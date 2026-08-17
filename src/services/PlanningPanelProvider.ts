@@ -3022,14 +3022,19 @@ Start by checking which documents exist, then present the menu.`;
                 // README) exist — it gates the "include extras" checkbox, not the zip.
                 let hasDocs = false;
                 try { hasDocs = cpRoot ? (await this._collectExtraDocSources(cpRoot)).length > 0 : false; } catch { hasDocs = false; }
-                this.postMessageToWebview({
+                // The browser Connections panel reaches this arm through
+                // /connections/verb → _handlePlanningVerb, so the WS push (tagged
+                // 'planning') never reaches it — transport.js re-dispatches the RETURN
+                // body, and only when it carries a `type`. Push AND return.
+                const cpState = {
                     type: 'createPlansState',
                     hasDocs,
                     publicUrl: this._stateStore.getPanelState<string>('createPlans.publicUrl') || '',
                     platform: this._stateStore.getPanelState<string>('createPlans.platform') || 'Notion',
                     platformRef: this._stateStore.getPanelState<string>('createPlans.platformRef') || ''
-                });
-                break;
+                };
+                this.postMessageToWebview(cpState);
+                return { success: true, ...cpState };
             }
             case 'createPlansCopyPrompt': {
                 // One prompt, adapted only by a single source-specific first line.
@@ -3068,7 +3073,9 @@ Start by checking which documents exist, then present the menu.`;
                 });
                 const folder = picked && picked.length > 0 ? picked[0] : '';
                 if (folder) {
-                    this.postMessageToWebview({ type: 'createPlansFolderPicked', folder });
+                    const pickedMsg = { type: 'createPlansFolderPicked', folder };
+                    this.postMessageToWebview(pickedMsg);
+                    return { success: true, ...pickedMsg };
                 }
                 break;
             }
@@ -3108,12 +3115,14 @@ Start by checking which documents exist, then present the menu.`;
             case 'createPlansPasteBack': {
                 const markdown = typeof msg.markdown === 'string' ? msg.markdown : '';
                 if (!markdown.trim()) {
-                    this.postMessageToWebview({ type: 'createPlansPasteBackResult', ok: false, error: 'Paste a markdown plan first.' });
-                    break;
+                    const res = { type: 'createPlansPasteBackResult', ok: false, error: 'Paste a markdown plan first.' };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 }
                 if (markdown.length > 200_000) {
-                    this.postMessageToWebview({ type: 'createPlansPasteBackResult', ok: false, error: 'Plan is too large (>200 KB).' });
-                    break;
+                    const res = { type: 'createPlansPasteBackResult', ok: false, error: 'Plan is too large (>200 KB).' };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 }
                 const pbRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 let cpProject: string | null = null;
@@ -3124,11 +3133,14 @@ Start by checking which documents exist, then present the menu.`;
                         markdown,
                         cpProject ? { projectName: cpProject } : undefined
                     );
-                    this.postMessageToWebview({ type: 'createPlansPasteBackResult', ok: true, projectName: cpProject });
+                    const res = { type: 'createPlansPasteBackResult', ok: true, projectName: cpProject };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (err) {
-                    this.postMessageToWebview({ type: 'createPlansPasteBackResult', ok: false, error: err instanceof Error ? err.message : String(err) });
+                    const res = { type: 'createPlansPasteBackResult', ok: false, error: err instanceof Error ? err.message : String(err) };
+                    this.postMessageToWebview(res);
+                    return { ...res, success: false };
                 }
-                break;
             }
             case 'createPlansImproveSource': {
                 // Optional handoff: copy a docs-improvement prompt for a configured

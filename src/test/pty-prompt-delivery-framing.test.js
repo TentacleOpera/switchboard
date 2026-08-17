@@ -189,13 +189,14 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         const { handle, writes } = stubHandle();
         await sendPromptToPty(handle, text, { clearBeforePrompt: true, clearBeforePromptDelayMs: 0 });
 
-        // First write is the /clear command.
-        assert.strictEqual(writes[0], '/clear\r', 'first write must be the /clear command');
+        assert.strictEqual(writes[0], '\x15', 'first write must reset the CLI input line (Ctrl+U)');
+        assert.strictEqual(writes[1], '/clear\r', 'second write must be the /clear command');
 
         // After the clear, the paste framing must still be whole.
         const pasteStart = writes.indexOf('\x1b[200~');
         assert.ok(pasteStart !== -1, 'open marker must be present after the clear');
         assert.strictEqual(writes[pasteStart], '\x1b[200~');
+        assert.ok(!writes.slice(pasteStart).includes('\x15'), 'no Ctrl+U after the open marker');
 
         const closeIdx = writes.length - 1 - CONFIRM_CR_COUNT;
         assert.strictEqual(writes[closeIdx], '\x1b[201~', 'close marker must be whole');

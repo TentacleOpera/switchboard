@@ -272,7 +272,12 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
         assert.ok(/_teamLookupRoots\(/.test(method), 'startTeamForWorkspace must call _teamLookupRoots(');
         const armIdx = taskViewerTs.indexOf("if (verb === 'ptyStartTeam')");
         assert.ok(armIdx > 0, 'ptyStartTeam arm not found');
-        const arm = taskViewerTs.slice(armIdx, armIdx + 600);
+        // Slice to the NEXT verb arm, not a fixed char window. The arm opens with
+        // a long wire-safety comment, so a 600-char window ended BEFORE the
+        // delegation line and the assertion could never see its target — a gate
+        // that fails no matter what the code does is not a gate.
+        const nextArmIdx = taskViewerTs.indexOf("if (verb === '", armIdx + 10);
+        const arm = taskViewerTs.slice(armIdx, nextArmIdx > armIdx ? nextArmIdx : armIdx + 2000);
         assert.ok(/this\.startTeamForWorkspace\(/.test(arm), 'ptyStartTeam must delegate to this.startTeamForWorkspace(');
     });
 
@@ -335,7 +340,11 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
     await test("kanban.html teamsTabSaveAgentGroup literal carries startOnLoad", async () => {
         const saveIdx = kanbanHtml.indexOf('function teamsTabSaveAgentGroup');
         assert.ok(saveIdx > 0, 'teamsTabSaveAgentGroup not found');
-        const save = kanbanHtml.slice(saveIdx, saveIdx + 1600);
+        // Slice to the next top-level function, not a fixed char window. The
+        // member-row loop pushes the group literal past 1600 chars, so the old
+        // window ended before the carry this test exists to assert.
+        const nextFnIdx = kanbanHtml.indexOf('\n        function ', saveIdx + 10);
+        const save = kanbanHtml.slice(saveIdx, nextFnIdx > saveIdx ? nextFnIdx : saveIdx + 6000);
         assert.ok(/prevGroup\?\.startOnLoad/.test(save),
             'teamsTabSaveAgentGroup must carry startOnLoad from prevGroup');
         assert.ok(/prevGroup\?\.startWorktree/.test(save),

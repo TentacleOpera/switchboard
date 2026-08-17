@@ -14,7 +14,7 @@ import { resolveEffectiveWorkspaceRootFromMappings, getMappingsFromIndex } from 
 import { SetupPanelProvider } from './services/SetupPanelProvider';
 import { ConnectionsPanelProvider } from './services/ConnectionsPanelProvider';
 import { ReviewCommentRequest, ReviewCommentResult } from './services/reviewTypes';
-import { sendRobustText } from './services/terminalUtils';
+import { sendRobustText, clearTerminalInputLine } from './services/terminalUtils';
 import { importPlanFiles } from './services/PlanFileImporter';
 import { ClickUpSyncService } from './services/ClickUpSyncService';
 import { LinearSyncService } from './services/LinearSyncService';
@@ -2912,7 +2912,9 @@ export async function activate(context: vscode.ExtensionContext) {
         const clearPromises: Promise<void>[] = [];
         for (const [, terminal] of registeredTerminals.entries()) {
             if (terminal.exitStatus === undefined) {
-                clearPromises.push(sendRobustText(terminal, '/clear', false));
+                clearPromises.push(
+                    clearTerminalInputLine(terminal).then(() => sendRobustText(terminal, '/clear', false))
+                );
             }
         }
         await Promise.all(clearPromises);

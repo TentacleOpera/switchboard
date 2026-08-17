@@ -34,6 +34,7 @@ AUTH=""; [ -n "$SWITCHBOARD_API_TOKEN" ] && AUTH="-H \"Authorization: Bearer $SW
 | Purpose | Call |
 | :--- | :--- |
 | **Primary — send a prompt (both hosts)** | `POST /terminals/verb/ptySendPrompt` with `{ "name": "<friendlyName>", "data": "<prompt>", "clearBeforePrompt": false }` |
+| **Dispatch a subtask (both hosts)** | the same call plus `"dispatch": { "planFile"\|"planId", "role" }` — registers the dispatch and attaches the protocol directives in one call (§3.5) |
 | Enumerate live terminals | `POST /terminals/verb/ptyListTerminals` with `{}` → `{ terminals: [...], hiddenTerminals: [...] }` |
 | Rest a terminal — reset its context | `POST /terminals/verb/ptyClearTerminal` with `{ "name": "<friendlyName>" }` |
 | Extension-host alternative | `POST /taskViewer/verb/sendToTerminal` with `{ "name", "input" }` |
@@ -178,7 +179,44 @@ not the standing order — it is a dispatch **record** the plan-ingestion sweep 
 turn-end notifier that fires when the coder's plan file advances. `ptySendPrompt` writes no
 record, so the sweep never saw the dispatch and the notifier never fired.
 
-Register the dispatch with the shipped `attributePastedPrompt` verb **before** you call
+### Do it in one call — `dispatch`
+
+`ptySendPrompt` takes an optional `dispatch` field: `{ "dispatch": { "planId"?, "planFile"?,
+"role"? } }`. When you pass it, the host registers the dispatch **itself, before delivering**,
+and attaches the protocol directives the board attaches — the plan-file completion report and
+the orchestrator reports directive. This is the route to use, on both hosts:
+
+```bash
+curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" $AUTH \
+  -H "Content-Type: application/json" --max-time 30 \
+  -d '{"name":"coder-1","data":"<your prompt>","clearBeforePrompt":false,
+       "dispatch":{"planFile":".switchboard/plans/<plan-file>","role":"coder"}}'
+# → { "success": true, "attributed": 1, "skipped": 0,
+#     "directivesAttached": ["COMPLETION REPORT", "ORCHESTRATOR REPORT"] }
+```
+
+Why it matters, beyond saving a call:
+
+- **`directivesAttached` is the receipt.** Omit `dispatch` and it comes back `[]`: your coder
+  was told nothing about writing a completion report, so it will finish correctly and the
+  board will read it as still in flight. An empty array on a real dispatch is a defect in your
+  call, not a cosmetic difference.
+- **Ordering is taken out of your hands.** The host attributes before it delivers, so the
+  `dispatched_at` / plan-file-mtime compare below cannot be inverted by a fast coder.
+- **It fails closed.** Nothing resolved (`attributed: 0`) → `success: false` and **no prompt is
+  delivered**. Fix the plan reference and re-send; there is no half-dispatched state to unwind.
+- **Shape is validated.** A non-string `planId` / `planFile` / `role`, or a `role` that is not a
+  known seat role, is rejected with `success: false` rather than silently coerced.
+
+Send `dispatch` **only on a dispatch** — never on a message, and never on a coder's report back
+to you. The protocol directives tell their recipient to write a completion report into a plan
+file; on a report message that would make *you* advance a plan file's mtime and fire a false
+`completed`.
+
+### Fallback: the two-call form
+
+A caller that cannot set `dispatch` (an older host, or a paste/drop path) must still register
+the dispatch with the shipped `attributePastedPrompt` verb **before** it calls
 `ptySendPrompt`. Registration stamps `dispatched_terminal` / `dispatched_at` on the plan row —
 the exact columns the sweep's `getActiveDispatchedByTerminal` query reads. With the record in
 place, the sweep's `blocked` outcome (silence past `turnEndSilenceMs`, ~90 s) and the
@@ -229,8 +267,12 @@ board's paste/drop path, which must stay permissive on ~4 000 installs).
 A `[switchboard:turn-end]` message arriving at your prompt *is* the new turn — text delivered
 to an idle agent terminal is a turn, same as a coder's report. Two outcomes:
 
-- **`completed`** — `Seat '<coder>' finished its turn on '<plan file>'.` The coder's plan file
-  advanced. Review the diff (see The review turn).
+- **`completed`** —
+  ```
+  [switchboard:turn-end] Seat '<coder>' finished its turn on '<plan file>' — "<topic>" (column <col>, feature <feat>, worked <dur>).
+  Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.
+  ```
+  The notice carries the card's inline state and the review instruction directly.
 - **`blocked`** — `Seat '<coder>' has gone quiet on '<plan file>' without writing a completion
   report — it may be waiting on input.` **`blocked` means "go look", not "this subtask is
   dead".** A `blocked` notice is not terminal: the coder can write its report afterward and a
@@ -301,14 +343,26 @@ said not to touch was touched.
 
 ---
 
-## 6. The resend
+## 6. The resend & escalation ladder
 
-If the review finds problems, compose a fix prompt naming the **specific defects** and send it
-to the **same** terminal, which retains its context (`clearBeforePrompt: false` preserved it).
+If the review finds problems on the **first** attempt, compose a fix prompt naming the **specific defects**
+and send it to the **same** terminal, which retains its context (`clearBeforePrompt: false` preserved it).
 
-Bound the attempts: after **3 failed reviews**, stop and report to the user rather than
-looping. An agent given an unbounded correction loop will keep sending. State what failed on
-each attempt in your report.
+If a seat fails review on the same subtask **twice**, do **not** send that subtask to it a third time.
+Escalate one rung along the ladder:
+
+`intern → coder → lead`
+
+Carry the specific defects from **both** attempts into the dispatch prompt so the stronger seat does
+not have to re-derive them. In your status report, state which seat you moved the subtask to and why.
+
+The ladder terminates:
+- If a seat that fails twice is already at `lead` tier, or your team has no seat above it, do **not**
+  dispatch again and do not take the subtask yourself. Stop, report to the user with the findings from
+  every attempt, and leave the card where it is.
+- Escalation retires the **pairing, not the seat** — an escalated-off seat still receives other subtasks.
+- When you escalate off a seat, that seat is now at rest for this subtask: apply §7 (`ptyClearTerminal`)
+  to it before assigning it different work.
 
 ---
 
@@ -400,14 +454,19 @@ Each with the observable signal and the fix:
 
 ---
 
-## 10. Empty coder pool
+## 10. Empty coder pool & tier resolution
 
-Before dispatching, enumerate the live coder pool with `ptyListTerminals` and filter for
-`role: 'coder'` (or the role your directive names). If the pool is empty or too small for the
-feature, **stop and tell the user** to create terminals — naming the Agents-tab **Agent Groups**
-control (which instantiates a wired team in one action) and the `+` button in the column
-header (the single-terminal path). Do not attempt to create terminals yourself; creation is
-not on the documented verb rail for agents, and each terminal is a running agent CLI.
+Before dispatching, enumerate the live terminal pool with `ptyListTerminals` across all roles
+(`intern`, `coder`, `lead`, etc.).
+
+- If the required pool or seat is missing or too small for the feature, **stop and tell the user**
+  to create terminals — naming the Agents-tab **Agent Groups** control (which instantiates a wired team
+  in one action) and the `+` button in the column header (the single-terminal path). Do not attempt to
+  create terminals yourself; creation is not on the documented verb rail for agents, and each terminal
+  is a running agent CLI.
+- When escalating and the rung immediately above the failed seat is absent on your team (e.g. no coder
+  exists between intern and lead), dispatch to the highest available rung above it and state the skipped
+  rung in the dispatch prompt. Never fall back downward to the same tier or a lower tier.
 
 ---
 

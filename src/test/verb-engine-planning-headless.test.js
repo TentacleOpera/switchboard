@@ -387,6 +387,60 @@ async function main() {
     //     moved to TicketsPanelProvider; their assertions were migrated verbatim into
     //     verb-engine-tickets-headless.test.js.
 
+    // ── Create Plans arms (Connections panel intake) ──────────────────────
+    await test('createPlansInit RETURNS the createPlansState body and keeps push additive', async () => {
+        const { provider, pushes, stateStore } = buildHeadlessPlanningProvider(tmpRoot);
+        await stateStore.setPanelState('createPlans.publicUrl', 'https://docs.example/plan');
+        await stateStore.setPanelState('createPlans.platformRef', 'DOC-42');
+        const result = await provider.handleServiceVerb('createPlansInit', { workspaceRoot: tmpRoot });
+        assert.strictEqual(result.success, true);
+        // The body must carry DATA, not just an ack — this is the whole fix.
+        assert.strictEqual(result.type, 'createPlansState');
+        assert.strictEqual(typeof result.hasDocs, 'boolean');
+        assert.strictEqual(result.publicUrl, 'https://docs.example/plan');
+        assert.strictEqual(result.platform, 'Notion');
+        assert.strictEqual(result.platformRef, 'DOC-42');
+        assert.ok(pushes.find(p => p.type === 'createPlansState'), 'webview push stays additive');
+    });
+
+    await test('createPlansPickFolder RETURNS the picked folder, and returns nothing when cancelled', async () => {
+        const picked = buildHeadlessPlanningProvider(tmpRoot, { showOpenDialogResult: [path.join(tmpRoot, 'docs')] });
+        const ok = await picked.provider.handleServiceVerb('createPlansPickFolder', { workspaceRoot: tmpRoot });
+        assert.strictEqual(ok.type, 'createPlansFolderPicked');
+        assert.strictEqual(ok.folder, path.join(tmpRoot, 'docs'));
+        assert.ok(picked.pushes.find(p => p.type === 'createPlansFolderPicked'), 'webview push stays additive');
+
+        // Cancelled / headless: showOpenDialog resolves undefined. Returning an empty
+        // `folder` here would blank a previously-picked label in the panel.
+        const cancelled = buildHeadlessPlanningProvider(tmpRoot, { showOpenDialogResult: undefined });
+        const none = await cancelled.provider.handleServiceVerb('createPlansPickFolder', { workspaceRoot: tmpRoot });
+        assert.ok(!none || none.type !== 'createPlansFolderPicked', 'a cancelled pick must not fabricate a folder');
+    });
+
+    await test('createPlansPasteBack RETURNS a typed body on every exit', async () => {
+        const empty = buildHeadlessPlanningProvider(tmpRoot);
+        const r1 = await empty.provider.handleServiceVerb('createPlansPasteBack', { workspaceRoot: tmpRoot, markdown: '   ' });
+        assert.strictEqual(r1.type, 'createPlansPasteBackResult');
+        assert.strictEqual(r1.ok, false);
+        assert.match(r1.error, /Paste a markdown plan first/);
+        // Input validation is not a transport failure — a success:false here makes
+        // transport.js raise a rail banner over the panel's own inline message.
+        assert.strictEqual(r1.success, true);
+
+        const big = buildHeadlessPlanningProvider(tmpRoot);
+        const r2 = await big.provider.handleServiceVerb('createPlansPasteBack', { workspaceRoot: tmpRoot, markdown: 'x'.repeat(200_001) });
+        assert.strictEqual(r2.ok, false);
+        assert.match(r2.error, /too large/);
+
+        const okRun = buildHeadlessPlanningProvider(tmpRoot);
+        const r3 = await okRun.provider.handleServiceVerb('createPlansPasteBack', { workspaceRoot: tmpRoot, markdown: '# A plan\n\nbody' });
+        assert.strictEqual(r3.type, 'createPlansPasteBackResult');
+        assert.strictEqual(r3.ok, true);
+        assert.ok(okRun.recorders.executedCommands.some(c => c.command === 'switchboard.importPlanFromClipboard'),
+            'the success branch must be reached through the import command, not by falling through');
+        assert.ok(okRun.pushes.find(p => p.type === 'createPlansPasteBackResult'), 'webview push stays additive');
+    });
+
     // ── Cleanup ───────────────────────────────────────────────────────────
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
 

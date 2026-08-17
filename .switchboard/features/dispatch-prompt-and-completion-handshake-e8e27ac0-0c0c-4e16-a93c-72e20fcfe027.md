@@ -1,0 +1,32 @@
+# Dispatch prompt and completion handshake
+
+**Complexity:** 6
+
+## Goal
+
+Three defects in the dispatch-prompt and completion-detection chain: the standalone host hand-rolls a four-line prompt instead of calling generateUnifiedPrompt, lead-dispatched coders never receive the completion-report directive so their cards never clear, and the resulting blocked stamps flap and spam the team lead.
+
+They are grouped because they are one causal chain, not three tickets. A dispatched agent is told what to do (the prompt), told how to signal it is done (the completion-report directive), and observed by the sweep that reads that signal (the blocked/completed classification). Break any link and the two downstream of it misreport: a prompt without the handshake produces work that reads as blocked, and a sweep that mistakes "reading a file" for "stuck" turns that misreport into an interrupt stream aimed at the team lead. The feature restores the chain end to end so a card's light means what it says on both hosts.
+
+## How the Subtasks Achieve This
+
+- **Standalone Dispatch Builds Its Own Prompt Instead of Calling generateUnifiedPrompt**: deletes `bootstrap.ts`'s hand-rolled `buildPromptForCards` and routes the `triggerAction` arm through `KanbanProvider.buildDispatchPlans` → `generateUnifiedPrompt`, so `npx switchboard` emits the same prompt the extension does — PRD and design-system references, batch execution rules, constitution, workflow-file redirection, feature-mode subtask expansion, git/subagent/safeguard policy. It also widens `TaskViewerProvider.getLocalApiServerPort()` to see the server the standalone host wires in, which is what makes the Phone-a-Friend and delegate directives resolve a real port instead of `0`. This is the first link: the dispatched agent gets a complete brief on both hosts.
+- **Lead-Dispatched Coders Never Receive the Completion-Report Directive**: adds a role-gated `ensureDispatchProtocolDirectives` append at both pty delivery chokepoints (`TaskViewerProvider._ptyHostVerb`, `bootstrap.deliverPrompt`), inside the existing seat-block gate and before standing orders. A lead composing its own prose posts a plain `ptySendPrompt`, which reaches neither the board builder nor the existing `dispatch`-payload gate, so its coders were never told to append to the plan file — and that plan-file mtime advance is the only thing that clears a card. This is the second link: the agent is told how to signal completion regardless of who dispatched it.
+- **The "Seat Has Gone Quiet" Notice Flaps, and Every Flap Wakes the Lead**: replaces the per-silence-episode blocked notice with a paced, aggregated digest in `PlanIngestionEngine`, keeping the per-seat signal flowing to autoban while collapsing the lead-facing text into one message per interval. `recordLiveness` nulls `blocked_at` on any terminal output, so the "single-fire gate" never was one and a working coder re-triggered it every ~2 minutes. This is the third link: the observer stops converting normal work into interrupts, and the genuinely stuck seats it does report arrive as one message carrying evidence.
+
+## Dependencies & sequencing
+
+- **Ship order: completion directive → standalone prompt parity → blocked digest.** The first two share two files and must serialise; the third is independent and goes last only to rebase onto a settled `bootstrap.ts`.
+- **"Lead-Dispatched Coders…" must land before "Standalone Dispatch…".** They edit the same two seams. The completion-directive plan adds its append *inside* `deliverPrompt`'s `applySeatBlock` branch (`bootstrap.ts:274-298`); the standalone-parity plan flips the board-dispatch call site (`:1758`) to pass `applySeatBlock = false`, which deliberately bypasses that append because `generateUnifiedPrompt` already carries the bundle. Landing them in the other order leaves the flip looking like a dropped handshake, and it is the kind of thing a later reader "fixes" back. They also both rewrite `src/test/seat-safeguards-fleet-prompt-path.test.js` — one replaces section 11, the other appends contracts — so a concurrent run collides on that file too.
+- **Within "Standalone Dispatch…", the port fix is a hard prerequisite for the routing swap.** `generateUnifiedPrompt`'s `dispatch-analysis` arm reads `getLocalApiServerPort()`, while the local `buildDispatchAnalysisPrompt` reads the live standalone server directly. Routing Analyze through the provider before widening the accessor replaces a correct port with `API_PORT=0` — a regression, not a parity win.
+- **"The Seat Has Gone Quiet…" has no ordering constraint against the other two.** It is the only subtask touching `src/services/PlanIngestionEngine.ts`, and its host edits (`notifyTurnEnd`, the `bootstrap.ts` turn-end closure at `:2017`) are in different regions from the other plans'. It could land first if convenient.
+- **Guard in place before any of them: `ensureDispatchProtocolDirectives` must stay the single append point.** All three plans assume the directive bundle is idempotent and composed in one place; a raw `ensureCompletionDirective` concat at any new call site forks the protocol and silently defeats the completion detection this feature exists to restore.
+- **Per the project PRD's orchestration discipline, one agent stream per provider file.** `src/standalone/bootstrap.ts` and `src/services/TaskViewerProvider.ts` are each touched by two of the three subtasks — serialise those, do not fan out.
+
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
+- [ ] [Standalone Dispatch Builds Its Own Prompt Instead of Calling generateUnifiedPrompt](../plans/feature_plan_20260817141000_standalone-dispatch-prompt-is-a-hardcoded-subset.md) — **PLAN REVIEWED**
+- [ ] [The "Seat Has Gone Quiet" Notice Flaps, and Every Flap Wakes the Lead](../plans/feature_plan_20260817141200_seat-gone-quiet-notice-flaps-and-spams-the-lead.md) — **PLAN REVIEWED**
+- [ ] [Lead-Dispatched Coders Never Receive the Completion-Report Directive](../plans/feature_plan_20260817141300_lead-dispatched-coders-never-get-the-completion-report-directive.md) — **PLAN REVIEWED**
+<!-- END SUBTASKS -->
+

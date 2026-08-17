@@ -439,5 +439,97 @@ test('the shipped attributePastedPrompt paste/drop path is not hardened by this 
     assert.ok(/return \{ success: true, attributed: attributed\.length/.test(arm), 'the caller needs `attributed` in the body — a zero is a failed registration');
 });
 
+console.log('\n--- composeCompletedTurnEndBody & turn-end notices ---');
+
+const { composeCompletedTurnEndBody } = require('../../out/services/PlanIngestionEngine');
+
+test('composeCompletedTurnEndBody renders all clauses when present', () => {
+    const record = {
+        topic: 'Implement Finished Seat Notice',
+        kanbanColumn: 'In Progress',
+        featureId: 'feat-123',
+        dispatchedAt: '2026-08-17T00:00:00.000Z'
+    };
+    const nowMs = Date.parse('2026-08-17T00:00:45.000Z');
+    const result = composeCompletedTurnEndBody(record, 'coder-1', '.switchboard/plans/test.md', nowMs);
+    const lines = result.split('\n');
+    assert.strictEqual(lines.length, 2, 'must be exactly 2 lines');
+    assert.strictEqual(
+        lines[0],
+        `[switchboard:turn-end] Seat 'coder-1' finished its turn on '.switchboard/plans/test.md' — "Implement Finished Seat Notice" (column In Progress, feature feat-123, worked 45s).`
+    );
+    assert.strictEqual(
+        lines[1],
+        'Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.'
+    );
+});
+
+test('composeCompletedTurnEndBody drops missing clauses gracefully', () => {
+    const record = {
+        topic: '',
+        kanbanColumn: '',
+        featureId: null,
+        dispatchedAt: null
+    };
+    const result = composeCompletedTurnEndBody(record, 'coder-2', 'plan.md', Date.now());
+    const lines = result.split('\n');
+    assert.strictEqual(lines.length, 2);
+    assert.strictEqual(
+        lines[0],
+        `[switchboard:turn-end] Seat 'coder-2' finished its turn on 'plan.md'.`
+    );
+    assert.strictEqual(
+        lines[1],
+        'Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.'
+    );
+});
+
+test('composeCompletedTurnEndBody formats minutes when worked >= 120s', () => {
+    const record = {
+        topic: 'Long task',
+        kanbanColumn: 'Coded',
+        featureId: '',
+        dispatchedAt: new Date(1000000000000).toISOString()
+    };
+    const nowMs = 1000000000000 + 14 * 60 * 1000;
+    const result = composeCompletedTurnEndBody(record, 'lead-1', 'long.md', nowMs);
+    assert.ok(result.includes('column Coded, worked 14m'));
+    assert.ok(!result.includes('feature '));
+});
+
+test('composeCompletedTurnEndBody flattens and truncates topic to 80 chars with ellipsis', () => {
+    const longTopic = 'A'.repeat(50) + '\n' + 'B'.repeat(50);
+    const record = {
+        topic: longTopic,
+        kanbanColumn: 'In Progress',
+        featureId: 'f1',
+        dispatchedAt: null
+    };
+    const result = composeCompletedTurnEndBody(record, 'c1', 'plan.md', Date.now());
+    const lines = result.split('\n');
+    assert.strictEqual(lines.length, 2, 'newlines in topic must be flattened to preserve 2-line shape');
+    assert.ok(lines[0].includes('— "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA BBBBBBBBBBBBBBBBBBBBBBBBBBBBB…" (column In Progress, feature f1).'));
+});
+
+test('both completed turnEndNotifier call sites in PlanIngestionEngine pass a body', () => {
+    const matches = planIngestionTs.match(/_turnEndNotifier\(\{[^}]*outcome:\s*'completed'[^}]*\}\)/g) || [];
+    assert.strictEqual(matches.length, 2, 'both completed notifier calls must exist');
+    for (const m of matches) {
+        assert.ok(m.includes('body'), `completed notifier call must pass body: ${m}`);
+    }
+});
+
+test('both hosts honour info.body for completed turn-end notices', () => {
+    assert.ok(
+        taskViewerTs.includes("const message = info.body ?? (info.outcome === 'completed'"),
+        'TaskViewerProvider must honour info.body ?? fallback'
+    );
+    assert.ok(
+        bootstrapTs.includes("const message = info.body ?? (info.outcome === 'completed'"),
+        'bootstrap.ts must honour info.body ?? fallback'
+    );
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) { process.exit(1); }
+

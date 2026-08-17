@@ -469,6 +469,7 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
     saveSetting: {
         fields: {
             key: { type: 'string', required: true },
+            baseIds: { type: 'array' },
         },
     },
     getSetting: {
@@ -1261,6 +1262,18 @@ export const SETUP_VERB_SCHEMAS: Record<string, VerbSchema> = {
 };
 
 export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
+    ptySendPrompt: {
+        fields: {
+            name: { type: 'string', required: true },
+            data: { type: 'string' },
+            clearBeforePrompt: { type: 'boolean' },
+            clearBeforePromptDelayMs: { type: 'number' },
+            clearBeforePromptFromConfig: { type: 'boolean' },
+            standingOrders: { type: 'boolean' },
+            dispatch: { type: 'object' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
     sendToTerminal: {
         fields: {
             name: { type: 'string', required: true },

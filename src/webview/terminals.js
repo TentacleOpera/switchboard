@@ -104,6 +104,7 @@
     // carries an optional desired layout and a member order used to choose what renders
     // when the pane-size floor leaves fewer slots than members.
     let terminalGroups = []; // [{ id, name, source, value?, layout, members, order }]
+    let lastReadGroupIds = []; // ids of terminal groups as last read from backend
     let activeGroupId = null; // which group is currently locked, or null for "composing"
     let activeGroupPage = 0; // transient: which page of the active group is showing
     let selectedTerminalNames = new Set(); // multi-select in the sidebar
@@ -1486,14 +1487,25 @@
         return defaultVal;
     }
 
-    async function saveSetting(key, value) {
+    async function saveSetting(key, value, baseIds) {
         if (soloTerminalName) { return; }
         try {
-            await fetch('/kanban/verb/saveSetting', {
+            const body = { key, value };
+            const effectiveBaseIds = baseIds !== undefined ? baseIds : (key === 'terminals.groups' ? lastReadGroupIds : undefined);
+            if (Array.isArray(effectiveBaseIds)) {
+                body.baseIds = effectiveBaseIds;
+            }
+            const res = await fetch('/kanban/verb/saveSetting', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key, value })
+                body: JSON.stringify(body)
             });
+            if (res.ok) {
+                const data = await res.json();
+                if (key === 'terminals.groups' && data && Array.isArray(data.value)) {
+                    lastReadGroupIds = data.value.map(g => g && g.id).filter(Boolean);
+                }
+            }
         } catch { /* ignore */ }
     }
 
@@ -1537,6 +1549,7 @@
                 }
                 return null;
             }).filter(Boolean);
+            lastReadGroupIds = terminalGroups.map(g => g.id);
         }
         const savedActive = await loadSetting('terminals.activeGroupId', null);
         activeGroupId = (typeof savedActive === 'string' || savedActive === null) ? savedActive : null;
@@ -1620,9 +1633,10 @@
      * before the panel's next whole-array save can clobber it.
      *
      * Merge, not replace: a reload that arrives mid-drag must not discard an
-     * in-flight local edit. New groups (ids not yet in memory) are added;
-     * existing ones keep their local state — the backend only adds, never
-     * modifies (idempotency: skip existing group id in teamWiring.ts).
+     * in-flight local edit. New groups (ids not yet in memory) are added.
+     * For existing groups, the backend owns `members` and `order` for rows
+     * it registers (team spawns/restarts); `layout` and every other local
+     * UI field remain the panel's.
      */
     async function reloadTerminalGroups() {
         try {
@@ -1633,15 +1647,37 @@
                 LAYOUT_MODES.includes(g.layout) &&
                 (g.source === 'manual' || g.source === 'role' || g.source === 'worktree')
             );
-            const existingIds = new Set(terminalGroups.map(g => g.id));
-            let added = false;
+            const existingMap = new Map(terminalGroups.map(g => [g.id, g]));
+            let changed = false;
             for (const g of validated) {
-                if (!existingIds.has(g.id)) {
+                const existing = existingMap.get(g.id);
+                if (!existing) {
                     terminalGroups.push(g);
-                    added = true;
+                    // Register it so the same id arriving twice in one read
+                    // refreshes the row just pushed rather than pushing a
+                    // second copy — a duplicate would survive into the next
+                    // whole-array save.
+                    existingMap.set(g.id, g);
+                    changed = true;
+                } else {
+                    if (Array.isArray(g.members)) {
+                        const membersChanged = JSON.stringify(existing.members) !== JSON.stringify(g.members);
+                        if (membersChanged) {
+                            existing.members = [...g.members];
+                            changed = true;
+                        }
+                    }
+                    if (Array.isArray(g.order)) {
+                        const orderChanged = JSON.stringify(existing.order) !== JSON.stringify(g.order);
+                        if (orderChanged) {
+                            existing.order = [...g.order];
+                            changed = true;
+                        }
+                    }
                 }
             }
-            if (added) {
+            lastReadGroupIds = validated.map(g => g.id);
+            if (changed) {
                 renderSidebarList();
                 renderGroupTabStrip();
             }
@@ -8839,12 +8875,19 @@
      * finished. {head} is substituted with the live head name.
      */
     var NEW_CODING_HEAD_PROMPT_CLIENT =
-        'You lead this team. Your coders work the subtasks of one feature. When a coder '
-        + 'reports a subtask finished, note it and give that coder the next subtask. Do not send '
-        + 'anything to the reviewer, and do not write review instructions — that is not your job. '
-        + 'When every subtask of the feature is finished, read the port from '
-        + '.switchboard/api-server-port.txt, confirm no subtask is still outstanding via '
-        + 'GET /kanban/feature, then make one call: POST /kanban/dispatch with '
+        'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
+        + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
+        + 'no such seat, dispatch to a coder and say why in your status report. Post a status report '
+        + 'to .switchboard/orchestrator/reports/ when a subtask is dispatched, and a finished report '
+        + 'when the feature is handed to review. When a seat fails review on the same subtask twice, '
+        + 'do not send that subtask to it a third time — escalate one rung along intern → coder → lead, '
+        + 'name the specific defects in the dispatch, and say in your status report which seat you moved '
+        + 'it to and why; if the seat that failed twice is a lead, or your team has no seat above it, '
+        + 'stop and report to the human instead of dispatching again. When a coder reports a subtask '
+        + 'finished, note it and give that coder the next subtask. Do not send anything to the '
+        + 'reviewer, and do not write review instructions — that is not your job. When every subtask of '
+        + 'the feature is finished, read the port from .switchboard/api-server-port.txt, confirm no '
+        + 'subtask is still outstanding via GET /kanban/feature, then make one call: POST /kanban/dispatch with '
         + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — '
         + 'that one call moves the card and dispatches the reviewer with the reviewer\'s own '
         + 'prompt. Do NOT use /kanban/move: it moves the card and dispatches nobody. Only '

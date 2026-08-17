@@ -41,10 +41,16 @@ const {
 const {
     migrateAgentGroups,
     migrateCodingTeamOrders,
+    migrateTeamPairOrders,
+    loadEffectiveStandingOrders,
+    describeStandingOrderMigrations,
     OLD_CODING_HEAD_PROMPT,
-    NEW_CODING_HEAD_PROMPT
+    NEW_CODING_HEAD_PROMPT,
+    PRE_REWRITE_CALLBACK_INSTRUCTION,
+    STANDING_ORDERS_PREMIGRATION_BAK_KEY
 } = require('../../out/services/teamWiring');
 const { resolvePreset } = require('../../out/services/linkPresets');
+const { STANDING_ORDERS_CONFIG_KEY } = require('../../out/services/standingOrders');
 
 const SRC = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
 const AGENT_PROMPT_BUILDER_SRC = SRC('services', 'agentPromptBuilder.ts');
@@ -59,6 +65,17 @@ let failed = 0;
 function test(name, fn) {
     try { fn(); console.log(`  ✅ ${name}`); passed++; }
     catch (e) { console.error(`  ❌ ${name}`); console.error(e && e.stack ? e.stack : e); failed++; }
+}
+
+// Async cases are queued and drained before the summary, so the pass/fail tally
+// can never print ahead of a still-running assertion.
+const _asyncCases = [];
+function testAsync(name, fn) { _asyncCases.push([name, fn]); }
+async function _drainAsyncCases() {
+    for (const [name, fn] of _asyncCases) {
+        try { await fn(); console.log(`  ✅ ${name}`); passed++; }
+        catch (e) { console.error(`  ❌ ${name}`); console.error(e && e.stack ? e.stack : e); failed++; }
+    }
 }
 
 const PLAN_A = '5f3e165f-d7ce-46e3-8291-f41d07380d38';
@@ -367,7 +384,8 @@ test('the shipped Coding reviewer is reports-to-head, and no shipped member is a
 
 test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal', () => {
     for (const lit of ['/kanban/dispatch', 'CODE REVIEWED', '"from":"{head}"', 'Do NOT use /kanban/move',
-        'GET /kanban/feature', 'FEATURE planId']) {
+        'GET /kanban/feature', 'FEATURE planId', 'intern → coder → lead', 'seat fails review on the same subtask twice',
+        'stop and report to the human instead of dispatching again']) {
         assert.ok(NEW_CODING_HEAD_PROMPT.includes(lit), `missing load-bearing literal: ${lit}`);
     }
     assert.ok(!NEW_CODING_HEAD_PROMPT.includes('satisfied with it, hand it to review yourself'),
@@ -450,21 +468,231 @@ test('a head name containing regex metacharacters does not break the rewrite', (
     assert.strictEqual(out[0].instruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, head));
 });
 
-test('all three host read sites and the client mirror compose both converters', () => {
+test('all three host read sites use loadEffectiveStandingOrders and client mirror composes converters', () => {
     const sites = [
         ['services/TaskViewerProvider.ts', 2],
         ['standalone/bootstrap.ts', 1]
     ];
     for (const [file, count] of sites) {
         const body = SRC(...file.split('/'));
-        const n = (body.match(/migrateCodingTeamOrders\(migrateTeamPairOrders\(orders\)\)/g) || []).length;
+        const n = (body.match(/loadEffectiveStandingOrders\(db\)/g) || []).length;
         assert.strictEqual(n, count,
-            `${file}: expected ${count} composed call site(s), found ${n} — a site applying only one `
-            + 'converter produces host-dependent standing orders');
+            `${file}: expected ${count} loadEffectiveStandingOrders call site(s), found ${n}`);
     }
     assert.ok(TERMINALS_JS_SRC.includes('migrateCodingTeamOrdersClient(migrateTeamPairOrdersClient(orders))'),
         'terminals.js must mirror the composition or the webview renders orders the host no longer delivers');
 });
 
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed > 0) { process.exit(1); }
+/** Every .ts/.js file under src/, excluding the test tree and build output. */
+function walkSrc() {
+    const srcDir = path.join(__dirname, '..');
+    const out = [];
+    (function walk(dir) {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (entry.isDirectory()) {
+                if (entry.name === 'test' || entry.name === 'out' || entry.name === 'node_modules') { continue; }
+                walk(path.join(dir, entry.name));
+            } else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.js'))) {
+                out.push(path.join(dir, entry.name));
+            }
+        }
+    })(srcDir);
+    return out.map(f => ({ rel: path.normalize(path.relative(srcDir, f)), body: fs.readFileSync(f, 'utf8') }));
+}
+
+// A stale standing order is only fixable if EVERY server-side reader migrates.
+// That invariant used to be maintained by convention across four sites, and a
+// fifth added later would have reintroduced the bug silently. Asserting exact
+// per-file OCCURRENCE counts (not just an allowlist of filenames) is what makes
+// a fourth raw read fail — including one added inside an already-permitted file,
+// which a filename allowlist waves straight through. The counts also assert
+// PRESENCE: delete the loader's own read and this test goes red instead of green.
+test('getConfigJson(STANDING_ORDERS_CONFIG_KEY) occurs exactly once in each of exactly three files', () => {
+    const EXPECTED = new Map([
+        // loadEffectiveStandingOrders — the only delivery-path reader.
+        [path.normalize('services/teamWiring.ts'), 1],
+        // mutateStandingOrders — the serialising read-modify-write primitive.
+        [path.normalize('services/standingOrders.ts'), 1],
+        // _handleStandingOrdersList — needs the RAW rows by design (identity-stable ids).
+        [path.normalize('services/LocalApiServer.ts'), 1],
+    ]);
+    const RAW_READ = /getConfigJson\s*(?:<[^>]*>)?\s*\(\s*STANDING_ORDERS_CONFIG_KEY/g;
+
+    const actual = new Map();
+    for (const { rel, body } of walkSrc()) {
+        const n = (body.match(RAW_READ) || []).length;
+        if (n > 0) { actual.set(rel, n); }
+    }
+
+    assert.deepStrictEqual(
+        [...actual.entries()].sort(),
+        [...EXPECTED.entries()].sort(),
+        'raw reads of terminals.standingOrders drifted. Every server-side reader must go '
+        + 'through loadEffectiveStandingOrders, or a stale order reaches a live agent again. '
+        + `Found: ${JSON.stringify([...actual.entries()])}`
+    );
+});
+
+// OLD_HEADPROMPT_FRAGMENT is the recogniser key. It cannot be imported by the
+// webview, so exactly TWO copies are legitimate: the exported host const and the
+// terminals.js mirror. A third copy is precisely how the diagnostic endpoint
+// drifted out of agreement with delivered behaviour — LocalApiServer carried one
+// and its staleness markers would have gone silently dead on the next text edit.
+test('OLD_HEADPROMPT_FRAGMENT exists in exactly two files and is byte-identical', () => {
+    const hostWiringSrc = SRC('services', 'teamWiring.ts');
+    const hostFragmentMatch = hostWiringSrc.match(/const OLD_HEADPROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(hostFragmentMatch, 'OLD_HEADPROMPT_FRAGMENT not found in teamWiring.ts');
+    const hostFragment = hostFragmentMatch[1];
+
+    const clientFragmentMatch = TERMINALS_JS_SRC.match(/var OLD_HEADPROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(clientFragmentMatch, 'OLD_HEADPROMPT_FRAGMENT not found in terminals.js');
+    const clientFragment = clientFragmentMatch[1];
+
+    assert.strictEqual(clientFragment, hostFragment,
+        'OLD_HEADPROMPT_FRAGMENT drifted between teamWiring.ts and terminals.js');
+
+    const carriers = walkSrc()
+        .filter(({ body }) => body.includes(hostFragment))
+        .map(({ rel }) => rel)
+        .sort();
+    assert.deepStrictEqual(carriers,
+        [path.normalize('services/teamWiring.ts'), path.normalize('webview/terminals.js')].sort(),
+        'the old-headPrompt recogniser fragment must live in exactly two files — the exported '
+        + 'host const and the terminals.js mirror. A third copy is an ungated drift site; import '
+        + 'describeStandingOrderMigrations (or OLD_HEADPROMPT_FRAGMENT) instead. '
+        + `Found: ${carriers.join(', ')}`);
+});
+
+// ── loadEffectiveStandingOrders: migrate on WRITE, once ────────────────────
+// The pure transforms were correct and still the stale text reached a live
+// agent, because nothing rewrote the persisted row: correctness depended on
+// every present and future render path remembering to call them. These assert
+// the row stops existing rather than being re-neutralised forever.
+
+/** Minimal in-memory stand-in for KanbanDatabase's config-JSON surface. */
+function fakeDb(seed = {}) {
+    const store = new Map(Object.entries(seed).map(([k, v]) => [k, JSON.stringify(v)]));
+    return {
+        store,
+        writes: [],
+        failSet: false,
+        async getConfigJson(key, defaultValue) {
+            if (!store.has(key)) { return defaultValue; }
+            try { return JSON.parse(store.get(key)); } catch { return defaultValue; }
+        },
+        async setConfigJson(key, value) {
+            this.writes.push(key);
+            if (this.failSet) { throw new Error('simulated setConfigJson failure'); }
+            store.set(key, JSON.stringify(value));
+            return true;
+        },
+    };
+}
+
+const staleRows = (head = 'lead-1') => [
+    order({
+        id: 'p1', parent: head, child: 'Coding-reviewer', scope: 'pair',
+        instruction: resolvePreset('reviewer', head, 'Coding-reviewer')
+    }),
+    order({
+        id: 'h1', parent: head, child: '', scope: 'team-head', teamId: 't1',
+        instruction: OLD_CODING_HEAD_PROMPT.replace(/\{head\}/g, head)
+    }),
+    order({ id: 'x1', parent: 'a', child: 'b', scope: 'pair', instruction: 'operator wrote this by hand' }),
+];
+
+testAsync('loadEffectiveStandingOrders rewrites the config key once and backs it up once', async () => {
+    const before = staleRows();
+    const db = fakeDb({ [STANDING_ORDERS_CONFIG_KEY]: before });
+
+    const first = await loadEffectiveStandingOrders(db);
+    assert.ok(!first.some(o => o.instruction.includes('hand it to review yourself')),
+        'first delivery must carry the feature-level text');
+    assert.ok(!first.some(o => o.id === 'p1'), 'the stale reviewer pair row must be absent from delivery');
+    assert.ok(first.some(o => o.id === 'x1'), 'an operator-authored ad-hoc order must survive untouched');
+
+    // Persisted: the stale fragment is gone from DISK, not just from the render.
+    const persisted = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []);
+    assert.ok(!JSON.stringify(persisted).includes('hand it to review yourself'),
+        'the persisted row must no longer contain the old fragment');
+
+    // Backup holds the pre-migration array verbatim. Compared through the same
+    // JSON round-trip the config table applies, so an absent optional field is
+    // not mistaken for data loss.
+    const onDisk = (v) => JSON.parse(JSON.stringify(v));
+    assert.deepStrictEqual(await db.getConfigJson(STANDING_ORDERS_PREMIGRATION_BAK_KEY, null), onDisk(before),
+        'the premigration backup must hold the pre-migration array verbatim');
+
+    // Second pass: reference short-circuit, no write-chain entry at all.
+    const writesAfterFirst = db.writes.length;
+    const second = await loadEffectiveStandingOrders(db);
+    assert.strictEqual(db.writes.length, writesAfterFirst,
+        'a second pass must recognise nothing and never enter the write chain');
+    assert.deepStrictEqual(await db.getConfigJson(STANDING_ORDERS_PREMIGRATION_BAK_KEY, null), onDisk(before),
+        'the backup must never be overwritten by a later persist');
+    assert.deepStrictEqual(second.map(o => o.id).sort(), first.map(o => o.id).sort(),
+        'the effective set must be stable across passes');
+});
+
+testAsync('a failed persist still delivers a migrated prompt', async () => {
+    const db = fakeDb({ [STANDING_ORDERS_CONFIG_KEY]: staleRows() });
+    db.failSet = true;
+    const effective = await loadEffectiveStandingOrders(db);
+    assert.ok(!effective.some(o => o.instruction.includes('hand it to review yourself')),
+        'a failed write must fall back to the in-memory transform, never block or degrade delivery');
+    assert.ok(!effective.some(o => o.id === 'p1'), 'the stale pair row must still be filtered');
+});
+
+testAsync('an install with nothing stale is never written to', async () => {
+    const clean = [order({ id: 'x1', parent: 'a', child: 'b', scope: 'pair', instruction: 'hand-written' })];
+    const db = fakeDb({ [STANDING_ORDERS_CONFIG_KEY]: clean });
+    const out = await loadEffectiveStandingOrders(db);
+    assert.deepStrictEqual(out, JSON.parse(JSON.stringify(clean)));
+    assert.deepStrictEqual(db.writes, [], 'no recogniser fired, so nothing may be written — not even a backup');
+});
+
+// ── The read endpoint's markers: derived, additive, identity-stable ────────
+test('describeStandingOrderMigrations marks stale/dropped/effective without minting an id', () => {
+    const raw = staleRows();
+    const notes = describeStandingOrderMigrations(raw);
+
+    assert.deepStrictEqual(notes.get('p1'), { stale: true, dropped: true },
+        'the reviewer pair row exists on disk and contributes nothing — it must read as dropped');
+    const h1 = notes.get('h1');
+    assert.strictEqual(h1.stale, true);
+    assert.strictEqual(h1.effectiveInstruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1'),
+        'effectiveInstruction must be the text actually delivered');
+    assert.strictEqual(notes.has('x1'), false, 'an untouched operator order carries no marker');
+
+    // Identity stability: two calls, same keys — no crypto.randomUUID() leaks out.
+    assert.deepStrictEqual(
+        [...describeStandingOrderMigrations(raw).keys()].sort(),
+        [...notes.keys()].sort(),
+        'markers must be keyed on ON-DISK ids only, or the endpoint churns ids and breaks delete-by-id');
+});
+
+test('describeStandingOrderMigrations covers the pair-fold drop, not just the Coding rows', () => {
+    // The endpoint originally re-implemented only the Coding recognisers, so
+    // pre-rewrite per-member pair rows were dropped from every delivered prompt
+    // while the diagnostic surface reported them as ordinary live rows.
+    const instruction = PRE_REWRITE_CALLBACK_INSTRUCTION;
+    assert.ok(typeof instruction === 'string' && instruction.length > 0,
+        'PRE_REWRITE_CALLBACK_INSTRUCTION must be exported from teamWiring');
+
+    const raw = [order({ id: 'm1', parent: 'coder-1', child: 'lead-1', scope: 'pair', instruction })];
+    const notes = describeStandingOrderMigrations(raw);
+    assert.deepStrictEqual(notes.get('m1'), { stale: true, dropped: true },
+        'a folded per-member pair row must read as dropped — it is filtered from every delivered prompt');
+});
+
+test('describeStandingOrderMigrations is empty once the persist has run', () => {
+    const migrated = migrateCodingTeamOrders(migrateTeamPairOrders(staleRows()));
+    assert.strictEqual(describeStandingOrderMigrations(migrated).size, 0,
+        'no recogniser fires post-persist — permanently absent markers are the correct end state');
+});
+
+_drainAsyncCases().then(() => {
+    console.log(`\n${passed} passed, ${failed} failed`);
+    if (failed > 0) { process.exit(1); }
+});
+

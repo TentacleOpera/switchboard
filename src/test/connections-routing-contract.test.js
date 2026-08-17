@@ -189,5 +189,44 @@ test('connections.js handles every Remote push the host actually sends', () => {
     assert.ok(!cnxCode.includes('remoteHealthResult'), 'stale health message type still handled');
 });
 
+const PLANNING = fs.readFileSync(path.join(ROOT, 'src', 'services', 'PlanningPanelProvider.ts'), 'utf8');
+const BOOTSTRAP = fs.readFileSync(path.join(ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+
+// Scope each assertion to its own arm. A file-global `return { success: true, ... }`
+// count is useless: PlanningPanelProvider already has 18 of them, so a global check
+// is green before the fix lands and stays green if the fix is reverted.
+function armBody(verb) {
+    const start = PLANNING.indexOf(`case '${verb}': {`);
+    assert.ok(start >= 0, `arm '${verb}' not found`);
+    const next = PLANNING.indexOf("            case '", start + 10);
+    return PLANNING.slice(start, next > start ? next : start + 4000);
+}
+
+test('Connections-consumed createPlans arms return their typed body, not just a push', () => {
+    for (const [verb, type] of [
+        ['createPlansInit', 'createPlansState'],
+        ['createPlansPickFolder', 'createPlansFolderPicked'],
+        ['createPlansPasteBack', 'createPlansPasteBackResult'],
+    ]) {
+        const body = armBody(verb);
+        assert.ok(body.includes(`type: '${type}'`), `${verb} must still build a ${type} payload`);
+        assert.match(body, /return \{[^}]*success[^}]*\}/,
+            `${verb} must RETURN its payload: the browser Connections panel reaches it via `
+            + `/connections/verb → _handlePlanningVerb, the 'planning'-tagged push never reaches a `
+            + `connections-subscribed client, and transport.js drops an untyped body`);
+        assert.ok(body.includes('this.postMessageToWebview('),
+            `${verb} must keep its push — PRD contract #4 keeps the webview push additive`);
+    }
+});
+
+test("createPlansPasteBack's import command is bridged in BOTH hosts", () => {
+    // Registered in extension.ts for the extension host. In standalone an unbridged
+    // command falls through to vscodeShim.executeCommand, which warns and returns
+    // undefined WITHOUT throwing — so the arm takes its success branch and the panel
+    // renders "Plan card created" for a plan that was never written.
+    assert.match(BOOTSTRAP, /switchboardCommandRegistry\.register\(\s*'switchboard\.importPlanFromClipboard'/,
+        'standalone must bridge switchboard.importPlanFromClipboard or paste-back reports a false success');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) { process.exit(1); }

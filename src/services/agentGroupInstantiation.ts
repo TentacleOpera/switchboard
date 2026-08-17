@@ -1,5 +1,5 @@
 import { MAX_DELEGATES_PER_PARENT, MAX_LIVE_DELEGATE_PTYS } from '../standalone/ptyFleetService';
-import { wireSpawnedTeam, AGENT_GROUP_CALLBACK_INSTRUCTION } from './teamWiring';
+import { wireSpawnedTeam, AGENT_GROUP_CALLBACK_INSTRUCTION, type TerminalGroupsSettingsAccessor } from './teamWiring';
 
 // Re-exported for downstream consumers (e.g. the team-member-scope preset).
 // The instruction text now lives in teamWiring.ts, where the shared wiring
@@ -38,6 +38,7 @@ export interface AgentGroupCreateResult {
 
 export interface InstantiateAgentGroupOptions {
     db: any;
+    settings?: TerminalGroupsSettingsAccessor;
     group: any;
     cwd: string;
     /** Count of live delegate (parented) ptys across the whole fleet. */
@@ -119,7 +120,7 @@ export async function instantiateAgentGroupCore(
     // installed exactly once on this path, not twice.
     //
     // Terminals are already created — do not roll back. Surface the error.
-    const wired = await wireSpawnedTeam({ db, headName, children: workers, members: Array.isArray(group?.members) ? group.members : undefined, prompt: group?.prompt, headPrompt: group?.headPrompt });
+    const wired = await wireSpawnedTeam({ db, settings: opts.settings, headName, children: workers, members: Array.isArray(group?.members) ? group.members : undefined, prompt: group?.prompt, headPrompt: group?.headPrompt });
     if (!wired.ok) {
         return {
             success: true,

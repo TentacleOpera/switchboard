@@ -47,6 +47,28 @@ export function cleanupTerminalSendLock(key: string): void {
 const _backgroundSendQueues = new WeakMap<vscode.Terminal, Promise<void>>();
 
 
+// Ctrl+U (unix-line-discard) — see ptyPromptDelivery.ts for the full rationale.
+// sendText writes straight to the terminal's stdin without stealing focus, the same
+// way _sendRobustTextBackground writes its bracketed-paste markers below.
+export const CLEAR_INPUT_LINE = '\x15';
+// Exported so the HostTerminal seam leg in TaskViewerProvider — which cannot use
+// clearTerminalInputLine (its sendText is the seam's own two-arg signature, not
+// vscode.Terminal's) — paces off the same value instead of a copy that silently
+// stops tracking this one.
+export const CLEAR_INPUT_SETTLE_MS = 30;
+
+/**
+ * Reset a terminal's CLI input line. For the sendText-based legs; the clipboard
+ * leg uses pasteTextViaClipboard's `clearInputLine` option instead, because the
+ * byte must land AFTER focus acquisition, not before the clipboard lock.
+ */
+export async function clearTerminalInputLine(terminal: vscode.Terminal): Promise<void> {
+    try {
+        terminal.sendText(CLEAR_INPUT_LINE, false);
+        await new Promise(r => setTimeout(r, CLEAR_INPUT_SETTLE_MS));
+    } catch { /* terminal closed — nothing to reset */ }
+}
+
 // Named timing constants for clipboard paste operations
 const PRE_PASTE_SETTLE_MS = 200;
 
@@ -64,7 +86,7 @@ const POST_PASTE_SETTLE_MS = () => isRemoteTerminal() ? 300 : 100; // was 800
 export async function pasteTextViaClipboard(
     terminal: vscode.Terminal,
     text: string,
-    options?: { acquireFocus?: boolean }
+    options?: { acquireFocus?: boolean; clearInputLine?: boolean }
 ): Promise<void> {
     const acquireFocus = options?.acquireFocus !== false; // default true
     await withClipboardLock(async () => {
@@ -96,6 +118,15 @@ export async function pasteTextViaClipboard(
         } else {
             terminal.show(false);
             await new Promise(r => setTimeout(r, PRE_PASTE_SETTLE_MS));
+        }
+
+        // Reset the CLI input line immediately before the paste — never as part of
+        // the pasted text. workbench.action.terminal.paste delivers the clipboard
+        // inside a bracketed-paste block when the TUI has enabled ?2004h, where a
+        // control byte is literal text, so '\x15' + text in the clipboard is wrong.
+        if (options?.clearInputLine) {
+            terminal.sendText(CLEAR_INPUT_LINE, false);
+            await new Promise(r => setTimeout(r, CLEAR_INPUT_SETTLE_MS));
         }
 
         await vscode.commands.executeCommand('workbench.action.terminal.paste');

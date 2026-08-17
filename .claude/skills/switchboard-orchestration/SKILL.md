@@ -77,7 +77,15 @@ curl -s "$BASE/worktree/list"
 
 Plan records include: `planId`, `sessionId`, `topic`, `planFile`, `kanbanColumn`, `status`,
 `complexity`, `tags`, `project`, `isFeature`, `featureId`, `worktreeId`, `worktreeStatus`,
-`dispatchedAt` (null = not currently working).
+`dispatchedAt` (null = not currently working), `recommendedRole`.
+
+`recommendedRole` (`lead` | `coder` | `intern`) is the seat the **board** would route this plan
+to — resolved through the operator's `kanban.routingMapConfig` and the pair-mode intern bypass,
+the same rule `POST /kanban/dispatch` uses for `"auto"`. Dispatch a subtask to a seat of that
+role on your team; if your team has no such seat, dispatch to a coder and say why. Absent when
+the plan's complexity is unknown — treat absence as `coder`. Do **not** re-derive it by reading
+the plan file's `Recommendation:` line: nothing in the system parses that line, and a remapped
+board or an active pair mode would make it wrong.
 
 ---
 
@@ -188,7 +196,7 @@ prompt-delivery verb pair. The full contract lives in the
 
 | Endpoint | Body | Purpose |
 |---|---|---|
-| `POST /terminals/verb/ptySendPrompt` | `{ name, data, clearBeforePrompt }` | Deliver a prompt to a named terminal. **Pass `clearBeforePrompt: false` explicitly** — the omitted-field default has moved once already; if it moves back, every send wipes the coder's conversation. Both hosts apply standing orders (the callback contract). |
+| `POST /terminals/verb/ptySendPrompt` | `{ name, data, clearBeforePrompt, dispatch? }` | Deliver a prompt to a named terminal. **Pass `clearBeforePrompt: false` explicitly** — the omitted-field default has moved once already; if it moves back, every send wipes the coder's conversation. Both hosts apply standing orders (the callback contract). **Dispatching a subtask? Pass `dispatch: { planFile\|planId, role }`** — the host then registers the dispatch before delivering *and* attaches the protocol directives the board attaches (plan-file completion report + orchestrator reports directive), echoing `attributed` and `directivesAttached`. Without it the coder is never told to write a completion report, so a finished subtask reports nothing the board can see. Fails closed: `attributed: 0` → `success: false`, nothing delivered. Never send `dispatch` on a plain message or on a report back to your head — it would make the recipient write a plan file and fire a false `completed`. |
 | `POST /terminals/verb/ptyListTerminals` | `{}` | Enumerate live terminals: `{ terminals: [...], hiddenTerminals: [...] }`. Copy `friendlyName` verbatim. |
 | `POST /terminals/verb/ptyClearTerminal` | `{ name }` | Reset a named terminal's context. Send it when you put a terminal **at rest** — a clear issued at rest is what resets a coder you always send with `clearBeforePrompt: false`, and it lands long before the next dispatch instead of racing it. Never send it to your own terminal, and never use `ptyClearAllTerminals` (it clears every active terminal, you included). |
 

@@ -41,7 +41,11 @@ import { isPtyAvailable } from '../standalone/ptyBackend';
 // terminal bytes.
 import { PtyFleetService, PTY_IDE_NAME } from '../standalone/ptyFleetService';
 import { instantiateAgentGroupCore, InstantiateAgentGroupResult } from './agentGroupInstantiation';
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, migrateTeamPairOrders, migrateCodingTeamOrders, resolveTeamScopedRoleTerminal, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots } from './teamWiring';
+// The pure migrators are deliberately NOT imported here: every standing-orders
+// read in this file goes through `loadEffectiveStandingOrders`, which composes
+// them and persists the result. Importing them back would re-open the
+// four-site-convention hole the loader closed.
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from './teamWiring';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -50,7 +54,7 @@ let JSDOMClass: any;
 import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog';
 import { KanbanProvider } from './KanbanProvider';
 import type { SetupPanelProvider } from './SetupPanelProvider';
-import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock } from './terminalUtils';
+import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock, clearTerminalInputLine, CLEAR_INPUT_LINE, CLEAR_INPUT_SETTLE_MS } from './terminalUtils';
 import { buildFetchPlansPrompt, buildReconcilePrompt } from './schedulerPresets';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
 import {
@@ -75,7 +79,9 @@ import {
     normalizeNewlines,
     PROJECT_LINE_DIRECTIVE,
     resolveDelegateIdentityForTerminal,
-    buildSeatDirectiveBlock
+    buildSeatDirectiveBlock,
+    ensureDispatchProtocolDirectives,
+    validateDispatchPayload
 } from './agentPromptBuilder';
 import type { NotionFetchService } from './NotionFetchService';
 let NotionFetchServiceClass: any;
@@ -421,6 +427,40 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return { success: false, error: 'PTY host unavailable on this platform/installation' };
         }
 
+        // Seat-block cache invalidation. Runs BEFORE the verb is forwarded: a
+        // clear that then fails leaves the entry dropped, which costs one
+        // redundant block and never a suppression.
+        //
+        // FOUR seats-are-wiped paths reach this seam, not two:
+        //   - ptyClearTerminal / ptyClearAllTerminals — the obvious ones.
+        //   - a bare `/clear` ptyWrite. The sidebar's per-terminal "clear" and
+        //     broadcast "CLEAR TERMINALS" buttons post `sendToTerminal` with
+        //     `input: '/clear'`, and the content rule at :14421 routes a
+        //     single-line leading-slash string down the raw ptyWrite branch —
+        //     it never reaches a clear verb. Without this arm the seat's
+        //     context is empty while its cache entry survives, and the next
+        //     prompt is suppressed into a seat holding no git/subagent policy.
+        //   - ptyRenameTerminal, which wipes nothing but invalidates the LOOKUP:
+        //     entries are keyed on agentInstanceId and found here by name, while
+        //     ptyFleetService.rename() mutates friendlyName in place under an
+        //     unchanged instance id. A suppressed send never re-records, so a
+        //     surviving entry keeps a stale name and defeats every later
+        //     ptyClearTerminal on that seat. Dropping costs one redundant block.
+        const seatCacheDropName =
+            (verb === 'ptyClearTerminal' || verb === 'ptyRenameTerminal'
+                || (verb === 'ptyWrite' && String(payload?.data ?? '').trim() === '/clear'))
+                ? payload?.name
+                : undefined;
+        if (typeof seatCacheDropName === 'string') {
+            for (const [id, entry] of this._seatBlockCache.entries()) {
+                if (entry.name === seatCacheDropName) {
+                    this._seatBlockCache.delete(id);
+                }
+            }
+        } else if (verb === 'ptyClearAllTerminals') {
+            this._seatBlockCache.clear();
+        }
+
         // Append seat-scoped directive block AND standing-orders block at the
         // sole extension-host chokepoint. This covers the HTTP terminals rail,
         // the browser cockpit, and all internal fleet dispatches, because they
@@ -435,15 +475,69 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Standing orders: appended when the caller did not opt out
         // (standingOrders !== false).
         //
-        // Ordering (constraint 1): strip inbound SO → append seat block →
-        // applyStandingOrders. The $-anchored STANDING_ORDERS_BLOCK_RE requires
-        // the SO block to be last; inverting the order breaks the strip on the
-        // next send and delivers two SO blocks.
+        // Dispatch protocol: appended when caller supplies `dispatch` payload
+        // (ensureDispatchProtocolDirectives), before seat block and standing orders.
+        //
+        // Ordering (constraint 1): apply dispatch protocol directives →
+        // strip inbound SO → append seat block → applyStandingOrders. The $-anchored
+        // STANDING_ORDERS_BLOCK_RE requires the SO block to be last; inverting the
+        // order breaks the strip on the next send and delivers two SO blocks.
         //
         // ptyListTerminals is called ONCE and reused for both the live set
         // (standing orders) and role resolution (seat block) — do not add a
         // second list call.
+        let foldedAttributionResult: { attributed: number; skipped: number } | null = null;
+        let directivesAttached: string[] = [];
         if (verb === 'ptySendPrompt' && typeof payload?.data === 'string') {
+            const hasDispatch = payload?.dispatch !== undefined && payload?.dispatch !== null;
+            if (hasDispatch) {
+                // Shape-validate before the field reaches a DB UPDATE — reject,
+                // never coerce (see validateDispatchPayload).
+                const parsed = validateDispatchPayload(payload.dispatch);
+                if (!parsed.ok) {
+                    return { success: false, attributed: 0, skipped: 0, directivesAttached: [], error: parsed.error };
+                }
+                const { planId, planFile, role } = parsed.value;
+
+                if (!this._kanbanProvider) {
+                    return { success: false, error: 'Kanban provider unavailable for dispatch attribution' };
+                }
+
+                try {
+                    const attrRes = await this._kanbanProvider.handleServiceVerb('attributePastedPrompt', {
+                        terminalName: payload.name,
+                        role,
+                        planIds: planId ? [planId] : [],
+                        planFiles: planFile ? [planFile] : [],
+                        workspaceRoot: payload.workspaceRoot
+                    });
+                    if (!attrRes || attrRes.success === false || attrRes.attributed === 0) {
+                        return {
+                            success: false,
+                            attributed: attrRes?.attributed ?? 0,
+                            skipped: attrRes?.skipped ?? (planId || planFile ? 1 : 0),
+                            directivesAttached: [],
+                            error: attrRes?.error || 'Failed to attribute dispatch to any plan'
+                        };
+                    }
+                    foldedAttributionResult = {
+                        attributed: attrRes.attributed,
+                        skipped: attrRes.skipped ?? 0
+                    };
+                } catch (err) {
+                    return {
+                        success: false,
+                        attributed: 0,
+                        skipped: (planId || planFile ? 1 : 0),
+                        directivesAttached: [],
+                        error: err instanceof Error ? err.message : String(err)
+                    };
+                }
+
+                payload = { ...payload, data: ensureDispatchProtocolDirectives(payload.data) };
+                directivesAttached = ['COMPLETION REPORT', 'ORCHESTRATOR REPORT'];
+            }
+
             const applySO = payload?.standingOrders !== false;
             const applySeatBlock = payload?.addonsComposed !== true && payload?.seatBlock !== false;
             if (applySO || applySeatBlock) {
@@ -476,6 +570,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         ...terminals,
                         ...(Array.isArray(listed?.hiddenTerminals) ? listed.hiddenTerminals : [])
                     ];
+
+                    // Prune cache against live roleRows (terminals + hiddenTerminals)
+                    if (listed && (Array.isArray(listed.terminals) || Array.isArray(listed.hiddenTerminals))) {
+                        const liveInstanceIds = new Set<string>();
+                        for (const row of roleRows) {
+                            if (row?.agentInstanceId) {
+                                liveInstanceIds.add(row.agentInstanceId);
+                            }
+                        }
+                        for (const cachedId of this._seatBlockCache.keys()) {
+                            if (!liveInstanceIds.has(cachedId)) {
+                                this._seatBlockCache.delete(cachedId);
+                            }
+                        }
+                    }
+
                     let data = payload.data;
 
                     // Seat block — resolve role from the terminal record, build
@@ -485,6 +595,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // (guardrail ON) — never an empty block.
                     if (applySeatBlock) {
                         try {
+                            data = stripStandingOrdersBlock(data);
                             const targetRow = roleRows.find((t: any) => t.friendlyName === payload.name);
                             const role = targetRow?.role || '';
                             const seatOpts = this._kanbanProvider
@@ -492,7 +603,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 : null;
                             const seatBlock = seatOpts ? buildSeatDirectiveBlock(seatOpts) : '';
                             if (seatBlock) {
-                                data = stripStandingOrdersBlock(data) + '\n\n' + seatBlock;
+                                const instanceId = targetRow?.agentInstanceId;
+                                const isClearingSend = payload?.clearBeforePrompt === true;
+                                const cachedEntry = instanceId ? this._seatBlockCache.get(instanceId) : undefined;
+                                const shouldDeliver = !instanceId || isClearingSend || cachedEntry?.block !== seatBlock;
+                                if (shouldDeliver) {
+                                    data = data + '\n\n' + seatBlock;
+                                    if (instanceId) {
+                                        this._seatBlockCache.set(instanceId, { name: targetRow?.friendlyName || payload.name, block: seatBlock });
+                                    }
+                                }
                             }
                         } catch (err) {
                             console.warn('[TaskViewerProvider] Seat directive block append failed:', err);
@@ -503,21 +623,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // block is last (constraint 1). applyStandingOrders strips
                     // internally (no-op when the seat block already stripped).
                     if (applySO) {
-                        const orders = db ? await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []) : [];
-                        if (orders.length > 0) {
-                            // Migrate pre-rewrite per-member pair rows into team-scoped
-                            // orders, then migrate stale Coding-team orders, before
-                            // rendering. Pure transforms — no DB writes. Pair-fold
-                            // first, then Coding-team rewrite.
-                            const effectiveOrders = migrateCodingTeamOrders(migrateTeamPairOrders(orders));
-                            if (effectiveOrders.length > 0) {
-                                // Read registered terminal groups for team-scope membership
-                                // resolution. wireSpawnedTeam writes one group per started team
-                                // into terminals.groups; applyStandingOrders uses it to decide
-                                // whether a team-scoped order applies to this terminal.
-                                const groups = db ? await db.getConfigJson<TerminalGroup[]>('terminals.groups', []) : [];
-                                data = applyStandingOrders(data, payload.name, effectiveOrders, live, groups || []);
-                            }
+                        const effectiveOrders = db ? await loadEffectiveStandingOrders(db) : [];
+                        if (effectiveOrders.length > 0) {
+                            // Read registered terminal groups for team-scope membership
+                            // resolution. wireSpawnedTeam writes one group per started team
+                            // into terminals.groups; applyStandingOrders uses it to decide
+                            // whether a team-scoped order applies to this terminal.
+                            const groups = this._kanbanProvider
+                                ? this._kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
+                                : (db ? await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []) : []);
+                            data = applyStandingOrders(data, payload.name, effectiveOrders, live, groups || []);
                         }
                     }
 
@@ -614,6 +729,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     status: String(t.status ?? 'active'),
                 }));
             }
+            if (verb === 'ptySendPrompt' && result && typeof result === 'object') {
+                return {
+                    ...result,
+                    directivesAttached,
+                    ...(foldedAttributionResult ? {
+                        attributed: foldedAttributionResult.attributed,
+                        skipped: foldedAttributionResult.skipped
+                    } : {})
+                };
+            }
             return result;
         } catch (err) {
             return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -634,8 +759,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         try {
             const db = await this._getKanbanDb(this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '');
             if (!db) { return false; }
-            const orders = await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []);
-            if (!orders || orders.length === 0) { return false; }
+            const effectiveOrders = await loadEffectiveStandingOrders(db);
+            if (!effectiveOrders || effectiveOrders.length === 0) { return false; }
             // Build a live-names set spanning both PTY fleet terminals and VS
             // Code terminals. The PTY host chokepoint only sees PTY terminals;
             // the VS Code path must include VS Code terminal names or pair
@@ -655,12 +780,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             for (const t of (vscode.window.terminals || [])) {
                 if (t.exitStatus === undefined) { live.add(t.name); }
             }
-            const groups = await db.getConfigJson<TerminalGroup[]>('terminals.groups', []);
-            // Migrate pre-rewrite per-member pair rows into team-scoped orders,
-            // then migrate stale Coding-team orders, before rendering. Pure
-            // transforms — no DB writes. Pair-fold first, then Coding-team
-            // rewrite.
-            const effectiveOrders = migrateCodingTeamOrders(migrateTeamPairOrders(orders));
+            const groups = this._kanbanProvider
+                ? this._kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
+                : await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []);
             return { orders: effectiveOrders, liveNames: live, groups: groups || [] };
         } catch {
             return false;
@@ -850,6 +972,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     /** Hidden PTY fleet names (active only), used for unattended improver dispatch. */
     private _ptyHiddenTerminalNames: string[] = [];
     private _unattendedPlannerCursor = 0;
+    private _seatBlockCache = new Map<string, { name: string; block: string }>();
 
     /**
      * Liveness snapshot cache (all statuses), refreshed from the same
@@ -1277,6 +1400,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // `body` (pre-composed evidence) wins when set; otherwise the host
             // composes its own one-line message. `stalled` always carries a body
             // from the engine, but the fallback keeps a malformed nudge honest.
+            // Note: `composeCompletedTurnEndBody` in PlanIngestionEngine is the real producer for completed.
             const message = info.body ?? (info.outcome === 'completed'
                 ? `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${planFile}'.`
                 : info.outcome === 'stalled'
@@ -2486,11 +2610,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
-        // Pin the root the API routes resolve DBs against, so in-process readers of
-        // route-written stores (the standing-orders append in _ptyHostVerb) hit the
-        // same kanban.db. Re-assigned on every _startLocalApiServer call, which is
-        // re-entrant — it stays in lockstep with the `workspaceRoot` option below.
-        this._apiServerWorkspaceRoot = effectiveRoot;
+        // Pin the fleet's orders root on first start and latch it for the extension
+        // host lifetime. The fleet is one-shot per host (see comment below) and outlives
+        // individual server restarts, so its standing orders must remain anchored to the
+        // initial root even if the board switches workspace or the watchdog re-enters.
+        if (!this._apiServerWorkspaceRoot) {
+            this._apiServerWorkspaceRoot = effectiveRoot;
+        }
         const cacheService = this._getCacheService(effectiveRoot);
         const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
 
@@ -2925,7 +3051,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     const headName = result.terminal?.friendlyName;
                     if (headName) {
                         try {
-                            const wired = await wireSpawnedTeam({ db, headName, children: result.delegates, members: Array.isArray(payload.delegates) ? payload.delegates : undefined, prompt: payload.teamPrompt, headPrompt: payload.teamHeadPrompt });
+                            // Resolved against the pinned fleet root, NOT caller-supplied `root`
+                            // — a caller-supplied workspaceRoot on the HTTP create call must not steer
+                            // where a fleet's standing orders land (same invariant as the rename rewrite).
+                            const wiringDb = await this._getKanbanDb(this._apiServerWorkspaceRoot || effectiveRoot);
+                            // Bound to a local so the accessors cannot return `undefined`
+                            // when the provider is absent — an accessor that answers
+                            // `undefined` reads as "no groups" and would drop the roster.
+                            const kp = this._kanbanProvider;
+                            const settings: TerminalGroupsSettingsAccessor | undefined = kp
+                                ? {
+                                    get: (k, d) => kp._getScopedSetting(k, d),
+                                    set: (k, v) => kp._updateScopedSetting(k, v),
+                                }
+                                : undefined;
+                            const wired = wiringDb
+                                ? await wireSpawnedTeam({ db: wiringDb, settings, headName, children: result.delegates, members: Array.isArray(payload.delegates) ? payload.delegates : undefined, prompt: payload.teamPrompt, headPrompt: payload.teamHeadPrompt })
+                                : { ok: false as const, error: 'Fleet Kanban DB unavailable' };
                             if (!wired.ok) {
                                 // Surface the wiring error on the verb result;
                                 // do not fail the create — terminals are real.
@@ -3047,6 +3189,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
                 return this._kanbanProvider.resolveAutoDispatchColumn(_wsRoot, complexity);
             },
+            // Same score→role rule POST /kanban/dispatch routes by, exposed as
+            // `recommendedRole` on plan reads so a lead dispatches by the board's
+            // policy rather than a split baked into its prompt.
+            resolveRoutedRole: (score: number) => this._kanbanProvider
+                ? this._kanbanProvider.resolveRoutedRole(score)
+                : scoreToRoutingRole(score),
             moveCard: async (wsRoot, sessionId, targetColumn, planFile) => {
                 // Route the kanban_operations fallback script's move through the
                 // provider so it inherits the feature cascade, integration-sync fan-out,
@@ -5637,7 +5785,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
             if (clearBeforePrompt) {
                 try {
-                    await pasteTextViaClipboard(terminal, '/clear', { acquireFocus: true });
+                    await pasteTextViaClipboard(terminal, '/clear', { acquireFocus: true, clearInputLine: true });
                     await new Promise(r => setTimeout(r, 1000));
                     terminal.sendText('', true);
                     await new Promise(r => setTimeout(r, clearDelay));
@@ -11833,9 +11981,27 @@ Each plan file must include:
         if (!db || !(await db.ensureReady())) {
             return { success: false, error: 'Kanban DB not ready' };
         }
+        // Standing orders must land in the fleet root (what delivery reads), NOT the
+        // spawn root or definition root. Fallback to resolvedRoot when _apiServerWorkspaceRoot
+        // is unset (e.g. host without local API server).
+        const wiringDb = await this._getKanbanDb(this._apiServerWorkspaceRoot || resolvedRoot);
+        if (!wiringDb || !(await wiringDb.ensureReady())) {
+            return { success: false, error: 'Kanban DB not ready' };
+        }
+
+        // Bound to a local so the accessors cannot answer `undefined` (which would
+        // read as "no groups" and drop the roster) when the provider is absent.
+        const kp = this._kanbanProvider;
+        const settings: TerminalGroupsSettingsAccessor | undefined = kp
+            ? {
+                get: (k, d) => kp._getScopedSetting(k, d),
+                set: (k, v) => kp._updateScopedSetting(k, v),
+            }
+            : undefined;
 
         return instantiateAgentGroupCore({
-            db,
+            db: wiringDb,
+            settings,
             group,
             cwd: resolvedRoot,
             liveDelegateCount: async () => {
@@ -14370,6 +14536,11 @@ What would you like to find?`;
                         // callback contract). Switching the branch wholesale would paste a
                         // standing-orders block into every `/clear`; the content rule keeps
                         // the shipped callers byte-identical.
+                        // Control string: single line (no \n) starting with `/`.
+                        // Hoisted out of the PTY block so the non-PTY fallbacks below
+                        // share the same decision.
+                        const isControlString = !input.includes('\n') && input.trimStart().startsWith('/');
+
                         if (this._ptyHostPort) {
                             const normalized = this._normalizeAgentKey(this._stripIdeSuffix(name));
                             const res = await this._ptyHostVerb('ptyListTerminals', {});
@@ -14377,9 +14548,6 @@ What would you like to find?`;
                                 const target = res.terminals.find((t: any) => t.friendlyName === name)
                                     || res.terminals.find((t: any) => this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === normalized);
                                 if (target && target.status === 'active') {
-                                    // Control string: single line (no \n) starting with `/`.
-                                    // Keeps the four shipped `/clear` callers byte-for-byte.
-                                    const isControlString = !input.includes('\n') && input.trimStart().startsWith('/');
                                     let ptyRes: any;
                                     if (isControlString) {
                                         ptyRes = await this._ptyHostVerb('ptyWrite', { name: target.friendlyName, data: input + '\r' });
@@ -14453,8 +14621,15 @@ What would you like to find?`;
                             const soOpt = data.standingOrders === false
                                 ? false
                                 : await this._resolveStandingOrdersForVsCode();
+                            // Same rule as the PTY leg: reset the input line before a slash command, or
+                            // the CLI concatenates it with whatever the user left in the box.
+                            if (isControlString) { await clearTerminalInputLine(terminal); }
                             await sendRobustText(terminal, input, paced, undefined, { standingOrders: soOpt });
                         } else {
+                            if (isControlString && typeof terminal.sendText === 'function') {
+                                terminal.sendText(CLEAR_INPUT_LINE, false);
+                                await new Promise(r => setTimeout(r, CLEAR_INPUT_SETTLE_MS));
+                            }
                             terminal.sendText(input, true);
                         }
                         console.log(`[TaskViewer] sendToTerminal: sent to '${name}' (paced: ${paced}, len: ${input.length})`);
@@ -20571,7 +20746,7 @@ What would you like to find?`;
             const paced = meta.sender !== meta.recipient;
             if (clearBeforePrompt) {
                 try {
-                    await pasteTextViaClipboard(terminal, '/clear', { acquireFocus: true });
+                    await pasteTextViaClipboard(terminal, '/clear', { acquireFocus: true, clearInputLine: true });
                     // Submit the pasted /clear command
                     await new Promise(r => setTimeout(r, paced ? 1000 : 100));
                     terminal.sendText('', true);

@@ -7,7 +7,7 @@ import { parse as parseUrl } from 'url';
 import { isPtyAvailable } from './ptyBackend';
 import { PtyFleetService } from './ptyFleetService';
 import { TerminalWsGateway } from './terminalWsGateway';
-import { clearPty, modelPty, sendPromptToPty } from './ptyPromptDelivery';
+import { clearPty, modelPty, sendPromptToPty, writeSlashCommand } from './ptyPromptDelivery';
 
 interface PtyHostOptions {
     workspaceRoot: string;
@@ -184,7 +184,18 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 const handle = fleet.get(payload.name);
                 if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
                 if (handle.status === 'active') {
-                    handle.write(payload.data || '');
+                    const data: string = payload.data || '';
+                    // Content rule, mirroring sendToTerminal / bootstrap: a single-line
+                    // leading-slash write is a slash command, and every slash command gets
+                    // the input line reset first. writeSlashCommand also takes the
+                    // per-terminal lock, so the command cannot splice into an in-flight
+                    // chunked paste from sendPromptToPty (it previously could).
+                    const body = data.replace(/[\r\n]+$/, '');
+                    if (body && !body.includes('\n') && body.trimStart().startsWith('/')) {
+                        await writeSlashCommand(handle, body);
+                    } else {
+                        handle.write(data);
+                    }
                     return { success: true };
                 }
                 return { success: false, error: `Terminal ${payload.name} is not active` };

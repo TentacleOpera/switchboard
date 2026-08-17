@@ -41,6 +41,9 @@ const {
     ACCURATE_CODING_DIRECTIVE,
     FOCUS_DIRECTIVE,
     buildGitPolicyBlock,
+    ensureDispatchProtocolDirectives,
+    validateDispatchPayload,
+    DISPATCH_ROLES,
 } = require('../../out/services/agentPromptBuilder');
 
 const AGENT_PROMPT_BUILDER_SRC = fs.readFileSync(
@@ -798,9 +801,248 @@ test('applyStandingOrders and STANDING_ORDERS_BLOCK_RE are unchanged (no new log
     );
 });
 
+// ── 16. Seat Directive Block Memoization & Cache Invalidation ───────────
+
+test('TaskViewerProvider declares private _seatBlockCache Map', () => {
+    assert.ok(
+        TASK_VIEWER_SRC.includes('private _seatBlockCache = new Map<string, { name: string; block: string }>();'),
+        'TaskViewerProvider must declare _seatBlockCache Map<string, { name: string; block: string }>'
+    );
+});
+
+test('TaskViewerProvider keys seat block cache on agentInstanceId and not friendlyName', () => {
+    const verbStart = TASK_VIEWER_SRC.indexOf('private async _ptyHostVerb');
+    const verbEnd = TASK_VIEWER_SRC.indexOf('const http = require', verbStart);
+    const verbBody = TASK_VIEWER_SRC.slice(verbStart, verbEnd);
+    assert.ok(
+        verbBody.includes('this._seatBlockCache.get(instanceId)') || verbBody.includes('this._seatBlockCache.set(instanceId'),
+        '_ptyHostVerb must key _seatBlockCache on agentInstanceId'
+    );
+    assert.ok(
+        !verbBody.includes('this._seatBlockCache.get(payload.name)') && !verbBody.includes('this._seatBlockCache.set(payload.name'),
+        '_ptyHostVerb must NOT key _seatBlockCache on friendlyName (avoids terminal recreation trap)'
+    );
+});
+
+test('TaskViewerProvider invalidates seat block cache on ptyClearTerminal and ptyClearAllTerminals', () => {
+    const verbStart = TASK_VIEWER_SRC.indexOf('private async _ptyHostVerb');
+    const verbEnd = TASK_VIEWER_SRC.indexOf('const http = require', verbStart);
+    const verbBody = TASK_VIEWER_SRC.slice(verbStart, verbEnd);
+    assert.ok(
+        verbBody.includes("verb === 'ptyClearTerminal'") && verbBody.includes('this._seatBlockCache.delete('),
+        '_ptyHostVerb must delete from _seatBlockCache on ptyClearTerminal'
+    );
+    assert.ok(
+        verbBody.includes("verb === 'ptyClearAllTerminals'") && verbBody.includes('this._seatBlockCache.clear()'),
+        '_ptyHostVerb must clear _seatBlockCache on ptyClearAllTerminals'
+    );
+});
+
+test('TaskViewerProvider delivers seat block when clearBeforePrompt is true (board dispatch shape)', () => {
+    const verbStart = TASK_VIEWER_SRC.indexOf('private async _ptyHostVerb');
+    const verbEnd = TASK_VIEWER_SRC.indexOf('const http = require', verbStart);
+    const verbBody = TASK_VIEWER_SRC.slice(verbStart, verbEnd);
+    assert.ok(
+        verbBody.includes('payload?.clearBeforePrompt === true'),
+        '_ptyHostVerb must bypass suppression when clearBeforePrompt is true'
+    );
+});
+
+test('TaskViewerProvider prunes _seatBlockCache against live roleRows', () => {
+    const verbStart = TASK_VIEWER_SRC.indexOf('private async _ptyHostVerb');
+    const verbEnd = TASK_VIEWER_SRC.indexOf('const http = require', verbStart);
+    const verbBody = TASK_VIEWER_SRC.slice(verbStart, verbEnd);
+    assert.ok(
+        verbBody.includes('liveInstanceIds') && verbBody.includes('this._seatBlockCache.delete('),
+        '_ptyHostVerb must prune _seatBlockCache against live instance IDs'
+    );
+});
+
+test('standalone bootstrap declares seatBlockCache Map and keys on handle.agentInstanceId', () => {
+    const fnStart = BOOTSTRAP_SRC.indexOf('const deliverPrompt = async');
+    const fnEnd = BOOTSTRAP_SRC.indexOf('await sendPromptToPty', fnStart);
+    const fnBody = BOOTSTRAP_SRC.slice(fnStart, fnEnd);
+    assert.ok(
+        BOOTSTRAP_SRC.includes('const seatBlockCache = new Map<string, string>();'),
+        'bootstrap must declare seatBlockCache Map<string, string>'
+    );
+    assert.ok(
+        fnBody.includes('seatBlockCache.get(instanceId)') || fnBody.includes('seatBlockCache.set(instanceId, seatBlock)'),
+        'deliverPrompt must key seatBlockCache on handle.agentInstanceId'
+    );
+    assert.ok(
+        !fnBody.includes('seatBlockCache.get(handle.friendlyName)') && !fnBody.includes('seatBlockCache.set(handle.friendlyName'),
+        'deliverPrompt must NOT key seatBlockCache on friendlyName'
+    );
+});
+
+test('standalone bootstrap invalidates seatBlockCache on ptyClearTerminal and ptyClearAllTerminals', () => {
+    assert.ok(
+        /case\s+'ptyClearTerminal':[\s\S]*?seatBlockCache\.delete\(handle\.agentInstanceId\)/.test(BOOTSTRAP_SRC),
+        'bootstrap ptyClearTerminal must delete handle.agentInstanceId from seatBlockCache'
+    );
+    assert.ok(
+        /case\s+'ptyClearAllTerminals':[\s\S]*?seatBlockCache\.clear\(\)/.test(BOOTSTRAP_SRC),
+        'bootstrap ptyClearAllTerminals must clear seatBlockCache'
+    );
+});
+
+test('standalone deliverPrompt delivers seat block when opts.clearBeforePrompt is true', () => {
+    const fnStart = BOOTSTRAP_SRC.indexOf('const deliverPrompt = async');
+    const fnEnd = BOOTSTRAP_SRC.indexOf('await sendPromptToPty', fnStart);
+    const fnBody = BOOTSTRAP_SRC.slice(fnStart, fnEnd);
+    assert.ok(
+        fnBody.includes('opts?.clearBeforePrompt === true'),
+        'deliverPrompt must bypass suppression when opts.clearBeforePrompt is true'
+    );
+});
+
+test('standalone deliverPrompt prunes seatBlockCache against live active fleet', () => {
+    const fnStart = BOOTSTRAP_SRC.indexOf('const deliverPrompt = async');
+    const fnEnd = BOOTSTRAP_SRC.indexOf('await sendPromptToPty', fnStart);
+    const fnBody = BOOTSTRAP_SRC.slice(fnStart, fnEnd);
+    assert.ok(
+        fnBody.includes('ptyFleetService.listActive()') && fnBody.includes('seatBlockCache.delete('),
+        'deliverPrompt must prune seatBlockCache against live active fleet instance IDs'
+    );
+});
+
+test('TaskViewerProvider invalidates seat block cache on a bare /clear ptyWrite (sidebar clear buttons)', () => {
+    const verbStart = TASK_VIEWER_SRC.indexOf('private async _ptyHostVerb');
+    const verbEnd = TASK_VIEWER_SRC.indexOf('const http = require', verbStart);
+    const verbBody = TASK_VIEWER_SRC.slice(verbStart, verbEnd);
+    assert.ok(
+        verbBody.includes("verb === 'ptyWrite'") && verbBody.includes("=== '/clear'"),
+        "_ptyHostVerb must invalidate _seatBlockCache on a bare '/clear' ptyWrite — sendToTerminal routes the sidebar clear buttons down the raw-write branch, never through ptyClearTerminal"
+    );
+});
+
+test('TaskViewerProvider invalidates seat block cache on ptyRenameTerminal (stale-name trap)', () => {
+    const verbStart = TASK_VIEWER_SRC.indexOf('private async _ptyHostVerb');
+    const verbEnd = TASK_VIEWER_SRC.indexOf('const http = require', verbStart);
+    const verbBody = TASK_VIEWER_SRC.slice(verbStart, verbEnd);
+    assert.ok(
+        verbBody.includes("verb === 'ptyRenameTerminal'"),
+        '_ptyHostVerb must drop the seat entry on ptyRenameTerminal — the cache is found by name here while rename() mutates friendlyName under an unchanged agentInstanceId, so a surviving entry defeats every later ptyClearTerminal'
+    );
+});
+
+test('standalone sendToTerminal drops the seat block memo on a bare /clear write', () => {
+    const caseStart = BOOTSTRAP_SRC.indexOf("case 'sendToTerminal': {", BOOTSTRAP_SRC.indexOf('const handlePtyVerb'));
+    assert.ok(caseStart > 0, "bootstrap must have a sendToTerminal case in handlePtyVerb");
+    const caseEnd = BOOTSTRAP_SRC.indexOf('return { success: true, ...(created', caseStart);
+    const caseBody = BOOTSTRAP_SRC.slice(caseStart, caseEnd);
+    assert.ok(
+        caseBody.includes("text.trim() === '/clear'") && caseBody.includes('seatBlockCache.delete(handle.agentInstanceId)'),
+        "standalone sendToTerminal must drop the seat's seatBlockCache entry on a bare '/clear' write — that branch wipes the seat's context without reaching ptyClearTerminal"
+    );
+});
+
+// ── 7. Dispatch protocol & folded attribution ──────────────────────────────
+
+test('BEHAVIOUR: ensureDispatchProtocolDirectives attaches both completion and report directives idempotently', () => {
+    const raw = 'Please write the code according to the plan.';
+    const formatted = ensureDispatchProtocolDirectives(raw);
+    assert.ok(formatted.includes('COMPLETION REPORT:'), 'must attach completion directive');
+    assert.ok(formatted.includes('ORCHESTRATOR REPORT:'), 'must attach orchestrator report directive');
+
+    const doubleFormatted = ensureDispatchProtocolDirectives(formatted);
+    assert.strictEqual(doubleFormatted, formatted, 'ensureDispatchProtocolDirectives must be idempotent');
+});
+
+test('TaskViewerProvider _ptyHostVerb handles dispatch payload and folded attribution', () => {
+    assert.ok(
+        TASK_VIEWER_SRC.includes('ensureDispatchProtocolDirectives(payload.data)'),
+        'TaskViewerProvider must apply ensureDispatchProtocolDirectives when dispatch payload is present'
+    );
+    assert.ok(
+        TASK_VIEWER_SRC.includes("handleServiceVerb('attributePastedPrompt'"),
+        'TaskViewerProvider must invoke attributePastedPrompt for folded attribution'
+    );
+    assert.ok(
+        TASK_VIEWER_SRC.includes("directivesAttached = ['COMPLETION REPORT', 'ORCHESTRATOR REPORT']"),
+        'TaskViewerProvider must record directivesAttached on dispatch'
+    );
+    assert.ok(
+        TASK_VIEWER_SRC.includes('attrRes.attributed === 0'),
+        'TaskViewerProvider must fail-closed if attribution yields 0 attributed plans'
+    );
+});
+
+test('standalone bootstrap handlePtyVerb and deliverPrompt handle dispatch payload', () => {
+    assert.ok(
+        BOOTSTRAP_SRC.includes('ensureDispatchProtocolDirectives(out)'),
+        'bootstrap deliverPrompt must apply ensureDispatchProtocolDirectives on dispatch'
+    );
+    assert.ok(
+        BOOTSTRAP_SRC.includes("kanbanProvider.handleServiceVerb('attributePastedPrompt'"),
+        'bootstrap ptySendPrompt must fold attribution via kanbanProvider'
+    );
+    assert.ok(
+        BOOTSTRAP_SRC.includes('attrRes.attributed === 0'),
+        'bootstrap ptySendPrompt must fail-closed if attribution yields 0 attributed plans'
+    );
+});
+
+// `dispatch` is the first caller-settable prompt-composition field, and
+// `dispatch.planId` / `planFile` reach a DB UPDATE. `/terminals/verb/*` has no
+// per-field schema, so the reject-don't-coerce rule is the whole guard.
+test('BEHAVIOUR: validateDispatchPayload rejects bad shapes instead of coercing them', () => {
+    const good = validateDispatchPayload({ planId: '  abc  ', planFile: ' p.md ', role: ' coder ' });
+    assert.ok(good.ok, 'a well-formed dispatch must validate');
+    assert.deepStrictEqual(good.value, { planId: 'abc', planFile: 'p.md', role: 'coder' });
+
+    for (const bad of [[], 'x', 7, null, undefined]) {
+        assert.strictEqual(validateDispatchPayload(bad).ok, false, `dispatch=${JSON.stringify(bad)} must be rejected`);
+    }
+    for (const field of ['planId', 'planFile', 'role']) {
+        const res = validateDispatchPayload({ [field]: 42 });
+        assert.strictEqual(res.ok, false, `non-string dispatch.${field} must be rejected, not coerced to ''`);
+        assert.ok(res.error.includes(field), `the error must name the offending field: ${res.error}`);
+    }
+    const badRole = validateDispatchPayload({ planFile: 'p.md', role: 'wizard' });
+    assert.strictEqual(badRole.ok, false, 'an unknown role must be rejected — it is written to dispatched_agent');
+    for (const role of DISPATCH_ROLES) {
+        assert.ok(validateDispatchPayload({ role }).ok, `known seat role rejected: ${role}`);
+    }
+});
+
+// A schema entry that no route invokes is decoration. `/terminals/verb/*` had no
+// per-field validation at all, so the declared ptySendPrompt shape only bites if
+// the route calls the validator.
+test('the ptySendPrompt schema is declared AND invoked on the /terminals/verb rail', () => {
+    const schemas = fs.readFileSync(path.join(__dirname, '..', 'services', 'verbSchemas.ts'), 'utf8');
+    const api = fs.readFileSync(path.join(__dirname, '..', 'services', 'LocalApiServer.ts'), 'utf8');
+    const taskViewerBlock = schemas.slice(schemas.indexOf('export const TASK_VIEWER_VERB_SCHEMAS'));
+    assert.ok(
+        /ptySendPrompt: \{[\s\S]*?dispatch: \{ type: 'object' \}/.test(taskViewerBlock),
+        'TASK_VIEWER_VERB_SCHEMAS.ptySendPrompt must declare the dispatch field'
+    );
+    const handler = api.slice(api.indexOf('private async _handleTerminalVerb'));
+    const handlerBody = handler.slice(0, handler.indexOf('private async _handleTerminalsRelay'));
+    assert.ok(
+        /validateVerbPayload\('taskViewer', verb, body\)/.test(handlerBody),
+        '_handleTerminalVerb does not invoke validateVerbPayload — the declared ptySendPrompt schema is dead on the route the lead actually calls'
+    );
+    assert.ok(
+        /verb\.startsWith\('pty'\)/.test(handlerBody),
+        'the validation must stay scoped to the pty rail — sendToTerminal rides this route with a different payload per host'
+    );
+});
+
+test('both hosts validate the dispatch payload before it reaches the DB', () => {
+    for (const [name, src] of [['TaskViewerProvider', TASK_VIEWER_SRC], ['bootstrap', BOOTSTRAP_SRC]]) {
+        assert.ok(
+            src.includes('validateDispatchPayload(payload.dispatch)'),
+            `${name} must shape-validate dispatch — an unvalidated planId reaches attributePasteDispatch`
+        );
+    }
+});
+
 // ── Summary ──────────────────────────────────────────────────────────────
 
 setTimeout(() => {
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failed > 0) { process.exit(1); }
 }, 1000);
+

@@ -15,7 +15,8 @@ import {
     mutateStandingOrders,
     makeStandingOrder,
 } from './standingOrders';
-import { plausibleOriginTerminal } from './teamWiring';
+import { plausibleOriginTerminal, describeStandingOrderMigrations } from './teamWiring';
+import { parseComplexityScore } from './complexityScale';
 import {
     DEFAULT_KANBAN_COLUMNS,
     DISPLAY_MODE_COLUMNS,
@@ -27,6 +28,7 @@ import {
 } from './agentConfig';
 import { WsHub } from './wsHub';
 import { PLANNING_VERBS, SETUP_VERBS } from '../generated/verbAllowlist';
+import { validateVerbPayload } from './verbSchemas';
 import { isLoopbackHostHeader, isLoopbackOrigin } from '../utils/loopbackHostname';
 
 /** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
@@ -228,6 +230,16 @@ interface LocalApiServerOptions {
         targetColumn: string;
         reason: string;
     }>;
+    /**
+     * Score→role through the board's own rule (operator `kanban.routingMapConfig`
+     * first, then the default bands, then the pair-mode intern bypass). Stamped
+     * onto plan reads as `recommendedRole` so a lead dispatching a subtask follows
+     * the operator's configuration instead of parsing the plan file's
+     * `Recommendation:` line — nothing in src parses that line, and a baked-in
+     * split would silently override a remapped board and pair mode.
+     * Optional — absent in headless/test harnesses; rows then carry no field.
+     */
+    resolveRoutedRole?: (score: number) => 'lead' | 'coder' | 'intern';
     planningVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     ticketsVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     designVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
@@ -1912,6 +1924,25 @@ export class LocalApiServer {
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
 
+            // Network boundary for the pty rail. This route carried NO per-field
+            // validation, which was harmless while every prompt-composition field
+            // was host-composed — `dispatch` is the first caller-settable one and it
+            // reaches a DB UPDATE, so the declared shape has to be enforced where the
+            // caller actually arrives (both hosts construct this server, so one check
+            // covers both). Scoped to `pty*` deliberately: `sendToTerminal` rides this
+            // same rail with a DIFFERENT payload per host (`{name,input}` on the
+            // extension, `{terminalName,text}` on standalone), so validating it against
+            // the taskViewer shape would reject valid standalone calls. `ptySendPrompt`
+            // is today the only `pty*` verb with a declared schema.
+            if (verb.startsWith('pty')) {
+                const validation = validateVerbPayload('taskViewer', verb, body);
+                if (!validation.ok) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Invalid payload for '${verb}': ${validation.error}` }));
+                    return;
+                }
+            }
+
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await terminalVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -2333,6 +2364,23 @@ export class LocalApiServer {
      * GET /terminals/standing-orders — list active standing orders for the current
      * workspace. Returns `{ success: true, available, orders }`; `available` is false
      * when no kanban DB is reachable so the webview can gate the UI honestly.
+     *
+     * Keeps `orders` raw and identity-stable (preserving on-disk UUIDs for
+     * delete-by-id — `standing-orders-marker-contract.test.js` forbids returning
+     * migrated rows here, because the pair migration mints a fresh
+     * `crypto.randomUUID()` per call and the Link-up editor deletes by id).
+     * Staleness is therefore **additive per-row metadata**, not a rewritten
+     * array: `stale`, `dropped`, and `effectiveInstruction`.
+     *
+     * Those markers come from `describeStandingOrderMigrations`, which runs the
+     * SAME pure transforms delivery runs. Re-deriving them here from a local copy
+     * of a recogniser (or of `OLD_HEADPROMPT_FRAGMENT`) is the defect this
+     * endpoint exists to close: the one surface you would use to ask "what is
+     * this agent actually told?" must not be able to drift from the answer.
+     *
+     * Once the persisting pass in `loadEffectiveStandingOrders` has run, no
+     * recogniser fires and the markers are permanently absent. That is the
+     * correct end state, not a broken endpoint.
      */
     private async _handleStandingOrdersList(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -2349,12 +2397,19 @@ export class LocalApiServer {
 
         try {
             const raw = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
-            // Default absent `scope` to `pair` on read so the client always
-            // sees an explicit scope field, even for shipped-state rows.
-            const orders = (Array.isArray(raw) ? raw : []).map(o => ({
+            const rawArray = Array.isArray(raw) ? raw : [];
+
+            // Derived from the pure transforms, keyed by the row's ON-DISK id —
+            // no minted ids leak into the response.
+            const notes = describeStandingOrderMigrations(rawArray);
+            const orders = rawArray.map(o => ({
                 ...o,
-                scope: o.scope || 'pair' as StandingOrderScope,
+                // Default absent `scope` to `pair` on read so the client always
+                // sees an explicit scope field, even for shipped-state rows.
+                scope: (o.scope || 'pair') as StandingOrderScope,
+                ...(notes.get(o?.id) || {}),
             }));
+
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, available: true, orders }));
         } catch (err) {
@@ -2711,7 +2766,30 @@ export class LocalApiServer {
             } else {
                 plans = await this._resolveBoard(db);
             }
-            return plans;
+            return this._withRecommendedRole(plans);
+        });
+    }
+
+    /**
+     * Stamp `recommendedRole` on plan rows — the seat a lead should dispatch each
+     * subtask to. Resolved by the board (operator routing map + pair-mode bypass),
+     * never by an agent reading the plan file's `Recommendation:` line. Absent when
+     * the complexity is unknown or the host wired no resolver: the head prompt's
+     * documented fallback ("dispatch to a coder and say why") covers absence, and a
+     * guessed role would be worse than none.
+     */
+    private _withRecommendedRole(rows: any[]): any[] {
+        const resolve = this._options.resolveRoutedRole;
+        if (!resolve || !Array.isArray(rows)) { return rows; }
+        return rows.map(row => {
+            if (!row || typeof row !== 'object') { return row; }
+            const score = parseComplexityScore(String(row.complexity ?? ''));
+            if (!score) { return row; }
+            try {
+                return { ...row, recommendedRole: resolve(score) };
+            } catch {
+                return row;
+            }
         });
     }
 
@@ -2721,7 +2799,7 @@ export class LocalApiServer {
             if (!db) throw new Error('Kanban database not available');
             const board = await this._resolveBoard(db);
             const features = (board || []).filter((p: any) => p.isFeature === 1 || p.isFeature === true);
-            return features;
+            return this._withRecommendedRole(features);
         });
     }
 
@@ -2803,7 +2881,7 @@ export class LocalApiServer {
                 const abs = path.isAbsolute(record.planFile) ? record.planFile : path.join(root, record.planFile);
                 content = await fs.readFile(abs, 'utf8');
             } catch { /* file may be missing — return the record without content */ }
-            return { ...record, content };
+            return this._withRecommendedRole([{ ...record, content }])[0];
         });
     }
 

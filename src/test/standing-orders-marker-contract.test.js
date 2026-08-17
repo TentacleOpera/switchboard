@@ -863,7 +863,24 @@ new Function('exports', 'module', 'require', tsc.transpileModule(TEAM_WIRING_SRC
     compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
 }).outputText)(teamWiringModule.exports, teamWiringModule, teamWiringRequire);
 
-const { wireSpawnedTeam } = teamWiringModule.exports;
+const { wireSpawnedTeam, TERMINALS_LAYOUT_MODES } = teamWiringModule.exports;
+
+/**
+ * The panel's own layout whitelist, read out of terminals.js rather than
+ * restated: `LAYOUT_MODES = Object.keys(LAYOUTS)` is what both
+ * `loadLayoutSettings` and `reloadTerminalGroups` filter on, so it is the only
+ * correct yardstick for "is this stored layout keepable".
+ */
+const PANEL_LAYOUT_MODES = (() => {
+    const start = TERMINALS_JS_SRC.indexOf('const LAYOUTS = {');
+    assert.ok(start !== -1, 'terminals.js: `const LAYOUTS = {` not found');
+    const end = TERMINALS_JS_SRC.indexOf('\n    };', start);
+    assert.ok(end !== -1, 'terminals.js: end of LAYOUTS block not found');
+    const modes = [...TERMINALS_JS_SRC.slice(start, end).matchAll(/^\s*'([^']+)':\s*\{\s*slots:/gm)]
+        .map(m => m[1]);
+    assert.ok(modes.length >= 7, `terminals.js: parsed only ${modes.length} layout modes`);
+    return modes;
+})();
 
 /**
  * In-memory db stub for wireSpawnedTeam. getConfigJson/setConfigJson operate
@@ -984,9 +1001,315 @@ test('wireSpawnedTeam: children: [] => zero orders written and { ok: true } retu
         `children: []: expected zero orders written, got ${orders.length}`);
 });
 
+test('wireSpawnedTeam: group roster first-registration append path', async () => {
+    const db = makeInMemoryDb();
+    const result = await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: CODER_CHILDREN,
+        members: CODER_MEMBERS, prompt: 'team prompt {child}',
+    });
+    assert.strictEqual(result.ok, true);
+    const groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    assert.strictEqual(groups.length, 1, 'first registration appends group');
+    assert.strictEqual(groups[0].id, result.groupId);
+    assert.strictEqual(groups[0].name, HEAD_NAME);
+    assert.strictEqual(groups[0].source, 'manual');
+    assert.deepStrictEqual(groups[0].members, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-coder-3']);
+    assert.deepStrictEqual(groups[0].order, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-coder-3']);
+    // A new row must carry a layout the panel's own validator accepts, or both
+    // loadLayoutSettings and reloadTerminalGroups silently drop the group.
+    assert.ok(
+        PANEL_LAYOUT_MODES.includes(groups[0].layout),
+        `append path must write a LAYOUT_MODES-valid layout, got ${JSON.stringify(groups[0].layout)}`
+    );
+});
+
+test('wireSpawnedTeam: second run with different children replaces members and removes stale member (not union)', async () => {
+    const db = makeInMemoryDb();
+    // 1st run: 3 coders
+    await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: CODER_CHILDREN,
+        members: CODER_MEMBERS, prompt: 'team prompt {child}',
+    });
+    let groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    assert.strictEqual(groups.length, 1);
+    assert.deepStrictEqual(groups[0].members, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-coder-3']);
+
+    // 2nd run: 2 coders + 1 intern (lead-1-coder-3 removed, lead-1-intern added)
+    const newChildren = [
+        { friendlyName: 'lead-1-coder-1' },
+        { friendlyName: 'lead-1-coder-2' },
+        { friendlyName: 'lead-1-intern' },
+    ];
+    await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: newChildren,
+        prompt: 'team prompt {child}',
+    });
+    groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    assert.strictEqual(groups.length, 1, 'still exactly 1 group');
+    assert.deepStrictEqual(groups[0].members, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-intern']);
+    assert.deepStrictEqual(groups[0].order, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-intern']);
+    assert.ok(!groups[0].members.includes('lead-1-coder-3'), 'stale member lead-1-coder-3 must be removed');
+});
+
+test('wireSpawnedTeam: unknown keys on stored roster row survive upsert', async () => {
+    const db = makeInMemoryDb();
+    const groupId = 'team_' + encodeURIComponent(HEAD_NAME).replace(/[^a-zA-Z0-9_]/g, '_');
+    // Pre-populate store with custom fields
+    await db.setConfigJson('switchboard.prompts.terminals.groups', [
+        {
+            id: groupId,
+            name: HEAD_NAME,
+            source: 'manual',
+            customFlag: 'preserved-value',
+            uiCollapsed: true,
+            members: [HEAD_NAME, 'lead-1-coder-old'],
+            order: [HEAD_NAME, 'lead-1-coder-old'],
+        }
+    ]);
+
+    await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: CODER_CHILDREN,
+    });
+
+    const groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    assert.strictEqual(groups.length, 1);
+    assert.strictEqual(groups[0].customFlag, 'preserved-value', 'custom keys must survive');
+    assert.strictEqual(groups[0].uiCollapsed, true, 'custom boolean flags must survive');
+    assert.deepStrictEqual(groups[0].members, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-coder-3']);
+});
+
+test('wireSpawnedTeam: null/non-object stored entry with matching id is replaced', async () => {
+    const db = makeInMemoryDb();
+    const groupId = 'team_' + encodeURIComponent(HEAD_NAME).replace(/[^a-zA-Z0-9_]/g, '_');
+    // Pre-populate with null or primitive
+    await db.setConfigJson('switchboard.prompts.terminals.groups', [null, { id: 'other-group', members: [] }]);
+
+    await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: CODER_CHILDREN,
+    });
+
+    const groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    assert.strictEqual(groups.length, 3);
+    const teamGroup = groups.find(g => g && g.id === groupId);
+    assert.ok(teamGroup, 'group should be registered');
+    assert.deepStrictEqual(teamGroup.members, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-coder-3']);
+});
+
+test('wireSpawnedTeam: existing layout on stored row is preserved across re-runs', async () => {
+    const db = makeInMemoryDb();
+    const groupId = 'team_' + encodeURIComponent(HEAD_NAME).replace(/[^a-zA-Z0-9_]/g, '_');
+    // Pre-populate store with a custom layout '2x2'
+    await db.setConfigJson('switchboard.prompts.terminals.groups', [
+        {
+            id: groupId,
+            name: HEAD_NAME,
+            source: 'manual',
+            layout: '2x2',
+            members: [HEAD_NAME, 'lead-1-coder-old'],
+            order: [HEAD_NAME, 'lead-1-coder-old'],
+        }
+    ]);
+
+    // Spawn 1 child — head + 1 = 2 members, so layoutForTeamSize would pick '2h'.
+    await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: [{ friendlyName: 'lead-1-coder-1' }],
+    });
+
+    const groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    assert.strictEqual(groups.length, 1);
+    assert.strictEqual(groups[0].layout, '2x2', 'operator-authored layout must survive');
+    assert.deepStrictEqual(groups[0].members, [HEAD_NAME, 'lead-1-coder-1']);
+});
+
+test("wireSpawnedTeam: an operator's '2v' survives a re-run — the ladder is not the validator", async () => {
+    // '2v' is the discriminating case: it is a valid panel layout with its own
+    // button, but it is deliberately ABSENT from TEAM_LAYOUT_LADDER because a
+    // stacked pair is never auto-picked. Validating a stored layout against the
+    // ladder therefore reverts the one mode only an operator can have authored.
+    // A test pinned on '2x2' passes against both the correct and the broken
+    // implementation, which is why this one exists alongside it.
+    const db = makeInMemoryDb();
+    const groupId = 'team_' + encodeURIComponent(HEAD_NAME).replace(/[^a-zA-Z0-9_]/g, '_');
+    await db.setConfigJson('switchboard.prompts.terminals.groups', [
+        {
+            id: groupId,
+            name: HEAD_NAME,
+            source: 'manual',
+            layout: '2v',
+            members: [HEAD_NAME, 'lead-1-coder-old'],
+            order: [HEAD_NAME, 'lead-1-coder-old'],
+        }
+    ]);
+
+    await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: [{ friendlyName: 'lead-1-coder-1' }],
+    });
+
+    const groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    assert.strictEqual(groups[0].layout, '2v', "operator's stacked-pair layout must not revert to '2h'");
+    assert.deepStrictEqual(groups[0].members, [HEAD_NAME, 'lead-1-coder-1']);
+});
+
+test('wireSpawnedTeam: a stored layout outside the panel whitelist falls back to the computed one', async () => {
+    const db = makeInMemoryDb();
+    const groupId = 'team_' + encodeURIComponent(HEAD_NAME).replace(/[^a-zA-Z0-9_]/g, '_');
+    await db.setConfigJson('switchboard.prompts.terminals.groups', [
+        { id: groupId, name: HEAD_NAME, source: 'manual', layout: '9x9', members: [], order: [] }
+    ]);
+
+    await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: [{ friendlyName: 'lead-1-coder-1' }],
+    });
+
+    const groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    assert.ok(
+        PANEL_LAYOUT_MODES.includes(groups[0].layout),
+        `merged row must stay loadable, got ${JSON.stringify(groups[0].layout)}`
+    );
+});
+
+test('TERMINALS_LAYOUT_MODES is byte-identical to LAYOUT_MODES in terminals.js', () => {
+    assert.ok(TERMINALS_LAYOUT_MODES instanceof Set, 'teamWiring must export TERMINALS_LAYOUT_MODES as a Set');
+    assert.deepStrictEqual(
+        [...TERMINALS_LAYOUT_MODES].sort(),
+        [...PANEL_LAYOUT_MODES].sort(),
+        'the backend layout whitelist must mirror the panel\'s LAYOUTS keys — a mode present in one and '
+        + 'not the other either reverts an operator layout or writes a row the panel then drops'
+    );
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// reloadTerminalGroups (webview) — the second half of the roster upsert.
+// Executed, not pattern-matched: the backend upsert is invisible unless the
+// panel adopts `members`/`order` for an id it already holds.
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Extract `reloadTerminalGroups` from terminals.js and run it against injected
+ * closure state. The panel is one big IIFE, so the function is lifted whole and
+ * re-hosted with the four collaborators it closes over.
+ */
+function makeReloadHarness(initialGroups, backendGroups) {
+    const start = TERMINALS_JS_SRC.indexOf('    async function reloadTerminalGroups()');
+    assert.ok(start !== -1, 'terminals.js: reloadTerminalGroups not found');
+    const end = TERMINALS_JS_SRC.indexOf('    async function fetchTerminalList()', start);
+    assert.ok(end !== -1, 'terminals.js: end marker (fetchTerminalList) not found');
+    const src = TERMINALS_JS_SRC.slice(start, end);
+
+    const calls = { sidebar: 0, tabStrip: 0 };
+    const factory = new Function('deps', `
+        const LAYOUT_MODES = deps.LAYOUT_MODES;
+        const loadSetting = deps.loadSetting;
+        const renderSidebarList = deps.renderSidebarList;
+        const renderGroupTabStrip = deps.renderGroupTabStrip;
+        let terminalGroups = deps.terminalGroups;
+        let lastReadGroupIds = [];
+        ${src}
+        return {
+            reloadTerminalGroups,
+            groups: () => terminalGroups,
+            lastReadIds: () => lastReadGroupIds,
+        };
+    `);
+    const api = factory({
+        LAYOUT_MODES: PANEL_LAYOUT_MODES,
+        loadSetting: async () => JSON.parse(JSON.stringify(backendGroups)),
+        renderSidebarList: () => { calls.sidebar++; },
+        renderGroupTabStrip: () => { calls.tabStrip++; },
+        terminalGroups: initialGroups,
+    });
+    return { ...api, calls };
+}
+
+const ROSTER_ID = 'team_lead_1';
+function localRow(extra) {
+    return Object.assign({
+        id: ROSTER_ID,
+        name: HEAD_NAME,
+        source: 'manual',
+        layout: '2v',
+        members: [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-3'],
+        order: [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-3'],
+    }, extra || {});
+}
+
+test('reloadTerminalGroups: an id already in memory has members and order refreshed', async () => {
+    const local = [localRow({ pinnedByOperator: true })];
+    const fresh = [{
+        id: ROSTER_ID, name: HEAD_NAME, source: 'manual', layout: '2x2',
+        members: [HEAD_NAME, 'lead-1-coder-1', 'lead-1-intern'],
+        order: [HEAD_NAME, 'lead-1-coder-1', 'lead-1-intern'],
+    }];
+    const h = makeReloadHarness(local, fresh);
+    await h.reloadTerminalGroups();
+
+    assert.strictEqual(h.groups().length, 1, 'refresh must not append a second row for the same id');
+    assert.deepStrictEqual(h.groups()[0].members, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-intern']);
+    assert.deepStrictEqual(h.groups()[0].order, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-intern']);
+    assert.ok(!h.groups()[0].members.includes('lead-1-coder-3'), 'stale member must be dropped, not unioned');
+    assert.strictEqual(h.groups()[0].layout, '2v', 'layout is the panel\'s — the backend does not own it');
+    assert.strictEqual(h.groups()[0].pinnedByOperator, true, 'unknown local fields must survive');
+    assert.strictEqual(h.calls.sidebar, 1, 'a members-only change must redraw the sidebar');
+    assert.strictEqual(h.calls.tabStrip, 1, 'a members-only change must redraw the tab strip');
+});
+
+test('reloadTerminalGroups: an unchanged read triggers no redraw', async () => {
+    const local = [localRow()];
+    const h = makeReloadHarness(local, [localRow()]);
+    await h.reloadTerminalGroups();
+    assert.strictEqual(h.calls.sidebar, 0, 'an idempotent reload must not redraw');
+    assert.strictEqual(h.calls.tabStrip, 0);
+});
+
+test('reloadTerminalGroups: a new id is appended and a local-only group is left alone', async () => {
+    const local = [{
+        id: 'grp_local', name: 'my group', source: 'manual', layout: '1',
+        members: ['a'], order: ['a'],
+    }];
+    const h = makeReloadHarness(local, [localRow()]);
+    await h.reloadTerminalGroups();
+    assert.strictEqual(h.groups().length, 2, 'backend row added, local row kept');
+    assert.ok(h.groups().some(g => g.id === 'grp_local'), 'this loop never removes');
+    assert.strictEqual(h.calls.sidebar, 1);
+});
+
+test('reloadTerminalGroups: a row with non-array members cannot blank a populated local one', async () => {
+    const local = [localRow()];
+    const fresh = [{ id: ROSTER_ID, name: HEAD_NAME, source: 'manual', layout: '2x2', members: null, order: undefined }];
+    const h = makeReloadHarness(local, fresh);
+    await h.reloadTerminalGroups();
+    assert.deepStrictEqual(h.groups()[0].members, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-3']);
+    assert.deepStrictEqual(h.groups()[0].order, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-3']);
+    assert.strictEqual(h.calls.sidebar, 0);
+});
+
+test('reloadTerminalGroups: the same id twice in one read yields one row, last wins', async () => {
+    const fresh = [
+        { id: ROSTER_ID, name: HEAD_NAME, source: 'manual', layout: '2x2', members: ['x'], order: ['x'] },
+        { id: ROSTER_ID, name: HEAD_NAME, source: 'manual', layout: '2x2', members: ['y'], order: ['y'] },
+    ];
+    const h = makeReloadHarness([], fresh);
+    await h.reloadTerminalGroups();
+    assert.strictEqual(h.groups().length, 1, 'a duplicate id must not produce a duplicate row');
+    assert.deepStrictEqual(h.groups()[0].members, ['y'], 'last wins');
+});
+
+test('reloadTerminalGroups: a malformed backend row is filtered before it can enter panel state', async () => {
+    const fresh = [
+        { id: 'bad-layout', name: 'x', source: 'manual', layout: '9x9', members: [], order: [] },
+        { id: 'bad-source', name: 'x', source: 'ghost', layout: '1', members: [], order: [] },
+        null,
+    ];
+    const h = makeReloadHarness([], fresh);
+    await h.reloadTerminalGroups();
+    assert.strictEqual(h.groups().length, 0, 'validation filter must still gate panel state');
+});
+
 // Summary
 
 Promise.all(testPromises).then(() => {
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failed > 0) { process.exit(1); }
 });
+
+

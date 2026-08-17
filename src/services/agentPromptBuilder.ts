@@ -7,7 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { DefaultPromptOverride, CustomAgentAddons } from './agentConfig';
+import { DefaultPromptOverride, CustomAgentAddons, BUILT_IN_AGENT_LABELS } from './agentConfig';
 import { extractDesignSystemTokens, ExtractedDesignSystem } from './designSystemTokens';
 
 // One-time diagnostic for the ticket_updater mode collapse. Users who configured
@@ -989,6 +989,68 @@ export function ensureOrchestratorReportDirective(text: string): string {
     return text;
 }
 
+/**
+ * The protocol directives every code-touching dispatch carries, board or lead.
+ * Idempotent — each member guards on its own sentinel. Add new dispatch-protocol
+ * directives HERE, never at a call site.
+ */
+export function ensureDispatchProtocolDirectives(text: string): string {
+    return ensureOrchestratorReportDirective(ensureCompletionDirective(text));
+}
+
+/**
+ * Roles a `dispatch.role` may name. `dispatch.role` is METADATA written to
+ * `dispatched_agent` — it never selects a seat safeguard set (the seat block
+ * resolves role from the terminal record, which is why `seatBlock` is stripped
+ * at the HTTP boundary and `dispatch.role` must not become a way around it).
+ */
+export const DISPATCH_ROLES: ReadonlySet<string> = new Set(
+    Object.keys(BUILT_IN_AGENT_LABELS)
+);
+
+export interface ValidatedDispatch {
+    planId: string;
+    planFile: string;
+    role: string;
+}
+
+/**
+ * Shape-validate the caller-settable `dispatch` field of `ptySendPrompt`.
+ * `/terminals/verb/*` has no per-field schema, and `dispatch.planId` /
+ * `dispatch.planFile` reach a DB UPDATE — so reject unknown shapes rather than
+ * coercing them to `''` (a coerced planId silently becomes "attribute nothing",
+ * which the fail-closed arm then reports as an attribution failure and blames
+ * the plan rather than the payload). Both hosts call this.
+ */
+export function validateDispatchPayload(
+    dispatch: any
+): { ok: true; value: ValidatedDispatch } | { ok: false; error: string } {
+    if (!dispatch || typeof dispatch !== 'object' || Array.isArray(dispatch)) {
+        return { ok: false, error: 'dispatch must be an object' };
+    }
+    for (const field of ['planId', 'planFile', 'role'] as const) {
+        const v = dispatch[field];
+        if (v !== undefined && v !== null && typeof v !== 'string') {
+            return { ok: false, error: `dispatch.${field} must be a string` };
+        }
+    }
+    const role = typeof dispatch.role === 'string' ? dispatch.role.trim() : '';
+    if (role && !DISPATCH_ROLES.has(role)) {
+        return {
+            ok: false,
+            error: `dispatch.role '${role}' is not a known role (${[...DISPATCH_ROLES].join(', ')})`
+        };
+    }
+    return {
+        ok: true,
+        value: {
+            planId: typeof dispatch.planId === 'string' ? dispatch.planId.trim() : '',
+            planFile: typeof dispatch.planFile === 'string' ? dispatch.planFile.trim() : '',
+            role,
+        }
+    };
+}
+
 
 export const NO_SUBAGENTS_DIRECTIVE = "SUBAGENT POLICY: You are strictly forbidden from spawning or invoking any subagents. Handle all tasks yourself.";
 export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
@@ -1655,8 +1717,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
         // coder/lead/intern so its completion handshake is override-proof — without this,
         // a reviewer `replace` override silently breaks completion detection (the card's
         // working-state light never clears).
-        baseInstructions = ensureCompletionDirective(baseInstructions);
-        baseInstructions = ensureOrchestratorReportDirective(baseInstructions);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions);
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
@@ -1771,8 +1832,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureCompletionDirective(baseInstructions);
-        baseInstructions = ensureOrchestratorReportDirective(baseInstructions);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -1825,8 +1885,7 @@ For each plan:
             if (cavemanOutputEnabled) {
                 baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
             }
-            baseInstructions = ensureCompletionDirective(baseInstructions);
-        baseInstructions = ensureOrchestratorReportDirective(baseInstructions);
+            baseInstructions = ensureDispatchProtocolDirectives(baseInstructions);
 
 
             // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
@@ -1879,8 +1938,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureCompletionDirective(baseInstructions);
-        baseInstructions = ensureOrchestratorReportDirective(baseInstructions);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -1919,8 +1977,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureCompletionDirective(baseInstructions);
-        baseInstructions = ensureOrchestratorReportDirective(baseInstructions);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -2325,8 +2382,7 @@ export function buildCustomAgentPrompt(
     const customWritesCode =
         (customGitCommit === 'whenDone' || customGitPush === 'pushWhenDone') && !customGuardrailOn;
     if (customWritesCode) {
-        prompt = ensureCompletionDirective(prompt);
-        prompt = ensureOrchestratorReportDirective(prompt);
+        prompt = ensureDispatchProtocolDirectives(prompt);
     }
 
     return normalizeNewlines(prompt);

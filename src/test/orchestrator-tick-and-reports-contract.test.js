@@ -41,6 +41,17 @@ const path = require('path');
 const ROOT = process.cwd();
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
+/** Every .ts/.js under src/, repo-relative. Used by the no-stray-caller greps. */
+function srcFiles(dir = 'src') {
+    const out = [];
+    for (const entry of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+        const rel = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) { out.push(...srcFiles(rel)); }
+        else if (/\.(ts|js)$/.test(entry.name)) { out.push(rel); }
+    }
+    return out;
+}
+
 const PERSONA = '.agents/skills/switchboard-orchestrator/SKILL.md';
 const ORCHESTRATION = '.agents/skills/switchboard-orchestration/SKILL.md';
 const LAUNCHER = '.agents/workflows/switchboard.md';
@@ -354,16 +365,38 @@ async function run() {
         }
     });
 
-    await check('the report directive travels with every completion directive, and never replaces it', () => {
-        const builder = read('src/services/agentPromptBuilder.ts');
-        const completions = (builder.match(/= ensureCompletionDirective\(/g) || []).length;
-        const reports = (builder.match(/= ensureOrchestratorReportDirective\(/g) || []).length;
-        assert.ok(completions > 0, 'ensureCompletionDirective has no call sites');
-        assert.strictEqual(
-            reports,
-            completions,
-            `ensureOrchestratorReportDirective is wired at ${reports} of ${completions} completion-directive call sites — the unwired ones give agents no reply channel`
+    // The bundle is the only place the two directives are named. A count of
+    // bundle call sites cannot see the drift this replaces: it stays green when a
+    // seventh site re-adds a bare `ensureCompletionDirective(` with no report
+    // directive beside it — the exact failure the superseded counting assertion
+    // was written for. Grep for the function names instead, across all of src.
+    await check('ensureCompletionDirective / ensureOrchestratorReportDirective have no callers outside the bundle', () => {
+        const offenders = [];
+        for (const rel of srcFiles()) {
+            // Tests legitimately import the members to assert their behaviour.
+            if (rel.startsWith('src/test/')) { continue; }
+            const body = read(rel);
+            const lines = body.split('\n');
+            lines.forEach((line, i) => {
+                if (!/\bensure(CompletionDirective|OrchestratorReportDirective)\s*\(/.test(line)) { return; }
+                // Prose naming the function is not a call site.
+                if (/^\s*(\/\/|\*|\/\*)/.test(line)) { return; }
+                // The definitions themselves, and the one line inside the bundle
+                // that composes them, are the permitted occurrences.
+                if (/^\s*export function ensure(CompletionDirective|OrchestratorReportDirective)\s*\(/.test(line)) { return; }
+                if (/return ensureOrchestratorReportDirective\(ensureCompletionDirective\(text\)\);/.test(line)) { return; }
+                offenders.push(`${rel}:${i + 1}`);
+            });
+        }
+        assert.deepStrictEqual(
+            offenders, [],
+            'these sites name a protocol directive directly instead of calling ensureDispatchProtocolDirectives — '
+            + 'a site that pairs them by hand is one edit away from pairing them wrong: ' + offenders.join(', ')
         );
+        const builder = read('src/services/agentPromptBuilder.ts');
+        const bundles = (builder.match(/ensureDispatchProtocolDirectives\(/g) || []).length;
+        // 6 board composition sites + the definition.
+        assert.ok(bundles >= 7, `ensureDispatchProtocolDirectives has ${bundles} occurrences in the builder, expected at least 7`);
         assert.ok(
             /IN ADDITION TO, never INSTEAD OF/.test(builder),
             'the report directive must state it is in addition to the plan-file completion report — read as a replacement it breaks completion detection for every card'
@@ -372,6 +405,46 @@ async function run() {
             !/CODING_COMPLETION_REPORT_DIRECTIVE\s*=\s*`[^`]*ORCHESTRATOR REPORT/.test(builder),
             'the report directive was folded into the completion directive, whose exact text is load-bearing for completion detection'
         );
+    });
+
+    // A lead-dispatched agent is told the same as a board-dispatched one only if
+    // BOTH delivery chokepoints attach the bundle. Implementing one host splits
+    // the two hosts on prompt content, which the PRD forbids.
+    await check('both delivery chokepoints attach the dispatch protocol bundle', () => {
+        for (const [file, needle] of [
+            ['src/services/TaskViewerProvider.ts', 'ensureDispatchProtocolDirectives(payload.data)'],
+            ['src/standalone/bootstrap.ts', 'ensureDispatchProtocolDirectives(out)'],
+        ]) {
+            assert.ok(
+                read(file).includes(needle),
+                `${file} does not attach the dispatch protocol bundle — a lead dispatching through this host gets no completion directive, and its coders' finished subtasks report nothing the sweep can see`
+            );
+        }
+    });
+
+    // The lead's seat-routing line names `recommendedRole`. A prompt that names a
+    // field no read returns is the same defect class this plan exists to remove.
+    await check('the recommendedRole the head prompt names is actually stamped by the plan reads', () => {
+        const api = read('src/services/LocalApiServer.ts');
+        assert.ok(
+            /recommendedRole: resolve\(score\)/.test(api),
+            'no read stamps recommendedRole — the head prompt tells the lead to read a field that does not exist'
+        );
+        for (const site of ['_withRecommendedRole(plans)', '_withRecommendedRole(features)', '_withRecommendedRole([{ ...record, content }])']) {
+            assert.ok(api.includes(site), `plan read missing the recommendedRole stamp: ${site}`);
+        }
+        for (const file of ['src/services/TaskViewerProvider.ts', 'src/standalone/bootstrap.ts']) {
+            assert.ok(
+                /resolveRoutedRole: /.test(read(file)),
+                `${file} does not wire resolveRoutedRole — recommendedRole would be absent on this host only`
+            );
+        }
+        for (const file of ['src/services/teamWiring.ts', 'src/webview/terminals.js', 'src/webview/kanban.html']) {
+            assert.ok(
+                read(file).includes('a recommendedRole; dispatch it to a seat of that role'),
+                `${file}'s head prompt lost the seat-routing line`
+            );
+        }
     });
 
     // ─── 8. Start seats, confirm arms — the two doors behave identically ─────

@@ -261,6 +261,91 @@ function post(port, pathname, body) {
         );
     });
 
+    // --- one rule, both hosts: reset the input line before a slash command ---
+    // An agent CLI's input box is a persistent buffer. Anything the user left in
+    // it concatenates with the next write, so `/clear` arrives as `…text/clear` —
+    // a prompt, not a command — and the context is never reset. Every leg that
+    // writes a slash command must emit Ctrl+U (\x15) first, OUTSIDE any paste
+    // framing. pty-prompt-delivery-framing.test.js pins the byte sequence on the
+    // in-process helper; these assertions pin the legs that helper cannot see:
+    // the child process, the standalone host, and the two VS Code paths.
+    await test('every slash-command write leg resets the input line first (both hosts)', () => {
+        const delivery = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyPromptDelivery.ts'), 'utf8');
+        assert.ok(
+            /export async function writeSlashCommand\b/.test(delivery)
+            && /export async function writeSlashCommandLocked\b/.test(delivery),
+            'ptyPromptDelivery must export BOTH writeSlashCommand (takes the terminal lock) and writeSlashCommandLocked (for callers already inside it) — withTerminalLock is a promise chain, not a reentrant mutex, so one variant cannot serve both.'
+        );
+        assert.ok(
+            !/handle\.write\('\/(clear|model)/.test(delivery),
+            'no bare handle.write of a slash command may remain in ptyPromptDelivery — every one must route through writeSlashCommand(Locked).'
+        );
+
+        // Child process (leg: ptyWrite, the only path implementation.html's four
+        // clear buttons take to a PTY seat under the extension host).
+        const child = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyHost.ts'), 'utf8');
+        const ptyWriteArm = child.slice(child.indexOf("case 'ptyWrite'"), child.indexOf("case 'ptyPasteImage'"));
+        assert.ok(ptyWriteArm.length > 0, "ptyHost.ts must still serve a 'ptyWrite' arm");
+        assert.ok(
+            /writeSlashCommand\(/.test(ptyWriteArm) && /startsWith\('\/'\)/.test(ptyWriteArm),
+            "the ptyWrite arm must route a single-line leading-slash write through writeSlashCommand — the rule lives at the write, not in the caller, or a future ptyWrite caller silently opts out."
+        );
+
+        // Standalone host (same four buttons, in-process fleet).
+        // Anchor inside handlePtyVerb: the kanbanVerb router also carries a
+        // `case 'sendToTerminal'`, but it only forwards here behind the ptyReady
+        // guard — the real write leg is this one.
+        const boot = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        const ptyRouter = boot.slice(boot.indexOf('const handlePtyVerb'));
+        const sendToTerminalArm = ptyRouter.slice(ptyRouter.indexOf("case 'sendToTerminal'"));
+        assert.ok(
+            /writeSlashCommand\(/.test(sendToTerminalArm.slice(0, 3000)),
+            "bootstrap's sendToTerminal control-string branch must use writeSlashCommand, not a raw handle.write(text + '\\r')."
+        );
+
+        // VS Code clipboard leg: POSITION is the whole bug. The byte must be
+        // emitted after focus has settled and BEFORE the paste command — inside
+        // the pasted text it is literal, and before the clipboard lock it can
+        // precede its own /clear by seconds under batch dispatch.
+        const utils = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'terminalUtils.ts'), 'utf8');
+        assert.ok(
+            /clearInputLine\?:\s*boolean/.test(utils),
+            'pasteTextViaClipboard must expose a clearInputLine option (default OFF, so sendRobustText large-prompt pastes stay byte-identical).'
+        );
+        const clearIdx = utils.indexOf('options?.clearInputLine');
+        const pasteIdx = utils.indexOf("executeCommand('workbench.action.terminal.paste')");
+        const settleIdx = utils.indexOf('PRE_PASTE_SETTLE_MS));');
+        assert.ok(clearIdx !== -1 && pasteIdx !== -1 && settleIdx !== -1, 'terminalUtils must keep the focus-settle → clear → paste sequence recognisable');
+        assert.ok(
+            settleIdx < clearIdx && clearIdx < pasteIdx,
+            'the Ctrl+U must be emitted AFTER focus acquisition/settle and BEFORE workbench.action.terminal.paste — both misplacements fail silently.'
+        );
+
+        // VS Code sendText legs.
+        assert.ok(
+            /export async function clearTerminalInputLine\(/.test(utils),
+            'terminalUtils must export clearTerminalInputLine for the sendText-based legs.'
+        );
+        const ext = fs.readFileSync(path.join(REPO_ROOT, 'src', 'extension.ts'), 'utf8');
+        assert.ok(
+            /clearTerminalInputLine\(terminal\)[\s\S]{0,120}?sendRobustText\(terminal,\s*'\/clear'/.test(ext),
+            "switchboard.clearAllTerminals must reset the input line before sendRobustText('/clear') — /clear is under the clipboard threshold, so it takes the sendText branch and concatenates."
+        );
+        const tvp = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
+        assert.ok(
+            !/pasteTextViaClipboard\(terminal,\s*'\/clear',\s*\{\s*acquireFocus:\s*true\s*\}/.test(tvp),
+            "every pasteTextViaClipboard(terminal, '/clear', …) call must pass clearInputLine: true."
+        );
+        assert.ok(
+            /if \(isControlString\) \{ await clearTerminalInputLine\(terminal\); \}/.test(tvp),
+            "sendToTerminal's registered-vscode.Terminal fallback must reset the input line for control strings — a PTY-only fix leaves VS Code terminal agents broken while every other leg reports done."
+        );
+        assert.ok(
+            /isControlString[\s\S]{0,200}?sendText\(CLEAR_INPUT_LINE, false\)/.test(tvp),
+            "sendToTerminal's HostTerminal seam fallback must write CLEAR_INPUT_LINE with addNewLine=false — true would submit the reset as its own line."
+        );
+    });
+
     await test('terminals.js dials the pty host origin, not the page origin', () => {
         // Plan 3's regression: the panel and the gateway are no longer the same server
         // under the extension host. Rebuilding the socket URL from location.host

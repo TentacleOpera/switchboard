@@ -13,6 +13,8 @@ import {
     columnToPromptRole,
     FOCUS_DIRECTIVE,
     buildSeatDirectiveBlock,
+    ensureDispatchProtocolDirectives,
+    validateDispatchPayload,
 } from '../services/agentPromptBuilder';
 import { writeOrchestratorReport } from '../services/ScheduledJobsService';
 import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets, createStandaloneFolderWatcher } from './hostServices';
@@ -35,7 +37,7 @@ import { isPtyAvailable } from './ptyBackend';
 import { SURFACES } from '../services/wsHub';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 import { TerminalWsGateway } from './terminalWsGateway';
-import { sendPromptToPty, clearPty, modelPty } from './ptyPromptDelivery';
+import { sendPromptToPty, clearPty, modelPty, writeSlashCommand } from './ptyPromptDelivery';
 import {
     applyStandingOrders,
     stripStandingOrdersBlock,
@@ -45,7 +47,10 @@ import {
     rewriteStandingOrdersForRename,
 } from '../services/standingOrders';
 import { instantiateAgentGroupCore } from '../services/agentGroupInstantiation';
-import { wireSpawnedTeam, findTeamForHeadRole, migrateTeamPairOrders, migrateCodingTeamOrders } from '../services/teamWiring';
+// The pure migrators are deliberately NOT imported here — see the note at the
+// matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
+// only server-side reader of `terminals.standingOrders` in either host.
+import { wireSpawnedTeam, findTeamForHeadRole, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -223,6 +228,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         clearBeforePromptDelayMs: resolveStandalonePtyClearDelay(),
     });
 
+    const seatBlockCache = new Map<string, string>();
+
     /**
      * Sole standalone chokepoint for prompt delivery. Every `sendPromptToPty` call
      * in this host is replaced with `deliverPrompt` so the seat directive block and
@@ -233,21 +240,44 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
      * the extension's `standingOrders` field. `applySeatBlock` (5th) controls the
      * seat-scoped directive block — host-only, like the extension's `seatBlock`
      * field. Both default true; machine-origin notices (turn-end) pass both false.
+     * `dispatch` (6th) controls the dispatch protocol directives bundle when present.
      *
-     * Ordering (constraint 1): strip inbound SO → append seat block →
-     * applyStandingOrders. The $-anchored STANDING_ORDERS_BLOCK_RE requires the
-     * SO block to be last; inverting the order breaks the strip on the next send.
+     * Ordering (constraint 1): apply dispatch protocol directives →
+     * strip inbound SO → append seat block → applyStandingOrders. The $-anchored
+     * STANDING_ORDERS_BLOCK_RE requires the SO block to be last; inverting the
+     * order breaks the strip on the next send.
      */
     const deliverPrompt = async (
         handle: any,
         text: string,
         opts: any,
         applyOrders = true,
-        applySeatBlock = true
+        applySeatBlock = true,
+        dispatch?: any
     ): Promise<void> => {
+        // Prune cache against live active fleet
+        try {
+            const activeHandles = ptyFleetService.listActive();
+            const liveInstanceIds = new Set<string>();
+            for (const h of activeHandles) {
+                if (h?.agentInstanceId) {
+                    liveInstanceIds.add(h.agentInstanceId);
+                }
+            }
+            for (const cachedId of seatBlockCache.keys()) {
+                if (!liveInstanceIds.has(cachedId)) {
+                    seatBlockCache.delete(cachedId);
+                }
+            }
+        } catch { /* best-effort prune */ }
+
         let out = text;
+        if (dispatch && typeof dispatch === 'object') {
+            out = ensureDispatchProtocolDirectives(out);
+        }
         if (applySeatBlock) {
             try {
+                out = stripStandingOrdersBlock(out);
                 // Role comes straight off the terminal handle — no IPC needed.
                 // An unresolved role (empty string) falls back to workspace
                 // defaults (guardrail ON) — never an empty block.
@@ -257,24 +287,28 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     : null;
                 const seatBlock = seatOpts ? buildSeatDirectiveBlock(seatOpts) : '';
                 if (seatBlock) {
-                    out = stripStandingOrdersBlock(out) + '\n\n' + seatBlock;
+                    const instanceId = handle?.agentInstanceId;
+                    const isClearingSend = opts?.clearBeforePrompt === true;
+                    const cachedBlock = instanceId ? seatBlockCache.get(instanceId) : undefined;
+                    const shouldDeliver = !instanceId || isClearingSend || cachedBlock !== seatBlock;
+                    if (shouldDeliver) {
+                        out = out + '\n\n' + seatBlock;
+                        if (instanceId) {
+                            seatBlockCache.set(instanceId, seatBlock);
+                        }
+                    }
                 }
             } catch { /* a degraded prompt beats a lost dispatch */ }
         }
         if (applyOrders) {
             try {
-                const orders = await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []);
-                if (orders.length > 0) {
-                    // Migrate pre-rewrite per-member pair rows into team-scoped
-                    // orders, then migrate stale Coding-team orders, before
-                    // rendering. Pure transforms — no DB writes. Pair-fold
-                    // first, then Coding-team rewrite.
-                    const effectiveOrders = migrateCodingTeamOrders(migrateTeamPairOrders(orders));
-                    if (effectiveOrders.length > 0) {
-                        const live = new Set(ptyFleetService.listActive().map(t => t.friendlyName));
-                        const groups = await db.getConfigJson<TerminalGroup[]>('terminals.groups', []);
-                        out = applyStandingOrders(out, handle.friendlyName, effectiveOrders, live, groups || []);
-                    }
+                const effectiveOrders = await loadEffectiveStandingOrders(db);
+                if (effectiveOrders.length > 0) {
+                    const live = new Set(ptyFleetService.listActive().map(t => t.friendlyName));
+                    const groups = kanbanProvider
+                        ? kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
+                        : await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []);
+                    out = applyStandingOrders(out, handle.friendlyName, effectiveOrders, live, groups || []);
                 }
             } catch { /* a degraded prompt beats a lost dispatch */ }
         }
@@ -895,6 +929,36 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     switchboardCommandRegistry.register('revealInExplorer', async () => undefined);
     switchboardCommandRegistry.register('vscode.open', async () => undefined);
 
+    // PlanningPanelProvider's createPlansPasteBack arm (Connections → Web Agents)
+    // calls this command through the commands seam. It is registered in
+    // src/extension.ts:1150 for the extension host ONLY; unregistered here the seam
+    // falls through to vscodeShim.executeCommand, which warns and returns undefined
+    // WITHOUT throwing — so the arm reports a success for a plan that was never
+    // written. Bridge it to the same ingest path the board's own clipboard import uses.
+    switchboardCommandRegistry.register('switchboard.importPlanFromClipboard', async (markdownText?: string, _options?: { projectName?: string }) => {
+        const md = typeof markdownText === 'string' ? markdownText : '';
+        if (!md.trim()) {
+            throw new Error('Clipboard import needs markdown from the browser; none was provided (headless has no server-side clipboard access).');
+        }
+        if (md.length > 200_000) {
+            throw new Error('Clipboard content too large (>200 KB). Aborting import.');
+        }
+        const extractTitle = (text: string): string => {
+            const h1 = text.match(/^#\s+(.+)$/m); if (h1) { return h1[1].trim(); }
+            const h2 = text.match(/^##\s+(.+)$/m); if (h2) { return h2[1].trim(); }
+            const h3 = text.match(/^###\s+(.+)$/m); if (h3) { return h3[1].trim(); }
+            return 'Imported Plan';
+        };
+        const hasMulti = /^---\s*PLAN\s*---\s*$/m.test(md);
+        const chunks = hasMulti
+            ? md.split(/^---\s*PLAN\s*---\s*$/m).map((s: string) => s.trim()).filter(Boolean)
+            : [md.trim()];
+        for (const chunk of chunks) {
+            await createAndIngestPlan(workspaceRoot, extractTitle(chunk), chunk);
+        }
+        await pushFullState();
+    });
+
     // Attachments. Registered ONLY in extension.ts before this change (lines 2096/2101), so the
     // standalone host's registry-first command seam fell through to vscodeShim's no-op
     // and viewAttachments returned success with no data — a faked success (contract #6)
@@ -1321,7 +1385,17 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     let wiringError: string | undefined;
                     let teamGroupId: string | undefined;
                     if (spawned.children.length > 0) {
-                        const wired = await wireSpawnedTeam({ db, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates, prompt: teamPrompt, headPrompt: teamHeadPrompt });
+                        const settings: TerminalGroupsSettingsAccessor | undefined = kanbanProvider
+                            ? {
+                                get: (k, d) => kanbanProvider._getScopedSetting(k, d),
+                                set: (k, v) => kanbanProvider._updateScopedSetting(k, v),
+                            }
+                            : undefined;
+                        // In standalone mode, there is exactly one workspace root, so
+                        // the fleet root and spawn root are identical by construction.
+                        // (In the extension host, standing orders write to the latched
+                        // _apiServerWorkspaceRoot rather than the spawn or definition root.)
+                        const wired = await wireSpawnedTeam({ db, settings, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates, prompt: teamPrompt, headPrompt: teamHeadPrompt });
                         if (!wired.ok) {
                             wiringError = wired.error;
                         } else {
@@ -1440,6 +1514,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 case 'ptyClearTerminal': {
                     const handle = ptyFleetService.get(payload.name);
                     if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
+                    if (handle.agentInstanceId) {
+                        seatBlockCache.delete(handle.agentInstanceId);
+                    }
                     if (handle.status === 'active') { await clearPty(handle); }
                     return { success: true };
                 }
@@ -1488,24 +1565,82 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // bypasses this strip — which is the point.
                     if (payload.addonsComposed !== undefined) { delete payload.addonsComposed; }
                     if (payload.seatBlock !== undefined) { delete payload.seatBlock; }
+                    let foldedAttributionResult: { attributed: number; skipped: number } | null = null;
+                    let directivesAttached: string[] = [];
+                    if (payload.dispatch !== undefined && payload.dispatch !== null) {
+                        // Shape-validate before the field reaches a DB UPDATE — reject,
+                        // never coerce (see validateDispatchPayload).
+                        const parsed = validateDispatchPayload(payload.dispatch);
+                        if (!parsed.ok) {
+                            return { success: false, attributed: 0, skipped: 0, directivesAttached: [], error: parsed.error };
+                        }
+                        const { planId, planFile, role } = parsed.value;
+
+                        try {
+                            const attrRes = await kanbanProvider.handleServiceVerb('attributePastedPrompt', {
+                                terminalName: payload.name,
+                                role,
+                                planIds: planId ? [planId] : [],
+                                planFiles: planFile ? [planFile] : [],
+                                workspaceRoot: payload.workspaceRoot || workspaceRoot
+                            });
+                            if (!attrRes || attrRes.success === false || attrRes.attributed === 0) {
+                                return {
+                                    success: false,
+                                    attributed: attrRes?.attributed ?? 0,
+                                    skipped: attrRes?.skipped ?? (planId || planFile ? 1 : 0),
+                                    directivesAttached: [],
+                                    error: attrRes?.error || 'Failed to attribute dispatch to any plan'
+                                };
+                            }
+                            foldedAttributionResult = {
+                                attributed: attrRes.attributed,
+                                skipped: attrRes.skipped ?? 0
+                            };
+                        } catch (err) {
+                            return {
+                                success: false,
+                                attributed: 0,
+                                skipped: (planId || planFile ? 1 : 0),
+                                directivesAttached: [],
+                                error: err instanceof Error ? err.message : String(err)
+                            };
+                        }
+                        directivesAttached = ['COMPLETION REPORT', 'ORCHESTRATOR REPORT'];
+                    }
                     try {
                         const deliveryDefaults = getPromptDeliveryOptions();
                         const resolvedClear = typeof payload.clearBeforePrompt === 'boolean'
                             ? payload.clearBeforePrompt
                             : (payload.clearBeforePromptFromConfig === true ? deliveryDefaults.clearBeforePrompt : false);
-                        await deliverPrompt(handle, payload.data || '', {
-                            clearBeforePrompt: resolvedClear,
-                            clearBeforePromptDelayMs: typeof payload.clearBeforePromptDelayMs === 'number'
-                                ? payload.clearBeforePromptDelayMs
-                                : deliveryDefaults.clearBeforePromptDelayMs,
-                        }, payload.standingOrders !== false);
-                        return { success: true };
+                        await deliverPrompt(
+                            handle,
+                            payload.data || '',
+                            {
+                                clearBeforePrompt: resolvedClear,
+                                clearBeforePromptDelayMs: typeof payload.clearBeforePromptDelayMs === 'number'
+                                    ? payload.clearBeforePromptDelayMs
+                                    : deliveryDefaults.clearBeforePromptDelayMs,
+                            },
+                            payload.standingOrders !== false,
+                            true,
+                            payload.dispatch
+                        );
+                        return {
+                            success: true,
+                            directivesAttached,
+                            ...(foldedAttributionResult ? {
+                                attributed: foldedAttributionResult.attributed,
+                                skipped: foldedAttributionResult.skipped
+                            } : {})
+                        };
                     } catch (err) {
                         return { success: false, error: err instanceof Error ? err.message : String(err) };
                     }
                 }
 
                 case 'ptyClearAllTerminals': {
+                    seatBlockCache.clear();
                     const active = ptyFleetService.listActive();
                     await Promise.all(active.map(t => clearPty(t)));
                     return { success: true, cleared: active.length };
@@ -1710,7 +1845,16 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // pinned false; sendToTerminal has never cleared, and getPromptDeliveryOptions()
                     // would inject the config default of true, wiping the coder's context.
                     if (!text.includes('\n') && text.trimStart().startsWith('/')) {
-                        handle.write(text + '\r');
+                        // A bare `/clear` on this branch IS a context wipe: the
+                        // sidebar's per-terminal "clear" and broadcast "CLEAR
+                        // TERMINALS" buttons post sendToTerminal with
+                        // input '/clear' and never reach ptyClearTerminal. Drop
+                        // the seat's memo or the next prompt is suppressed into
+                        // a seat holding no git/subagent policy.
+                        if (text.trim() === '/clear' && handle.agentInstanceId) {
+                            seatBlockCache.delete(handle.agentInstanceId);
+                        }
+                        await writeSlashCommand(handle, text);
                     } else {
                         await deliverPrompt(handle, text, { clearBeforePrompt: false }, payload.standingOrders !== false);
                     }
@@ -1918,6 +2062,7 @@ Each plan file must include:
             const planFile = info.planFile;
             // `body` (pre-composed evidence) wins when set; otherwise compose the
             // host's own one-line message. `stalled` always carries a body.
+            // Note: `composeCompletedTurnEndBody` in PlanIngestionEngine is the real producer for completed.
             const message = info.body ?? (info.outcome === 'completed'
                 ? `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${planFile}'.`
                 : info.outcome === 'stalled'
@@ -2013,8 +2158,13 @@ Each plan file must include:
         if (!ptyReady) {
             return { success: false, error: 'PTY terminals are unavailable: the optional node-pty module could not be loaded on this machine.' };
         }
+        const settings: TerminalGroupsSettingsAccessor | undefined = {
+            get: (k, d) => kanbanProvider._getScopedSetting(k, d),
+            set: (k, v) => kanbanProvider._updateScopedSetting(k, v),
+        };
         return instantiateAgentGroupCore({
             db,
+            settings,
             group,
             cwd: groupRoot || workspaceRoot,
             liveDelegateCount: async () =>
@@ -2127,6 +2277,10 @@ Each plan file must include:
                 });
             } catch { return null; }
         },
+        // Same score→role rule POST /kanban/dispatch routes by, exposed as
+        // `recommendedRole` on plan reads so a lead dispatches by the board's
+        // policy rather than a split baked into its prompt. Both hosts wire it.
+        resolveRoutedRole: (score: number) => kanbanProvider.resolveRoutedRole(score),
         // Same `ptyReady` guard the kanbanVerb entry point carries: a page loaded
         // before a restart (or a direct API caller) can still reach these verbs, and
         // an unguarded call would surface as an unhandled spawn exception.

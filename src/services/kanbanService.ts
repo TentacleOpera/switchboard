@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { HostSeams } from './hostSeams';
 import type { BroadcastHub } from './broadcastHub';
+import { KanbanDatabase } from './KanbanDatabase';
+import { mutateTerminalGroups, type TerminalGroupsSettingsAccessor } from './teamWiring';
 
 /**
  * Kanban Service — Feature A · A2b (Generic Verb Passthrough)
@@ -239,6 +241,37 @@ export class KanbanService {
         if (key === 'selectedRole') {
             await this._ctx.workspaceStateUpdate(fullKey, value);
             return { success: true };
+        }
+
+        if (key === 'terminals.groups') {
+            if (!Array.isArray(value)) {
+                return { success: false, error: 'value must be an array for terminals.groups' };
+            }
+            const baseIds: string[] = Array.isArray(payload?.baseIds)
+                ? payload.baseIds.filter((id: any): id is string => typeof id === 'string')
+                : [];
+            const baseIdSet = new Set(baseIds);
+            const clientIds = new Set(value.map((g: any) => g && g.id).filter(Boolean));
+
+            const settings: TerminalGroupsSettingsAccessor = {
+                get: (k, d) => this._ctx.getScopedSetting(k, d, payload?.initiatorProject),
+                set: (k, v) => this._ctx.updateScopedSetting(k, v, payload?.initiatorProject),
+            };
+
+            let db: any;
+            if (this._ctx.workspaceRoot) {
+                try {
+                    db = KanbanDatabase.forWorkspace(this._ctx.workspaceRoot);
+                } catch { /* ignore */ }
+            }
+
+            const merged = await mutateTerminalGroups({ db, settings }, (current) => {
+                const unseen = current.filter((g: any) => g && g.id && !baseIdSet.has(g.id) && !clientIds.has(g.id));
+                return [...value, ...unseen];
+            });
+
+            this._ctx.broadcaster.push({ type: 'settingResult', key, value: merged });
+            return { success: true, key, value: merged };
         }
 
         if (key.startsWith('roleConfig_')) {

@@ -2,6 +2,7 @@ import {
     mutateStandingOrders,
     makeStandingOrder,
     StandingOrder,
+    STANDING_ORDERS_CONFIG_KEY,
 } from './standingOrders';
 import { resolvePreset, resolvePresetMeta, DEFAULT_MEMBER_RELATIONSHIP } from './linkPresets';
 import { GIT_SAFETY_DIRECTIVE } from './agentPromptBuilder';
@@ -61,7 +62,7 @@ export const AGENT_GROUP_CALLBACK_INSTRUCTION =
  * field carries this exact string. The migration recogniser matches against it
  * (not the post-rewrite constant) because this is what is actually on disk.
  */
-const PRE_REWRITE_CALLBACK_INSTRUCTION =
+export const PRE_REWRITE_CALLBACK_INSTRUCTION =
     'it is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
     + '{"name":"<that terminal>","data":"<your report>","clearBeforePrompt":false} against the port in '
     + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.';
@@ -87,6 +88,24 @@ const TEAM_LAYOUT_LADDER: ReadonlyArray<{ mode: string; slots: number }> = [
     { mode: '2x3', slots: 6 },
     { mode: '3x3', slots: 9 },
 ];
+/**
+ * Every layout the terminals panel will LOAD — the keys of `LAYOUTS`
+ * (terminals.js:1384), which is a strict SUPERSET of `TEAM_LAYOUT_LADDER`.
+ *
+ * Use this — never the ladder — to decide whether a stored `layout` on an
+ * existing roster row is keepable. The ladder omits `'2v'` on purpose (a
+ * stacked pair is never auto-picked), but `'2v'` is a first-class operator
+ * choice: it has its own layout button (terminals.html:2011) and
+ * `layoutForGroupSwitch` honours it. Validating an operator-authored layout
+ * against the auto-pick ladder would therefore revert precisely the one mode
+ * that can only have come from a human — the silently-discarded user edit this
+ * plan exists to end, pointed the other way.
+ *
+ * Pinned to terminals.js by `standing-orders-marker-contract.test.js`.
+ */
+export const TERMINALS_LAYOUT_MODES: ReadonlySet<string> = new Set([
+    '1', '2h', '2v', '1x3', '2x2', '2x3', '3x3',
+]);
 
 function layoutForTeamSize(memberCount: number): string {
     for (const rung of TEAM_LAYOUT_LADDER) {
@@ -96,7 +115,30 @@ function layoutForTeamSize(memberCount: number): string {
 }
 
 /** Config key the terminals webview owns for `terminals.groups`. */
-const TERMINALS_GROUPS_KEY = 'terminals.groups';
+export const TERMINALS_GROUPS_KEY = 'switchboard.prompts.terminals.groups';
+
+/**
+ * Settings accessor interface for scoped settings access without importing KanbanProvider.
+ */
+export interface TerminalGroupsSettingsAccessor {
+    /**
+     * Sync in the extension host (`KanbanProvider._getScopedSetting` reads a
+     * sql.js DB synchronously), async in hosts that await a store — every caller
+     * awaits, so both shapes satisfy this. Do NOT narrow to `Promise<T>`: it
+     * rejects the extension host's own accessor.
+     */
+    get<T>(key: string, defaultValue: T): T | Promise<T>;
+    set<T>(key: string, value: T): void | Promise<void>;
+}
+
+export interface MutateTerminalGroupsOptions {
+    db?: {
+        getConfigJson: (key: string, fallback: any) => Promise<any>;
+        /** `KanbanDatabase.setConfigJson` resolves `boolean` — the result is unused. */
+        setConfigJson: (key: string, value: any) => Promise<any>;
+    };
+    settings?: TerminalGroupsSettingsAccessor;
+}
 
 /**
  * Module-level promise chain serialising `terminals.groups` read-modify-write
@@ -106,6 +148,65 @@ const TERMINALS_GROUPS_KEY = 'terminals.groups';
  * so a stale read clobbers a concurrent write.
  */
 let _groupsWriteChain: Promise<unknown> = Promise.resolve();
+
+/**
+ * Mutate terminal groups atomically inside _groupsWriteChain.
+ * Handles bare 'terminals.groups' legacy migration idempotently on first read.
+ */
+export async function mutateTerminalGroups(
+    opts: MutateTerminalGroupsOptions,
+    transform: (current: any[]) => any[] | Promise<any[]>
+): Promise<any[]> {
+    const { db, settings } = opts;
+    let result: any[] = [];
+    const p = _groupsWriteChain.then(async () => {
+        let current: any[] = [];
+        if (settings) {
+            try {
+                const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
+                current = Array.isArray(raw) ? [...raw] : [];
+            } catch {
+                current = [];
+            }
+        } else if (db) {
+            try {
+                const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []);
+                current = Array.isArray(raw) ? [...raw] : [];
+            } catch {
+                current = [];
+            }
+        }
+
+        // Shipped bare key migration: import bare 'terminals.groups' from db if present
+        if (db) {
+            try {
+                const bareRaw = await db.getConfigJson('terminals.groups', []);
+                if (Array.isArray(bareRaw) && bareRaw.length > 0) {
+                    const existingIds = new Set(current.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bareRaw) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            current.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort migration */ }
+        }
+
+        const next = await transform(current);
+        const validated = Array.isArray(next) ? next : [];
+
+        if (settings) {
+            await settings.set(TERMINALS_GROUPS_KEY, validated);
+        } else if (db) {
+            await db.setConfigJson(TERMINALS_GROUPS_KEY, validated);
+        }
+        result = validated;
+    });
+    _groupsWriteChain = p.catch(() => {});
+    await p;
+    return result;
+}
 
 /** Config key for agent group definitions (team templates). */
 const AGENT_GROUPS_CONFIG_KEY = 'terminals.agentGroups';
@@ -172,12 +273,19 @@ export const OLD_CODING_HEAD_PROMPT =
  * load-bearing literals).
  */
 export const NEW_CODING_HEAD_PROMPT =
-    'You lead this team. Your coders work the subtasks of one feature. When a coder '
-    + 'reports a subtask finished, note it and give that coder the next subtask. Do not send '
-    + 'anything to the reviewer, and do not write review instructions — that is not your job. '
-    + 'When every subtask of the feature is finished, read the port from '
-    + '.switchboard/api-server-port.txt, confirm no subtask is still outstanding via '
-    + 'GET /kanban/feature, then make one call: POST /kanban/dispatch with '
+    'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
+    + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
+    + 'no such seat, dispatch to a coder and say why in your status report. Post a status report '
+    + 'to .switchboard/orchestrator/reports/ when a subtask is dispatched, and a finished report '
+    + 'when the feature is handed to review. When a seat fails review on the same subtask twice, '
+    + 'do not send that subtask to it a third time — escalate one rung along intern → coder → lead, '
+    + 'name the specific defects in the dispatch, and say in your status report which seat you moved '
+    + 'it to and why; if the seat that failed twice is a lead, or your team has no seat above it, '
+    + 'stop and report to the human instead of dispatching again. When a coder reports a subtask '
+    + 'finished, note it and give that coder the next subtask. Do not send anything to the '
+    + 'reviewer, and do not write review instructions — that is not your job. When every subtask of '
+    + 'the feature is finished, read the port from .switchboard/api-server-port.txt, confirm no '
+    + 'subtask is still outstanding via GET /kanban/feature, then make one call: POST /kanban/dispatch with '
     + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — '
     + 'that one call moves the card and dispatches the reviewer with the reviewer\'s own '
     + 'prompt. Do NOT use /kanban/move: it moves the card and dispatches nobody. Only '
@@ -719,6 +827,7 @@ export async function startTeamById(opts: {
 
 export interface WireSpawnedTeamOptions {
     db: any;
+    settings?: TerminalGroupsSettingsAccessor;
     headName: string;
     children: Array<{ friendlyName: string;[k: string]: any }>;
     /**
@@ -765,9 +874,11 @@ export interface WireSpawnedTeamResult {
 }
 
 /**
- * Wire a head and its children: install standing orders and register a
- * terminals group. Idempotent on re-run — team-scoped orders are keyed on
- * `(scope, teamId)` and pair-scoped orders on `(parent, child)`. Returns
+ * Wire a head and its children: install standing orders and register or update
+ * a terminals group so the roster reflects the most recent spawn. Idempotent on
+ * re-run — team-scoped orders are keyed on `(scope, teamId)` and pair-scoped orders
+ * on `(parent, child)`. Group roster rows are upserted with freshly computed
+ * members/order/layout while preserving existing custom properties. Returns
  * `{ ok, error? }` — never throws at the caller, never rolls back terminals.
  *
  * `db` absent → returns an error, does not crash the create.
@@ -909,12 +1020,12 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     }
 
     // ── Group registration ───────────────────────────────────────────
-    // The backend becomes a second writer to a key the webview owns. The
-    // write is serialised through _groupsWriteChain so two concurrent heads
-    // do not drop one another's group. The caller pushes a
-    // `terminalsGroupsChanged` broadcast after a successful registration so
-    // open panels re-read the key before their next whole-array save can
-    // clobber it.
+    // The backend writes to the unified terminals.groups key through
+    // mutateTerminalGroups. The write is serialised through _groupsWriteChain
+    // so two concurrent heads do not drop one another's group. The caller
+    // pushes a `terminalsGroupsChanged` broadcast after a successful
+    // registration so open panels re-read the key before their next
+    // whole-array save can clobber it.
     //
     // source: 'manual' — loadLayoutSettings (terminals.js) silently discards
     // any group whose source is not manual/role/worktree.
@@ -934,16 +1045,32 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     };
 
     try {
-        const p = _groupsWriteChain.then(async () => {
-            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
-            const current = Array.isArray(raw) ? raw : [];
-            // Idempotent — skip if a group with this id already exists.
-            if (current.some((g: any) => g && g.id === groupId)) { return; }
-            const next = [...current, group];
-            await db.setConfigJson(TERMINALS_GROUPS_KEY, next);
+        await mutateTerminalGroups({ db, settings: opts.settings }, (current) => {
+            // Upsert — the freshly spawned team is the whole truth for members and
+            // order. Replace stale members (not union), preserve operator-authored
+            // layout and any unknown keys from existing group objects.
+            const idx = current.findIndex((g: any) => g && g.id === groupId);
+            if (idx === -1) {
+                return [...current, group];
+            }
+            const existing = current[idx];
+            const merged = (existing && typeof existing === 'object')
+                ? {
+                    ...existing,
+                    id: groupId,
+                    name: headName,
+                    source: 'manual' as const,
+                    layout: (typeof existing.layout === 'string' && TERMINALS_LAYOUT_MODES.has(existing.layout))
+                        ? existing.layout
+                        : layout,
+                    members: groupMembers,
+                    order: groupMembers,
+                }
+                : group;
+            const next = [...current];
+            next[idx] = merged;
+            return next;
         });
-        _groupsWriteChain = p.catch(() => {});
-        await p;
     } catch (err: any) {
         // A failed group write must not undo a successful order install.
         return { ok: false, error: `Group registration failed: ${err?.message || err}` };
@@ -962,12 +1089,16 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
  * Unrecognised rows — operator-edited ad-hoc link-up orders, `head-receives`
  * presets — are left untouched.
  *
- * Pure: no DB writes. Called at the standing-orders read sites so the
- * transformation is applied before `applyStandingOrders` renders. The old
- * pair rows stay in the DB but are filtered from the rendered set; the
- * function is idempotent because the team-scoped order it produces is keyed
- * on `(scope, teamId)` and a second pass finds no recognisable pair rows to
- * convert (they were already replaced in the returned array).
+ * Pure: no DB writes of its own. Called through
+ * `loadEffectiveStandingOrders`, which persists the result once; the transform
+ * itself stays pure so it is unit-testable and safe to re-run. Idempotent
+ * because the team-scoped order it produces is keyed on `(scope, teamId)` and
+ * a second pass finds no recognisable pair rows to convert (they were already
+ * replaced in the returned array). **Returns the input array BY REFERENCE when
+ * it recognises nothing** — `loadEffectiveStandingOrders` stakes its
+ * "did anything change?" test on that identity, so a refactor that always
+ * returns a fresh array turns the one-time persist into a write on every
+ * prompt.
  *
  * The recogniser matches the PRE-rewrite callback text — that is what is
  * actually on disk. Matching the post-rewrite constant would miss every
@@ -1031,6 +1162,21 @@ export function migrateTeamPairOrders(orders: StandingOrder[]): StandingOrder[] 
 }
 
 /**
+ * A substitution-independent fragment unique to the old per-subtask
+ * headPrompt. The new feature-level text does not contain it, so a converted
+ * row is never re-matched.
+ *
+ * **Exported deliberately, and there must be exactly TWO copies of this string
+ * in the tree: this one and the `terminals.js` mirror** (which cannot import).
+ * A third copy is how the diagnostic surface drifts back out of agreement with
+ * delivered behaviour — the defect this whole migration exists to close. Any
+ * other module that needs staleness information imports
+ * `describeStandingOrderMigrations`, never this literal.
+ * `stage-marker-commit-contract.test.js` gates both halves.
+ */
+export const OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review yourself';
+
+/**
  * Migrate stale Coding-team standing orders on read — the read-site
  * counterpart to the `migrateAgentGroups` Coding-team step (§1b).
  *
@@ -1064,11 +1210,6 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
     const drop = new Set<string>();        // order ids to remove
     const rewritten: StandingOrder[] = []; // replacement team-head rows
     let touched = false;
-
-    // A substitution-independent fragment unique to the old per-subtask
-    // headPrompt. The new feature-level text does not contain it, so a
-    // converted row is never re-matched.
-    const OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review yourself';
 
     for (const o of orders) {
         if (!o || typeof o !== 'object') { continue; }
@@ -1113,6 +1254,108 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
         ...orders.filter(o => !drop.has(o.id)),
         ...rewritten,
     ];
+}
+
+/** Additive per-row migration verdict for a persisted standing order. */
+export interface StandingOrderMigrationNote {
+    /** A recogniser fired on this row: what is on disk is not what is delivered. */
+    stale?: true;
+    /** The transform removes this row entirely — it exists on disk and contributes nothing. */
+    dropped?: true;
+    /** The text this row actually contributes to a delivered prompt. Present only when it differs. */
+    effectiveInstruction?: string;
+}
+
+/**
+ * Per-`id` migration verdict for the rows persisted at
+ * `terminals.standingOrders`, derived by running **the same pure transforms
+ * delivery runs** and diffing by id — never by re-implementing a recogniser.
+ * That is the whole point: a second hand-rolled copy of a recogniser (or of
+ * `OLD_HEADPROMPT_FRAGMENT`) is how `GET /terminals/standing-orders` drifted
+ * out of agreement with what an agent is actually told.
+ *
+ * Covers BOTH transforms — the pair-fold's dropped `(member, head)` rows, the
+ * Coding reviewer pair row, and the rewritten `team-head` row — because it
+ * diffs the composed result rather than pattern-matching row shapes.
+ *
+ * Identity-safe: rows the pair migration *mints* carry a fresh
+ * `crypto.randomUUID()` and have no on-disk counterpart, so they appear in no
+ * note and are never surfaced as persisted rows. Calling this twice therefore
+ * yields the same notes against the same ids — the endpoint's `orders` array
+ * stays byte-stable and the Link-up editor's delete-by-id keeps working.
+ *
+ * Returns an empty map once the persisting pass in
+ * `loadEffectiveStandingOrders` has run. That is the correct end state, not an
+ * inert function.
+ */
+export function describeStandingOrderMigrations(
+    raw: StandingOrder[]
+): Map<string, StandingOrderMigrationNote> {
+    const notes = new Map<string, StandingOrderMigrationNote>();
+    if (!Array.isArray(raw) || raw.length === 0) { return notes; }
+
+    const effective = migrateCodingTeamOrders(migrateTeamPairOrders(raw));
+    // Reference short-circuit — both transforms return their input by reference
+    // when they recognise nothing, so this is an exact "nothing is stale" test.
+    if (effective === raw) { return notes; }
+
+    const survivors = new Map<string, StandingOrder>();
+    for (const o of effective) {
+        if (o && typeof o.id === 'string') { survivors.set(o.id, o); }
+    }
+
+    for (const o of raw) {
+        if (!o || typeof o !== 'object' || typeof o.id !== 'string') { continue; }
+        const survivor = survivors.get(o.id);
+        if (!survivor) {
+            notes.set(o.id, { stale: true, dropped: true });
+            continue;
+        }
+        if (survivor.instruction !== o.instruction) {
+            notes.set(o.id, { stale: true, effectiveInstruction: survivor.instruction });
+        }
+    }
+    return notes;
+}
+
+/** Backup config key for standing orders before first migration persist. */
+export const STANDING_ORDERS_PREMIGRATION_BAK_KEY = 'terminals.standingOrders.premigration.bak';
+
+/**
+ * Copy pre-migration standing orders to backup key once if not already present.
+ */
+async function backupOnce(db: any, raw: StandingOrder[]): Promise<void> {
+    if (!db || typeof db.getConfigJson !== 'function' || typeof db.setConfigJson !== 'function') {
+        return;
+    }
+    const existing = await db.getConfigJson(STANDING_ORDERS_PREMIGRATION_BAK_KEY, null);
+    if (existing === null || existing === undefined) {
+        await db.setConfigJson(STANDING_ORDERS_PREMIGRATION_BAK_KEY, raw);
+    }
+}
+
+/**
+ * The only server-side reader of terminals.standingOrders. Reads, applies the
+ * pure transforms, persists the result once if anything changed, and returns the
+ * effective set. A failed persist logs and returns the in-memory transform —
+ * delivery never depends on the write.
+ */
+export async function loadEffectiveStandingOrders(db: any): Promise<StandingOrder[]> {
+    if (!db || typeof db.getConfigJson !== 'function') {
+        return [];
+    }
+    const raw = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
+    const effective = migrateCodingTeamOrders(migrateTeamPairOrders(raw));
+    if (effective === raw) { return raw; } // reference short-circuit: nothing matched
+    try {
+        await backupOnce(db, raw);
+        await mutateStandingOrders(db, async (current) =>
+            migrateCodingTeamOrders(migrateTeamPairOrders(current))
+        );
+    } catch (err) {
+        console.warn('[teamWiring] standing-order migration persist failed:', err);
+    }
+    return effective;
 }
 
 /**
@@ -1167,7 +1410,8 @@ export function plausibleOriginTerminal(record: any): string {
  * with `ptyFleetService.listActive()` without constructing a `TaskViewerProvider`.
  */
 export async function resolveTeamScopedRoleTerminal(opts: {
-    db: any;
+    db?: any;
+    settings?: TerminalGroupsSettingsAccessor;
     originName: string;
     role: string;
     /** Live terminals: `{ name, role }`. Caller supplies the union of the pty fleet and the VS Code registry. */
@@ -1175,12 +1419,33 @@ export async function resolveTeamScopedRoleTerminal(opts: {
     /** Same normaliser the existing role resolvers use, injected to avoid a provider import. */
     normalizeRole: (r: string | undefined) => string;
 }): Promise<string | null> {
-    const { db, originName, role, liveTerminals, normalizeRole } = opts;
-    if (!db || !originName || !role) { return null; }
+    const { db, settings, originName, role, liveTerminals, normalizeRole } = opts;
+    if ((!db && !settings) || !originName || !role) { return null; }
 
     let groups: any[] = [];
     try {
-        groups = await db.getConfigJson('terminals.groups', []) as any[];
+        if (settings) {
+            const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
+            groups = Array.isArray(raw) ? [...raw] : [];
+        } else if (db) {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? [...raw] : [];
+        }
+        // Check legacy bare key if db present
+        if (db) {
+            try {
+                const bare = await db.getConfigJson('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+        }
     } catch { return null; }
     if (!Array.isArray(groups) || groups.length === 0) { return null; }
 

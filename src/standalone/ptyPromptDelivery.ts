@@ -28,6 +28,38 @@ function withTerminalLock<T>(terminalName: string, fn: () => Promise<T>): Promis
     return current;
 }
 
+// Ctrl+U (unix-line-discard). Agent CLIs keep a persistent input buffer: anything
+// already sitting in it concatenates with the next write, so `/clear` lands as
+// `…text/clear` — a prompt, not a command, and the context is never reset. This
+// byte empties the line first. No-op when empty, harmless in a plain shell, so it
+// is sent unconditionally — no CLI detection, no role gate.
+// It MUST land OUTSIDE any bracketed-paste block — i.e. before `\x1b[200~`, never
+// after it. Inside the block it is absorbed as literal text and silently prefixes
+// the payload (see the framing rules below). It is written on its own so it
+// arrives as a keypress rather than as part of a burst the TUI may treat as paste.
+const CLEAR_INPUT_LINE = '\x15';
+// Just enough for the TUI to process the kill before the command arrives. Not a
+// clipboard/focus settle — this path writes straight to the pty master fd.
+const CLEAR_INPUT_SETTLE_MS = 30;
+
+/**
+ * Write a single-line slash command with the input line reset first.
+ *
+ * Takes the per-terminal lock, so a slash command can never splice into an
+ * in-flight chunked paste from sendPromptToPty. Callers that ALREADY hold the
+ * lock (sendPromptToPty's clear branch) must call writeSlashCommandLocked.
+ */
+export async function writeSlashCommand(handle: ExtendedTerminalHandle, command: string): Promise<void> {
+    return withTerminalLock(handle.name, () => writeSlashCommandLocked(handle, command));
+}
+
+/** Lock-free body. Callers must already hold the terminal lock. */
+export async function writeSlashCommandLocked(handle: ExtendedTerminalHandle, command: string): Promise<void> {
+    handle.write(CLEAR_INPUT_LINE);
+    await new Promise(r => setTimeout(r, CLEAR_INPUT_SETTLE_MS));
+    handle.write(command.replace(/[\r\n]+$/, '') + '\r');
+}
+
 export interface PromptDeliveryOptions {
     clearBeforePrompt?: boolean;
     clearBeforePromptDelayMs?: number;
@@ -40,7 +72,7 @@ export async function sendPromptToPty(
 ): Promise<void> {
     return withTerminalLock(handle.name, async () => {
         if (opts?.clearBeforePrompt) {
-            handle.write('/clear\r');
+            await writeSlashCommandLocked(handle, '/clear');
             const delay = opts.clearBeforePromptDelayMs ?? DEFAULT_CLEAR_SETTLE_MS;
             await new Promise(r => setTimeout(r, Math.min(10000, Math.max(0, delay))));
         }
@@ -111,7 +143,7 @@ export async function sendPromptToPty(
 export async function clearPty(handle: ExtendedTerminalHandle): Promise<void> {
     return withTerminalLock(handle.name, async () => {
         try {
-            handle.write('/clear\r');
+            await writeSlashCommandLocked(handle, '/clear');
         } catch { /* PTY died between check and write — nothing to clear */ }
     });
 }
@@ -125,7 +157,7 @@ export async function clearPty(handle: ExtendedTerminalHandle): Promise<void> {
 export async function modelPty(handle: ExtendedTerminalHandle): Promise<void> {
     return withTerminalLock(handle.name, async () => {
         try {
-            handle.write('/model\r');
+            await writeSlashCommandLocked(handle, '/model');
         } catch { /* PTY died between check and write — nothing to model */ }
     });
 }

@@ -32,7 +32,7 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, mutateTerminalGroups, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
 import { createVscodeHostSeams, type HostSeams } from './hostSeams';
@@ -11164,6 +11164,28 @@ ${FOCUS_DIRECTIVE}`;
                 if (key === 'selectedRole') {
                     await this._context.workspaceState.update(fullKey, value);
                     return { success: true };
+                }
+                if (key === 'terminals.groups') {
+                    if (!Array.isArray(value)) {
+                        return { success: false, error: 'value must be an array for terminals.groups' };
+                    }
+                    const baseIds: string[] = Array.isArray(msg?.baseIds)
+                        ? msg.baseIds.filter((id: any): id is string => typeof id === 'string')
+                        : [];
+                    const baseIdSet = new Set(baseIds);
+                    const clientIds = new Set(value.map((g: any) => g && g.id).filter(Boolean));
+                    const root = this._taskViewerProvider?._resolveWorkspaceRoot();
+                    const db = root ? KanbanDatabase.forWorkspace(root) : undefined;
+                    const settings: TerminalGroupsSettingsAccessor = {
+                        get: (k, d) => this._getScopedSetting(k, d, msg.initiatorProject),
+                        set: (k, v) => this._updateScopedSetting(k, v, msg.initiatorProject),
+                    };
+                    const merged = await mutateTerminalGroups({ db, settings }, (current) => {
+                        const unseen = current.filter((g: any) => g && g.id && !baseIdSet.has(g.id) && !clientIds.has(g.id));
+                        return [...value, ...unseen];
+                    });
+                    this._broadcaster?.push({ type: 'settingResult', key, value: merged });
+                    return { success: true, key, value: merged };
                 }
                 if (key.startsWith('roleConfig_')) {
                     const roleName = key.replace('roleConfig_', '');

@@ -183,7 +183,20 @@ export function applyStandingOrders(
     const cleanPrompt = stripStandingOrdersBlock(prompt);
 
     const mine = selectOrders(orders, targetName, liveNames, groups);
-    if (mine.length === 0) { return cleanPrompt; }
+    if (mine.length === 0) {
+        if (groups.some(g => Array.isArray(g?.members) && g.members.includes(targetName))) {
+            const rejected = orders.map(o => ({
+                parent: o.parent,
+                child: o.child,
+                scope: scopeOf(o),
+            }));
+            console.warn(
+                `[standingOrders] Target "${targetName}" is a member of a registered team group, but matched 0 of ${orders.length} standing orders. Rejected orders:`,
+                rejected
+            );
+        }
+        return cleanPrompt;
+    }
 
     // Render safeguard-bearing scopes (global, team) before pair so that
     // whatever renders last is the least safety-critical. Truncation is gone,

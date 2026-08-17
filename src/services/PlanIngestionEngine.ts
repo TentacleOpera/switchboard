@@ -473,7 +473,10 @@ export class PlanIngestionEngine {
                                             }
                                             if (this._turnEndNotifier) {
                                                 notifiedSeatsThisTick.add(terminalName);
-                                                try { this._turnEndNotifier({ seatName: terminalName, planFile: record.planFile, outcome: 'completed', workspaceRoot: folder }); } catch (cbErr) {
+                                                try {
+                                                    const body = composeCompletedTurnEndBody(record, terminalName, record.planFile, Date.now());
+                                                    this._turnEndNotifier({ seatName: terminalName, planFile: record.planFile, outcome: 'completed', workspaceRoot: folder, body });
+                                                } catch (cbErr) {
                                                     this._host.logger.appendLine(`[GlobalPlanWatcher] turnEndNotifier callback failed: ${cbErr}`);
                                                 }
                                             }
@@ -1334,7 +1337,10 @@ export class PlanIngestionEngine {
                         // callbacks stay independently optional, matching the sweep's
                         // structure at :435–:446.
                         if (transitioned && this._turnEndNotifier && clearedRecord.dispatchedTerminal) {
-                            try { this._turnEndNotifier({ seatName: clearedRecord.dispatchedTerminal, planFile: relativePath, outcome: 'completed', workspaceRoot }); } catch (cbErr) {
+                            try {
+                                const body = composeCompletedTurnEndBody(clearedRecord, clearedRecord.dispatchedTerminal, relativePath, Date.now());
+                                this._turnEndNotifier({ seatName: clearedRecord.dispatchedTerminal, planFile: relativePath, outcome: 'completed', workspaceRoot, body });
+                            } catch (cbErr) {
                                 this._host.logger.appendLine(`[GlobalPlanWatcher] turnEndNotifier callback failed: ${cbErr}`);
                             }
                         }
@@ -1502,3 +1508,43 @@ export function expandHome(p: string): string {
         ? path.join(os.homedir(), trimmed.slice(1))
         : trimmed;
 }
+
+// ─── Turn-end notice composer for completed arm ─────────────────────────────
+
+export function composeCompletedTurnEndBody(
+    record: Pick<KanbanPlanRecord, 'topic' | 'kanbanColumn' | 'featureId' | 'dispatchedAt'>,
+    seatName: string,
+    planFile: string,
+    nowMs: number
+): string {
+    const safePlanFile = String(planFile || '').replace(/[\r\n]+/g, ' ').trim();
+    const rawTopic = String(record?.topic || '').replace(/[\r\n]+/g, ' ').trim();
+    let safeTopic = rawTopic;
+    if (safeTopic.length > 80) {
+        safeTopic = safeTopic.slice(0, 80) + '…';
+    }
+
+    const clauses: string[] = [];
+    if (record?.kanbanColumn) {
+        clauses.push(`column ${record.kanbanColumn}`);
+    }
+    if (record?.featureId) {
+        clauses.push(`feature ${record.featureId}`);
+    }
+    if (record?.dispatchedAt) {
+        const parsed = Date.parse(record.dispatchedAt);
+        if (Number.isFinite(parsed)) {
+            const ms = Math.max(0, nowMs - parsed);
+            const duration = ms < 120000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}m`;
+            clauses.push(`worked ${duration}`);
+        }
+    }
+
+    const topicClause = safeTopic ? ` — "${safeTopic}"` : '';
+    const parenthetical = clauses.length > 0 ? ` (${clauses.join(', ')})` : '';
+    const header = `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${safePlanFile}'${topicClause}${parenthetical}.`;
+    const instruction = 'Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.';
+
+    return `${header}\n${instruction}`;
+}
+

@@ -4672,12 +4672,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
                     + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
                     + 'commit first, then correct forward.',
-                headPrompt: 'You lead this team. Your coders work the subtasks of one feature. When a coder '
-                    + 'reports a subtask finished, note it and give that coder the next subtask. Do not send '
-                    + 'anything to the reviewer, and do not write review instructions — that is not your job. '
-                    + 'When every subtask of the feature is finished, read the port from '
-                    + '.switchboard/api-server-port.txt, confirm no subtask is still outstanding via '
-                    + 'GET /kanban/feature, then make one call: POST /kanban/dispatch with '
+                headPrompt: 'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
+                    + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
+                    + 'no such seat, dispatch to a coder and say why in your status report. Post a status report '
+                    + 'to .switchboard/orchestrator/reports/ when a subtask is dispatched, and a finished report '
+                    + 'when the feature is handed to review. When a seat fails review on the same subtask twice, '
+                    + 'do not send that subtask to it a third time — escalate one rung along intern → coder → lead, '
+                    + 'name the specific defects in the dispatch, and say in your status report which seat you moved '
+                    + 'it to and why; if the seat that failed twice is a lead, or your team has no seat above it, '
+                    + 'stop and report to the human instead of dispatching again. When a coder reports a subtask '
+                    + 'finished, note it and give that coder the next subtask. Do not send anything to the '
+                    + 'reviewer, and do not write review instructions — that is not your job. When every subtask of '
+                    + 'the feature is finished, read the port from .switchboard/api-server-port.txt, confirm no '
+                    + 'subtask is still outstanding via GET /kanban/feature, then make one call: POST /kanban/dispatch with '
                     + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — '
                     + 'that one call moves the card and dispatches the reviewer with the reviewer\'s own '
                     + 'prompt. Do NOT use /kanban/move: it moves the card and dispatches nobody. Only '
@@ -5071,6 +5078,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             };
             agentsTabAgentGroups.push(forked);
             teamsTabPendingStartId = forked.id;
+            // Busy the button for the whole save round-trip. Without this the
+            // re-render below draws the now-adopted card with a live START, and
+            // a second click fires startAgentGroup for an id the host has not
+            // persisted yet — exactly the write-then-read race the sequencing
+            // on saveAgentGroupResult exists to close.
+            teamsTabStartingId = forked.id;
             teamsTabPickedKey = forked.id;
             teamsTabRenderAgentGroups();
             teamsTabRenderGallery();
@@ -9875,11 +9888,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (msg.success) {
                       teamsTabStartTeam(id);
                     } else {
+                      // The save failed, so the forked id does not exist on the
+                      // host. Roll the optimistic push back: leaving it in the
+                      // local list draws an adopted card whose START resolves
+                      // nothing — a dead button, which the capability-gating
+                      // rule bars. The card reverts to its shipped type and
+                      // reads USE & START again.
+                      teamsTabStartingId = null;
+                      const idx = agentsTabAgentGroups.findIndex(g => g.id === id);
+                      if (idx >= 0) {
+                        const reverted = agentsTabAgentGroups[idx];
+                        agentsTabAgentGroups.splice(idx, 1);
+                        teamsTabPickedKey = 'type:' + reverted.name;
+                      }
+                      teamsTabRenderAgentGroups();
+                      teamsTabRenderGallery();
+                      // After the re-render — teamsTabRenderFlow rebuilds the
+                      // error span, so writing before it would be erased.
                       const errEl = document.getElementById('teams-flow-error');
                       if (errEl) { errEl.textContent = msg.error || 'Failed to save team — start aborted.'; }
-                      const btn = document.getElementById('teams-flow-start-btn');
-                      if (btn) { btn.disabled = false; btn.textContent = 'USE & START'; }
-                      teamsTabStartingId = null;
                     }
                   }
                   break;

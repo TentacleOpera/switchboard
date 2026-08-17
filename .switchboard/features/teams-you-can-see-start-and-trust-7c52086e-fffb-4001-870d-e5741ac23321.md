@@ -15,10 +15,10 @@ Make a team something the operator can find, understand, launch and rely on. Rig
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Team Picker Shows a Phantom Member-less "Lead team" — the Two Team Verbs Resolve One Root and Seed Into It](../plans/feature_plan_20260816212416_team-verbs-read-the-wrong-workspace-db.md) — **CODER CODED**
-- [ ] [Promote START TEAM Out of the Tiny `+` Picker Into the Terminals Sidebar Ops Block](../plans/feature_plan_20260816212500_start-team-is-a-first-class-sidebar-control.md) — **CODER CODED**
-- [ ] [Teams Start Themselves on Load](../plans/teams-start-themselves-on-load.md) — **CODER CODED**
-- [ ] [TEAMS Tab — Pick a Team From Three Cards and See It Drawn](../plans/teams-tab-pick-a-team-from-three-cards.md) — **CODER CODED**
+- [ ] [Team Picker Shows a Phantom Member-less "Lead team" — the Two Team Verbs Resolve One Root and Seed Into It](../plans/feature_plan_20260816212416_team-verbs-read-the-wrong-workspace-db.md) — **CODE REVIEWED**
+- [ ] [Promote START TEAM Out of the Tiny `+` Picker Into the Terminals Sidebar Ops Block](../plans/feature_plan_20260816212500_start-team-is-a-first-class-sidebar-control.md) — **CODE REVIEWED**
+- [ ] [Teams Start Themselves on Load](../plans/teams-start-themselves-on-load.md) — **CODE REVIEWED**
+- [ ] [TEAMS Tab — Pick a Team From Three Cards and See It Drawn](../plans/teams-tab-pick-a-team-from-three-cards.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -50,3 +50,7 @@ The shared surfaces and the single agreed design for each, so a coder implements
 | Seeding `SEEDED_AGENT_GROUP` | workspace-db fix | Boot seeds the selected root on both hosts and keeps doing so (`extension.ts:819-825`, `bootstrap.ts:2188-2192`). The read verb stops seeding, and the candidate walk skips seed-only roots. The seed is neutralised for resolution, never deleted. |
 
 No subtask was merged, split or deleted — the four are genuinely disjoint units of work with one shared seam, and the audit's output was the seam's contract rather than a change of composition.
+
+## Review Findings
+
+All four subtasks reviewed in place against their plan files with cross-subtask regression tracing; the reconciled seam held — `startTeamForWorkspace` is the single extension-host entry point and both downstream subtasks call it rather than re-deriving a root, and the `terminals.agentGroups` additive-fields contract survives the webview save. One CRITICAL and three MAJOR were found and fixed, across `protocol-catalog.json`, `src/generated/verbAllowlist.ts`, `src/webview/kanban.html` and `src/test/team-autostart-workspace-scope.test.js`: the TEAMS-tab `startAgentGroup` arm was never catalogued so it dead-clicked over HTTP in the browser cockpit and broke the CI-wired `catalog:check`; `USE & START` left its button live during the save round-trip and never rolled back an optimistically-adopted card on save failure; and both new source-text contract tests used fixed character windows that ended before their assertion targets, so two gates named in the plans were red in CI no matter what the code did. Gate-wiring audit: `catalog:check`, `parity:check`, `push-routing:check`, `standalone-parity:check`, `verb-returns:check`, `lint` and `test:contract:team-autostart-scope` are all invoked by `.github/workflows/integration-tests.yml`; the one hole is that `eslint.config.js` scopes to `**/*.ts`, so the webview JS/HTML that carries most of this feature is not covered by the lint gate (pre-existing and documented at `integration-tests.yml:835`). Final state: `compile-tests` clean, `team-autostart-workspace-scope` 22/22 pass, `lint` 0 errors, and every ratchet/parity/catalog gate green.
