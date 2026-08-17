@@ -2,7 +2,9 @@
 
 ## Goal
 
-Pushing a batch of plans from Notion or Linear stages them into the session queue and wakes an orchestrator once to decide the order. Nothing fires on arrival. The remote board becomes an intake for broad orders — "here are five plans, deal with them" — rather than a trigger wired directly to the agents.
+Pushing a batch of plans from Notion or Linear stages them into the session queue in arrival order instead of firing an agent per card. The remote board becomes an intake for broad orders — "here are five plans, deal with them" — rather than a trigger wired directly to the agents.
+
+**This is entirely extension-managed and requires no orchestrator.** Remote Control is mechanical today and stays mechanical: staging a batch and letting the lead walk it one at a time needs no judgement, so no agent is in the correctness path. Optional batch *sequencing* — reordering by dependency, grouping what belongs together — is judgement and is an explicit opt-in on top of a default that is already correct without it.
 
 ### Problem & background
 
@@ -25,18 +27,31 @@ Now that a queue exists (subtask 2) and the lead paces itself through it (subtas
 The channel carries broad orders at batch granularity. It is not a chat: no per-turn dialogue, no resident addressee, no reply loop. Three consequences worth stating because they each *remove* work:
 
 * **No control card and no session-level message channel.** The existing per-card comment routing stays exactly as it is.
-* **No self-feeding-loop risk.** Nothing replies to comments in a loop, so the poller cannot re-ingest an orchestrator's own output as a new instruction.
-* **No resident orchestrator.** A batch wakes one, it sequences and hands off (subtask 6), and it exits. Remote Control adds no third session state.
+* **No self-feeding-loop risk.** Nothing replies to comments in a loop, so the poller cannot re-ingest an agent's own output as a new instruction.
+* **No resident orchestrator.** Nothing is seated, nothing waits, no session state is added.
 
-### Degraded mode is safe by construction
+### Why no orchestrator is required
 
-If no orchestrator is available, staged cards simply sit in the queue in arrival order — visible on the board, counted on the Dispatch toggle, and pullable by the lead. Contrast today's failure, where the same batch has already started five agents before anyone looks. "Nothing happened yet" is a recoverable state; "five agents are running" is not.
+Remote Control is extension-managed today, and that is a property worth keeping rather than an accident to fix. It works while the user is away, it is deterministic, it costs no context, and it cannot misjudge. Making the burst fix depend on an agent would put judgement in the correctness path of a mechanism whose whole value is that it has none.
+
+The two concerns are separable:
+
+* **Not stampeding** is mechanical — append arrivals to the queue in order, let the lead pull one at a time. No judgement, no agent, and it is the entire bug fix.
+* **Sequencing and grouping** are judgement — reorder by dependency, group a batch into a feature, notice that something arrived under-specified and belongs in the planning lane. Real value, and strictly optional.
+
+**Arrival order is a good default, not a fallback.** Plans are pushed in roughly the order they are wanted; the queue is reorderable on the board (subtask 2) and its depth is visible on the Dispatch toggle. A batch that runs in the order it was pushed, one card at a time, is a correct outcome.
+
+**Queue mode is also more robust than `full` even for a single card.** `performKanbanDispatch` returns `409` when no terminal is live (`LocalApiServer.ts:1319`), so a remote move under `full` with no live coder fails or degrades to the clipboard. Staging always succeeds and waits for a lead — so the mechanical path removes a failure mode rather than trading one for another.
+
+### Sequencing is opt-in and explicit, never ambient
+
+If batch sequencing is wanted it is a setting, not a consequence of a terminal happening to be open. Behaviour that changes depending on whether an orchestrator is seated is exactly the ambient spookiness this feature exists to remove: the same five plans would run in a different order on Tuesday than on Monday, with nothing in the board explaining why. With the setting off, no agent is involved at any point. With it on, an orchestrator is woken (started if needed) to sequence the batch before the first dispatch, bounded so that its absence or failure falls back to arrival order rather than stalling the queue.
 
 ---
 
 ## Metadata
 
-- **Complexity:** 5
+- **Complexity:** 4
 - **Tags:** backend, api, reliability, feature
 - **Feature:** 3e8b662b-a8a8-42c5-8e43-6d67998aa201
 
@@ -44,43 +59,46 @@ If no orchestrator is available, staged cards simply sit in the queue in arrival
 
 ## User Review Required
 
-**None.** Five decisions made here:
+**None.** Six decisions made here:
 
+* **Remote Control requires no orchestrator.** The mechanical path is the whole fix and stays extension-managed. This reverses an earlier draft of this plan, which made staging depend on an agent being available to sequence — that put judgement in the correctness path of the one mechanism whose value is having none, and stalled the away-from-desk case that Remote Control exists for.
 * **A third `mode` value, `queue`, rather than changing what `full` means.** `full` stays as the one-card "run this now" trigger, which is a legitimate use; `queue` becomes the recommended setting for a remote board that pushes batches. Changing `full` in place would alter behaviour for anyone using single-card remote triggering.
-* **Staging happens in the poll loop; sequencing happens in the orchestrator.** The extension must never decide order — that is judgement, and it is the thing the orchestrator is actually for.
-* **One wake per batch, not per card.** A wake per card reintroduces the fan-out this plan removes, one level up.
-* **The ack comment tells the truth.** A card that was staged must not be acked as dispatched; the current wording would become a lie and remote users read those acks as status.
-* **No orchestrator available ⇒ cards stay staged.** No fallback to direct dispatch — falling back to the burst on the path whose purpose is preventing the burst.
+* **Sequencing is an explicit setting, not "if an orchestrator is seated".** Ambient behaviour that depends on which terminals are open makes the same batch run differently on different days with nothing on the board to explain it.
+* **Sequencing is bounded and falls back to arrival order.** An absent or failed sequencer must never hold a queue shut — the failure mode of the feature that prevents stampedes cannot be a stall.
+* **One wake per batch, not per card**, when sequencing is on. A wake per card reintroduces the fan-out this plan removes, one level up.
+* **The ack comment tells the truth.** A card that was staged must not be acked as dispatched; the current wording would become a lie, and remote users read those acks as status.
 
 ---
 
 ## Implementation
 
-**Blocked on subtasks 1, 2 and 6** — staging needs the queue, and the intake orchestrator hands off through subtask 6.
+**Blocked on subtasks 1 and 2** — staging needs a queue to stage into and a lead that pulls from it. Steps 1–4 are the whole bug fix and involve no agent. Steps 5–6 are the opt-in sequencing layer and additionally want subtask 6's handoff endpoint; they can ship later or never without weakening 1–4.
 
-1. **`RemoteConfig.mode` gains `'queue'`** (`RemoteControlService.ts:57`): `ingest` = pull only; `queue` = pull + stage, never dispatch; `full` = pull + dispatch, today's behaviour. Normalise unknown persisted values to `queue` for remote-driven boards — the safe direction, since the failure mode of guessing wrong is "work waits" rather than "work stampedes."
+1. **`RemoteConfig.mode` gains `'queue'`** (`RemoteControlService.ts:57`): `ingest` = pull only; `queue` = pull + stage, never dispatch; `full` = pull + dispatch, today's behaviour. Normalise unknown persisted values to `queue` — the safe direction, since guessing wrong means "work waits" rather than "work stampedes."
 
 2. **`_applyStateMirror` branches on mode.** In `queue` mode, a delta resolving to a dispatch column stages the card: move it to `DISPATCH`, assign the next `queue_position` (subtask 2), and do **not** call `onColumnMove`. The echo guard at `:640` is unchanged and still load-bearing.
 
 3. **Truthful ack.** Staged cards get *"staged as position N in the session queue"*, naming the position, instead of the dispatch ack at `:651-654`.
 
-4. **One batch wake.** After a poll cycle that staged at least one card, wake an orchestrator once with the batch — the staged plan ids, their arrival order, and the pre-existing queue contents. Debounce across cycles so a trickle of arrivals over several polls produces one sequencing pass rather than several.
+4. **Nothing else.** With sequencing off, this is the complete path: arrivals stage in delta order and the lead pulls them one at a time via subtask 1. No agent is woken, nothing waits, and the queue is correct on its own.
 
-5. **Persona `## Remote intake`.** You were woken by a batch, not a conversation. Decide the order; group what belongs together into a feature where the grouping is real; state what you changed and why; dispatch the first card via `queue/next`; report on the cards; hand off and exit. Bounded report shape per subtask 5 — a Notion comment is a worse home for an essay than a terminal is.
+5. **Opt-in sequencing** behind a setting (default **off**). When on, a poll cycle that staged at least one card wakes an orchestrator once with the batch — staged plan ids, arrival order, and the pre-existing queue contents. Debounced across cycles so a trickle over several polls produces one pass. Bounded: if no orchestrator can be started, or it does not respond within the bound, the queue proceeds in arrival order and the fallback is logged. The sequencer reorders before the first dispatch; it never holds the queue shut.
 
-6. **No orchestrator available ⇒ leave them staged** and note it once in the log. The board already shows the count; the lead can pull them in arrival order.
+6. **Persona `## Remote intake`** (only reached when sequencing is on). You were woken by a batch, not a conversation. Decide the order; group what belongs together into a feature where the grouping is real; state what you changed and why; report on the cards; hand off and exit. Bounded report shape per subtask 5 — a Notion comment is a worse home for an essay than a terminal is.
 
 ---
 
 ## Verification Plan
 
-- **Unit — the headline case:** five state deltas resolving to a dispatch column in one poll cycle, `mode: 'queue'`. Exactly zero dispatches, five cards staged, positions 1–5 in delta order.
-- **Unit:** the same five deltas under `mode: 'full'` still dispatch five times — the existing behaviour is preserved for anyone relying on it.
+- **Unit — the headline case:** five state deltas resolving to a dispatch column in one poll cycle, `mode: 'queue'`, sequencing **off**. Exactly zero dispatches, five cards staged, positions 1–5 in delta order — and **no agent involved at any point**, which is the property this plan turns on.
+- **Unit:** the same five deltas under `mode: 'full'` still dispatch five times — existing behaviour preserved for anyone relying on it.
 - **Unit:** `mode: 'ingest'` still imports without moving or dispatching.
-- **Unit:** one batch wake for five staged cards, not five; and one wake for a trickle spanning three poll cycles.
 - **Unit:** a staged card is acked as staged with its position, never as dispatched.
-- **Unit:** no orchestrator available → cards remain staged, nothing dispatched, one log line.
 - **Unit:** the echo guard still no-ops a delta whose column equals the card's current column, in `queue` mode as in `full`.
-- **Manual UAT:** move five Notion issues to the trigger state at once. Nothing starts; the Dispatch toggle reads 5; the orchestrator wakes once, states an order, dispatches the first; the lead walks the remaining four one at a time.
-- **Manual UAT:** the same batch with the orchestrator unavailable — five cards staged, nothing running, board legible.
+- **Unit:** unknown persisted `mode` normalises to `queue`, not `full`.
+- **Unit — sequencing on:** one wake for five staged cards, not five; one wake for a trickle spanning three poll cycles.
+- **Unit — the fallback that must not stall:** sequencing on with no orchestrator startable, and separately with one that never responds. In both cases the queue proceeds in arrival order within the bound and logs the fallback. A stalled queue here would make the anti-stampede feature the cause of the outage.
+- **Manual UAT — no agent path:** move five Notion issues to the trigger state at once with sequencing off. Nothing starts, the Dispatch toggle reads 5, and the lead walks all five one at a time in pushed order.
+- **Manual UAT — single card:** one remote move with no live coder. Under `queue` it stages successfully; under `full` it 409s or clipboards — confirming queue mode removes that failure mode.
+- **Manual UAT — sequencing on:** the same batch reordered by the orchestrator before the first dispatch, with the reordering stated on the cards.
 - **Regression:** per-card remote comment routing, the two cursors, the seen-set, `authoredBySelf` and cursor-advance-after-dispatch are all untouched.
