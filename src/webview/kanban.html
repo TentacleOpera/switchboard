@@ -1394,6 +1394,35 @@
             color: var(--text-secondary);
             margin-top: 2px;
         }
+        .teams-card-autostart {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 4px;
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .teams-card-autostart-cb {
+            margin: 0;
+            cursor: pointer;
+        }
+        .teams-card-autostart-label {
+            cursor: pointer;
+        }
+        .teams-card-autostart-wt {
+            flex: 1 1 80px;
+            min-width: 60px;
+            font-size: 9px;
+            text-transform: none;
+            letter-spacing: normal;
+            padding: 2px 4px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            background: var(--panel-bg);
+            color: var(--text-primary);
+        }
         .teams-build-link {
             display: inline-block;
             margin-top: 8px;
@@ -4800,6 +4829,60 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 card.appendChild(noteDiv);
             }
 
+            // START ON LOAD toggle — adopted teams only. Shipped types have no
+            // persisted row to hold it; it appears once the team is adopted.
+            // stopPropagation so toggling does not also pick the card.
+            if (entry.adopted) {
+                const autoDiv = document.createElement('div');
+                autoDiv.className = 'teams-card-autostart';
+                autoDiv.addEventListener('click', (e) => e.stopPropagation());
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.className = 'teams-card-autostart-cb';
+                cb.checked = !!group.startOnLoad;
+                const cbLabel = document.createElement('span');
+                cbLabel.className = 'teams-card-autostart-label';
+                cbLabel.textContent = 'START ON LOAD';
+                autoDiv.appendChild(cb);
+                autoDiv.appendChild(cbLabel);
+                // Worktree field — only when the toggle is on. Empty by default;
+                // no placeholder implying a worktree is expected. The gallery
+                // re-renders via the saveAgentGroup round-trip, so revealing this
+                // input is handled by the re-render, not inline.
+                if (group.startOnLoad) {
+                    const wtInput = document.createElement('input');
+                    wtInput.type = 'text';
+                    wtInput.className = 'teams-card-autostart-wt';
+                    wtInput.value = group.startWorktree || '';
+                    wtInput.placeholder = '';
+                    wtInput.addEventListener('change', () => {
+                        const g = agentsTabAgentGroups.find(x => x.id === group.id);
+                        if (!g) return;
+                        const val = wtInput.value.trim();
+                        if (val) { g.startWorktree = val; }
+                        else { delete g.startWorktree; }
+                        postKanbanMessage({ type: 'saveAgentGroup', group: { ...g } });
+                    });
+                    autoDiv.appendChild(wtInput);
+                }
+                cb.addEventListener('change', () => {
+                    const g = agentsTabAgentGroups.find(x => x.id === group.id);
+                    if (!g) return;
+                    if (cb.checked) {
+                        g.startOnLoad = true;
+                    } else {
+                        // Un-checking removes the key (and startWorktree with it)
+                        // rather than writing false — absence is the documented
+                        // default and keeps the stored shape byte-identical for
+                        // installs that never touch the toggle.
+                        delete g.startOnLoad;
+                        delete g.startWorktree;
+                    }
+                    postKanbanMessage({ type: 'saveAgentGroup', group: { ...g } });
+                });
+                card.appendChild(autoDiv);
+            }
+
             card.addEventListener('click', () => {
                 teamsTabPickedKey = key;
                 teamsTabRenderGallery();
@@ -5237,7 +5320,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // the head role to a free one, the team becomes active.
             const promptText = (document.getElementById('agent-groups-prompt')?.value || '').trim();
             const headPromptText = (document.getElementById('agent-groups-head-prompt')?.value || '').trim();
-            const group = { id, name, headRole, members, ...(promptText ? { prompt: promptText } : {}), ...(headPromptText ? { headPrompt: headPromptText } : {}) };
+            // Autostart fields are NOT editor fields — they are set on the card
+            // toggle. This literal rebuilds the group from scratch and drops
+            // every field it does not name (see the unassigned comment above),
+            // so an EDIT+SAVE would silently clear the operator's START ON LOAD
+            // without this carry. Read from the existing in-memory definition.
+            const prevGroup = agentsTabEditingGroupId
+                ? agentsTabAgentGroups.find(g => g.id === agentsTabEditingGroupId) || null
+                : null;
+            const group = {
+                id, name, headRole, members,
+                ...(promptText ? { prompt: promptText } : {}),
+                ...(headPromptText ? { headPrompt: headPromptText } : {}),
+                ...(prevGroup?.startOnLoad ? { startOnLoad: true } : {}),
+                ...(prevGroup?.startWorktree ? { startWorktree: prevGroup.startWorktree } : {}),
+            };
             // Replace or append
             const idx = agentsTabAgentGroups.findIndex(g => g.id === id);
             if (idx >= 0) { agentsTabAgentGroups[idx] = group; }

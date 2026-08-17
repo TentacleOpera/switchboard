@@ -2274,6 +2274,23 @@ Each plan file must include:
     void taskViewerProvider.restoreAutobanOnStartup()
         .catch(err => log(opts, `autoban restore failed: ${err}`));
 
+    // Boot-time team autostart. Same fire-and-forget shape as the autoban
+    // restore above. This host is single-root and runs with
+    // suppressLocalApiServer, so startTeamsOnLoad routes through
+    // kanbanProvider.startAgentGroupById (using the instantiator registered
+    // above) rather than startTeamForWorkspace — exactly as this host's
+    // ptyStartTeam verb does. The liveTerminals callback reads the in-process
+    // fleet directly, since _ptyHostVerb is unavailable on this host.
+    void taskViewerProvider.startTeamsOnLoad(workspaceRoot, {
+        liveTerminals: async () => ptyFleetService.listActive().map(t => ({
+            role: t.role,
+            friendlyName: t.friendlyName,
+            parentInstanceId: t.parentInstanceId,
+            status: t.status,
+        })),
+    })
+        .catch(err => log(opts, `team autostart failed: ${err}`));
+
     return {
         server,
         port,

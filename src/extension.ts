@@ -1180,6 +1180,16 @@ export async function activate(context: vscode.ExtensionContext) {
     taskViewerProvider.setSetupPanelProvider(setupPanelProvider);
     kanbanProvider!.setTaskViewerProvider(taskViewerProvider);
     setupPanelProvider.setTaskViewerProvider(taskViewerProvider);
+    // Boot-time team autostart. Fire-and-forget, exactly as the standalone host
+    // treats restoreAutobanOnStartup (bootstrap.ts): starting agent CLIs must
+    // never extend activation, and a failure must never take it down. Placed
+    // after the delegate import (above) and after the provider exists and is
+    // wired to the kanban provider, so a team assembled by that import is
+    // eligible on the very first launch after an upgrade.
+    if (workspaceRoot) {
+        void taskViewerProvider.startTeamsOnLoad(workspaceRoot)
+            .catch(err => console.warn('[Switchboard] Team autostart failed:', err));
+    }
     setupPanelProvider.setKanbanProvider(kanbanProvider!);
     const resolveEffectiveStateRoot = (candidateWorkspaceRoot?: string): string | null => {
         const selectedWorkspaceRoot = candidateWorkspaceRoot || kanbanProvider!.getCurrentWorkspaceRoot();

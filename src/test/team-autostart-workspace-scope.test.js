@@ -36,6 +36,8 @@ const { findTeamForHeadRoleInRoots, wireSpawnedTeam, listTeamsInRoots, resolveTe
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const taskViewerTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/TaskViewerProvider.ts'), 'utf8');
 const bootstrapTs = fs.readFileSync(path.join(REPO_ROOT, 'src/standalone/bootstrap.ts'), 'utf8');
+const kanbanHtml = fs.readFileSync(path.join(REPO_ROOT, 'src/webview/kanban.html'), 'utf8');
+const extensionTs = fs.readFileSync(path.join(REPO_ROOT, 'src/extension.ts'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -285,6 +287,59 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
         const arm = bootstrapTs.slice(caseIdx, caseIdx + 400);
         assert.ok(/peekAgentGroups/.test(arm), 'the verb arm must call peekAgentGroups');
         assert.ok(!/listAgentGroups/.test(arm), 'the verb arm must NOT call listAgentGroups (it seeds)');
+    });
+
+    console.log('\n--- teams start themselves on load: autostart contracts ---');
+
+    // 19. The autostart method exists and carries the one-shot latch. The latch
+    //     is the second guard against re-entrancy (the primary guard is
+    //     placement outside _startLocalApiServer). Without it a watchdog
+    //     re-tick after a provider-state glitch would re-spawn teams.
+    await test('startTeamsOnLoad exists and is gated by _teamAutostartDone', async () => {
+        const methodIdx = taskViewerTs.indexOf('startTeamsOnLoad(');
+        assert.ok(methodIdx > 0, 'startTeamsOnLoad method not found');
+        const method = taskViewerTs.slice(methodIdx, methodIdx + 400);
+        assert.ok(/_teamAutostartDone/.test(method), 'startTeamsOnLoad must check _teamAutostartDone');
+        assert.ok(taskViewerTs.indexOf('_teamAutostartDone = false') > 0,
+            '_teamAutostartDone latch field must be declared');
+    });
+
+    // 20. Re-entrancy guard: the hook must NOT live inside _startLocalApiServer
+    //     (which the liveness watchdog re-invokes on every check). A
+    //     startTeamsOnLoad call inside that body would re-spawn a team every
+    //     time the operator closed its head.
+    await test('startTeamsOnLoad is NOT called from _startLocalApiServer', async () => {
+        const startIdx = taskViewerTs.indexOf('private async _startLocalApiServer');
+        assert.ok(startIdx > 0, '_startLocalApiServer not found');
+        // Slice from the method declaration to the next private/public method.
+        const nextMethod = taskViewerTs.indexOf('\n    private ', startIdx + 1);
+        const body = taskViewerTs.slice(startIdx, nextMethod > 0 ? nextMethod : startIdx + 6000);
+        assert.ok(!/startTeamsOnLoad/.test(body),
+            '_startLocalApiServer body must NOT contain startTeamsOnLoad (re-entrant)');
+    });
+
+    // 21. Both hosts call startTeamsOnLoad at boot — the both-hosts rule. The
+    //     extension host calls it from activation; the standalone host calls
+    //     it beside restoreAutobanOnStartup.
+    await test('both hosts call startTeamsOnLoad at boot', async () => {
+        assert.ok(/startTeamsOnLoad\(/.test(extensionTs),
+            'extension.ts must call startTeamsOnLoad');
+        assert.ok(/startTeamsOnLoad\(/.test(bootstrapTs),
+            'bootstrap.ts must call startTeamsOnLoad');
+    });
+
+    // 22. Field-carry guard (root cause 1): teamsTabSaveAgentGroup's object
+    //     literal must name startOnLoad explicitly. The literal rebuilds the
+    //     group from scratch and drops every field it does not name, so without
+    //     this carry an EDIT+SAVE silently wipes the operator's START ON LOAD.
+    await test("kanban.html teamsTabSaveAgentGroup literal carries startOnLoad", async () => {
+        const saveIdx = kanbanHtml.indexOf('function teamsTabSaveAgentGroup');
+        assert.ok(saveIdx > 0, 'teamsTabSaveAgentGroup not found');
+        const save = kanbanHtml.slice(saveIdx, saveIdx + 1600);
+        assert.ok(/prevGroup\?\.startOnLoad/.test(save),
+            'teamsTabSaveAgentGroup must carry startOnLoad from prevGroup');
+        assert.ok(/prevGroup\?\.startWorktree/.test(save),
+            'teamsTabSaveAgentGroup must carry startWorktree from prevGroup');
     });
 
     console.log(`\n${passed} passed, ${failed} failed`);

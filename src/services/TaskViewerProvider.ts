@@ -828,6 +828,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      */
     private _ptyHostBootFailed = false;
     /**
+     * One-shot latch for the boot-time team autostart pass
+     * (`startTeamsOnLoad`). Deliberately per-provider-instance: a window
+     * reload constructs a new provider, which is the intended reset — the
+     * DB-backed debounce row (`terminals.autostart.lastRunAt`) is what stops
+     * a reload from double-starting across windows. This is the SECOND guard;
+     * the primary guard is placement outside `_startLocalApiServer` (which is
+     * re-entrant — the liveness watchdog re-invokes it on every check).
+     */
+    private _teamAutostartDone = false;
+    /**
      * Last known fleet membership, refreshed on every `ptyListTerminals` forward.
      *
      * `getRegisteredTerminals` is a SYNCHRONOUS LocalApiServer callback and the fleet
@@ -11687,6 +11697,118 @@ Each plan file must include:
             this._broadcaster?.push({ type: 'terminalsGroupsChanged' }, SURFACES.terminals);
         }
         return result;
+    }
+
+    /**
+     * Poll briefly for the pty host to become ready. On the extension host the
+     * fleet lives in a child process (`_ptyHostChild`/`_ptyHostPort`); on the
+     * standalone host the fleet is in-process (`suppressLocalApiServer`), already
+     * constructed by bootstrap before this is called, so it short-circuits true.
+     * Used by the boot-time autostart pass so it does not fire into a host with
+     * no fleet, and does not block activation longer than the timeout.
+     */
+    private async _waitForPtyHost(timeoutMs: number): Promise<boolean> {
+        if (this.suppressLocalApiServer) { return true; }
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            if (isPtyAvailable() && !!this._ptyHostChild && !!this._ptyHostPort) { return true; }
+            await new Promise(r => setTimeout(r, 200));
+        }
+        return isPtyAvailable() && !!this._ptyHostChild && !!this._ptyHostPort;
+    }
+
+    /**
+     * Start every team marked `startOnLoad` for this workspace, once per host
+     * launch. Called from activation (extension.ts) and from bootstrap.ts.
+     *
+     * Deliberately NOT called from `_startLocalApiServer`: that method is
+     * re-entrant (the liveness watchdog re-invokes it on every check), and a
+     * team-start pass inside it would re-spawn a team every time the operator
+     * closed its head. The `_teamAutostartDone` latch is the second guard, not
+     * the only one.
+     *
+     * Definitions are resolved by `listTeamsInRoots` — the same candidate walk
+     * the picker and START use — so autostart cannot read a different board
+     * than the one the operator authored teams in.
+     *
+     * Host routing: the extension host starts teams through
+     * `startTeamForWorkspace` (the single entry point the prerequisite
+     * extracted). The standalone host runs with `suppressLocalApiServer`, so
+     * `_ptyHostPort` is never assigned and `startTeamForWorkspace`'s
+     * `instantiateAgentGroup` arm would refuse with "PTY host unavailable" on
+     * a host that owns the fleet outright. Standalone routes through
+     * `kanbanProvider.startAgentGroupById` instead — exactly as its
+     * `ptyStartTeam` verb does (bootstrap.ts) — using the instantiator
+     * registered by `setAgentGroupInstantiator`.
+     */
+    public async startTeamsOnLoad(
+        workspaceRoot: string,
+        opts?: {
+            liveTerminals?: () => Promise<Array<{ role?: string; friendlyName?: string; parentInstanceId?: any; status?: string }>>;
+        }
+    ): Promise<void> {
+        if (this._teamAutostartDone) { return; }
+        this._teamAutostartDone = true;
+
+        const roots = this._teamLookupRoots(undefined, workspaceRoot);
+        const { teams, root: sourceRoot } = await listTeamsInRoots(roots, (r) => this._getKanbanDbIfPresent(r));
+        const marked = (teams || []).filter(t => t && t.startOnLoad === true);
+        if (marked.length === 0) { return; }
+
+        // Cross-window debounce. Two VS Code windows on one workspace are two
+        // extension hosts with two pty fleets, so startTeamById's liveness check
+        // (which asks THIS host's fleet) cannot see the other window's head and
+        // would start a duplicate team. The DB config table is the only state
+        // both windows actually share.
+        const db = sourceRoot ? await this._getKanbanDbIfPresent(sourceRoot) : undefined;
+        const AUTOSTART_DEBOUNCE_MS = 60_000;
+        if (db) {
+            const last = Number(await db.getConfigJson('terminals.autostart.lastRunAt', 0)) || 0;
+            if (Date.now() - last < AUTOSTART_DEBOUNCE_MS) {
+                console.log(`[TaskViewerProvider] Team autostart: skipped — another host started teams `
+                    + `for '${sourceRoot}' ${Math.round((Date.now() - last) / 1000)}s ago.`);
+                return;
+            }
+            await db.setConfigJson('terminals.autostart.lastRunAt', Date.now());
+        }
+
+        // The pty fleet must exist before we ask it for terminals. Poll briefly
+        // rather than blocking activation; give up with a log if it never arrives.
+        if (!(await this._waitForPtyHost(10_000))) {
+            console.warn(`[TaskViewerProvider] Team autostart: PTY host never became ready; `
+                + `${marked.length} marked team(s) not started.`);
+            return;
+        }
+
+        for (const team of marked) {
+            // Per-team try/catch: one bad startWorktree must not stop the rest.
+            try {
+                let result: any;
+                if (this.suppressLocalApiServer && opts?.liveTerminals && this._kanbanProvider) {
+                    // Standalone: route through the kanbanProvider's registered
+                    // instantiator (setAgentGroupInstantiator at bootstrap.ts),
+                    // exactly as the standalone ptyStartTeam verb does.
+                    const spawnCwd = team.startWorktree || undefined;
+                    result = await this._kanbanProvider.startAgentGroupById(
+                        sourceRoot || workspaceRoot, team.id, opts.liveTerminals, spawnCwd
+                    );
+                } else {
+                    result = await this.startTeamForWorkspace({
+                        teamId: team.id,
+                        pinnedRoot: workspaceRoot,
+                        payloadCwd: team.startWorktree || undefined,
+                    });
+                }
+                if (result?.success === false) {
+                    console.warn(`[TaskViewerProvider] Team autostart: '${team.name}' failed — ${result.error}`);
+                } else {
+                    console.log(`[TaskViewerProvider] Team autostart: started '${team.name}'`
+                        + (team.startWorktree ? ` in '${team.startWorktree}'` : ''));
+                }
+            } catch (err) {
+                console.warn(`[TaskViewerProvider] Team autostart: '${team?.name}' threw —`, err);
+            }
+        }
     }
 
     /**
