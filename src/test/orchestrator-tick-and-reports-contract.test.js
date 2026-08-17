@@ -134,6 +134,31 @@ async function run() {
         );
     });
 
+    await check('persona defines the ready-to-go query, its exclusions, and its source', () => {
+        assert.ok(/\n## What Is Ready To Go\n/.test(persona), 'persona has no ## What Is Ready To Go section');
+        assert.ok(/featureId/.test(persona), 'persona does not state the subtask exclusion (featureId)');
+        assert.ok(/ACTIVE_PROJECT_FILTER/.test(persona), 'persona ignores the injected project filter — the answer would not match the board');
+        assert.ok(/kanban-state-\*\.md/.test(persona), 'persona does not route this question off the per-column exports (they carry no featureId)');
+        assert.ok(/kanban\/plans/.test(persona), 'persona names no endpoint for the ready query');
+        // CODE REVIEWED also appears legitimately in ## What You Never Do, so assert
+        // the exclusion sentence exists rather than forbidding the string.
+        assert.ok(
+            /Exclude every other column[\s\S]{0,400}CODE REVIEWED/.test(persona),
+            'persona does not exclude the finished columns from the ready set'
+        );
+        assert.ok(/BACKLOG/.test(persona) && /DISPATCH/.test(persona), 'persona does not exclude the two display-mode columns');
+    });
+
+    await check('pre-flight check 5 and the tick both defer to the one ready definition', () => {
+        const refs = persona.match(/## What Is Ready To Go/g) || [];
+        assert.ok(refs.length >= 3, `the ready definition is referenced ${refs.length} times — check 5 and ## The Tick must both point at it instead of restating the columns`);
+    });
+
+    await check('a passing pre-flight check produces no output', () => {
+        assert.ok(/Pre-flight clear\./.test(persona), 'persona names no silent-pass report line');
+        assert.ok(!/Report what you find in plain terms/.test(persona), 'the six checks still instruct the agent to narrate every check');
+    });
+
     // ─── 2. The Miscellaneous sweep, in BOTH trees ───────────────────────────
     const mdFiles = [];
     const walk = (dir) => {
@@ -476,6 +501,74 @@ async function run() {
         const next = after.slice(1).search(/\n {4}(?:public|private|protected)\s/);
         const body = next === -1 ? after : after.slice(0, next + 1);
         assert.ok(/sessions/.test(body) && /rename/.test(body), 'Stop does not archive session.md — the next Start reads a stale session and never re-interviews');
+    });
+
+    // ─── 9. Handoff: hands off to lead, writes session log, and exits ────────
+    await check('persona documents ## Handoff, or arm? and ## The handoff sequence ending in exit', () => {
+        assert.ok(persona.includes('## Handoff, or arm?'), 'persona lost ## Handoff, or arm?');
+        assert.ok(persona.includes('## The handoff sequence'), 'persona lost ## The handoff sequence');
+        const handoffSection = persona.slice(persona.indexOf('## The handoff sequence'));
+        assert.ok(
+            /POST \/orchestration\/handoff/.test(handoffSection),
+            'handoff sequence does not call POST /orchestration/handoff'
+        );
+        assert.ok(
+            /exit/i.test(handoffSection),
+            'handoff sequence must instruct the agent to exit after reporting handoff'
+        );
+    });
+
+    await check('POST /orchestration/handoff is routed and wired to TaskViewerProvider', () => {
+        const api = read('src/services/LocalApiServer.ts');
+        assert.ok(
+            /pathname === '\/orchestration\/handoff' && req\.method === 'POST'/.test(api),
+            'POST /orchestration/handoff is not routed in LocalApiServer'
+        );
+        assert.ok(
+            /orchestrationHandoff\?:/.test(api),
+            'LocalApiServerOptions does not declare orchestrationHandoff'
+        );
+        const provider = read('src/services/TaskViewerProvider.ts');
+        assert.ok(
+            provider.includes('handoffOrchestrationSession('),
+            'TaskViewerProvider does not implement handoffOrchestrationSession'
+        );
+    });
+
+    await check('handoff writes summary to session log BEFORE closing terminal and does NOT touch automationMode', () => {
+        const provider = read('src/services/TaskViewerProvider.ts');
+        const start = provider.indexOf('public async handoffOrchestrationSession(');
+        assert.ok(start !== -1, 'handoffOrchestrationSession must exist');
+        const after = provider.slice(start);
+        const next = after.slice(1).search(/\n {4}(?:public|private|protected)\s/);
+        const body = next === -1 ? after : after.slice(0, next + 1);
+
+        const appendLogAt = body.indexOf('appendFile(sessionPath');
+        const closeTermAt = body.indexOf('_closeTerminal(');
+        assert.ok(
+            appendLogAt !== -1 && closeTermAt !== -1 && appendLogAt < closeTermAt,
+            'handoff must write to session.md BEFORE closing the orchestrator terminal'
+        );
+        assert.ok(
+            !body.includes('_stopAutobanEngine()'),
+            'handoff must NOT call _stopAutobanEngine — it leaves the automation engine state untouched'
+        );
+        assert.ok(
+            !body.includes("automationMode: 'agent-managed'"),
+            'handoff must NOT set automationMode'
+        );
+        assert.ok(
+            body.includes('status: 409'),
+            'handoff must return 409 on unsafe handoff or second terminal move'
+        );
+        assert.ok(
+            /!p\.dispatchedAt/.test(body) && /!p\.featureId/.test(body),
+            'handoff queue validation predicate must match dispatchNextFromQueue candidate filter (!dispatchedAt && !featureId)'
+        );
+        assert.ok(
+            /if \(!db\)[\s\S]{0,100}status: 409/.test(body),
+            'handoff must fail closed with 409 when database is unavailable'
+        );
     });
 
     console.log('');

@@ -48,14 +48,25 @@ export interface RemoteConfig {
     silentSync: boolean;
     /** Poll cadence, 30–120s. */
     pingFrequencySeconds: number;
-    /** Remote mode: 'ingest' = pull only (no state mirror, no agent dispatch); 'full' = pull + mirror + dispatch. */
-    mode: 'ingest' | 'full';
+    /** Remote mode: 'ingest' = pull only (no state mirror, no agent dispatch); 'queue' = pull + stage into the session queue, never dispatch; 'full' = pull + mirror + dispatch (today's behaviour). */
+    mode: 'ingest' | 'queue' | 'full';
     /** Whether push (status + content) is active. Gates push at trigger sites. */
     push: boolean;
     /** Whether comment polling is active. */
     comments: boolean;
     /** Whether plan-content polling is active (pull remote body edits back into the local plan file). */
     content: boolean;
+    /**
+     * Opt-in batch sequencing (subtask 7 step 5, default OFF). When true, a
+     * poll cycle that staged at least one card wakes an orchestrator once with
+     * the batch to reorder by dependency / group into features before the first
+     * dispatch. Bounded: if no orchestrator can be started or it does not
+     * respond within the bound, the queue proceeds in arrival order and the
+     * fallback is logged. The bound is enforced by the extension, not by the
+     * agent's cooperation — an agent that hangs is the expected failure, not
+     * the exception.
+     */
+    queueSequencing?: boolean;
 }
 
 export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
@@ -103,6 +114,29 @@ interface RemoteControlDeps {
     getProvider: (kind: RemoteProviderKind) => RemoteProvider | null;
     /** Apply a remote-driven column move + dispatch the destination column's agent (§9). */
     onColumnMove: (plan: KanbanPlanRecord, targetColumn: string) => Promise<{ dispatched: boolean }>;
+    /**
+     * Stage a card into the session queue (DISPATCH column, next queue_position).
+     * Called in `queue` mode instead of `onColumnMove`. Returns the position
+     * assigned, or -1 on failure. Optional — absent in test harnesses.
+     */
+    onStageForQueue?: (plan: KanbanPlanRecord) => Promise<{ staged: boolean; position: number }>;
+    /**
+     * Arm the queue-level stall watch (subtask 3). Called after a poll cycle
+     * that staged at least one card. `headTerminal` is null when no coding head
+     * is live — the sweep's "no head seated" gate notifies the user. Optional.
+     */
+    onArmQueueWatch?: (workspaceRoot: string, headTerminal: string | null) => Promise<void>;
+    /**
+     * Opt-in batch sequencing (subtask 7 step 5). Called once per poll cycle
+     * that staged at least one card, when `queueSequencing` is on. Receives the
+     * staged plan ids in arrival order and the workspace root. The extension
+     * starts (or reuses) an orchestrator, hands it the batch, and waits for it
+     * to finish reordering — bounded by a timeout the extension enforces. If
+     * the orchestrator cannot be started or does not respond within the bound,
+     * returns `{ sequenced: false }` and the queue proceeds in arrival order.
+     * Optional — absent in test harnesses (sequencing is always off).
+     */
+    onSequenceBatch?: (workspaceRoot: string, stagedPlanIds: string[]) => Promise<{ sequenced: boolean; error?: string }>;
     /** Route an inbound comment to the card's current column agent (§7). */
     onComment: (plan: KanbanPlanRecord, commentBody: string) => Promise<void>;
     /** Persisted description-sync cursors per issue (issueId → ISO timestamp). */
@@ -135,6 +169,14 @@ export class RemoteControlService {
     private _timer?: NodeJS.Timeout;
     private _polling = false;
     private _active = false;
+    // ── Queue-mode state (subtask 7 — remote plans enter the queue) ──
+    /** True if at least one card was staged during the current poll cycle.
+     *  Reset at the top of _pollState, set in _applyStateMirror's queue branch,
+     *  and read after the delta loop to arm the queue watch once per cycle. */
+    private _stagedThisCycle = false;
+    /** Plan ids staged during the current poll cycle, in arrival (delta) order.
+     *  Collected alongside _stagedThisCycle for the optional sequencing layer. */
+    private _stagedPlanIdsThisCycle: string[] = [];
     // ── Health state (feature 7 — Remote-Sync Health & Error Surfacing) ──
     private _lastPollAt: string | null = null;
     private _lastPollOk = true;
@@ -239,10 +281,11 @@ export class RemoteControlService {
                 boards: this._normalizeBoards(parsed.boards),
                 silentSync: parsed.silentSync === true,
                 pingFrequencySeconds: this._clampFrequency(parsed.pingFrequencySeconds),
-                mode: parsed.mode === 'full' ? 'full' : 'ingest',
+                mode: this._normalizeMode(parsed.mode),
                 push: parsed.push === true,
                 comments: parsed.comments !== false, // default true
                 content: parsed.content !== false, // default true
+                queueSequencing: parsed.queueSequencing === true, // default false
             };
         } catch {
             return { ...DEFAULT_REMOTE_CONFIG };
@@ -257,10 +300,11 @@ export class RemoteControlService {
             boards: this._normalizeBoards(config.boards),
             silentSync: config.silentSync === true,
             pingFrequencySeconds: this._clampFrequency(config.pingFrequencySeconds),
-            mode: config.mode === 'full' ? 'full' : 'ingest',
+            mode: this._normalizeMode(config.mode),
             push: config.push === true,
             comments: config.comments !== false,
             content: config.content !== false,
+            queueSequencing: config.queueSequencing === true,
         };
         await db.setConfig(REMOTE_CONFIG_KEY, JSON.stringify(normalized));
         if (this._active) {
@@ -273,6 +317,19 @@ export class RemoteControlService {
         const valid: RemoteProviderKind[] = ['linear', 'notion', 'clickup'];
         const str = String(value || '');
         return valid.includes(str as RemoteProviderKind) ? (str as RemoteProviderKind) : 'linear';
+    }
+
+    /**
+     * Normalize the remote mode. Unknown or corrupt values resolve to `ingest`
+     * (unchanged from the original ternary's default) — NOT `queue`, because
+     * `queue` moves cards to DISPATCH on garbage input and that is a behaviour
+     * change on ~4,000 shipped installs. `queue` is only ever reached by an
+     * explicit user choice, and `full` keeps its explicit meaning.
+     */
+    private _normalizeMode(value: unknown): 'ingest' | 'queue' | 'full' {
+        if (value === 'full') return 'full';
+        if (value === 'queue') return 'queue';
+        return 'ingest';
     }
 
     /**
@@ -599,6 +656,8 @@ export class RemoteControlService {
 
         const config = await this.getConfig();
         const { deltas, nextCursor } = await provider.fetchStateDeltas(cursor);
+        this._stagedThisCycle = false;
+        this._stagedPlanIdsThisCycle = [];
         for (const d of deltas) {
             let plan: KanbanPlanRecord | null | undefined = byRemoteId.get(d.remoteId);
             if (!plan) {
@@ -620,7 +679,46 @@ export class RemoteControlService {
             // In ingest mode, skip state mirror (column move + agent dispatch).
             // State import (above) still runs — the remote is a plan source.
             if (config.mode === 'ingest') { continue; }
-            await this._applyStateMirror(provider, plan, column, refreshedThisCycle);
+            await this._applyStateMirror(provider, plan, column, refreshedThisCycle, config.mode);
+        }
+        // After a cycle that staged at least one card, arm the queue-level
+        // stall watch (subtask 3). This is the one path that can leave a full
+        // queue with no dispatch at all and no user present — precisely the
+        // silent night subtask 3 exists to prevent. Without the arm, this
+        // plan's success case (five cards staged, nothing started) is
+        // indistinguishable from an outage. Arm with null — the sweep's "no
+        // head seated" gate tells the user that work is staged and nothing is
+        // driving it, which is the whole point of staging rather than
+        // dispatching.
+        if (this._stagedThisCycle && this._deps.onArmQueueWatch) {
+            const wsRoot = this._deps.getWorkspaceRoot?.() || '';
+            if (wsRoot) {
+                try { await this._deps.onArmQueueWatch(wsRoot, null); }
+                catch (armErr) { this._log(`Queue mode: armQueueWatch failed: ${armErr instanceof Error ? armErr.message : String(armErr)}`); }
+            }
+        }
+        // ── Opt-in batch sequencing (default OFF) ──────────────────────
+        // When `queueSequencing` is on, wake an orchestrator once with the
+        // batch to reorder by dependency / group into features before the first
+        // dispatch. One wake per batch, not per card — a wake per card
+        // reintroduces the fan-out this plan removes, one level up. Bounded: if
+        // no orchestrator can be started or it does not respond within the
+        // bound, the queue proceeds in arrival order and the fallback is
+        // logged. The bound is enforced by the extension, not by the agent's
+        // cooperation — an agent that hangs is the expected failure, not the
+        // exception.
+        if (this._stagedThisCycle && config.queueSequencing && this._deps.onSequenceBatch) {
+            const wsRoot = this._deps.getWorkspaceRoot?.() || '';
+            if (wsRoot && this._stagedPlanIdsThisCycle.length > 0) {
+                try {
+                    const result = await this._deps.onSequenceBatch(wsRoot, [...this._stagedPlanIdsThisCycle]);
+                    if (!result.sequenced) {
+                        this._log(`Queue mode: sequencing fallback — queue proceeds in arrival order (${result.error || 'no reason given'}).`);
+                    }
+                } catch (seqErr) {
+                    this._log(`Queue mode: onSequenceBatch failed — queue proceeds in arrival order: ${seqErr instanceof Error ? seqErr.message : String(seqErr)}`);
+                }
+            }
         }
         // Advance AFTER processing. State idempotency comes from the echo guard, so a
         // re-fetched (same-minute / inclusive-cursor) item simply no-ops.
@@ -633,7 +731,8 @@ export class RemoteControlService {
         provider: RemoteProvider,
         plan: KanbanPlanRecord,
         targetColumn: string,
-        refreshedThisCycle: Set<string>
+        refreshedThisCycle: Set<string>,
+        mode: 'ingest' | 'queue' | 'full' = 'full'
     ): Promise<void> {
         // The whole echo guard: never re-apply the column the card is already in. Our own
         // outbound push re-surfaces as a delta with the column we just set → no-op here.
@@ -642,10 +741,44 @@ export class RemoteControlService {
         const remoteId = this._remoteIdOf(provider.kind, plan);
         this._log(`State mirror: ${remoteId} → column ${targetColumn} (from ${plan.kanbanColumn}).`);
         try {
-            // Pull the remote-authored body/description into the local plan BEFORE dispatch.
+            // Pull the remote-authored body/description into the local plan BEFORE dispatch
+            // or staging — a staged card must carry the remote-authored body before the
+            // lead picks it up.
             await provider.refreshLocalPlanFromRemote(remoteId);
             // Track that this card was already refreshed so _pollDescriptions doesn't double-pull.
             refreshedThisCycle.add(remoteId);
+
+            // ── Queue mode: stage instead of dispatch ──────────────────────
+            // A delta resolving to a dispatch column stages the card into the
+            // session queue (DISPATCH, next queue_position) and does NOT call
+            // onColumnMove. The lead walks staged cards one at a time via
+            // subtask 1's queue/next. No agent is woken — staging is
+            // mechanical, and no judgement belongs in the correctness path of
+            // the one mechanism whose value is having none.
+            if (mode === 'queue') {
+                if (!this._deps.onStageForQueue) {
+                    this._log(`Queue mode: onStageForQueue dep absent — cannot stage ${plan.planId}, skipping (no dispatch).`);
+                    return;
+                }
+                const { staged, position } = await this._deps.onStageForQueue(plan);
+                if (staged) {
+                    // Truthful ack: a staged card is NOT a dispatched card. The
+                    // current wording ("dispatched the local agent") would be a
+                    // lie the user acts on. Name the position so the remote
+                    // user can see the queue depth.
+                    provider.postComment(
+                        remoteId,
+                        `Switchboard received this status change and staged it as position ${position} in the session queue. A coding lead will pick it up in order.`
+                    ).catch(e => this._log(`Stage ack comment failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`));
+                    this._stagedThisCycle = true;
+                    this._stagedPlanIdsThisCycle.push(plan.planId);
+                } else {
+                    this._log(`Queue mode: stageForQueue refused ${plan.planId} (position ${position}).`);
+                }
+                return;
+            }
+
+            // ── Full mode: dispatch as today ───────────────────────────────
             const { dispatched } = await this._deps.onColumnMove(plan, targetColumn);
             if (dispatched) {
                 provider.postComment(

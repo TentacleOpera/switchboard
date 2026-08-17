@@ -46,7 +46,7 @@ import { instantiateAgentGroupCore, InstantiateAgentGroupResult } from './agentG
 // read in this file goes through `loadEffectiveStandingOrders`, which composes
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from './teamWiring';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -1146,6 +1146,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Serialization queue: ensures only one column tick runs at a time to prevent terminal dispatch contention.
     private _autobanTickQueue: Promise<void> = Promise.resolve();
     private _autobanState: AutobanConfigState = normalizeAutobanConfigState();
+    private _orchestrationSessionState: 'none' | 'interviewing' | 'armed' | 'handed-off' = 'none';
     private _singleColumnAutobanState: SingleColumnAutobanConfig = DEFAULT_SINGLE_COLUMN_CONFIG;
     private _migratedBoardBatchNotice: string | undefined;
     private _droppedCustomJobsNotice: string | undefined;
@@ -1178,10 +1179,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
     // Safety-net sweep: checks every 60s whether source columns are empty and stops autoban if so.
     private _autobanEmptyColumnSweepTimer?: NodeJS.Timeout;
-    // ─── Survivor scheduler state (run-sheet tick) ─────────────────────────
-    // The per-job timer engine is deleted; this one map is all that the survivor
-    // tick needs. _schedulerInFlight guards against re-sending a long-running
-    // fetch-plans (or spawning a second terminal for it) on the next run-sheet tick.
+    // ─── Survivor scheduler state ──────────────────────────────────────────
+    // fetch-plans and reconcile have no interval of their own. They used to ride
+    // the run-sheet tick; the run sheet is being deleted as a decision structure,
+    // so they get an explicit timer tied to WORKSPACE ACTIVATION — a cloud VM
+    // pushes plans whether or not a queue session is running. This timer is
+    // independent of the schedule engine: it fires with the schedule off, and
+    // _stopAutobanEngine never touches it (only dispose / explicit stop do).
+    private _survivorJobsTimer?: NodeJS.Timeout;
+    // _schedulerInFlight guards against re-sending a long-running fetch-plans
+    // (or spawning a second terminal for it) on the next survivor tick.
     private _schedulerInFlight = new Map<string, boolean>();
     // Dedupe key set: tracks recently processed mirror events (sessionId+stablePath) to prevent watcher churn re-processing
     private _recentMirrorProcessed = new Map<string, NodeJS.Timeout>();
@@ -1220,6 +1227,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _linearServices: Map<string, LinearSyncService> = new Map();
     private _notionContentCache: Map<string, string | null> = new Map();
     private _localApiServer: LocalApiServer | null = null;
+    // PlanIngestionEngine reference — set after the GlobalPlanWatcherService is
+    // created (extension.ts wires this after both the provider and the watcher
+    // exist). Used by the armQueueWatch callback so LocalApiServer's
+    // dispatchNextFromQueue can arm the queue-level stall watch (subtask 3)
+    // without importing the engine directly.
+    private _planIngestionEngine?: import('./PlanIngestionEngine').PlanIngestionEngine;
     // Phone-a-Friend dispatch serialization guard — a single in-flight promise that
     // prevents interleaved /clear + prompt sequences when multiple POSTs arrive
     // near-simultaneously at batch end. Keyed on the resolved target terminal.
@@ -3286,6 +3299,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return this._kanbanProvider.resolveDispatchForApi(wsRoot, targetColumn);
             },
             resolveTeamRoleTerminal: async (wsRoot, originTerminal, role) => this.resolveTeamRoleTerminal(wsRoot, originTerminal, role),
+            resolveTeamMembers: async (wsRoot, headTerminal) => this.resolveTeamMembers(wsRoot, headTerminal),
+            armQueueWatch: async (wsRoot, headTerminal, opts) => {
+                if (this._planIngestionEngine) {
+                    await this._planIngestionEngine.armQueueWatch(wsRoot, headTerminal, opts);
+                }
+            },
             resolveAutoDispatchColumn: async (_wsRoot, complexity) => {
                 if (!this._kanbanProvider) {
                     return { targetColumn: 'LEAD CODED', reason: 'kanban provider unavailable — defaulting to lead' };
@@ -3666,6 +3685,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // orchestrator agent after the user answers the pre-flight and writes
                 // .switchboard/orchestrator/session.md.
                 return await this.confirmOrchestrationSession(wsRoot);
+            },
+            orchestrationHandoff: async (args) => {
+                // POST /orchestration/handoff — hand off orchestration to a coding lead and exit.
+                return await this.handoffOrchestrationSession(args);
             },
             catalogProvider: async () => {
                 const candidates = [
@@ -4863,6 +4886,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public setRegisteredTerminals(map: Map<string, vscode.Terminal>) {
         this._registeredTerminals = map;
+    }
+
+    /**
+     * Set the PlanIngestionEngine reference — wired in extension.ts after the
+     * GlobalPlanWatcherService is created. The LocalApiServer's
+     * `armQueueWatch` callback delegates to `engine.armQueueWatch` so
+     * `dispatchNextFromQueue` can arm the queue-level stall watch (subtask 3)
+     * without importing the engine directly.
+     */
+    public setPlanIngestionEngine(engine: import('./PlanIngestionEngine').PlanIngestionEngine): void {
+        this._planIngestionEngine = engine;
     }
 
     public setKanbanProvider(provider: KanbanProvider) {
@@ -9757,6 +9791,31 @@ Each plan file must include:
     }
 
     /**
+     * The roster of terminal names on the same registered team as `headTerminal`
+     * (the head itself plus its members), or null when the head names no live
+     * team. Reads `terminals.groups` through the identical path
+     * `resolveTeamRoleTerminal` uses (via `resolveTeamMembersForHead`), so the
+     * in-flight predicate in `dispatchNextFromQueue` derives team membership
+     * from a card's `dispatched_terminal` identically to dispatch routing.
+     *
+     * Public so the LocalApiServer composition root can wire it as the
+     * `resolveTeamMembers` callback for `POST /kanban/queue/next`.
+     */
+    public async resolveTeamMembers(
+        workspaceRoot: string,
+        headTerminal: string
+    ): Promise<string[] | null> {
+        try {
+            const db = await this._getKanbanDb(workspaceRoot);
+            if (!db || !await db.ensureReady()) { return null; }
+            return await resolveTeamMembersForHead({ db, originName: headTerminal });
+        } catch (err) {
+            console.warn('[TaskViewerProvider] resolveTeamMembers failed:', err);
+            return null;
+        }
+    }
+
+    /**
      * Resolve a terminal display name to the delegate-identity fields that the parent
      * directive needs. This is a no-op for terminals with no live delegate children and
      * for VS Code terminals, so the overwhelmingly common case costs zero extra round-trips
@@ -10450,6 +10509,11 @@ Each plan file must include:
         if (this._autobanState.enabled && !this._autobanState.paused) {
             this._startAutobanEngine();
         }
+        // Survivor jobs (fetch-plans, reconcile) run on their own
+        // activation-scoped timer, independent of the schedule engine — a cloud
+        // VM pushes plans whether or not a queue is running. Started here so a
+        // restart re-arms it; stopped only on dispose.
+        this._startSurvivorJobsTimer();
     }
 
     /** Called by Kanban controls strip to toggle the shared Autoban engine state. */
@@ -10701,6 +10765,7 @@ Each plan file must include:
         // after the user answers the pre-flight. A seated-but-unconfirmed orchestrator
         // leaves enabled false and the topology untouched — the interview is a clean
         // no-op if the user closes the terminal.
+        this._orchestrationSessionState = 'interviewing';
         this.postMessage({ type: 'orchestratorStartResult', success: true });
     }
 
@@ -10721,7 +10786,10 @@ Each plan file must include:
      * forgot to write it learns immediately instead of arming a session with
      * no rules.
      */
-    public async confirmOrchestrationSession(workspaceRoot?: string): Promise<{ success: boolean; sessionFile?: string; error?: string }> {
+    public async confirmOrchestrationSession(workspaceRoot?: string): Promise<{ success: boolean; sessionFile?: string; error?: string; status?: number }> {
+        if (this._orchestrationSessionState === 'handed-off') {
+            return { success: false, status: 409, error: 'Session already handed off — cannot confirm after handoff' };
+        }
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (!root) {
             return { success: false, error: 'no workspace folder found — cannot confirm orchestration session' };
@@ -10744,9 +10812,129 @@ Each plan file must include:
             enabled: true,
             automationMode: 'agent-managed'
         });
+        this._orchestrationSessionState = 'armed';
         await this._persistAutobanState();
         this._postAutobanStateNow();
         return { success: true, sessionFile: sessionPath };
+    }
+
+    /**
+     * Hand off orchestration to a coding lead and exit.
+     * Reached by `POST /orchestration/handoff`.
+     *
+     * 1. Refuse unsafe handoff (no live coding head or empty queue) with 409.
+     * 2. Refuse second terminal move (already armed or already handed off) with 409.
+     * 3. Post summary to session log before closing terminal.
+     * 4. Close orchestrator seat via _closeTerminal(ORCHESTRATOR_TERMINAL_NAME).
+     * 5. Does NOT arm or disarm autobanState (no _stopAutobanEngine, no automationMode change, no timer).
+     */
+    public async handoffOrchestrationSession(args: {
+        workspaceRoot?: string;
+        headTerminal: string;
+        stagedCount?: number;
+        firstCardPlanId?: string;
+        summary: string;
+    }): Promise<{ success: boolean; status?: number; error?: string; [key: string]: any }> {
+        const root = this._resolveWorkspaceRoot(args?.workspaceRoot);
+        if (!root) {
+            return { success: false, status: 400, error: 'no workspace folder found — cannot hand off orchestration session' };
+        }
+
+        // Refuse second terminal move.
+        if (this._orchestrationSessionState === 'handed-off') {
+            return { success: false, status: 409, error: 'Session already handed off — cannot hand off twice' };
+        }
+        if (this._autobanState?.enabled && this._autobanState?.automationMode === 'agent-managed') {
+            return { success: false, status: 409, error: 'Session already armed — cannot hand off an armed session' };
+        }
+
+        // 1. Refuse an unsafe handoff first.
+        const headTerminal = String(args?.headTerminal || '').trim();
+        if (!headTerminal || !this._isTerminalLive(headTerminal)) {
+            return {
+                success: false,
+                status: 409,
+                error: `No live coding head: '${headTerminal || ''}' is not a live terminal — handoff requires an active lead to pace the pipeline`
+            };
+        }
+
+        const stagedCount = args?.stagedCount !== undefined ? Number(args.stagedCount) : undefined;
+        if (stagedCount !== undefined && stagedCount <= 0) {
+            return {
+                success: false,
+                status: 409,
+                error: 'Empty queue: stagedCount must be greater than 0'
+            };
+        }
+
+        // Ground truth over self-report: always verify queue state against the board.
+        // The queue candidate predicate matches dispatchNextFromQueue in LocalApiServer.ts:
+        // column DISPATCH (or PLAN REVIEWED fallback) AND !dispatchedAt AND (!featureId || featureId === '').
+        const isQueueable = (p: any): boolean =>
+            !!p
+            && (!p.dispatchedAt)
+            && (!p.featureId || p.featureId === '');
+
+        const db = await this._getKanbanDb(root);
+        if (!db) {
+            return {
+                success: false,
+                status: 409,
+                error: 'Unresolvable database: kanban database unavailable — cannot verify queue before handoff'
+            };
+        }
+        const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+        const board: any[] = (await db.getBoard?.(wsId)) || [];
+        let candidates = board.filter((p: any) => p && p.kanbanColumn === 'DISPATCH' && isQueueable(p));
+        if (candidates.length === 0) {
+            candidates = board.filter((p: any) => p && p.kanbanColumn === 'PLAN REVIEWED' && isQueueable(p));
+        }
+        if (candidates.length === 0) {
+            return {
+                success: false,
+                status: 409,
+                error: 'Empty queue: no dispatchable top-level cards found in DISPATCH or PLAN REVIEWED — handoff requires un-dispatched top-level cards in the queue'
+            };
+        }
+
+        const summary = String(args?.summary || '').trim();
+
+        // 3. Post summary to session log BEFORE touching terminal.
+        const sessionPath = path.join(root, '.switchboard', 'orchestrator', 'session.md');
+        const entry = `\n\n### Handoff — ${new Date().toISOString()}\n- **Lead:** ${headTerminal}\n- **Staged:** ${stagedCount ?? 'all scoped'}\n- **First card:** ${args?.firstCardPlanId || 'none'}\n- **Summary:** ${summary}\n`;
+        try {
+            await fs.promises.appendFile(sessionPath, entry, 'utf8');
+        } catch {
+            const sessionsDir = path.join(root, '.switchboard', 'orchestrator');
+            await fs.promises.mkdir(sessionsDir, { recursive: true });
+            await fs.promises.writeFile(sessionPath, `# Session\n\n## Log${entry}`, 'utf8');
+        }
+
+        // 4. Close the orchestrator seat.
+        // NOTE: This intentionally differs from stopOrchestratorFromKanban (which leaves the
+        // terminal alive because a running agent might have uncommitted context). Here, the
+        // orchestrator agent has just called /handoff at the end of its pre-flight after
+        // posting its report and summary, so there is nothing in-flight to lose.
+        await this._closeTerminal(ORCHESTRATOR_TERMINAL_NAME);
+
+        // 5. Do not arm and do not disarm. Leaves autobanState and timers untouched.
+        this._orchestrationSessionState = 'handed-off';
+
+        this.postMessage({
+            type: 'orchestrationHandoff',
+            headTerminal,
+            stagedCount,
+            firstCardPlanId: args?.firstCardPlanId
+        });
+
+        return {
+            success: true,
+            status: 200,
+            headTerminal,
+            stagedCount,
+            firstCardPlanId: args?.firstCardPlanId,
+            message: `Handoff complete: pipeline handed to ${headTerminal}`
+        };
     }
 
     /**
@@ -10763,6 +10951,7 @@ Each plan file must include:
      * and never re-interviews.
      */
     public async stopOrchestratorFromKanban(workspaceRoot?: string): Promise<void> {
+        this._orchestrationSessionState = 'none';
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
             enabled: false
@@ -12462,15 +12651,9 @@ Each plan file must include:
                     console.error(`[Autoban] Run-sheet step ${step.sourceColumn} → ${step.headRole} failed:`, e);
                 }
             }
-            // ── Surviving scheduler jobs ride the run-sheet clock ───────────
-            // fetch-plans and reconcile tick here — no per-job interval, no
-            // per-job START/STOP. The run sheet is the one clock. With the run
-            // sheet off (checked at the top of the tick), neither runs.
-            try {
-                await this._tickSurvivorSchedulerJobs();
-            } catch (e) {
-                console.error('[Autoban] Survivor scheduler jobs tick failed:', e);
-            }
+            // Survivor scheduler jobs (fetch-plans, reconcile) no longer ride
+            // this tick — they have their own activation-scoped timer
+            // (_startSurvivorJobsTimer), so they fire with the run sheet off.
             this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
             this._postAutobanState();
             const workspaceRoot = this._resolveWorkspaceRoot();
@@ -23404,6 +23587,7 @@ What would you like to find?`;
 
     public dispose() {
         this._stopAutobanEngine();
+        this._stopSurvivorJobsTimer();
         this.stopPlanScanner();
         if (this._postAutobanStateDebounceTimer) {
             clearTimeout(this._postAutobanStateDebounceTimer);
@@ -26565,12 +26749,42 @@ What would you like to find?`;
     }
 
     /**
-     * Tick the two surviving scheduler jobs (fetch-plans, reconcile) from the
-     * run-sheet clock. Reads the scheduler config, filters to enabled jobs with
-     * surviving sources, and delivers the prompt to the job's terminal via the
-     * same sendRobustText path the old per-job tick used. The per-job in-flight
-     * guard is carried forward — a long-running fetch-plans must not be re-sent
-     * on the next tick.
+     * Start the survivor-jobs timer (fetch-plans, reconcile). Tied to workspace
+     * activation, NOT to a queue session — a cloud VM pushes plans whether or
+     * not a queue is running. The cadence reads
+     * `singleColumnConfig.intervalMinutes` (default 10m) so it tracks the
+     * schedule's configured interval, but the timer fires with the schedule OFF
+     * and is never touched by `_stopAutobanEngine`. Idempotent — a second call
+     * clears the existing timer first so activation/deactivation cycles do not
+     * stack. The tick is a no-op (not an error) when no remote branches exist
+     * or no survivor jobs are enabled.
+     */
+    private _startSurvivorJobsTimer(): void {
+        if (this._survivorJobsTimer) {
+            clearInterval(this._survivorJobsTimer);
+        }
+        const intervalMinutes = Math.max(this._singleColumnAutobanState.intervalMinutes || 10, 1);
+        this._survivorJobsTimer = setInterval(() => {
+            void this._tickSurvivorSchedulerJobs().catch(e =>
+                console.error('[Autoban] Survivor scheduler jobs tick failed:', e)
+            );
+        }, intervalMinutes * 60 * 1000);
+    }
+
+    private _stopSurvivorJobsTimer(): void {
+        if (this._survivorJobsTimer) {
+            clearInterval(this._survivorJobsTimer);
+            this._survivorJobsTimer = undefined;
+        }
+    }
+
+    /**
+     * Tick the two surviving scheduler jobs (fetch-plans, reconcile) on their
+     * own activation-scoped timer. Reads the scheduler config, filters to
+     * enabled jobs with surviving sources, and delivers the prompt to the job's
+     * terminal via the same sendRobustText path the old per-job tick used. The
+     * per-job in-flight guard is carried forward — a long-running fetch-plans
+     * must not be re-sent on the next tick.
      */
     private async _tickSurvivorSchedulerJobs(): Promise<void> {
         const sched = await GlobalIntegrationConfigService.getSchedulerConfig();

@@ -1091,6 +1091,11 @@ export async function activate(context: vscode.ExtensionContext) {
     // forward) so the cross-process sweep loop never blocks on an HTTP call. Empty
     // when the fleet is unavailable → the sweep degrades to today's blind timeout.
     globalPlanWatcher.getEngine().setTerminalLivenessProvider(() => taskViewerProvider.getFleetLiveness());
+    // Queue-level stall watch seam (subtask 3): the LocalApiServer's
+    // dispatchNextFromQueue arms the watch via this engine reference. Wired
+    // after the watcher is created — the engine doesn't exist at
+    // TaskViewerProvider construction time.
+    taskViewerProvider.setPlanIngestionEngine(globalPlanWatcher.getEngine());
     // Turn-end notification seam: when a dispatched seat goes quiet (turn end),
     // tell the agent waiting on it — its head (parentInstanceId) or the
     // orchestrator. Same idiom as the two seams above: a host-injected callback

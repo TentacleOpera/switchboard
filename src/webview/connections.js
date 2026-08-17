@@ -146,6 +146,8 @@
         const pushInput = document.getElementById('remote-push');
         const modeFull = document.getElementById('remote-mode-full');
         const modeFullLabel = modeFull ? modeFull.closest('label') : null;
+        const modeQueue = document.getElementById('remote-mode-queue');
+        const modeQueueLabel = modeQueue ? modeQueue.closest('label') : null;
         if (pushInput && pushLabel) {
             pushInput.disabled = !caps.push;
             pushLabel.style.opacity = caps.push ? '1' : '0.5';
@@ -155,6 +157,12 @@
             modeFull.disabled = !caps.pull;
             modeFullLabel.style.opacity = caps.pull ? '1' : '0.5';
             modeFullLabel.style.pointerEvents = caps.pull ? 'auto' : 'none';
+        }
+        // Queue mode also requires pull — staging needs to read the remote board.
+        if (modeQueue && modeQueueLabel) {
+            modeQueue.disabled = !caps.pull;
+            modeQueueLabel.style.opacity = caps.pull ? '1' : '0.5';
+            modeQueueLabel.style.pointerEvents = caps.pull ? 'auto' : 'none';
         }
     }
 
@@ -207,9 +215,11 @@
             const freq = document.getElementById('remote-ping-frequency');
             if (freq) freq.value = config.pingFrequencySeconds || 60;
             const modeIngest = document.getElementById('remote-mode-ingest');
+            const modeQueue = document.getElementById('remote-mode-queue');
             const modeFull = document.getElementById('remote-mode-full');
             if (modeIngest && modeFull) {
-                modeIngest.checked = config.mode !== 'full';
+                modeIngest.checked = config.mode === 'ingest' || (config.mode !== 'queue' && config.mode !== 'full');
+                if (modeQueue) modeQueue.checked = config.mode === 'queue';
                 modeFull.checked = config.mode === 'full';
             }
             const comments = document.getElementById('remote-comments');
@@ -218,6 +228,8 @@
             if (content) content.checked = config.content !== false;
             const push = document.getElementById('remote-push');
             if (push) push.checked = config.push === true;
+            const queueSeq = document.getElementById('remote-queue-sequencing');
+            if (queueSeq) queueSeq.checked = config.queueSequencing === true;
         }
 
         remoteControlActive = payload.active === true;
@@ -232,6 +244,12 @@
         const providerEl = document.getElementById('remote-provider');
         const providerVal = providerEl ? providerEl.value : 'linear';
         const modeFull = document.getElementById('remote-mode-full');
+        const modeQueue = document.getElementById('remote-mode-queue');
+        // Three-way mode: queue is checked → 'queue'; full is checked → 'full';
+        // otherwise 'ingest' (the default and the safe fallback).
+        const mode = modeQueue && modeQueue.checked ? 'queue'
+            : modeFull && modeFull.checked ? 'full'
+            : 'ingest';
         // Merge over the host-supplied config so any field this form does not render
         // survives the replace performed by setRemoteConfig.
         return Object.assign({}, _lastRemoteConfig || {}, {
@@ -240,10 +258,11 @@
             silentSync: document.getElementById('remote-silent-sync')?.checked === true,
             pingFrequencySeconds: Math.min(120, Math.max(30,
                 parseInt(document.getElementById('remote-ping-frequency')?.value, 10) || 60)),
-            mode: modeFull && modeFull.checked ? 'full' : 'ingest',
+            mode,
             push: document.getElementById('remote-push')?.checked === true,
             comments: document.getElementById('remote-comments')?.checked !== false,
             content: document.getElementById('remote-content')?.checked !== false,
+            queueSequencing: document.getElementById('remote-queue-sequencing')?.checked === true,
         });
     }
 

@@ -115,6 +115,15 @@ export interface KanbanPlanRecord {
     featureId?: string;
     workspaceName?: string;
     projectId?: number | null;
+    /**
+     * V60: 1-based position within the DISPATCH session queue. NULL = not staged
+     * (sorts last). Assigned by stageForQueue (append from MAX+1), rewritten by
+     * reorderQueue (one transaction), and cleared by clearQueuePosition when a
+     * card leaves DISPATCH (dispatch to a coder, or a drag out) so a card that
+     * returns to the board does not carry a stale position and jump the queue
+     * on re-stage. Read through PLAN_COLUMNS alongside dispatchedAt.
+     */
+    queuePosition?: number | null;
 }
 
 export interface ImportedDocEntry {
@@ -202,7 +211,8 @@ CREATE TABLE IF NOT EXISTS plans (
     is_feature           INTEGER DEFAULT 0,
     feature_id           TEXT DEFAULT '',
     workspace_name    TEXT DEFAULT '',
-    project_id        INTEGER DEFAULT NULL
+    project_id        INTEGER DEFAULT NULL,
+    queue_position    INTEGER DEFAULT NULL
 );
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -481,6 +491,22 @@ const MIGRATION_V58_SQL = [
 // stamped). Never edit a shipped V51–V58 body.
 const MIGRATION_V59_SQL = [
     `ALTER TABLE plans ADD COLUMN blocked_at TEXT DEFAULT NULL`,
+];
+
+// V60: plans.queue_position — the DISPATCH session queue's explicit order.
+// Membership in DISPATCH already exists (a stored column value rendered inside
+// PLAN REVIEWED's slot); what was missing was an order. queue_position is a
+// 1-based sort key assigned by stageForQueue (append from MAX+1), rewritten by
+// reorderQueue (one transaction), and cleared by clearQueuePosition when a
+// card leaves DISPATCH. NULL sorts last so pre-existing staged cards (staged
+// before this migration lands) keep working and drop to the end of the queue
+// rather than vanishing or jumping the front. The column is also present in
+// SCHEMA_TABLES_SQL, so fresh DBs get it from creation and the migration ALTER
+// is a no-op there. Idempotent under the version gate (try/catch covers a
+// stale restore where the column already exists but the version wasn't
+// stamped). Never edit a shipped V51–V59 body.
+const MIGRATION_V60_SQL = [
+    `ALTER TABLE plans ADD COLUMN queue_position INTEGER DEFAULT NULL`,
 ];
 
 
@@ -857,7 +883,7 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
                        dispatched_terminal, dispatched_at, last_liveness_at, blocked_at,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
-                       workspace_name, project_id`;
+                       workspace_name, project_id, queue_position`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -8333,6 +8359,16 @@ export class KanbanDatabase {
             await this.setMigrationVersion(59);
             console.log('[KanbanDatabase] V59 migration completed: blocked_at column added to plans');
         }
+
+        // V60: plans.queue_position (DISPATCH session queue order).
+        const v60 = await this.getMigrationVersion();
+        if (v60 < 60) {
+            for (const sql of MIGRATION_V60_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(60);
+            console.log('[KanbanDatabase] V60 migration completed: queue_position column added to plans');
+        }
     }
 
     /**
@@ -9793,6 +9829,99 @@ FROM plans
     }
 
     /**
+     * V60 — clear a card's queue_position when it leaves DISPATCH (dispatch to
+     * a coder, or a drag out to another column). A card that returns to the
+     * board later does not carry a stale position and jump the queue on
+     * re-stage. Scoped by plan_id + workspace_id. Idempotent (NULL → NULL is a
+     * no-op). Does NOT touch dispatched_at — clearing the working state is a
+     * separate concern owned by clearWorkingState.
+     */
+    public async clearQueuePosition(planId: string, workspaceId: string): Promise<boolean> {
+        if (!planId || !workspaceId) return false;
+        return this._persistedUpdate(
+            'UPDATE plans SET queue_position = NULL WHERE plan_id = ? AND workspace_id = ?',
+            [planId, workspaceId]
+        );
+    }
+
+    /**
+     * V60 — append queue positions to the given plan ids, in the caller's
+     * order, starting from MAX(queue_position)+1 within the workspace's
+     * DISPATCH set. NULL positions (pre-existing staged cards, or cards staged
+     * before V60) sort last and are not renumbered here — they keep working
+     * and drop to the end. A card already in DISPATCH is re-positioned rather
+     * than duplicated (its row is updated, not inserted). Callers MUST pass the
+     * selection order, not board order, for the webview staging arm.
+     */
+    public async appendQueuePositions(workspaceId: string, orderedPlanIds: string[]): Promise<boolean> {
+        if (!workspaceId || !Array.isArray(orderedPlanIds) || orderedPlanIds.length === 0) return false;
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            // Read the current max position across the workspace's staged set.
+            // NULL positions do not contribute to MAX — they sort last by design.
+            let maxPos = 0;
+            const stmt = this._db.prepare(
+                'SELECT COALESCE(MAX(queue_position), 0) AS m FROM plans WHERE workspace_id = ? AND kanban_column = ?',
+                [workspaceId, 'DISPATCH']
+            );
+            try {
+                if (stmt.step()) { maxPos = Number(stmt.getAsObject().m ?? 0); }
+            } finally {
+                stmt.free();
+            }
+            let next = maxPos;
+            for (const planId of orderedPlanIds) {
+                next += 1;
+                this._db.run(
+                    'UPDATE plans SET queue_position = ?, kanban_column = ? WHERE plan_id = ? AND workspace_id = ?',
+                    [next, 'DISPATCH', planId, workspaceId]
+                );
+            }
+            await this._persist();
+            return true;
+        } catch (error) {
+            console.error('[KanbanDatabase] appendQueuePositions failed:', error);
+            return false;
+        }
+    }
+
+    /**
+     * V60 — rewrite queue positions for the given ordered plan ids in ONE
+     * transaction, assigning 1..N in the caller's order. The caller passes the
+     * full ordered id list (the post-drop order). Cards not in the list keep
+     * their positions. A partial rewrite leaves duplicate positions, which the
+     * render comparator tie-breaks on the board's existing order (ts descending)
+     * rather than randomly — see the plan's Race Conditions note. The
+     * transaction wraps all writes so a failure rolls back to the prior order.
+     */
+    public async setQueuePositions(workspaceId: string, orderedPlanIds: string[]): Promise<boolean> {
+        if (!workspaceId || !Array.isArray(orderedPlanIds) || orderedPlanIds.length === 0) return false;
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            this._db.exec('BEGIN');
+            try {
+                let pos = 0;
+                for (const planId of orderedPlanIds) {
+                    pos += 1;
+                    this._db.run(
+                        'UPDATE plans SET queue_position = ? WHERE plan_id = ? AND workspace_id = ?',
+                        [pos, planId, workspaceId]
+                    );
+                }
+                this._db.exec('COMMIT');
+            } catch (inner) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                throw inner;
+            }
+            await this._persist();
+            return true;
+        } catch (error) {
+            console.error('[KanbanDatabase] setQueuePositions failed:', error);
+            return false;
+        }
+    }
+
+    /**
      * Blocked-state writer (V59). Sets `blocked_at` to the given ISO timestamp
      * (or NULL to clear) WITHOUT touching `dispatched_at` — the card stays lit
      * as working/blocked; only the blocked overlay flips. The derive layer
@@ -10198,6 +10327,8 @@ FROM plans
                     lastLivenessAt: row.last_liveness_at !== null && row.last_liveness_at !== undefined ? String(row.last_liveness_at) : null,
                     // Absent from SELECT lists that predate V59 → undefined → null.
                     blockedAt: row.blocked_at !== null && row.blocked_at !== undefined ? String(row.blocked_at) : null,
+                    // Absent from SELECT lists that predate V60 → undefined → null (sorts last).
+                    queuePosition: row.queue_position !== null && row.queue_position !== undefined ? Number(row.queue_position) : null,
                     clickupTaskId: String(row.clickup_task_id || ""),
                     linearIssueId: String(row.linear_issue_id || ""),
                     notionPageId: String(row.notion_page_id || ""),

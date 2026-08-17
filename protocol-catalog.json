@@ -14,7 +14,7 @@
       "TaskViewer": 104,
       "Setup": 99
     },
-    "apiEndpointCount": 73,
+    "apiEndpointCount": 74,
     "manualReviewCount": 6
   },
   "providers": {
@@ -26008,6 +26008,11 @@
     },
     {
       "path": "/kanban/dispatch",
+      "method": "POST",
+      "prefix": false
+    },
+    {
+      "path": "/kanban/queue/next",
       "method": "POST",
       "prefix": false
     },

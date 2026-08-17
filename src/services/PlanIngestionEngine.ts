@@ -118,6 +118,30 @@ export interface FeatureWatchRecord {
     stopColumns?: string[];
 }
 
+/**
+ * Queue-level stall watch — the backstop for a lead-paced pipeline with the
+ * schedule off. Armed by every path that can leave cards staged (staging,
+ * dispatch, remote intake) via `armQueueWatch`, and persisted in the
+ * `kanban.queueWatches` config key. The sweep reads this each tick and nudges
+ * the head when the queue has cards left, no card is in flight, and the head
+ * has gone idle. If the head is gone, the user is told — the night never ends
+ * silently with work still staged.
+ *
+ * `headTerminal` is null when cards are staged before any coding team is
+ * seated; the sweep notifies the user once in that state and keeps the watch
+ * until a head is seated (upgrading the record on the next arm or sweep).
+ */
+export interface QueueWatchRecord {
+    headTerminal: string | null;   // null = staged with no coding head yet
+    workspaceRoot: string;
+    armedAt: number;
+    lastNudgedAt: number;
+    nudgeCount: number;
+    /** Stamp of the one-shot "no coding head seated" user notice. Prevents
+     *  repeating the same notice every tick while the state persists. */
+    noHeadNotifiedAt?: number;
+}
+
 export interface PlanIngestionHost {
     /** Watcher factory — creates recursive folder / single-file watchers. */
     readonly watcher: PlanIngestionWatcher;
@@ -206,6 +230,59 @@ export class PlanIngestionEngine {
 
     public setTurnEndNotifier(fn: (info: TurnEndInfo) => void): void {
         this._turnEndNotifier = fn;
+    }
+
+    /**
+     * Arm the queue-level stall watch. Called from every path that can leave
+     * cards staged: `dispatchNextFromQueue` (the pop), `Stage for queue`, the
+     * Analyze button's staging, and remote intake staging. Idempotent —
+     * re-arming an existing watch for the same workspace is a no-op that does
+     * NOT reset `nudgeCount` (a re-stage is not a dispatch). When
+     * `headTerminal` is null the watch is armed for the "no coding head seated
+     * yet" state; the sweep notifies the user once and keeps the watch until a
+     * head is seated, upgrading the record on the next arm or sweep.
+     *
+     * A successful dispatch (the pop in `dispatchNextFromQueue`) passes
+     * `{ onDispatch: true }` so the nudge state resets — the lead just did its
+     * job, and a fresh stall window starts from this dispatch.
+     */
+    public async armQueueWatch(
+        workspaceRoot: string,
+        headTerminal: string | null,
+        opts?: { onDispatch?: boolean }
+    ): Promise<void> {
+        const WATCH_KEY = 'kanban.queueWatches';
+        try {
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.ensureReady();
+            const existing = await db.getConfigJson<QueueWatchRecord[]>(WATCH_KEY, []);
+            const now = Date.now();
+            const idx = existing.findIndex(w => w && w.workspaceRoot === workspaceRoot);
+            if (idx >= 0) {
+                const w = existing[idx];
+                // Re-arm: upgrade headTerminal if one is now seated, and reset
+                // nudge state on a dispatch. A re-stage (no onDispatch) is a
+                // no-op on the nudge state — the lead has not advanced.
+                existing[idx] = {
+                    ...w,
+                    headTerminal: headTerminal ?? w.headTerminal ?? null,
+                    ...(opts?.onDispatch ? { lastNudgedAt: 0, nudgeCount: 0 } : {}),
+                };
+                await db.setConfigJson(WATCH_KEY, existing);
+                return;
+            }
+            const record: QueueWatchRecord = {
+                headTerminal: headTerminal ?? null,
+                workspaceRoot,
+                armedAt: now,
+                lastNudgedAt: 0,
+                nudgeCount: 0,
+            };
+            existing.push(record);
+            await db.setConfigJson(WATCH_KEY, existing);
+        } catch (err) {
+            this._host.logger.appendLine(`[GlobalPlanWatcher] armQueueWatch failed for ${workspaceRoot}: ${err}`);
+        }
     }
 
     /**
@@ -525,6 +602,19 @@ export class PlanIngestionEngine {
                             });
                         } catch (nudgeErr) {
                             this._host.logger.appendLine(`[GlobalPlanWatcher] feature nudge sweep failed for ${folder}: ${nudgeErr}`);
+                        }
+                        // ── Queue-level stall nudge ────────────────────────────────
+                        // The backstop for a lead-paced pipeline with the schedule
+                        // off. Shares the same liveness snapshot, `nowMs`,
+                        // `turnEndSilenceMs` and `notifiedSeatsThisTick` set as the
+                        // feature sweep so a head that is both a feature head and a
+                        // queue head is nudged at most once per tick.
+                        try {
+                            await this._runQueueNudgeSweep({
+                                db, folder, liveness, nowMs, turnEndSilenceMs, notifiedSeatsThisTick,
+                            });
+                        } catch (queueNudgeErr) {
+                            this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge sweep failed for ${folder}: ${queueNudgeErr}`);
                         }
                         await this._retryPendingFeatureLinks(db, folder);
                     } catch (sweepErr) {
@@ -1053,6 +1143,13 @@ export class PlanIngestionEngine {
                 `[GlobalPlanWatcher] Feature nudge fired for feature ${watch.featureId} → head '${watch.headTerminal}' (${remaining.length} subtask(s) remaining).`
             );
 
+            // Add the head to the shared notifiedSeatsThisTick set so the
+            // queue nudge sweep does not double-wake the same head on this
+            // tick. A head that is both a feature head and a queue head would
+            // receive two prompts without this — the plan's double-wake
+            // foot-gun. Both sweeps must both read AND write this set.
+            notifiedSeatsThisTick.add(watch.headTerminal);
+
             // Stamp lastNudgedAt and keep the watch.
             watch.lastNudgedAt = nowMs;
             mutated = true;
@@ -1064,6 +1161,284 @@ export class PlanIngestionEngine {
                 await db.setConfigJson(WATCH_KEY, kept);
             } catch (writeErr) {
                 this._host.logger.appendLine(`[GlobalPlanWatcher] feature nudge: failed to persist watch state: ${writeErr}`);
+            }
+        }
+    }
+
+    /**
+     * Queue-level stall nudge — the backstop for a lead-paced pipeline with
+     * the schedule off. Mirrors `_runFeatureNudgeSweep`'s shape and reuses its
+     * hard-won guards verbatim: the empty-liveness guard (no evidence is not
+     * "everyone died"), the mid-turn `lastDataAt` gate, the shared
+     * `notifiedSeatsThisTick` set (both sweeps read AND write it), and the
+     * `turnEndSilenceMs` pacing floor. Called from the same tick as the feature
+     * sweep so the two share one liveness snapshot and one `nowMs`.
+     *
+     * Gates, in order:
+     *  1. empty liveness snapshot → return, change nothing;
+     *  2. queue empty → drop the watch silently (the session ended normally);
+     *  3. no coding head seated at all → keep the watch, notify the user once;
+     *  4. head present in the record but absent or `exited` → drop the watch,
+     *     notify the user;
+     *  5. any card in flight for this team → keep, stay silent, reset nudge
+     *     state (the lead just dispatched);
+     *  6. a seat notified this tick → keep, stay silent (avoid a double wake);
+     *  7. head `lastDataAt` within `turnEndSilenceMs` → keep, stay silent;
+     *  8. otherwise nudge, add the head to `notifiedSeatsThisTick`, and on the
+     *     second nudge with no dispatch in between, escalate to the user.
+     */
+    private async _runQueueNudgeSweep(args: {
+        db: KanbanDatabase;
+        folder: string;
+        liveness: Array<{ friendlyName: string; lastDataAt: number; status: string }>;
+        nowMs: number;
+        turnEndSilenceMs: number;
+        notifiedSeatsThisTick: Set<string>;
+    }): Promise<void> {
+        if (!this._turnEndNotifier) return; // no notifier → no delivery → nothing to do.
+        const { db, folder, liveness, nowMs, turnEndSilenceMs, notifiedSeatsThisTick } = args;
+        const WATCH_KEY = 'kanban.queueWatches';
+        let allWatches: QueueWatchRecord[] = [];
+        try {
+            allWatches = await db.getConfigJson<QueueWatchRecord[]>(WATCH_KEY, []);
+        } catch { return; } // unreadable config is no evidence — try next tick.
+        if (allWatches.length === 0) return;
+        // Only process watches for THIS workspace — the tick iterates over all
+        // watched roots and calls the sweep per root with that root's DB. A
+        // watch for workspace A processed during workspace B's sweep would read
+        // B's board and produce wrong evidence. Watches for other workspaces
+        // are preserved untouched in the write-back (see `otherWatches` below).
+        const otherWatches = allWatches.filter(w => w && w.workspaceRoot !== folder);
+        let watches = allWatches.filter(w => w && w.workspaceRoot === folder);
+        if (watches.length === 0) return;
+        // An EMPTY liveness snapshot is NO EVIDENCE, not evidence that every head
+        // died. `getFleetLiveness()` returns [] whenever the fleet is unavailable —
+        // before the first forward after an extension reload, while the ptyHost is
+        // booting, on a fleet-less host. Without this guard the very next tick reads
+        // every armed head as "absent" and permanently drops every watch, silently,
+        // for a head that is still running. Same contract as the feature sweep's
+        // `:924-931` guard: no data is not a signal. Reused verbatim, not
+        // reimplemented — a naive copy that treats empty as "every head died"
+        // destroys every watch and notifies the user that every lead is gone.
+        if (liveness.length === 0) return;
+
+        const livenessByName = new Map<string, { lastDataAt: number; status: string }>();
+        for (const entry of liveness) {
+            if (entry.friendlyName) livenessByName.set(entry.friendlyName, { lastDataAt: entry.lastDataAt, status: entry.status });
+        }
+
+        // Coding columns — a team is "in flight" while any of its cards sits in
+        // one of these. Matches subtask 1's CODING_COLUMNS exactly.
+        const CODING_COLUMNS = new Set(['LEAD CODED', 'CODER CODED', 'INTERN CODED']);
+
+        let mutated = false;
+        const kept: QueueWatchRecord[] = [];
+        for (const watch of watches) {
+            // (2) Queue empty → drop the watch silently. The session ended
+            // normally; a watch with no work to watch is not a stall.
+            let board: KanbanPlanRecord[] = [];
+            try {
+                const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+                board = await db.getBoard(wsId) || [];
+            } catch {
+                // Unreadable board is no evidence — keep the watch, try next tick.
+                kept.push(watch);
+                continue;
+            }
+            const queueCards = board.filter(p =>
+                p && (p.kanbanColumn === 'DISPATCH' || p.kanbanColumn === 'PLAN REVIEWED')
+                && (!p.dispatchedAt)
+                && (!p.featureId || p.featureId === '')
+            );
+            if (queueCards.length === 0) {
+                this._host.logger.appendLine(
+                    `[GlobalPlanWatcher] Queue nudge: dropping watch for ${watch.workspaceRoot} — queue is empty (session ended normally).`
+                );
+                mutated = true;
+                continue;
+            }
+
+            // (3) No coding head seated at all. `headTerminal` null, or the
+            // recorded head is absent from liveness (not exited — absent means
+            // the fleet snapshot has no row, which the empty-liveness guard
+            // above already handled for the fleet-unavailable case; here it
+            // means the specific head is not live). Keep the watch and notify
+            // the user ONCE — a queue staged with no lead is the worst case,
+            // not an exempt one.
+            if (!watch.headTerminal) {
+                if (!watch.noHeadNotifiedAt) {
+                    const body = `[switchboard:turn-end] Queue stall — ${queueCards.length} card(s) staged in the dispatch queue, but no coding head is live. Seat a coding team to start the pipeline.`;
+                    try {
+                        this._turnEndNotifier({
+                            seatName: '',
+                            planFile: '',
+                            outcome: 'stalled',
+                            workspaceRoot: folder,
+                            body,
+                        });
+                    } catch (cbErr) {
+                        this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge no-head notifier failed: ${cbErr}`);
+                    }
+                    this._host.logger.appendLine(
+                        `[GlobalPlanWatcher] Queue nudge: no coding head seated for ${watch.workspaceRoot} — notified user (${queueCards.length} card(s) staged).`
+                    );
+                    watch.noHeadNotifiedAt = nowMs;
+                    mutated = true;
+                }
+                kept.push(watch);
+                continue;
+            }
+
+            // (4) Head present in the record but absent or `exited` → drop the
+            // watch and notify the user, naming the head and the number of
+            // cards left staged. Silently dropping is the failure this plan
+            // exists to prevent.
+            const headLive = livenessByName.get(watch.headTerminal);
+            if (!headLive || headLive.status === 'exited') {
+                const body = `[switchboard:turn-end] Queue stall — coding head '${watch.headTerminal}' is ${!headLive ? 'absent' : 'exited'} with ${queueCards.length} card(s) still staged in the dispatch queue. The pipeline cannot advance without a lead.`;
+                try {
+                    this._turnEndNotifier({
+                        seatName: watch.headTerminal,
+                        planFile: '',
+                        outcome: 'stalled',
+                        workspaceRoot: folder,
+                        body,
+                    });
+                } catch (cbErr) {
+                    this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge dead-head notifier failed: ${cbErr}`);
+                }
+                this._host.logger.appendLine(
+                    `[GlobalPlanWatcher] Queue nudge: dropping watch for ${watch.workspaceRoot} — head '${watch.headTerminal}' is ${!headLive ? 'absent' : 'exited'} (${queueCards.length} card(s) left staged).`
+                );
+                mutated = true;
+                continue;
+            }
+
+            // (5) Any card in flight for this team → keep, stay silent, and
+            // reset nudge state. The lead just dispatched — a fresh stall
+            // window starts from this dispatch. The in-flight predicate is
+            // subtask 1's column-scoped one: a card in a coding column held
+            // by the head's team. Team membership is approximated here by
+            // `dispatchedTerminal === watch.headTerminal` (the head itself
+            // holds the card after a pop); the per-dispatch watchdog owns
+            // the working window.
+            const inFlight = board.some(p =>
+                p && CODING_COLUMNS.has(String(p.kanbanColumn || ''))
+                && typeof p.dispatchedTerminal === 'string'
+                && p.dispatchedTerminal.length > 0
+                && p.dispatchedTerminal === watch.headTerminal
+            );
+            if (inFlight) {
+                if (watch.nudgeCount > 0 || watch.lastNudgedAt > 0) {
+                    watch.nudgeCount = 0;
+                    watch.lastNudgedAt = 0;
+                    mutated = true;
+                }
+                kept.push(watch);
+                continue;
+            }
+
+            // (6) A seat notified this tick → keep, stay silent. The shared
+            // `notifiedSeatsThisTick` set prevents a double-wake when the head
+            // is also a feature head that the feature sweep already poked. Both
+            // sweeps must both read AND write this set — a head that is also a
+            // feature head gets double-woken on one tick if the queue sweep
+            // only reads it.
+            if (notifiedSeatsThisTick.has(watch.headTerminal)) {
+                kept.push(watch);
+                continue;
+            }
+
+            // (7) Head's own lastDataAt within turnEndSilenceMs — it is not
+            // mid-turn. Delivering a prompt to a terminal whose agent is
+            // actively working injects text into a running turn. Evaluated
+            // against the same `nowMs` the feature sweep uses — not a fresh
+            // `Date.now()`.
+            if (headLive.lastDataAt <= 0 || nowMs - headLive.lastDataAt < turnEndSilenceMs) {
+                kept.push(watch);
+                continue;
+            }
+
+            // Pacing: at most one nudge per watch per `turnEndSilenceMs` window.
+            if (watch.lastNudgedAt > 0 && nowMs - watch.lastNudgedAt < turnEndSilenceMs) {
+                kept.push(watch);
+                continue;
+            }
+
+            // (8) Escalation: on the second nudge with no dispatch in between,
+            // stop nudging and surface to the user. A nudge stream is what a
+            // poll is, and a head that ignores two nudges is not going to
+            // answer a third.
+            if (watch.nudgeCount >= 2) {
+                const body = `[switchboard:turn-end] Queue stall — coding head '${watch.headTerminal}' has not advanced the queue after ${watch.nudgeCount} nudge(s). ${queueCards.length} card(s) remain staged. The lead may be stuck, rate-limited, or gone.`;
+                try {
+                    this._turnEndNotifier({
+                        seatName: watch.headTerminal,
+                        planFile: '',
+                        outcome: 'stalled',
+                        workspaceRoot: folder,
+                        body,
+                    });
+                } catch (cbErr) {
+                    this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge escalation notifier failed: ${cbErr}`);
+                }
+                this._host.logger.appendLine(
+                    `[GlobalPlanWatcher] Queue nudge: escalating to user for ${watch.workspaceRoot} — head '${watch.headTerminal}' ignored ${watch.nudgeCount} nudge(s) (${queueCards.length} card(s) staged).`
+                );
+                // Keep the watch but stop nudging — a dispatch will reset
+                // nudgeCount via the onDispatch arm or the in-flight gate.
+                watch.lastNudgedAt = nowMs;
+                mutated = true;
+                kept.push(watch);
+                continue;
+            }
+
+            // Compose the evidence body. The next card's plan file, how long
+            // the head has been silent, and the exact call to make.
+            const nextCard = queueCards[0];
+            const silentFor = headLive.lastDataAt > 0 ? Math.round((nowMs - headLive.lastDataAt) / 1000) : 0;
+            const lines: string[] = [
+                `[switchboard:turn-end] Queue stall — you have gone idle with ${queueCards.length} card(s) staged in the dispatch queue.`,
+                `  Next card: ${nextCard.planFile} (column ${nextCard.kanbanColumn})`,
+                `  You have been silent for ${silentFor}s.`,
+                `  Make the call: POST /kanban/queue/next with {"from":"${watch.headTerminal}"} against the port in .switchboard/api-server-port.txt.`,
+            ];
+            const body = lines.join('\n');
+
+            try {
+                this._turnEndNotifier({
+                    seatName: watch.headTerminal,
+                    planFile: '',
+                    outcome: 'stalled',
+                    workspaceRoot: folder,
+                    recipientSeat: watch.headTerminal,
+                    body,
+                });
+            } catch (cbErr) {
+                this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge notifier failed for ${watch.workspaceRoot}: ${cbErr}`);
+            }
+            // Add the head to the shared notifiedSeatsThisTick set so the
+            // feature sweep does not double-wake the same head on this tick.
+            notifiedSeatsThisTick.add(watch.headTerminal);
+            this._host.logger.appendLine(
+                `[GlobalPlanWatcher] Queue nudge fired for ${watch.workspaceRoot} → head '${watch.headTerminal}' (${queueCards.length} card(s) staged).`
+            );
+
+            watch.lastNudgedAt = nowMs;
+            watch.nudgeCount = (watch.nudgeCount ?? 0) + 1;
+            mutated = true;
+            kept.push(watch);
+        }
+
+        if (mutated) {
+            try {
+                // Merge the processed watches for this workspace with the
+                // untouched watches for other workspaces — the config key is
+                // process-global, and writing only `kept` would wipe every
+                // other workspace's watch on each tick.
+                await db.setConfigJson(WATCH_KEY, [...kept, ...otherWatches]);
+            } catch (writeErr) {
+                this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge: failed to persist watch state: ${writeErr}`);
             }
         }
     }

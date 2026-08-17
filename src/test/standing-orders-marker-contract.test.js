@@ -391,6 +391,42 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         + 'pair-scoped bypass order on the head. The Coding reviewer must use '
         + 'relationship: \'reports-to-head\' instead.'
     );
+
+    // ── queue/next standing order ────────────────────────────────────
+    // The Coding headPrompt must tell the lead to pull the next card via
+    // POST /kanban/queue/next after the reviewer passes, and the sentence
+    // must be byte-identical between teamWiring.ts (NEW_CODING_HEAD_PROMPT,
+    // the host source of truth) and kanban.html's shipped headPrompt. The
+    // rewriter at teamWiring.ts:1239-1241 rewrites stale team-head rows by
+    // indexOf match, so the two literals MUST move together — a drift here
+    // ships a lead that never asks for the next card (the whole point of
+    // the lead-paced-pipeline feature).
+    const headPromptAnchor = /NEW_CODING_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
+    assert.ok(headPromptAnchor, 'NEW_CODING_HEAD_PROMPT not found in teamWiring.ts');
+    const tsHeadPrompt = readQuotedChain(TEAM_WIRING_SRC, headPromptAnchor.index + headPromptAnchor[0].length);
+    assert.ok(tsHeadPrompt, 'could not read NEW_CODING_HEAD_PROMPT as a quoted chain');
+    assert.strictEqual(
+        headPrompt, tsHeadPrompt,
+        'Coding headPrompt drift detected between kanban.html and teamWiring.ts.\n'
+        + `teamWiring.ts: "${tsHeadPrompt}"\n`
+        + `kanban.html:   "${headPrompt}"\n`
+        + 'The two literals must be byte-identical — the teamWiring.ts rewriter '
+        + 'matches stale rows by indexOf, so a drift ships a lead carrying stale text.'
+    );
+    const queueNextSentence = 'When the reviewer reports the feature passed, POST /kanban/queue/next with '
+        + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
+        + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
+        + 'empty and stop.';
+    assert.ok(
+        tsHeadPrompt.includes(queueNextSentence),
+        'NEW_CODING_HEAD_PROMPT must carry the POST /kanban/queue/next standing order — '
+        + 'without it a lead never asks for the next card after a review pass.'
+    );
+    assert.ok(
+        headPrompt.includes(queueNextSentence),
+        'kanban.html Coding headPrompt must carry the POST /kanban/queue/next standing order '
+        + 'byte-identically to teamWiring.ts — a gallery-adopted team must pace its own pipeline.'
+    );
 });
 
 test('GIT_SAFETY_DIRECTIVE_WORKTREE_MODE excludes the staging-scope clause (isolated trees need no path-staging rule)', () => {

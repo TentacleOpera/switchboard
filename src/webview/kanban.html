@@ -2969,6 +2969,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <button class="strip-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">CHAT PROMPT</button>
                 <button class="strip-btn" id="btn-suggest-features" data-tooltip="Scan pre-coding columns and copy a prompt asking an agent to propose feature groupings">SUGGEST FEATURES</button>
                 <button class="strip-btn is-teal" id="btn-feature-action" data-tooltip="Convert selected plans to feature or manage existing feature" disabled>PROMOTE TO FEATURE</button>
+                <button class="strip-btn" id="btn-stage-for-queue" data-tooltip="Stage selected plans into the Dispatch queue, in selection order" disabled>STAGE FOR QUEUE</button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
                 <div id="wt-indicator" style="display:none; margin-left:auto; align-items:center; gap:4px; font-size:10px; color:var(--text-secondary);">
                     <span class="sb-icon sb-icon-sm sb-icon-branch" style="opacity:0.6;" aria-hidden="true"></span>
@@ -4693,7 +4694,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'that one call moves the card and dispatches the reviewer with the reviewer\'s own '
                     + 'prompt. Do NOT use /kanban/move: it moves the card and dispatches nobody. Only '
                     + 'advance the feature your team worked; leave other cards alone. Do not wait to be '
-                    + 'asked.'
+                    + 'asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
+                    + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
+                    + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
+                    + 'empty and stop.'
             },
             {
                 name: 'Multi-agent planning',
@@ -6524,10 +6528,37 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (emptyState) emptyState.remove();
 
                 const cardTs = parseInt(cardEl.dataset.ts || '0', 10);
+                // V60: when the target renders as the DISPATCH queue (Dispatch
+                // view, PLAN REVIEWED slot), insert by queue_position ascending
+                // with NULL last — the SAME comparator the initial render uses,
+                // so a staged card does not jump to the top on the next board
+                // move and the queue stays visibly ordered mid-session. Falls
+                // back to the legacy ts-descending insert for every other target.
+                const queueInsert = (domTargetColumn === 'PLAN REVIEWED' && showingDispatch);
+                const cardQp = queueInsert ? parseInt(cardEl.dataset.queuePosition || '', 10) : NaN;
+                const cardQpNull = queueInsert && isNaN(cardQp);
                 const existingCards = Array.from(targetBody.querySelectorAll('.kanban-card'));
                 let inserted = false;
                 for (const child of existingCards) {
                     if (child === cardEl) continue;
+                    if (queueInsert) {
+                        const childQp = parseInt(child.dataset.queuePosition || '', 10);
+                        const childQpNull = isNaN(childQp);
+                        // NULL sorts last: a non-null card goes before any null
+                        // child; a null card goes after every non-null child.
+                        if (!cardQpNull && childQpNull) {
+                            targetBody.insertBefore(cardEl, child);
+                            inserted = true;
+                            break;
+                        }
+                        if (cardQpNull && !childQpNull) continue;
+                        if (!cardQpNull && !childQpNull && cardQp < childQp) {
+                            targetBody.insertBefore(cardEl, child);
+                            inserted = true;
+                            break;
+                        }
+                        continue;
+                    }
                     const childTs = parseInt(child.dataset.ts || '0', 10);
                     if (cardTs > childTs) {
                         targetBody.insertBefore(cardEl, child);
@@ -6987,7 +7018,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const dispatchViewControls = (isPlanReviewed && showingDispatch)
                         ? `<span id="dispatch-view-info" class="dispatch-view-info" style="font-size:11px; margin-right:auto; color:var(--vscode-descriptionForeground);">0 plans · 0 coder terminals</span>
                            <button class="column-icon-btn" id="btn-add-coder-terminal" data-action="addCoderTerminal" data-column="${escapeAttr(def.id)}" data-tooltip="${(dispatchAnalyzeAvailable && terminalCreateAvailable) ? 'Add a coder terminal' : 'Creating terminals requires a terminal host (unavailable here)'}"${(dispatchAnalyzeAvailable && terminalCreateAvailable) ? '' : ' disabled'} style="font-size:12px; width:22px;">+</button>
-                           <button class="column-icon-btn" id="btn-send-dispatch-set" data-action="sendDispatchSetToCoders" data-column="${escapeAttr(def.id)}" data-tooltip="Send all staged plans to complexity-routed coders" style="width:auto; padding:0 8px; font-size:10px;"${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable) ? ' disabled' : ''}>Send all to coders</button>`
+                           <button class="column-icon-btn" id="btn-send-dispatch-set" data-action="sendDispatchSetToCoders" data-column="${escapeAttr(def.id)}" data-tooltip="Fan out: send all staged plans to complexity-routed coders in parallel" style="width:auto; padding:0 8px; font-size:10px;"${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable) ? ' disabled' : ''}>Send all to coders</button>
+                           <button class="column-icon-btn" id="btn-run-queue" data-action="runQueue" data-column="${escapeAttr(def.id)}" data-tooltip="${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable) ? 'Run the queue in order — stage plans and seat a coder first' : (!lastCodingHeadLive ? 'Run the queue — no coding head is live; seat a coder team first' : 'Run the queue: dispatch the first staged plan, the lead pulls the rest in order')}" style="width:auto; padding:0 8px; font-size:10px;"${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable || !lastCodingHeadLive) ? ' disabled' : ''}>Run queue</button>`
                         : '';
                     buttonArea = `<div class="column-button-area" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
                         ${pipelineButtons}
@@ -7109,7 +7141,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                     }
                     const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'copyDispatchPromptSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature' && action !== 'dispatchAnalyze' && action !== 'sendDispatchToCoder' && action !== 'addCoderTerminal' && action !== 'sendDispatchSetToCoders') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'copyDispatchPromptSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature' && action !== 'dispatchAnalyze' && action !== 'sendDispatchToCoder' && action !== 'addCoderTerminal' && action !== 'sendDispatchSetToCoders' && action !== 'runQueue' && action !== 'stageForQueue') return;
 
                     switch (action) {
                         case 'moveSelected': {
@@ -7239,6 +7271,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         case 'sendDispatchSetToCoders': {
                             if (!dispatchAnalyzeAvailable) return;
                             postKanbanMessage({ type: 'sendDispatchSetToCoders', workspaceRoot: getActiveWorkspaceRoot() });
+                            break;
+                        }
+                        case 'runQueue': {
+                            if (!dispatchAnalyzeAvailable) return;
+                            postKanbanMessage({ type: 'runQueue', workspaceRoot: getActiveWorkspaceRoot() });
                             break;
                         }
                         case 'addBlankFeature': {
@@ -7714,12 +7751,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const info = document.getElementById('dispatch-view-info');
             const sendBtn = document.getElementById('btn-send-dispatch-set');
             const addBtn = document.getElementById('btn-add-coder-terminal');
+            const runBtn = document.getElementById('btn-run-queue');
             if (!info) return;
             const n = dispatchStagedCount();
             const m = lastCoderTerminalCount;
             info.textContent = `${n} plan${n === 1 ? '' : 's'} · ${m} coder terminal${m === 1 ? '' : 's'}`;
             if (sendBtn) sendBtn.disabled = !(n > 0 && dispatchAnalyzeAvailable);
             if (addBtn) addBtn.disabled = !(dispatchAnalyzeAvailable && terminalCreateAvailable);
+            // V60: Run queue mirrors Send all's disable pattern — empty queue
+            // or no terminal host leaves it inert — AND adds a coding-head-live
+            // gate: pressing Run with no team seated is an error, not an
+            // auto-start (the plan's explicit decision). lastCodingHeadLive
+            // tracks the same thing the runQueue backend resolver does (lead
+            // preferred, coder fallback), so a live lead with zero coder-role
+            // terminals still enables the button.
+            if (runBtn) runBtn.disabled = !(n > 0 && dispatchAnalyzeAvailable && lastCodingHeadLive);
         }
 
         function renderBoard(cards, justFinishedIds = new Set()) {
@@ -7840,7 +7886,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const countEl = document.getElementById('count-' + col);
                 const items = buckets[col];
                 if (!container || !countEl) return;
+                // V60: in Dispatch view the PLAN REVIEWED slot renders the
+                // DISPATCH session queue, ordered by queue_position ascending
+                // with NULL last. The tie-break is the board's existing ts
+                // descending order so duplicate positions (a partial rewrite,
+                // or two windows staging at once) sort deterministically rather
+                // than randomly — see the plan's Race Conditions note. Every
+                // other column keeps the ts-descending render it always had.
+                const queueOrdered = (col === 'PLAN REVIEWED' && showingDispatch);
                 const sortedItems = [...items].sort((a, b) => {
+                    if (queueOrdered) {
+                        const ap = a.queuePosition, bp = b.queuePosition;
+                        const an = (ap === null || ap === undefined), bn = (bp === null || bp === undefined);
+                        if (an && !bn) return 1;   // NULL sorts last
+                        if (!an && bn) return -1;
+                        if (!an && !bn) {
+                            const d = ap - bp;
+                            if (d !== 0) return d;
+                        }
+                    }
                     const tsDiff = (b._ts || 0) - (a._ts || 0);
                     if (tsDiff !== 0) return tsDiff;
                     // Secondary tiebreaker: createdAt descending (for cards with no lastActivity/same lastActivity)
@@ -8278,11 +8342,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     : '';
             }
 
-            // Dispatch is an agent-led decision: cards enter DISPATCH via the Analyze button
-            // (planner + dispatch-analysis skill) or, as a deliberate operator override, a drag
-            // inside the Dispatch view. There is deliberately NO per-card "Move to Dispatch"
-            // button — a one-click move carries no parallel-safety analysis, which is the only
-            // thing membership in DISPATCH is supposed to mean. The `→ Planned` arm is the exit
+            // DISPATCH is an ordered session queue (V60): cards enter via the
+            // Analyze button (planner + dispatch-analysis skill), an explicit
+            // Stage for queue action on the selection, or remote intake; each
+            // entry gets a queue_position. A same-column drag inside the
+            // Dispatch view reorders the queue. The `→ Planned` arm is the exit
             // direction and stays.
             const backlogActionBtn = (!isCompleted && card.column === 'CREATED' && !showingBacklog)
                 ? `<button class="card-btn icon-btn send-to-backlog-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Backlog">
@@ -8322,8 +8386,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const reviewTooltip = card.isFeature ? 'Review feature' : 'Review plan';
             const t = card.lastActivity ? new Date(card.lastActivity).getTime() : 0;
             const tsVal = isNaN(t) ? 0 : t;
+            const qpVal = (card.queuePosition === null || card.queuePosition === undefined) ? '' : String(card.queuePosition);
             return `
-                <div class="kanban-card${completedClass}${featureClass}${workingClass}${blockedClass}${droppedClass}" draggable="true"${stateTitle} data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}" data-ts="${tsVal}">
+                <div class="kanban-card${completedClass}${featureClass}${workingClass}${blockedClass}${droppedClass}" draggable="true"${stateTitle} data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}" data-ts="${tsVal}" data-queue-position="${escapeAttr(qpVal)}">
                     <div class="card-topic">${featureBadge}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
@@ -8493,6 +8558,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let dispatchAnalyzeAvailable = true;
         // Alive coder-terminal count, pushed in updateBoard for the Dispatch view header.
         let lastCoderTerminalCount = 0;
+        // V60: a live coding HEAD (lead OR coder), pushed alongside
+        // coderTerminalCount in updateBoard. The Run-queue button disables on
+        // this, not on coderTerminalCount, so it tracks the same thing the
+        // runQueue backend resolver does (lead preferred, coder fallback).
+        // Defaults false so the button starts disabled until the first push
+        // confirms a head is live.
+        let lastCodingHeadLive = false;
         // Whether the host can actually CREATE a coder terminal. Distinct from
         // dispatchAnalyzeAvailable (pty readiness): standalone can have a live PTY fleet
         // while terminal creation is unavailable, in which case the arm returns success
@@ -8688,6 +8760,61 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // display-mode column (BACKLOG for CREATED, DISPATCH for PLAN REVIEWED).
             const effectiveTargetColumn = (showingBacklog && targetColumn === 'CREATED') ? 'BACKLOG'
                 : (showingDispatch && targetColumn === 'PLAN REVIEWED') ? 'DISPATCH' : targetColumn;
+
+            // V60: a same-column drop inside the Dispatch view is a queue
+            // REORDER, not a no-op. Today's handler returns early on
+            // `card.column === effectiveTargetColumn` (:8743), which dead-ends
+            // the paced-queue case. Fill that branch: compute the insertion
+            // index from the drop position relative to the rendered cards
+            // (nearest-card midpoint against the pointer's clientY — the board
+            // has no existing drop-index helper, so this is new), then post the
+            // full ordered id list to reorderQueue. Do not fall through to the
+            // column-move path. A multi-card drag reorders the whole selection
+            // as a contiguous block at the drop index.
+            if (showingDispatch && effectiveTargetColumn === 'DISPATCH') {
+                const draggedIds = sessionIds.filter(id => {
+                    const card = currentCards.find(c => (c.planId || c.sessionId) === id);
+                    return card && card.column === 'DISPATCH';
+                });
+                if (draggedIds.length === 0) return;
+                const targetBody = document.getElementById('col-' + targetColumn);
+                if (!targetBody) return;
+                // Build the current rendered order of DISPATCH cards (excluding
+                // the dragged set), then splice the dragged block in at the
+                // insertion index derived from the pointer's clientY.
+                const stationaryEls = Array.from(targetBody.querySelectorAll('.kanban-card'))
+                    .filter(el => {
+                        const pid = el.dataset.planId || el.dataset.session || '';
+                        return !draggedIds.includes(pid);
+                    });
+                let insertIndex = stationaryEls.length;  // default: drop at end
+                const pointerY = e.clientY;
+                for (let i = 0; i < stationaryEls.length; i++) {
+                    const rect = stationaryEls[i].getBoundingClientRect();
+                    const midpoint = rect.top + rect.height / 2;
+                    if (pointerY < midpoint) { insertIndex = i; break; }
+                }
+                const stationaryIds = stationaryEls.map(el => el.dataset.planId || el.dataset.session || '').filter(Boolean);
+                const orderedIds = [...stationaryIds.slice(0, insertIndex), ...draggedIds, ...stationaryIds.slice(insertIndex)];
+                // Optimistic DOM reorder so the queue reflects the drop before
+                // the server round-trip. Re-append in the new order.
+                targetBody.querySelectorAll('.kanban-card').forEach(el => {
+                    const pid = el.dataset.planId || el.dataset.session || '';
+                    if (draggedIds.includes(pid)) el.classList.add('card-dropped');
+                });
+                const emptyState = targetBody.querySelector('.empty-state');
+                if (emptyState) emptyState.remove();
+                orderedIds.forEach(id => {
+                    const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
+                    if (cardEl) targetBody.appendChild(cardEl);
+                });
+                document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                selectedCards.clear();
+                updateReassignButtonVisibility();
+                updateFeatureActionButton();
+                postKanbanMessage({ type: 'reorderQueue', sessionIds: orderedIds, workspaceRoot });
+                return;
+            }
 
             sessionIds.forEach(id => {
                 const card = currentCards.find(c => (c.planId || c.sessionId) === id);
@@ -9178,6 +9305,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         coderTerminalCountChanged = msg.coderTerminalCount !== lastCoderTerminalCount;
                         lastCoderTerminalCount = msg.coderTerminalCount;
                     }
+                    // V60: codingHeadLive (lead OR coder). Edge-trigger
+                    // updateDispatchViewInfo so the Run-queue button flips the
+                    // moment a lead comes online even when coder count is 0.
+                    let codingHeadLiveChanged = false;
+                    if (typeof msg.codingHeadLive !== 'undefined') {
+                        codingHeadLiveChanged = !!msg.codingHeadLive !== lastCodingHeadLive;
+                        lastCodingHeadLive = !!msg.codingHeadLive;
+                    }
                     if (typeof msg.terminalCreateAvailable !== 'undefined') {
                         terminalCreateAvailable = msg.terminalCreateAvailable === true;
                     }
@@ -9250,7 +9385,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     // Edge-triggered, so the common (cards-changed) path does not repaint
                     // twice — renderBoard already called this.
-                    if (coderTerminalCountChanged) updateDispatchViewInfo();
+                    if (coderTerminalCountChanged || codingHeadLiveChanged) updateDispatchViewInfo();
                     break;
                 }
                 case 'settingResult': {
@@ -10088,6 +10223,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     btn.disabled = true;
                     btn.textContent = 'ASSIGN';
                 }
+            }
+            // V60: Stage for queue is enabled whenever there is a selection —
+            // the selection order (selectedCards insertion order) IS the queue
+            // order. Staging a card already in DISPATCH re-positions it; that
+            // is allowed, not refused.
+            const stageBtn = document.getElementById('btn-stage-for-queue');
+            if (stageBtn) {
+                const count = selectedCards.size;
+                stageBtn.disabled = count === 0;
+                stageBtn.textContent = count > 0 ? `STAGE FOR QUEUE (${count})` : 'STAGE FOR QUEUE';
             }
         }
 
@@ -12472,6 +12617,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 } else if (features.length === 0 && nonFeatures.length > 1) {
                     openFeatureCreateModal({ singlePlanPromote: false });
                 }
+            });
+            // V60: Stage the selected plans into the Dispatch queue, in
+            // selection order (selectedCards insertion order). Clears the
+            // selection afterwards, matching the neighbouring handlers
+            // (sendDispatchToCoder, completeSelected). The backend refuses
+            // subtasks and reports how many were refused.
+            document.getElementById('btn-stage-for-queue')?.addEventListener('click', () => {
+                const ids = Array.from(selectedCards.keys()).filter(Boolean);
+                if (ids.length === 0) return;
+                postKanbanMessage({ type: 'stageForQueue', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
+                selectedCards.clear();
+                document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                updateReassignButtonVisibility();
+                updateFeatureActionButton();
             });
             document.getElementById('feature-create-close')?.addEventListener('click', closeFeatureCreateModal);
             document.getElementById('feature-create-cancel')?.addEventListener('click', closeFeatureCreateModal);

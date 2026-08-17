@@ -290,7 +290,10 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'that one call moves the card and dispatches the reviewer with the reviewer\'s own '
     + 'prompt. Do NOT use /kanban/move: it moves the card and dispatches nobody. Only '
     + 'advance the feature your team worked; leave other cards alone. Do not wait to be '
-    + 'asked.';
+    + 'asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
+    + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
+    + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
+    + 'empty and stop.';
 
 /**
  * Convert existing agent groups to the team shape. Runs on every read
@@ -1482,6 +1485,87 @@ export async function resolveTeamScopedRoleTerminal(opts: {
         if (!g || !Array.isArray(g.members) || !g.members.includes(originName)) { continue; }
         const hit = candidatesIn(g);
         if (hit) { return hit; }
+    }
+    return null;
+}
+
+/**
+ * The roster of terminal names on the same registered team as `originName`
+ * (the head itself plus its members), or null when `originName` names no
+ * live team. Reads `terminals.groups` through the identical path
+ * `resolveTeamScopedRoleTerminal` uses (same key, same legacy bare-key
+ * merge, same head-id derivation, same `order`-then-`members` roster
+ * preference) so the in-flight predicate in `dispatchNextFromQueue` derives
+ * team membership from a card's `dispatched_terminal` identically to
+ * dispatch routing.
+ *
+ * Returns string rosters only — `wireSpawnedTeam` writes `members`/`order`
+ * as arrays of terminal-name strings, so a spawned team always resolves
+ * here. The gallery seed carries object members and is converted by
+ * `migrateAgentGroups` at the read sites; this helper does not run that
+ * converter (it is read-only and the caller is a membership oracle, not a
+ * spawner), so a never-spawned gallery-only team may return null — which
+ * is the correct answer for the in-flight check (no live team ⇒ no
+ * in-flight refusal beyond the head-only fallback).
+ */
+export async function resolveTeamMembersForHead(opts: {
+    db?: any;
+    settings?: TerminalGroupsSettingsAccessor;
+    originName: string;
+}): Promise<string[] | null> {
+    const { db, settings, originName } = opts;
+    if ((!db && !settings) || !originName) { return null; }
+
+    let groups: any[] = [];
+    try {
+        if (settings) {
+            const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
+            groups = Array.isArray(raw) ? [...raw] : [];
+        } else if (db) {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? [...raw] : [];
+        }
+        if (db) {
+            try {
+                const bare = await db.getConfigJson('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+        }
+    } catch { return null; }
+    if (!Array.isArray(groups) || groups.length === 0) { return null; }
+
+    const rosterOf = (g: any): string[] => {
+        const roster: any[] = Array.isArray(g?.order) && g.order.length
+            ? g.order
+            : (Array.isArray(g?.members) ? g.members : []);
+        const names: string[] = [];
+        for (const n of roster) {
+            if (typeof n === 'string' && n.length > 0) { names.push(n); }
+        }
+        return names;
+    };
+
+    // Preferred: the group the origin HEADS (same id derivation as
+    // resolveTeamScopedRoleTerminal and wireSpawnedTeam).
+    const headId = 'team_' + encodeURIComponent(originName).replace(/[^a-zA-Z0-9_]/g, '_');
+    const headGroup = groups.find(g => g && g.id === headId);
+    if (headGroup) {
+        const roster = rosterOf(headGroup);
+        if (roster.length) { return roster; }
+    }
+    // Otherwise: first group (in stored order) that contains the origin.
+    for (const g of groups) {
+        if (!g || !Array.isArray(g.members) || !g.members.includes(originName)) { continue; }
+        const roster = rosterOf(g);
+        if (roster.length) { return roster; }
     }
     return null;
 }

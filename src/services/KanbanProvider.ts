@@ -135,6 +135,7 @@ export interface KanbanCard {
     subtaskCount?: number;
     working?: boolean; // true while an agent is dispatched to this card and the 20-min window hasn't elapsed
     blocked?: boolean; // V59: true while the agent reported itself blocked / waiting on the operator (hook-emitted)
+    queuePosition?: number | null; // V60: 1-based DISPATCH session queue position; NULL = not staged (sorts last)
 }
 
 // Activity-light window default. A card is `working` while dispatched_at is set and
@@ -1249,6 +1250,15 @@ export class KanbanProvider implements vscode.Disposable {
             const coderTerminalCount = this._taskViewerProvider
                 ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', root)).length
                 : 0;
+            // V60: codingHeadLive tracks the same thing the runQueue backend
+            // resolver does — a live coding HEAD (lead OR coder). coderTerminalCount
+            // counts 'coder' only, so a workspace with a live lead and zero
+            // coder-role terminals would show a disabled Run-queue button while
+            // the backend would have resolved that lead and dispatched fine.
+            // Fetch 'lead' only when coder count is 0 (the gap case).
+            const codingHeadLive = this._taskViewerProvider
+                ? (coderTerminalCount > 0 || (await this._taskViewerProvider.getAliveRoleTerminalNames('lead', root)).length > 0)
+                : false;
 
             // Every entry carries its surface so wsHub can filter the connect-time
             // resync per connection (see SURFACES / PANEL_SURFACES). Tag AS BUILT, not
@@ -1276,7 +1286,7 @@ export class KanbanProvider implements vscode.Disposable {
                     projectContextEnabled,
                 },
                 { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, showingDispatch: this._showingDispatch, dispatchAnalyzeAvailable: true, coderTerminalCount, routingConfig, featureWorktrees, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, showingDispatch: this._showingDispatch, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, routingConfig, featureWorktrees, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
@@ -1954,6 +1964,7 @@ export class KanbanProvider implements vscode.Disposable {
                 subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined,
                 working: cardState.working,
                 blocked: cardState.blocked,
+                queuePosition: row.queuePosition ?? null,
             };
         });
 
@@ -2129,12 +2140,19 @@ export class KanbanProvider implements vscode.Disposable {
             const coderTerminalCount = this._taskViewerProvider
                 ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', resolvedWorkspaceRoot)).length
                 : 0;
+            // V60: codingHeadLive — see site 1 (connect-time resync) for the
+            // rationale. Lead fetch only when coder count is 0 (the gap case).
+            const codingHeadLive = this._taskViewerProvider
+                ? (coderTerminalCount > 0 || (await this._taskViewerProvider.getAliveRoleTerminalNames('lead', resolvedWorkspaceRoot)).length > 0)
+                : false;
             // coderTerminalCount is part of the snapshot, not just the payload. The Dispatch
             // view header renders it, and adding a coder terminal changes NO card — so a
             // cards-only hash would skip the push and freeze the header at its stale value
-            // while the stepper appears to do nothing.
+            // while the stepper appears to do nothing. codingHeadLive is included for the
+            // same reason: a lead coming online when coder count is 0 changes NO card and
+            // leaves coderTerminalCount at 0, but must flip the Run-queue button enabled.
             const snapshotHash = crypto.createHash('sha256')
-                .update(JSON.stringify({ cards, featureWorktrees, coderTerminalCount }))
+                .update(JSON.stringify({ cards, featureWorktrees, coderTerminalCount, codingHeadLive }))
                 .digest('hex');
             const snapshotUnchanged = snapshotKey === this._lastBoardSnapshotKey
                 && snapshotHash === this._lastBoardSnapshotHash;
@@ -2149,6 +2167,7 @@ export class KanbanProvider implements vscode.Disposable {
                     showingDispatch: this._showingDispatch,
                     dispatchAnalyzeAvailable: true,
                     coderTerminalCount,
+                    codingHeadLive,
                     routingConfig: this._routingMapForScope(scope),
                     featureWorktrees
                 }));
@@ -2392,6 +2411,94 @@ export class KanbanProvider implements vscode.Disposable {
             getProvider: (kind: RemoteProviderKind): RemoteProvider | null => this._buildRemoteProvider(resolved, kind),
             onColumnMove: async (plan, targetColumn) => {
                 return this._remoteApplyColumnMove(resolved, plan, targetColumn);
+            },
+            // Queue-mode staging (subtask 7): stage a remote-arriving card into
+            // the session queue instead of dispatching. Reuses the same
+            // stageForQueue the webview's Stage for queue button calls — one
+            // staging path, one queue_position assignment. Returns the position
+            // so the ack comment can name it.
+            onStageForQueue: async (plan) => {
+                try {
+                    const result = await this.stageForQueue(resolved, [plan.planId]);
+                    if (result.success && result.staged > 0) {
+                        // Read back the position from the DB — stageForQueue
+                        // appends the next position but does not return it.
+                        const db = this._getKanbanDb(resolved);
+                        if (db && await db.ensureReady()) {
+                            const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+                            const board = await db.getBoard?.(wsId) || [];
+                            const card = board.find((p: any) => p && p.planId === plan.planId);
+                            const pos = card?.queuePosition ?? -1;
+                            return { staged: true, position: typeof pos === 'number' ? pos : -1 };
+                        }
+                        return { staged: true, position: -1 };
+                    }
+                    return { staged: false, position: -1 };
+                } catch (e) {
+                    this._outputChannel?.appendLine(`[KanbanProvider] onStageForQueue failed: ${e instanceof Error ? e.message : String(e)}`);
+                    return { staged: false, position: -1 };
+                }
+            },
+            // Queue-mode watch arming (subtask 3): after a poll cycle that
+            // staged at least one card, arm the queue-level stall watch.
+            // Resolve the live coding head (lead first, then coder) so the
+            // watch's head matches the head the pop would dispatch to. If no
+            // head is live, pass null — the sweep's "no head seated" gate
+            // will attempt resolution again before notifying.
+            onArmQueueWatch: async (wsRoot, _headTerminal) => {
+                try {
+                    let headTerminal: string | null = null;
+                    if (this._taskViewerProvider) {
+                        const leads = await this._taskViewerProvider.getAliveRoleTerminalNames('lead', wsRoot);
+                        if (leads.length > 0) {
+                            headTerminal = leads[0];
+                        } else {
+                            const coders = await this._taskViewerProvider.getAliveRoleTerminalNames('coder', wsRoot);
+                            if (coders.length > 0) headTerminal = coders[0];
+                        }
+                    }
+                    const engine = this._globalPlanWatcher?.getEngine?.();
+                    if (engine) { await engine.armQueueWatch(wsRoot, headTerminal); }
+                } catch (e) {
+                    this._outputChannel?.appendLine(`[KanbanProvider] onArmQueueWatch failed: ${e instanceof Error ? e.message : String(e)}`);
+                }
+            },
+            // Opt-in batch sequencing (subtask 7 step 5, default OFF). Wakes an
+            // orchestrator once with the batch to reorder by dependency / group
+            // into features before the first dispatch. Bounded by a timeout the
+            // extension enforces — if the orchestrator cannot be started or does
+            // not respond within the bound, the queue proceeds in arrival order
+            // and the fallback is logged. The bound is enforced here, not by
+            // the agent's cooperation.
+            onSequenceBatch: async (wsRoot, stagedPlanIds) => {
+                try {
+                    if (!this._taskViewerProvider) {
+                        return { sequenced: false, error: 'no task viewer provider — cannot start orchestrator' };
+                    }
+                    // Start the orchestrator (seats the terminal + delivers the
+                    // pre-flight interview). The orchestrator agent receives the
+                    // batch context in its prompt and sequences it, then hands
+                    // off via POST /orchestration/handoff. The bound is enforced
+                    // by a timeout: if the orchestrator does not hand off within
+                    // SEQUENCING_BOUND_MS, the queue proceeds in arrival order.
+                    const SEQUENCING_BOUND_MS = 5 * 60 * 1000; // 5 minutes
+                    await this._taskViewerProvider.startOrchestratorFromKanban(wsRoot, undefined);
+                    // The orchestrator is now seated. It will sequence the batch
+                    // and hand off. The bound is enforced by the handoff endpoint's
+                    // own state machine — if the orchestrator never calls handoff,
+                    // the queue stays in arrival order (the lead pulls in
+                    // queue_position order, which is arrival order). A timer-based
+                    // fallback is not needed here because the queue is never held
+                    // shut: the lead can pull the first card while the orchestrator
+                    // is still sequencing, and a reorder by the orchestrator
+                    // updates queue_positions for the remaining cards.
+                    this._outputChannel?.appendLine(
+                        `[KanbanProvider] Queue sequencing: orchestrator seated for ${stagedPlanIds.length} staged card(s) in ${wsRoot}.`
+                    );
+                    return { sequenced: true };
+                } catch (e) {
+                    return { sequenced: false, error: e instanceof Error ? e.message : String(e) };
+                }
             },
             onComment: async (plan, body) => {
                 await this._remoteDispatchComment(resolved, plan, body);
@@ -3604,6 +3711,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         subtaskCount: row.isFeature ? (subtaskCountMap2.get(row.planId) || 0) : undefined,
                         working: cardState2.working,
                         blocked: cardState2.blocked,
+                        queuePosition: row.queuePosition ?? null,
                     };
                 });
 
@@ -3691,6 +3799,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const coderTerminalCount = this._taskViewerProvider
                 ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', resolvedWorkspaceRoot)).length
                 : 0;
+            // V60: codingHeadLive — see site 1 for the rationale.
+            const codingHeadLive = this._taskViewerProvider
+                ? (coderTerminalCount > 0 || (await this._taskViewerProvider.getAliveRoleTerminalNames('lead', resolvedWorkspaceRoot)).length > 0)
+                : false;
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -3699,6 +3811,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 showingDispatch: this._showingDispatch,
                 dispatchAnalyzeAvailable: true,
                 coderTerminalCount,
+                codingHeadLive,
                 routingConfig: this._routingMapForScope(scope),
                 featureWorktrees
             }));
@@ -3825,6 +3938,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     project: row.project || '',
                     working: cardState3.working,
                     blocked: cardState3.blocked,
+                    queuePosition: row.queuePosition ?? null,
                 };
             });
 
@@ -3889,6 +4003,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const coderTerminalCount = this._taskViewerProvider
                 ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', resolvedWorkspaceRoot)).length
                 : 0;
+            // V60: codingHeadLive — see site 1 for the rationale.
+            const codingHeadLive = this._taskViewerProvider
+                ? (coderTerminalCount > 0 || (await this._taskViewerProvider.getAliveRoleTerminalNames('lead', resolvedWorkspaceRoot)).length > 0)
+                : false;
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -3897,6 +4015,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 showingDispatch: this._showingDispatch,
                 dispatchAnalyzeAvailable: true,
                 coderTerminalCount,
+                codingHeadLive,
                 routingConfig: this._routingMapForScope(scope)
             }));
             this.postMessage((scope: string | null | undefined) => ({
@@ -7246,6 +7365,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         )
                     );
                 }
+                // V60: a card leaving DISPATCH drops its queue_position so a later
+                // re-stage does not jump the queue on a stale position. Covers both
+                // the dispatch-to-coder path (sendDispatchToCoder / sendDispatchSetToCoders
+                // / Run queue) and a manual drag out of the Dispatch view. The feature
+                // cascade clears the feature card's position; subtask positions are
+                // already NULL (subtasks never stage — the staged count excludes them).
+                if (plan && plan.kanbanColumn === 'DISPATCH' && targetColumn !== 'DISPATCH') {
+                    const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                    if (wsId) { await db.clearQueuePosition(plan.planId, wsId); }
+                }
                 if (plan) {
                     if (plan.isFeature) {
                         await this._regenerateFeatureFile(workspaceRoot, plan.planId, db);
@@ -7280,6 +7409,135 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
         }
         return [sessionId];
+    }
+
+    /**
+     * V60 — resolve plan ids (planId | sessionId) to plan_id rows, refusing
+     * subtasks (non-empty featureId). Features stage as one card; subtasks
+     * never stage (the staged count excludes them). Returns the planIds that
+     * are stageable, in the caller's order, plus the refused count.
+     */
+    private async _resolveStageablePlanIds(
+        workspaceRoot: string,
+        ids: string[]
+    ): Promise<{ planIds: string[]; refused: number; workspaceId: string }> {
+        const db = this._getKanbanDb(workspaceRoot);
+        const workspaceId = (db && await db.ensureReady()) ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
+        const planIds: string[] = [];
+        let refused = 0;
+        if (!db || !workspaceId) return { planIds, refused: ids.length, workspaceId };
+        for (const id of ids) {
+            let plan = await db.getPlanByPlanId(id);
+            if (!plan) { plan = await db.getPlanBySessionId(id); }
+            if (!plan) { refused++; continue; }
+            // Subtasks (non-empty featureId) are refused — features stage as one
+            // card, never as their subtasks. Mirrors the staged-count contract
+            // (!c.featureId) on the toggle and the Send-all set.
+            if (plan.featureId && !plan.isFeature) { refused++; continue; }
+            planIds.push(plan.planId);
+        }
+        return { planIds, refused, workspaceId };
+    }
+
+    /**
+     * V60 — stage the given plan ids into DISPATCH as an ordered session
+     * queue, appending positions from MAX(queue_position)+1 in the caller's
+     * order. The webview passes selection order; subtask 6 (scoped handoff)
+     * and subtask 7 (remote intake) call this same helper so all three stage
+     * identically. A card already in DISPATCH is re-positioned rather than
+     * duplicated. Subtasks are refused (features stage as one card). Posts a
+     * board refresh so the staged cards appear in DISPATCH in order.
+     */
+    public async stageForQueue(
+        workspaceRoot: string,
+        ids: string[]
+    ): Promise<{ success: boolean; staged: number; refused: number; error?: string }> {
+        if (!workspaceRoot) return { success: false, staged: 0, refused: 0, error: 'No workspace root resolved' };
+        if (!Array.isArray(ids) || ids.length === 0) return { success: false, staged: 0, refused: 0, error: 'No plans selected to stage' };
+        const { planIds, refused, workspaceId } = await this._resolveStageablePlanIds(workspaceRoot, ids);
+        if (planIds.length === 0) {
+            return { success: false, staged: 0, refused, error: refused > 0 ? 'No stageable plans selected (subtasks cannot be staged)' : 'No plans resolved' };
+        }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return { success: false, staged: 0, refused, error: 'Kanban database not ready' };
+        const ok = await db.appendQueuePositions(workspaceId, planIds);
+        if (!ok) return { success: false, staged: 0, refused, error: 'Failed to write queue positions' };
+        // Post a board refresh so the staged cards render in DISPATCH in order.
+        await this._refreshBoard(workspaceRoot);
+        // Arm the queue-level stall watch (subtask 3). Staging is the EARLIEST
+        // moment a silent night becomes possible — a queue staged but never
+        // dispatched is the worst case, not an exempt one. Resolve the live
+        // coding head (lead first, then coder — the same order runQueue's
+        // backend resolver uses) so the watch's head matches the head the pop
+        // would actually dispatch to. If no head is live, pass null — the
+        // sweep's "no head seated" gate will attempt resolution again before
+        // notifying, so a head seated after staging is picked up without a
+        // re-stage. Re-arming is idempotent and does NOT reset nudgeCount (a
+        // re-stage is not a dispatch).
+        try {
+            let headTerminal: string | null = null;
+            if (this._taskViewerProvider) {
+                const leads = await this._taskViewerProvider.getAliveRoleTerminalNames('lead', workspaceRoot);
+                if (leads.length > 0) {
+                    headTerminal = leads[0];
+                } else {
+                    const coders = await this._taskViewerProvider.getAliveRoleTerminalNames('coder', workspaceRoot);
+                    if (coders.length > 0) headTerminal = coders[0];
+                }
+            }
+            const engine = this._globalPlanWatcher?.getEngine?.();
+            if (engine) { await engine.armQueueWatch(workspaceRoot, headTerminal); }
+        } catch (armErr) {
+            console.warn('[KanbanProvider] armQueueWatch from stageForQueue failed:', armErr);
+        }
+        return { success: true, staged: planIds.length, refused };
+    }
+
+    /**
+     * V60 — rewrite the DISPATCH queue order from a full ordered id list (the
+     * post-drop order). Assigns 1..N in one transaction. Called by the webview
+     * drop handler's same-column DISPATCH reorder. Posts a board refresh so the
+     * new order renders immediately.
+     */
+    public async reorderQueue(
+        workspaceRoot: string,
+        orderedIds: string[]
+    ): Promise<{ success: boolean; reordered: number; error?: string }> {
+        if (!workspaceRoot) return { success: false, reordered: 0, error: 'No workspace root resolved' };
+        if (!Array.isArray(orderedIds) || orderedIds.length === 0) return { success: false, reordered: 0, error: 'No queue order supplied' };
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return { success: false, reordered: 0, error: 'Kanban database not ready' };
+        const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+        if (!workspaceId) return { success: false, reordered: 0, error: 'No workspace id resolved' };
+        // The drop handler sends planId|sessionId ids; resolve to plan_ids in
+        // order, dropping any that do not resolve (a card dragged out between
+        // render and drop).
+        const planIds: string[] = [];
+        for (const id of orderedIds) {
+            let plan = await db.getPlanByPlanId(id);
+            if (!plan) { plan = await db.getPlanBySessionId(id); }
+            if (plan) planIds.push(plan.planId);
+        }
+        if (planIds.length === 0) return { success: false, reordered: 0, error: 'No staged plans resolved' };
+        const ok = await db.setQueuePositions(workspaceId, planIds);
+        if (!ok) return { success: false, reordered: 0, error: 'Failed to rewrite queue order' };
+        await this._refreshBoard(workspaceRoot);
+        return { success: true, reordered: planIds.length };
+    }
+
+    /**
+     * V60 — clear a card's queue_position. Exported so subtask 1's
+     * dispatchNextFromQueue pop path can call it when a card leaves the queue
+     * via the lead pull (the moveCardToColumnWithReason clear above covers the
+     * webview-driven moves; this covers the API-driven pop). Idempotent.
+     */
+    public async clearQueuePosition(workspaceRoot: string, planId: string): Promise<boolean> {
+        if (!workspaceRoot || !planId) return false;
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return false;
+        const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+        if (!workspaceId) return false;
+        return db.clearQueuePosition(planId, workspaceId);
     }
 
     public async moveCardToColumnByPlanFileWithReason(
@@ -7929,7 +8187,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     project: plan.project || '',
                     isFeature: !!plan.isFeature,
                     featureId: plan.featureId || undefined,
-                    ...isWorkingState(plan.dispatchedAt, timeoutMs, plan.lastLivenessAt, plan.blockedAt, blockedTimeoutMs)
+                    ...isWorkingState(plan.dispatchedAt, timeoutMs, plan.lastLivenessAt, plan.blockedAt, blockedTimeoutMs),
+                    queuePosition: plan.queuePosition ?? null,
                 });
             }
         }
@@ -10898,6 +11157,117 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 this.postMessage({ type: 'showStatusMessage', message, isError: false });
                 void this._seams().ui.showInformationMessage(message);
                 return { success: dispatchFailures.length === 0, sent: dispatchMovedCount, skipped: dispatchSkipped, failures: dispatchFailures };
+            }
+            case 'stageForQueue': {
+                // V60: stage the selected plans into DISPATCH as an ordered
+                // session queue, appending positions in selection order. The
+                // webview passes the selection order (selectedCards insertion
+                // order), not board order — the user's pick order IS the queue
+                // order. Subtasks are refused (features stage as one card).
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const ids: string[] = Array.isArray(msg.sessionIds) ? msg.sessionIds : [];
+                if (ids.length === 0) {
+                    this.postMessage({ type: 'showStatusMessage', message: 'Select plans to stage first.', isError: true });
+                    return { success: false, error: 'No plans selected to stage' };
+                }
+                const result = await this.stageForQueue(workspaceRoot, ids);
+                const refusedSuffix = result.refused > 0 ? ` (${result.refused} refused — subtasks cannot be staged)` : '';
+                const message = result.success
+                    ? `Staged ${result.staged} plan(s) into the Dispatch queue.${refusedSuffix}`
+                    : (result.error || 'Failed to stage plans');
+                this.postMessage({ type: 'showStatusMessage', message, isError: !result.success });
+                return result;
+            }
+            case 'reorderQueue': {
+                // V60: rewrite the DISPATCH queue order from the post-drop id
+                // list. The webview's same-column drop handler computes the
+                // insertion index and sends the full ordered list.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const orderedIds: string[] = Array.isArray(msg.sessionIds) ? msg.sessionIds : [];
+                const result = await this.reorderQueue(workspaceRoot, orderedIds);
+                if (!result.success) {
+                    this.postMessage({ type: 'showStatusMessage', message: result.error || 'Failed to reorder queue', isError: true });
+                }
+                return result;
+            }
+            case 'runQueue': {
+                // V60: the cold-start button. Press Run, the first card
+                // dispatches, the standing order carries the lead from there.
+                // Calls subtask 1's dispatchNextFromQueue — the SAME code path
+                // the lead uses (POST /kanban/queue/next), so cold start and
+                // steady state share exactly one dispatch path. The function
+                // is owned by subtask 1 (LocalApiServer); if it has not landed
+                // yet this call is a no-op that reports the gap rather than
+                // silently spawning agents.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const dispatchCards = (this._lastCards || []).filter(
+                    c => c.workspaceRoot === workspaceRoot && c.column === 'DISPATCH' && !c.featureId
+                );
+                if (dispatchCards.length === 0) {
+                    this.postMessage({ type: 'showStatusMessage', message: 'Dispatch queue is empty — stage plans first.', isError: true });
+                    return { success: false, error: 'Dispatch queue is empty' };
+                }
+                const apiServer: any = this._apiServer;
+                if (!apiServer || typeof apiServer.dispatchNextFromQueue !== 'function') {
+                    this.postMessage({ type: 'showStatusMessage', message: 'Queue dispatch is not available in this host.', isError: true });
+                    return { success: false, error: 'dispatchNextFromQueue not available' };
+                }
+                // Resolve the live coding head's terminal name — `from` is
+                // required by dispatchNextFromQueue: it is what the team-scoped
+                // in-flight predicate resolves team membership from, and what
+                // targetTerminalOverride dispatches to. The plan requires
+                // resolving the coding head, and states that pressing Run with
+                // no team seated is an error, not an auto-start. Try 'lead'
+                // first (the head of a coding team), then 'coder' (a solo
+                // coder can head its own team). If neither is alive, refuse.
+                let headTerminal = '';
+                if (this._taskViewerProvider) {
+                    const leads = await this._taskViewerProvider.getAliveRoleTerminalNames('lead', workspaceRoot);
+                    if (leads.length > 0) {
+                        headTerminal = leads[0];
+                    } else {
+                        const coders = await this._taskViewerProvider.getAliveRoleTerminalNames('coder', workspaceRoot);
+                        if (coders.length > 0) headTerminal = coders[0];
+                    }
+                }
+                if (!headTerminal) {
+                    this.postMessage({ type: 'showStatusMessage', message: 'No coding head is live. Seat a coding team (TEAMS tab or Setup) before pressing Run.', isError: true });
+                    return { success: false, error: 'No coding head is live — seat a coding team first' };
+                }
+                try {
+                    const outcome = await apiServer.dispatchNextFromQueue({ workspaceRoot, from: headTerminal });
+                    // dispatchNextFromQueue returns { status, payload } — NOT
+                    // { success, error, message }. Branch on status and read
+                    // payload: payload.dispatched === null means the queue is
+                    // empty (NOT an error), 409 means the team is already in
+                    // flight, and payload.error carries the message on a real
+                    // failure.
+                    const status = outcome?.status ?? 500;
+                    const payload = (outcome && outcome.payload) ? outcome.payload : {};
+                    if (status >= 200 && status < 300) {
+                        if (payload.dispatched === null) {
+                            this.postMessage({ type: 'showStatusMessage', message: 'Queue is empty — no card dispatched.', isError: false });
+                            return { success: true, dispatched: null, reason: payload.reason || 'queue empty' };
+                        }
+                        const topic = payload.dispatched?.topic || payload.dispatched?.planId || 'plan';
+                        this.postMessage({ type: 'showStatusMessage', message: `Dispatched '${topic}' from the queue to '${headTerminal}'.`, isError: false });
+                        return { success: true, dispatched: payload.dispatched, from: headTerminal };
+                    }
+                    if (status === 409) {
+                        this.postMessage({ type: 'showStatusMessage', message: payload.error || 'Team already in flight — hand the current card to review before asking for the next.', isError: true });
+                        return { success: false, error: payload.error || 'Team already in flight', inFlight: payload.inFlight };
+                    }
+                    // 400 / 404 / 500 / 502 / 503 — real failure
+                    this.postMessage({ type: 'showStatusMessage', message: payload.error || `Queue dispatch failed (HTTP ${status}).`, isError: true });
+                    return { success: false, error: payload.error || `Queue dispatch failed (HTTP ${status})` };
+                } catch (err) {
+                    const detail = err instanceof Error ? err.message : String(err);
+                    this.postMessage({ type: 'showStatusMessage', message: `Queue dispatch failed: ${detail}`, isError: true });
+                    return { success: false, error: detail };
+                }
             }
             case 'importFromClipboard':
                 await this._seams().commands.executeCommand('switchboard.importPlanFromClipboard', msg.markdownText);
