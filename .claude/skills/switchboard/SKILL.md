@@ -132,7 +132,7 @@ two commands.
    1. Plan     — write or improve coding plans
    2. Code     — dispatch a plan to be coded, check what's in flight
    3. Board    — browse, move, complete cards; organize features
-   4. Automate — oversee a column pass, or manage a project end-to-end
+   4. Automate — run a pass now, or start the orchestrator (pre-flight interview)
    5. More     — design & artifacts · external PM (ClickUp/Linear) · setup & tour
    ```
    - **Terminals line:** list the live terminal agents from the `/health` `terminals`
@@ -185,7 +185,7 @@ What would you like to do?
 1. Plan     — write or improve coding plans
 2. Code     — dispatch a plan to be coded, check what's in flight
 3. Board    — browse, move, complete cards; organize features
-4. Automate — oversee a column pass, or manage a project end-to-end
+4. Automate — run a pass now, or start the orchestrator (pre-flight interview)
 5. More     — design & artifacts · external PM (ClickUp/Linear) · setup & tour
 ```
 
@@ -294,8 +294,7 @@ What would you like to do?
   resends a fix if it falls short — repeating per subtask. Enable the **`Drive`** toggle in the
   control strip (beside Ultracode/Goal) to prepend the directive to feature dispatch prompts,
   or follow the **`terminal-coder-dispatch`** skill directly. This is attended driving by a
-  reasoning agent — distinct from the unattended oversight pass (§6) and from fire-and-forget
-  kanban dispatch.
+  reasoning agent — distinct from fire-and-forget kanban dispatch.
 
 ### Design & Artifacts *(secondary — under "More", expand only when picked)*
 - **Design panel / Stitch verbs** — `POST /design/verb/<name>` (e.g. `stitchGenerate`,
@@ -320,12 +319,8 @@ What would you like to do?
 - **Get tickets** — `get-tickets` skill.
 
 ### Automation
-- **Oversee a column (attended sequential pass)** — see §6 below. If
-  `$ROOT/.switchboard/oversight-state.md` shows an interrupted pass, lead with
-  "Resume the interrupted pass" instead.
-- **Manage a project start to end** — see §7 below (project pipeline).
 - **Run one pass now** — drive group → dispatch → verify-via-git → merge inline, in this session.
-- **Arm / disarm the unattended engine** — `POST /orchestration/start` / `POST /orchestration/stop`.
+- **Start / stop the orchestrator** — `POST /orchestration/start` seats the orchestrator into a pre-flight interview (it reports what is missing, proposes a goal, and waits); `POST /orchestration/confirm` arms the session after you answer; `POST /orchestration/stop` disarms and archives the session.
 
 ### Setup & Tour *(under "More" normally; promoted to the numbered tier when a setup gap exists)*
 - **Guided setup (onboarding)** — see §5 below. Interactive, one step at a time.
@@ -430,149 +425,6 @@ roles, workflows). For how-to-invoke questions outside onboarding, use the
    want to learn about each.
 
 **Hard rule:** never dump the whole manual. One topic at a time, verify, advance.
-
----
-
-## 6. Column Oversight — Attended Sequential Pass
-
-The agent-supervised equivalent of single-column autoban: you replace the automation timer
-with observed completion. Triggered by "progress through each plan in `<column>`" or
-"oversee the board". **The loop runs in the extension**, not in your head — you start it,
-read status in short turns, and produce the digest. Never re-derive the state machine.
-
-### Protocol (endpoint-driven)
-
-1. **Start the pass — one call:** `POST /oversight/start` with
-   `{"workspaceRoot": "$ROOT", "queue": {...}, "targetColumn"?, "stage"?, "reviewGate"?, "reviewColumn"?, "cooldownMs"?, "stuckThresholdMs"?}`.
-   The extension resolves the queue once, starts the in-extension two-lane engine, and
-   returns `{passId, pass}`. **Precondition:** a live terminal agent must be registered —
-   the endpoint halts the pass on a hollow dispatch ack; tell the user to open their agent
-   terminal(s) (AGENT SETUP tab / saved grid) if `start` reports no live terminal.
-
-2. **Queue semantics — resolved once, in code AND here (the contradiction is closed):**
-   - **Explicit list** (`queue: { planIds: [...] }`) → **the list IS the queue**, in the
-     given order, **feature subtasks included**. Only feature *container* rows are
-     rejected (dispatch their subtasks instead). This is §6a.
-   - **Column sweep** (`queue: { sourceColumn: "<S>" }`) → queue = every plan in column S,
-     oldest first, **excluding feature rows AND feature subtasks** (subtasks carry their
-     own `kanban_column` and must not leak into column sweeps). This is §6.
-   - Mixed-column explicit selections are fine: each card enters the appropriate lane from
-     wherever it sits.
-
-3. **Poll status in short turns:** `GET /oversight/status?workspaceRoot=$ROOT` — returns
-   the live pass state: queue remaining (ordered), in-flight card(s) + lane + `cardStage`,
-   `plannerLane` cooldown + ready-at, completed list with durations, halt reason if any.
-   Read it, narrate one line of progress, and yield. **Do not sleep-loop, do not `stat`
-   plan files, do not re-derive lane state** — the extension owns all of that on the
-   `GlobalPlanWatcherService` mtime-advance completion signal.
-
-4. **Two overlapping lanes (encoded in the engine, not prose-enforced):**
-   - **Coding lane — WIP 1, review-gated by default for explicit lists.** One plan
-     end-to-end: coding dispatch → coding completion (first plan-file mtime advance) →
-     advance to `CODE REVIEWED` (reviewer dispatched via the same in-process path) → review
-     completion → next plan. `cardStage` (`coding` | `review`) tracks where the in-flight
-     card sits; do NOT confuse with §7's pass-level `stage`.
-   - **Planner lane — ≥2-minute cooldown, overlaps the coding lane.** Plans whose next
-     stage is planning (e.g. CREATED → PLAN REVIEWED) do not queue behind the coding lane.
-     The cooldown is measured from the previous planner dispatch's **completion signal**,
-     not its dispatch time.
-
-5. **Halt / stop / resume:**
-   - **Halt-on-failure:** any dispatch failure or stuck-timeout halts the WHOLE pass —
-     never re-dispatch, never skip silently, never move a card backward. `status` shows
-     `state: "halted"` + `haltReason`.
-   - **Stop:** `POST /oversight/stop` `{"workspaceRoot": "$ROOT"}` cancels the pass and
-     leaves the board as-is.
-   - **Resume:** if `$ROOT/.switchboard/oversight-state.md` shows an interrupted pass on
-     entry, offer resume-or-refuse — never start a second concurrent loop (the endpoint is
-     a singleton: a second `start` while running returns the in-flight pass).
-
-6. **Hard guardrails:** the engine never arms `/orchestration/start` (that unattended
-   engine is a separate mode), and refuses to start (409) while autoban/orchestration
-   automation is armed on the workspace — disarming is required first.
-
-### Durable pass state + log — the extension is the SOLE writer
-
-During a pass, **the extension is the sole writer of `oversight-state.md` (rewritten per
-state change) and `oversight-log.md` (append-only per event)**. You may **read** them —
-for the §1 resume offer, and for the end-of-pass digest — but you must **never write** them.
-Writing them from the agent side races the extension and corrupts the pass state. The state
-file is deleted only after the final pass-summary log line; on halt it is kept so the §1
-resume offer keeps working. On extension reactivation the engine resumes an in-flight pass
-from the state file without re-dispatching the in-flight card.
-
-### End-of-pass digest — read the cards, don't copy them
-
-The log stays **mechanics-only** (which plans were actioned, outcome, duration). At pass
-end — or whenever the user asks "what happened?" — take the actioned-plan list from
-`status`/the log and **read those plan files' content** (their trailing status / review
-sections), then report the digest: per plan, landing status, key implementation notes,
-remaining risks, and one aggregated **"Open questions across the pass"** list. Substance
-lives in the cards once; the log is just the index of which cards to read.
-
-### 6b. Single-Dispatch Watch (lightweight, session-scoped — NOT an oversight pass)
-
-Invoked by the "Want me to watch until it finishes?" offer after a single dispatch. This is
-NOT a §6/§7 multi-card pass — it is a one-off, session-scoped watch over one plan, and does
-NOT use the `/oversight/*` endpoints (those are for multi-card passes).
-
-On "yes" after a single dispatch:
-1. **Baseline:** capture the plan file's mtime at dispatch (`stat -f %m "$PLAN"`) — comparing
-   epoch mtimes avoids parsing the ISO `dispatchedAt`.
-2. **Poll** with the same mtime-advance signal and shell discipline: blocking sleep-loop
-   chunks (`until [ "$(stat -f %m "$PLAN")" -gt "$BASE_MTIME" ]; do sleep 60; done`), ≤10
-   min per invocation, re-invoked until the mtime advances or the stuck threshold
-   (`switchboard.activityLight.timeoutMs`, default 10 min) is hit.
-3. **On completion (first mtime advance):** read the plan file and report what was actually
-   done — the terminal agent appended its findings/notes to the plan. Summarize for the
-   user: key changes, findings, risks, open questions. Then offer the next step. Shape:
-   ```
-   ✓ Done — "Fix Ghost Plan Duplication" finished coding in 60s, now in Intern.
-
-   **What was done:** Skip-brain-promotion flag added to TaskViewerProvider.ts,
-   disabling the brain backflow across all creation paths. Stale comments cleaned up.
-
-   **Findings:** No major issues. Dead code (_promotePlanToBrain) left deliberately
-   to avoid breaking structural tests.
-
-   Send it to review?
-   ```
-   Read the trailing sections of the plan file and summarize. Do NOT just say "finished" —
-   the user wants to know what happened. Keep it concise but substantive.
-4. **On timeout:** report the stuck card; never re-dispatch, never move it backward.
-5. **Boundary (hard):** this watch is session-scoped. It does **not** create/update
-   `oversight-state.md`, does **not** append to `oversight-log.md`, and does **not** trip
-   the §1 "resume the interrupted pass" prompt. Those belong to the §6/§7 multi-card passes
-   and must stay separate so a single watch never looks like an interrupted pass.
-
----
-
-## 7. Project Pipeline — Manage a Project Start to End
-
-A thin orchestration layer over the §6 oversight pass, for "manage project `<X>` from start
-to end" requests. One `POST /oversight/start` call covers **one stage/lane configuration** —
-you call it once per stage, not once for the whole pipeline.
-
-1. **Resolve scope once:** filter the board to the named project's plans (kanban-state tags
-   / `GET /kanban/plans`); read the project's feature files' `## Dependencies & sequencing`
-   sections to derive plan order; where no ordering is stated, oldest-first within column.
-
-2. **Walk the pipeline stage by stage:** for each pre-terminal stage transition the board
-   defines (e.g. PLAN REVIEWED → coding column → review column), call
-   `POST /oversight/start` with `{"queue": {"planIds": [<project's cards in this stage>]}, "stage": "<stage label>"}`,
-   poll `GET /oversight/status` to completion, produce the stage digest, then start the
-   next stage. Same engine, same completion signal, same halt/stop/resume semantics.
-
-3. **Same state file** (`oversight-state.md` carries the `stage` field from the `start`
-   body); same termination and guardrails. Report a stage summary between stages and, at
-   the end, the same end-of-pass digest per stage plus a project-level rollup (every plan's
-   final status, accumulated risks, and the aggregated open-questions list across all
-   stages).
-
-4. **Judgment boundary:** the manager may choose *order* within the dependency constraints
-   and may pause to flag a plan that looks unready (missing sections, unresolved User Review
-   items) — it may NOT skip stages, batch-dispatch, or reduce plans' scope. Anything
-   ambiguous → stop and ask.
 
 ---
 

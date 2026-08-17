@@ -6,6 +6,7 @@ import { TASKVIEWER_VERBS } from '../generated/verbAllowlist';
 import { validateVerbPayload } from './verbSchemas';
 import {
     applyStandingOrders,
+    stripStandingOrdersBlock,
     STANDING_ORDERS_CONFIG_KEY,
     StandingOrder,
     TerminalGroup,
@@ -39,7 +40,7 @@ import { isPtyAvailable } from '../standalone/ptyBackend';
 // terminal bytes.
 import { PtyFleetService, PTY_IDE_NAME } from '../standalone/ptyFleetService';
 import { instantiateAgentGroupCore, InstantiateAgentGroupResult } from './agentGroupInstantiation';
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, migrateTeamPairOrders, resolveTeamScopedRoleTerminal, plausibleOriginTerminal } from './teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, migrateTeamPairOrders, migrateCodingTeamOrders, resolveTeamScopedRoleTerminal, plausibleOriginTerminal } from './teamWiring';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -47,10 +48,9 @@ import type { JSDOM } from 'jsdom';
 let JSDOMClass: any;
 import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog';
 import { KanbanProvider } from './KanbanProvider';
-import { OversightPassService } from './OversightPassService';
 import type { SetupPanelProvider } from './SetupPanelProvider';
 import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock } from './terminalUtils';
-import { buildFetchPlansPrompt } from './schedulerPresets';
+import { buildFetchPlansPrompt, buildReconcilePrompt } from './schedulerPresets';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
 import {
     CustomAgentConfig,
@@ -73,7 +73,8 @@ import {
     resolveWorkingDir,
     normalizeNewlines,
     PROJECT_LINE_DIRECTIVE,
-    resolveDelegateIdentityForTerminal
+    resolveDelegateIdentityForTerminal,
+    buildSeatDirectiveBlock
 } from './agentPromptBuilder';
 import type { NotionFetchService } from './NotionFetchService';
 let NotionFetchServiceClass: any;
@@ -419,38 +420,110 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return { success: false, error: 'PTY host unavailable on this platform/installation' };
         }
 
-        // Append standing-orders block at the sole extension-host chokepoint. This
-        // covers the HTTP terminals rail, the browser cockpit, and all internal
-        // fleet dispatches, because they all route through _ptyHostVerb.
-        if (verb === 'ptySendPrompt' && payload?.standingOrders !== false && typeof payload?.data === 'string') {
-            try {
-                // Same root the /terminals/standing-orders routes write through
-                // (LocalApiServer._resolveDbForRoot defaults to options.workspaceRoot).
-                // NOT _getWorkspaceRoot(), which follows the board's active workspace
-                // selection and would read a different DB after a workspace switch.
-                const db = await this._getKanbanDb(this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '');
-                const orders = db ? await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []) : [];
-                if (orders.length > 0) {
-                    // Migrate pre-rewrite per-member pair rows into team-scoped
-                    // orders before rendering. Pure transform — no DB writes.
-                    const effectiveOrders = migrateTeamPairOrders(orders);
-                    if (effectiveOrders.length > 0) {
-                        const listed = await this._ptyHostVerb('ptyListTerminals', {});
-                        const live = new Set<string>(
-                            (listed?.terminals || [])
-                                .filter((t: any) => t.status === 'active')
-                                .map((t: any) => t.friendlyName)
-                        );
-                        // Read registered terminal groups for team-scope membership
-                        // resolution. wireSpawnedTeam writes one group per started team
-                        // into terminals.groups; applyStandingOrders uses it to decide
-                        // whether a team-scoped order applies to this terminal.
-                        const groups = db ? await db.getConfigJson<TerminalGroup[]>('terminals.groups', []) : [];
-                        payload = { ...payload, data: applyStandingOrders(payload.data, payload.name, effectiveOrders, live, groups || []) };
+        // Append seat-scoped directive block AND standing-orders block at the
+        // sole extension-host chokepoint. This covers the HTTP terminals rail,
+        // the browser cockpit, and all internal fleet dispatches, because they
+        // all route through _ptyHostVerb.
+        //
+        // Seat block: appended when the prompt was NOT already composed by
+        // agentPromptBuilder (addonsComposed !== true) and the host-only
+        // seat-block opt-out is not set (seatBlock !== false). A safeguard is a
+        // property of the seat, not of the dispatch — it rides every prompt the
+        // seat receives, whoever sent it.
+        //
+        // Standing orders: appended when the caller did not opt out
+        // (standingOrders !== false).
+        //
+        // Ordering (constraint 1): strip inbound SO → append seat block →
+        // applyStandingOrders. The $-anchored STANDING_ORDERS_BLOCK_RE requires
+        // the SO block to be last; inverting the order breaks the strip on the
+        // next send and delivers two SO blocks.
+        //
+        // ptyListTerminals is called ONCE and reused for both the live set
+        // (standing orders) and role resolution (seat block) — do not add a
+        // second list call.
+        if (verb === 'ptySendPrompt' && typeof payload?.data === 'string') {
+            const applySO = payload?.standingOrders !== false;
+            const applySeatBlock = payload?.addonsComposed !== true && payload?.seatBlock !== false;
+            if (applySO || applySeatBlock) {
+                try {
+                    // Same root the /terminals/standing-orders routes write through
+                    // (LocalApiServer._resolveDbForRoot defaults to options.workspaceRoot).
+                    // NOT _getWorkspaceRoot(), which follows the board's active workspace
+                    // selection and would read a different DB after a workspace switch.
+                    const db = await this._getKanbanDb(this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '');
+                    const listed = await this._ptyHostVerb('ptyListTerminals', {});
+                    const terminals = listed?.terminals || [];
+                    const live = new Set<string>(
+                        terminals
+                            .filter((t: any) => t.status === 'active')
+                            .map((t: any) => t.friendlyName)
+                    );
+                    // Role resolution reads BOTH lists. ptyListTerminals returns
+                    // hidden seats in a sibling `hiddenTerminals` array, and a
+                    // hidden seat is a real prompt target: /terminals/relay
+                    // (LocalApiServer._handleTerminalRelay) validates its
+                    // recipient against terminals + hiddenTerminals, and the
+                    // child's `fleet.get(name)` resolves either. Searching only
+                    // `terminals` would deliver to a hidden seat while resolving
+                    // its role to '' — dropping that seat's configured
+                    // safeguards, which is the defect this change exists to fix.
+                    // `live` deliberately stays terminals-only: it is the
+                    // standing-orders membership set and its semantics are
+                    // unchanged by this plan.
+                    const roleRows = [
+                        ...terminals,
+                        ...(Array.isArray(listed?.hiddenTerminals) ? listed.hiddenTerminals : [])
+                    ];
+                    let data = payload.data;
+
+                    // Seat block — resolve role from the terminal record, build
+                    // the block from the shared resolver, and append it AFTER
+                    // stripping any inbound SO block. An unresolved role (empty
+                    // string, unknown name) falls back to workspace defaults
+                    // (guardrail ON) — never an empty block.
+                    if (applySeatBlock) {
+                        try {
+                            const targetRow = roleRows.find((t: any) => t.friendlyName === payload.name);
+                            const role = targetRow?.role || '';
+                            const seatOpts = this._kanbanProvider
+                                ? await this._kanbanProvider.resolveSeatPromptOptions(role)
+                                : null;
+                            const seatBlock = seatOpts ? buildSeatDirectiveBlock(seatOpts) : '';
+                            if (seatBlock) {
+                                data = stripStandingOrdersBlock(data) + '\n\n' + seatBlock;
+                            }
+                        } catch (err) {
+                            console.warn('[TaskViewerProvider] Seat directive block append failed:', err);
+                        }
                     }
+
+                    // Standing orders — apply AFTER the seat block so the SO
+                    // block is last (constraint 1). applyStandingOrders strips
+                    // internally (no-op when the seat block already stripped).
+                    if (applySO) {
+                        const orders = db ? await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []) : [];
+                        if (orders.length > 0) {
+                            // Migrate pre-rewrite per-member pair rows into team-scoped
+                            // orders, then migrate stale Coding-team orders, before
+                            // rendering. Pure transforms — no DB writes. Pair-fold
+                            // first, then Coding-team rewrite.
+                            const effectiveOrders = migrateCodingTeamOrders(migrateTeamPairOrders(orders));
+                            if (effectiveOrders.length > 0) {
+                                // Read registered terminal groups for team-scope membership
+                                // resolution. wireSpawnedTeam writes one group per started team
+                                // into terminals.groups; applyStandingOrders uses it to decide
+                                // whether a team-scoped order applies to this terminal.
+                                const groups = db ? await db.getConfigJson<TerminalGroup[]>('terminals.groups', []) : [];
+                                data = applyStandingOrders(data, payload.name, effectiveOrders, live, groups || []);
+                            }
+                        }
+                    }
+
+                    payload = { ...payload, data };
+                } catch (err) {
+                    console.warn('[TaskViewerProvider] Standing-orders / seat-block append failed:', err);
                 }
-            } catch (err) {
-                console.warn('[TaskViewerProvider] Standing-orders append failed:', err);
             }
         }
 
@@ -582,9 +655,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (t.exitStatus === undefined) { live.add(t.name); }
             }
             const groups = await db.getConfigJson<TerminalGroup[]>('terminals.groups', []);
-            // Migrate pre-rewrite per-member pair rows into team-scoped orders
-            // before rendering. Pure transform — no DB writes.
-            const effectiveOrders = migrateTeamPairOrders(orders);
+            // Migrate pre-rewrite per-member pair rows into team-scoped orders,
+            // then migrate stale Coding-team orders, before rendering. Pure
+            // transforms — no DB writes. Pair-fold first, then Coding-team
+            // rewrite.
+            const effectiveOrders = migrateCodingTeamOrders(migrateTeamPairOrders(orders));
             return { orders: effectiveOrders, liveNames: live, groups: groups || [] };
         } catch {
             return false;
@@ -836,6 +911,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _autobanState: AutobanConfigState = normalizeAutobanConfigState();
     private _singleColumnAutobanState: SingleColumnAutobanConfig = DEFAULT_SINGLE_COLUMN_CONFIG;
     private _migratedBoardBatchNotice: string | undefined;
+    private _droppedCustomJobsNotice: string | undefined;
     private _postAutobanStateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private _activeDispatchSessions = new Map<string, string>();
     // Cards autoban has dispatched and not yet heard back about: a
@@ -865,20 +941,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
     // Safety-net sweep: checks every 60s whether source columns are empty and stops autoban if so.
     private _autobanEmptyColumnSweepTimer?: NodeJS.Timeout;
-    // ─── Scheduler engine (per-job, terminal-agnostic) ──────────────────────
-    // Keyed by jobId so N local-terminal jobs can run concurrently.
-    private _schedulerTimers = new Map<string, NodeJS.Timeout>();
-    private _schedulerFirstPromptTimers = new Map<string, NodeJS.Timeout>();
-    private _schedulerConfigChangeTimers = new Map<string, NodeJS.Timeout>();
-    private _schedulerOutputWatchers = new Map<string, vscode.FileSystemWatcher>();
-    private _schedulerOutputFallbackTimers = new Map<string, NodeJS.Timeout>();
-    private _schedulerTickQueues = new Map<string, Promise<void>>();
-    private _schedulerLastSendAt = new Map<string, number>();
+    // ─── Survivor scheduler state (run-sheet tick) ─────────────────────────
+    // The per-job timer engine is deleted; this one map is all that the survivor
+    // tick needs. _schedulerInFlight guards against re-sending a long-running
+    // fetch-plans (or spawning a second terminal for it) on the next run-sheet tick.
     private _schedulerInFlight = new Map<string, boolean>();
-    // Single source of truth for closed-terminal → job resolution. Maintained
-    // at launch/stop. The closed-terminal handler reads this index instead of
-    // string-matching the terminal name, so it stops the right job's loop.
-    private _schedulerTerminalToJobId = new Map<string, string>();
     // Dedupe key set: tracks recently processed mirror events (sessionId+stablePath) to prevent watcher churn re-processing
     private _recentMirrorProcessed = new Map<string, NodeJS.Timeout>();
     // Persisted workspace blacklist: stable-path keys of brain plans present during setup.
@@ -916,10 +983,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _linearServices: Map<string, LinearSyncService> = new Map();
     private _notionContentCache: Map<string, string | null> = new Map();
     private _localApiServer: LocalApiServer | null = null;
-    // In-extension attended oversight-pass engine (POST /oversight/*). Created
-    // eagerly in the constructor (before the async API-server start) so the
-    // watcher can be attached in either order.
-    private _oversightPass: OversightPassService | null = null;
     // Phone-a-Friend dispatch serialization guard — a single in-flight promise that
     // prevents interleaved /clear + prompt sequences when multiple POSTs arrive
     // near-simultaneously at batch end. Keyed on the resolved target terminal.
@@ -1040,43 +1103,21 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._migratedBoardBatchNotice = `Board-batch job migrated: run-sheet interval set to ${migratedInterval} min. Automation is off until you start it.`;
         }
 
+        // One-time notice for dropped `custom` scheduler jobs. Reads the raw
+        // config (bypassing the DROPPED_SOURCES filter) so the labels are
+        // visible. Latches behind a workspaceState flag so it shows on exactly
+        // one activation — the same pattern boardBatch.migrated uses.
+        const alreadyNoticedCustom = this._context.workspaceState.get<boolean>('customJobs.dropped') === true;
+        if (!alreadyNoticedCustom) {
+            const droppedLabels = GlobalIntegrationConfigService.getDroppedCustomJobLabels();
+            if (droppedLabels.length > 0) {
+                this._droppedCustomJobsNotice = `Custom scheduler job${droppedLabels.length > 1 ? 's' : ''} stopped: ${droppedLabels.join(', ')}. The job record${droppedLabels.length > 1 ? 's are' : ' is'} preserved in integration-config.json but no longer run — the scheduler surface has been retired.`;
+            }
+            void this._context.workspaceState.update('customJobs.dropped', true);
+        }
+
         // Ensure pair programming defaults to OFF on load regardless of previous session state
         this._autobanState.pairProgrammingMode = 'off';
-
-        // Oversight-pass engine — created before the API server so the /oversight/*
-        // callbacks and the watcher attach (extension.ts) can land in either order.
-        // The dispatch dep is the SAME internal code path POST /kanban/dispatch
-        // uses (performKanbanDispatch), called in-process — never over HTTP.
-        this._oversightPass = new OversightPassService({
-            dispatch: async (wsRoot, planRef, targetColumn, options) => {
-                if (!this._localApiServer) {
-                    return { status: 503, payload: { success: false, error: 'Local API server not started' } };
-                }
-                return this._localApiServer.performKanbanDispatch(wsRoot, planRef, targetColumn, options);
-            },
-            countEligibleTerminals: async (wsRoot, role) => {
-                if (role === 'planner') {
-                    // Count the SAME set getUnattendedPlannerTerminal draws from, or
-                    // the lane clamps itself against terminals it will never select.
-                    const hidden = this.getUnattendedImproverTerminals();
-                    if (hidden.length > 0) { return hidden.length; }
-                }
-                const { terminals } = await this.getRoleTerminalSet(role, wsRoot);
-                return terminals.length;
-            },
-            resolvePlannerTerminal: async () => this.getUnattendedPlannerTerminal(),
-            getKanbanDatabase: async (wsRoot) => this._getKanbanDb(wsRoot),
-            resolveDispatchRole: async (wsRoot, targetColumn) => {
-                if (!this._kanbanProvider) return { role: null };
-                const gate = await this._kanbanProvider.resolveDispatchForApi(wsRoot, targetColumn);
-                return { role: gate.role };
-            },
-            // Autoban and an attended pass both dispatch cards — never run both.
-            // Oversight (orchestrationConfig.enabled) also dispatches, so it arms
-            // the guard too — arming oversight no longer sets autobanState.enabled,
-            // so without this OR the 409 stops firing and two engines double-dispatch.
-            isAutomationArmed: () => this._autobanState.enabled === true || this._autobanState.orchestrationConfig?.enabled === true
-        });
 
     }
 
@@ -1110,8 +1151,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._autobanState.aggressivePairProgramming = hasNew ? switchboardConfig.get<boolean>('pairProgramming.aggressive', false) : switchboardConfig.get<boolean>('aggressivePairProgramming.enabled', false);
 
         // Order below is the constructor's original order, preserved verbatim —
-        // the watchers resolve a workspace root, and _startLocalApiServer reads
-        // the _oversightPass built in the constructor.
+        // the watchers resolve a workspace root.
         this._setupStateWatcher();
         this._setupPlanWatcher();
         this._setupMemoWatcher();
@@ -1125,7 +1165,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Start local API server for agent access
         void this._startLocalApiServer();
         void this._validateNoSwitchboardPollution();
-        void this._startAllSchedulerLoops();
 
         this._initEventHandlers();
     }
@@ -1135,25 +1174,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Returns true when an oversight agent is armed (orchestrationConfig.enabled).
+     * Returns true when the orchestrator is armed (agent-managed mode + enabled).
      * This is the single source of truth for "is an orchestrator supervising" —
-     * it is NOT a mode comparison. Callers that previously checked
-     * `getAutomationMode() === 'orchestration'` should use this instead.
+     * it is NOT a mode comparison alone. The name is preserved for callers; the
+     * implementation reads the mode and the armed flag, not a deleted config field.
      */
     public isOversightAgentRunning(): boolean {
-        return this._autobanState.orchestrationConfig?.enabled === true;
-    }
-
-    /**
-     * Wire the oversight-pass engine to the plan watcher's native completion
-     * signal (plan-file mtime advance — the activity-light OFF-switch) and
-     * resume any pass interrupted by an extension reload. Called from
-     * extension.ts once the GlobalPlanWatcherService exists.
-     */
-    public attachOversightWatcher(watcher: GlobalPlanWatcherService): void {
-        if (!this._oversightPass) return;
-        this._oversightPass.attachWatcher(watcher);
-        void this._oversightPass.resumeFromDisk(this._filterMappedRoots(this._getWorkspaceRoots()));
+        return this._autobanState.automationMode === 'agent-managed' && this._autobanState.enabled;
     }
 
     /**
@@ -1318,6 +1345,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     data: message,
                     clearBeforePrompt: false,
                     standingOrders: false,
+                    // Host-only opt-out: a one-line machine notice has no task
+                    // to constrain, so the seat block is noise. Stripped at the
+                    // HTTP boundary; an HTTP caller cannot set this.
+                    seatBlock: false,
                 });
                 if (sendRes?.success === false) {
                     console.warn(`[TaskViewerProvider] turn-end delivery to '${recipientName}' failed: ${sendRes.error || 'unknown error'} (seat '${seatName}', ${info.outcome} on ${planFile}).`);
@@ -1364,7 +1395,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Never restart a stopped or paused engine.
         if (!this._autobanState.enabled || this._autobanState.paused) { return; }
         // Only single-column mode uses completion-driven dispatch.
-        if (this._autobanState.automationMode !== 'internal') { return; }
+        if (this._autobanState.automationMode !== 'scheduled') { return; }
 
         const key = this._autobanPlanFileKey(info.planFile, info.workspaceRoot);
         const entry = key ? this._autobanDispatchedPlanFiles.get(key) : undefined;
@@ -1859,7 +1890,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         ['switchboard.agents.customAgents', 'customAgents'],
         ['switchboard.kanban.customColumns', 'customKanbanColumns'],
         ['switchboard.agents.promptOverrides', 'defaultPromptOverrides'],
-        ['switchboard.kanban.autoCommitOnCodeReview', 'autoCommitOnCodeReview'],
         ['switchboard.agents.julesAutoSyncEnabled', 'julesAutoSyncEnabled'],
         ['switchboard.agents.plannerTerminalCount', 'plannerTerminalCount'],
         ['switchboard.agents.plannerLimitDispatchToTerminals', 'plannerLimitDispatchToTerminals'],
@@ -2826,6 +2856,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         clearBeforePromptDelayMs: payload.clearBeforePromptDelayMs ?? resolvePtyClearDelay(vscode.workspace.getConfiguration('switchboard'))
                     };
                 }
+                // Strip host-only fields a caller must not set. `addonsComposed`
+                // tells the delivery layer the prompt was already composed by
+                // agentPromptBuilder — if a caller could set it, any agent could
+                // opt a seat out of its own safety block, converting the fix
+                // into a bypass. `seatBlock` is the host-only opt-out for
+                // machine-origin notices (turn-end). Both are stripped here at
+                // the HTTP boundary, exactly like `clearBeforePromptFromConfig`
+                // above. Internal senders that go directly to _ptyHostVerb
+                // (notifyTurnEnd, _attemptDirectTerminalPush) bypass this strip
+                // — which is the point: only the host sets them.
+                if (payload.addonsComposed !== undefined) { delete payload.addonsComposed; }
+                if (payload.seatBlock !== undefined) { delete payload.seatBlock; }
             }
             const result = await this._ptyHostVerb(verb, payload, signal);
             if (['ptyCreateTerminal', 'ptyCreateBatch', 'ptyCloseTerminal', 'ptyRenameTerminal'].includes(verb)) {
@@ -3344,23 +3386,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             orchestrationStop: async () => {
                 await this.stopOrchestratorFromKanban();
             },
-            oversightStart: async (body) => {
-                if (!this._oversightPass) {
-                    return { status: 503, body: { success: false, error: 'Oversight pass engine not available' } };
-                }
-                return this._oversightPass.start(body);
-            },
-            oversightStatus: (wsRoot) => {
-                if (!this._oversightPass) {
-                    return { status: 503, body: { success: false, error: 'Oversight pass engine not available' } };
-                }
-                return this._oversightPass.status(wsRoot);
-            },
-            oversightStop: async (body) => {
-                if (!this._oversightPass) {
-                    return { status: 503, body: { success: false, error: 'Oversight pass engine not available' } };
-                }
-                return this._oversightPass.stop(body);
+            orchestrationConfirm: async (wsRoot) => {
+                // POST /orchestration/confirm — the only path that arms. Called by the
+                // orchestrator agent after the user answers the pre-flight and writes
+                // .switchboard/orchestrator/session.md.
+                return await this.confirmOrchestrationSession(wsRoot);
             },
             catalogProvider: async () => {
                 const candidates = [
@@ -6425,7 +6455,7 @@ Each plan file must include:
                 const sent = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, group.targetAgent, finalPrompt, {
                     batch: true,
                     sessionIds: group.plans.map(p => p.sessionId || p.planId || '').filter(Boolean)
-                }, 'sidebar');
+                }, 'sidebar', true);
                 if (!sent) {
                     throw new Error(`Could not deliver prompt to '${group.targetAgent}'`);
                 }
@@ -6584,10 +6614,9 @@ Each plan file must include:
      * existed — and since batch improvers are named `improver_*`, that fallback WAS
      * the live path, so a hidden coder seat could be handed an improve prompt.
      *
-     * `getUnattendedPlannerTerminal` and the oversight `countEligibleTerminals` dep
-     * must share this predicate: a clamp computed over a different set than the
-     * picker draws from means the lane sizes itself against terminals it will never
-     * select.
+     * `getUnattendedPlannerTerminal` draws from exactly this set. Any future
+     * clamp must share this predicate: a count computed over a different set than
+     * the picker draws from sizes itself against terminals it will never select.
      */
     public getUnattendedImproverTerminals(): string[] {
         return this._ptyHiddenTerminalNames.filter(name => {
@@ -6866,52 +6895,13 @@ Each plan file must include:
         commands: Record<string, string>;
         planIngestionFolder: string;
         visibleAgents: Record<string, boolean>;
-        autoCommitOnCodeReview: boolean;
     }> {
-        const [commands, planIngestionFolder, visibleAgents, autoCommitOnCodeReview] = await Promise.all([
+        const [commands, planIngestionFolder, visibleAgents] = await Promise.all([
             this.getStartupCommands(workspaceRoot),
             this.getPlanIngestionFolder(workspaceRoot),
-            this.getVisibleAgents(workspaceRoot),
-            this.handleGetAutoCommitOnCodeReviewSetting(workspaceRoot)
+            this.getVisibleAgents(workspaceRoot)
         ]);
-        return { commands, planIngestionFolder, visibleAgents, autoCommitOnCodeReview };
-    }
-
-    public async handleGetAutoCommitOnCodeReviewSetting(workspaceRoot?: string): Promise<boolean> {
-        const globalValue = this._context.globalState.get<boolean>('switchboard.kanban.autoCommitOnCodeReview');
-        if (globalValue !== undefined) {
-            return globalValue;
-        }
-
-        const statePath = this._resolveStateFilePath(workspaceRoot);
-        if (!statePath) return false;
-        try {
-            const content = await fs.promises.readFile(statePath, 'utf8');
-            const state = JSON.parse(content);
-            // Off by default: only an explicit `true` enables auto-commit.
-            return state.autoCommitOnCodeReview === true;
-        } catch {
-            return false;
-        }
-    }
-
-    public async autoCommitForCodeReview(workspaceRoot: string, planTopic: string): Promise<void> {
-        const execFileAsync = promisify(cp.execFile);
-        try {
-            // git status --porcelain detects all change types and always exits 0
-            const { stdout } = await execFileAsync('git', ['status', '--porcelain'], { cwd: workspaceRoot });
-            if (!stdout.trim()) {
-                console.log('[TaskViewerProvider] Working tree clean — skipping auto-commit for code review');
-                return;
-            }
-            await execFileAsync('git', ['add', '-A'], { cwd: workspaceRoot });
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-            const safeTopic = planTopic.replace(/"/g, '').substring(0, 80);
-            await execFileAsync('git', ['commit', '-m', `switchboard: auto-commit before code review (${safeTopic}, ${timestamp})`], { cwd: workspaceRoot });
-            console.log(`[TaskViewerProvider] Auto-committed before code review for: ${safeTopic}`);
-        } catch (e: any) {
-            console.warn(`[TaskViewerProvider] Auto-commit before code review failed (non-fatal): ${e.message}`);
-        }
+        return { commands, planIngestionFolder, visibleAgents };
     }
 
     public handleGetAccurateCodingSetting(): boolean {
@@ -9569,7 +9559,7 @@ Each plan file must include:
     }
 
     private async _persistAutobanState(): Promise<void> {
-        if (this._autobanState.automationMode === 'internal') {
+        if (this._autobanState.automationMode === 'scheduled') {
             this._singleColumnAutobanState.enabled = this._autobanState.enabled;
             this._singleColumnAutobanState.batchSize = this._autobanState.batchSize;
             this._singleColumnAutobanState.complexityFilter = this._autobanState.complexityFilter;
@@ -9837,7 +9827,7 @@ Each plan file must include:
     }
 
     private _getEnabledAutobanSourceColumns(): string[] {
-        if (this._autobanState.automationMode === 'internal') {
+        if (this._autobanState.automationMode === 'scheduled') {
             // Every run-sheet column counts. Returning only PLAN REVIEWED would
             // auto-stop the engine the moment that column drained, stranding cards
             // still sitting in CREATED that the planner step is there to pick up.
@@ -9938,10 +9928,10 @@ Each plan file must include:
         if (!this._autobanState.enabled) {
             return false;
         }
-        // An oversight agent is still working the board (grouping plans,
+        // An orchestrator is still working the board (grouping plans,
         // handling judgement transitions), so an empty column is not a stop
         // condition while one is armed. The user stops it via the toggle.
-        if (this._autobanState.orchestrationConfig?.enabled === true) {
+        if (this.isOversightAgentRunning()) {
             return false;
         }
         if (this._hasActiveWatchColumn()) {
@@ -10108,7 +10098,8 @@ Each plan file must include:
         return buildAutobanBroadcastState({
             ...this._autobanState,
             singleColumnConfig: this._singleColumnAutobanState,
-            migratedBoardBatchNotice: this._migratedBoardBatchNotice
+            migratedBoardBatchNotice: this._migratedBoardBatchNotice,
+            droppedCustomJobsNotice: this._droppedCustomJobsNotice
         }, this._autobanLastTickAt.entries());
     }
 
@@ -10173,7 +10164,7 @@ Each plan file must include:
             await this._pruneStaleBackupRegistry(workspaceRoot);
         }
         // External mode runs no clock. A persisted `enabled: true` left over
-        // from a prior internal-mode session must not broadcast "running" with
+        // from a prior scheduled-mode session must not broadcast "running" with
         // no engine ticking behind it — force the flag false before the panel
         // sees it.
         if (this._autobanState.automationMode === 'external' && this._autobanState.enabled) {
@@ -10197,6 +10188,17 @@ Each plan file must include:
             this._stopAutobanEngine();
             await this._persistAutobanState();
             this._postAutobanStateNow();
+            return;
+        }
+
+        // Agent-managed mode: the orchestrator IS the automation. The ON/OFF
+        // toggle starts/stops the orchestrator, not the run-sheet engine.
+        if (this._autobanState.automationMode === 'agent-managed') {
+            if (enabled) {
+                await this.startOrchestratorFromKanban(undefined);
+            } else {
+                await this.stopOrchestratorFromKanban(undefined);
+            }
             return;
         }
 
@@ -10354,27 +10356,51 @@ Each plan file must include:
         }
 
         // Inject the kickoff prompt. The persona workflow (.agents/skills/switchboard-orchestrator/SKILL.md)
-        // encodes the full Kickoff Protocol; this prompt points the agent at it and injects
-        // the runtime context (UNATTENDED flag, workspace root, active project filter, and
-        // the fan-out endpoint). The dispatch path uses sendRobustText (clipboard-paste for
-        // long payloads).
+        // encodes the full pre-flight + Kickoff Protocol; this prompt points the agent at it and injects
+        // the runtime context (UNATTENDED flag, workspace root, active project filter). The dispatch
+        // path uses sendRobustText (clipboard-paste for long payloads).
+        //
+        // Start no longer arms. It seats the orchestrator and delivers one of three
+        // prompts chosen by two facts: does .switchboard/orchestrator/session.md exist,
+        // and is orchestrationConfig.enabled true? The arming half moved to
+        // confirmOrchestrationSession (called by POST /orchestration/confirm after the
+        // user answers the pre-flight). See the ## Pre-flight section of the persona skill.
         const personaPath = path.join(root, '.agents', 'skills', 'switchboard-orchestrator', 'SKILL.md');
         let projectFilter = '';
         try {
             projectFilter = (await this._kanbanProvider?.resolveAuthoringProject(root, initiatorProject)) || '';
         } catch { /* best-effort */ }
+        const sessionPath = path.join(root, '.switchboard', 'orchestrator', 'session.md');
+        let sessionExists = false;
+        try { await fs.promises.access(sessionPath); sessionExists = true; } catch { /* absent */ }
+        const armed = this._autobanState?.enabled === true;
         let kickoffPrompt: string;
         try {
             await fs.promises.access(personaPath);
-            kickoffPrompt = [
+            const baseLines = [
                 `You are the Switchboard orchestrator. Read and follow .agents/skills/switchboard-orchestrator/SKILL.md now.`,
                 ``,
                 `UNATTENDED=true`,
                 `WORKSPACE_ROOT=${root}`,
                 `ACTIVE_PROJECT_FILTER=${projectFilter || ''}`,
-                ``,
-                `Read the board, group plans into features, message the team leads that already exist via ptySendPrompt (clearBeforePrompt:false) and ask them to report back when done. Handle what comes back — including [switchboard:turn-end] notices for leads that went quiet. Move cards only via move-card.js or POST /kanban/move.`
-            ].join('\n');
+                ``
+            ];
+            // Three-way branch: pre-flight (no session), resume (session + armed),
+            // pre-flight-with-stale-session (session but disarmed). The persona skill's
+            // ## Pre-flight section owns the protocol for each mode.
+            if (!sessionExists) {
+                kickoffPrompt = baseLines.concat([
+                    `This is a fresh start — no session file exists. Run the pre-flight: the six checks in ## Pre-flight, report what you find, propose a goal for this session, and STOP. Do not begin ticking. The user will answer in this terminal; on their confirmation, write .switchboard/orchestrator/session.md (Rules then Log) and call POST /orchestration/confirm — only then begin.`
+                ]).join('\n');
+            } else if (armed) {
+                kickoffPrompt = baseLines.concat([
+                    `A session is already confirmed and armed — .switchboard/orchestrator/session.md exists and orchestrationConfig.enabled is true. Resume: read session.md, continue under its existing rules, do not re-run the pre-flight or re-interview. Pick up where the session left off.`
+                ]).join('\n');
+            } else {
+                kickoffPrompt = baseLines.concat([
+                    `A stale session file exists at .switchboard/orchestrator/session.md but orchestration is not armed. Run the pre-flight (## Pre-flight, the six checks), tell the user a stale session file exists, and offer to reuse its goal. On confirmation, write session.md (overwrite the stale one if the user accepts it, or write a fresh one if they alter the goal) and call POST /orchestration/confirm — only then begin.`
+                ]).join('\n');
+            }
         } catch {
             kickoffPrompt = `You are the Switchboard orchestrator. The orchestrator workflow is not yet installed (.agents/skills/switchboard-orchestrator/SKILL.md). Stand by — do not take autonomous action.`;
         }
@@ -10394,52 +10420,117 @@ Each plan file must include:
             return;
         }
 
-        // Arm the oversight session. The orchestrator is an ordinary agent with
-        // a skill — no wake timer, no polling. It reads the board and messages
-        // leads; the turn-end notifier backstops a lead that goes quiet without
-        // reporting. Arming oversight does NOT set autobanState.enabled or change
-        // automationMode — the run sheet and the oversight agent are independent.
+        // Start no longer arms here. The arming block (stop the run-sheet engine,
+        // flip enabled=true + automationMode='agent-managed', persist, broadcast)
+        // moved to confirmOrchestrationSession, called by POST /orchestration/confirm
+        // after the user answers the pre-flight. A seated-but-unconfirmed orchestrator
+        // leaves enabled false and the topology untouched — the interview is a clean
+        // no-op if the user closes the terminal.
+        this.postMessage({ type: 'orchestratorStartResult', success: true });
+    }
+
+    /**
+     * The arming half of Start, callable over HTTP. Called by
+     * `POST /orchestration/confirm` after the orchestrator agent has run the
+     * pre-flight, the user has answered in the terminal, and the agent has
+     * written `.switchboard/orchestrator/session.md` (Rules then Log).
+     *
+     * Verifies the session file exists, then runs the arming block moved
+     * verbatim out of startOrchestratorFromKanban: stop the run-sheet engine,
+     * flip `enabled=true` + `automationMode='agent-managed'`, persist,
+     * broadcast. Idempotent on a second call — relies on the existing
+     * double-enter behaviour of the arming calls rather than adding a new guard.
+     *
+     * Returns `{ success: true, sessionFile }` on success, or
+     * `{ success: false, error }` when `session.md` is absent so an agent that
+     * forgot to write it learns immediately instead of arming a session with
+     * no rules.
+     */
+    public async confirmOrchestrationSession(workspaceRoot?: string): Promise<{ success: boolean; sessionFile?: string; error?: string }> {
+        const root = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!root) {
+            return { success: false, error: 'no workspace folder found — cannot confirm orchestration session' };
+        }
+        const sessionPath = path.join(root, '.switchboard', 'orchestrator', 'session.md');
+        try {
+            await fs.promises.access(sessionPath);
+        } catch {
+            return { success: false, error: 'no session file — write .switchboard/orchestrator/session.md before confirming' };
+        }
+
+        // Arming block moved verbatim from startOrchestratorFromKanban. The
+        // run-sheet engine is torn down BEFORE the mode flips so a `scheduled`
+        // run sheet cannot survive the transition to `agent-managed` — two
+        // clocks dispatching the same board is the hazard the exclusive-mode
+        // model exists to remove. This ordering must survive the split.
+        this._stopAutobanEngine();
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
-            orchestrationConfig: { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig, enabled: true }
+            enabled: true,
+            automationMode: 'agent-managed'
         });
         await this._persistAutobanState();
         this._postAutobanStateNow();
-        // Topology switch rides the actual arming transition — after every early
-        // return above — so a failed kickoff never leaves per-feature switched on
-        // with a stashed prior and nothing to restore it. HTTP callers reach this
-        // path too (POST /orchestration/start calls this method directly).
-        await this._kanbanProvider?.applyOversightWorktreeTopology(root, true);
+        return { success: true, sessionFile: sessionPath };
     }
 
     /**
      * Called by the Kanban AUTOMATION tab (Stop orchestrator) or
-     * POST /orchestration/stop. Disarms the oversight session only — does NOT
-     * stop the autoban engine or set autobanState.enabled. Does NOT dispose the
-     * terminal — a running agent may hold uncommitted context; killing it is
-     * the user's call via the terminal UI. Restores the prior worktree topology
-     * via the kanban provider.
+     * POST /orchestration/stop. Disarms the automation — sets the single
+     * ON/OFF flag to false. Does NOT dispose the terminal — a running agent
+     * may hold uncommitted context; killing it is the user's call via the
+     * terminal UI.
+     *
+     * Also archives `.switchboard/orchestrator/session.md` to
+     * `.switchboard/orchestrator/sessions/session-<ISO>.md` so the next Start
+     * interviews from scratch. Best-effort: a rename failure logs and disarm
+     * still completes. Without this, the next Start reads a stale session file
+     * and never re-interviews.
      */
     public async stopOrchestratorFromKanban(workspaceRoot?: string): Promise<void> {
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
-            orchestrationConfig: { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig, enabled: false }
+            enabled: false
         });
         await this._persistAutobanState();
         this._postAutobanStateNow();
-        // Restore the user's prior worktree topology. Resolves the root the same
-        // way startOrchestratorFromKanban does so both halves agree. The verb arm
-        // passes msg.workspaceRoot through; HTTP callers pass nothing and fall
-        // back to the provider's default resolution.
+
+        // Best-effort archive of the session file. A missing file is a no-op
+        // (Stop during an interview never wrote one). A name collision on the
+        // ISO second gets a counter suffix rather than overwriting an archived
+        // session.
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (root) {
-            await this._kanbanProvider?.applyOversightWorktreeTopology(root, false);
+            const sessionPath = path.join(root, '.switchboard', 'orchestrator', 'session.md');
+            try {
+                await fs.promises.access(sessionPath);
+                const sessionsDir = path.join(root, '.switchboard', 'orchestrator', 'sessions');
+                await fs.promises.mkdir(sessionsDir, { recursive: true });
+                const iso = new Date().toISOString().replace(/[:.]/g, '-');
+                let archivePath = path.join(sessionsDir, `session-${iso}.md`);
+                let counter = 1;
+                while (true) {
+                    try {
+                        await fs.promises.access(archivePath);
+                        // Collision — append a counter suffix instead of overwriting.
+                        archivePath = path.join(sessionsDir, `session-${iso}-${counter}.md`);
+                        counter++;
+                        continue;
+                    } catch {
+                        break; // name is free
+                    }
+                }
+                await fs.promises.rename(sessionPath, archivePath);
+            } catch (err) {
+                // session.md absent (no-op) or rename failure — log and continue.
+                console.warn('[TaskViewerProvider] stopOrchestratorFromKanban: session archive skipped:', err instanceof Error ? err.message : err);
+            }
         }
     }
 
     public async setAutomationModeFromKanban(msg: any): Promise<void> {
         const newMode = msg.mode;
-        if (!['internal', 'external'].includes(newMode)) return;
+        if (!['agent-managed', 'scheduled', 'external'].includes(newMode)) return;
 
         const wasEnabled = this._autobanState.enabled;
 
@@ -10448,7 +10539,7 @@ Each plan file must include:
             this._stopAutobanEngine();
         }
 
-        if (newMode === 'internal') {
+        if (newMode === 'scheduled') {
             const enabled = msg.enabled === undefined ? this._singleColumnAutobanState.enabled : !!msg.enabled;
             const intervalMinutes = msg.intervalMinutes || this._singleColumnAutobanState.intervalMinutes || 10;
             const batchSize = msg.batchSize || this._singleColumnAutobanState.batchSize || 1;
@@ -10472,7 +10563,7 @@ Each plan file must include:
             this._autobanState = normalizeAutobanConfigState({
                 ...this._autobanState,
                 enabled,
-                automationMode: 'internal',
+                automationMode: 'scheduled',
                 rules: singleColumnSyntheticRules,
                 batchSize,
                 complexityFilter,
@@ -10483,27 +10574,30 @@ Each plan file must include:
             if (enabled) {
                 this._startAutobanEngine();
             }
+        } else if (newMode === 'agent-managed') {
+            // Agent-managed: the orchestrator is the automation. The wake interval
+            // lives on orchestrationConfig.intervalMinutes. The mode carries the
+            // whole signal — no separate enabled flag. The engine is not started
+            // here; the ON/OFF toggle starts/stops the orchestrator.
+            const enabled = msg.enabled === undefined ? this._autobanState.enabled : !!msg.enabled;
+            const intervalMinutes = msg.intervalMinutes || this._autobanState.orchestrationConfig?.intervalMinutes || 10;
+            this._autobanState = normalizeAutobanConfigState({
+                ...this._autobanState,
+                enabled,
+                automationMode: 'agent-managed',
+                orchestrationConfig: { intervalMinutes }
+            });
         } else {
-            // external — Switchboard emits a prompt and runs no clock. Oversight
-            // is independent of the mode, so orchestrationConfig carries through
-            // untouched: switching automation modes must not disarm an armed
-            // oversight agent. enabled is forced false and the engine is stopped
-            // so no surviving timer can re-arm behind the transition.
+            // external — Switchboard emits a prompt and runs no clock. enabled is
+            // forced false and the engine is stopped so no surviving timer can
+            // re-arm behind the transition.
             this._autobanState = normalizeAutobanConfigState({
                 ...this._autobanState,
                 enabled: false,
-                automationMode: newMode,
-                orchestrationConfig: { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig }
+                automationMode: newMode
             });
             this._stopAutobanEngine();
         }
-
-        // Re-run scheduler loops on every mode transition so switching back to
-        // internal re-arms local-terminal jobs, and switching to external tears
-        // them down (the loop starter skips local-terminal jobs in external mode,
-        // and the sweep stops any already-running loop for free). Await so the
-        // teardown completes before the state is persisted.
-        await this._startAllSchedulerLoops();
 
         await this._persistAutobanState();
         this._postAutobanStateNow();
@@ -10549,7 +10643,7 @@ Each plan file must include:
         this._singleColumnAutobanState = { ...this._singleColumnAutobanState, whenSchedule: validated };
         void this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
         // Restart the engine if enabled so the new schedule takes effect.
-        if (this._autobanState.enabled && this._autobanState.automationMode === 'internal') {
+        if (this._autobanState.enabled && this._autobanState.automationMode === 'scheduled') {
             this._startAutobanEngine();
         }
         this._postAutobanStateNow();
@@ -10751,13 +10845,13 @@ Each plan file must include:
     /** Called by Kanban reset-timer button to restart countdown intervals and fire an immediate tick. */
     public async resetAutobanTimersFromKanban(): Promise<void> {
         if (!this._autobanState.enabled) { return; }
-        // External mode runs no clock. This path installs its own setInterval
-        // without going through _startAutobanEngine, so the engine gate alone
-        // does not cover it. The !enabled guard above is NOT cover: the engine
-        // gate leaves enabled === true, so enable → external → reset-timers
-        // would install a live clock without this.
-        if (this._autobanState.automationMode === 'external') {
-            console.log('[Autoban] Timer reset refused — external mode runs no clock.');
+        // The run sheet is SCHEDULED mode's clock. This path installs its own
+        // setInterval without going through _startAutobanEngine, so the engine
+        // gate alone does not cover it. The !enabled guard above is NOT cover:
+        // in agent-managed, `enabled` means "orchestrator armed", so it is
+        // legitimately true while no run sheet may tick.
+        if (this._autobanState.automationMode !== 'scheduled') {
+            console.log(`[Autoban] Timer reset refused — ${this._autobanState.automationMode} mode does not run the run sheet.`);
             return;
         }
 
@@ -10826,17 +10920,18 @@ Each plan file must include:
             this._autobanState.paused = true;
         } else {
             if (!this._autobanState.paused) { return; }
-            // External mode runs no clock — and resume is a THIRD timer-install
-            // path alongside _startAutobanEngine and resetAutobanTimersFromKanban.
-            // `paused` survives the switch into external (only `enabled` is
-            // forced false), so without this the resume branch below installs a
-            // live interval in the mode that is supposed to run none. Clear the
-            // paused flag so the state is honest, then install nothing.
-            if (this._autobanState.automationMode === 'external') {
+            // Resume is a THIRD timer-install path alongside _startAutobanEngine
+            // and resetAutobanTimersFromKanban, and the run sheet is SCHEDULED
+            // mode's clock alone. `paused` survives a switch into external or
+            // agent-managed (only `enabled` is touched), so without this the
+            // resume branch below installs a live run-sheet interval in a mode
+            // that must run none. Clear the paused flag so the state is honest,
+            // then install nothing.
+            if (this._autobanState.automationMode !== 'scheduled') {
                 this._autobanState.paused = false;
                 delete this._autobanState.pausedRemainingMs;
                 this._stopAutobanEngine();
-                console.log('[Autoban] Resume refused — external mode runs no clock.');
+                console.log(`[Autoban] Resume refused — ${this._autobanState.automationMode} mode does not run the run sheet.`);
                 await this._persistAutobanState();
                 this._postAutobanStateNow();
                 return;
@@ -11181,7 +11276,6 @@ Each plan file must include:
                 || sanitizedCustomAgents !== undefined
                 || sanitizedCustomKanbanColumns !== undefined
                 || (typeof data.planIngestionFolder === 'string' && !validationError)
-                || typeof data.autoCommitOnCodeReview === 'boolean'
             ) {
                 await this.updateState(async (state: any) => {
                     if (data.commands) {
@@ -11225,10 +11319,6 @@ Each plan file must include:
                         } else {
                             delete state.planIngestionFolder;
                         }
-                    }
-
-                    if (typeof data.autoCommitOnCodeReview === 'boolean') {
-                        state.autoCommitOnCodeReview = data.autoCommitOnCodeReview;
                     }
 
 
@@ -11881,7 +11971,7 @@ Each plan file must include:
      * single-column config carries the setting; otherwise it is per-rule.
      */
     private _isCompletionTriggered(column: string): boolean {
-        const mode = this._autobanState.automationMode === 'internal'
+        const mode = this._autobanState.automationMode === 'scheduled'
             ? this._singleColumnAutobanState.triggerMode
             : this._autobanState.rules[column]?.triggerMode;
         return mode === 'completion';
@@ -11913,6 +12003,15 @@ Each plan file must include:
                 } catch (e) {
                     console.error(`[Autoban] Run-sheet step ${step.sourceColumn} → ${step.headRole} failed:`, e);
                 }
+            }
+            // ── Surviving scheduler jobs ride the run-sheet clock ───────────
+            // fetch-plans and reconcile tick here — no per-job interval, no
+            // per-job START/STOP. The run sheet is the one clock. With the run
+            // sheet off (checked at the top of the tick), neither runs.
+            try {
+                await this._tickSurvivorSchedulerJobs();
+            } catch (e) {
+                console.error('[Autoban] Survivor scheduler jobs tick failed:', e);
             }
             this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
             this._postAutobanState();
@@ -11949,7 +12048,7 @@ Each plan file must include:
      * that character pair closes the block and detonates the whole file.)
      * and returns the next Date >= `fromNow` that matches, or null if the
      * expression is invalid. Extended tokens (`L`, `W`, `?`, named days) are
-     * NOT supported — same constraint as the SCHEDULER_TARGET_CONTRACTS cloud
+     * NOT supported — same constraint as the deleted scheduler target-contract
      * block, and documented in the WHEN control placeholder.
      *
      * Day-of-month / day-of-week follow standard cron OR semantics: when BOTH
@@ -12107,13 +12206,18 @@ Each plan file must include:
 
     /** Start the continuous Autoban background polling engine. */
     private _startAutobanEngine(): void {
-        // External mode runs no clock. Stop any surviving timer first so an
-        // in-flight transition (enable → switch to external) cannot leave a
-        // ticking interval behind, then refuse to install one. A silent no-op
-        // here is indistinguishable from the bug it prevents — log the refusal.
-        if (this._autobanState.automationMode === 'external') {
+        // The run sheet is SCHEDULED mode's clock and no other mode's. Gate on
+        // the mode that runs it, never on `!== 'external'`: that was a correct
+        // proxy while the axis had two values, and became wrong the moment
+        // `agent-managed` was added — in agent-managed the orchestrator IS the
+        // automation, so a run-sheet interval here is the second clock the
+        // three-mode model exists to prevent. Stop any surviving timer first so
+        // an in-flight transition cannot leave one ticking, then refuse to
+        // install one. A silent no-op is indistinguishable from the bug it
+        // prevents — log the refusal, naming the mode.
+        if (this._autobanState.automationMode !== 'scheduled') {
             this._stopAutobanEngine();
-            console.log('[Autoban] Engine start refused — external mode runs no clock.');
+            console.log(`[Autoban] Engine start refused — ${this._autobanState.automationMode} mode does not run the run sheet.`);
             return;
         }
         this._stopAutobanEngine();
@@ -13871,6 +13975,12 @@ Each plan file must include:
                             // the same lie _tryRestoreAutoban prevents on restart.
                             if (this._autobanState.enabled && this._autobanState.automationMode === 'external') {
                                 this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, enabled: false });
+                                this._stopAutobanEngine();
+                            } else if (this._autobanState.automationMode !== 'scheduled') {
+                                // Agent-managed: `enabled` means "the orchestrator is
+                                // armed", NOT "the run sheet is armed". Do not force it
+                                // false — that would disarm the orchestrator — but never
+                                // install the run-sheet clock behind it either.
                                 this._stopAutobanEngine();
                             } else if (this._autobanState.enabled && !wasEnabled) {
                                 this._startAutobanEngine();
@@ -19797,19 +19907,6 @@ What would you like to find?`;
                 this._registeredTerminals?.delete(this._suffixedName(cleanedTerminalName));
             }
 
-            // If the closed terminal was a scheduler job's terminal, stop that
-            // job's polling loop and push the updated status to the kanban
-            // webview so the status line flips from 🟢 to 🔴. Resolve the job
-            // from the terminal→jobId index (single source of truth) rather
-            // than string-matching the terminal name, so the right loop stops.
-            const closedJobId = this._jobIdForTerminalName(terminal.name);
-            if (closedJobId) {
-                this._stopSchedulerJobLoop(closedJobId);
-                // Clean up in-memory dispatch map + index entry
-                this._registeredTerminals?.delete(this._suffixedName(terminal.name));
-                this._schedulerTerminalToJobId.delete(terminal.name);
-            }
-
             this._refreshTerminalStatuses();
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to handle terminal closure:', e);
@@ -20083,7 +20180,8 @@ What would you like to find?`;
         targetAgent: string,
         payload: string,
         metadata: Record<string, any>,
-        sender: string = 'sidebar'
+        sender: string = 'sidebar',
+        promptComposed: boolean = false
     ): Promise<boolean> {
         // F-04 SECURITY: Validate agent name before using as path segment
         if (!this._isValidAgentName(targetAgent)) {
@@ -20099,7 +20197,7 @@ What would you like to find?`;
             recipient: targetAgent,
             action: 'execute',
             metadata
-        });
+        }, promptComposed);
         if (pushed) return true;
 
         this._seams().ui.showWarningMessage(
@@ -20155,7 +20253,8 @@ What would you like to find?`;
         terminalName: string,
         payload: string,
         messageId: string,
-        meta: { sender: string; recipient: string; action: string; metadata: Record<string, any> }
+        meta: { sender: string; recipient: string; action: string; metadata: Record<string, any> },
+        promptComposed: boolean = false
     ): Promise<boolean> {
         // The PTY fleet is checked FIRST. Checking it first (rather than as a
         // not-found fallback) matters — a PTY and a VS Code terminal can normalize
@@ -20191,7 +20290,15 @@ What would you like to find?`;
                             name: target.friendlyName,
                             data: payload,
                             clearBeforePrompt,
-                            clearBeforePromptDelayMs: clearDelay
+                            clearBeforePromptDelayMs: clearDelay,
+                            // Host-only marker: when true, the prompt was already
+                            // composed by agentPromptBuilder and the delivery layer
+                            // must NOT append the seat directive block (would
+                            // double-apply). Stripped at the HTTP boundary
+                            // (handlePtyVerb) so a caller cannot set it. Default
+                            // false — a call site added later gets the safeguard by
+                            // omission rather than losing it.
+                            addonsComposed: promptComposed
                         });
                         if (writeRes?.success) { return true; }
                         console.error(`[TaskViewerProvider] PTY prompt delivery to '${terminalName}' failed:`, writeRes?.error);
@@ -20634,7 +20741,7 @@ What would you like to find?`;
 
         // 4. Send Message (Write to Inbox) — dispatch after column is moved
         try {
-            const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, messagePayload, messageMetadata, 'sidebar');
+            const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, messagePayload, messageMetadata, 'sidebar', true);
 
             if (success) {
                 // Dispatch succeeded — no additional state updates needed (already done above)
@@ -22829,13 +22936,7 @@ What would you like to find?`;
 
 
     public dispose() {
-        this._oversightPass?.dispose();
-        this._oversightPass = null;
         this._stopAutobanEngine();
-        // Stop every scheduler loop (any local-terminal jobs).
-        for (const jobId of Array.from(this._schedulerTimers.keys())) {
-            this._stopSchedulerJobLoop(jobId);
-        }
         this.stopPlanScanner();
         if (this._postAutobanStateDebounceTimer) {
             clearTimeout(this._postAutobanStateDebounceTimer);
@@ -25935,337 +26036,105 @@ What would you like to find?`;
         }
     }
 
-    // ─── Scheduler engine (per-job, terminal-agnostic) ──────────────────────
+    // ─── Surviving scheduler jobs (fetch-plans, reconcile) ─────────────────
     //
-    // Runs any `ScheduledJob` whose `target` is `local-terminal`. N timers, N
-    // terminals, N tick queues — all keyed by jobId.
-    //
-    // Load-bearing constraints preserved for EVERY local-terminal job:
-    //   - Never headless: prompts go via sendText to an interactive terminal,
-    //     never `claude -p` (API-billed, loses claude.ai MCP connectors).
-    //   - Sub-hourly niche: minute-granularity intervals; the only target that
-    //     can poll faster than hourly.
+    // These two jobs ride the run-sheet tick — no per-job interval, no per-job
+    // START/STOP. The run sheet is the one clock. With the run sheet off, the
+    // tick body returns early before reaching here, so neither runs.
 
-    /** Derive the terminal name for a job. Formatted as Scheduler: <label> (<short-id>). */
+    /** Derive the terminal name for a surviving job. */
     private _schedulerTerminalName(job: ScheduledJob): string {
         const label = job.label || 'Job';
         return `Scheduler: ${label} (${job.id.slice(0, 8)})`;
     }
 
-    /** Resolve the jobId that owns a given terminal name (closed-terminal handler). */
-    private _jobIdForTerminalName(terminalName: string): string | undefined {
-        const stripped = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
-        for (const [rawName, jobId] of this._schedulerTerminalToJobId.entries()) {
-            if (this._normalizeAgentKey(this._stripIdeSuffix(rawName)) === stripped) {
-                return jobId;
-            }
-        }
-        return undefined;
-    }
-
     /**
-     * Start (or restart) the loop for a single `local-terminal` job. The
-     * interval is the job's `intervalMinutes`. No-op if the job is disabled.
+     * Resolve the job's terminal, creating it if it is not open.
+     *
+     * The retired scheduler surface owned terminal creation via its per-job
+     * START button, which is deleted. With that button gone, a resolve-only
+     * lookup would never find a terminal and the survivors would be permanently
+     * inert — the exact "cloud-authored plans never arrive" failure this change
+     * exists to avoid. So the checkbox IS the start button: enabling a job and
+     * arming the run sheet is all it takes.
+     *
+     * Creation follows the shipped `sendPromptToAgentTerminal` pattern (spawn,
+     * settle, boot the CLI, settle) including its fleet gate — when a pty fleet
+     * owns the terminal set, this host must not spawn a `vscode.Terminal`
+     * behind it. Spawn happens once; every later tick finds the live terminal.
      */
-    private async _startSchedulerJobLoop(job: ScheduledJob): Promise<void> {
-        if (!job.enabled) {
-            this._stopSchedulerJobLoop(job.id);
-            return;
-        }
-        const intervalMs = Math.max(job.intervalMinutes || 1, 1) * 60 * 1000;
-        const existing = this._schedulerTimers.get(job.id);
-        if (existing) {
-            clearInterval(existing);
-        }
-        this._schedulerTimers.set(job.id, setInterval(() => this._enqueueSchedulerTick(job.id), intervalMs));
-    }
-
-    /**
-     * Stop the loop for one job: clear its timer, first-prompt timer,
-     * config-change timer, output watcher + fallback, and drain the tick queue.
-     * Does NOT close the terminal (the caller / closed-terminal handler owns that).
-     */
-    private _stopSchedulerJobLoop(jobId: string): void {
-        const timer = this._schedulerTimers.get(jobId);
-        if (timer) {
-            clearInterval(timer);
-            this._schedulerTimers.delete(jobId);
-        }
-        const first = this._schedulerFirstPromptTimers.get(jobId);
-        if (first) {
-            clearTimeout(first);
-            this._schedulerFirstPromptTimers.delete(jobId);
-        }
-        const cfgChange = this._schedulerConfigChangeTimers.get(jobId);
-        if (cfgChange) {
-            clearTimeout(cfgChange);
-            this._schedulerConfigChangeTimers.delete(jobId);
-        }
-        this._disposeSchedulerOutputCapture(jobId);
-    }
-
-    private _enqueueSchedulerTick(jobId: string): void {
-        const prev = this._schedulerTickQueues.get(jobId) || Promise.resolve();
-        this._schedulerTickQueues.set(jobId, prev.then(async () => {
-            try {
-                await this._schedulerTick(jobId);
-            } catch (err) {
-                console.error(`[Scheduler] Tick failed for job ${jobId}:`, err);
-            }
-        }));
-    }
-
-    /**
-     * One tick for one job. Resolves the job's terminal by name (via the
-     * terminal→jobId index), applies the per-job in-flight guard, builds the
-     * prompt via a `job.source` dispatch, and sends it. Output capture is
-     * started per job after a successful send.
-     */
-    private async _schedulerTick(jobId: string): Promise<void> {
-        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
-        const job = sched.jobs.find(j => j.id === jobId);
-        if (!job || !job.enabled) return;
-
-        const terminalName = this._schedulerTerminalName(job);
-        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
-        const terminal = (vscode.window.terminals || []).find(t => {
-            const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
-            return tName === strippedTarget && t.exitStatus === undefined;
-        });
-        if (!terminal) {
-            // No terminal for this job running in this window. Another window may own it.
-            return;
-        }
-
-        if (this._schedulerInFlight.get(jobId)) {
-            return;
-        }
-
-        // Prompt comes from promptOverride or a source preset. promptOverride
-        // precedence is preserved exactly — an empty override skips the tick.
-        const prompt = (job.promptOverride || '').trim() || (job.source === 'fetch-plans' ? buildFetchPlansPrompt(job) : '');
-        if (!prompt) return;
-        this._schedulerInFlight.set(jobId, true);
-        try {
-            await sendRobustText(terminal, normalizeNewlines(prompt), true, undefined, { background: true, standingOrders: await this._resolveStandingOrdersForVsCode() });
-            this._schedulerLastSendAt.set(jobId, Date.now());
-            this._startSchedulerOutputCapture(job);
-        } finally {
-            this._schedulerInFlight.set(jobId, false);
-        }
-    }
-
-    /**
-     * Start a per-job file watcher + 90s fallback timer to capture the job's
-     * written findings and push them to the webview. Jobs write to
-     * `.switchboard/scheduler-<id>-latest.md` and post a `schedulerOutput`
-     * message carrying the jobId.
-     */
-    private _startSchedulerOutputCapture(job: ScheduledJob): void {
-        this._disposeSchedulerOutputCapture(job.id);
-        const workspaceRoot = this._resolveWorkspaceRoot();
-        if (!workspaceRoot) return;
-        const outputPath = path.join(workspaceRoot, '.switchboard', `scheduler-${job.id}-latest.md`);
-
-        const watcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(path.dirname(outputPath), path.basename(outputPath)),
-            false, false, false
-        );
-        watcher.onDidChange(() => this._captureSchedulerOutput(job));
-        watcher.onDidCreate(() => this._captureSchedulerOutput(job));
-        this._schedulerOutputWatchers.set(job.id, watcher);
-
-        this._schedulerOutputFallbackTimers.set(job.id, setTimeout(async () => {
-            await this._captureSchedulerOutput(job);
-        }, 90 * 1000));
-    }
-
-    private async _captureSchedulerOutput(job: ScheduledJob): Promise<void> {
-        this._disposeSchedulerOutputCapture(job.id);
-        const workspaceRoot = this._resolveWorkspaceRoot();
-        if (!workspaceRoot) return;
-        const outputPath = path.join(workspaceRoot, '.switchboard', `scheduler-${job.id}-latest.md`);
-        try {
-            const content = await fs.promises.readFile(outputPath, 'utf-8');
-            const stat = await fs.promises.stat(outputPath);
-            const message = { type: 'schedulerOutput', jobId: job.id, output: content, timestamp: stat.mtime.toISOString() };
-            this.postMessage(message);
-            this._kanbanProvider?.postMessage(message);
-        } catch {
-            const message = { type: 'schedulerOutput', jobId: job.id, output: null, timestamp: new Date().toISOString() };
-            this.postMessage(message);
-            this._kanbanProvider?.postMessage(message);
-        }
-    }
-
-    private _disposeSchedulerOutputCapture(jobId: string): void {
-        const watcher = this._schedulerOutputWatchers.get(jobId);
-        if (watcher) {
-            watcher.dispose();
-            this._schedulerOutputWatchers.delete(jobId);
-        }
-        const fallback = this._schedulerOutputFallbackTimers.get(jobId);
-        if (fallback) {
-            clearTimeout(fallback);
-            this._schedulerOutputFallbackTimers.delete(jobId);
-        }
-    }
-
-    /**
-     * Start loops for every enabled `local-terminal` job in the scheduler
-     * config. Called at activation and after config writes. Stops loops for
-     * jobs that no longer exist or are disabled.
-     */
-    private async _startAllSchedulerLoops(): Promise<void> {
-        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
-        const isExternal = this._autobanState.automationMode === 'external';
-        const enabledIds = new Set<string>();
-        for (const job of sched.jobs) {
-            // External mode runs no clock — skip local-terminal jobs so their
-            // loops never start. The sweep below tears down any already-running
-            // loop for free. External (antigravity/cloud) targets are prompt-
-            // handoff and own their own recurrence, so they are unaffected.
-            if (job.enabled && job.target === 'local-terminal' && !isExternal) {
-                enabledIds.add(job.id);
-                await this._startSchedulerJobLoop(job);
-            }
-        }
-        // Stop loops for jobs that vanished or were disabled.
-        for (const jobId of Array.from(this._schedulerTimers.keys())) {
-            if (!enabledIds.has(jobId)) {
-                this._stopSchedulerJobLoop(jobId);
-            }
-        }
-    }
-
-    /**
-     * Public wrapper so KanbanProvider can restart scheduler loops after a
-     * `setSchedulerConfig` write from the webview.
-     */
-    public async startAllSchedulerLoops(): Promise<void> {
-        await this._startAllSchedulerLoops();
-    }
-
-    /**
-     * Launch a terminal for a scheduler job and start its polling loop.
-     * Called by the webview's START button.
-     */
-    public async launchSchedulerTerminal(jobId: string): Promise<void> {
-        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
-        const job = sched.jobs.find(j => j.id === jobId);
-        if (!job) {
-            this._seams().ui.showWarningMessage(`Scheduler job '${jobId}' not found. Add it in the Automation tab first.`);
-            return;
-        }
+    private async _ensureSurvivorTerminal(job: ScheduledJob): Promise<vscode.Terminal | undefined> {
         const targetName = this._schedulerTerminalName(job);
         const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(targetName));
-
-        // Dispose any zombie (exited) terminal with the same name
-        const existing = vscode.window.terminals.find(t => {
-            const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
-            return tName === strippedTarget;
-        });
-        if (existing && existing.exitStatus !== undefined) {
-            existing.dispose();
-        }
-
-        // If a live terminal already exists, just reveal it
-        const live = vscode.window.terminals.find(t => {
-            const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
-            return tName === strippedTarget && t.exitStatus === undefined;
-        });
-        if (live) {
-            live.show();
-            this._schedulerTerminalToJobId.set(targetName, jobId);
-            await this._startSchedulerJobLoop(job);
-            return;
-        }
-
-        // Create the terminal
-        const terminal = vscode.window.createTerminal({
-            name: targetName,
-            location: vscode.TerminalLocation.Panel,
-            cwd: this._resolveWorkspaceRoot() ?? undefined
-        });
-
-        if (!this._registeredTerminals) this._registeredTerminals = new Map();
-        this._registeredTerminals.set(this._suffixedName(targetName), terminal);
-        this._schedulerTerminalToJobId.set(targetName, jobId);
-
-        terminal.show();
-        try {
-            await this._seams().commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
-        } catch { /* ignore */ }
-
-        // Register in state
-        await this.updateState(async (state: any) => {
-            if (!state.terminals) state.terminals = {};
-            const key = this._suffixedName(targetName);
-            if (!state.terminals[key]) state.terminals[key] = {};
-            state.terminals[key].purpose = 'agent-grid';
-            state.terminals[key].role = 'scheduler';
-            state.terminals[key].friendlyName = targetName;
-            state.terminals[key].lastSeen = new Date().toISOString();
-            state.terminals[key].ideName = vscode.env.appName;
-        });
-        this.refresh();
-
-        // Wait for shell readiness, then send startup command
-        const customStartup = job?.startupCommand;
-        const cmd = customStartup && customStartup.trim() ? customStartup.trim() : await this.getAgentStartupCommand('coder');
-        if (cmd && cmd.trim()) {
-            const shellReady = new Promise<void>((resolve) => {
-                const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
-                    if (e.terminal === terminal) {
-                        disposable.dispose();
-                        resolve();
-                    }
-                });
-                setTimeout(() => { disposable.dispose(); resolve(); }, 5000);
-            });
-            await shellReady;
-            terminal.sendText(cmd.trim(), true);
-        }
-
-        // Start the polling loop + first-prompt one-shot
-        await this._startSchedulerJobLoop(job);
-        const prev = this._schedulerFirstPromptTimers.get(jobId);
-        if (prev) { clearTimeout(prev); }
-        this._schedulerFirstPromptTimers.set(jobId, setTimeout(() => {
-            this._schedulerFirstPromptTimers.delete(jobId);
-            this._enqueueSchedulerTick(jobId);
-        }, 2 * 1000));
-    }
-
-    /**
-     * Kill a scheduler job's terminal and stop its loop.
-     * Called by the webview's STOP button.
-     */
-    public async stopSchedulerTerminal(jobId: string): Promise<void> {
-        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
-        const job = sched.jobs.find(j => j.id === jobId);
-        if (!job) {
-            this._stopSchedulerJobLoop(jobId);
-            return;
-        }
-        const targetName = this._schedulerTerminalName(job);
-        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(targetName));
-        const suffixedKey = this._suffixedName(targetName);
         const live = (vscode.window.terminals || []).find(t => {
             const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
             return tName === strippedTarget && t.exitStatus === undefined;
         });
-        if (live) { live.dispose(); }
-        this._registeredTerminals?.delete(suffixedKey);
-        this._schedulerTerminalToJobId.delete(targetName);
-        await this.updateState(async (state: any) => {
-            if (state.terminals && state.terminals[suffixedKey]) {
-                delete state.terminals[suffixedKey];
+        if (live) { return live; }
+
+        if (this._ptyHostPort) { return undefined; }
+        const cwd = this._resolveWorkspaceRoot();
+        if (!cwd) { return undefined; }
+
+        try {
+            const startupCmd = (job.startupCommand || '').trim() || await this.getAgentStartupCommand('coder', cwd);
+            const terminal = vscode.window.createTerminal({
+                name: targetName,
+                location: vscode.TerminalLocation.Panel,
+                cwd
+            });
+            if (!this._registeredTerminals) { this._registeredTerminals = new Map(); }
+            this._registeredTerminals.set(this._suffixedName(targetName), terminal);
+            terminal.show();
+            await new Promise(r => setTimeout(r, 2000));
+            if (startupCmd) {
+                terminal.sendText(startupCmd, true);
+                await new Promise(r => setTimeout(r, 3000));
             }
-        });
-        this.clearTerminalAgentInfo(suffixedKey);
-        this._stopSchedulerJobLoop(jobId);
-        this.refresh();
+            return terminal;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Tick the two surviving scheduler jobs (fetch-plans, reconcile) from the
+     * run-sheet clock. Reads the scheduler config, filters to enabled jobs with
+     * surviving sources, and delivers the prompt to the job's terminal via the
+     * same sendRobustText path the old per-job tick used. The per-job in-flight
+     * guard is carried forward — a long-running fetch-plans must not be re-sent
+     * on the next tick.
+     */
+    private async _tickSurvivorSchedulerJobs(): Promise<void> {
+        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
+        // Source allowlist, not a target check. `job.target` is vestigial: the
+        // target picker is deleted and the external-handoff surface (COPY PROMPT)
+        // went with it, so a stale 'antigravity'/'cloud' target has nowhere else
+        // to go. Local terminal is the only target now, for every surviving job.
+        const survivorSources = new Set(['fetch-plans', 'reconcile']);
+        for (const job of sched.jobs) {
+            if (!job.enabled || !survivorSources.has(job.source)) continue;
+            // promptOverride precedence is preserved exactly — an empty override
+            // falls through to the source preset.
+            const prompt = (job.promptOverride || '').trim()
+                || (job.source === 'fetch-plans' ? buildFetchPlansPrompt(job) : buildReconcilePrompt());
+            if (!prompt) continue;
+            if (this._schedulerInFlight.get(job.id)) continue;
+
+            // Claim the guard BEFORE the first await. _ensureSurvivorTerminal
+            // can spend ~5s booting a CLI, which is long enough for a second
+            // run-sheet tick to enter this loop and spawn a duplicate terminal.
+            this._schedulerInFlight.set(job.id, true);
+            try {
+                const terminal = await this._ensureSurvivorTerminal(job);
+                if (!terminal) continue;
+                await sendRobustText(terminal, normalizeNewlines(prompt), true, undefined, { background: true, standingOrders: await this._resolveStandingOrdersForVsCode() });
+            } catch (e) {
+                console.error(`[Autoban] Survivor scheduler job '${job.source}' failed:`, e);
+            } finally {
+                this._schedulerInFlight.set(job.id, false);
+            }
+        }
     }
 
     /**
@@ -26334,8 +26203,7 @@ What would you like to find?`;
     /**
      * Shared delivery plumbing for PM-terminal prompts: resolve the Project Manager
      * terminal (registered → open-by-name → clipboard fallback) with send-lock +
-     * robust send. Extracted from _handleDispatchProjectManager so the targeted-pass
-     * handler reuses the identical delivery path without duplication.
+     * robust send. Sole caller is _handleDispatchProjectManager.
      */
     private async _deliverPromptToPmTerminal(
         prompt: string,
@@ -26396,72 +26264,5 @@ What would you like to find?`;
             );
         }
         return false;
-    }
-
-    /**
-     * Build the targeted-pass prompt for a set of selected plans. The prompt embeds
-     * a frozen click-time plan list (board order) and instructs the PM agent to run
-     * the manage skill's §6 "Targeted pass" variant — two execution lanes:
-     *   - Coding lane: WIP 1, review-gated (a plan must pass CODE REVIEW before the
-     *     next starts).
-     *   - Planner lane: 2-minute cooldown between consecutive planner dispatches,
-     *     overlapping the coding lane.
-     * Per-card lane-stage is tracked via the `cardStage` field in oversight-state.md
-     * (named to avoid collision with §7's pass-level `stage` field).
-     */
-    private _buildTargetedPassPrompt(
-        plans: { planId: string; topic: string; planFile: string; kanbanColumn: string; complexity: string }[],
-        workspaceRoot: string,
-        port: number
-    ): string {
-        const planList = plans.map((p, i) =>
-            `${i + 1}. planId=${p.planId} | "${p.topic}" | file=${p.planFile} | column=${p.kanbanColumn} | complexity=${p.complexity}`
-        ).join('\n');
-
-        return `Read ${workspaceRoot}/.agents/workflows/switchboard.md and follow its §6 "Targeted pass" variant exactly — the plan list below IS the queue (board order); skip source-column resolution. The workspace root is ${workspaceRoot} — use it as $ROOT directly (this is the board's selected workspace; do not derive the root from your terminal's working directory). The API server is running on port ${port}.
-
-TARGETED PASS — run exactly these plans autonomously:
-${planList}
-
-Execution rules (from SKILL.md §6 Targeted pass):
-- Two lanes. Coding lane: WIP 1, review-gated — one plan end-to-end at a time (dispatch via POST /kanban/dispatch with targetColumn omitted so complexity auto-routing decides → wait for the coding completion signal = first plan-file mtime advance after dispatch → advance the card to CODE REVIEWED dispatching the reviewer via the same one-call endpoint → wait for the review completion signal = next mtime advance → only then start the next plan). "In flight" means anywhere between coding dispatch and review completion. Track the in-flight card's lane stage via the \`cardStage\` field (values: \`coding\` | \`review\`) in oversight-state.md — do NOT use \`stage\` (that is §7's pass-level pipeline stage field).
-- Planner lane: selected plans whose next stage is planning (e.g. CREATED → PLAN REVIEWED, planner role) do NOT queue behind the coding lane. Consecutive planner dispatches require ≥2 minutes after the previous planner dispatch's completion signal. Persist the cooldown timestamp in oversight-state.md under a \`plannerLane\` field. The planner lane overlaps the coding lane.
-- Autonomous within the pass: no per-card confirmation. Halt the ENTIRE pass on any failure/timeout — never skip, never re-dispatch a halted card. Cards already in a terminal/reviewed column: skip with a one-line note rather than halting.
-- Single-pass guard: if oversight-state.md shows an in-flight pass, offer resume-or-refuse — never start a second concurrent loop.
-- Durable state: rewrite oversight-state.md after every state change (dispatch, completion, lane transition, halt). Append to oversight-log.md on every pass event. At pass end, produce the end-of-pass digest (read the actioned plan files' content, report per-plan landing status + key notes + risks + aggregated open questions).`;
-    }
-
-    /**
-     * Handle a "Run Selected Plans" targeted-pass dispatch from the kanban board
-     * toolbar. The KanbanProvider resolves the cross-column selection into plan
-     * records at click time (excluding feature rows and epic subtasks host-side)
-     * and passes the frozen snapshot here. We pre-flight the API server, build the
-     * targeted-pass prompt, and deliver via the shared PM-terminal-else-clipboard
-     * path — identical to the Manage launcher.
-     */
-    public async handleDispatchManagerForSelected(
-        plans: { planId: string; topic: string; planFile: string; kanbanColumn: string; complexity: string }[],
-        workspaceRoot: string
-    ): Promise<boolean> {
-        if (plans.length === 0) {
-            this._seams().ui.showWarningMessage('No dispatchable plans in the selection.');
-            return false;
-        }
-
-        // 1. Pre-flight: API server liveness — the manage skill needs it.
-        const port = this.getLocalApiServerPort();
-        const serverAlive = !!this._localApiServer && this._localApiServer.isListening();
-        if (!serverAlive || port === 0) {
-            this._seams().ui.showErrorMessage(
-                'Switchboard API server is not running. Open the Switchboard panel and try again.'
-            );
-            return false;
-        }
-
-        // 2. Build the targeted-pass prompt with the frozen plan list.
-        const prompt = this._buildTargetedPassPrompt(plans, workspaceRoot, port);
-
-        // 3. Deliver via the shared PM-terminal-else-clipboard path.
-        return await this._deliverPromptToPmTerminal(prompt, workspaceRoot);
     }
 }

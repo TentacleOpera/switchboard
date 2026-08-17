@@ -59,7 +59,7 @@ primary workspace.
 | `GET /kanban/columns` | `{ builtIn: [...defs], custom: [{id,label,labelSource,displayModeOf?,legacyAliasOf?}], displayOnly: [{label,aliasOf}] }` — `displayModeOf`/`legacyAliasOf` mark a column that is NOT an independent peer (`BACKLOG` is a view of `CREATED`; `CODED` is a legacy alias of `LEAD CODED`) |
 | `GET /kanban/features` | All features (`isFeature` rows) |
 | `GET /worktree/list` | All worktree rows (`path`, `branch`, `subtask_plan_id`, `feature_id`, `tier`, `status`, `base_branch`) |
-| `GET /orchestrator/session-log` | The orchestrator's session log (markdown string) |
+| `GET /orchestrator/session-log` | The orchestrator's session file — `.switchboard/orchestrator/session.md` when it exists, falling back to the legacy `.switchboard/orchestrator/session-log.md` (markdown string, `''` when neither exists) |
 
 ```bash
 curl -s "$BASE/kanban/board"
@@ -120,6 +120,9 @@ curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also
 | `POST /kanban/feature/delete` | `{ featurePlanId, deleteSubtasks?, workspaceRoot? }` | Delete a feature |
 | `POST /kanban/feature/split` | `{ featurePlanId, keptPlanIds: [...], firstFeatureName, secondFeatureName, workspaceRoot? }` | Split a feature in two |
 | `POST /worktree/cleanup` | `{ worktreeId or branch, workspaceRoot? }` | Mark a worktree merged and clean it up (kind-aware) |
+| `POST /orchestration/start` | `{ workspaceRoot? }` | Seat the orchestrator terminal and deliver the pre-flight interview. **Does not arm** — returns a message saying the orchestrator is seated and awaiting confirmation. Arming is `POST /orchestration/confirm` |
+| `POST /orchestration/confirm` | `{ workspaceRoot? }` | Arm an orchestration session after the pre-flight. Verifies `.switchboard/orchestrator/session.md` exists, then flips `orchestrationConfig.enabled` to true and applies agent-managed mode. Returns `{ success, sessionFile }` or `{ success:false, error }` when `session.md` is absent. The only path that arms |
+| `POST /orchestration/stop` | — | Disarm the orchestrator and archive `session.md` to `sessions/session-<ISO>.md` |
 
 ```bash
 # Column vocabulary: CREATED | PLAN REVIEWED | LEAD CODED | CODER CODED | INTERN CODED
@@ -133,89 +136,11 @@ curl -s -X POST "$BASE/kanban/feature" -H "Content-Type: application/json" \
 
 ---
 
-## 4a. Oversight pass (POST/GET) — attended column-oversight engine
-
-The in-extension attended oversight pass (`switchboard.md` §6/§6a/§7) — the supervising
-manager starts it, polls status in short turns, and produces the digest; the extension runs
-the two-lane state machine on the `GlobalPlanWatcherService` plan-file-mtime completion
-signal (the activity-light OFF-switch). Requires the running extension; absent in
-headless/test harnesses (503).
-
-| Endpoint | Body / Query | Purpose |
-|---|---|---|
-| `POST /oversight/start` | `{ workspaceRoot, queue: { planIds?: [] \| sourceColumn?: "" }, targetColumn?, stage?, reviewGate?, reviewColumn?, cooldownMs?, stuckThresholdMs?, plannerConcurrency? }` | Resolve the queue once and start the pass. Returns `{ success, passId?, pass }` (or `{ success, alreadyRunning: true, pass }` if a pass is already in flight — singleton, never a second loop). `409` while autoban/orchestration automation is armed (double-dispatch guard). `400` if neither `planIds` nor `sourceColumn` is supplied. |
-| `GET /oversight/status` | `?workspaceRoot=` (omit for all known passes) | Live pass state: `passId`, `state` (`running` \| `halted` \| `ended` \| `stopped`), `haltReason?`, `queueRemaining[]`, `inFlight[]` (`planId`, `topic`, `lane`, `cardStage`, `dispatchedAt`, `dispatchConfirmed`), `plannerLane` (`cooldownMs`, `lastDispatchAt`, `readyAt`, `lastCompletionAt`), `completed[]` (`planId`, `topic`, `lane`, `durationSeconds`, `landedColumn`, `hasOpenQuestions`), `skipped[]`. |
-| `POST /oversight/stop` | `{ workspaceRoot }` | Cancel the running pass; leaves the board as-is; writes a stop log line. |
-
-**Queue semantics (resolved once at `start`, in code AND prose):**
-- `queue.planIds` → **explicit list IS the queue**, in given order, **feature subtasks
-  included** (only feature *container* rows are rejected). §6a.
-- `queue.sourceColumn` → **column sweep**, oldest first, **excluding feature rows AND
-  feature subtasks** (subtasks carry their own `kanban_column`). §6.
-
-**Two overlapping lanes (engine-encoded, not prose-enforced):**
-- Coding lane WIP-1, review-gated by default for explicit lists (`reviewGate` defaults
-  true when `planIds` is supplied, false for column sweeps). `cardStage` = `coding` →
-  `review`. `targetColumn` omitted/`"auto"` ⇒ complexity auto-routing.
-- Planner lane overlaps the coding lane and runs up to `plannerConcurrency` cards at once
-  (default **1** — an omitted field reproduces the old single-card behaviour exactly).
-  The engine clamps that number down to the count of live planner terminals, so asking for
-  more workers than exist yields a smaller lane rather than a pass-wide halt.
-- `cooldownMs` (default 120000) is the minimum interval between planner **dispatches**, not a
-  completion-gated barrier: at most one planner card is dispatched per `cooldownMs` window.
-  Measuring it from completions is what silently re-serialised a parallel lane after its first
-  N cards, so `lastCompletionAt` is still reported but no longer gates anything. Pass a small
-  `cooldownMs` when you actually want N workers running concurrently.
-
-**Unattended improvers (planner lane):** every oversight dispatch is marked unattended, which
-appends an `UNATTENDED IMPROVER CONTRACT:` block to the improver's prompt: never ask in chat,
-touch exactly one plan file, and record unresolved items under `## Outstanding Questions` in
-that plan. A completed plan carrying that heading with at least one `[user]`/`[research]` item
-is reported as `hasOpenQuestions: true` on its `completed[]` row in `GET /oversight/status` and
-named in the end-of-pass summary line in `oversight-log.md`. The heading is the only channel —
-there is no message and no queue. See the `improve-plan` skill's `## Unattended runs` block for
-the improver-side half of the same contract.
-
-**Halt / resume / singleton:**
-- Halt-on-failure: any dispatch failure or stuck-timeout halts the WHOLE pass — never
-  re-dispatch, never skip silently, never move a card backward. `state: "halted"` +
-  `haltReason`.
-- The extension is the **sole writer** of `.switchboard/oversight-state.md` (rewritten per
-  state change) and `oversight-log.md` (append-only). Agents read them for the resume offer
-  and digest; never write them. The state file is deleted only after the final pass-summary
-  log line; on halt it is kept.
-- On extension reactivation the engine resumes an in-flight pass from `oversight-state.md`
-  without re-dispatching the in-flight card.
-- Never arms `/orchestration/start` (separate unattended mode).
-
-```bash
-# Start an explicit-list pass (the list IS the queue, feature subtasks included)
-curl -s -X POST "$BASE/oversight/start" -H "Content-Type: application/json" -d '{
-  "workspaceRoot": "/repo",
-  "queue": { "planIds": ["a1b2c3d4", "e5f6g7h8"] },
-  "stage": "coding"
-}'
-
-# Start a column sweep (excludes feature rows and feature subtasks)
-curl -s -X POST "$BASE/oversight/start" -H "Content-Type: application/json" -d '{
-  "workspaceRoot": "/repo",
-  "queue": { "sourceColumn": "CREATED" }
-}'
-
-# Poll in short turns
-curl -s "$BASE/oversight/status?workspaceRoot=/repo"
-
-# Cancel
-curl -s -X POST "$BASE/oversight/stop" -H "Content-Type: application/json" -d '{"workspaceRoot": "/repo"}'
-```
-
----
-
 ## 4b. Prompt delivery (POST /terminals/verb/*) — attended coder driving
 
 When you are a head agent **driving a coder terminal** (dispatch a subtask, get called back,
 review the diff, resend a fix) — not running an unattended column sweep — use the
-prompt-delivery verb pair, not `/oversight/start`. The full contract lives in the
+prompt-delivery verb pair. The full contract lives in the
 **`terminal-coder-dispatch`** skill; the endpoints are:
 
 | Endpoint | Body | Purpose |
@@ -227,12 +152,6 @@ prompt-delivery verb pair, not `/oversight/start`. The full contract lives in th
 Clear a coder the moment you stand it down, not on the way back in — see
 `terminal-coder-dispatch`, "Resting a terminal", for the precondition (completion received
 **and** next work assigned elsewhere) and the self-clear prohibition.
-
-**When to use this vs `POST /oversight/start`:** oversight is the *unattended* engine — a
-deterministic column sweep with no agent watching, completion detected by plan-file mtime.
-Prompt delivery is the *attended* pattern — a reasoning agent drives one coder at a time,
-reviews the diff, and decides what to send next. They are different jobs; do not substitute
-one for the other.
 
 ---
 
@@ -333,7 +252,7 @@ Trust **git and board state**, never an agent's self-reported "done":
 
 ## 11. File-based fallback (no HTTP)
 If the API server is down you can still communicate via the filesystem (the orchestrator reads these):
-- **Session log:** `.switchboard/orchestrator/session-log.md` — append-only; read it to see the orchestrator's decisions.
+- **Session file:** `.switchboard/orchestrator/session.md` — the current session file (Rules + append-only Log); read it to see the orchestrator's decisions. The legacy `.switchboard/orchestrator/session-log.md` is still honoured as a fallback by `GET /orchestrator/session-log` on installs that have one.
 - **Progress:** `.switchboard/orchestrator/progress.json` — the orchestrator's per-plan stall state.
 
 ## Notes
