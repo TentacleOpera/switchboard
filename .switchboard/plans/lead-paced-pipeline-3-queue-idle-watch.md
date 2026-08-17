@@ -25,9 +25,13 @@ It composes **evidence** rather than a poke — remaining subtasks, their seats,
 
 Every one of those properties is what a queue watch needs. The sweep is not scoped wrongly by accident — it was built for feature watches (`kanban.featureWatches`) because that was the case in hand. A queue is a second watch record type over the same machinery, not a second subsystem.
 
-### Why this must land before the clock is retired
+### Why this belongs next to subtask 1, not subtask 4
 
-This is an ordering constraint, not a preference. The `retire-orchestrator-machinery` plan hit the identical dependency and named it: *"Deleting the cadence removes the only thing that currently restarts a stalled orchestrator. The sibling notification card must land first."* Same rule, one layer down. Plan 4 must not merge until this is in.
+Scheduling survives (subtask 4 keeps it), so this is not "the thing that replaces the clock" — with a schedule enabled, a stalled lead is picked up by the next tick and the schedule *is* the recovery.
+
+What this covers is the **schedule-off** session, and that case is introduced by subtask 1, not by subtask 4. The moment a lead can pace itself with no clock running, a lead that stops pacing is an overnight session that ends silently with work staged. So this lands alongside 1, before unpaced pull is offered to users — the constraint is real but it attaches earlier in the sequence than an earlier draft of this feature claimed.
+
+The `retire-orchestrator-machinery` plan named the same class of dependency — *"deleting the cadence removes the only thing that currently restarts a stalled orchestrator"* — and the lesson generalises: never ship the thing that removes a recovery path before the replacement exists. Here the recovery path is only removed for users who turn the schedule off.
 
 ---
 
