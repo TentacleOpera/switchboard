@@ -46,7 +46,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 
 | Trigger Words | Workflow File | Description |
 | :--- | :--- | :--- |
-| `/switchboard` | **`switchboard.md`** | **The local management console** — drive the board, plans, features, dispatch, and automation while the VS Code extension is running. The primary front door; start here when unsure. |
+| `/switchboard` | **`switchboard.md`** | **The launcher** — start the board if nothing is running, then start the orchestration agent into its pre-flight. The primary front door; start here when unsure. |
 | `/switchboard-cloud` | **`switchboard-cloud.md`** | Cloud-VM planning brake — plan first, do not auto-code in a remote VM. |
 | `/switchboard-remote` | **`switchboard-remote.md`** | Remote Switchboard control — drive plans via Linear or Notion when the local machine is off. |
 | `/switchboard-memo`, "start memo capture" | **`switchboard-memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/switchboard-memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
@@ -131,7 +131,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `constitution-builder` | Build or refine a project constitution (coding standards and conventions) for the workspace. |
 | `tuning` | Tune Switchboard agent behavior and workflow settings. |
 | `switchboard-memo` | User invokes `/switchboard-memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
-| `switchboard` | User types `/switchboard` — the local management console (board, plans, features, dispatch, automation). The primary front door. |
+| `switchboard` | User types `/switchboard` — the launcher: start the board if nothing is running, then start the orchestration agent into its pre-flight. The primary front door. |
 | `improve-feature` | Internal, extension-dispatched (`.agents/skills/improve-feature/SKILL.md`) — improves every subtask of a feature, then restructures the set: merge/delete/rewrite/split. Authorised to cut; git is the undo. Has a high/low complexity-tier mode. |
 | `rearrange-feature` | Restructure a feature's subtasks — split one subtask into several, move scope between subtasks, merge, or reorder — WITHOUT rewriting their content. Structure-only counterpart to `improve-feature` (which re-authors content) and `switchboard-split` (1→2 on complexity only). Rewrites subtask files in place to keep planIds stable; wires new subtasks via `POST /kanban/plans` + `assign-to-feature.js`. |
 | `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |

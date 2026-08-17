@@ -142,6 +142,43 @@ curl -s -X POST "$BASE/kanban/feature" -H "Content-Type: application/json" \
 
 ---
 
+## 4a. Verb-rail traps (read before you call `POST /<panel>/verb/<name>`)
+
+The generic verb rail (`POST /<panel>/verb/<name>`) routes webview messages through
+the same handler a UI click takes. Two traps hide on this surface, and they share
+one failure mode: **the route answers `{success:true}` and nothing happens.** An
+agent cannot detect the no-op from the response, so it reports success and moves
+on — the most expensive class of bug on this surface.
+
+### Trap 1 — read verbs return only `{success:true}`
+
+Read verbs (`get*` / `fetch*` / `load*`) over the generic rail return only
+`{success:true}` — their data arrives on the **WS hub**, which an HTTP client
+cannot see. The call looks successful and returns nothing.
+
+**Use the dedicated GET endpoints instead:** `GET /kanban/board`,
+`GET /kanban/plans`, `GET /kanban/plan?planId=<id>`. They return the data in
+the response body (wrapped in `.data`).
+
+### Trap 2 — exact webview field names
+
+Raw verbs expect the **exact webview message field names**. The two that bite:
+
+- `triggerAction` takes `{ sessionId, targetColumn }` — **not** `planId`, **not** `column`.
+- `promptOnDrop` takes `{ sessionIds, sourceColumn, targetColumn }` — **not** `planId`, **not** `column`.
+
+Wrong names (`planId`, `column`) make the arm silently no-op while the route
+layer still answers `{success:true}` — the call LOOKS successful and nothing
+happened.
+
+**Prefer the first-class endpoints** (`POST /kanban/dispatch`, `POST /kanban/move`)
+— they validate, canonicalize columns, verify against the DB, and return honest
+errors. Use raw verbs only when no endpoint exists, and **verify the effect
+afterwards** (`GET /kanban/plan?planId=<id>` → check `dispatchedAt` and
+`kanbanColumn`).
+
+---
+
 ## 4b. Prompt delivery (POST /terminals/verb/*) — attended coder driving
 
 When you are a head agent **driving a coder terminal** (dispatch a subtask, get called back,
