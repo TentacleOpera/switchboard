@@ -11342,18 +11342,18 @@ Each plan file must include:
                 // Invalid cron — fall back to interval mode.
                 console.error(`[Autoban] WHEN schedule "${whenSchedule}" is invalid — falling back to interval mode (${intervalMinutes}m).`);
                 this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-                this._enqueueRunSheetTick(batchSize);
+                void this._scheduleQueuePop();
                 const timer = setInterval(() => {
-                    this._enqueueRunSheetTick(batchSize);
+                    void this._scheduleQueuePop();
                 }, intervalMinutes * 60 * 1000);
                 this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
             }
         } else {
             this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-            this._enqueueRunSheetTick(batchSize);
+            void this._scheduleQueuePop();
             if (!this._isCompletionTriggered(AUTOBAN_SOURCE_COLUMN)) {
                 const timer = setInterval(() => {
-                    this._enqueueRunSheetTick(batchSize);
+                    void this._scheduleQueuePop();
                 }, intervalMinutes * 60 * 1000);
                 this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
             }
@@ -11405,16 +11405,16 @@ Each plan file must include:
             const whenSchedule = this._singleColumnAutobanState.whenSchedule;
             if (whenSchedule) {
                 // WHEN mode: restart the cron timer. Do NOT fire an immediate
-                // tick — the run sheet fires only on the cron line.
+                // tick — the schedule fires only on the cron line.
                 const installed = this._startWhenScheduleTimer();
                 if (!installed) {
                     // Invalid cron — fall back to interval mode and fire immediately.
                     const intervalMinutes = Math.max(this._singleColumnAutobanState.intervalMinutes || 10, 1);
                     console.error(`[Autoban] WHEN schedule "${whenSchedule}" is invalid — falling back to interval mode (${intervalMinutes}m).`);
                     this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-                    this._enqueueRunSheetTick(batchSize);
+                    void this._scheduleQueuePop();
                     const timer = setInterval(() => {
-                        this._enqueueRunSheetTick(batchSize);
+                        void this._scheduleQueuePop();
                     }, intervalMinutes * 60 * 1000);
                     this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
                 }
@@ -11425,16 +11425,16 @@ Each plan file must include:
                     // Completion mode has no clock to resume — prime it and let the
                     // next turn-end carry the chain.
                     this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-                    this._enqueueRunSheetTick(batchSize);
+                    void this._scheduleQueuePop();
                 } else {
                     // Clock mode: resume the countdown where it was paused, then fall
                     // back into the regular interval.
                     const resumeIn = Number.isFinite(remainingMs) ? Math.max(0, remainingMs) : intervalMs;
                     this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now() - (intervalMs - resumeIn));
                     const timeoutHandle = setTimeout(() => {
-                        this._enqueueRunSheetTick(batchSize);
+                        void this._scheduleQueuePop();
                         const intervalHandle = setInterval(() => {
-                            this._enqueueRunSheetTick(batchSize);
+                            void this._scheduleQueuePop();
                         }, intervalMs);
                         this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, intervalHandle);
                     }, resumeIn);
@@ -12632,6 +12632,58 @@ Each plan file must include:
      * Steps do NOT short-circuit each other: an unavailable planner team must not
      * stop the coder team from picking up work that is already reviewed.
      */
+    /**
+     * The schedule's dispatch path. Instead of walking the run sheet, the
+     * interval and cron timers call this — which resolves the live coding head
+     * (lead first, then coder — the same order `runQueue` uses) and calls
+     * `dispatchNextFromQueue` up to `batchSize` times. Each 409 (team in
+     * flight) or empty-queue result stops the loop: the pop's serialization is
+     * the only guard, and a refused pop is a normal outcome, not an error.
+     *
+     * No head live → no-op (the schedule will try again next tick). This is
+     * NOT an error: a schedule running with no team seated is a config issue
+     * the user sees in the panel, not a crash.
+     */
+    private async _scheduleQueuePop(): Promise<void> {
+        if (!this._autobanState.enabled || this._autobanState.paused) { return; }
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (!workspaceRoot) { return; }
+        const apiServer = this._localApiServer;
+        if (!apiServer || typeof apiServer.dispatchNextFromQueue !== 'function') { return; }
+
+        // Resolve the live coding head — lead first, then coder.
+        let headTerminal = '';
+        const leads = await this.getAliveRoleTerminalNames('lead', workspaceRoot);
+        if (leads.length > 0) {
+            headTerminal = leads[0];
+        } else {
+            const coders = await this.getAliveRoleTerminalNames('coder', workspaceRoot);
+            if (coders.length > 0) { headTerminal = coders[0]; }
+        }
+        if (!headTerminal) { return; } // no team seated — try again next tick
+
+        const batchSize = normalizeAutobanBatchSize(this._autobanState.batchSize);
+        for (let i = 0; i < batchSize; i++) {
+            try {
+                const outcome = await apiServer.dispatchNextFromQueue({ workspaceRoot, from: headTerminal });
+                const status = outcome?.status ?? 500;
+                // 409 = team in flight, 200 with dispatched === null = queue empty.
+                // Both are normal outcomes that stop the loop.
+                if (status === 409) { break; }
+                if (status >= 200 && status < 300 && outcome?.payload?.dispatched === null) { break; }
+                if (status < 200 || status >= 300) {
+                    console.warn(`[Autoban] Schedule queue pop returned ${status}: ${outcome?.payload?.error ?? 'unknown'}`);
+                    break;
+                }
+            } catch (e) {
+                console.error('[Autoban] Schedule queue pop failed:', e);
+                break;
+            }
+        }
+        this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
+        this._postAutobanState();
+    }
+
     private _enqueueRunSheetTick(batchSize: number): void {
         this._autobanTickQueue = this._autobanTickQueue.then(async () => {
             if (!this._autobanState.enabled || this._autobanState.paused) { return; }
@@ -12817,11 +12869,10 @@ Each plan file must include:
         this._whenScheduleTimer = setTimeout(() => {
             this._whenScheduleTimer = undefined;
             if (isRealFire) {
-                // Real cron fire — dispatch the tick.
+                // Real cron fire — dispatch via the queue pop.
                 if (this._autobanState.enabled && !this._autobanState.paused) {
-                    const { batchSize } = this._autobanState;
                     this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-                    this._enqueueRunSheetTick(batchSize);
+                    void this._scheduleQueuePop();
                 }
             } else {
                 // Re-arm only — the real cron time is still in the future.
@@ -12881,18 +12932,18 @@ Each plan file must include:
                 // Invalid cron — fall back to interval mode, not a clockless void.
                 console.error(`[Autoban] WHEN schedule "${whenSchedule}" is invalid — falling back to interval mode (${intervalMinutes}m).`);
                 this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-                this._enqueueRunSheetTick(batchSize);
+                void this._scheduleQueuePop();
                 const timer = setInterval(() => {
-                    this._enqueueRunSheetTick(batchSize);
+                    void this._scheduleQueuePop();
                 }, intervalMinutes * 60 * 1000);
                 this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
             }
         } else {
             this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-            this._enqueueRunSheetTick(batchSize);
+            void this._scheduleQueuePop();
             if (!this._isCompletionTriggered(AUTOBAN_SOURCE_COLUMN)) {
                 const timer = setInterval(() => {
-                    this._enqueueRunSheetTick(batchSize);
+                    void this._scheduleQueuePop();
                 }, intervalMinutes * 60 * 1000);
                 this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
             }
@@ -12927,8 +12978,7 @@ Each plan file must include:
                 ? `every ${intervalMinutes}m (ON DONE: paced by turn-end)`
                 : `every ${intervalMinutes}m`;
         console.log(
-            `[Autoban] Engine started — run sheet ${scheduleDesc}: `
-            + this._getAutobanRunSheet().map(s => `${s.sourceColumn} → ${s.headRole} team`).join(', ')
+            `[Autoban] Engine started — schedule ${scheduleDesc}, queue pop dispatch.`
         );
     }
 

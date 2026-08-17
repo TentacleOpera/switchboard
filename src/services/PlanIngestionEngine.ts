@@ -302,6 +302,24 @@ export class PlanIngestionEngine {
         this._terminalLivenessProvider = fn;
     }
 
+    /**
+     * Queue-head resolver seam (subtask 3 fix): the queue nudge sweep calls
+     * this to resolve the live coding head (lead first, then coder) for a
+     * workspace when a watch's `headTerminal` is null — the "staged with no
+     * head" state. The resolver is role-aware (it queries the terminal host
+     * for terminals tagged 'lead' or 'coder', not inferred from liveness,
+     * which carries only friendlyName/lastDataAt/status). Returns the terminal
+     * name or null when no head is live. Wired in extension.ts to
+     * `taskViewerProvider.getAliveRoleTerminalNames`. Absent in test harnesses
+     * → the sweep's null-head gate degrades to the original "notify user"
+     * behaviour (no resolution attempt, no false alarm — it just notifies).
+     */
+    private _queueHeadResolver?: (workspaceRoot: string) => Promise<string | null>;
+
+    public setQueueHeadResolver(fn: (workspaceRoot: string) => Promise<string | null>): void {
+        this._queueHeadResolver = fn;
+    }
+
     public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
         this._regenerateFeatureFile = cb;
     }
@@ -1265,28 +1283,62 @@ export class PlanIngestionEngine {
             // means the specific head is not live). Keep the watch and notify
             // the user ONCE — a queue staged with no lead is the worst case,
             // not an exempt one.
+            //
+            // BUT: null must mean "there is no head", never "nobody looked".
+            // When a watch was armed with headTerminal null (e.g. staged before
+            // a team was seated), attempt resolution via the role-aware
+            // resolver before notifying. If a head is now live, UPGRADE the
+            // record and fall through to the normal gates (in-flight, mid-turn,
+            // nudge) instead of crying outage. This is the plan's requirement:
+            // "A staged queue with no head, where a head is later seated,
+            // upgrades the record's headTerminal on the next arm or sweep
+            // rather than needing a re-stage."
             if (!watch.headTerminal) {
-                if (!watch.noHeadNotifiedAt) {
-                    const body = `[switchboard:turn-end] Queue stall — ${queueCards.length} card(s) staged in the dispatch queue, but no coding head is live. Seat a coding team to start the pipeline.`;
+                let resolvedHead: string | null = null;
+                if (this._queueHeadResolver) {
                     try {
-                        this._turnEndNotifier({
-                            seatName: '',
-                            planFile: '',
-                            outcome: 'stalled',
-                            workspaceRoot: folder,
-                            body,
-                        });
-                    } catch (cbErr) {
-                        this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge no-head notifier failed: ${cbErr}`);
+                        resolvedHead = await this._queueHeadResolver(folder);
+                    } catch (resolveErr) {
+                        this._host.logger.appendLine(
+                            `[GlobalPlanWatcher] Queue nudge: head resolution failed for ${watch.workspaceRoot}: ${resolveErr}`
+                        );
                     }
-                    this._host.logger.appendLine(
-                        `[GlobalPlanWatcher] Queue nudge: no coding head seated for ${watch.workspaceRoot} — notified user (${queueCards.length} card(s) staged).`
-                    );
-                    watch.noHeadNotifiedAt = nowMs;
-                    mutated = true;
                 }
-                kept.push(watch);
-                continue;
+                if (resolvedHead) {
+                    // A head is now live — upgrade the record and fall through
+                    // to the normal gates. Do NOT notify the user; the pipeline
+                    // is healthy.
+                    this._host.logger.appendLine(
+                        `[GlobalPlanWatcher] Queue nudge: upgrading watch for ${watch.workspaceRoot} — head '${resolvedHead}' now live (was null).`
+                    );
+                    watch.headTerminal = resolvedHead;
+                    watch.noHeadNotifiedAt = 0;
+                    mutated = true;
+                    // Fall through to gates (4)–(8) below with the upgraded head.
+                } else {
+                    // Resolution genuinely found nobody — notify the user ONCE.
+                    if (!watch.noHeadNotifiedAt) {
+                        const body = `[switchboard:turn-end] Queue stall — ${queueCards.length} card(s) staged in the dispatch queue, but no coding head is live. Seat a coding team to start the pipeline.`;
+                        try {
+                            this._turnEndNotifier({
+                                seatName: '',
+                                planFile: '',
+                                outcome: 'stalled',
+                                workspaceRoot: folder,
+                                body,
+                            });
+                        } catch (cbErr) {
+                            this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge no-head notifier failed: ${cbErr}`);
+                        }
+                        this._host.logger.appendLine(
+                            `[GlobalPlanWatcher] Queue nudge: no coding head seated for ${watch.workspaceRoot} — notified user (${queueCards.length} card(s) staged).`
+                        );
+                        watch.noHeadNotifiedAt = nowMs;
+                        mutated = true;
+                    }
+                    kept.push(watch);
+                    continue;
+                }
             }
 
             // (4) Head present in the record but absent or `exited` → drop the

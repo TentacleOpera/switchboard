@@ -1091,6 +1091,22 @@ export async function activate(context: vscode.ExtensionContext) {
     // forward) so the cross-process sweep loop never blocks on an HTTP call. Empty
     // when the fleet is unavailable → the sweep degrades to today's blind timeout.
     globalPlanWatcher.getEngine().setTerminalLivenessProvider(() => taskViewerProvider.getFleetLiveness());
+    // Queue-head resolver seam (subtask 3 fix): the queue nudge sweep calls
+    // this to resolve the live coding head (lead first, then coder) when a
+    // watch's headTerminal is null — the "staged with no head" state. Role-
+    // aware: queries the terminal host for terminals tagged 'lead' or 'coder',
+    // not inferred from liveness (which carries only friendlyName/lastDataAt/
+    // status). Returns null when no head is live — the sweep then notifies the
+    // user. Same order as runQueue's backend resolver and the arming sites.
+    globalPlanWatcher.getEngine().setQueueHeadResolver(async (wsRoot) => {
+        try {
+            const leads = await taskViewerProvider.getAliveRoleTerminalNames('lead', wsRoot);
+            if (leads.length > 0) return leads[0];
+            const coders = await taskViewerProvider.getAliveRoleTerminalNames('coder', wsRoot);
+            if (coders.length > 0) return coders[0];
+        } catch { /* fleet unavailable — return null, sweep notifies user */ }
+        return null;
+    });
     // Queue-level stall watch seam (subtask 3): the LocalApiServer's
     // dispatchNextFromQueue arms the watch via this engine reference. Wired
     // after the watcher is created — the engine doesn't exist at
