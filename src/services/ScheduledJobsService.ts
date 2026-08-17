@@ -61,21 +61,22 @@ export async function bootstrapInstructionsDirectory(workspaceRoot: string): Pro
     return baseDir;
 }
 
-export async function writeInstruction(workspaceRoot: string, req: InstructionRequest): Promise<InstructionWriteResult> {
+/**
+ * Directory-parameterised core of `writeInstruction`. Holds the
+ * frontmatter-flatten + timestamped-filename + write-body mechanics, with
+ * `dirAbs` in place of a hardcoded inbox path and `prefix` in place of the
+ * literal `instr`. Writes with `{ flag: 'wx' }` (exclusive-create) and retries
+ * with a fresh random up to 5 times on a same-second collision — the shipped
+ * plain `writeFile` silently clobbers a collision, losing a report. Keeps
+ * `flatten()` on every frontmatter value so a multi-line body cannot forge a
+ * `kind:` or `from:` key.
+ */
+export async function writeInboxFile(dirAbs: string, req: InstructionRequest, prefix = 'instr'): Promise<InstructionWriteResult> {
     try {
-        const baseDir = await bootstrapInstructionsDirectory(workspaceRoot);
-        if (!baseDir) {
-            return { success: false, error: '.switchboard directory does not exist' };
-        }
-        const inboxDir = path.join(baseDir, 'inbox');
-
         const flatten = (s: string) => String(s || '').replace(/[\r\n]+/g, ' ').trim();
         const now = new Date();
         const iso = now.toISOString();
         const compact = iso.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-        const rand = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
-        const filename = `instr-${compact}-${flatten(req.kind)}-${rand}.md`;
-        const filePath = path.join(inboxDir, filename);
 
         const fmLines: string[] = ['---'];
         if (req.from) fmLines.push(`from: ${flatten(req.from)}`);
@@ -86,16 +87,49 @@ export async function writeInstruction(workspaceRoot: string, req: InstructionRe
         fmLines.push('---');
         fmLines.push('');
         fmLines.push(req.body);
+        const content = fmLines.join('\n');
 
-        await fs.promises.writeFile(filePath, fmLines.join('\n'), 'utf8');
-        return { success: true, filePath };
+        for (let attempt = 0; attempt < 5; attempt++) {
+            const rand = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+            const filename = `${prefix}-${compact}-${flatten(req.kind)}-${rand}.md`;
+            const filePath = path.join(dirAbs, filename);
+            try {
+                await fs.promises.writeFile(filePath, content, { encoding: 'utf8', flag: 'wx' });
+                return { success: true, filePath };
+            } catch (err: any) {
+                if (err?.code === 'EEXIST') { continue; }
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        }
+        return { success: false, error: 'Failed to write inbox file after 5 collision retries' };
     } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
 }
 
-export async function isInboxItemClaimed(workspaceRoot: string, filename: string, stalenessHours = 24): Promise<boolean> {
-    const claimPath = path.join(workspaceRoot, '.switchboard', 'instructions', 'inbox', 'claimed', `${filename}.claim`);
+export async function writeInstruction(workspaceRoot: string, req: InstructionRequest): Promise<InstructionWriteResult> {
+    try {
+        const baseDir = await bootstrapInstructionsDirectory(workspaceRoot);
+        if (!baseDir) {
+            return { success: false, error: '.switchboard directory does not exist' };
+        }
+        const inboxDir = path.join(baseDir, 'inbox');
+        return writeInboxFile(inboxDir, req, 'instr');
+    } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+}
+
+/**
+ * Directory-parameterised core of `isInboxItemClaimed`. Rejects a `filename`
+ * containing `/`, `\`, or `..` before joining — the persona documents the call
+ * to agents, so a machine-supplied name is still validated.
+ */
+export async function isInboxItemClaimedIn(inboxDirAbs: string, filename: string, stalenessHours = 24): Promise<boolean> {
+    if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+        return false;
+    }
+    const claimPath = path.join(inboxDirAbs, 'claimed', `${filename}.claim`);
     if (!fs.existsSync(claimPath)) return false;
 
     try {
@@ -112,12 +146,66 @@ export async function isInboxItemClaimed(workspaceRoot: string, filename: string
     return false;
 }
 
-export async function claimInboxItem(workspaceRoot: string, filename: string, agentId = 'external-agent'): Promise<void> {
-    const claimPath = path.join(workspaceRoot, '.switchboard', 'instructions', 'inbox', 'claimed', `${filename}.claim`);
+export async function isInboxItemClaimed(workspaceRoot: string, filename: string, stalenessHours = 24): Promise<boolean> {
+    const inboxDir = path.join(workspaceRoot, '.switchboard', 'instructions', 'inbox');
+    return isInboxItemClaimedIn(inboxDir, filename, stalenessHours);
+}
+
+/**
+ * Directory-parameterised core of `claimInboxItem`. Same path-traversal guard
+ * as `isInboxItemClaimedIn`.
+ */
+export async function claimInboxItemIn(inboxDirAbs: string, filename: string, agentId = 'external-agent'): Promise<void> {
+    if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+        return;
+    }
+    const claimPath = path.join(inboxDirAbs, 'claimed', `${filename}.claim`);
     const dir = path.dirname(claimPath);
     await fs.promises.mkdir(dir, { recursive: true });
     const content = `claimed_ts: ${new Date().toISOString()}\nagent: ${agentId}\n`;
     await fs.promises.writeFile(claimPath, content, 'utf8');
+}
+
+export async function claimInboxItem(workspaceRoot: string, filename: string, agentId = 'external-agent'): Promise<void> {
+    const inboxDir = path.join(workspaceRoot, '.switchboard', 'instructions', 'inbox');
+    return claimInboxItemIn(inboxDir, filename, agentId);
+}
+
+/**
+ * Lazily creates `.switchboard/orchestrator/reports/claimed/` and returns the
+ * reports directory. Returns `null` when `.switchboard` is absent — same lazy
+ * guard as `bootstrapInstructionsDirectory` — so a non-Switchboard folder is
+ * never littered. No standing-job seeding (this is a reports inbox, not an
+ * instructions pipeline).
+ */
+export async function bootstrapOrchestratorReportsDirectory(workspaceRoot: string): Promise<string | null> {
+    const sbDir = path.join(workspaceRoot, '.switchboard');
+    if (!fs.existsSync(sbDir)) {
+        // Lazy creation: do not eagerly pollute non-Switchboard workspaces
+        return null;
+    }
+    const reportsDir = path.join(sbDir, 'orchestrator', 'reports');
+    const claimedDir = path.join(reportsDir, 'claimed');
+    await fs.promises.mkdir(claimedDir, { recursive: true });
+    return reportsDir;
+}
+
+/**
+ * Writes a report file to `.switchboard/orchestrator/reports/` using the same
+ * `writeInboxFile` mechanics as the instructions inbox (exclusive-create with
+ * retry, frontmatter flatten). The only TS writer for the reports channel —
+ * agent-authored reports are plain file writes by the agent, not code.
+ */
+export async function writeOrchestratorReport(workspaceRoot: string, req: InstructionRequest): Promise<InstructionWriteResult> {
+    try {
+        const reportsDir = await bootstrapOrchestratorReportsDirectory(workspaceRoot);
+        if (!reportsDir) {
+            return { success: false, error: '.switchboard directory does not exist' };
+        }
+        return writeInboxFile(reportsDir, req, 'report');
+    } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
 }
 
 export async function getLastRunCursor(workspaceRoot: string, jobName: string): Promise<string | null> {

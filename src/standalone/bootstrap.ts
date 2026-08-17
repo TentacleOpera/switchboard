@@ -12,10 +12,9 @@ import {
     buildAnalysisScopeLine,
     columnToPromptRole,
     FOCUS_DIRECTIVE,
-    GIT_SAFETY_DIRECTIVE,
-    SKIP_COMPILATION_DIRECTIVE,
-    SKIP_TESTS_DIRECTIVE,
+    buildSeatDirectiveBlock,
 } from '../services/agentPromptBuilder';
+import { writeOrchestratorReport } from '../services/ScheduledJobsService';
 import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets, createStandaloneFolderWatcher } from './hostServices';
 import {
     getShellHtml as sharedGetShellHtml,
@@ -39,13 +38,14 @@ import { TerminalWsGateway } from './terminalWsGateway';
 import { sendPromptToPty, clearPty, modelPty } from './ptyPromptDelivery';
 import {
     applyStandingOrders,
+    stripStandingOrdersBlock,
     STANDING_ORDERS_CONFIG_KEY,
     StandingOrder,
     TerminalGroup,
     rewriteStandingOrdersForRename,
 } from '../services/standingOrders';
 import { instantiateAgentGroupCore } from '../services/agentGroupInstantiation';
-import { wireSpawnedTeam, findTeamForHeadRole, migrateTeamPairOrders } from '../services/teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRole, migrateTeamPairOrders, migrateCodingTeamOrders } from '../services/teamWiring';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -121,12 +121,15 @@ function htmlEscapeJson(json: string): string {
 
 async function buildPromptForCards(role: string, records: any[], root: string): Promise<string | null> {
     if (records.length === 0) return null;
+    // FOCUS_DIRECTIVE is dispatch-scoped (it references the plan list below it)
+    // and stays here. The seat-scoped directives (git safety, skip-compilation,
+    // skip-tests) were hardcoded here unconditionally — they are now supplied by
+    // the seat block in the delivery layer (deliverPrompt) from the configured
+    // role addons, so both hosts agree and an operator who disabled them stops
+    // receiving them.
     const blocks: string[] = [
         `You are acting as the Switchboard ${role} agent.`,
         FOCUS_DIRECTIVE,
-        GIT_SAFETY_DIRECTIVE,
-        SKIP_COMPILATION_DIRECTIVE,
-        SKIP_TESTS_DIRECTIVE,
         '',
         `Process the following ${records.length} plan(s):`,
     ];
@@ -222,27 +225,55 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
     /**
      * Sole standalone chokepoint for prompt delivery. Every `sendPromptToPty` call
-     * in this host is replaced with `deliverPrompt` so standing orders are appended
-     * consistently across the terminals rail, board dispatch, and memo send-to-planner.
+     * in this host is replaced with `deliverPrompt` so the seat directive block and
+     * standing orders are appended consistently across the terminals rail, board
+     * dispatch, and memo send-to-planner.
+     *
+     * `applyOrders` (4th) controls the standing-orders block — same precedent as
+     * the extension's `standingOrders` field. `applySeatBlock` (5th) controls the
+     * seat-scoped directive block — host-only, like the extension's `seatBlock`
+     * field. Both default true; machine-origin notices (turn-end) pass both false.
+     *
+     * Ordering (constraint 1): strip inbound SO → append seat block →
+     * applyStandingOrders. The $-anchored STANDING_ORDERS_BLOCK_RE requires the
+     * SO block to be last; inverting the order breaks the strip on the next send.
      */
     const deliverPrompt = async (
         handle: any,
         text: string,
         opts: any,
-        applyOrders = true
+        applyOrders = true,
+        applySeatBlock = true
     ): Promise<void> => {
         let out = text;
+        if (applySeatBlock) {
+            try {
+                // Role comes straight off the terminal handle — no IPC needed.
+                // An unresolved role (empty string) falls back to workspace
+                // defaults (guardrail ON) — never an empty block.
+                const role = handle.role || '';
+                const seatOpts = kanbanProvider
+                    ? await kanbanProvider.resolveSeatPromptOptions(role)
+                    : null;
+                const seatBlock = seatOpts ? buildSeatDirectiveBlock(seatOpts) : '';
+                if (seatBlock) {
+                    out = stripStandingOrdersBlock(out) + '\n\n' + seatBlock;
+                }
+            } catch { /* a degraded prompt beats a lost dispatch */ }
+        }
         if (applyOrders) {
             try {
                 const orders = await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []);
                 if (orders.length > 0) {
                     // Migrate pre-rewrite per-member pair rows into team-scoped
-                    // orders before rendering. Pure transform — no DB writes.
-                    const effectiveOrders = migrateTeamPairOrders(orders);
+                    // orders, then migrate stale Coding-team orders, before
+                    // rendering. Pure transforms — no DB writes. Pair-fold
+                    // first, then Coding-team rewrite.
+                    const effectiveOrders = migrateCodingTeamOrders(migrateTeamPairOrders(orders));
                     if (effectiveOrders.length > 0) {
                         const live = new Set(ptyFleetService.listActive().map(t => t.friendlyName));
                         const groups = await db.getConfigJson<TerminalGroup[]>('terminals.groups', []);
-                        out = applyStandingOrders(text, handle.friendlyName, effectiveOrders, live, groups || []);
+                        out = applyStandingOrders(out, handle.friendlyName, effectiveOrders, live, groups || []);
                     }
                 }
             } catch { /* a degraded prompt beats a lost dispatch */ }
@@ -1445,6 +1476,15 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const handle = ptyFleetService.get(payload.name);
                     if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
                     if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
+                    // Strip host-only fields an HTTP caller must not set — same
+                    // boundary strip as TaskViewerProvider.handlePtyVerb.
+                    // `addonsComposed` and `seatBlock` are host-settable only;
+                    // an HTTP caller supplying them would opt a seat out of its
+                    // own safety block. The standalone board path calls
+                    // deliverPrompt directly (never through this case), so it
+                    // bypasses this strip — which is the point.
+                    if (payload.addonsComposed !== undefined) { delete payload.addonsComposed; }
+                    if (payload.seatBlock !== undefined) { delete payload.seatBlock; }
                     try {
                         const deliveryDefaults = getPromptDeliveryOptions();
                         const resolvedClear = typeof payload.clearBeforePrompt === 'boolean'
@@ -1880,6 +1920,18 @@ Each plan file must include:
                 : info.outcome === 'stalled'
                     ? `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`
                     : `[switchboard:turn-end] Seat '${seatName}' has gone quiet on '${planFile}' without writing a completion report — it may be waiting on input.`);
+            // Fire-and-forget mirror to the reports directory — a non-pty
+            // orchestrator reads the same notice as a file. Never awaited
+            // ahead of the pty send, never able to suppress it. `finished`
+            // for the seat-finished variant; `blocked` for both the gone-
+            // quiet and feature-stall variants. Same helper, same from:
+            // system mapping as the extension host twin.
+            void writeOrchestratorReport(info.workspaceRoot, {
+                from: 'system',
+                kind: info.outcome === 'completed' ? 'finished' : 'blocked',
+                planId: planFile,
+                body: message
+            }).catch(() => { /* logged, never fatal */ });
             const active = ptyFleetService.listActive();
             // `recipientSeat` (the feature nudge) names the recipient directly —
             // the head IS the recipient, so resolving its parent would address the
@@ -1920,7 +1972,9 @@ Each plan file must include:
             try {
                 // clearBeforePrompt: false — never wipe the recipient's conversation.
                 // standingOrders (4th arg) false — machine-origin, not a dispatched task.
-                await deliverPrompt(handle, message, { clearBeforePrompt: false }, false);
+                // applySeatBlock (5th arg) false — a one-line machine notice has no
+                // task to constrain; the seat block is noise here.
+                await deliverPrompt(handle, message, { clearBeforePrompt: false }, false, false);
             } catch (err) {
                 log(opts, `turn-end delivery to '${recipientName}' failed: ${err}`);
             }

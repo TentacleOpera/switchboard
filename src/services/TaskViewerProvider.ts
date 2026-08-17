@@ -14,6 +14,7 @@ import {
     mutateStandingOrders,
     makeStandingOrder,
 } from './standingOrders';
+import { writeOrchestratorReport } from './ScheduledJobsService';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConstitutionPath } from './constitutionUtils';
@@ -1271,6 +1272,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 : info.outcome === 'stalled'
                     ? `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`
                     : `[switchboard:turn-end] Seat '${seatName}' has gone quiet on '${planFile}' without writing a completion report — it may be waiting on input.`);
+            // Fire-and-forget mirror to the reports directory — a non-pty
+            // orchestrator reads the same notice as a file. Never awaited
+            // ahead of the pty send, never able to suppress it. `finished`
+            // for the seat-finished variant; `blocked` for both the gone-
+            // quiet and feature-stall variants.
+            void writeOrchestratorReport(info.workspaceRoot, {
+                from: 'system',
+                kind: info.outcome === 'completed' ? 'finished' : 'blocked',
+                planId: planFile,
+                body: message
+            }).catch(() => { /* logged, never fatal */ });
             // ptyListTerminals is the only path that carries agentInstanceId and
             // parentInstanceId across the child-process boundary. The cached
             // _ptyTerminalNames array is friendly names only — insufficient for

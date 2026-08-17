@@ -416,12 +416,14 @@ function buildExecutionIntro(verb: string, plans: BatchPromptPlan[], featureMode
     return `Please ${verb} the ${plans.length} plans below.`;
 }
 
+export const ACCURATE_CODING_DIRECTIVE = `Accuracy Mode: Before coding, read and follow the workflow at .agents/skills/accuracy/SKILL.md step-by-step while implementing this task.`;
+
 function withCoderAccuracyInstruction(basePayload: string, enabled: boolean): string {
     if (!enabled) {
         return basePayload;
     }
 
-    const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agents/skills/accuracy/SKILL.md step-by-step while implementing this task.`;
+    const accuracyInstruction = `\n\n${ACCURATE_CODING_DIRECTIVE}`;
     return `${basePayload}${accuracyInstruction}`;
 }
 
@@ -571,9 +573,35 @@ const GIT_BRANCH_CLAUSES: Record<string, string> = {
 
 /** Commit clause vocabulary. */
 const GIT_COMMIT_CLAUSES: Record<string, string> = {
-    whenDone: 'When you have finished the task, stage all your changes and create a single descriptive commit.',
+    whenDone: 'When you have finished the task, stage the files you changed by explicit path — never `git add -A` or `git add .`. Do not stage anything under `.switchboard/` except this plan\'s own file, whose completion report is part of the work. Then create a single commit with a message describing the change.',
     dontCommit: 'Do NOT commit. Leave all changes in the working tree for the user to review.'
 };
+
+/**
+ * Role → stage marker vocabulary. A role that can be given a commit strategy
+ * maps to the stage its commit finishes; unknown roles yield `undefined` and
+ * emit no stage trailer (a missing marker means "no information", never "not
+ * done"). Exported so readers (and tests) share one vocabulary — a second
+ * hand-maintained copy is how the vocabularies drift.
+ */
+export const STAGE_BY_ROLE: Record<string, string> = {
+    planner: 'planned',
+    lead: 'coded',
+    coder: 'coded',
+    intern: 'coded',
+    claude_designer: 'coded',
+    reviewer: 'reviewed'
+};
+
+/**
+ * The commit strategies that actually produce a commit. The stage-trailer
+ * instruction is gated on membership, not on "is a known commit clause" —
+ * `dontCommit` is a known clause, so a `commit && commit !== 'notSpecified'`
+ * guard lets it through and emits "Do NOT commit. … End the commit message
+ * with a git trailer block", which contradicts itself in the same sentence.
+ * An explicit allowlist forces a decision when a strategy is added.
+ */
+const COMMITTING_STRATEGIES = new Set(['whenDone']);
 
 /** Push clause vocabulary. */
 const GIT_PUSH_CLAUSES: Record<string, string> = {
@@ -605,8 +633,17 @@ export function buildGitPolicyBlock(opts: {
     guardrail?: boolean;
     worktreeActive?: boolean;
     worktreePerPlanActive?: boolean;
+    /** Stage marker for the commit trailer (`planned` | `coded` | `reviewed`).
+     *  When present, the commit clause instructs the agent to add
+     *  `Switchboard-Stage: <stage>` and one `Switchboard-Plan: <id>` line per
+     *  planId. Absent → no trailer instruction (exported skills, custom agents,
+     *  unmapped roles). Optional so callers with no dispatch context
+     *  (AgentSkillExporter) are unaffected. */
+    stage?: string;
+    /** planIds the dispatch carries. Empty/undefined → stage trailer only. */
+    planIds?: string[];
 }): string {
-    const { branch, commit, push, guardrail, worktreeActive, worktreePerPlanActive } = opts;
+    const { branch, commit, push, guardrail, worktreeActive, worktreePerPlanActive, stage, planIds } = opts;
     const clauses: string[] = [];
 
     // Branch clause — suppressed when a feature worktree is already assigned
@@ -615,9 +652,33 @@ export function buildGitPolicyBlock(opts: {
         clauses.push(GIT_BRANCH_CLAUSES[branch]);
     }
 
-    // Commit clause — anchor to the assigned worktree when one is active.
+    // Commit clause — anchor to the assigned worktree when one is active. The
+    // stage-trailer instruction goes INSIDE the commit clause so dontCommit and
+    // notSpecified cannot emit it. A batch dispatch (M plans : 1 prompt : 1
+    // terminal) emits one Switchboard-Plan line per plan; git trailers
+    // legitimately repeat a key, and a reader does a membership test, not
+    // equality. The trailer text precedes the worktree suffix so both read
+    // coherently together.
+    //
+    // The BLANK line is load-bearing, not politeness: git only parses trailers
+    // in the message's final paragraph. Verified against git 2.50.1 — a message
+    // whose trailer lines follow the subject with no blank line returns EMPTY
+    // from `git log --format='%(trailers:key=Switchboard-Stage,valueonly)'`,
+    // which is the exact query the orchestrator skill runs. Instructing the
+    // agent to put the trailers "after the subject line" therefore produces
+    // commits that carry the markers as ordinary body text and read as
+    // unmarked — a silent, total loss of the signal this feature exists to
+    // create. State the blank line, and say why, so the agent cannot drop it.
     if (commit && commit !== 'notSpecified' && GIT_COMMIT_CLAUSES[commit]) {
-        const commitText = GIT_COMMIT_CLAUSES[commit];
+        let commitText = GIT_COMMIT_CLAUSES[commit];
+        if (stage && COMMITTING_STRATEGIES.has(commit)) {
+            const trailerLines = [
+                `Switchboard-Stage: ${stage}`,
+                ...(planIds || []).filter(Boolean).map(id => `Switchboard-Plan: ${id}`)
+            ];
+            const quoted = trailerLines.map(t => `\`${t}\``).join(', ');
+            commitText += ` End the commit message with a git trailer block: a blank line, then ${quoted} — each on its own line, as the last lines of the message. Git only parses trailers in that final block, so the blank line is required.`;
+        }
         clauses.push(worktreeActive ? `${commitText} Commit inside your assigned worktree.` : commitText);
     }
 
@@ -840,8 +901,8 @@ export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
 - do NOT start any auxiliary workflow for this step.`;
 
 export const SPLIT_PLAN_DIRECTIVE = `SPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent." Read the full original file before writing either output. Create both files in the same directory as the original.`;
-export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do not run any project compilation step as part of the verification plan.`;
-export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do not run automated tests as part of the verification plan.`;
+export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do not run any project compilation step as part of the verification plan. This directive overrides the plan file's Verification Plan for this run — the checks remain written down, they are simply not executed now.`;
+export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do not run automated tests as part of the verification plan. This directive overrides the plan file's Verification Plan for this run — the checks remain written down, they are simply not executed now.`;
 // The full research-prompt template now lives in .agents/skills/advise_research/SKILL.md (the
 // canonical source). The generateResearchPrompt() function in src/webview/planning.js is a separate
 // UI-driven code path (Research tab) and remains independent — it embeds the same structure for the
@@ -898,11 +959,118 @@ export function ensureCompletionDirective(text: string): string {
     return text;
 }
 
+// ORCHESTRATOR_REPORT_DIRECTIVE is a sibling of CODING_COMPLETION_REPORT_DIRECTIVE,
+// NOT folded into it — the completion directive's text is load-bearing for
+// completion detection and asserted elsewhere. This directive gives agents a
+// file-based reply channel for mid-work updates (finished, blocked, question,
+// status) that works when ptySendPrompt cannot reach the orchestrator. It is
+// IN ADDITION TO, never INSTEAD OF, the plan-file completion report — an agent
+// that reads it as a replacement breaks completion detection for every card.
+export const ORCHESTRATOR_REPORT_DIRECTIVE = `ORCHESTRATOR REPORT: Post a report file to .switchboard/orchestrator/reports/ when you finish, when you are blocked, when you have a question, and when asked for status. Format: a markdown file named report-<UTC timestamp>-<kind>-<5 digits>.md with frontmatter:
+---
+from: <your seat name>
+kind: finished | blocked | question | status
+planId: <plan id>
+created: <UTC timestamp>
+---
+<one-line message body>
+This is IN ADDITION TO, never INSTEAD OF, the plan-file completion report — the completion report stays in the plan file. Do NOT skip the completion report.`;
+
+/**
+ * Idempotent report-directive guard. Appends ORCHESTRATOR_REPORT_DIRECTIVE to
+ * `text` only if the directive's sentinel (`ORCHESTRATOR REPORT:`) is not
+ * already present, so the directive is never double-appended. Travels
+ * alongside ensureCompletionDirective at every call site.
+ */
+export function ensureOrchestratorReportDirective(text: string): string {
+    if (!text.includes('ORCHESTRATOR REPORT:')) {
+        return text + '\n\n' + ORCHESTRATOR_REPORT_DIRECTIVE;
+    }
+    return text;
+}
+
 
 export const NO_SUBAGENTS_DIRECTIVE = "SUBAGENT POLICY: You are strictly forbidden from spawning or invoking any subagents. Handle all tasks yourself.";
 export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
     `SUBAGENT POLICY: You are authorized to use the "${name}" subagent for this task. Do not spawn or invoke any other subagents.`;
 export const WORKTREES_PER_PLAN_DIRECTIVE = 'Where possible, process each plan as an isolated unit, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
+
+/**
+ * Seat-scoped directive options — the subset of addon config that is true of a
+ * seat regardless of what it is asked to do. Resolved by
+ * `KanbanProvider.resolveSeatPromptOptions` from the same `_getPromptsConfig`
+ * maps the board path uses, then composed by `buildSeatDirectiveBlock` into a
+ * block appended at the pty delivery layer beside standing orders.
+ *
+ * Dispatch-scoped addons (FOCUS_DIRECTIVE, BATCH_EXECUTION_RULES, PRD injection,
+ * project pin, featureSubagentPolicy, workflow-file redirection, pairProgramming)
+ * are deliberately absent — they reference plan files and are meaningless on
+ * arbitrary text sends.
+ */
+export interface SeatDirectiveOptions {
+    subagentPolicy?: 'noSubagents' | 'useSubagents' | 'customSubagent' | 'default';
+    customSubagentName?: string;
+    gitProhibitionEnabled?: boolean;
+    gitBranchStrategy?: string;
+    gitCommitStrategy?: string;
+    gitPushStrategy?: string;
+    skipCompilation?: boolean;
+    skipTests?: boolean;
+    cavemanOutput?: boolean;
+    suppressWalkthrough?: boolean;
+    accurateCoding?: boolean;
+    /** Worktree signals for buildGitPolicyBlock — dispatch-scoped, default false on the seat path. */
+    worktreeActive?: boolean;
+    worktreePerPlanActive?: boolean;
+}
+
+/**
+ * Pure composer for the seat-scoped directive block. Emits the existing
+ * constants verbatim — same strings, same `LABEL:` prefixes, same joining as
+ * `buildKanbanBatchPrompt`. Returns `''` when every seat-scoped addon is at its
+ * no-op value, so the delivery layer appends nothing. No `vscode` import, no
+ * plan input, no new prose.
+ *
+ * The block is structurally separate from the task text: the delivery layer
+ * appends it after the sender's prose and before standing orders, producing
+ * `<sender's text>` → `<seat block>` → `<standing orders>` — the same shape a
+ * board dispatch has.
+ */
+export function buildSeatDirectiveBlock(opts: SeatDirectiveOptions): string {
+    const parts: string[] = [];
+
+    // Subagent policy — 'useSubagents' and 'default' emit no directive on the
+    // seat path. The board path's 'useSubagents' branch emits batch-parallel
+    // text only when plans.length > 1, which is dispatch-scoped.
+    if (opts.subagentPolicy === 'noSubagents') {
+        parts.push(NO_SUBAGENTS_DIRECTIVE);
+    } else if (opts.subagentPolicy === 'customSubagent' && opts.customSubagentName) {
+        parts.push(CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE(opts.customSubagentName));
+    }
+
+    // Git policy — same builder the board path uses.
+    const gitBlock = buildGitPolicyBlock({
+        branch: opts.gitBranchStrategy,
+        commit: opts.gitCommitStrategy,
+        push: opts.gitPushStrategy,
+        guardrail: opts.gitProhibitionEnabled,
+        worktreeActive: opts.worktreeActive,
+        worktreePerPlanActive: opts.worktreePerPlanActive,
+    });
+    if (gitBlock) { parts.push(gitBlock); }
+
+    // Skip directives — verbatim constants, shared with the board path.
+    if (opts.skipCompilation) { parts.push(SKIP_COMPILATION_DIRECTIVE); }
+    if (opts.skipTests) { parts.push(SKIP_TESTS_DIRECTIVE); }
+
+    // Output shaping — verbatim constants.
+    if (opts.cavemanOutput) { parts.push(CAVEMAN_OUTPUT_DIRECTIVE); }
+    if (opts.suppressWalkthrough) { parts.push(SUPPRESS_WALKTHROUGH_DIRECTIVE); }
+    if (opts.accurateCoding) { parts.push(ACCURATE_CODING_DIRECTIVE); }
+
+    if (parts.length === 0) { return ''; }
+    return parts.join('\n\n');
+}
 
 /**
  * Single selector for the feature orchestration directive.
@@ -1103,7 +1271,16 @@ export function normalizeRetiredWorkflowPath(p: string): string {
 }
 
 /** Roles that touch code and should receive the git safety guardrail. */
-const CODE_TOUCHING_ROLES = new Set(['lead', 'coder', 'intern', 'reviewer', 'tester']);
+// `planner` is here because it authors plan files — its own work product,
+// tracked in git — and now carries a commit strategy (`gitCommitStrategyByRole`,
+// `KanbanProvider.ts`) and a commit radio (`ROLE_ADDONS.planner`). Without it,
+// `assembleSuffix` dropped the planner's gitBlock and the whole three-layer
+// wiring was a dead control: the radio saved a value no emitted prompt ever
+// read, and `STAGE_BY_ROLE.planner = 'planned'` could never reach a commit.
+// Default-safe: with the planner's shipped defaults (`gitProhibition: false`,
+// every strategy `notSpecified`) `buildGitPolicyBlock` returns `''` and
+// `assembleSuffix` filters it out, so no default prompt changes.
+const CODE_TOUCHING_ROLES = new Set(['planner', 'lead', 'coder', 'intern', 'reviewer', 'tester']);
 
 /**
  * Shared suffix-block assembler. Canonicalises inclusion rules so they can't
@@ -1289,9 +1466,10 @@ export function buildKanbanBatchPrompt(
             ? (options?.plannerFeatureWorkflowPath || DEFAULT_FEATURE_PLANNER_WORKFLOW)
             : (options?.plannerWorkflowPath || DEFAULT_PLANNER_WORKFLOW);
         const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? false;
-        // §Git — planner is non-code-touching; strategies resolve to `undefined`/`notSpecified`
-        // so only the guardrail clause can fire. Resolved here for symmetry with the outer
-        // scope (the planner branch re-declares gitProhibitionEnabled with its own default).
+        // §Git — planner now carries a commit strategy (it authors plan files, its
+        // own work product, tracked in git). Branch/push stay notSpecified. Resolved
+        // here for symmetry with the outer scope (the planner branch re-declares
+        // gitProhibitionEnabled with its own default).
         const gitBranchStrategy = options?.gitBranchStrategy;
         const gitCommitStrategy = options?.gitCommitStrategy;
         const gitPushStrategy = options?.gitPushStrategy;
@@ -1350,7 +1528,7 @@ export function buildKanbanBatchPrompt(
 
         // Add dispatch context and plan list
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
         const suffixBlock = assembleSuffix('planner', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1478,11 +1656,12 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
         // a reviewer `replace` override silently breaks completion detection (the card's
         // working-state light never clears).
         baseInstructions = ensureCompletionDirective(baseInstructions);
+        baseInstructions = ensureOrchestratorReportDirective(baseInstructions);
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
         const suffixBlock = assembleSuffix('reviewer', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1539,7 +1718,7 @@ For each plan:
             : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct product acceptance / intent review against the product requirements document in-place for each plan.`;
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
         const suffixBlock = assembleSuffix('tester', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1593,12 +1772,13 @@ For each plan:
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
         baseInstructions = ensureCompletionDirective(baseInstructions);
+        baseInstructions = ensureOrchestratorReportDirective(baseInstructions);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
         const suffixBlock = assembleSuffix('lead', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1646,12 +1826,13 @@ For each plan:
                 baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
             }
             baseInstructions = ensureCompletionDirective(baseInstructions);
+        baseInstructions = ensureOrchestratorReportDirective(baseInstructions);
 
 
             // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
             // no subagent block, no feature directive (replaced by featureExecutionBlock).
             // gitBlock still included via assembleSuffix.
-            const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
+            const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
             const suffixBlock = assembleSuffix('coder', {
                 dispatchContextPrefix, gitBlock, antigravityBlock, skipBlock
             });
@@ -1699,12 +1880,13 @@ For each plan:
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
         baseInstructions = ensureCompletionDirective(baseInstructions);
+        baseInstructions = ensureOrchestratorReportDirective(baseInstructions);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
         const suffixBlock = assembleSuffix('coder', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1738,6 +1920,7 @@ For each plan:
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
         baseInstructions = ensureCompletionDirective(baseInstructions);
+        baseInstructions = ensureOrchestratorReportDirective(baseInstructions);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -1746,7 +1929,7 @@ For each plan:
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
         const suffixBlock = assembleSuffix('intern', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1780,7 +1963,7 @@ For each plan:
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
         // §6 — analyst is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('analyst', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
@@ -1842,7 +2025,7 @@ fields above, no speculative implementation detail. Comment only.`;
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
         // §6 — ticket_updater is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('ticket_updater', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
@@ -1893,7 +2076,7 @@ fields above, no speculative implementation detail. Comment only.`;
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
         // §6 — researcher is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('researcher', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
@@ -2143,6 +2326,7 @@ export function buildCustomAgentPrompt(
         (customGitCommit === 'whenDone' || customGitPush === 'pushWhenDone') && !customGuardrailOn;
     if (customWritesCode) {
         prompt = ensureCompletionDirective(prompt);
+        prompt = ensureOrchestratorReportDirective(prompt);
     }
 
     return normalizeNewlines(prompt);
