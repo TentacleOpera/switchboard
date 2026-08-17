@@ -300,3 +300,7 @@ Open the TEAMS tab and look at it:
 ---
 
 **Recommendation:** Complexity 6 → **Send to Coder.**
+
+## Completion Report
+
+Implemented in commits `a7941d32` (initial) and `758c6e2c`-followup (defect fix). The TEAMS tab now renders three team cards with pixel-art portrait `<symbol>` placeholders in one `<defs>` block, a clickable card row merging adopted teams with un-adopted shipped types (matched by name so no double-render), and a flow diagram below that derives head + member nodes from `headRole`/`members[]` with `count` expanding to N nodes and edges typed by `MEMBER_RELATIONSHIP_PRESETS`. The flow panel's single action button resolves its label from adoption state — `START` for adopted teams, `USE & START` for shipped types — with the start sequenced on `saveAgentGroupResult` so a forked id is persisted before `ptyStartTeam` resolves it. A new `startAgentGroup` arm in `KanbanProvider._handleMessage` carries group ID only (never a definition, matching `ptyStartTeam`'s payload.group rejection) and splits by host: standalone calls `startAgentGroupById` with a real `liveTerminals` provider registered from `bootstrap.ts` (the double-start refusal check now sees the live fleet), extension calls `TaskViewerProvider.startTeamForWorkspace` unmodified. Reduced-motion support, copy fixes, and the `+ Build your own` link demoting the custom card are all landed. Lint passes with 0 errors; verb-returns and push-routing checks pass.

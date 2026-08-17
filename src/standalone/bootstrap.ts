@@ -2048,6 +2048,19 @@ Each plan file must include:
             // needs an explicit mirror write.)
         });
     });
+    // Live-terminals provider for the TEAMS-tab `startAgentGroup` arm.
+    // `startAgentGroupById` takes `liveTerminals` as a parameter and uses it
+    // for the double-start refusal check; without a real provider the check
+    // sees an empty list and a second head spawns on top of a live one. Same
+    // shape the ptyStartTeam verb builds at :1218-1224.
+    kanbanProvider.setLiveTerminalsProvider(async () =>
+        ptyFleetService.listActive().map(t => ({
+            role: t.role,
+            friendlyName: t.friendlyName,
+            parentInstanceId: t.parentInstanceId,
+            status: t.status,
+        }))
+    );
     // Awaited here, well before `server.start()` below: a ghost `purpose:'pty'`
     // entry from a previous run would otherwise satisfy /kanban/dispatch's
     // no-live-terminal pre-flight and route work at a dead pid.

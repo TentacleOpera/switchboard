@@ -321,6 +321,20 @@ export class KanbanProvider implements vscode.Disposable {
         this._agentGroupInstantiator = fn;
     }
 
+    /**
+     * Live-terminals provider for the standalone host's `startAgentGroup` arm.
+     * `startAgentGroupById` takes `liveTerminals` as a parameter (it has no
+     * fleet access of its own); without a real provider the double-start
+     * refusal check sees an empty list and a second head spawns on top of a
+     * live one. Registered from bootstrap.ts where ptyFleetService is in
+     * scope — same seam as setAgentGroupInstantiator. Returns the same shape
+     * bootstrap.ts:1218-1224 builds for the ptyStartTeam verb.
+     */
+    private _liveTerminalsProvider?: () => Promise<Array<{ role?: string; friendlyName?: string; parentInstanceId?: any; status?: string }>>;
+    public setLiveTerminalsProvider(fn: () => Promise<Array<{ role?: string; friendlyName?: string; parentInstanceId?: any; status?: string }>>) {
+        this._liveTerminalsProvider = fn;
+    }
+
     public setTaskViewerProvider(provider: TaskViewerProvider) {
         this._taskViewerProvider = provider;
         // Constructor's _reloadSettingsFromStore ran before the DB tier was reachable;
@@ -11614,7 +11628,10 @@ ${FOCUS_DIRECTIVE}`;
                     // the candidate-root walk, so this arm must NOT resolve a root
                     // of its own.
                     const result = this._agentGroupInstantiator
-                        ? await this.startAgentGroupById(workspaceRoot, groupId, async () => [])
+                        ? await this.startAgentGroupById(
+                              workspaceRoot, groupId,
+                              this._liveTerminalsProvider || (async () => [])
+                          )
                         : await this._taskViewerProvider!.startTeamForWorkspace({
                               teamId: groupId,
                               pinnedRoot: workspaceRoot,

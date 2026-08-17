@@ -228,3 +228,7 @@ None. The placement, the form pattern, and the deletion of the picker section ar
 ---
 
 **Recommendation:** Complexity 3 → **Send to Intern.**
+
+## Completion Report
+
+Implemented in the sidebar-control commit. `START TEAM` is now a full-width `secondary-btn w-full` in `.sidebar-ops` between `FILL GRID`'s form and `CLEAR ALL TERMINALS`, with an inline `#start-team-form` reusing the `.fill-grid-form` pattern — team `<select>` populated on open from `fetchAgentGroups()`, workspace target `<select>` unhidden only when 2+ roots exist, `CANCEL` closes with no side effect, `START` submits `startTeam({ id }, { parentRoot? })`. The orphaned `.team-picker`/`.team-option*` CSS block was deleted, and the `buildRolePicker` team section was removed with `const teams` moved down to the role-picker banner so `autoStartByHeadRole` and the role-chip annotation (`role-option-team-note`/`teamSpawnSummary`) survive. The picker's title "New terminal — pick a role" is now accurate — every remaining control in it creates one terminal. Zero teams surfaces an honest toast rather than an empty form. Grep gates pass: `team-picker|team-option` returns nothing, the annotation trio survives, `const teams` has exactly one hit. Lint passes with 0 errors; compile and tests skipped per standing orders.
