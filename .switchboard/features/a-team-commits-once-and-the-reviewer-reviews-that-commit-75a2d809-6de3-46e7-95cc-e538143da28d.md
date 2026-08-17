@@ -56,11 +56,11 @@ This feature makes a team commit once, as its head: members report instead of co
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [A Coder's Commit Sweeps the Whole Shared Tree, Including Its Peers' Unfinished Work](../plans/agent-commits-sweep-the-whole-shared-tree.md) — **CODER CODED**
-- [ ] [A Lead-Dispatched Coder's Commits Carry No Stage Trailers, So Coded Work Reads as Unmarked](../plans/lead-dispatched-commits-carry-no-stage-trailers.md) — **CODER CODED**
-- [ ] [A Team Commits Once, As Its Head — Members Never Commit Their Own Subtasks](../plans/a-team-commits-once-as-its-head.md) — **CODER CODED**
-- [ ] [The Reviewer Is Never Told What To Review — It Is Handed Plan Paths and a Dirty Tree](../plans/the-reviewer-is-never-told-what-to-review.md) — **CODER CODED**
-- [ ] [A Lead-Dispatched Plan Is Never Registered, So Every Backstop Downstream Is Blind](../plans/a-lead-dispatched-plan-is-never-registered.md) — **CODER CODED**
+- [ ] [A Coder's Commit Sweeps the Whole Shared Tree, Including Its Peers' Unfinished Work](../plans/agent-commits-sweep-the-whole-shared-tree.md) — **CODE REVIEWED**
+- [ ] [A Lead-Dispatched Coder's Commits Carry No Stage Trailers, So Coded Work Reads as Unmarked](../plans/lead-dispatched-commits-carry-no-stage-trailers.md) — **CODE REVIEWED**
+- [ ] [A Team Commits Once, As Its Head — Members Never Commit Their Own Subtasks](../plans/a-team-commits-once-as-its-head.md) — **CODE REVIEWED**
+- [ ] [The Reviewer Is Never Told What To Review — It Is Handed Plan Paths and a Dirty Tree](../plans/the-reviewer-is-never-told-what-to-review.md) — **CODE REVIEWED**
+- [ ] [A Lead-Dispatched Plan Is Never Registered, So Every Backstop Downstream Is Blind](../plans/a-lead-dispatched-plan-is-never-registered.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -78,3 +78,7 @@ Execution order, and why each position is load-bearing:
 **External conflicts.** `src/webview/kanban.html` (touched by #1) is contended by the *Teams You Can See, Start and Trust* feature's remaining subtasks — serialise behind them. The seat-block function bodies are also contended by `a-lead-dispatched-agent-is-told-less-than-a-board-dispatched-one.md` (`d91d7daf`, PLAN REVIEWED), which fixes the completion-report half of the same seam; sequence it before or after this feature, never during.
 
 **Gate between #3 and #4.** #3 changes what a live team is told about committing, and it is the only subtask that alters behaviour for a seat an operator is actively using. Verify it by hand — the manual steps are written for it — before starting #4.
+
+## Review Findings
+
+All five subtasks reviewed in-place against their plan files, landed in `d0a9eae4`. One CRITICAL and two MAJOR found and fixed: `resolveTeamStanding` resolved headship only from the `team-head` standing order, which `wireSpawnedTeam` writes only for a team with a non-empty `headPrompt` — one of three shipped team types — so every other team gagged its members while its head kept the shipped `notSpecified` default and was told to commit nothing, which also starved subtask #4's trailers and subtask #5's review unit; headship now resolves from the always-written `team` order's `parent` as well. The two MAJORs were red CI gates: a hoist comment in `bootstrap.ts` put the token `applyStandingOrders` textually above `buildSeatDirectiveBlock` and tripped the source-text ordering assertion, and `paste-attribution-contract.test.js:56` pinned the exact `\d+` plan-id regex subtask #2 exists to correct. Files changed by this review: `src/services/standingOrders.ts`, `src/standalone/bootstrap.ts`, `src/test/paste-attribution-contract.test.js`, `src/test/seat-safeguards-fleet-prompt-path.test.js`. Validation: `tsc -p tsconfig.test.json` clean, `eslint src` 0 errors, and seat-safeguards 94/0, stage-marker-commit 44/0, standing-orders-marker 55/0, terminal-plan-attribution 40/0, paste-attribution 8/0, team-scoped-routing 41/0, multi-parent-terminals 29/0, team-autostart-scope 22/0 — all eight suites are CI-wired in `.github/workflows/integration-tests.yml`. Remaining risks, both accepted per the plans: `selectOrders` ANDs the shared predicate onto its inline test rather than replacing it (narrower only for a multi-team seat), and a team-member reviewer receives `Do NOT commit` on `ptySendPrompt` while its real board dispatch stays ungated.

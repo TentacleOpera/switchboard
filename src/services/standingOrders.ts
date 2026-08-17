@@ -121,6 +121,26 @@ export function resolveTeamStanding(
             return { inTeam: true, isHead: true, teamId: o.teamId, headName: o.parent, members: group.members };
         }
     }
+    // Head-second: a `team-head` order exists ONLY when the team was wired with a
+    // non-empty headPrompt (`wireSpawnedTeam`), which is true for exactly one of
+    // the three shipped team types and for no operator-created team that left the
+    // head-prompt box empty. The head name is nevertheless always recorded — the
+    // ALWAYS-written `team` order stores it in `parent` precisely so the head can
+    // be excluded from member delivery. Resolve headship from that same fact, or
+    // a headPrompt-less team gags its members into `dontCommit` while its head
+    // keeps the shipped `notSpecified` default and is told to commit nothing —
+    // a completed body of work with no committer, which is the exact asymmetry
+    // this gate exists to prevent. Runs as its own pass, before the member pass,
+    // so "head wins" holds regardless of the order rows' array order.
+    for (const o of orders) {
+        if (scopeOf(o) !== 'team') { continue; }
+        if (!o.teamId) { continue; }
+        const group = groups.find(g => g && g.id === o.teamId);
+        if (!group || !Array.isArray(group.members)) { continue; }
+        if (!!o.parent && targetName === o.parent && group.members.includes(targetName)) {
+            return { inTeam: true, isHead: true, teamId: o.teamId, headName: o.parent, members: group.members };
+        }
+    }
     // Not a head of any team — check if the target is a non-head member of a
     // team-scope order's group. The head exclusion (`o.parent && targetName ===
     // o.parent`) is the SAME check `selectOrders`' team branch uses, so the two

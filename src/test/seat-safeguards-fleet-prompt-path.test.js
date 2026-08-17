@@ -1134,6 +1134,39 @@ test('resolveTeamStanding: a non-head member resolves isHead false; the head res
     assert.strictEqual(headStanding.isHead, true, 'head must be head');
 });
 
+// 1b. SYMMETRY REGRESSION: `wireSpawnedTeam` writes the `team-head` order ONLY
+//     when the team was wired with a non-empty headPrompt — true for exactly one
+//     of the three shipped team types, and for no operator-created team that left
+//     the head-prompt box empty. Resolving headship from the `team-head` scope
+//     ALONE therefore left such a head as inTeam:false, so the gate gagged its
+//     members into dontCommit while the head kept the shipped notSpecified
+//     default and received no commit clause at all — a completed body of work
+//     with no committer, which is the exact asymmetry this gate exists to
+//     prevent. The ALWAYS-written `team` order carries the head name in `parent`
+//     (that is how selectOrders excludes the head from member delivery), so
+//     headship resolves from it too.
+test('resolveTeamStanding: a team wired with NO headPrompt still resolves its head as isHead', () => {
+    const resolve = loadResolveTeamStanding();
+    const teamId = 'team_res_lead';
+    const headName = 'res-lead';
+    const memberName = 'res-1';
+    const groups = [{ id: teamId, name: headName, members: [headName, memberName] }];
+    // Only the `team` order — no `team-head` row, because no headPrompt was supplied.
+    const orders = [
+        { id: 'team-member', parent: headName, child: '', instruction: 'report to head', createdAt: 0, scope: 'team', teamId },
+    ];
+    const headStanding = resolve(headName, orders, groups);
+    assert.strictEqual(headStanding.inTeam, true,
+        'a headPrompt-less team head must be inTeam, or the commit gate skips it entirely');
+    assert.strictEqual(headStanding.isHead, true,
+        'a headPrompt-less team head must resolve isHead, or its team is gagged with no committer');
+    assert.deepStrictEqual(headStanding.members, [headName, memberName],
+        'the head must carry its team roster verbatim, or its commit trailers resolve no plan ids');
+    const memberStanding = resolve(memberName, orders, groups);
+    assert.strictEqual(memberStanding.inTeam, true, 'the member is still gated');
+    assert.strictEqual(memberStanding.isHead, false, 'the member is still not the head');
+});
+
 // 2. A seat with gitCommitStrategy 'whenDone' that is a non-head member composes
 //    a block containing GIT_COMMIT_CLAUSES.dontCommit verbatim and NOT the
 //    whenDone text.

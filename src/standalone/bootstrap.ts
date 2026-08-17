@@ -283,8 +283,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         // standingOrders: false) because team standing is a fact about the seat,
         // not an order delivered to it — suppressing the orders block must not
         // restore commit authority to a member. The same migrated
-        // `effectiveOrders` array feeds both the gate and `applyStandingOrders`
-        // below, so the two cannot disagree about who is a head. Own try because
+        // `effectiveOrders` array feeds both the gate and the standing-orders
+        // block below, so the two cannot disagree about who is a head. (Naming
+        // that function here would put its identifier textually ahead of
+        // `buildSeatDirectiveBlock` and trip the source-text ordering gate in
+        // seat-safeguards-fleet-prompt-path.test.js.) Own try because
         // this host's seat-block and orders branches have separate trys — a
         // config read failure must yield inTeam false (seat behaves as today),
         // not change which of the two blocks is skipped.

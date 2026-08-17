@@ -53,7 +53,12 @@ test('extractPastedDispatchIdentity is defined and scans for dispatch identity',
     const fn = block(terminalsJs, 'function extractPastedDispatchIdentity(text) {', 'const pendingBatchEntries = new Set();');
     assert.ok(fn.includes('PLANS TO PROCESS:'), 'scanner must look for dispatch marker');
     assert.ok(fn.includes('PLANS TO DISCUSS:'), 'scanner must reject consultation marker');
-    assert.ok(/PLAN_ID=\(\\d\+\)/.test(fn), 'scanner must extract PLAN_ID digits');
+    // Plan ids are UUIDs. The shipped `(\d+)` captured a single leading digit
+    // out of one (`PLAN_ID=6bef84f4-…` → `"6"`) and survived unnoticed on the
+    // planFiles fallback; this assertion used to pin that defect. It now pins
+    // the correction, and terminal-plan-attribution-contract.test.js holds the
+    // byte-equality mirror against dispatchIdentity.ts so the two cannot drift.
+    assert.ok(/PLAN_ID=\(\[0-9a-fA-F-\]\{8,\}\)/.test(fn), 'scanner must extract full UUID PLAN_IDs, not just digits');
     assert.ok(/Plan File:\\s\+\(\\S\+\)/.test(fn), 'scanner must extract Plan File paths');
     assert.ok(fn.includes('PASTE_SCAN_MIN_CHARS'), 'scanner must respect min-chars threshold');
 });

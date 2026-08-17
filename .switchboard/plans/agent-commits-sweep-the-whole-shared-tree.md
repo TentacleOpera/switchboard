@@ -194,3 +194,7 @@ None. The clause text, its quoting, its placement in one of the two constants, a
 
 Implemented explicit staging-scope clause across `GIT_SAFETY_DIRECTIVE` in `src/services/agentPromptBuilder.ts`, the webview client mirror `GIT_SAFETY_DIRECTIVE_CLIENT` in `src/webview/terminals.js`, and all 3 shipped team prompt templates in `src/webview/kanban.html`. Added a negative contract assertion in `src/test/standing-orders-marker-contract.test.js` ensuring `GIT_SAFETY_DIRECTIVE_WORKTREE_MODE` excludes the staging-scope restriction. No issues encountered during implementation.
 
+
+## Review Findings
+
+Reviewed against the plan as source of truth; no findings. The clause landed in `GIT_SAFETY_DIRECTIVE` only (`agentPromptBuilder.ts:562`), with `GIT_SAFETY_DIRECTIVE_WORKTREE_MODE` correctly untouched and now pinned by the new negative assertion in `standing-orders-marker-contract.test.js`; all four mirrors moved together (`terminals.js` still one unbroken literal, `kanban.html` `+`-joined as its extractor requires), and the clause is apostrophe-free with both commands in backticks so `stage-marker-commit-contract.test.js:173`'s stripper still passes. Validation: `standing-orders-marker` 55/0, `stage-marker-commit` 44/0, `tsc -p tsconfig.test.json` clean, `eslint src` 0 errors. Remaining risk: teams already adopted on disk carry the pre-clause prompt — explicitly out of scope per the plan's Migration note, since the delivery-layer directive is what actually reaches a seat.
