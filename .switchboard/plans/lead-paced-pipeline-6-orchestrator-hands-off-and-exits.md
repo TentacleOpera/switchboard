@@ -46,7 +46,7 @@ From that moment the pipeline is lead-paced (plan 1), queue-ordered (plan 2), an
 
 * **Handoff is a real terminal state**, not "arm and hope the agent stays quiet."
 * **Handoff is the default for one team.** Arming requires a reason the orchestrator must state — multiple teams, worktrees, or cross-repo coordination.
-* **Exit means the terminal ends.** An idle-but-seated orchestrator is a resident manager with extra steps and a live context bill — *except* under Remote Control, which is a third state rather than an exception to the rule (see below).
+* **Exit means the terminal ends.** An idle-but-seated orchestrator is a resident manager with extra steps and a live context bill. Remote Control does not change this: remote intake is a batch that wakes an orchestrator, gets sequenced, and hands off (subtask 7) — it needs no resident session.
 * **The orchestrator dispatches card one through `queue/next`**, not a bespoke path. One dispatch entry point for the button, the orchestrator and the lead.
 * **The handoff report is required output.** An exit the user cannot see reads as a crash.
 
@@ -60,9 +60,9 @@ From that moment the pipeline is lead-paced (plan 1), queue-ordered (plan 2), an
 
 2. **Do not arm on handoff.** The arming block (`TaskViewerProvider.ts:10633-10642`) is reached only by `/confirm`. Handoff must not touch `automationMode` — under plan 4 that axis is gone, and until then handoff must leave it exactly as it found it so the two paths cannot both think they own pacing.
 
-3. **Persona: `## Handoff, or arm?`** — a decision the agent makes explicitly and states. One team and a linear queue → handoff. Multiple teams, worktrees, or separate repos → arm, and say why in one line. Remote Control active → stay seated (subtask 7). Default is handoff; anything else needs a stated reason.
+3. **Persona: `## Handoff, or arm?`** — a decision the agent makes explicitly and states. One team and a linear queue → handoff. Multiple teams, worktrees, or separate repos → arm, and say why in one line. Default is handoff; arming needs a stated reason.
 
-3b. **Three session states, named.** `handed off` (exited, nothing running but the queue), `armed` (multi-team coordination, wake interval installed), and `seated` (Remote Control — idle, **no timer**, woken only by inbound instructions per `switchboard-contracts` #9). The seated state is what keeps subtask 7 from contradicting this plan's exit rule: a terminal woken by push costs nothing between messages, which is not true of an armed one. Handoff must refuse to exit while Remote Control is active.
+3b. **Two session states, named.** `handed off` (exited; nothing running but the queue and its watch) and `armed` (multi-team coordination, wake interval installed). Remote intake does not add a third: a batch of remote plans wakes an orchestrator, which sequences the batch and hands off exactly as an interactive session does (subtask 7).
 
 4. **Persona: `## The handoff sequence`** — the five steps above as an ordered procedure with the exact calls, ending in `POST /orchestration/handoff` and exit. Written so the agent cannot end a session in the seated-but-idle state that this plan exists to remove.
 
@@ -80,7 +80,6 @@ From that moment the pipeline is lead-paced (plan 1), queue-ordered (plan 2), an
 - **Unit:** handoff does not set `automationMode` or the armed flag, and does not install any timer.
 - **Unit:** `/confirm` still arms, unchanged, for the multi-team path.
 - **Contract test:** the persona contains `## Handoff, or arm?` and `## The handoff sequence`, and the handoff sequence ends in an exit. Both are covered by the persona gate.
-- **Unit:** the `seated` state installs no timer — the distinction from `armed` is the whole justification for allowing a non-exiting orchestrator, so a wake interval leaking into it is a real defect.
 - **Manual UAT — the headline case:** from a cold start with four ready plans and no team, run `/switchboard`. The orchestrator should scope, launch a team, stage four, dispatch one, report, and **exit**. Then all four must complete with no orchestrator running and no timers installed.
 - **Manual UAT:** a two-team worktree session still reaches the armed path, with the orchestrator stating why it armed.
 - **Manual UAT:** after handoff, the automation panel shows the queue session and the pacing lead, not an armed orchestrator.
