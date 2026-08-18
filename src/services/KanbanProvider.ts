@@ -206,24 +206,24 @@ export function normalizeFeatureWorktreeMode(value: unknown): 'none' | 'per-feat
 }
 
 // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────────
-// │ Imports & module helpers .................... lines 1–205
-// │ class KanbanProvider .......................... line 211
-// │   Fields / wiring setters ..................... lines 212–360
-// │   Workspace roots / state messages ............ lines 360–1587
-// │   open() / deserializeWebviewPanel ............. lines 1588–1781
-// │   refresh / refreshWithData / push helpers ..... lines 1816–2265
-// │   postMessage / per-connection push renderers .. lines 2256–2400
-// │   Auto-archive / Remote Control API ............ lines 2627–2840
-// │   ClickUp sync result handling ................ lines 3309–3450
-// │   Dispatch identity / prompt generation ........ lines 3450–5510
-// │   Seat prompt options / role config ........... lines 5510–6662
-// │   Column state cleanup / visible agents ........ lines 6663–6994
-// │   Control plane / repo scope / project filter .. lines 6995–7400
-// │   Card-move / queue / column moves ............. lines 7402–8083
-// │   API server / dispatch resolution ............. lines 8084–8264
-// │   handleServiceVerb / _handleMessage switch .... lines 8178–12540
-// │   Feature CRUD / subtask / worktree arms ....... lines 12537–12835
-// │   Feature subtask resolve (phase 1a/1b/2) ...... lines 14145–14280
+// │ Imports & module helpers .................... lines 1–226
+// │ class KanbanProvider .......................... line 232
+// │   Fields / wiring setters ..................... lines 233–381
+// │   Workspace roots / state messages ............ lines 381–1608
+// │   open() / deserializeWebviewPanel ............. lines 1609–1802
+// │   refresh / refreshWithData / push helpers ..... lines 1837–2286
+// │   postMessage / per-connection push renderers .. lines 2277–2421
+// │   Auto-archive / Remote Control API ............ lines 2648–2861
+// │   ClickUp sync result handling ................ lines 3330–3471
+// │   Dispatch identity / prompt generation ........ lines 3471–5531
+// │   Seat prompt options / role config ........... lines 5531–6683
+// │   Column state cleanup / visible agents ........ lines 6684–7015
+// │   Control plane / repo scope / project filter .. lines 7016–7421
+// │   Card-move / queue / column moves ............. lines 7423–8104
+// │   API server / dispatch resolution ............. lines 8105–8285
+// │   handleServiceVerb / _handleMessage switch .... lines 8199–12561
+// │   Feature CRUD / subtask / worktree arms ....... lines 12558–12856
+// │   Feature subtask resolve (phase 1a/1b/2) ...... lines 14166–14301
 // └──────────────────────────────────────────────────────────────────────────
 
 /**

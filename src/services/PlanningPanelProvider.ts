@@ -162,26 +162,26 @@ interface KanbanPlanSummary {
 }
 
 // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────────
-// │ Imports & type defs .......................... lines 1–102
-// │ class PlanningPanelProvider .................... line 104
-// │   handleServiceVerb / verb delegation ......... lines 106–185
+// │ Imports & type defs .......................... lines 1–185
+// │ class PlanningPanelProvider .................... line 187
+// │   handleServiceVerb / verb delegation ......... lines 189–268
 // │   Seam bundle / webview setup / message
-// │     listener wiring .......................... lines 186–820
-// │   postMessageToWebview / project fan-out ...... lines 927–1000
-// │   Theme / animation / scanlines settings ....... lines 821–850
-// │   _handleMessage switch (planning + project) .. lines 2510–5210
-// │     Roots / tab-state / comment / containers ... lines 2539–2900
-// │     Docs fetch / filtered / pages .............. lines 2904–3012
-// │     Create-plans wizard ....................... lines 3013–3170
-// │     Local docs / link / duplicate .............. lines 3172–3360
-// │     Artifact / html-tweak / chat prompts ....... lines 3360–3420
-// │     Kanban plans / features / constitution ..... lines 3507–4540
-// │     Project PRD / context / architect .......... lines 4186–4530
-// │     File save / linear catalog / online sync ... lines 4634–5210
-// │   Online doc create / sync / import-full-doc ... lines 4897–6810
-// │   Import research doc / ticket-file-changed .... lines 6856–7107
-// │   Stitch / insights / tuning arms .............. lines 5091–5210
-// │   Planning HTML preview server ................ lines 1773–1850
+// │     listener wiring .......................... lines 269–903
+// │   postMessageToWebview / project fan-out ...... lines 1010–1083
+// │   Theme / animation / scanlines settings ....... lines 904–933
+// │   _handleMessage switch (planning + project) .. lines 2593–5312
+// │     Roots / tab-state / comment / containers ... lines 2622–2983
+// │     Docs fetch / filtered / pages .............. lines 2987–3095
+// │     Create-plans wizard ....................... lines 3096–3272
+// │     Local docs / link / duplicate .............. lines 3274–3462
+// │     Artifact / html-tweak / chat prompts ....... lines 3462–3522
+// │     Kanban plans / features / constitution ..... lines 3609–4642
+// │     Project PRD / context / architect .......... lines 4288–4632
+// │     File save / linear catalog / online sync ... lines 4736–5312
+// │   Online doc create / sync / import-full-doc ... lines 4999–6912
+// │   Import research doc / ticket-file-changed .... lines 6958–7209
+// │   Stitch / insights / tuning arms .............. lines 5193–5312
+// │   Planning HTML preview server ................ lines 1856–1933
 // └──────────────────────────────────────────────────────────────────────────
 
 export class PlanningPanelProvider {
@@ -3262,7 +3262,15 @@ Start by checking which documents exist, then present the menu.`;
                 this._seams().ui.showTemporaryNotification('Docs maintenance prompt copied to clipboard');
                 const dhResult = { type: 'docsHealthPromptResult', success: true };
                 this.postMessageToWebview(dhResult);
-                return { success: true, ...dhResult };
+                // `prompt` in the RETURNED body is what fills the clipboard on the
+                // browser host: the headless clipboard seam is a no-op logger
+                // (standalone/hostServices.ts), so the writeText above copies nothing
+                // there — transport.js copies `result.prompt` via navigator.clipboard
+                // client-side. Without it #dh-status says "Copied to clipboard!" over
+                // an empty clipboard, a faked success the panel contract forbids. The
+                // editor host ignores the extra field. `success` comes from dhResult
+                // (spreading it after a literal `success` is TS2783).
+                return { ...dhResult, prompt: DOCS_HEALTH_PROMPT };
             }
             case 'importResearchDoc': {
                 const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;

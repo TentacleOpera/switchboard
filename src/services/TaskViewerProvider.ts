@@ -379,25 +379,25 @@ function resolvePtyClearDelay(cfg: vscode.WorkspaceConfiguration): number {
 
 // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────────
 // │ Imports & module helpers .................... lines 1–375
-// │ class TaskViewerProvider ...................... line 377
-// │   _handleMessage / handleServiceVerb dispatch . lines 379–410
-// │   Survivor scheduler state ................... lines 1165–1202
-// │   Provider wiring setters ..................... lines 4698–4730
-// │   postMessage / cross-panel fan-out ........... lines 4724–7430
-// │   Plan selection / loading / recovery ......... lines 8393–8500
-// │   Orchestrator start / onboarding ............. lines 10507–11600
+// │ class TaskViewerProvider ...................... line 400
+// │   _handleMessage / handleServiceVerb dispatch . lines 402–433
+// │   Survivor scheduler state ................... lines 1188–1225
+// │   Provider wiring setters ..................... lines 4721–4753
+// │   postMessage / cross-panel fan-out ........... lines 4747–7453
+// │   Plan selection / loading / recovery ......... lines 8416–8523
+// │   Orchestrator start / onboarding ............. lines 10530–11623
 // │   Verb routing (kanban/planning/design/
-// │     setup/tickets) ........................... lines 3256–3310
-// │   Last-accessed tracking & prefetch ........... lines 9086–9200
-// │   Message listener builder / plan registry .... lines 12843–16000
-// │   Plan recovery / workspace identity .......... lines 15498–16000
-// │   Setup/tickets/linear/clickup verb arms ...... lines 12861–14550
-// │   Memo arms (list/load/save/clear/generate) ... lines 14087–14260
-// │   Pipeline / airlock / kanban workflow ......... lines 14261–14500
-// │   DB path / archive query / reset ............. lines 14295–14415
-// │   Action-triggered / airlock sync ............. lines 20763–23200
-// │   Comment manager / JSON cache ................ lines 25584–26310
-// │   Surviving scheduler jobs .................... lines 26311–26570
+// │     setup/tickets) ........................... lines 3279–3333
+// │   Last-accessed tracking & prefetch ........... lines 9109–9223
+// │   Message listener builder / plan registry .... lines 12866–16023
+// │   Plan recovery / workspace identity .......... lines 15521–16023
+// │   Setup/tickets/linear/clickup verb arms ...... lines 12884–14573
+// │   Memo arms (list/load/save/clear/generate) ... lines 14110–14283
+// │   Pipeline / airlock / kanban workflow ......... lines 14284–14523
+// │   DB path / archive query / reset ............. lines 14318–14438
+// │   Action-triggered / airlock sync ............. lines 20786–23223
+// │   Comment manager / JSON cache ................ lines 25607–26333
+// │   Surviving scheduler jobs .................... lines 26334–26593
 // └──────────────────────────────────────────────────────────────────────────
 
 export class TaskViewerProvider implements vscode.WebviewViewProvider {

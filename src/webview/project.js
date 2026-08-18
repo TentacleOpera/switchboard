@@ -69,18 +69,18 @@
     });
 
     // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────
-    // │ IIFE / vscode wrapper / tab switching ...... lines 1–69
-    // │ Global state (edit/review/dirty/scope) ...... lines 71–90
-    // │ Kanban plans fetch & render ................ lines 91–400
-    // │ Kanban plan card / column / complexity ...... lines 401–830
-    // │ Constitution status / paths ................. lines 831–1296
-    // │ Kanban plan log / detail modal .............. lines 1297–1503
-    // │ Project PRD / context-enabled ............... lines 1504–2131
-    // │ Architect prompt / feature details .......... lines 2087–2698
-    // │ Feature subtask add/remove .................  lines 2699–2838
-    // │ Constitution builder / updater / addon ...... lines 2839–3088
-    // │ Constitution path CRUD ...................... lines 3089–3389
-    // │ Insights (read/extract/governance/status) ... lines 3390–3690
+    // │ IIFE / vscode wrapper / tab switching ...... lines 1–84
+    // │ Global state (edit/review/dirty/scope) ...... lines 86–105
+    // │ Kanban plans fetch & render ................ lines 106–415
+    // │ Kanban plan card / column / complexity ...... lines 416–845
+    // │ Constitution status / paths ................. lines 846–1311
+    // │ Kanban plan log / detail modal .............. lines 1312–1518
+    // │ Project PRD / context-enabled ............... lines 1519–2146
+    // │ Architect prompt / feature details .......... lines 2102–2713
+    // │ Feature subtask add/remove .................  lines 2714–2853
+    // │ Constitution builder / updater / addon ...... lines 2854–3103
+    // │ Constitution path CRUD ...................... lines 3104–3404
+    // │ Insights (read/extract/governance/status) ... lines 3405–3705
     // └──────────────────────────────────────────────────────────────────────
 
     // Global state

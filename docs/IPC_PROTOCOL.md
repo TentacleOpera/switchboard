@@ -40,106 +40,106 @@ Webview: `src/webview/kanban.html` (inline JS). Provider: `src/services/KanbanPr
 
 | Message type | Sent from | Handled in (case arm) | Purpose |
 | :--- | :--- | :--- | :--- |
-| `ready` | kanban.html (init) | `KanbanProvider.ts` ~8267 | Panel ready — seed state. |
-| `selectPlan` | kanban.html (card click) | ~8340 | Select a plan card. |
-| `openPlanByPath` | kanban.html | ~8349 | Open a plan by file path. |
-| `refresh` / `scanFoldersNow` | kanban.html | ~8379 / ~8384 | Rescan plan folders. |
-| `reassignPlansWorkspace` | kanban.html | ~8389 | Reassign plans to a workspace. |
-| `selectWorkspace` | kanban.html | ~8541 | Switch active workspace. |
-| `addProject` | kanban.html | ~8616 | Create a project. |
-| `copyPrdPrompt` | kanban.html | ~8659 | Copy PRD prompt to clipboard. |
-| `deleteProject` | kanban.html | ~8690 | Delete a project. |
-| `setPushScope` / `setProjectFilter` | kanban.html | ~8714 / ~8719 | Set push scope / project filter. |
-| `assignSelectedToProject` | kanban.html | ~8740 | Assign selected plans to a project. |
-| `setAutomationMode` | kanban.html | ~8781 | Set automation mode. |
-| `startOrchestrator` / `stopOrchestrator` | kanban.html | ~8787 / ~8795 | Start/stop the orchestrator. |
-| `getSchedulerConfig` / `setSchedulerConfig` | kanban.html | ~8801 / ~8806 | Scheduler config get/set. |
-| `getAutobanConfig` / `updateAutobanConfig` | kanban.html | ~8815 / ~8818 | Autoban config get/update. |
-| `toggleAutoban` / `resetAutobanTimers` / `toggleAutobanPause` | kanban.html | ~8824 / ~8841 / ~8845 | Autoban controls. |
-| `setWhenSchedule` / `setPairProgrammingMode` | kanban.html | ~8849 / ~8855 | Schedule / pair-programming mode. |
-| `getRemoteConfig` / `setRemoteConfig` | kanban.html | ~8866 / ~8874 | Remote config get/set. |
-| `runNotionRemoteSetup` | kanban.html | ~8882 | Run Notion remote setup. |
-| `startRemoteControl` / `stopRemoteControl` | kanban.html | ~8891 / ~8895 | Start/stop Remote Control. |
-| `triggerAction` / `triggerBatchAction` | kanban.html | ~8899 / ~9157 | Trigger a (batch) agent action. |
-| `moveCardBackwards` / `moveCardForward` | kanban.html | ~9241 / ~9259 | Move a card one column back/forward. |
-| `openSetupPanel` | kanban.html | ~9277 | Open the Setup panel. |
-| `saveIntegrationAutoPullSettings` | kanban.html | ~9283 | Save auto-pull settings. |
-| `setWorkspaceOverride` / `setProjectOverride` | kanban.html | ~9333 / ~9354 | Set workspace/project override. |
-| `toggleCliTriggers` | kanban.html | ~9389 | Toggle CLI triggers. |
-| `setFeatureWorkflowMode` | kanban.html | ~9394 | Set feature workflow mode. |
-| `toggleDynamicComplexityRouting` / `toggleCollapseCoders` | kanban.html | ~9420 / ~9432 | Routing/collapse toggles. |
-| `toggleAllowUnknownComplexityAutoMove` | kanban.html | ~9448 | Toggle unknown-complexity auto-move. |
-| `toggleClearTerminalBeforePrompt` / `updateClearTerminalBeforePromptDelay` | kanban.html | ~9460 / ~9478 | Clear-terminal-before-prompt settings. |
-| `updateRoutingConfig` | kanban.html | ~9495 | Update routing config. |
-| `setColumnDragDropMode` | kanban.html | ~9501 | Set column drag-drop mode. |
-| `recoverSelected` / `archiveSelected` / `recoverAll` | kanban.html | ~9511 / ~9528 / ~9637 | Recover/archive plans. |
-| `showInfo` / `showWarning` | kanban.html | ~9667 / ~9675 | Info/warning notification. |
-| `promptOnDrop` | kanban.html | ~9684 | Handle a card drop (dispatch or copy). |
-| `batchPlannerPrompt` / `batchDispatchLow` / `batchLowComplexity` / `julesLowComplexity` | kanban.html | ~9844 / ~9864 / ~9872 / ~9893 | Batch dispatch variants. |
-| `moveSelected` / `moveAll` | kanban.html | ~9922 / ~10057 | Move selected/all cards. |
-| `chatCopyPrompt` / `copyChatWorkflow` | kanban.html | ~10199 / ~10233 | Copy chat prompt/workflow. |
-| `promptSelected` / `promptAll` | kanban.html | ~10241 / ~10365 | Dispatch prompt for selected/all. |
-| `attributePastedPrompt` | kanban.html | ~10477 | Attribute a pasted prompt to a plan. |
-| `watchFeature` / `unwatchFeature` | kanban.html | ~10560 / ~10607 | Watch/unwatch a feature. |
-| `julesSelected` | kanban.html | ~10639 | Dispatch selected to Jules. |
-| `completePlan` / `completeSelected` / `completeAll` | kanban.html | ~10661 / ~10691 / ~10725 | Complete plan(s). |
-| `uncompleteCard` | kanban.html | ~10768 | Uncomplete a card. |
-| `reviewPlan` | kanban.html | ~10833 | Review a plan. |
-| `pauseLiveSync` / `resumeLiveSync` | kanban.html | ~10886 / ~10891 | Pause/resume live sync. |
-| `copyPlanLink` | kanban.html | ~10900 | Copy a plan link. |
-| `improvePlan` / `createPlan` | kanban.html | ~10909 / ~10962 | Improve/create a plan. |
-| `toggleBacklogView` | kanban.html | ~10987 | Toggle backlog view. |
-| `sendToBacklog` / `sendToNew` / `sendToPlanned` | kanban.html | ~10992 / ~11001 / ~11010 | Send cards to a column. |
-| `toggleDispatchView` / `dispatchAnalyze` | kanban.html | ~11019 / ~11024 | Dispatch view / analyze. |
-| `sendDispatchToCoder` / `sendDispatchSetToCoders` | kanban.html | ~11065 / ~11153 | Send dispatch to coder(s). |
-| `stageForQueue` / `reorderQueue` / `runQueue` | kanban.html | ~11228 / ~11249 / ~11262 | Queue staging/reorder/run. |
-| `importFromClipboard` | kanban.html | ~11333 | Import plans from clipboard. |
-| `copyDispatchPromptSelected` | kanban.html | ~11336 | Copy dispatch prompt for selected. |
-| `codeMapConfirm` / `codeMapSelected` | kanban.html | ~11397 / ~11410 | Code-map confirm/select. |
-| `getDbPath` / `testingFailed` | kanban.html | ~11435 / ~11440 | DB path get / testing-failed signal. |
-| `addCoderTerminal` / `focusTerminal` | kanban.html | ~11529 / ~11551 | Add coder terminal / focus terminal. |
-| `getStartupCommands` / `saveStartupCommands` | kanban.html | ~11569 / ~11576 | Startup commands get/save. |
-| `getPromptsConfig` / `savePromptsConfig` | kanban.html | ~11599 / ~11606 | Prompts config get/save. |
-| `getDefaultPromptOverrides` / `saveDefaultPromptOverrides` | kanban.html | ~11612 / ~11619 | Default prompt overrides get/save. |
-| `fileExists` | kanban.html | ~11625 | Check a file exists. |
-| `saveSetting` / `getSetting` | kanban.html | ~11648 / ~11691 | Generic setting save/get. |
-| `getDefaultPromptPreviews` / `getPromptPreview` | kanban.html | ~11710 / ~11717 | Prompt preview get. |
-| `generateAntigravityPrompt` / `externalAutomationPrompt` | kanban.html | ~11784 / ~11799 | Generate external-host prompt. |
-| `getPersonaForRole` | kanban.html | ~11813 | Get persona for a role. |
-| `copyGatherPrompt` / `copyExecutePrompt` | kanban.html | ~11828 / ~11848 | Copy gather/execute prompt. |
-| `getKanbanStructure` / `getBoardCards` | kanban.html | ~11867 / ~11881 | Board structure / cards get. |
-| `getAutoArchiveConfig` / `saveAutoArchiveConfig` | kanban.html | ~11931 / ~11936 | Auto-archive config get/save. |
-| `updateKanbanStructure` / `saveKanbanColumn` / `deleteKanbanColumn` / `restoreKanbanDefaults` / `toggleKanbanColumnVisibility` | kanban.html | ~11941 / ~11952 / ~11964 / ~11976 / ~11988 | Kanban column structure edits. |
-| `exportAgentAsSkill` / `saveCustomAgent` / `deleteCustomAgent` / `getCustomAgents` | kanban.html | ~12000 / ~12034 / ~12050 / ~12066 | Custom agent CRUD. |
-| `getAgentGroups` / `saveAgentGroup` / `deleteAgentGroup` / `startAgentGroup` | kanban.html | ~12081 / ~12096 / ~12111 / ~12126 | Agent group CRUD/start. |
-| `getUATData` / `setUATCheckState` | kanban.html | ~12161 / ~12226 | UAT data get/set. |
-| `getWorktreeConfig` / `getSafetySession` / `createWorktree` / `createWorktreeForFeature` / `createWorktreeForProject` | kanban.html | ~12244 / ~12245 / ~12251 / ~12285 / ~12322 | Worktree creation. |
-| `toggleWorktreeAgentsOpenWithGrid` / `setSuppressMainTerminals` / `getFeatureWorktreeMode` / `setFeatureWorktreeMode` | kanban.html | ~12360 / ~12371 / ~12382 / ~12388 | Worktree settings. |
-| `openWorktreeTerminals` / `copyWorktreeMergePrompt` / `cleanupWorktree` / `abandonWorktree` / `getWorktreeStatuses` | kanban.html | ~12404 / ~12428 / ~12489 / ~12496 / ~12522 | Worktree terminals/cleanup. |
-| `addSubtaskToFeature` / `promoteToFeature` / `createFeature` / `suggestFeatures` / `removeSubtaskFromFeature` / `deleteFeature` / `getFeatureDetails` / `updateFeatureConfig` | kanban.html | ~12537 / ~12570 / ~12645 / ~12664 / ~12688 / ~12696 / ~12704 / ~12724 | Feature CRUD. |
+| `ready` | kanban.html (init) | `KanbanProvider.ts` ~8288 | Panel ready — seed state. |
+| `selectPlan` | kanban.html (card click) | ~8361 | Select a plan card. |
+| `openPlanByPath` | kanban.html | ~8370 | Open a plan by file path. |
+| `refresh` / `scanFoldersNow` | kanban.html | ~8400 / ~8405 | Rescan plan folders. |
+| `reassignPlansWorkspace` | kanban.html | ~8410 | Reassign plans to a workspace. |
+| `selectWorkspace` | kanban.html | ~8562 | Switch active workspace. |
+| `addProject` | kanban.html | ~8637 | Create a project. |
+| `copyPrdPrompt` | kanban.html | ~8680 | Copy PRD prompt to clipboard. |
+| `deleteProject` | kanban.html | ~8711 | Delete a project. |
+| `setPushScope` / `setProjectFilter` | kanban.html | ~8735 / ~8740 | Set push scope / project filter. |
+| `assignSelectedToProject` | kanban.html | ~8761 | Assign selected plans to a project. |
+| `setAutomationMode` | kanban.html | ~8802 | Set automation mode. |
+| `startOrchestrator` / `stopOrchestrator` | kanban.html | ~8808 / ~8816 | Start/stop the orchestrator. |
+| `getSchedulerConfig` / `setSchedulerConfig` | kanban.html | ~8822 / ~8827 | Scheduler config get/set. |
+| `getAutobanConfig` / `updateAutobanConfig` | kanban.html | ~8836 / ~8839 | Autoban config get/update. |
+| `toggleAutoban` / `resetAutobanTimers` / `toggleAutobanPause` | kanban.html | ~8845 / ~8862 / ~8866 | Autoban controls. |
+| `setWhenSchedule` / `setPairProgrammingMode` | kanban.html | ~8870 / ~8876 | Schedule / pair-programming mode. |
+| `getRemoteConfig` / `setRemoteConfig` | kanban.html | ~8887 / ~8895 | Remote config get/set. |
+| `runNotionRemoteSetup` | kanban.html | ~8903 | Run Notion remote setup. |
+| `startRemoteControl` / `stopRemoteControl` | kanban.html | ~8912 / ~8916 | Start/stop Remote Control. |
+| `triggerAction` / `triggerBatchAction` | kanban.html | ~8920 / ~9178 | Trigger a (batch) agent action. |
+| `moveCardBackwards` / `moveCardForward` | kanban.html | ~9262 / ~9280 | Move a card one column back/forward. |
+| `openSetupPanel` | kanban.html | ~9298 | Open the Setup panel. |
+| `saveIntegrationAutoPullSettings` | kanban.html | ~9304 | Save auto-pull settings. |
+| `setWorkspaceOverride` / `setProjectOverride` | kanban.html | ~9354 / ~9375 | Set workspace/project override. |
+| `toggleCliTriggers` | kanban.html | ~9410 | Toggle CLI triggers. |
+| `setFeatureWorkflowMode` | kanban.html | ~9415 | Set feature workflow mode. |
+| `toggleDynamicComplexityRouting` / `toggleCollapseCoders` | kanban.html | ~9441 / ~9453 | Routing/collapse toggles. |
+| `toggleAllowUnknownComplexityAutoMove` | kanban.html | ~9469 | Toggle unknown-complexity auto-move. |
+| `toggleClearTerminalBeforePrompt` / `updateClearTerminalBeforePromptDelay` | kanban.html | ~9481 / ~9499 | Clear-terminal-before-prompt settings. |
+| `updateRoutingConfig` | kanban.html | ~9516 | Update routing config. |
+| `setColumnDragDropMode` | kanban.html | ~9522 | Set column drag-drop mode. |
+| `recoverSelected` / `archiveSelected` / `recoverAll` | kanban.html | ~9532 / ~9549 / ~9658 | Recover/archive plans. |
+| `showInfo` / `showWarning` | kanban.html | ~9688 / ~9696 | Info/warning notification. |
+| `promptOnDrop` | kanban.html | ~9705 | Handle a card drop (dispatch or copy). |
+| `batchPlannerPrompt` / `batchDispatchLow` / `batchLowComplexity` / `julesLowComplexity` | kanban.html | ~9865 / ~9885 / ~9893 / ~9914 | Batch dispatch variants. |
+| `moveSelected` / `moveAll` | kanban.html | ~9943 / ~10078 | Move selected/all cards. |
+| `chatCopyPrompt` / `copyChatWorkflow` | kanban.html | ~10220 / ~10254 | Copy chat prompt/workflow. |
+| `promptSelected` / `promptAll` | kanban.html | ~10262 / ~10386 | Dispatch prompt for selected/all. |
+| `attributePastedPrompt` | kanban.html | ~10498 | Attribute a pasted prompt to a plan. |
+| `watchFeature` / `unwatchFeature` | kanban.html | ~10581 / ~10628 | Watch/unwatch a feature. |
+| `julesSelected` | kanban.html | ~10660 | Dispatch selected to Jules. |
+| `completePlan` / `completeSelected` / `completeAll` | kanban.html | ~10682 / ~10712 / ~10746 | Complete plan(s). |
+| `uncompleteCard` | kanban.html | ~10789 | Uncomplete a card. |
+| `reviewPlan` | kanban.html | ~10854 | Review a plan. |
+| `pauseLiveSync` / `resumeLiveSync` | kanban.html | ~10907 / ~10912 | Pause/resume live sync. |
+| `copyPlanLink` | kanban.html | ~10921 | Copy a plan link. |
+| `improvePlan` / `createPlan` | kanban.html | ~10930 / ~10983 | Improve/create a plan. |
+| `toggleBacklogView` | kanban.html | ~11008 | Toggle backlog view. |
+| `sendToBacklog` / `sendToNew` / `sendToPlanned` | kanban.html | ~11013 / ~11022 / ~11031 | Send cards to a column. |
+| `toggleDispatchView` / `dispatchAnalyze` | kanban.html | ~11040 / ~11045 | Dispatch view / analyze. |
+| `sendDispatchToCoder` / `sendDispatchSetToCoders` | kanban.html | ~11086 / ~11174 | Send dispatch to coder(s). |
+| `stageForQueue` / `reorderQueue` / `runQueue` | kanban.html | ~11249 / ~11270 / ~11283 | Queue staging/reorder/run. |
+| `importFromClipboard` | kanban.html | ~11354 | Import plans from clipboard. |
+| `copyDispatchPromptSelected` | kanban.html | ~11357 | Copy dispatch prompt for selected. |
+| `codeMapConfirm` / `codeMapSelected` | kanban.html | ~11418 / ~11431 | Code-map confirm/select. |
+| `getDbPath` / `testingFailed` | kanban.html | ~11456 / ~11461 | DB path get / testing-failed signal. |
+| `addCoderTerminal` / `focusTerminal` | kanban.html | ~11550 / ~11572 | Add coder terminal / focus terminal. |
+| `getStartupCommands` / `saveStartupCommands` | kanban.html | ~11590 / ~11597 | Startup commands get/save. |
+| `getPromptsConfig` / `savePromptsConfig` | kanban.html | ~11620 / ~11627 | Prompts config get/save. |
+| `getDefaultPromptOverrides` / `saveDefaultPromptOverrides` | kanban.html | ~11633 / ~11640 | Default prompt overrides get/save. |
+| `fileExists` | kanban.html | ~11646 | Check a file exists. |
+| `saveSetting` / `getSetting` | kanban.html | ~11669 / ~11712 | Generic setting save/get. |
+| `getDefaultPromptPreviews` / `getPromptPreview` | kanban.html | ~11731 / ~11738 | Prompt preview get. |
+| `generateAntigravityPrompt` / `externalAutomationPrompt` | kanban.html | ~11805 / ~11820 | Generate external-host prompt. |
+| `getPersonaForRole` | kanban.html | ~11834 | Get persona for a role. |
+| `copyGatherPrompt` / `copyExecutePrompt` | kanban.html | ~11849 / ~11869 | Copy gather/execute prompt. |
+| `getKanbanStructure` / `getBoardCards` | kanban.html | ~11888 / ~11902 | Board structure / cards get. |
+| `getAutoArchiveConfig` / `saveAutoArchiveConfig` | kanban.html | ~11952 / ~11957 | Auto-archive config get/save. |
+| `updateKanbanStructure` / `saveKanbanColumn` / `deleteKanbanColumn` / `restoreKanbanDefaults` / `toggleKanbanColumnVisibility` | kanban.html | ~11962 / ~11973 / ~11985 / ~11997 / ~12009 | Kanban column structure edits. |
+| `exportAgentAsSkill` / `saveCustomAgent` / `deleteCustomAgent` / `getCustomAgents` | kanban.html | ~12021 / ~12055 / ~12071 / ~12087 | Custom agent CRUD. |
+| `getAgentGroups` / `saveAgentGroup` / `deleteAgentGroup` / `startAgentGroup` | kanban.html | ~12102 / ~12117 / ~12132 / ~12147 | Agent group CRUD/start. |
+| `getUATData` / `setUATCheckState` | kanban.html | ~12182 / ~12247 | UAT data get/set. |
+| `getWorktreeConfig` / `getSafetySession` / `createWorktree` / `createWorktreeForFeature` / `createWorktreeForProject` | kanban.html | ~12265 / ~12266 / ~12272 / ~12306 / ~12343 | Worktree creation. |
+| `toggleWorktreeAgentsOpenWithGrid` / `setSuppressMainTerminals` / `getFeatureWorktreeMode` / `setFeatureWorktreeMode` | kanban.html | ~12381 / ~12392 / ~12403 / ~12409 | Worktree settings. |
+| `openWorktreeTerminals` / `copyWorktreeMergePrompt` / `cleanupWorktree` / `abandonWorktree` / `getWorktreeStatuses` | kanban.html | ~12425 / ~12449 / ~12510 / ~12517 / ~12543 | Worktree terminals/cleanup. |
+| `addSubtaskToFeature` / `promoteToFeature` / `createFeature` / `suggestFeatures` / `removeSubtaskFromFeature` / `deleteFeature` / `getFeatureDetails` / `updateFeatureConfig` | kanban.html | ~12558 / ~12591 / ~12666 / ~12685 / ~12709 / ~12717 / ~12725 / ~12745 | Feature CRUD. |
 
 ### host→webview
 
 | Message type | Sent from (KanbanProvider.ts) | Purpose |
 | :--- | :--- | :--- |
-| `switchboardThemeChanged` | ~524 | Theme changed push. |
-| `ultracodeAnimationSetting` | ~528 | Ultracode animation setting push. |
-| `switchToTab` | ~1606 / ~8295 | Switch the active tab. |
-| `updateColumns` | ~2086 / ~3734 / ~3950 | Push refreshed kanban columns. |
-| `updateAgentNames` / `visibleAgents` | ~2206 / ~3824 / ~4020 / ~6870 | Push agent names / visible agents. |
-| `updateAutobanConfig` / `updatePairProgrammingMode` | ~2215 / ~3833 / ~4029 / ~6881 | Push autoban config / pair-programming mode. |
-| `remoteControlState` | ~2779 / ~2813 | Push Remote Control active state. |
-| `featureWorkflowModeState` | ~4485 / ~9417 | Push feature-workflow-mode state. |
-| `saveDefaultPromptOverridesResult` | ~4739 | Push save-default-overrides result. |
-| `moveCards` / `moveCardsFailed` | ~6183 / ~6186 (and many more) | Push card-move result / failures. |
-| `showStatusMessage` | ~6202 / ~9671 (and many more) | Push a status toast. |
-| `promptOnDropResult` | ~9701 / ~9755 / ~9840 | Push prompt-on-drop result. |
-| `copyPlanLinkResult` | ~10273 / ~10306 | Push copy-plan-link result. |
-| `collapseCodersState` | ~9446 | Push collapse-coders state. |
-| `updateSchedulerConfig` | ~8803 / ~8810 | Push scheduler config. |
-| `notionRemoteSetupResult` | ~8886 | Push Notion remote-setup result. |
+| `switchboardThemeChanged` | ~545 | Theme changed push. |
+| `ultracodeAnimationSetting` | ~549 | Ultracode animation setting push. |
+| `switchToTab` | ~1627 / ~8316 | Switch the active tab. |
+| `updateColumns` | ~2107 / ~3755 / ~3971 | Push refreshed kanban columns. |
+| `updateAgentNames` / `visibleAgents` | ~2227 / ~3845 / ~4041 / ~6891 | Push agent names / visible agents. |
+| `updateAutobanConfig` / `updatePairProgrammingMode` | ~2236 / ~3854 / ~4050 / ~6902 | Push autoban config / pair-programming mode. |
+| `remoteControlState` | ~2800 / ~2834 | Push Remote Control active state. |
+| `featureWorkflowModeState` | ~4506 / ~9438 | Push feature-workflow-mode state. |
+| `saveDefaultPromptOverridesResult` | ~4760 | Push save-default-overrides result. |
+| `moveCards` / `moveCardsFailed` | ~6204 / ~6207 (and many more) | Push card-move result / failures. |
+| `showStatusMessage` | ~6223 / ~9692 (and many more) | Push a status toast. |
+| `promptOnDropResult` | ~9722 / ~9776 / ~9861 | Push prompt-on-drop result. |
+| `copyPlanLinkResult` | ~10294 / ~10327 | Push copy-plan-link result. |
+| `collapseCodersState` | ~9467 | Push collapse-coders state. |
+| `updateSchedulerConfig` | ~8824 / ~8831 | Push scheduler config. |
+| `notionRemoteSetupResult` | ~8907 | Push Notion remote-setup result. |
 | `remoteConfig` | ~2723 | Push remote-control config payload. |
-| `switchboardThemeNameSetting` | ~8292 | Push theme-name setting. |
+| `switchboardThemeNameSetting` | ~8313 | Push theme-name setting. |
 
 ---
 
@@ -152,75 +152,77 @@ Webview: `src/webview/planning.js`. Provider: `src/services/PlanningPanelProvide
 
 | Message type | Sent from (planning.js) | Handled in (case arm) | Purpose |
 | :--- | :--- | :--- | :--- |
-| `webviewReady` | init | ~2539 | Panel ready. |
-| `renderMarkdownLive` | editor | ~2541 | Live-render markdown. |
-| `fetchRoots` | init ~9210 | ~2547 | Fetch workspace roots. |
-| `persistTabState` | tab switch | ~2619 | Persist active tab. |
-| `submitComment` | comment form | ~2639 | Submit a comment. |
-| `savePlanningContainerSelection` | container pick | ~2689 | Save container selection. |
-| `fetchChildren` / `fetchPreview` / `fetchPageContent` | doc tree | ~2736 / ~2739 / ~2750 / ~2980 | Fetch doc children/preview/page. |
-| `appendToPlannerPrompt` | prompt editor | ~2742 | Append to planner prompt. |
-| `importFullDoc` | doc import | ~2746 | Import a full doc. |
-| `fetchAntigravityArtifact` | artifact | ~2753 | Fetch an Antigravity artifact. |
-| `addLocalFolder` / `removeLocalFolder` / `listLocalFolders` | folders ~7283 / ~2529 / ~459 | ~2780 / ~2797 / ~2806 | Local folder CRUD/list. |
-| `listPlanningHtmlFolders` / `addPlanningHtmlFolder` / `removePlanningHtmlFolder` | html folders ~6973 / ~7032 / ~7016 | ~2819 / ~2827 / ~2844 | Planning HTML folder CRUD. |
-| `serveAndOpenHtml` | html open | ~2853 | Serve and open an HTML file. |
-| `refreshSource` | refresh ~2945 / ~7227 | ~2871 | Refresh a doc source. |
-| `fetchContainers` | containers ~2980 / ~9064 | ~2885 | Fetch containers for a source. |
-| `fetchImportedDocs` / `fetchDocsFile` / `fetchFilteredDocs` / `fetchDocPages` | docs ~3578 / ~4640 | ~2904 / ~2907 / ~2914 / ~2953 | Imported docs list/file/filtered/pages. |
-| `syncToSource` | sync | ~2910 | Sync a doc to its source. |
-| `importPlansFromClipboard` / `createPlansInit` / `createPlansCopyPrompt` / `createPlansPickFolder` / `createPlansDownloadZip` / `createPlansPasteBack` / `createPlansImproveSource` | plans wizard | ~3013 / ~3019 / ~3039 / ~3065 / ~3082 / ~3115 / ~3145 | Create-plans wizard steps. |
-| `importResearchDoc` | research ~2820 / ~2876 | ~3172 | Import a research doc. |
-| `linkToDocument` / `linkToFolder` | link ~2185 / ~2860 | ~3178 / ~3182 | Link a doc/folder. |
-| `createLocalDoc` / `draftImproveLocalDoc` / `resolveDuplicate` / `deleteLocalDoc` | docs ~2805 / ~2866 | ~3186 / ~3191 / ~3224 / ~3229 | Local doc create/draft/resolve/delete. |
-| `saveOnlineDocFile` / `deleteImportedDoc` | docs | ~3264 / ~3311 | Online doc save/delete. |
-| `importPlans` | plans ~5388 | ~3355 | Import plans. |
-| `copyArtifactPrompt` / `sendArtifactPromptToTerminal` | artifact ~7095 | ~3360 / ~3366 | Copy/send artifact prompt. |
-| `copyHtmlTweakPrompt` / `sendHtmlTweakPrompt` | html tweak | ~3385 / ~3392 | Copy/send HTML tweak prompt. |
-| `copyChatPrompt` | chat | ~3412 | Copy chat prompt. |
-| `uploadPlanAttachment` | attachment | ~3421 | Upload a plan attachment. |
-| `createPlan` / `fetchKanbanPlans` | plans ~2047 / ~1740 | ~3507 / ~3511 | Create plan / fetch kanban plans. |
-| `openKanbanPlan` / `fetchKanbanPlanPreview` / `copyKanbanPlanPrompt` / `copyFeaturePlannerPrompt` | plan | ~3621 / ~3637 / ~3643 / ~3672 | Open/preview/copy plan prompt. |
-| `moveKanbanPlanColumn` / `planShown` / `setKanbanPlanComplexity` / `deleteKanbanPlan` / `fetchKanbanPlanLog` | plan ~5862 / ~5864 / ~5890 / ~5319 / ~5915 | ~3697 / ~3722 / ~3729 / ~3777 / ~3833 | Plan column move/shown/complexity/delete/log. |
-| `getFeatureDetails` / `addSubtaskToFeature` / `removeSubtaskFromFeature` / `deleteFeature` / `createFeature` / `updateFeatureConfig` | feature ~5759 / ~5771 / ~5794 / ~5780 | ~3856 / ~3877 / ~3912 / ~3937 / ~3970 / ~4021 | Feature CRUD. |
-| `loadConstitutionFiles` / `getConstitutionStatus` / `readConstitutionFile` / `saveConstitutionFile` / `deleteConstitutionFile` | constitution ~6779 | ~4028 / ~4054 / ~4075 / ~4127 / ~4529 | Constitution file ops. |
-| `getConstitutionPaths` / `addConstitutionPath` / `removeConstitutionPath` / `setConstitutionPath` | constitution | ~4543 / ~4555 / ~4581 / ~4598 | Constitution path ops. |
-| `getProjectContextEnabled` / `setProjectContextEnabled` / `getProjectPrd` / `saveProjectPrd` | project ~6644 / ~6702 / ~1480 / ~1500 | ~4186 / ~4196 / ~4207 / ~4239 | Project context / PRD ops. |
-| `invokePrdBuilder` / `copyPrdBuildPrompt` | prd | ~4279 / ~4299 | PRD builder invoke/copy. |
-| `toggleConstitutionAddon` / `copyConstitutionPrompt` / `copyConstitutionUpdatePrompt` / `invokeConstitutionBuilder` / `invokeConstitutionUpdater` / `invokeSystemBuilder` / `copySystemBuildPrompt` | constitution ~2977 / ~2983 / ~2989 | ~4308 / ~4317 / ~4354 / ~4400 / ~4423 / ~4444 / ~4471 | Constitution/system builder ops. |
-| `openArchitectTerminal` / `copyArchitectPrompt` | architect ~2087 | ~4491 / ~4518 | Architect terminal/prompt. |
-| `saveFileContent` | editor | ~4634 | Save file content. |
-| `linearLoadAutomationCatalog` | linear | ~4793 | Load Linear automation catalog. |
-| `openTicketsPanel` | tickets ~1707 | ~4805 | Open the Tickets panel. |
-| `openExternalUrl` / `copyToClipboard` / `copyDiagramPrompt` | util | ~4814 / ~4826 / ~4830 | Open URL / clipboard / diagram prompt. |
-| `improveFeature` | feature | ~4835 | Improve a feature. |
-| `createOnlineDocument` / `setUploadLocation` / `syncDocToOnline` / `getSyncConfig` | online ~2956 / ~2966 / ~5018 | ~4897 / ~4994 / ~5018 / ~5075 | Online doc create/upload/sync. |
-| `loadInsights` / `readInsight` / `runTuningExtract` / `runTuningGovernance` / `updateInsightStatus` / `deleteInsight` / `copyInsightLink` | insights | ~5091 / ~5113 / ~5137 / ~5174 / ~5183 / ~5197 / ~5211 | Insight ops. |
-| `ticketsRootChanged` / `ticketsDefaultRoot` | tickets ~4217 / ~4219 | (forwarded to Tickets provider) | Tickets root change. |
-| `removeLocalFolder` | folders ~2529 | ~2797 | Remove a local folder. |
+| `webviewReady` | init | ~2622 | Panel ready. |
+| `renderMarkdownLive` | editor | ~2624 | Live-render markdown. |
+| `fetchRoots` | init ~9239 | ~2630 | Fetch workspace roots. |
+| `persistTabState` | tab switch | ~2702 | Persist active tab. |
+| `submitComment` | comment form | ~2722 | Submit a comment. |
+| `savePlanningContainerSelection` | container pick | ~2772 | Save container selection. |
+| `fetchChildren` / `fetchPreview` / `fetchPageContent` | doc tree | ~2819 / ~2822 / ~2833 / ~3063 | Fetch doc children/preview/page. |
+| `appendToPlannerPrompt` | prompt editor | ~2825 | Append to planner prompt. |
+| `importFullDoc` | doc import | ~2829 | Import a full doc. |
+| `fetchAntigravityArtifact` | artifact | ~2836 | Fetch an Antigravity artifact. |
+| `addLocalFolder` / `removeLocalFolder` / `listLocalFolders` | folders ~7312 / ~2558 / ~488 | ~2863 / ~2880 / ~2889 | Local folder CRUD/list. |
+| `listPlanningHtmlFolders` / `addPlanningHtmlFolder` / `removePlanningHtmlFolder` | html folders ~7002 / ~7061 / ~7045 | ~2902 / ~2910 / ~2927 | Planning HTML folder CRUD. |
+| `serveAndOpenHtml` | html open | ~2936 | Serve and open an HTML file. |
+| `refreshSource` | refresh ~2974 / ~7256 | ~2954 | Refresh a doc source. |
+| `fetchContainers` | containers ~3009 / ~9093 | ~2968 | Fetch containers for a source. |
+| `fetchImportedDocs` / `fetchDocsFile` / `fetchFilteredDocs` / `fetchDocPages` | docs ~3607 / ~4669 | ~2987 / ~2990 / ~2997 / ~3036 | Imported docs list/file/filtered/pages. |
+| `syncToSource` | sync | ~2993 | Sync a doc to its source. |
+| `importPlansFromClipboard` / `createPlansInit` / `createPlansCopyPrompt` / `createPlansPickFolder` / `createPlansDownloadZip` / `createPlansPasteBack` / `createPlansImproveSource` | plans wizard | ~3096 / ~3102 / ~3122 / ~3148 / ~3165 / ~3198 / ~3228 | Create-plans wizard steps. |
+| `importResearchDoc` | research ~2849 / ~2905 | ~3274 | Import a research doc. |
+| `docsHealthCopyPrompt` | connections.js (Docs Health tab) | ~3255 | Copy the docs-maintenance prompt. |
+| `linkToDocument` / `linkToFolder` | link ~2214 / ~2889 | ~3280 / ~3284 | Link a doc/folder. |
+| `createLocalDoc` / `draftImproveLocalDoc` / `resolveDuplicate` / `deleteLocalDoc` | docs ~2834 / ~2895 | ~3288 / ~3293 / ~3326 / ~3331 | Local doc create/draft/resolve/delete. |
+| `saveOnlineDocFile` / `deleteImportedDoc` | docs | ~3366 / ~3413 | Online doc save/delete. |
+| `importPlans` | plans ~5417 | ~3457 | Import plans. |
+| `copyArtifactPrompt` / `sendArtifactPromptToTerminal` | artifact ~7124 | ~3462 / ~3468 | Copy/send artifact prompt. |
+| `copyHtmlTweakPrompt` / `sendHtmlTweakPrompt` | html tweak | ~3487 / ~3494 | Copy/send HTML tweak prompt. |
+| `copyChatPrompt` | chat | ~3514 | Copy chat prompt. |
+| `uploadPlanAttachment` | attachment | ~3523 | Upload a plan attachment. |
+| `createPlan` / `fetchKanbanPlans` | plans ~2076 / ~1769 | ~3609 / ~3613 | Create plan / fetch kanban plans. |
+| `openKanbanPlan` / `fetchKanbanPlanPreview` / `copyKanbanPlanPrompt` / `copyFeaturePlannerPrompt` | plan | ~3723 / ~3739 / ~3745 / ~3774 | Open/preview/copy plan prompt. |
+| `moveKanbanPlanColumn` / `planShown` / `setKanbanPlanComplexity` / `deleteKanbanPlan` / `fetchKanbanPlanLog` | plan ~5891 / ~5893 / ~5919 / ~5348 / ~5944 | ~3799 / ~3824 / ~3831 / ~3879 / ~3935 | Plan column move/shown/complexity/delete/log. |
+| `getFeatureDetails` / `addSubtaskToFeature` / `removeSubtaskFromFeature` / `deleteFeature` / `createFeature` / `updateFeatureConfig` | feature ~5788 / ~5800 / ~5823 / ~5809 | ~3958 / ~3979 / ~4014 / ~4039 / ~4072 / ~4123 | Feature CRUD. |
+| `loadConstitutionFiles` / `getConstitutionStatus` / `readConstitutionFile` / `saveConstitutionFile` / `deleteConstitutionFile` | constitution ~6808 | ~4130 / ~4156 / ~4177 / ~4229 / ~4631 | Constitution file ops. |
+| `getConstitutionPaths` / `addConstitutionPath` / `removeConstitutionPath` / `setConstitutionPath` | constitution | ~4645 / ~4657 / ~4683 / ~4700 | Constitution path ops. |
+| `getProjectContextEnabled` / `setProjectContextEnabled` / `getProjectPrd` / `saveProjectPrd` | project ~6673 / ~6731 / ~1509 / ~1529 | ~4288 / ~4298 / ~4309 / ~4341 | Project context / PRD ops. |
+| `invokePrdBuilder` / `copyPrdBuildPrompt` | prd | ~4381 / ~4401 | PRD builder invoke/copy. |
+| `toggleConstitutionAddon` / `copyConstitutionPrompt` / `copyConstitutionUpdatePrompt` / `invokeConstitutionBuilder` / `invokeConstitutionUpdater` / `invokeSystemBuilder` / `copySystemBuildPrompt` | constitution ~3006 / ~3012 / ~3018 | ~4410 / ~4419 / ~4456 / ~4502 / ~4525 / ~4546 / ~4573 | Constitution/system builder ops. |
+| `openArchitectTerminal` / `copyArchitectPrompt` | architect ~2116 | ~4593 / ~4620 | Architect terminal/prompt. |
+| `saveFileContent` | editor | ~4736 | Save file content. |
+| `linearLoadAutomationCatalog` | linear | ~4895 | Load Linear automation catalog. |
+| `openTicketsPanel` | tickets ~1736 | ~4907 | Open the Tickets panel. |
+| `openExternalUrl` / `copyToClipboard` / `copyDiagramPrompt` | util | ~4916 / ~4928 / ~4932 | Open URL / clipboard / diagram prompt. |
+| `improveFeature` | feature | ~4937 | Improve a feature. |
+| `createOnlineDocument` / `setUploadLocation` / `syncDocToOnline` / `getSyncConfig` | online ~2985 / ~2995 / ~5047 | ~4999 / ~5096 / ~5120 / ~5177 | Online doc create/upload/sync. |
+| `loadInsights` / `readInsight` / `runTuningExtract` / `runTuningGovernance` / `updateInsightStatus` / `deleteInsight` / `copyInsightLink` | insights | ~5193 / ~5215 / ~5239 / ~5276 / ~5285 / ~5299 / ~5313 | Insight ops. |
+| `ticketsRootChanged` / `ticketsDefaultRoot` | tickets ~4246 / ~4248 | (forwarded to Tickets provider) | Tickets root change. |
+| `removeLocalFolder` | folders ~2558 | ~2880 | Remove a local folder. |
 
 ### host→webview (sent from `PlanningPanelProvider.ts` via `postMessageToWebview`)
 
 | Message type | Sent from | Purpose |
 | :--- | :--- | :--- |
-| `error` | ~798 | Push an error. |
-| `themeChanged` | ~821 | Push theme change. |
-| `cyberAnimationSetting` / `cyberScanlinesSetting` | ~829 / ~833 / ~5942 / ~5944 | Cyber animation/scanlines setting. |
-| `switchboardThemeChanged` / `switchboardThemeNameSetting` | ~837 / ~5946 | Theme name push. |
-| `ultracodeAnimationSetting` | ~841 | Ultracode animation setting. |
-| `integrationProviderStates` | ~2602 | Push integration provider states. |
-| `commentResult` | ~2682 / ~2685 | Push submit-comment result. |
-| `localFoldersListed` | ~2793 / ~2803 | Push local-folders list. |
-| `planningHtmlFoldersListed` | ~2840 / ~2850 | Push planning-html-folders list. |
+| `error` | ~881 | Push an error. |
+| `themeChanged` | ~904 | Push theme change. |
+| `cyberAnimationSetting` / `cyberScanlinesSetting` | ~912 / ~916 / ~6044 / ~6046 | Cyber animation/scanlines setting. |
+| `switchboardThemeChanged` / `switchboardThemeNameSetting` | ~920 / ~6048 | Theme name push. |
+| `ultracodeAnimationSetting` | ~924 | Ultracode animation setting. |
+| `integrationProviderStates` | ~2685 | Push integration provider states. |
+| `commentResult` | ~2765 / ~2768 | Push submit-comment result. |
+| `localFoldersListed` | ~2876 / ~2886 | Push local-folders list. |
+| `planningHtmlFoldersListed` | ~2923 / ~2933 | Push planning-html-folders list. |
 | `createPlansState` | ~3113 | Push create-plans wizard state. |
-| `onlineDocCreated` | ~4902 / ~4913 / ~4918 / ~4926 / ~4941 / ~4947 / ~4987 / ~4990 | Push online-doc-created result. |
-| `uploadLocationSet` | ~5011 | Push upload-location set. |
-| `syncToOnlineResult` | ~5026 / ~5037 / ~5069 / ~5071 | Push sync-to-online result. |
-| `plannerPromptState` | ~6315 / ~6321 | Push planner-prompt state. |
-| `syncResult` | ~6513 / ~6520 / ~6526 / ~6532 / ~6584 / ~6586 / ~6589 | Push sync result. |
-| `importFullDocResult` | ~6596 / ~6628 / ~6636 / ~6647 / ~6671 / ~6677 / ~6777 / ~6811 | Push import-full-doc result. |
-| `importResearchDocResult` | ~6856 / ~6865 / ~6869 / ~6910 / ~6948 | Push import-research-doc result. |
-| `ticketFileChanged` | ~7107 | Push a ticket-file change. |
+| `docsHealthPromptResult` | ~3264 (+ the returned HTTP body) | Push docs-health copy result. The body also carries `prompt` — the browser host's clipboard write is client-side. |
+| `onlineDocCreated` | ~5004 / ~5015 / ~5020 / ~5028 / ~5043 / ~5049 / ~5089 / ~5092 | Push online-doc-created result. |
+| `uploadLocationSet` | ~5113 | Push upload-location set. |
+| `syncToOnlineResult` | ~5128 / ~5139 / ~5171 / ~5173 | Push sync-to-online result. |
+| `plannerPromptState` | ~6417 / ~6423 | Push planner-prompt state. |
+| `syncResult` | ~6615 / ~6622 / ~6628 / ~6634 / ~6686 / ~6688 / ~6691 | Push sync result. |
+| `importFullDocResult` | ~6698 / ~6730 / ~6738 / ~6749 / ~6773 / ~6779 / ~6879 / ~6913 | Push import-full-doc result. |
+| `importResearchDocResult` | ~6958 / ~6967 / ~6971 / ~7012 / ~7050 | Push import-research-doc result. |
+| `ticketFileChanged` | ~7209 | Push a ticket-file change. |
 
 ---
 
@@ -233,21 +235,21 @@ and `TaskViewerProvider.ts`. Many project.js messages overlap with planning.js (
 
 | Message type | Sent from (project.js) | Handled in | Purpose |
 | :--- | :--- | :--- | :--- |
-| `fetchKanbanPlans` | ~53 / ~403 / ~416 / ~437 / ~704 / ~714 / ~833 / ~1041 / ~1070 / ~1363 / ~1809 / ~1846 | `PlanningPanelProvider.ts` ~3511 | Fetch kanban plans (frequent poll). |
-| `loadConstitutionFiles` | ~61 / ~63 | ~4028 | Load constitution files. |
-| `loadInsights` | ~65 / ~1124 / ~3462 / ~3486 | ~5091 | Load insights. |
-| `getConstitutionStatus` | ~939 | ~4054 | Get constitution status. |
-| `copyInsightLink` / `updateInsightStatus` / `deleteInsight` / `readInsight` | ~1107 / ~1110 / ~1116 / ~3457 | ~5211 / ~5183 / ~5197 / ~5113 | Insight ops. |
-| `webviewReady` | ~1166 | ~2539 | Panel ready. |
-| `getProjectPrd` / `getProjectContextEnabled` / `setProjectContextEnabled` | ~1474 / ~1480 / ~1500 | ~4207 / ~4186 / ~4196 | Project PRD / context. |
-| `planShown` | ~1882 | ~3722 | Plan shown. |
-| `deleteKanbanPlan` / `moveKanbanPlanColumn` / `setKanbanPlanComplexity` / `fetchKanbanPlanLog` | ~1990 / ~1992 / ~2009 / ~2015 / ~2624 / ~2633 | ~3777 / ~3697 / ~3729 / ~3833 | Plan column ops. |
-| `importPlans` / `createPlan` | ~2040 / ~2047 | ~3355 / ~3507 | Import/create plans. |
-| `copyArchitectPrompt` | ~2087 / ~2093 / ~2099 | ~4518 | Copy architect prompt. |
-| `getFeatureDetails` | ~2410 | ~3856 | Get feature details. |
-| `invokeConstitutionBuilder` / `copyConstitutionPrompt` / `invokeConstitutionUpdater` / `copyConstitutionUpdatePrompt` / `toggleConstitutionAddon` | ~2977 / ~2983 / ~2989 / ~3002 / ~3008 | ~4400 / ~4317 / ~4423 / ~4354 / ~4308 | Constitution builder ops. |
-| `getConstitutionPaths` / `addConstitutionPath` / `setConstitutionPath` / `removeConstitutionPath` | ~3025 / ~3034 / ~3072 / ~3080 | ~4543 / ~4555 / ~4598 / ~4581 | Constitution path ops. |
-| `runTuningExtract` / `runTuningGovernance` | ~3474 / ~3480 | ~5137 / ~5174 | Tuning extract/governance. |
+| `fetchKanbanPlans` | ~53 / ~418 / ~431 / ~452 / ~719 / ~729 / ~848 / ~1056 / ~1085 / ~1378 / ~1824 / ~1861 | `PlanningPanelProvider.ts` ~3613 | Fetch kanban plans (frequent poll). |
+| `loadConstitutionFiles` | ~61 / ~63 | ~4130 | Load constitution files. |
+| `loadInsights` | ~65 / ~1139 / ~3477 / ~3501 | ~5193 | Load insights. |
+| `getConstitutionStatus` | ~954 | ~4156 | Get constitution status. |
+| `copyInsightLink` / `updateInsightStatus` / `deleteInsight` / `readInsight` | ~1122 / ~1125 / ~1131 / ~3472 | ~5313 / ~5285 / ~5299 / ~5215 | Insight ops. |
+| `webviewReady` | ~1181 | ~2622 | Panel ready. |
+| `getProjectPrd` / `getProjectContextEnabled` / `setProjectContextEnabled` | ~1489 / ~1495 / ~1515 | ~4309 / ~4288 / ~4298 | Project PRD / context. |
+| `planShown` | ~1897 | ~3824 | Plan shown. |
+| `deleteKanbanPlan` / `moveKanbanPlanColumn` / `setKanbanPlanComplexity` / `fetchKanbanPlanLog` | ~2005 / ~2007 / ~2024 / ~2030 / ~2639 / ~2648 | ~3879 / ~3799 / ~3831 / ~3935 | Plan column ops. |
+| `importPlans` / `createPlan` | ~2055 / ~2062 | ~3457 / ~3609 | Import/create plans. |
+| `copyArchitectPrompt` | ~2102 / ~2108 / ~2114 | ~4620 | Copy architect prompt. |
+| `getFeatureDetails` | ~2425 | ~3958 | Get feature details. |
+| `invokeConstitutionBuilder` / `copyConstitutionPrompt` / `invokeConstitutionUpdater` / `copyConstitutionUpdatePrompt` / `toggleConstitutionAddon` | ~2992 / ~2998 / ~3004 / ~3017 / ~3023 | ~4502 / ~4419 / ~4525 / ~4456 / ~4410 | Constitution builder ops. |
+| `getConstitutionPaths` / `addConstitutionPath` / `setConstitutionPath` / `removeConstitutionPath` | ~3040 / ~3049 / ~3087 / ~3095 | ~4645 / ~4657 / ~4700 / ~4683 | Constitution path ops. |
+| `runTuningExtract` / `runTuningGovernance` | ~3489 / ~3495 | ~5239 / ~5276 | Tuning extract/governance. |
 
 ### host→webview
 
@@ -267,9 +269,9 @@ Webview: `src/webview/design.js`. Provider: `src/services/DesignPanelProvider.ts
 
 | Message type | Sent from (design.js) | Handled in (case arm) | Purpose |
 | :--- | :--- | :--- | :--- |
-| `ready` | ~5551 | ~2515 | Panel ready. |
-| `activeTabChanged` | ~197 / ~266 / ~270 / ~273 | ~2603 | Active tab changed. |
-| `refreshDocsForTab` | ~216 / ~271 | ~3972 | Refresh docs for a tab. |
+| `ready` | ~5566 | ~2515 | Panel ready. |
+| `activeTabChanged` | ~212 / ~281 / ~285 / ~288 | ~2603 | Active tab changed. |
+| `refreshDocsForTab` | ~231 / ~286 | ~3972 | Refresh docs for a tab. |
 | `renderMarkdownLive` | editor | ~2494 | Live-render markdown. |
 | `persistTabState` | tab switch | ~2561 | Persist tab state. |
 | `inspectRequestDataUrl` | inspect | ~2573 | Inspect a data URL. |
@@ -277,22 +279,22 @@ Webview: `src/webview/design.js`. Provider: `src/services/DesignPanelProvider.ts
 | `disableDesignDoc` | doc | ~2653 | Disable a design doc. |
 | `saveFileContent` | editor | ~2679 | Save file content. |
 | `fetchPreview` | preview | ~2748 | Fetch a preview. |
-| `copyStitchTweakPrompt` / `copyDesignSystemPrompt` / `bindDesignSystemToProject` / `createDesignSystemTemplate` | design system ~5536 | ~2831 / ~2839 / ~2873 / ~2932 | Design-system prompt/bind/template. |
-| `sendStitchTweakPrompt` / `copyHtmlTweakPrompt` / `sendHtmlTweakPrompt` / `copyClaudeImportPrompt` / `sendClaudeImportPrompt` / `copyClaudeArtifactPrompt` / `sendClaudeArtifactPrompt` | prompts ~1085 / ~5517 | ~2971 / ~2993 / ~3001 / ~3023 / ~3031 / ~3052 / ~3061 | Copy/send various prompts. |
-| `linkToDocument` / `linkToFolder` | link ~800 / ~839 / ~1076 | ~3085 / ~3100 | Link doc/folder. |
+| `copyStitchTweakPrompt` / `copyDesignSystemPrompt` / `bindDesignSystemToProject` / `createDesignSystemTemplate` | design system ~5551 | ~2831 / ~2839 / ~2873 / ~2932 | Design-system prompt/bind/template. |
+| `sendStitchTweakPrompt` / `copyHtmlTweakPrompt` / `sendHtmlTweakPrompt` / `copyClaudeImportPrompt` / `sendClaudeImportPrompt` / `copyClaudeArtifactPrompt` / `sendClaudeArtifactPrompt` | prompts ~1100 / ~5532 | ~2971 / ~2993 / ~3001 / ~3023 / ~3031 / ~3052 / ~3061 | Copy/send various prompts. |
+| `linkToDocument` / `linkToFolder` | link ~815 / ~854 / ~1091 | ~3085 / ~3100 | Link doc/folder. |
 | `serveAndOpenHtml` | html | ~3105 | Serve and open HTML. |
-| `stitchSaveApiKey` / `stitchSaveAuthConfig` / `stitchValidateAuth` | stitch ~4939 | ~3125 / ~3151 / ~3183 | Stitch auth. |
+| `stitchSaveApiKey` / `stitchSaveAuthConfig` / `stitchValidateAuth` | stitch ~4954 | ~3125 / ~3151 / ~3183 | Stitch auth. |
 | `stitchListDesignSystems` / `stitchCreateDesignSystem` / `stitchUpdateDesignSystem` / `stitchApplyDesignSystem` | stitch | ~3215 / ~3248 / ~3283 / ~3320 | Stitch design-system ops. |
 | `stitchListProjects` / `stitchGetProjectScreens` / `stitchRebuildImageCache` / `stitchForceReloadScreens` / `stitchCreateProject` / `stitchRefreshScreen` / `stitchOpenManifest` / `stitchDownloadPalette` | stitch | ~3394 / ~3463 / ~3561 / ~3606 / ~3681 / ~3722 / ~3737 / ~3802 | Stitch project/screen ops. |
-| `listDesignFolders` / `addDesignFolder` / `removeDesignFolder` | folders ~4338 / ~4572 / ~4474 | ~3845 / ~3852 / ~3869 | Design folder CRUD. |
-| `listHtmlFolders` / `addHtmlFolder` / `removeHtmlFolder` | folders ~4339 / ~4574 / ~4476 | ~3880 / ~3887 / ~3903 | HTML folder CRUD. |
+| `listDesignFolders` / `addDesignFolder` / `removeDesignFolder` | folders ~4353 / ~4587 / ~4489 | ~3845 / ~3852 / ~3869 | Design folder CRUD. |
+| `listHtmlFolders` / `addHtmlFolder` / `removeHtmlFolder` | folders ~4354 / ~4589 / ~4491 | ~3880 / ~3887 / ~3903 | HTML folder CRUD. |
 | `listClaudeFolders` / `addClaudeFolder` / `removeClaudeFolder` | folders | ~3913 / ~3920 / ~3936 | Claude folder CRUD. |
 | `stitchHtmlListDocs` | stitch | ~3952 | List Stitch HTML docs. |
-| `listImagesFolders` / `addImagesFolder` / `removeImagesFolder` | folders ~4340 / ~4576 / ~4478 | ~3994 / ~4001 / ~4017 | Images folder CRUD. |
-| `listStitchFolders` / `addStitchFolder` / `removeStitchFolder` | folders ~4341 / ~4578 / ~4480 | ~4028 / ~4035 / ~4049 | Stitch folder CRUD. |
-| `stitchPickAttachFiles` | stitch ~2652 | ~4058 | Pick Stitch attach files. |
+| `listImagesFolders` / `addImagesFolder` / `removeImagesFolder` | folders ~4355 / ~4591 / ~4493 | ~3994 / ~4001 / ~4017 | Images folder CRUD. |
+| `listStitchFolders` / `addStitchFolder` / `removeStitchFolder` | folders ~4356 / ~4593 / ~4495 | ~4028 / ~4035 / ~4049 | Stitch folder CRUD. |
+| `stitchPickAttachFiles` | stitch ~2667 | ~4058 | Pick Stitch attach files. |
 | `stitchGenerate` / `stitchEdit` / `stitchVariants` / `stitchDownloadAsset` / `stitchPreviewHtml` | stitch | ~4087 / ~4144 / ~4201 / ~4260 / ~4324 | Stitch generate/edit/variants/download/preview. |
-| `copyHtmlTweakPrompt` | ~1085 | ~2993 | Copy HTML tweak prompt. |
+| `copyHtmlTweakPrompt` | ~1100 | ~2993 | Copy HTML tweak prompt. |
 
 ### host→webview (sent from `DesignPanelProvider.ts` via `postMessageToWebview`)
 
@@ -368,35 +370,35 @@ Webview: `src/webview/tickets.js`. Provider: `src/services/TicketsPanelProvider.
 | :--- | :--- | :--- | :--- |
 | `getStatusShowTicketsSetting` / `setStatusShowTicketsSetting` | — | ~1318 / ~1325 | Status-bar show tickets setting. |
 | `persistTabState` | tab switch | ~1332 | Persist tab state. |
-| `fetchRoots` | ~4786 | ~1338 | Fetch workspace roots. |
+| `fetchRoots` | ~4818 | ~1338 | Fetch workspace roots. |
 | `switchTicketsProvider` | provider switch | ~1348 | Switch tickets provider. |
 | `setTicketsAutoSync` | auto-sync toggle | ~1386 | Set tickets auto-sync. |
-| `addTicketsFolder` / `removeTicketsFolder` / `listTicketsFolders` / `saveTicketsFolderPaths` / `browseTicketsFolder` / `saveTicketsFolder` | folders ~4917 / ~3696 | ~1409 / ~1425 / ~1433 / ~1442 / ~1452 / ~1468 | Tickets folder CRUD. |
-| `linearLoadProject` / `linearLoadProjects` / `linearSaveProjectSelection` | linear ~4124 | ~1484 / ~1545 / ~1594 | Linear project load/save. |
-| `clickupLoadSpaces` / `clickupLoadFolders` / `clickupLoadLists` / `invalidateClickUpCache` / `clickupLoadProject` / `clickupLoadSpaceTags` / `clickupLoadListStatuses` / `clickupSaveSpaceSelection` / `clickupSaveFolderSelection` / `clickupSaveListSelection` | clickup ~7231 | ~1613 / ~1647 / ~1684 / ~1720 / ~1729 / ~1798 / ~1823 / ~1849 / ~1872 / ~1893 | ClickUp space/folder/list ops. |
-| `setupTicketsWatcher` / `ticketsDefaultRoot` / `ticketsRootChanged` | root ~4580 / ~4588 / ~4217 | ~1919 / ~1936 / ~1991 | Tickets watcher / default root / root changed. |
+| `addTicketsFolder` / `removeTicketsFolder` / `listTicketsFolders` / `saveTicketsFolderPaths` / `browseTicketsFolder` / `saveTicketsFolder` | folders ~4949 / ~3728 | ~1409 / ~1425 / ~1433 / ~1442 / ~1452 / ~1468 | Tickets folder CRUD. |
+| `linearLoadProject` / `linearLoadProjects` / `linearSaveProjectSelection` | linear ~4156 | ~1484 / ~1545 / ~1594 | Linear project load/save. |
+| `clickupLoadSpaces` / `clickupLoadFolders` / `clickupLoadLists` / `invalidateClickUpCache` / `clickupLoadProject` / `clickupLoadSpaceTags` / `clickupLoadListStatuses` / `clickupSaveSpaceSelection` / `clickupSaveFolderSelection` / `clickupSaveListSelection` | clickup ~7263 | ~1613 / ~1647 / ~1684 / ~1720 / ~1729 / ~1798 / ~1823 / ~1849 / ~1872 / ~1893 | ClickUp space/folder/list ops. |
+| `setupTicketsWatcher` / `ticketsDefaultRoot` / `ticketsRootChanged` | root ~4612 / ~4620 / ~4249 | ~1919 / ~1936 / ~1991 | Tickets watcher / default root / root changed. |
 | `refreshTicketsDelta` | refresh | ~2029 | Refresh tickets delta. |
-| `saveLocalTicketFile` / `listLocalTicketFiles` | files ~5200 | ~2142 / ~2181 | Save/list local ticket files. |
+| `saveLocalTicketFile` / `listLocalTicketFiles` | files ~5232 | ~2142 / ~2181 | Save/list local ticket files. |
 | `getTicketSyncStatuses` | sync | ~2387 | Get ticket sync statuses. |
-| `readLocalTicketFile` | read ~2969 / ~3174 / ~3191 / ~5590 / ~5601 | ~2419 | Read a local ticket file. |
-| `linearLoadTaskDetails` / `clickupLoadTaskDetails` | details ~3176 / ~3193 / ~3288 / ~5593 / ~5603 | ~2450 / ~2545 | Load task details. |
+| `readLocalTicketFile` | read ~3001 / ~3206 / ~3223 / ~5622 / ~5633 | ~2419 | Read a local ticket file. |
+| `linearLoadTaskDetails` / `clickupLoadTaskDetails` | details ~3208 / ~3225 / ~3320 / ~5625 / ~5635 | ~2450 / ~2545 | Load task details. |
 | `linearUpdateIssueLabels` / `clickupUpdateTaskTags` | labels | ~2613 / ~2649 | Update labels/tags. |
 | `loadTicketAssignees` / `loadTicketMembers` | assignees | ~2686 / ~2742 | Load assignees/members. |
 | `linearUpdateIssueAssignee` / `clickupUpdateTaskAssignees` | assignee | ~2789 / ~2825 | Update assignee(s). |
 | `linearUpdateIssuePriority` / `clickupUpdateTaskPriority` | priority | ~2876 / ~2912 | Update priority. |
-| `editTicket` / `pushTicket` / `pushTicketWithSubtasks` / `deleteTicketConfirmed` / `importTicketSubtasks` | edit ~5216 / ~5229 / ~5240 | ~2948 / ~2975 / ~3008 / ~3060 / ~3086 | Ticket edit/push/delete/import. |
-| `fetchMoveTargets` / `moveTicket` / `changeTicketStatus` / `convertToSubtask` | move ~5716 | ~3138 / ~3188 / ~3217 / ~3245 | Ticket move/status/convert. |
-| `ticketAttachImage` / `postTicketComment` / `loadTicketComments` / `postTicketReply` / `downloadAttachment` / `viewAttachments` / `openAttachment` / `revealAttachment` | comments/attachments ~5339 | ~3330 / ~3374 / ~3402 / ~3437 / ~3465 / ~3495 / ~3547 / ~3572 | Attachments/comments. |
+| `editTicket` / `pushTicket` / `pushTicketWithSubtasks` / `deleteTicketConfirmed` / `importTicketSubtasks` | edit ~5248 / ~5261 / ~5272 | ~2948 / ~2975 / ~3008 / ~3060 / ~3086 | Ticket edit/push/delete/import. |
+| `fetchMoveTargets` / `moveTicket` / `changeTicketStatus` / `convertToSubtask` | move ~5748 | ~3138 / ~3188 / ~3217 / ~3245 | Ticket move/status/convert. |
+| `ticketAttachImage` / `postTicketComment` / `loadTicketComments` / `postTicketReply` / `downloadAttachment` / `viewAttachments` / `openAttachment` / `revealAttachment` | comments/attachments ~5371 | ~3330 / ~3374 / ~3402 / ~3437 / ~3465 / ~3495 / ~3547 / ~3572 | Attachments/comments. |
 | `linearImportTask` / `clickupImportTask` / `importAllTickets` / `syncAllTickets` | import | ~3603 / ~3647 / ~3691 / ~3769 | Import/sync tickets. |
 | `clickupCreateTask` / `linearCreateIssue` | create | ~3877 / ~3951 | Create task/issue. |
 | `ticketsAskAgent` | ask agent | ~4036 | Ask agent about a ticket. |
-| `applyClickUpConfig` / `saveClickUpMappings` / `saveClickUpAutomation` / `applyLinearConfig` / `saveLinearAutomation` | config ~5943 / ~5977 / ~5989 / ~5950 / ~6000 | ~4080 / ~4090 / ~4099 / ~4108 / ~4127 | Apply/save integration config. |
-| `linearBrowseProjects` | browse ~6003 / ~6006 | ~4136 | Browse Linear projects. |
-| `enableTriagePipeline` | triage ~5961 / ~5970 | ~4176 | Enable triage pipeline. |
-| `browseIntegrationTicketSaveLocation` / `saveIntegrationTicketSaveLocation` / `getIntegrationTicketSaveLocations` | save location ~6017 / ~6020 / ~6024 / ~6029 / ~8357 / ~8361 / ~6067 | ~4187 / ~4204 / ~4219 | Integration save-location ops. |
-| `getIntegrationSetupStates` / `getPlanningSources` / `savePlanningSources` | states ~6066 / ~6055 | ~4241 / ~4246 / ~4261 | Integration states / planning sources. |
-| `openExternalUrl` / `copyDiagramPrompt` / `copyToClipboard` / `renderMarkdownLive` / `linearLoadAutomationCatalog` | util ~3280 / ~5279 | ~4281 / ~4284 / ~4287 / ~4290 / ~4293 | Shared util arms. |
-| `copyToClipboard` | ~3280 | ~4287 | Copy to clipboard. |
+| `applyClickUpConfig` / `saveClickUpMappings` / `saveClickUpAutomation` / `applyLinearConfig` / `saveLinearAutomation` | config ~5975 / ~6009 / ~6021 / ~5982 / ~6032 | ~4080 / ~4090 / ~4099 / ~4108 / ~4127 | Apply/save integration config. |
+| `linearBrowseProjects` | browse ~6035 / ~6038 | ~4136 | Browse Linear projects. |
+| `enableTriagePipeline` | triage ~5993 / ~6002 | ~4176 | Enable triage pipeline. |
+| `browseIntegrationTicketSaveLocation` / `saveIntegrationTicketSaveLocation` / `getIntegrationTicketSaveLocations` | save location ~6049 / ~6052 / ~6056 / ~6061 / ~8389 / ~8393 / ~6099 | ~4187 / ~4204 / ~4219 | Integration save-location ops. |
+| `getIntegrationSetupStates` / `getPlanningSources` / `savePlanningSources` | states ~6098 / ~6087 | ~4241 / ~4246 / ~4261 | Integration states / planning sources. |
+| `openExternalUrl` / `copyDiagramPrompt` / `copyToClipboard` / `renderMarkdownLive` / `linearLoadAutomationCatalog` | util ~3312 / ~5311 | ~4281 / ~4284 / ~4287 / ~4290 / ~4293 | Shared util arms. |
+| `copyToClipboard` | ~3312 | ~4287 | Copy to clipboard. |
 
 ### host→webview (sent from `TicketsPanelProvider.ts` via `postMessage`)
 
@@ -427,6 +429,9 @@ messages from `connections.js` are forwarded to the appropriate provider's `hand
 `stopRemoteControl`, `getIntegrationSetupStates`, `getPlanningSources`). These are forwarded
 to `SetupPanelProvider` / `PlanningPanelProvider` — see those panels' webview→host tables.
 
+`docsHealthCopyPrompt` (Docs Health tab) is the one verb posted only from this panel. Its arm
+lives in `PlanningPanelProvider.ts` and is listed in the Planning tables above.
+
 ### host→webview
 
 Pushes are the Setup/Planning providers' host→webview types (see those tables), redirected to
@@ -446,8 +451,8 @@ indexed here. Only its two `postMessage` calls are listed.
 
 | Message type | Sent from (terminals.js) | Purpose |
 | :--- | :--- | :--- |
-| `terminalFleetState` | ~1373 | Push terminal fleet state to the parent (browser shell). |
-| `popoutTerminal` | ~4782 | Request to pop out a terminal into its own window. |
+| `terminalFleetState` | ~1411 | Push terminal fleet state to the parent (browser shell). |
+| `popoutTerminal` | ~4820 | Request to pop out a terminal into its own window. |
 
 ### host→webview
 
@@ -465,23 +470,22 @@ Webview: `src/webview/memo.js`. Backend: `src/services/TaskViewerProvider.ts` (m
 
 | Message type | Handled in (TaskViewerProvider.ts case arm) | Purpose |
 | :--- | :--- | :--- |
-| `memoListWorkspaces` | ~14087 | List workspaces for the memo dropdown. |
-| `setActiveTab` / `setActiveSubTab` | ~14097 / ~14102 | Set active tab/sub-tab. |
-| `memoLoad` | ~14108 | Load memo content for a workspace. |
-| `memoSave` | ~14123 | Save memo content. |
-| `memoClear` | ~14137 | Clear memo content. |
-| `memoGeneratePrompt` | ~14147 | Generate a memo prompt. |
-| `webviewReady` | ~12861 | Panel ready. |
+| `memoListWorkspaces` | ~14110 | List workspaces for the memo dropdown. |
+| `setActiveTab` / `setActiveSubTab` | ~14120 / ~14125 | Set active tab/sub-tab. |
+| `memoLoad` | ~14131 | Load memo content for a workspace. |
+| `memoSave` | ~14146 | Save memo content. |
+| `memoClear` | ~14160 | Clear memo content. |
+| `memoGeneratePrompt` | ~14170 | Generate a memo prompt. |
 
 ### host→webview (sent from `TaskViewerProvider.ts` via `postMessage`)
 
 | Message type | Sent from | Purpose |
 | :--- | :--- | :--- |
-| `memoWorkspaceItems` | ~14094 | Push workspace items to the memo dropdown. |
-| `memoContent` | ~14120 / ~14206 | Push memo content. |
-| `memoError` | ~14111 / ~14126 / ~14140 / ~14151 | Push a memo error. |
-| `memoUpdated` | ~14842 | Push memo-updated signal. |
-| `openMemoTab` | ~5789 / ~5792 | Push open-memo-tab signal. |
+| `memoWorkspaceItems` | ~14117 | Push workspace items to the memo dropdown. |
+| `memoContent` | ~14143 / ~14229 | Push memo content. |
+| `memoError` | ~14134 / ~14149 / ~14163 / ~14174 | Push a memo error. |
+| `memoUpdated` | ~14865 | Push memo-updated signal. |
+| `openMemoTab` | ~5812 / ~5815 | Push open-memo-tab signal. |
 
 ---
 
@@ -492,30 +496,30 @@ These shared push types appear across panels:
 
 | Message type | Sent from (TaskViewerProvider.ts) | Purpose |
 | :--- | :--- | :--- |
-| `selectSession` | ~4738 / ~16210 / ~18077 / ~18331 / ~18336 | Select a plan/session. |
-| `loading` | ~5390 / ~5399 / ~5449 | Push loading state. |
-| `actionTriggered` | ~6063 / ~20763 / ~21033 / ~21049 / ~21059 / ~21081 / ~22680 / ~22699 | Push agent-action result. |
-| `workspaceChanged` | ~7413 | Push workspace change. |
-| `startupCommands` | ~7417 / ~14045 | Push startup commands. |
-| `terminalAgentNames` | ~1736 / ~7421 | Push terminal agent names. |
-| `visibleAgents` / `customAgents` | ~7424 / ~7427 / ~14050 | Push visible/custom agents. |
-| `terminalStatuses` | ~21933 / ~22955 | Push terminal statuses. |
-| `sessionStatus` | ~21980 | Push session status. |
-| `selectPlanFile` | ~8393 / ~8489 | Push select-plan-file. |
-| `orchestratorStartResult` | ~10507 / ~10518 | Push orchestrator start result. |
-| `onboardingProgress` | ~11585 / ~21910 / ~21912 / ~21915 | Push onboarding progress. |
-| `multiRepoScaffoldResult` | ~13776 | Push multi-repo scaffold result. |
-| `createAgentGridResult` | ~13859 / ~13862 | Push create-agent-grid result. |
-| `planLoading` | ~13899 / ~13914 / ~13924 / ~13928 | Push plan-loading state. |
-| `recoverablePlans` / `restorePlanResult` | ~13967 / ~13973 / ~13976 | Push recoverable plans / restore result. |
-| `accurateCodingSetting` / `advancedReviewerSetting` / `leadChallengeSetting` / `julesAutoSyncSetting` | ~14055 / ~14060 / ~14065 / ~14070 | Push coding/review settings. |
-| `defaultPromptOverrides` / `defaultPromptPreviews` | ~14075 / ~14084 | Push default prompt overrides/previews. |
-| `dbPathUpdated` / `dbConnectionResult` | ~14297 / ~14341 / ~14353 / ~14359 / ~14367 | Push DB path/connection result. |
-| `planCreated` | ~21326 | Push plan-created signal. |
-| `setupStatus` | ~21902 / ~21928 | Push setup status. |
-| `refresh` | ~19942 | Push refresh signal. |
-| `airlock_syncStart` / `airlock_syncComplete` / `airlock_syncError` | ~20775 / ~20783 / ~20787 / ~23155 / ~23158 | Airlock sync signals. |
-| `airlock_coderSent` / `airlock_coderError` | ~23144 / ~23101 / ~23106 / ~23125 / ~23147 | Airlock coder send/error. |
+| `selectSession` | ~4761 / ~16233 / ~18100 / ~18354 / ~18359 | Select a plan/session. |
+| `loading` | ~5413 / ~5422 / ~5472 | Push loading state. |
+| `actionTriggered` | ~6086 / ~20786 / ~21056 / ~21072 / ~21082 / ~21104 / ~22703 / ~22722 | Push agent-action result. |
+| `workspaceChanged` | ~7436 | Push workspace change. |
+| `startupCommands` | ~7440 / ~14068 | Push startup commands. |
+| `terminalAgentNames` | ~1759 / ~7444 | Push terminal agent names. |
+| `visibleAgents` / `customAgents` | ~7447 / ~7450 / ~14073 | Push visible/custom agents. |
+| `terminalStatuses` | ~21956 / ~22978 | Push terminal statuses. |
+| `sessionStatus` | ~22003 | Push session status. |
+| `selectPlanFile` | ~8416 / ~8512 | Push select-plan-file. |
+| `orchestratorStartResult` | ~10530 / ~10541 | Push orchestrator start result. |
+| `onboardingProgress` | ~11608 / ~21933 / ~21935 / ~21938 | Push onboarding progress. |
+| `multiRepoScaffoldResult` | ~13799 | Push multi-repo scaffold result. |
+| `createAgentGridResult` | ~13882 / ~13885 | Push create-agent-grid result. |
+| `planLoading` | ~13922 / ~13937 / ~13947 / ~13951 | Push plan-loading state. |
+| `recoverablePlans` / `restorePlanResult` | ~13990 / ~13996 / ~13999 | Push recoverable plans / restore result. |
+| `accurateCodingSetting` / `advancedReviewerSetting` / `leadChallengeSetting` / `julesAutoSyncSetting` | ~14078 / ~14083 / ~14088 / ~14093 | Push coding/review settings. |
+| `defaultPromptOverrides` / `defaultPromptPreviews` | ~14098 / ~14107 | Push default prompt overrides/previews. |
+| `dbPathUpdated` / `dbConnectionResult` | ~14320 / ~14364 / ~14376 / ~14382 / ~14390 | Push DB path/connection result. |
+| `planCreated` | ~21349 | Push plan-created signal. |
+| `setupStatus` | ~21925 / ~21951 | Push setup status. |
+| `refresh` | ~19965 | Push refresh signal. |
+| `airlock_syncStart` / `airlock_syncComplete` / `airlock_syncError` | ~20798 / ~20806 / ~20810 / ~23178 / ~23181 | Airlock sync signals. |
+| `airlock_coderSent` / `airlock_coderError` | ~23167 / ~23124 / ~23129 / ~23148 / ~23170 | Airlock coder send/error. |
 
 ---
 

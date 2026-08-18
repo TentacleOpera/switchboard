@@ -88,32 +88,34 @@
     let _ticketsAwaitingListSelection = false;
 
     // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────
-    // │ IIFE / vscode wrapper / state seed ......... lines 1–88
-    // │ Workspace dropdown helpers ................. lines 90–145
-    // │ Tab-state persistence ...................... lines 146–206
-    // │ Zoom / pan / fit helpers ................... lines 207–438
-    // │ Research state persist/restore ............. lines 440–565
-    // │ Tags / assign / priority helpers ........... lines 566–1224
-    // │ Tickets stubs (real impl in tickets.js) .... lines 1224–1248
-    // │ Ticket status modal / create-modal helpers . lines 1249–1488
-    // │ Tickets tab elements / file poll ........... lines 1489–1560
-    // │ Workspace dropdown populate / sidebar ...... lines 1561–1703
-    // │ Tab switching / research import ............ lines 1704–1910
-    // │ Doc tree renderers (cards/folders/nodes) ... lines 1911–2421
-    // │ Doc preview / folder list / unified docs ... lines 2422–3053
-    // │ Antigravity sessions / docs-ready handlers . lines 3113–3879
-    // │ Imported docs / sync result / duplicate .... lines 3880–5192
-    // │ Research prompt / context button ........... lines 5193–5271
+    // │ IIFE / vscode wrapper / state seed ......... lines 1–117
+    // │ Workspace dropdown helpers ................. lines 119–174
+    // │ Tab-state persistence ...................... lines 175–235
+    // │ Zoom / pan / fit helpers ................... lines 236–467
+    // │ Research state persist/restore ............. lines 469–594
+    // │ Tags / assign / priority helpers ........... lines 595–1253
+    // │ Tickets stubs (real impl in tickets.js) .... lines 1253–1277
+    // │ Ticket status modal / create-modal helpers . lines 1278–1517
+    // │ Tickets tab elements / file poll ........... lines 1518–1589
+    // │ Workspace dropdown populate / sidebar ...... lines 1590–1732
+    // │ Tab switching / research import ............ lines 1733–1939
+    // │ Doc tree renderers (cards/folders/nodes) ... lines 1940–2450
+    // │ Doc preview / folder list / unified docs ... lines 2451–3082
+    // │ Antigravity sessions / docs-ready handlers . lines 3142–3908
+    // │ Imported docs / sync result / duplicate .... lines 3909–4155
+    // │ Host message listener (main dispatch) ...... lines 4156–4700
+    // │ Imported-docs handlers (cont.) ............. lines 4701–5221
+    // │ Research prompt / context button ........... lines 5222–5300
     // │ Kanban plans preview / review mode /
-    // │   comment popup / filters .................. lines 5272–6180
-    // │ Edit mode / new-doc modal / PRD context .... lines 6233–6833
-    // │ Planning HTML docs / folder modal .......... lines 6834–7289
-    // │ Tickets tab implementation ................. lines 7290–7557
-    // │ Rendering functions .......................  lines 7558–8350
-    // │ ClickUp rendering functions ................ lines 8351–8734
-    // │ Load functions ............................  lines 8735–8773
-    // │ Import/refine delegation ................... lines 8774–8930
-    // │ State persistence / message listener / init  lines 8931–9215
+    // │   comment popup / filters .................. lines 5301–6209
+    // │ Edit mode / new-doc modal / PRD context .... lines 6262–6862
+    // │ Planning HTML docs / folder modal .......... lines 6863–7318
+    // │ Tickets tab implementation ................. lines 7319–7586
+    // │ Rendering functions .......................  lines 7587–8379
+    // │ ClickUp rendering functions ................ lines 8380–8763
+    // │ Load functions ............................  lines 8764–8802
+    // │ Import/refine delegation ................... lines 8803–8959
+    // │ State persistence / sync-online UI / init .. lines 8960–9244
     // └──────────────────────────────────────────────────────────────────────
 
     // Helper to register a dropdown for updates

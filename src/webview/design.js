@@ -116,17 +116,18 @@
 
     // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────
     // │ IIFE / vscode wrapper / state seed ......... lines 1–58
-    // │ State object (design/stitch/html/images) .... lines 60–115
-    // │ Workspace dropdown / sidebar helpers ........ lines 117–195
-    // │ Tab switching / activeTabChanged ............ lines 196–285
-    // │ Doc tree / link-to-folder renderers ......... lines 286–1107
-    // │ HTML tweak / Claude artifact prompt helpers . lines 1085–1107
-    // │ Stitch auth / API key ....................... lines 1108–2805
-    // │ Stitch design-system / project / screen ops . lines 2806–4291
-    // │ Folder management & preview helpers ......... lines 4292–4570
-    // │ Folder CRUD (design/html/images/stitch) ..... lines 4572–4600
-    // │ Stitch attach / generate / edit / variants .. lines 4600–5400
-    // │ Host message listener & init ................ lines 5400–5570
+    // │ State object (design/stitch/html/images) .... lines 60–130
+    // │ Workspace dropdown / sidebar helpers ........ lines 132–210
+    // │ Tab switching / activeTabChanged ............ lines 211–300
+    // │ Doc tree / link-to-folder renderers ......... lines 301–1122
+    // │ HTML tweak / Claude artifact prompt helpers . lines 1100–1122
+    // │ Stitch auth / API key ....................... lines 1123–2820
+    // │ Stitch design-system / project / screen ops . lines 2821–3177
+    // │ Host message listener (main dispatch) ....... lines 3178–4306
+    // │ Folder management & preview helpers ......... lines 4307–4585
+    // │ Folder CRUD (design/html/images/stitch) ..... lines 4587–4615
+    // │ Stitch attach / generate / edit / variants .. lines 4615–5415
+    // │ Stitch apply-to-screens modal & init ........ lines 5415–5585
     // └──────────────────────────────────────────────────────────────────────
 
     function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {

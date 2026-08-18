@@ -40,35 +40,35 @@
     const persistedState = (vscode ? vscode.getState() : {}) || {};
 
     // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────
-    // │ IIFE / vscode wrapper / state seed ........ lines 1–40
-    // │ Tab-state & root persistence helpers ...... lines 42–464
+    // │ IIFE / vscode wrapper / state seed ........ lines 1–72
+    // │ Tab-state & root persistence helpers ...... lines 74–496
     // │ Ticket metadata helpers (priority/status/
-    // │   assignee/badges/subtasks) ............... lines 465–622
-    // │ Priority popover handlers ................. lines 623–653
+    // │   assignee/badges/subtasks) ............... lines 497–654
+    // │ Priority popover handlers ................. lines 655–685
     // │ Ticket card renderers (ClickUp/Linear/
-    // │   groups/drill-down header) ............... lines 654–786
-    // │ Filter option renderers ................... lines 787–941
-    // │ Filtered ticket getters ................... lines 942–1063
-    // │ Ticket list & panel renderers ............. lines 1064–1327
-    // │ Local ticket files & sync statuses ........ lines 1328–1419
-    // │ Tags / comment helpers .................... lines 1420–1617
-    // │ Tags & assign modals ...................... lines 1618–1810
-    // │ Priority/tags selection & markdown helpers  lines 1799–1946
-    // │ Tags/status/assign modal open-save ........ lines 1947–2311
+    // │   groups/drill-down header) ............... lines 686–818
+    // │ Filter option renderers ................... lines 819–973
+    // │ Filtered ticket getters ................... lines 974–1095
+    // │ Ticket list & panel renderers ............. lines 1096–1359
+    // │ Local ticket files & sync statuses ........ lines 1360–1451
+    // │ Tags / comment helpers .................... lines 1452–1649
+    // │ Tags & assign modals ...................... lines 1650–1842
+    // │ Priority/tags selection & markdown helpers  lines 1831–1978
+    // │ Tags/status/assign modal open-save ........ lines 1979–2343
     // │ Comment manager (threads/replies/
-    // │   optimistic merge) ....................... lines 2312–2692
-    // │ Mention autocomplete ...................... lines 2693–2842
-    // │ Attachments list .........................  lines 2843–2965
-    // │ Ticket file refresh & parent picker ....... lines 2966–3040
-    // │ Edit mode (enter/exit) .................... lines 3041–3196
-    // │ Priority popover/import/link/task details . lines 3197–3545
-    // │ Task detail renderers (Linear/ClickUp) .... lines 3302–3695
+    // │   optimistic merge) ....................... lines 2344–2724
+    // │ Mention autocomplete ...................... lines 2725–2874
+    // │ Attachments list .........................  lines 2875–2997
+    // │ Ticket file refresh & parent picker ....... lines 2998–3072
+    // │ Edit mode (enter/exit) .................... lines 3073–3228
+    // │ Priority popover/import/link/task details . lines 3229–3577
+    // │ Task detail renderers (Linear/ClickUp) .... lines 3334–3727
     // │ Integration config (ClickUp/Linear apply,
     // │   mappings, automation, save locations,
-    // │   triage pipeline) ....................... lines 3696–6070
-    // │ Host message listener & dispatch .......... lines 6071–7230
+    // │   triage pipeline) ....................... lines 3728–6102
+    // │ Host message listener & dispatch .......... lines 6103–7262
     // │ ClickUp list statuses / save-location
-    // │   pasteback / init ....................... lines 7231–8403
+    // │   pasteback / init ....................... lines 7263–8435
     // └──────────────────────────────────────────────────────────────────────
 
     // ── Tab-state persistence helpers ───────────────────────────────────────

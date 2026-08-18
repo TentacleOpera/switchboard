@@ -963,21 +963,21 @@ function _columnSlug(columnName: string): string {
 }
 
 // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────────
-// │ Imports & module helpers .................... lines 1–963
-// │ class KanbanDatabase .......................... line 965
-// │   Static instance cache / idle-eviction ....... lines 965–1071
-// │   Workspace mappings get/set .................. lines 1072–1577
+// │ Imports & module helpers .................... lines 1–981
+// │ class KanbanDatabase .......................... line 983
+// │   Static instance cache / idle-eviction ....... lines 983–1089
+// │   Workspace mappings get/set .................. lines 1090–1595
 // │   Data version / persist coalescing /
-// │     onColumnChanged .......................... lines 1578–1900
-// │   createIfMissing / migration version ......... lines 1957–2334
-// │   Plan insert / has-plan queries .............. lines 2335–2502
-// │   Column updates (by planFile / sessionId) .... lines 2503–2620
-// │   Feature status / complexity / tags / meta ... lines 2619–2866
-// │   Status / archive / project resolution ....... lines 2867–3080
-// │   Last-action / topic / plan-project updates .. lines 3066–3200
-// │   Worktree rows / feature worktree mode ....... lines 3200–4500
-// │   Plan records / board snapshot / config ...... lines 4500–7000
-// │   Schema / migrations / config-table bridge ... lines 7000–10667
+// │     onColumnChanged .......................... lines 1596–1918
+// │   createIfMissing / migration version ......... lines 1975–2352
+// │   Plan insert / has-plan queries .............. lines 2353–2520
+// │   Column updates (by planFile / sessionId) .... lines 2521–2638
+// │   Feature status / complexity / tags / meta ... lines 2637–2884
+// │   Status / archive / project resolution ....... lines 2885–3098
+// │   Last-action / topic / plan-project updates .. lines 3084–3218
+// │   Worktree rows / feature worktree mode ....... lines 3218–4518
+// │   Plan records / board snapshot / config ...... lines 4518–7018
+// │   Schema / migrations / config-table bridge ... lines 7018–10685
 // └──────────────────────────────────────────────────────────────────────────
 
 export class KanbanDatabase {

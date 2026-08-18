@@ -117,24 +117,41 @@
     let groupPrefs = { threshold: 2, hidden: [], pinned: [], orders: {}, layouts: {}, extras: {}, autoRoleGroups: false };
 
     // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────
-    // │ IIFE / state & constants (layout, panes,
-    // │   pins, modes, groups, prefs) ............. lines 1–118
-    // │ Cached fleet/agent state & decoders ......... lines 119–260
-    // │ WebGL renderer & xterm headless helpers ..... lines 261–670
-    // │ Theme & UI helpers ......................... lines 618–680
-    // │ Layout slot math / pane grid render ......... lines 680–1410
-    // │ Pane assignment / curtain / focus .......... lines 1411–2143
-    // │ Sidebar list / group rendering .............. lines 2144–3260
-    // │ Group comparator / ordering ................. lines 3261–3380
-    // │ Terminal socket connect / reattach .......... lines 3381–4064
-    // │ State chips / dispatch chips / sync ......... lines 4065–4260
-    // │ Fleet poll / kanban pane viewer ............. lines 4260–5360
-    // │ Drag-drop / paste / prompt dispatch ......... lines 4540–5800
-    // │ Kanban structure / board cards fetch ........ lines 5978–6100
-    // │ Terminal CRUD (create/rename/close/clear) ... lines 6466–7440
-    // │ Image paste / WebSocket terminal stream ..... lines 7864–8230
-    // │ Terminal socket message handling ............ lines 8236–8900
-    // │ Standing-orders / relay / agent prompts ..... lines 9062–9622
+    // │ IIFE / state & constants (layout, panes, pins,
+    // │   modes, groups, prefs) ...................... lines 1–251
+    // │ Input frame encode / base64 decode ........... lines 252–280
+    // │ xterm renderer: fit, size votes, WebGL swap .. lines 281–671
+    // │ Theme resolve / terminal theme build ......... lines 672–756
+    // │ init() — DOM wiring, listeners, boot ......... lines 757–1377
+    // │ Fleet state push to shell .................... lines 1378–1434
+    // │ Layout slot math / layout-for-fleet .......... lines 1435–1505
+    // │ Settings + layout persistence ................ lines 1506–1689
+    // │ Terminal list / group reload / pane toast .... lines 1690–1873
+    // │ Startup curtain .............................. lines 1874–2025
+    // │ Pane assignment sanitize / brand icons ....... lines 2026–2198
+    // │ renderTerminalRow (sidebar row) .............. lines 2199–2443
+    // │ Group CRUD / selection / switch .............. lines 2444–2695
+    // │ Derived groups / members / ordering .......... lines 2696–3048
+    // │ renderGroupTabStrip .......................... lines 3049–3296
+    // │ Terminal comparator / team bucketing ......... lines 3297–3458
+    // │ renderSidebarList ............................ lines 3459–3823
+    // │ Layout mode / assign-to-pane / focus ......... lines 3824–4077
+    // │ Input + dispatch state chips ................. lines 4078–4282
+    // │ renderPaneGrid / peek ........................ lines 4283–4491
+    // │ Pane element create / update / drop target ... lines 4492–5255
+    // │ Kanban column + workspace helpers ............ lines 5256–5425
+    // │ renderKanbanPane / kanban toggle ............. lines 5426–5978
+    // │ Fleet + kanban polls / board card fetch ...... lines 5979–6101
+    // │ Layout floor / fit ladder / scrollbar ........ lines 6102–6501
+    // │ Agent names / roles / groups fetch ........... lines 6502–6780
+    // │ Terminal + team creation / grid fill ......... lines 6781–7275
+    // │ Rename / close / clear terminal .............. lines 7276–7547
+    // │ Server modes / paste identity / view teardown . lines 7548–7815
+    // │ materializeTerminalView / jump-to-latest ..... lines 7816–8212
+    // │ connectTerminalSocket (WebSocket stream) ..... lines 8213–8481
+    // │ Write batching / replay / completion toasts .. lines 8482–8751
+    // │ debounce / link presets / select wiring ...... lines 8752–9103
+    // │ Standing orders / link modal / send .......... lines 9104–9661
     // └──────────────────────────────────────────────────────────────────────
 
     /**
