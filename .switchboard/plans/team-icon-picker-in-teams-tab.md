@@ -9,8 +9,9 @@ Give every team a visual identity the operator picks: an `icon` field on the tea
 > the resolver* so the icon chain is unblocked immediately, using the icons already
 > in the repo as stand-in art. Nothing here should assume that art is permanent, and
 > nothing here may make swapping it a code change. When the pixel-art registry lands,
-> its manifest becomes the picker's source and the stand-in pack is dropped from the
-> palette — a one-line change to where the picker reads its list, not a rework.
+> real art simply lands in `icons/` under the `agent-`/`team-` prefixes and the
+> stand-in pack is dropped from the palette — a change to which groups the picker
+> shows, not a rework.
 
 ### The problem, and the root cause
 Teams are currently identified by **name text plus a role-derived portrait**. `teamsTabGalleryCard` (`src/webview/kanban.html:4800`) renders an SVG `<use href="#portrait-<role>">` resolved by `teamsTabPortraitId` (`kanban.html:4736`), which maps `headRole` onto one of five hardcoded symbols — `portrait-planner`, `portrait-lead`, `portrait-coder`, `portrait-reviewer`, `portrait-agent` (defined at `kanban.html:3240`–`3286`).
@@ -30,7 +31,7 @@ The delivery side is already solved and unused: `/static/icons/` maps to the rep
 
 ### 1. The `icon` field
 Add `icon?: string` to the team definition stored at `terminals.agentGroups`. Three accepted forms, discriminated by prefix so no separate `iconKind` field is needed:
-- `art:<id>` — **the form that matters long term.** An id resolved through the manifest, not a filesystem path. Because the stored value is an id rather than a filename, re-drawing a piece, renaming a file, or moving the whole registry never invalidates a team's saved icon. Every team icon set during the placeholder period keeps working when the art underneath it is replaced.
+- `art:<name>` — **the form that matters long term.** A prefixed art filename without its extension (`team-atlas`), resolved to `/static/icons/team-atlas.png`. Regenerating a piece overwrites the same filename, so a team's saved icon keeps working when the art underneath it is replaced — which is the normal case with externally-generated art.
 - `pack:<filename>` — a direct file under `icons/`, for the stand-in period only. **Encoding is mandatory**: the stand-in filenames contain spaces (`25-1-100 Sci-Fi Flat icons-01.png`), so raw interpolation yields a broken URL. Do not spend effort renaming the stand-in pack — it is leaving. Encode at the resolver and move on.
 - `data:image/...;base64,...` — a custom icon the operator supplied inline.
 
@@ -41,8 +42,8 @@ Absent/empty `icon` → fall back to the existing role portrait. The fallback is
 ### 2. Picker UI in the TEAMS tab editor
 In the team form (alongside `#agent-groups-name` / `#agent-groups-head-role`, `kanban.html:5265`):
 - A current-icon preview button showing the resolved icon (or the role portrait when unset).
-- Clicking it opens an inline grid of the available art. Populate the grid from a single manifest-backed endpoint — `GET /terminals/icon-palette` — returning `[{ id, label, src, group }]`. Do **not** hardcode filenames into `kanban.html`, and do not glob client-side.
-  The endpoint reads a manifest, never a directory listing. That indirection is the whole reason the stand-in art can be swapped for pixel art without touching the picker: today the manifest is generated from the stand-in pack, later it is the pixel-art registry's `manifest.json`. Group entries by `group` so the picker can show `Agents`, `Teams` and `Stand-in` as separate sections and the stand-ins can be removed as a group.
+- Clicking it opens an inline grid of the available art. Populate it from `GET /terminals/icon-palette`, which reads the `icons/` directory server-side and returns `[{ name, src, mtime, kind }]` with `kind` derived from the filename prefix (`agent-` / `team-` / other). Do **not** hardcode filenames into `kanban.html`, and do not glob client-side.
+  Grouping by `kind` lets the picker show `Agents`, `Teams` and `Stand-in` as separate sections, so the stand-in pack can be dropped from the palette as one group once real art lands. The endpoint is specified in `agent-and-team-pixel-art-pipeline.md`; this plan is its first consumer.
 - A "custom…" affordance: a `<input type="file" accept="image/png,image/svg+xml,image/webp">`, read via `FileReader` to a data URI. Cap at **64 KB** after encoding and reject larger with an inline error. The value lands in `terminals.agentGroups`, which is a DB config blob read on every board load and relayed to panels — a megabyte of base64 per team would bloat every read.
 - A "reset to role portrait" entry that clears the field back to the default.
 - No confirmation dialogs anywhere in this flow, per CLAUDE.md. Reset and clear act immediately.
@@ -73,8 +74,8 @@ This resolver is the seam the pixel-art plan takes over. It must be the **only**
 ## Verification Plan
 1. `npm run compile` — clean.
 2. **The wipe regression, first and explicitly:** set a team's icon; then edit only that team's *name* and save; re-read `terminals.agentGroups` and confirm `icon` survived. Repeat for a member-row edit and for a prompt edit. This is the failure mode the plan exists to avoid — assert it, do not eyeball it.
-3. Unit: `teamIconSrc` — `art:` form resolves through the manifest; `pack:` form URL-encodes correctly (test with a spaced filename); `data:` form passes through; empty/absent returns `null`; a malformed value returns `null` rather than throwing.
-   Plus: an `art:<id>` whose manifest entry changes `src` still resolves — the stored value is untouched. This is the placeholder-swap guarantee; assert it now, while the art is still stand-in.
+3. Unit: `teamIconSrc` — `art:` form resolves to the static URL; `pack:` form URL-encodes correctly (test with a spaced filename); `data:` form passes through; empty/absent returns `null`; a malformed value returns `null` rather than throwing.
+   Plus: an `art:<name>` still resolves after the underlying PNG is replaced on disk. This is the placeholder-swap guarantee; assert it now, while the art is still stand-in.
 4. Unit/server: `saveAgentGroup` rejects an `icon` that is neither prefix, and rejects an oversized data URI.
 5. Manual, installed VSIX: pick a pack icon for team A and a custom PNG for team B. Confirm both render on the gallery card and on the flow head node. Reload the board and confirm both persist.
 6. Manual: delete the picked pack file from `icons/`, reload, confirm the card falls back to the role portrait rather than a broken image.
