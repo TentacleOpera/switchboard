@@ -87,6 +87,35 @@
     // "this list is empty" for a user who has not picked a list at all.
     let _ticketsAwaitingListSelection = false;
 
+    // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────
+    // │ IIFE / vscode wrapper / state seed ......... lines 1–88
+    // │ Workspace dropdown helpers ................. lines 90–145
+    // │ Tab-state persistence ...................... lines 146–206
+    // │ Zoom / pan / fit helpers ................... lines 207–438
+    // │ Research state persist/restore ............. lines 440–565
+    // │ Tags / assign / priority helpers ........... lines 566–1224
+    // │ Tickets stubs (real impl in tickets.js) .... lines 1224–1248
+    // │ Ticket status modal / create-modal helpers . lines 1249–1488
+    // │ Tickets tab elements / file poll ........... lines 1489–1560
+    // │ Workspace dropdown populate / sidebar ...... lines 1561–1703
+    // │ Tab switching / research import ............ lines 1704–1910
+    // │ Doc tree renderers (cards/folders/nodes) ... lines 1911–2421
+    // │ Doc preview / folder list / unified docs ... lines 2422–3053
+    // │ Antigravity sessions / docs-ready handlers . lines 3113–3879
+    // │ Imported docs / sync result / duplicate .... lines 3880–5192
+    // │ Research prompt / context button ........... lines 5193–5271
+    // │ Kanban plans preview / review mode /
+    // │   comment popup / filters .................. lines 5272–6180
+    // │ Edit mode / new-doc modal / PRD context .... lines 6233–6833
+    // │ Planning HTML docs / folder modal .......... lines 6834–7289
+    // │ Tickets tab implementation ................. lines 7290–7557
+    // │ Rendering functions .......................  lines 7558–8350
+    // │ ClickUp rendering functions ................ lines 8351–8734
+    // │ Load functions ............................  lines 8735–8773
+    // │ Import/refine delegation ................... lines 8774–8930
+    // │ State persistence / message listener / init  lines 8931–9215
+    // └──────────────────────────────────────────────────────────────────────
+
     // Helper to register a dropdown for updates
     function registerWorkspaceDropdown(selectElOrId, tabKey, includeAllOption = true) {
         _registeredDropdowns.push({ selectElOrId, tabKey, includeAllOption });

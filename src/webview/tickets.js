@@ -39,6 +39,38 @@
     // Restore persisted state (webview-local, survives reload via the seed above).
     const persistedState = (vscode ? vscode.getState() : {}) || {};
 
+    // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────
+    // │ IIFE / vscode wrapper / state seed ........ lines 1–40
+    // │ Tab-state & root persistence helpers ...... lines 42–464
+    // │ Ticket metadata helpers (priority/status/
+    // │   assignee/badges/subtasks) ............... lines 465–622
+    // │ Priority popover handlers ................. lines 623–653
+    // │ Ticket card renderers (ClickUp/Linear/
+    // │   groups/drill-down header) ............... lines 654–786
+    // │ Filter option renderers ................... lines 787–941
+    // │ Filtered ticket getters ................... lines 942–1063
+    // │ Ticket list & panel renderers ............. lines 1064–1327
+    // │ Local ticket files & sync statuses ........ lines 1328–1419
+    // │ Tags / comment helpers .................... lines 1420–1617
+    // │ Tags & assign modals ...................... lines 1618–1810
+    // │ Priority/tags selection & markdown helpers  lines 1799–1946
+    // │ Tags/status/assign modal open-save ........ lines 1947–2311
+    // │ Comment manager (threads/replies/
+    // │   optimistic merge) ....................... lines 2312–2692
+    // │ Mention autocomplete ...................... lines 2693–2842
+    // │ Attachments list .........................  lines 2843–2965
+    // │ Ticket file refresh & parent picker ....... lines 2966–3040
+    // │ Edit mode (enter/exit) .................... lines 3041–3196
+    // │ Priority popover/import/link/task details . lines 3197–3545
+    // │ Task detail renderers (Linear/ClickUp) .... lines 3302–3695
+    // │ Integration config (ClickUp/Linear apply,
+    // │   mappings, automation, save locations,
+    // │   triage pipeline) ....................... lines 3696–6070
+    // │ Host message listener & dispatch .......... lines 6071–7230
+    // │ ClickUp list statuses / save-location
+    // │   pasteback / init ....................... lines 7231–8403
+    // └──────────────────────────────────────────────────────────────────────
+
     // ── Tab-state persistence helpers ───────────────────────────────────────
     // NOTE: `persistTab` and `getRestoredState` are NOT yet in sharedUtils.js —
     // plan 1's promotion of `persistTab` was reverted in review (the lifted copy was

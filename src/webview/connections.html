@@ -310,6 +310,7 @@
         <button class="shared-tab-btn" data-tab="handoffs" role="tab" aria-selected="false">Hand-offs</button>
         <button class="shared-tab-btn" data-tab="jobs" role="tab" aria-selected="false">Jobs</button>
         <button class="shared-tab-btn" data-tab="web-agents" role="tab" aria-selected="false">Web Agents</button>
+        <button class="shared-tab-btn" data-tab="docs-health" role="tab" aria-selected="false">Docs Health</button>
     </div>
 
     <!-- SUB-TAB 1: PROVIDERS -->
@@ -496,6 +497,7 @@
                 Point an agent at your docs and get back a <strong>high-level plan</strong> — user flows and
                 logic, not code. Paste the plan below and it lands on the board, where Switchboard's own
                 planner turns it into an implementation. How detailed the plan is tracks how good your docs are.
+                See the <strong>Docs Health</strong> tab for the kinds of docs that make the biggest difference.
             </div>
 
             <div class="cp-section">
@@ -548,6 +550,73 @@
             <div class="cp-section cp-optional">
                 <button id="cp-btn-improve" class="strip-btn">Improve my docs with an agent</button>
                 <span class="cp-hint">Optional — copies a doc-improvement prompt for a configured docs folder. Reads no code.</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- SUB-TAB 5: DOCS HEALTH — planning-doc guidance & maintenance prompt -->
+    <div class="shared-tab-content" id="docs-health-fields" data-tab-content="docs-health">
+        <div class="cp-wrap">
+            <div class="cp-intro">
+                Good docs make good plans. When you point a planning agent at your docs, these are the kinds
+                of docs that help it understand your product and write better plans. Copy the maintenance
+                prompt below and paste it into a scheduled agent (like a Spark scheduled run) to create and
+                keep these docs updated.
+            </div>
+
+            <div class="conn-card">
+                <div class="conn-heading">Architecture / Component Map</div>
+                <strong>A map of what your product is and how its pieces fit together.</strong> Helps the
+                agent understand the project's structure without reading every file.
+                <div style="margin-top: 6px;"><em>Why this helps:</em> the agent knows where to look instead
+                of searching broadly.</div>
+                <div style="margin-top: 4px;"><em>Looks like:</em> a folder-layout overview plus a table
+                mapping features or UI areas to their source files. For a web service: routes→handlers→models.
+                For a CLI: commands→modules. For a library: public API→internal modules. For a browser
+                extension: panels→HTML→scripts→providers.</div>
+            </div>
+
+            <div class="conn-card">
+                <div class="conn-heading">Data-Flow / Interface Index</div>
+                <strong>A list of how information moves through your system</strong> — the entry points, the
+                messages, the interfaces between layers. Helps the agent find where things happen and how they
+                connect.
+                <div style="margin-top: 6px;"><em>Why this helps:</em> the agent can trace a user action to
+                the code that handles it without guessing.</div>
+                <div style="margin-top: 4px;"><em>Looks like:</em> for a web service: API endpoints with
+                method, path, handler, and purpose. For a browser extension: message types and their handlers.
+                For an event-driven app: event names, publishers, and subscribers. For a CLI: flags,
+                subcommands, and what they do. For a library: exported functions/classes and what they do.</div>
+            </div>
+
+            <div class="conn-card">
+                <div class="conn-heading">Search Scoping Guidelines</div>
+                <strong>A note telling the agent where your source code lives</strong> and where your build
+                artifacts, generated files, and dependencies are. Prevents the agent from reading stale or
+                generated files.
+                <div style="margin-top: 6px;"><em>Why this helps:</em> the agent searches the right
+                directories and ignores noise.</div>
+                <div style="margin-top: 4px;"><em>Looks like:</em> a short section in your README or root docs:
+                "Source is in <code>src/</code>. Build output is in <code>dist/</code> (or <code>build/</code>,
+                <code>out/</code>, <code>.next/</code>, <code>target/</code>). Don't read generated files or
+                <code>node_modules/</code>."</div>
+            </div>
+
+            <div class="conn-card">
+                <div class="conn-heading">Navigation Aids in Large Files</div>
+                <strong>A table of contents at the top of large source files</strong> listing the major
+                sections with line numbers. Lets the agent jump straight to the relevant code.
+                <em>(Only relevant if your project has large source files — roughly 500+ lines.)</em>
+                <div style="margin-top: 6px;"><em>Why this helps:</em> the agent opens the file it needs and
+                goes straight to the right section.</div>
+                <div style="margin-top: 4px;"><em>Looks like:</em> a comment block near the top of the file:
+                <code>// Sections: State (L20), Renderers (L150), Event Handlers (L300), Message Dispatch (L500)...</code></div>
+            </div>
+
+            <div class="cp-section">
+                <button id="dh-btn-copy" class="strip-btn strip-btn--primary">Copy docs maintenance prompt</button>
+                <span class="cp-hint" style="margin-left: 8px;">Paste into a scheduled agent to create and update these docs nightly. Works with any agent — Spark, Claude, Devin, or a cron-triggered CLI agent.</span>
+                <div style="margin-top: 8px;"><span id="dh-status" class="cp-hint"></span></div>
             </div>
         </div>
     </div>

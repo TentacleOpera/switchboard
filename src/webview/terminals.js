@@ -116,6 +116,27 @@
     // One object under one key to avoid a spray of saveSetting calls.
     let groupPrefs = { threshold: 2, hidden: [], pinned: [], orders: {}, layouts: {}, extras: {}, autoRoleGroups: false };
 
+    // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────
+    // │ IIFE / state & constants (layout, panes,
+    // │   pins, modes, groups, prefs) ............. lines 1–118
+    // │ Cached fleet/agent state & decoders ......... lines 119–260
+    // │ WebGL renderer & xterm headless helpers ..... lines 261–670
+    // │ Theme & UI helpers ......................... lines 618–680
+    // │ Layout slot math / pane grid render ......... lines 680–1410
+    // │ Pane assignment / curtain / focus .......... lines 1411–2143
+    // │ Sidebar list / group rendering .............. lines 2144–3260
+    // │ Group comparator / ordering ................. lines 3261–3380
+    // │ Terminal socket connect / reattach .......... lines 3381–4064
+    // │ State chips / dispatch chips / sync ......... lines 4065–4260
+    // │ Fleet poll / kanban pane viewer ............. lines 4260–5360
+    // │ Drag-drop / paste / prompt dispatch ......... lines 4540–5800
+    // │ Kanban structure / board cards fetch ........ lines 5978–6100
+    // │ Terminal CRUD (create/rename/close/clear) ... lines 6466–7440
+    // │ Image paste / WebSocket terminal stream ..... lines 7864–8230
+    // │ Terminal socket message handling ............ lines 8236–8900
+    // │ Standing-orders / relay / agent prompts ..... lines 9062–9622
+    // └──────────────────────────────────────────────────────────────────────
+
     /**
      * Which group header the role picker is currently open under.
      *   { key: string, targetSpec: object|undefined }   — open

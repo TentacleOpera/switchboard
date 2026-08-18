@@ -205,6 +205,27 @@ export function normalizeFeatureWorktreeMode(value: unknown): 'none' | 'per-feat
     return value === 'per-feature' ? 'per-feature' : 'none';
 }
 
+// ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────────
+// │ Imports & module helpers .................... lines 1–205
+// │ class KanbanProvider .......................... line 211
+// │   Fields / wiring setters ..................... lines 212–360
+// │   Workspace roots / state messages ............ lines 360–1587
+// │   open() / deserializeWebviewPanel ............. lines 1588–1781
+// │   refresh / refreshWithData / push helpers ..... lines 1816–2265
+// │   postMessage / per-connection push renderers .. lines 2256–2400
+// │   Auto-archive / Remote Control API ............ lines 2627–2840
+// │   ClickUp sync result handling ................ lines 3309–3450
+// │   Dispatch identity / prompt generation ........ lines 3450–5510
+// │   Seat prompt options / role config ........... lines 5510–6662
+// │   Column state cleanup / visible agents ........ lines 6663–6994
+// │   Control plane / repo scope / project filter .. lines 6995–7400
+// │   Card-move / queue / column moves ............. lines 7402–8083
+// │   API server / dispatch resolution ............. lines 8084–8264
+// │   handleServiceVerb / _handleMessage switch .... lines 8178–12540
+// │   Feature CRUD / subtask / worktree arms ....... lines 12537–12835
+// │   Feature subtask resolve (phase 1a/1b/2) ...... lines 14145–14280
+// └──────────────────────────────────────────────────────────────────────────
+
 /**
  * Provides a Kanban board WebviewPanel in the editor area.
  * Cards represent active plans and columns represent workflow stages.

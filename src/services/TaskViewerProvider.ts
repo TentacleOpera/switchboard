@@ -377,6 +377,29 @@ function resolvePtyClearDelay(cfg: vscode.WorkspaceConfiguration): number {
     return cfg.get<number>('terminal.ptyClearBeforePromptDelay', 600);
 }
 
+// ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────────
+// │ Imports & module helpers .................... lines 1–375
+// │ class TaskViewerProvider ...................... line 377
+// │   _handleMessage / handleServiceVerb dispatch . lines 379–410
+// │   Survivor scheduler state ................... lines 1165–1202
+// │   Provider wiring setters ..................... lines 4698–4730
+// │   postMessage / cross-panel fan-out ........... lines 4724–7430
+// │   Plan selection / loading / recovery ......... lines 8393–8500
+// │   Orchestrator start / onboarding ............. lines 10507–11600
+// │   Verb routing (kanban/planning/design/
+// │     setup/tickets) ........................... lines 3256–3310
+// │   Last-accessed tracking & prefetch ........... lines 9086–9200
+// │   Message listener builder / plan registry .... lines 12843–16000
+// │   Plan recovery / workspace identity .......... lines 15498–16000
+// │   Setup/tickets/linear/clickup verb arms ...... lines 12861–14550
+// │   Memo arms (list/load/save/clear/generate) ... lines 14087–14260
+// │   Pipeline / airlock / kanban workflow ......... lines 14261–14500
+// │   DB path / archive query / reset ............. lines 14295–14415
+// │   Action-triggered / airlock sync ............. lines 20763–23200
+// │   Comment manager / JSON cache ................ lines 25584–26310
+// │   Surviving scheduler jobs .................... lines 26311–26570
+// └──────────────────────────────────────────────────────────────────────────
+
 export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private async _handleMessage(message: any): Promise<any> {

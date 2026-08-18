@@ -114,6 +114,21 @@
         htmlSelectedElement: null,
     };
 
+    // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────
+    // │ IIFE / vscode wrapper / state seed ......... lines 1–58
+    // │ State object (design/stitch/html/images) .... lines 60–115
+    // │ Workspace dropdown / sidebar helpers ........ lines 117–195
+    // │ Tab switching / activeTabChanged ............ lines 196–285
+    // │ Doc tree / link-to-folder renderers ......... lines 286–1107
+    // │ HTML tweak / Claude artifact prompt helpers . lines 1085–1107
+    // │ Stitch auth / API key ....................... lines 1108–2805
+    // │ Stitch design-system / project / screen ops . lines 2806–4291
+    // │ Folder management & preview helpers ......... lines 4292–4570
+    // │ Folder CRUD (design/html/images/stitch) ..... lines 4572–4600
+    // │ Stitch attach / generate / edit / variants .. lines 4600–5400
+    // │ Host message listener & init ................ lines 5400–5570
+    // └──────────────────────────────────────────────────────────────────────
+
     function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
         const select = typeof selectElOrId === 'string' ? document.getElementById(selectElOrId) : selectElOrId;
         if (!select) return;

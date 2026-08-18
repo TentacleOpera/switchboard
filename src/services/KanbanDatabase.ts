@@ -962,6 +962,24 @@ function _columnSlug(columnName: string): string {
     return columnName.toLowerCase().replace(/\s+/g, '-');
 }
 
+// ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────────
+// │ Imports & module helpers .................... lines 1–963
+// │ class KanbanDatabase .......................... line 965
+// │   Static instance cache / idle-eviction ....... lines 965–1071
+// │   Workspace mappings get/set .................. lines 1072–1577
+// │   Data version / persist coalescing /
+// │     onColumnChanged .......................... lines 1578–1900
+// │   createIfMissing / migration version ......... lines 1957–2334
+// │   Plan insert / has-plan queries .............. lines 2335–2502
+// │   Column updates (by planFile / sessionId) .... lines 2503–2620
+// │   Feature status / complexity / tags / meta ... lines 2619–2866
+// │   Status / archive / project resolution ....... lines 2867–3080
+// │   Last-action / topic / plan-project updates .. lines 3066–3200
+// │   Worktree rows / feature worktree mode ....... lines 3200–4500
+// │   Plan records / board snapshot / config ...... lines 4500–7000
+// │   Schema / migrations / config-table bridge ... lines 7000–10667
+// └──────────────────────────────────────────────────────────────────────────
+
 export class KanbanDatabase {
     public static readonly UNASSIGNED_PROJECT_FILTER = '__unassigned__';
     private static _instances = new Map<string, KanbanDatabase>();

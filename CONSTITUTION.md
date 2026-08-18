@@ -33,6 +33,10 @@ Two facts shape every decision and override most defaults:
 
 ## Architecture & Layering Invariants
 
+> **Navigational map:** `ARCHITECTURE.md` (repo root) is the layout map — which file serves
+> which panel, folder roles, and the service cross-reference. The invariants below are the
+> *laws*; that map is the *layout*. Read it first when orienting on a task.
+
 - **[INVARIANT] The bundle is self-contained.** Webpack must bundle every runtime dependency into
   `dist/extension.js`. Never rely on runtime `require`/dynamic `import` of an unbundled package, and
   never assume `node_modules` exists at runtime — it does not in the published `.vsix`. The extension

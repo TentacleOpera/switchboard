@@ -41,6 +41,25 @@ Full setup steps: **[Installation guide](https://tentacleopera.github.io/switchb
 
 ---
 
+## For AI agents
+
+> Guidance for AI planning/coding agents orienting on this repo. A complementary addendum to
+> the human docs above (the online docs remain the single source of truth for human readers).
+
+- `src/` is the **source of truth** for all code. Read and search only there.
+- `dist/` is a **webpack build artifact** — not used in development or testing. Do not search
+  or read it; results there are stale generated bundles.
+- `ARCHITECTURE.md` (repo root) is the **navigational map** — which file serves which panel,
+  folder roles, and the service cross-reference. Read it first before searching the codebase.
+- `docs/IPC_PROTOCOL.md` is the **webview↔host message index** (both directions). Read it
+  before tracing a panel action into its provider arm.
+- `CONSTITUTION.md` states the non-negotiable invariants (the *laws*); `ARCHITECTURE.md` is
+  the *layout*. `CLAUDE.md` / `AGENTS.md` carry the agent workflow protocol and coding rules.
+- For planning agents: read `ARCHITECTURE.md` and `docs/IPC_PROTOCOL.md` **before** searching
+  the codebase — they turn a broad search into a targeted read.
+
+---
+
 **MIT License** — fully open source. 100% local-first: no external proxy servers, no telemetry, no tracking.
 
 ## Legal Notices & Trademarks

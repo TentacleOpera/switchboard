@@ -1002,6 +1002,7 @@
         "deleteInsight",
         "deleteKanbanPlan",
         "deleteLocalDoc",
+        "docsHealthCopyPrompt",
         "draftImproveLocalDoc",
         "fetchAntigravityArtifact",
         "fetchChildren",
@@ -1080,547 +1081,552 @@
       "arms": [
         {
           "verb": "webviewReady",
-          "line": 2539,
+          "line": 2622,
           "dynamic": false
         },
         {
           "verb": "renderMarkdownLive",
-          "line": 2541,
+          "line": 2624,
           "dynamic": false
         },
         {
           "verb": "fetchRoots",
-          "line": 2547,
+          "line": 2630,
           "dynamic": false
         },
         {
           "verb": "persistTabState",
-          "line": 2619,
+          "line": 2702,
           "dynamic": false
         },
         {
           "verb": "submitComment",
-          "line": 2639,
+          "line": 2722,
           "dynamic": false
         },
         {
           "verb": "savePlanningContainerSelection",
-          "line": 2689,
+          "line": 2772,
           "dynamic": false
         },
         {
           "verb": "fetchChildren",
-          "line": 2736,
-          "dynamic": false
-        },
-        {
-          "verb": "fetchPreview",
-          "line": 2739,
-          "dynamic": false
-        },
-        {
-          "verb": "appendToPlannerPrompt",
-          "line": 2742,
-          "dynamic": false
-        },
-        {
-          "verb": "importFullDoc",
-          "line": 2746,
-          "dynamic": false
-        },
-        {
-          "verb": "fetchPageContent",
-          "line": 2750,
-          "dynamic": false
-        },
-        {
-          "verb": "fetchAntigravityArtifact",
-          "line": 2753,
-          "dynamic": false
-        },
-        {
-          "verb": "addLocalFolder",
-          "line": 2780,
-          "dynamic": false
-        },
-        {
-          "verb": "removeLocalFolder",
-          "line": 2797,
-          "dynamic": false
-        },
-        {
-          "verb": "listLocalFolders",
-          "line": 2806,
-          "dynamic": false
-        },
-        {
-          "verb": "listPlanningHtmlFolders",
           "line": 2819,
           "dynamic": false
         },
         {
-          "verb": "addPlanningHtmlFolder",
-          "line": 2827,
+          "verb": "fetchPreview",
+          "line": 2822,
           "dynamic": false
         },
         {
-          "verb": "removePlanningHtmlFolder",
-          "line": 2844,
+          "verb": "appendToPlannerPrompt",
+          "line": 2825,
           "dynamic": false
         },
         {
-          "verb": "serveAndOpenHtml",
-          "line": 2853,
-          "dynamic": false
-        },
-        {
-          "verb": "refreshSource",
-          "line": 2871,
-          "dynamic": false
-        },
-        {
-          "verb": "fetchContainers",
-          "line": 2885,
-          "dynamic": false
-        },
-        {
-          "verb": "fetchImportedDocs",
-          "line": 2904,
-          "dynamic": false
-        },
-        {
-          "verb": "fetchDocsFile",
-          "line": 2907,
-          "dynamic": false
-        },
-        {
-          "verb": "syncToSource",
-          "line": 2910,
-          "dynamic": false
-        },
-        {
-          "verb": "fetchFilteredDocs",
-          "line": 2914,
-          "dynamic": false
-        },
-        {
-          "verb": "fetchDocPages",
-          "line": 2953,
+          "verb": "importFullDoc",
+          "line": 2829,
           "dynamic": false
         },
         {
           "verb": "fetchPageContent",
-          "line": 2980,
+          "line": 2833,
+          "dynamic": false
+        },
+        {
+          "verb": "fetchAntigravityArtifact",
+          "line": 2836,
+          "dynamic": false
+        },
+        {
+          "verb": "addLocalFolder",
+          "line": 2863,
+          "dynamic": false
+        },
+        {
+          "verb": "removeLocalFolder",
+          "line": 2880,
+          "dynamic": false
+        },
+        {
+          "verb": "listLocalFolders",
+          "line": 2889,
+          "dynamic": false
+        },
+        {
+          "verb": "listPlanningHtmlFolders",
+          "line": 2902,
+          "dynamic": false
+        },
+        {
+          "verb": "addPlanningHtmlFolder",
+          "line": 2910,
+          "dynamic": false
+        },
+        {
+          "verb": "removePlanningHtmlFolder",
+          "line": 2927,
+          "dynamic": false
+        },
+        {
+          "verb": "serveAndOpenHtml",
+          "line": 2936,
+          "dynamic": false
+        },
+        {
+          "verb": "refreshSource",
+          "line": 2954,
+          "dynamic": false
+        },
+        {
+          "verb": "fetchContainers",
+          "line": 2968,
+          "dynamic": false
+        },
+        {
+          "verb": "fetchImportedDocs",
+          "line": 2987,
+          "dynamic": false
+        },
+        {
+          "verb": "fetchDocsFile",
+          "line": 2990,
+          "dynamic": false
+        },
+        {
+          "verb": "syncToSource",
+          "line": 2993,
+          "dynamic": false
+        },
+        {
+          "verb": "fetchFilteredDocs",
+          "line": 2997,
+          "dynamic": false
+        },
+        {
+          "verb": "fetchDocPages",
+          "line": 3036,
+          "dynamic": false
+        },
+        {
+          "verb": "fetchPageContent",
+          "line": 3063,
           "dynamic": false
         },
         {
           "verb": "importPlansFromClipboard",
-          "line": 3013,
+          "line": 3096,
           "dynamic": false
         },
         {
           "verb": "createPlansInit",
-          "line": 3019,
+          "line": 3102,
           "dynamic": false
         },
         {
           "verb": "createPlansCopyPrompt",
-          "line": 3039,
+          "line": 3122,
           "dynamic": false
         },
         {
           "verb": "createPlansPickFolder",
-          "line": 3065,
+          "line": 3148,
           "dynamic": false
         },
         {
           "verb": "createPlansDownloadZip",
-          "line": 3082,
+          "line": 3165,
           "dynamic": false
         },
         {
           "verb": "createPlansPasteBack",
-          "line": 3115,
+          "line": 3198,
           "dynamic": false
         },
         {
           "verb": "createPlansImproveSource",
-          "line": 3145,
+          "line": 3228,
+          "dynamic": false
+        },
+        {
+          "verb": "docsHealthCopyPrompt",
+          "line": 3255,
           "dynamic": false
         },
         {
           "verb": "importResearchDoc",
-          "line": 3172,
+          "line": 3267,
           "dynamic": false
         },
         {
           "verb": "linkToDocument",
-          "line": 3178,
+          "line": 3273,
           "dynamic": false
         },
         {
           "verb": "linkToFolder",
-          "line": 3182,
+          "line": 3277,
           "dynamic": false
         },
         {
           "verb": "createLocalDoc",
-          "line": 3186,
+          "line": 3281,
           "dynamic": false
         },
         {
           "verb": "draftImproveLocalDoc",
-          "line": 3191,
+          "line": 3286,
           "dynamic": false
         },
         {
           "verb": "resolveDuplicate",
-          "line": 3224,
+          "line": 3319,
           "dynamic": false
         },
         {
           "verb": "deleteLocalDoc",
-          "line": 3229,
+          "line": 3324,
           "dynamic": false
         },
         {
           "verb": "saveOnlineDocFile",
-          "line": 3264,
+          "line": 3359,
           "dynamic": false
         },
         {
           "verb": "deleteImportedDoc",
-          "line": 3311,
+          "line": 3406,
           "dynamic": false
         },
         {
           "verb": "importPlans",
-          "line": 3355,
+          "line": 3450,
           "dynamic": false
         },
         {
           "verb": "copyArtifactPrompt",
-          "line": 3360,
+          "line": 3455,
           "dynamic": false
         },
         {
           "verb": "sendArtifactPromptToTerminal",
-          "line": 3366,
+          "line": 3461,
           "dynamic": false
         },
         {
           "verb": "copyHtmlTweakPrompt",
-          "line": 3385,
+          "line": 3480,
           "dynamic": false
         },
         {
           "verb": "sendHtmlTweakPrompt",
-          "line": 3392,
+          "line": 3487,
           "dynamic": false
         },
         {
           "verb": "copyChatPrompt",
-          "line": 3412,
-          "dynamic": false
-        },
-        {
-          "verb": "uploadPlanAttachment",
-          "line": 3421,
-          "dynamic": false
-        },
-        {
-          "verb": "createPlan",
           "line": 3507,
           "dynamic": false
         },
         {
+          "verb": "uploadPlanAttachment",
+          "line": 3516,
+          "dynamic": false
+        },
+        {
+          "verb": "createPlan",
+          "line": 3602,
+          "dynamic": false
+        },
+        {
           "verb": "fetchKanbanPlans",
-          "line": 3511,
+          "line": 3606,
           "dynamic": false
         },
         {
           "verb": "openKanbanPlan",
-          "line": 3621,
+          "line": 3716,
           "dynamic": false
         },
         {
           "verb": "fetchKanbanPlanPreview",
-          "line": 3637,
+          "line": 3732,
           "dynamic": false
         },
         {
           "verb": "copyKanbanPlanPrompt",
-          "line": 3643,
+          "line": 3738,
           "dynamic": false
         },
         {
           "verb": "copyFeaturePlannerPrompt",
-          "line": 3672,
+          "line": 3767,
           "dynamic": false
         },
         {
           "verb": "moveKanbanPlanColumn",
-          "line": 3697,
+          "line": 3792,
           "dynamic": false
         },
         {
           "verb": "planShown",
-          "line": 3722,
+          "line": 3817,
           "dynamic": false
         },
         {
           "verb": "setKanbanPlanComplexity",
-          "line": 3729,
+          "line": 3824,
           "dynamic": false
         },
         {
           "verb": "deleteKanbanPlan",
-          "line": 3777,
+          "line": 3872,
           "dynamic": false
         },
         {
           "verb": "fetchKanbanPlanLog",
-          "line": 3833,
+          "line": 3928,
           "dynamic": false
         },
         {
           "verb": "getFeatureDetails",
-          "line": 3856,
+          "line": 3951,
           "dynamic": false
         },
         {
           "verb": "addSubtaskToFeature",
-          "line": 3877,
+          "line": 3972,
           "dynamic": false
         },
         {
           "verb": "removeSubtaskFromFeature",
-          "line": 3912,
+          "line": 4007,
           "dynamic": false
         },
         {
           "verb": "deleteFeature",
-          "line": 3937,
+          "line": 4032,
           "dynamic": false
         },
         {
           "verb": "createFeature",
-          "line": 3970,
+          "line": 4065,
           "dynamic": false
         },
         {
           "verb": "updateFeatureConfig",
-          "line": 4021,
+          "line": 4116,
           "dynamic": false
         },
         {
           "verb": "loadConstitutionFiles",
-          "line": 4028,
+          "line": 4123,
           "dynamic": false
         },
         {
           "verb": "getConstitutionStatus",
-          "line": 4054,
+          "line": 4149,
           "dynamic": false
         },
         {
           "verb": "readConstitutionFile",
-          "line": 4075,
+          "line": 4170,
           "dynamic": false
         },
         {
           "verb": "saveConstitutionFile",
-          "line": 4127,
+          "line": 4222,
           "dynamic": false
         },
         {
           "verb": "getProjectContextEnabled",
-          "line": 4186,
+          "line": 4281,
           "dynamic": false
         },
         {
           "verb": "setProjectContextEnabled",
-          "line": 4196,
+          "line": 4291,
           "dynamic": false
         },
         {
           "verb": "getProjectPrd",
-          "line": 4207,
+          "line": 4302,
           "dynamic": false
         },
         {
           "verb": "saveProjectPrd",
-          "line": 4239,
+          "line": 4334,
           "dynamic": false
         },
         {
           "verb": "invokePrdBuilder",
-          "line": 4279,
+          "line": 4374,
           "dynamic": false
         },
         {
           "verb": "copyPrdBuildPrompt",
-          "line": 4299,
+          "line": 4394,
           "dynamic": false
         },
         {
           "verb": "toggleConstitutionAddon",
-          "line": 4308,
+          "line": 4403,
           "dynamic": false
         },
         {
           "verb": "copyConstitutionPrompt",
-          "line": 4317,
+          "line": 4412,
           "dynamic": false
         },
         {
           "verb": "copyConstitutionUpdatePrompt",
-          "line": 4354,
+          "line": 4449,
           "dynamic": false
         },
         {
           "verb": "invokeConstitutionBuilder",
-          "line": 4400,
+          "line": 4495,
           "dynamic": false
         },
         {
           "verb": "invokeConstitutionUpdater",
-          "line": 4423,
-          "dynamic": false
-        },
-        {
-          "verb": "invokeSystemBuilder",
-          "line": 4444,
-          "dynamic": false
-        },
-        {
-          "verb": "copySystemBuildPrompt",
-          "line": 4471,
-          "dynamic": false
-        },
-        {
-          "verb": "openArchitectTerminal",
-          "line": 4491,
-          "dynamic": false
-        },
-        {
-          "verb": "copyArchitectPrompt",
           "line": 4518,
           "dynamic": false
         },
         {
+          "verb": "invokeSystemBuilder",
+          "line": 4539,
+          "dynamic": false
+        },
+        {
+          "verb": "copySystemBuildPrompt",
+          "line": 4566,
+          "dynamic": false
+        },
+        {
+          "verb": "openArchitectTerminal",
+          "line": 4586,
+          "dynamic": false
+        },
+        {
+          "verb": "copyArchitectPrompt",
+          "line": 4613,
+          "dynamic": false
+        },
+        {
           "verb": "deleteConstitutionFile",
-          "line": 4529,
+          "line": 4624,
           "dynamic": false
         },
         {
           "verb": "getConstitutionPaths",
-          "line": 4543,
+          "line": 4638,
           "dynamic": false
         },
         {
           "verb": "addConstitutionPath",
-          "line": 4555,
+          "line": 4650,
           "dynamic": false
         },
         {
           "verb": "removeConstitutionPath",
-          "line": 4581,
+          "line": 4676,
           "dynamic": false
         },
         {
           "verb": "setConstitutionPath",
-          "line": 4598,
+          "line": 4693,
           "dynamic": false
         },
         {
           "verb": "saveFileContent",
-          "line": 4634,
+          "line": 4729,
           "dynamic": false
         },
         {
           "verb": "linearLoadAutomationCatalog",
-          "line": 4793,
+          "line": 4888,
           "dynamic": false
         },
         {
           "verb": "openTicketsPanel",
-          "line": 4805,
+          "line": 4900,
           "dynamic": false
         },
         {
           "verb": "openExternalUrl",
-          "line": 4814,
+          "line": 4909,
           "dynamic": false
         },
         {
           "verb": "copyToClipboard",
-          "line": 4826,
+          "line": 4921,
           "dynamic": false
         },
         {
           "verb": "copyDiagramPrompt",
-          "line": 4830,
+          "line": 4925,
           "dynamic": false
         },
         {
           "verb": "improveFeature",
-          "line": 4835,
+          "line": 4930,
           "dynamic": false
         },
         {
           "verb": "createOnlineDocument",
-          "line": 4897,
+          "line": 4992,
           "dynamic": false
         },
         {
           "verb": "setUploadLocation",
-          "line": 4994,
+          "line": 5089,
           "dynamic": false
         },
         {
           "verb": "syncDocToOnline",
-          "line": 5018,
-          "dynamic": false
-        },
-        {
-          "verb": "getSyncConfig",
-          "line": 5075,
-          "dynamic": false
-        },
-        {
-          "verb": "loadInsights",
-          "line": 5091,
-          "dynamic": false
-        },
-        {
-          "verb": "readInsight",
           "line": 5113,
           "dynamic": false
         },
         {
+          "verb": "getSyncConfig",
+          "line": 5170,
+          "dynamic": false
+        },
+        {
+          "verb": "loadInsights",
+          "line": 5186,
+          "dynamic": false
+        },
+        {
+          "verb": "readInsight",
+          "line": 5208,
+          "dynamic": false
+        },
+        {
           "verb": "runTuningExtract",
-          "line": 5137,
+          "line": 5232,
           "dynamic": false
         },
         {
           "verb": "runTuningGovernance",
-          "line": 5174,
+          "line": 5269,
           "dynamic": false
         },
         {
           "verb": "updateInsightStatus",
-          "line": 5183,
+          "line": 5278,
           "dynamic": false
         },
         {
           "verb": "deleteInsight",
-          "line": 5197,
+          "line": 5292,
           "dynamic": false
         },
         {
           "verb": "copyInsightLink",
-          "line": 5211,
+          "line": 5306,
           "dynamic": false
         }
       ]
@@ -4506,6 +4512,12 @@
       "direction": "request-response",
       "provider": "TaskViewer",
       "proposedService": "taskviewerService"
+    },
+    {
+      "verb": "docsHealthCopyPrompt",
+      "direction": "request-response",
+      "provider": "Planning",
+      "proposedService": "planningService"
     },
     {
       "verb": "downloadAttachment",
@@ -7957,6 +7969,12 @@
         "showing"
       ],
       "siteCount": 2
+    },
+    "docsHealthCopyPrompt": {
+      "payloadKeys": [
+        "type"
+      ],
+      "siteCount": 1
     },
     "downloadAttachment": {
       "payloadKeys": [
@@ -18697,7 +18715,17 @@
       "verb": "regenerateSparkContext",
       "direction": "request",
       "file": "src/webview/connections.js",
-      "line": 355,
+      "line": 586,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type"
+      ]
+    },
+    {
+      "verb": "docsHealthCopyPrompt",
+      "direction": "request",
+      "file": "src/webview/connections.js",
+      "line": 593,
       "receiver": "vscode",
       "payloadKeys": [
         "type"

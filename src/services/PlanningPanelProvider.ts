@@ -71,6 +71,66 @@ later, inside the tool this plan goes back into.
 Return the plan as markdown with a short title, a Goal, the flows/expected
 behaviour, and edge cases. It will be pasted directly onto a planning board.`;
 
+// Docs Health maintenance prompt — self-contained and tool-agnostic. Describes
+// general categories of planning-navigational docs (not Switchboard-specific
+// forms) so any agent, pointed at any project type, can build its own scanner
+// logic and create/update the docs that apply. No references to Switchboard,
+// VS Code, postMessage, dist/, or any host-specific path.
+const DOCS_HEALTH_PROMPT = `You are maintaining planning docs for a project. These docs help planning agents
+write better plans by providing navigational orientation — understanding the
+project's structure, data flows, and code organization without reading every
+file.
+
+For each category below, check whether a doc of that kind exists and is current.
+Create or update it as needed. You determine what's relevant — check file
+existence, compare referenced paths against actual paths, verify line ranges are
+still accurate, and determine which forms of each category apply to this
+project's architecture. Doc conventions vary by project; adapt the format,
+filenames, and structure to what makes sense for this project. Skip any category
+that doesn't apply (e.g. a project with no large files doesn't need file TOCs;
+a single-file script doesn't need a data-flow index).
+
+1. Architecture / Component Map
+Determine the project's structure — what are the major pieces and how do they
+relate? Create or update a markdown file (e.g. ARCHITECTURE.md) that maps
+features, UI areas, or modules to their source files. Include a folder-layout
+overview. The form depends on the project type: a web service maps
+routes→handlers→models; a CLI maps commands→modules; a library maps public
+API→internal modules; a browser extension maps panels→HTML→scripts→providers;
+a mobile app maps screens→components→state stores. If a map exists, verify the
+mappings are still accurate and update stale references.
+
+2. Data-Flow / Interface Index
+Identify how information moves through the system — the entry points, messages,
+or interfaces between layers. Create or update a markdown file listing each one
+with where it's defined, where it's handled, and its purpose. The form depends
+on the project: a web service lists API endpoints (method, path, handler,
+purpose); a browser extension lists message types and handlers; an event-driven
+app lists events, publishers, subscribers; a CLI lists flags and subcommands;
+a library lists exported functions/classes. If an index exists, verify entries
+are current. If the project has no inter-layer communication (e.g. a
+single-file script), note that and skip.
+
+3. Search Scoping Guidelines
+Identify which directories contain source code vs build artifacts, generated
+files, and dependencies. Check the project's root README or agent instructions
+for a note telling agents where to search and where not to. If missing, add a
+short section naming the source directories and the directories to ignore.
+Build your own logic to distinguish source from generated — common signals: the
+directory is in .gitignore, it's listed as an output in a build config, or it
+contains compiled/transpiled output.
+
+4. Navigation Aids in Large Files
+Identify source files over ~500 lines. For each, check if it has a
+table-of-contents comment block near the top listing major sections with
+approximate line ranges. If missing, read the file, identify its major regions,
+and add a TOC comment block in the appropriate comment syntax for the language.
+If present, verify the line ranges are still approximately accurate. If no
+files exceed the threshold, note that and skip.
+
+Report back with a summary of what you created, updated, confirmed as current,
+or skipped and why.`;
+
 
 export interface PlanningPanelAdapterFactories {
     getNotionService: (root: string) => NotionFetchService;
@@ -100,6 +160,29 @@ interface KanbanPlanSummary {
     clickupTaskId?: string;
     linearIssueId?: string;
 }
+
+// ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────────
+// │ Imports & type defs .......................... lines 1–102
+// │ class PlanningPanelProvider .................... line 104
+// │   handleServiceVerb / verb delegation ......... lines 106–185
+// │   Seam bundle / webview setup / message
+// │     listener wiring .......................... lines 186–820
+// │   postMessageToWebview / project fan-out ...... lines 927–1000
+// │   Theme / animation / scanlines settings ....... lines 821–850
+// │   _handleMessage switch (planning + project) .. lines 2510–5210
+// │     Roots / tab-state / comment / containers ... lines 2539–2900
+// │     Docs fetch / filtered / pages .............. lines 2904–3012
+// │     Create-plans wizard ....................... lines 3013–3170
+// │     Local docs / link / duplicate .............. lines 3172–3360
+// │     Artifact / html-tweak / chat prompts ....... lines 3360–3420
+// │     Kanban plans / features / constitution ..... lines 3507–4540
+// │     Project PRD / context / architect .......... lines 4186–4530
+// │     File save / linear catalog / online sync ... lines 4634–5210
+// │   Online doc create / sync / import-full-doc ... lines 4897–6810
+// │   Import research doc / ticket-file-changed .... lines 6856–7107
+// │   Stitch / insights / tuning arms .............. lines 5091–5210
+// │   Planning HTML preview server ................ lines 1773–1850
+// └──────────────────────────────────────────────────────────────────────────
 
 export class PlanningPanelProvider {
 
@@ -3168,6 +3251,18 @@ Start by checking which documents exist, then present the menu.`;
                 await this._seams().clipboard.writeText(improvePrompt);
                 this._seams().ui.showTemporaryNotification('Docs-improvement prompt copied to clipboard');
                 break;
+            }
+            case 'docsHealthCopyPrompt': {
+                // Copy the self-contained docs-maintenance prompt. Uses the
+                // createPlansInit push+return pattern (NOT createPlansCopyPrompt's
+                // break-only form) so the webview's #dh-status updates in both the
+                // VS Code host (postMessageToWebview) and the browser host
+                // (transport.js re-dispatches the returned body).
+                await this._seams().clipboard.writeText(DOCS_HEALTH_PROMPT);
+                this._seams().ui.showTemporaryNotification('Docs maintenance prompt copied to clipboard');
+                const dhResult = { type: 'docsHealthPromptResult', success: true };
+                this.postMessageToWebview(dhResult);
+                return { success: true, ...dhResult };
             }
             case 'importResearchDoc': {
                 const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
