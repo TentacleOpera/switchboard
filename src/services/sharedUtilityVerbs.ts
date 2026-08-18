@@ -87,6 +87,8 @@ export async function handleRenderMarkdownLive(
     deps: SharedUtilityVerbDeps,
     msg: any
 ): Promise<any> {
+    // Hoisted out of the try: the catch branch returns this too, so a render failure
+    // still hands the caller the image-rewritten source to render client-side.
     let content = msg.content || '';
     try {
         // Tickets edit-preview: resolve the ticket file's directory and rewrite
@@ -105,6 +107,20 @@ export async function handleRenderMarkdownLive(
             requestId: msg.requestId,
             html: html,
             htmlContent: html,
+            // The image-rewritten SOURCE. Callers whose view mode renders through
+            // sharedUtils' renderMarkdown re-render from this client-side, so the preview
+            // uses the same engine as the view it predicts. The HTML above stays for the
+            // Project panel, whose view mode IS markdown.api.render.
+            //
+            // MUST live on okRes, not only on the `return` spread below: every webview
+            // call site reads the PUSH, never the HTTP body. Put it only on the return and
+            // all four callers see undefined, fall back to un-rewritten source, and render
+            // with broken images — with no error raised anywhere.
+            //
+            // Also load-bearing off VS Code: `markdown.api.render` is a VS Code built-in,
+            // so on the standalone host `html` above is undefined (vscodeShim warns and
+            // returns undefined; it does not throw). This field is what keeps the live
+            // preview working there at all.
             markdown: content
         };
         deps.push(okRes);

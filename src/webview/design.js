@@ -1895,6 +1895,10 @@
 
         if (window.SwitchboardMarkdownEditor) {
             window.SwitchboardMarkdownEditor.attach(textarea, {
+                // No provider/id is sent here, so the host performs no image-path rewrite
+                // and the round trip's only product was CommonMark HTML — the wrong engine
+                // for this panel, and absent entirely off VS Code. Render with the
+                // view-mode renderer, in-process.
                 renderPreview: (markdown) => Promise.resolve(renderMarkdown(markdown))
             });
         }

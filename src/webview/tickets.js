@@ -3128,6 +3128,20 @@
                         const msg = event.data;
                         if (msg.type === 'markdownLiveRendered' && msg.requestId === requestId) {
                             window.removeEventListener('message', handler);
+                            // Keep the removeEventListener above exactly where it is: the
+                            // browser host mirrors one WS push to every panel surface, and
+                            // that line is what makes the duplicate arrivals harmless.
+                            //
+                            // The round trip's only remaining job is rewriting relative
+                            // image paths to webview URIs — the RENDER happens here, with
+                            // the same engine view mode uses (sharedUtils' renderMarkdown),
+                            // so the preview predicts the saved result instead of offering
+                            // CommonMark's all-or-nothing list spacing. Falling back to the
+                            // local source covers an older host that does not send the
+                            // field, and the standalone host, where markdown.api.render is
+                            // absent: images do not resolve, the preview still renders.
+                            // There is no reachable failure mode left, so there is no
+                            // rejection path.
                             resolve(renderMarkdown(typeof msg.markdown === 'string' ? msg.markdown : markdown));
                         }
                     };

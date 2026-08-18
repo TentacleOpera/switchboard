@@ -247,20 +247,109 @@ async function run() {
         'design.js renderPreview must resolve locally'
     );
 
-    // 5. externalizeAnchors idempotence check
-    const externalizeAnchorsStart = editorSource.indexOf('function externalizeAnchors(html)');
-    if (externalizeAnchorsStart !== -1) {
-        const externalizeAnchorsEnd = editorSource.indexOf('}', externalizeAnchorsStart);
-        window.eval(editorSource.slice(externalizeAnchorsStart, externalizeAnchorsEnd + 1));
-        const externalizeAnchors = window.externalizeAnchors;
-        if (typeof externalizeAnchors === 'function') {
-            const htmlWithLink = renderMarkdown('- see [docs](https://example.com)');
-            const externalizedOnce = externalizeAnchors(htmlWithLink);
-            const externalizedTwice = externalizeAnchors(externalizedOnce);
-            assert.strictEqual(externalizedOnce, externalizedTwice, 'externalizeAnchors must be idempotent on renderMarkdown output');
-            console.log('  ok - externalizeAnchors idempotence');
-            passed++;
+    // 4b. The round-tripping sites keep the duplicate-push guard and lost the reject
+    // path (plan verification item 6). The browser host mirrors one WS push to every
+    // panel surface, so removeEventListener is what makes the duplicate arrivals
+    // harmless — deleting it turns a tolerated duplicate into a repeated re-render.
+    for (const [label, src] of [['tickets.js', ticketsWebviewSource], ['planning.js', planningWebviewSource]]) {
+        const body = src.slice(
+            src.indexOf('renderPreview: (markdown) => new Promise((resolve) => {'),
+            src.indexOf('onAttachImage:', src.indexOf('renderPreview: (markdown) => new Promise((resolve) => {'))
+        );
+        assert.ok(
+            body.includes("window.removeEventListener('message', handler);"),
+            `${label} round-tripping renderPreview must still removeEventListener before resolving`
+        );
+        assert.ok(
+            !/\breject\(/.test(body),
+            `${label} round-tripping renderPreview must have no reject path`
+        );
+    }
+
+    // 5. externalizeAnchors idempotence (plan verification item 5). externalizeAnchors
+    // lives in sharedUtils.js — already eval'd onto the jsdom window above — NOT in
+    // markdownEditor.js. Asserted unconditionally: a `typeof === function` guard here
+    // would silently skip the check the moment the symbol moved, which is how this
+    // assertion spent its first pass not running at all.
+    const externalizeAnchors = window.externalizeAnchors;
+    assert.strictEqual(typeof externalizeAnchors, 'function',
+        'externalizeAnchors should be exposed on the window by sharedUtils.js');
+    const htmlWithLink = renderMarkdown('- see [docs](https://example.com)');
+    assert.ok(htmlWithLink.includes('<a '), 'fixture must actually contain an anchor to be a test');
+    const externalizedOnce = externalizeAnchors(htmlWithLink);
+    const externalizedTwice = externalizeAnchors(externalizedOnce);
+    assert.strictEqual(externalizedOnce, externalizedTwice,
+        'externalizeAnchors must be idempotent on renderMarkdown output');
+    assert.strictEqual((externalizedTwice.match(/target=/g) || []).length, 1,
+        'externalizeAnchors must not double-apply target= to a renderMarkdown anchor');
+    assert.strictEqual((externalizedTwice.match(/rel=/g) || []).length, 1,
+        'externalizeAnchors must not double-apply rel= to a renderMarkdown anchor');
+    console.log('  ok - externalizeAnchors idempotence');
+    passed++;
+
+    // 6. BEHAVIOURAL: the `markdown` field must reach the object handleRenderMarkdownLive
+    // PUSHES, and must carry the IMAGE-REWRITTEN content — not msg.content. Every webview
+    // call site reads the push, never the HTTP body, so a field added only to the `return`
+    // spread leaves all four switched sites falling back to un-rewritten source and
+    // rendering with broken images, with no error raised anywhere. The source regex above
+    // pins the shape; this pins the behaviour.
+    const { handleRenderMarkdownLive } = require(
+        path.join(process.cwd(), 'out', 'services', 'sharedUtilityVerbs.js'));
+
+    const makeDeps = (pushes, rendered) => ({
+        seams: () => ({ commands: { executeCommand: async () => rendered } }),
+        resolveWorkspaceRoot: () => '/ws',
+        push: (m) => pushes.push(m),
+        findTicketFilePath: async () => '/ws/.switchboard/tickets/linear/ABC-1.md',
+        rewriteLocalImagePaths: (content) => content.replace('](img.png)', '](https://host/img.png)'),
+        getTicketDocumentDirs: () => [],
+        getLinearSyncService: () => null
+    });
+
+    {
+        const pushes = [];
+        const res = await handleRenderMarkdownLive(
+            makeDeps(pushes, '<p>html</p>'),
+            { content: '![a](img.png)', requestId: 7, provider: 'linear', id: 'ABC-1' }
+        );
+        assert.strictEqual(pushes.length, 1, 'handleRenderMarkdownLive must push exactly one reply');
+        const pushed = pushes[0];
+        for (const field of ['html', 'htmlContent', 'markdown']) {
+            assert.ok(field in pushed, `pushed markdownLiveRendered must carry ${field}`);
         }
+        assert.strictEqual(pushed.markdown, '![a](https://host/img.png)',
+            'pushed markdown must be the IMAGE-REWRITTEN content, not msg.content');
+        assert.strictEqual(pushed.html, '<p>html</p>', 'pushed html must stay for the Project panel');
+        assert.strictEqual(res.markdown, pushed.markdown, 'the in-body return must agree with the push');
+        assert.strictEqual(res.success, true, 'the success branch must return success:true');
+        console.log('  ok - markdown field is on the PUSHED object, image-rewritten');
+        passed++;
+    }
+
+    {
+        // Standalone host: markdown.api.render is a VS Code built-in, so executeCommand
+        // resolves undefined WITHOUT throwing. The success branch runs with html:undefined,
+        // and `markdown` is the only thing keeping the browser-host preview alive.
+        const pushes = [];
+        await handleRenderMarkdownLive(makeDeps(pushes, undefined), { content: '- a\n- b\n\n- c', requestId: 8 });
+        assert.strictEqual(pushes[0].html, undefined, 'standalone host: markdown.api.render yields undefined');
+        assert.strictEqual(pushes[0].markdown, '- a\n- b\n\n- c',
+            'standalone host: the source markdown must survive so the preview is not blank');
+        console.log('  ok - browser host keeps a renderable payload with no markdown.api.render');
+        passed++;
+    }
+
+    {
+        // The catch branch must carry the source too — `content` is declared outside the
+        // try for exactly this reason (plan verification item 3).
+        const pushes = [];
+        const deps = makeDeps(pushes, '<p>x</p>');
+        deps.findTicketFilePath = async () => { throw new Error('boom'); };
+        const res = await handleRenderMarkdownLive(deps, { content: '# raw', requestId: 9, provider: 'linear', id: 'ABC-1' });
+        assert.strictEqual(pushes[0].markdown, '# raw', 'errRes must carry the source markdown');
+        assert.strictEqual(res.success, false, 'the failure branch must return success:false');
+        console.log('  ok - error branch carries the source markdown');
+        passed++;
     }
 
     console.log(`\n${passed} assertions passed.\n`);

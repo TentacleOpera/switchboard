@@ -128,6 +128,12 @@
                 font-size: 14px;
                 line-height: 1.6;
             }
+            /* The panels' `.md-li-loose` rules are ID-scoped to their view-mode preview
+               containers (#markdown-preview, #markdown-preview-tickets, …) and do not
+               reach `.md-live-preview`. Without this the preview emits the class and
+               renders no gap — indistinguishable from the renderer swap not having
+               landed. Same 0.65em as planning.html / tickets.html / design.html; keep
+               them in step. */
             .md-live-preview .md-li-loose { margin-top: 0.65em; }
             .md-preview-placeholder {
                 color: var(--text-muted, #8b949e);
