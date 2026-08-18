@@ -6,8 +6,16 @@
 
 The TEAMS tab's Phone a friend panel renders roleConfig.addons.phoneAFriendTargets as UI: an origin-to-target map behind an Advanced disclosure, and a one-word 'Target' text box that reads as a reply address. Both are storage keys with a placeholder attached. This feature deletes both surfaces and their resolver branches so the panel is a role select, an enable checkbox, and one line of copy naming which terminal gets called. Stored map keys are preserved on disk in both subtasks; neither deletes operator config.
 
+## How the Subtasks Achieve This
+
+- **Strip the Phone-a-Friend Panel to Controls, Not Plumbing**: Deletes the Advanced per-terminal-override disclosure and its `agentsTabPhoneRow` editor, deletes the unlabelled Target box, replaces both with one line of copy naming the `phone_a_friend` role registration as who gets called, and removes the per-origin and `'*'` resolver branches in `_dispatchPhoneAFriend` so stored keys become inert. Rewrites the now-false `originTerminal` comment in `agentPromptBuilder.ts`. Preserves every stored map key on disk. (Merged from the two original subtasks — per-terminal-override editor deletion + target-box replacement — which touched the same files, same render function, same resolver chain, and same help-text line.)
+
+## Dependencies & sequencing
+
+Single subtask — no internal ordering.
+
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Delete the Phone-a-Friend "Advanced: Per-Terminal Overrides" Editor — It Is Raw Plumbing on Screen](../plans/feature_plan_20260817193600_delete-phone-a-friend-per-terminal-override-editor.md) — **CREATED**
-- [ ] [The Phone-a-Friend "Target" Box Asks a Question It Never Explains — Say Who Gets Called Instead](../plans/feature_plan_20260817193700_phone-a-friend-target-box-names-nothing.md) — **CREATED**
+- [ ] [Strip the Phone-a-Friend Panel to Controls, Not Plumbing](../plans/feature_plan_20260818120000_phone-a-friend-panel-strip-to-controls.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+

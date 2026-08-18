@@ -139,7 +139,15 @@ function testDispatchViewContract() {
     //    list, so a card dragged out between render and press is skipped.
     const armIdx = kanbanProvider.indexOf("case 'sendDispatchSetToCoders': {");
     assert.notStrictEqual(armIdx, -1, "KanbanProvider must have a 'sendDispatchSetToCoders' arm");
-    const armBody = kanbanProvider.slice(armIdx, kanbanProvider.indexOf("case 'importFromClipboard'", armIdx));
+    // Bound the slice at the NEXT case label, not at a named distant neighbour.
+    // Anchoring on `case 'importFromClipboard'` made this assertion depend on the
+    // arms in between: inserting the V60 queue arms (stageForQueue / reorderQueue,
+    // which legitimately take a webview-supplied id list) between the two turned
+    // this into a red gate for someone else's code, with a message pointing at an
+    // arm that had not changed.
+    const armRest = kanbanProvider.slice(armIdx);
+    const nextCase = armRest.slice(1).search(/\n {12}case '/);
+    const armBody = nextCase === -1 ? armRest : armRest.slice(0, nextCase + 1);
     assert.strictEqual(
         /_lastCards[\s\S]{0,200}column === 'DISPATCH'/.test(armBody),
         true,
@@ -154,8 +162,16 @@ function testDispatchViewContract() {
     // 8. The coder-terminal count is part of the board SNAPSHOT, not just the payload.
     //    Adding a terminal changes no card, so a cards-only hash skips the push and the
     //    stepper appears to do nothing — the exact regression this pins.
+    // Matched on MEMBERSHIP, not on the exact field list: the invariant is that
+    // a terminal-only change reaches the hash, and pinning the literal triple
+    // made every legitimate addition to the snapshot a red gate (V60 added
+    // `codingHeadLive` so a lead coming online flips the Run-queue button, which
+    // is the same class of terminal-only change this assertion exists to catch).
+    const snapshotHashPayload = (kanbanProvider.match(/\.update\(JSON\.stringify\(\{[^}]*\}\)\)/g) || [])
+        .find(m => m.includes('cards') && m.includes('featureWorktrees'));
+    assert.ok(snapshotHashPayload, 'the board snapshot hash must be built from a JSON.stringify of the snapshot fields');
     assert.strictEqual(
-        /JSON\.stringify\(\{\s*cards,\s*featureWorktrees,\s*coderTerminalCount\s*\}\)/.test(kanbanProvider),
+        snapshotHashPayload.includes('coderTerminalCount'),
         true,
         'the board snapshot hash must include coderTerminalCount, or a terminal-only change is skipped'
     );

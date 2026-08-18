@@ -128,6 +128,7 @@
                 font-size: 14px;
                 line-height: 1.6;
             }
+            .md-live-preview .md-li-loose { margin-top: 0.65em; }
             .md-preview-placeholder {
                 color: var(--text-muted, #8b949e);
                 font-style: italic;

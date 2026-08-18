@@ -3122,14 +3122,13 @@
         const descTextarea = document.getElementById('ticket-edit-description');
         if (descTextarea && window.SwitchboardMarkdownEditor) {
             window.SwitchboardMarkdownEditor.attach(descTextarea, {
-                renderPreview: (markdown) => new Promise((resolve, reject) => {
+                renderPreview: (markdown) => new Promise((resolve) => {
                     const requestId = Date.now() + Math.random();
                     const handler = (event) => {
                         const msg = event.data;
                         if (msg.type === 'markdownLiveRendered' && msg.requestId === requestId) {
                             window.removeEventListener('message', handler);
-                            if (msg.error) reject(msg.error);
-                            else resolve(msg.html || msg.htmlContent || '');
+                            resolve(renderMarkdown(typeof msg.markdown === 'string' ? msg.markdown : markdown));
                         }
                     };
                     window.addEventListener('message', handler);

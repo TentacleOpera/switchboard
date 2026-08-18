@@ -12,7 +12,6 @@ const {
     normalizeOrchestrationConfig,
     normalizeAutobanBatchSize,
     normalizeSingleColumnConfig,
-    DEFAULT_AUTOBAN_RUN_SHEET,
     shouldSkipSharedReviewerAutobanDispatch
 } = require(path.join(process.cwd(), 'out', 'services', 'autobanState.js'));
 
@@ -24,8 +23,8 @@ async function run() {
         routingMode: 'dynamic',
         rules: {
             CREATED: { enabled: true, intervalMinutes: 10 },
-            'INTERN CODED': { enabled: true, intervalMinutes: 15, triggerMode: 'drain' },
-            'LEAD CODED': { enabled: true, intervalMinutes: 15, triggerMode: 'drain' },
+            'INTERN CODED': { enabled: true, intervalMinutes: 15 },
+            'LEAD CODED': { enabled: true, intervalMinutes: 15 },
             'CODER CODED': { enabled: true, intervalMinutes: 15 }
         }
     };
@@ -71,22 +70,22 @@ async function run() {
     assert.strictEqual(normalizedLegacy.routingMode, 'dynamic', 'legacy states should default routing mode to dynamic');
     assert.deepStrictEqual(
         normalizedLegacy.rules['PLAN REVIEWED'],
-        { enabled: true, intervalMinutes: 20, triggerMode: 'drain' },
+        { enabled: true, intervalMinutes: 20 },
         'legacy states should restore missing default column rules'
     );
     assert.deepStrictEqual(
         normalizedLegacy.rules['INTERN CODED'],
-        { enabled: true, intervalMinutes: 15, triggerMode: 'drain' },
+        { enabled: true, intervalMinutes: 15 },
         'legacy states should restore the intern coded autoban rule with default 15-minute interval'
     );
     assert.deepStrictEqual(
         normalizedLegacy.rules['LEAD CODED'],
-        { enabled: true, intervalMinutes: 15, triggerMode: 'drain' },
+        { enabled: true, intervalMinutes: 15 },
         'legacy states should restore the lead coded autoban rule'
     );
     assert.deepStrictEqual(
         normalizedLegacy.rules['CODER CODED'],
-        { enabled: true, intervalMinutes: 15, triggerMode: 'drain' },
+        { enabled: true, intervalMinutes: 15 },
         'legacy states should restore the coder coded autoban rule'
     );
 
@@ -97,17 +96,17 @@ async function run() {
     });
     assert.deepStrictEqual(
         normalizedLegacyCodedRule.rules['LEAD CODED'],
-        { enabled: false, intervalMinutes: 9, triggerMode: 'drain' },
+        { enabled: false, intervalMinutes: 9 },
         'legacy CODED autoban rules should be remapped onto LEAD CODED'
     );
     assert.deepStrictEqual(
         normalizedLegacyCodedRule.rules['CODER CODED'],
-        { enabled: false, intervalMinutes: 9, triggerMode: 'drain' },
+        { enabled: false, intervalMinutes: 9 },
         'legacy CODED autoban rules should be remapped onto CODER CODED'
     );
     assert.deepStrictEqual(
         normalizedLegacyCodedRule.rules['INTERN CODED'],
-        { enabled: true, intervalMinutes: 15, triggerMode: 'drain' },
+        { enabled: true, intervalMinutes: 15 },
         'legacy CODED autoban rules should NOT remap onto INTERN CODED (intern column postdates the split)'
     );
 
@@ -118,8 +117,8 @@ async function run() {
 
     assert.deepStrictEqual(
         getEnabledSharedReviewerAutobanColumns({
-            'LEAD CODED': { enabled: true, intervalMinutes: 15, triggerMode: 'drain' },
-            'CODER CODED': { enabled: true, intervalMinutes: 15, triggerMode: 'drain' },
+            'LEAD CODED': { enabled: true, intervalMinutes: 15 },
+            'CODER CODED': { enabled: true, intervalMinutes: 15 },
             'INTERN CODED': { enabled: true, intervalMinutes: 15 }
         }),
         ['LEAD CODED', 'CODER CODED', 'INTERN CODED'],
@@ -173,13 +172,23 @@ async function run() {
         providerSource.includes('const batchSize = normalizeAutobanBatchSize(this._autobanState.batchSize);'),
         'TaskViewerProvider should reuse shared autoban batch-size normalization instead of a local numeric fallback'
     );
+    // The run sheet's per-step terminal pick (`selection.terminalName`) went with
+    // `_autobanTickColumn`. The seam it fed did NOT: the schedule now reaches the
+    // same dispatch machinery through the queue pop, which forces the requesting
+    // head as the target terminal. Pin the seam and its surviving caller — pinning
+    // the deleted call site would just re-assert the run sheet.
     assert.ok(
-        providerSource.includes('targetTerminalOverride?: string') &&
-        providerSource.includes('selection.terminalName'),
+        providerSource.includes('targetTerminalOverride?: string'),
         'TaskViewerProvider should preserve the terminal-override dispatch seam for autoban pools'
     );
     assert.ok(
-        providerSource.includes('const batch = eligibleCards.slice(0, batchSize);'),
+        /dispatchNextFromQueue\(\{\s*workspaceRoot,\s*from:\s*headTerminal\s*\}\)/.test(providerSource),
+        'the schedule must dispatch through the queue pop with the resolved head as `from` — not re-implement a pop or walk a run sheet'
+    );
+    // The schedule's own batch cap. `batchSize` bounds how many pops one tick
+    // makes; each pop dispatches exactly one card, so the cap counts dispatches.
+    assert.ok(
+        /for \(let i = 0; i < batchSize; i\+\+\)/.test(providerSource),
         'autoban send/session caps should count dispatches, not individual plans inside a batch'
     );
     assert.ok(
@@ -188,27 +197,27 @@ async function run() {
         !implementationSource.includes('window.prompt('),
         'autoban add-terminal flow should auto-name backups in the extension instead of prompting in the webview or VS Code'
     );
+    // "Strict column isolation" was a property of the per-column tick, which is
+    // deleted — there is one clock and one pop now. What survives, and is still
+    // worth pinning, is that column→role mapping is delegated rather than
+    // re-derived locally.
     assert.ok(
         providerSource.includes('private _autobanColumnToRole(column: string): string | null') &&
-        providerSource.includes('return columnToPromptRole(column);') &&
-        providerSource.includes('With strict column isolation, each column ticks independently'),
-        'TaskViewerProvider should delegate column-to-role mapping to columnToPromptRole and use strict column isolation for autoban ticks'
+        providerSource.includes('return columnToPromptRole(column);'),
+        'TaskViewerProvider should delegate column-to-role mapping to columnToPromptRole'
     );
 
-    // --- Completion-driven dispatch: the three ways it silently dies ---
-    // Each of these shipped broken once. All three produce the same symptom:
-    // autoban dispatches exactly one card and the board stops with no error.
-
-    // 1. Key shape. The dispatch side reads an ABSOLUTE planFile
-    //    (_collectKanbanCardsInColumns resolves it); the turn-end side receives the
-    //    RELATIVE plan_file the DB stores. Both ends must normalise through the
-    //    same helper or the map lookup never matches.
-    assert.ok(
-        providerSource.includes('private _autobanPlanFileKey(') &&
-        /this\._autobanDispatchedPlanFiles\.set\(key, \{ cardId, sourceColumn \}\)/.test(providerSource) &&
-        /const key = this\._autobanPlanFileKey\(info\.planFile, info\.workspaceRoot\)/.test(providerSource),
-        'completion tracking must key both the dispatch side and the turn-end side through _autobanPlanFileKey'
-    );
+    // --- Completion-driven dispatch is DELETED ---
+    // These three failure modes ("autoban dispatches exactly one card and the
+    // board stops with no error") were all properties of inferring completion
+    // from a plan-file mtime advance and feeding it back in as a dispatch
+    // trigger. That whole hybrid is gone: the schedule pops on a clock, the
+    // lead pops by asking, and the pop's own 409 is the only interlock. The
+    // positive assertions that pinned `_autobanPlanFileKey` /
+    // `_autobanDispatchedPlanFiles` are therefore replaced by the negative
+    // assertions further down, which pin the deletion. What is kept here is
+    // everything that guards the SURVIVING paths against re-acquiring a
+    // completion gate.
 
     // 2. Tracking lifetime. handleKanbanBatchTrigger moves the card out of the
     //    source column BEFORE the prompt is sent, so _releaseSettledDispatchLocks
@@ -234,141 +243,84 @@ async function run() {
         'handleAutobanTurnEnd must not gate on (or mutate) _activeDispatchSessions — it is the tick path\'s short-lived re-dispatch lock, not a completion gate'
     );
 
-    // 3. Fallback chain. PLAN REVIEWED escalates intern -> coder -> lead. Stopping
-    //    the engine inside the per-role dispatch helper kills autoban on the first
-    //    missing role AND lets the escalation keep dispatching after every tracking
-    //    map was cleared by _stopAutobanEngine().
-    const dispatchHelperIdx = providerSource.indexOf('const dispatchWithAutobanTerminal = async (');
-    assert.notStrictEqual(dispatchHelperIdx, -1, 'dispatchWithAutobanTerminal must exist');
-    const dispatchHelperBody = stripLineComments(providerSource.slice(dispatchHelperIdx, providerSource.indexOf('\n        };', dispatchHelperIdx)));
+    // 3. A tick that cannot dispatch must not kill the engine. The old routed
+    //    tick expressed this as an intern->coder->lead fallback chain whose
+    //    per-role helper (`dispatchWithAutobanTerminal`) had to avoid
+    //    `_stopAutobanWithMessage`; that chain is deleted along with
+    //    `_autobanTickColumn`. The same invariant now lives in
+    //    `_scheduleQueuePop`: no live head, a 409, or an empty queue all end
+    //    the loop and leave the schedule armed for the next tick. A tick that
+    //    disarmed the schedule on a transient miss would be the same bug in a
+    //    new place — one quiet minute and the night is over.
+    const popIdx = providerSource.indexOf('private async _scheduleQueuePop(): Promise<void>');
+    assert.notStrictEqual(popIdx, -1, '_scheduleQueuePop must exist');
+    const popBody = stripLineComments(providerSource.slice(popIdx, providerSource.indexOf('\n    }', popIdx)));
     assert.ok(
-        !dispatchHelperBody.includes('_stopAutobanWithMessage'),
-        'dispatchWithAutobanTerminal must return false on no-target and let the intern->coder->lead fallback run; the loud stop belongs after the chain is exhausted'
+        !popBody.includes('_stopAutobanWithMessage') && !popBody.includes('_stopAutobanEngine'),
+        '_scheduleQueuePop must never stop the engine — no head, a 409, or an empty queue are normal outcomes for one tick'
     );
     assert.ok(
-        /no eligible terminal available for \$\{lastNoTargetRole\}/.test(providerSource),
-        'the routed tick must surface a loud "no target" stop once the whole fallback chain is exhausted'
+        /if \(status === 409\) \{ break; \}/.test(popBody),
+        'the schedule must treat the pop\'s in-flight 409 as a normal loop-ending outcome — the pop is the only interlock'
     );
 
-    // --- The clock is the default ---
-    // Autoban's whole job is "every intervalMinutes, dispatch a card". A rework
-    // once replaced that interval with completion-driven dispatch as the DEFAULT,
-    // which is not what autoban is for: a board with no agent reporting back just
-    // stops. Completion pacing is a per-column opt-in (triggerMode 'completion'),
-    // never the default, and it must not run alongside the clock or every card
-    // dispatches twice.
+    // --- The schedule calls the queue pop ---
+    // The run sheet, trigger modes, and completion hybrid are deleted.
+    // The schedule calls _scheduleQueuePop, which resolves the live coding
+    // head and calls dispatchNextFromQueue.
     assert.ok(
-        /setInterval\(\(\) => \{\s*this\._enqueueRunSheetTick\(batchSize\);\s*\}, intervalMinutes \* 60 \* 1000\)/.test(providerSource),
-        '_startAutobanEngine must install the recurring run-sheet interval — the clock is autoban\'s default pacing'
+        /setInterval\(\(\) => \{\s*void this\._scheduleQueuePop\(\);\s*\}, intervalMinutes \* 60 \* 1000\)/.test(providerSource),
+        '_startAutobanEngine must install the recurring schedule interval calling _scheduleQueuePop'
+    );
+    assert.ok(
+        providerSource.includes('private async _scheduleQueuePop(): Promise<void>'),
+        '_scheduleQueuePop must exist — the schedule dispatches via the queue pop, not the run sheet'
+    );
+    assert.ok(
+        !providerSource.includes('private _enqueueRunSheetTick('),
+        '_enqueueRunSheetTick must be deleted — the run sheet is no longer a decision structure'
+    );
+    assert.ok(
+        !providerSource.includes('private _getAutobanRunSheet(): readonly AutobanRunSheetStep[]'),
+        '_getAutobanRunSheet must be deleted — the run sheet accessor is removed'
+    );
+    assert.ok(
+        !providerSource.includes('private _isCompletionTriggered('),
+        '_isCompletionTriggered must be deleted — the trigger mode axis is removed'
+    );
+    assert.ok(
+        !providerSource.includes('private _autobanTickColumn('),
+        '_autobanTickColumn must be deleted — column ticks are replaced by the queue pop'
+    );
+    assert.ok(
+        !providerSource.includes('private _armAutobanStallWatchdog('),
+        '_armAutobanStallWatchdog must be deleted — completion tracking is removed'
+    );
+    assert.ok(
+        !providerSource.includes('private _autobanLaneInFlight('),
+        '_autobanLaneInFlight must be deleted — per-lane in-flight checks are removed'
+    );
+    assert.ok(
+        !providerSource.includes('private _autobanDispatchedPlanFiles'),
+        '_autobanDispatchedPlanFiles must be deleted — completion-driven dispatch tracking is removed'
     );
 
-    // --- The run sheet: one clock, ordered steps, availability is a condition ---
-    assert.ok(
-        providerSource.includes('private _getAutobanRunSheet(): readonly AutobanRunSheetStep[]'),
-        'the run sheet must be reachable through one accessor — the seam a user-edited sheet plugs into'
-    );
-    const runSheetTickIdx = providerSource.indexOf('private _enqueueRunSheetTick(');
-    assert.notStrictEqual(runSheetTickIdx, -1, '_enqueueRunSheetTick must exist');
-    const runSheetBody = stripLineComments(providerSource.slice(runSheetTickIdx, providerSource.indexOf('\n    }', runSheetTickIdx)));
-    assert.ok(
-        /for \(const step of this\._getAutobanRunSheet\(\)\)/.test(runSheetBody),
-        'a tick must walk every run-sheet step in order'
-    );
-    assert.ok(
-        !/\breturn;\s*\}\s*catch/.test(runSheetBody) && runSheetBody.includes('catch'),
-        'a failing step must not abort the remaining steps — an unavailable planner team cannot block the coder team'
-    );
-    // A run-sheet step SKIPS when its team is unavailable. Halting the engine there
-    // would stop the board because one team happened to be busy.
-    const tickIdx = providerSource.indexOf('private async _autobanTickColumn(');
-    const tickBody = providerSource.slice(tickIdx, providerSource.indexOf('\n    private ', tickIdx + 10));
-    const runSheetBranch = tickBody.slice(tickBody.indexOf('if (headRoleOverride) {'), tickBody.indexOf('// Complexity-aware routing'));
-    assert.ok(
-        runSheetBranch.includes('skipping this step') && !runSheetBranch.includes('_stopAutobanWithMessage'),
-        'an unavailable team must skip its run-sheet step, never stop the engine'
-    );
-    assert.deepStrictEqual(
-        DEFAULT_AUTOBAN_RUN_SHEET.map(s => [s.sourceColumn, s.headRole]),
-        [['CREATED', 'planner'], ['PLAN REVIEWED', 'coder']],
-        'the default run sheet is CREATED -> planner team, then PLAN REVIEWED -> coder team, in that order'
-    );
-    assert.ok(
-        providerSource.includes('private _isCompletionTriggered(column: string): boolean'),
-        'completion pacing must be gated behind an explicit per-column trigger-mode check'
-    );
-
-    // --- The run sheet is a PIPELINE, and that breaks two invariants if ignored ---
-
-    // 4. Premature auto-stop. CREATED -> planner FEEDS PLAN REVIEWED -> coder, so
-    //    dispatching the last CREATED card empties every enabled column while the
-    //    planner is still working. Stopping there means its output lands in PLAN
-    //    REVIEWED with the engine already off — the silent stop this feature exists
-    //    to remove. In-flight work must veto the empty-column sweep.
+    // --- The empty-column sweep no longer checks in-flight tracking ---
     const stopIfEmptyIdx = providerSource.indexOf('private async _stopAutobanIfNoValidTicketsRemain(');
     assert.notStrictEqual(stopIfEmptyIdx, -1, '_stopAutobanIfNoValidTicketsRemain must exist');
     const stopIfEmptyBody = stripLineComments(
         providerSource.slice(stopIfEmptyIdx, providerSource.indexOf('\n    }', stopIfEmptyIdx))
     );
     assert.ok(
-        /if \(this\._autobanDispatchedPlanFiles\.size > 0\) \{\s*return false;/.test(stopIfEmptyBody),
-        'the empty-column sweep must not stop the engine while autoban still has a dispatched card in flight — the run sheet is a pipeline and a later step feeds on an earlier one\'s output'
-    );
-    // Which requires the tracking map to be populated in EVERY trigger mode, not
-    // only under `completion`. If the set is re-gated on _isCompletionTriggered the
-    // veto above silently becomes a no-op for the default clock mode.
-    const dispatchTrackIdx = providerSource.indexOf('this._autobanDispatchedPlanFiles.set(key, { cardId, sourceColumn })');
-    assert.notStrictEqual(dispatchTrackIdx, -1, 'the dispatch path must record in-flight cards');
-    const trackingPrelude = stripLineComments(providerSource.slice(dispatchTrackIdx - 700, dispatchTrackIdx));
-    assert.ok(
-        !trackingPrelude.includes('_isCompletionTriggered'),
-        'in-flight tracking must be recorded in every trigger mode — gating the set on _isCompletionTriggered leaves the clock mode with no in-flight record and re-arms the premature auto-stop'
-    );
-    // And the stall watchdog must retire a record whose seat never reports, or one
-    // dead agent holds the veto open and the engine can never auto-stop again.
-    const watchdogIdx = providerSource.indexOf('private _armAutobanStallWatchdog(');
-    assert.notStrictEqual(watchdogIdx, -1, '_armAutobanStallWatchdog must exist');
-    const watchdogBody = stripLineComments(
-        providerSource.slice(watchdogIdx, providerSource.indexOf('\n    }', watchdogIdx))
-    );
-    assert.ok(
-        watchdogBody.includes('this._autobanDispatchedPlanFiles.delete(key)') &&
-        !watchdogBody.includes('_enqueueRunSheetTick') &&
-        !watchdogBody.includes('_stopAutoban'),
-        'the stall watchdog must drop the in-flight record (so a dead seat cannot wedge the veto open) while still never dispatching and never stopping the engine'
+        !stopIfEmptyBody.includes('_autobanDispatchedPlanFiles'),
+        'the empty-column sweep must not reference the deleted _autobanDispatchedPlanFiles'
     );
 
-    // 5. Fan-out. A turn-end triggers a pass over EVERY run-sheet step, so one
-    //    completion in the planner lane also dispatches into the coder lane and the
-    //    in-flight count compounds each generation. That directly contradicts the
-    //    argument used to delete globalSessionCap ("report-paced dispatch is
-    //    one-in-one-out and cannot outrun itself").
+    // Trigger mode axis is deleted — the schedule calls the queue pop,
+    // and a self-pacing lead calls it directly. No completion pacing.
     assert.ok(
-        providerSource.includes('private _autobanLaneInFlight(sourceColumn: string): boolean'),
-        'ON DONE needs a per-lane in-flight check — one card at a time is per run-sheet step, not per board'
-    );
-    assert.ok(
-        /_isCompletionTriggered\(step\.sourceColumn\) && this\._autobanLaneInFlight\(step\.sourceColumn\)/.test(runSheetBody),
-        'a run-sheet pass must skip a step whose lane already has a card in flight under ON DONE, or one turn-end fans out into a dispatch per step'
-    );
-    const turnEndGate = stripLineComments(providerSource.slice(turnEndIdx, providerSource.indexOf('\n    }', turnEndIdx)));
-    assert.ok(
-        turnEndGate.includes('_isCompletionTriggered'),
-        'handleAutobanTurnEnd must no-op unless the column opted into completion pacing — otherwise it double-dispatches against the clock'
-    );
-    assert.strictEqual(
-        normalizeSingleColumnConfig({}).triggerMode,
-        'drain',
-        'the default trigger mode is drain (clock-driven), not completion'
-    );
-    assert.strictEqual(
-        normalizeSingleColumnConfig({ triggerMode: 'completion' }).triggerMode,
-        'completion',
-        'completion is a valid opt-in trigger mode'
-    );
-    assert.strictEqual(
-        normalizeSingleColumnConfig({ triggerMode: 'nonsense' }).triggerMode,
-        'drain',
-        'an unrecognised persisted trigger mode falls back to the clock-driven default'
+        !turnEndBody.includes('_isCompletionTriggered'),
+        'handleAutobanTurnEnd must not reference the deleted _isCompletionTriggered — completion pacing is removed'
     );
 
     // --- Both hosts can actually START it (PRD contracts #6 and #7) ---
@@ -410,20 +362,90 @@ async function run() {
     // ─────────────────────────────────────────────────────────────────────────
     const kanbanProviderSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
 
-    // --- The mode axis is exactly agent-managed|scheduled|external, and it MAPS, never whitelists ---
-    // A whitelist that fell through would silently disarm a shipped install's
-    // clock. Everything unrecognised must land on `scheduled`.
-    for (const legacy of ['single-column', 'multi-column', 'run-sheet', 'scheduler', '', 'nonsense', undefined, null]) {
+    // --- The mode axis default is INVERTED to `external` ---
+    // The old default was `scheduled` (auto-start the clock). The inverted
+    // default is `external` — a fresh install runs nothing until the user
+    // explicitly arms a switch. Unknown/unrecognised values map to external.
+    for (const legacy of ['multi-column', '', 'nonsense', undefined, null]) {
         assert.strictEqual(
-            normalizeAutobanConfigState({ automationMode: legacy }).automationMode,
+            normalizeAutomationMode(legacy),
+            'external',
+            `an unrecognised automationMode of ${JSON.stringify(legacy)} must normalise to 'external' — the inverted default does NOT auto-start a clock`
+        );
+    }
+    // Known legacy values still MAP for the synthetic field, but the guard
+    // below forces enabled: false — they do NOT keep their clock running.
+    for (const legacy of ['run-sheet', 'scheduler', 'single-column']) {
+        assert.strictEqual(
+            normalizeAutomationMode(legacy),
             'scheduled',
-            `a persisted automationMode of ${JSON.stringify(legacy)} must normalise to 'scheduled' — falling through a whitelist disarms shipped installs`
+            `a persisted automationMode of ${JSON.stringify(legacy)} must MAP to 'scheduled' for the synthetic field — but the guard forces enabled: false`
         );
     }
     assert.strictEqual(
-        normalizeAutobanConfigState({ automationMode: 'external' }).automationMode,
+        normalizeAutomationMode('external'),
         'external',
         "'external' is the only value that normalises to external"
+    );
+
+    // --- Retired-mode guard: EVERY pre-two-switch state lands disabled ---
+    // The whole mode axis is retired, not just the older aliases. `scheduled`
+    // was the common running mode on shipped installs and `enabled: true` used
+    // to mean "walk the run sheet over CREATED / PLAN REVIEWED"; under the new
+    // engine the same flag means "pop the DISPATCH queue on a timer", so
+    // carrying it across the upgrade starts dispatching from a queue the user
+    // never staged. `agent-managed` is worse — it never installed a schedule
+    // timer at all, so carrying `enabled` GIVES that install a clock it never
+    // had. Both are the exact upgrade the plan's UAT forbids: "load a board
+    // persisted with automationMode: 'scheduled', enabled: true. It must come
+    // up disabled, with the notice, and dispatch nothing."
+    const ALL_RETIRED_MODES = [
+        'scheduled', 'agent-managed', 'external',
+        'run-sheet', 'scheduler', 'single-column', 'orchestration', 'internal',
+    ];
+    for (const retired of ALL_RETIRED_MODES) {
+        const normalized = normalizeAutobanConfigState({ automationMode: retired, enabled: true });
+        assert.strictEqual(
+            normalized.enabled, false,
+            `a persisted automationMode of '${retired}' must force enabled: false — no pre-two-switch state may auto-dispatch after the upgrade`
+        );
+        assert.ok(
+            typeof normalized.retiredAutomationModeNotice === 'string' && normalized.retiredAutomationModeNotice.length > 0,
+            `a persisted automationMode of '${retired}' must set retiredAutomationModeNotice`
+        );
+    }
+    // An unrecognised value is disarmed too — the discriminator is the ABSENCE
+    // of the new switch, not membership of a value whitelist.
+    assert.strictEqual(
+        normalizeAutobanConfigState({ automationMode: 'who-knows', enabled: true }).enabled, false,
+        'an unrecognised persisted automationMode must also land disabled'
+    );
+    // ...and a state ALREADY written by the two-switch normaliser is left
+    // alone, so the disarm is one-shot rather than a permanent lockout that
+    // re-fires on every load and makes the schedule impossible to arm.
+    const alreadyMigrated = normalizeAutobanConfigState({
+        automationMode: 'scheduled', enabled: true, orchestratorArmed: false,
+    });
+    assert.strictEqual(
+        alreadyMigrated.enabled, true,
+        'a state carrying orchestratorArmed has already been migrated — the guard must not disarm it again'
+    );
+    assert.strictEqual(
+        alreadyMigrated.retiredAutomationModeNotice, undefined,
+        'an already-migrated state must NOT re-show the retired-mode notice'
+    );
+    // A state with no automationMode at all (a fresh install) is not a
+    // migration and gets no notice.
+    assert.strictEqual(
+        normalizeAutobanConfigState({ enabled: true }).retiredAutomationModeNotice, undefined,
+        'a state with no automationMode is a fresh install, not a migration'
+    );
+    // The guard fires even when enabled is absent (undefined) and the legacy
+    // mode would otherwise derive enabled: true.
+    const retiredNoEnabled = normalizeAutobanConfigState({ automationMode: 'run-sheet' });
+    assert.strictEqual(
+        retiredNoEnabled.enabled, false,
+        "a retired mode with enabled absent must still force enabled: false — the guard is independent of the enabled flag"
     );
 
     // --- The migration table: three cohorts, all tested ---
@@ -439,11 +461,14 @@ async function run() {
         'agent-managed',
         'internal with oversight enabled migrates to agent-managed — the 150001 cohort must not lose its agent'
     );
-    // bare `internal` → `scheduled` (the majority cohort)
+    // bare `internal` → `external`. The old contract mapped it to `scheduled`
+    // "so the majority cohort keeps ticking"; that is precisely the default
+    // this feature inverts. There is no run sheet left to tick, and starting to
+    // dispatch from a queue the user never staged is the worse failure.
     assert.strictEqual(
         normalizeAutobanConfigState({ automationMode: 'internal' }).automationMode,
-        'scheduled',
-        'bare internal migrates to scheduled — the majority cohort keeps ticking'
+        'external',
+        'bare internal migrates to external — the inverted default runs nothing until the user arms a switch'
     );
 
     // --- orchestrationConfig.enabled is DELETED; intervalMinutes is RESTORED ---
@@ -514,24 +539,29 @@ async function run() {
     );
     assert.ok(
         !startOrchBody.includes('_stopAutobanEngine()'),
-        'startOrchestratorFromKanban must not tear down the run-sheet engine — that rides the arming transition in confirmOrchestrationSession'
+        'startOrchestratorFromKanban must not tear down the schedule — the schedule and orchestrator are independent switches'
     );
-    // The arming block landed in confirmOrchestrationSession, intact and in order:
-    // engine down BEFORE the mode flips, so a `scheduled` run sheet cannot survive
-    // the transition to `agent-managed` and leave two clocks on one board.
+    // The arming block sets the orchestratorArmed switch. The mode axis is deleted
+    // — no _stopAutobanEngine call, no exclusivity between schedule and orchestrator.
     const confirmStart = providerSource.indexOf('public async confirmOrchestrationSession');
     assert.ok(confirmStart !== -1, 'confirmOrchestrationSession must exist — it is the only path that arms');
     const confirmAfterSig = providerSource.slice(confirmStart);
     const confirmNextDecl = confirmAfterSig.slice(1).search(/\n {4}(?:public|private|protected)\s/);
-    const confirmBody = confirmNextDecl === -1 ? confirmAfterSig : confirmAfterSig.slice(0, confirmNextDecl + 1);
-    assert.ok(
-        /enabled:\s*true/.test(confirmBody) && confirmBody.includes("automationMode: 'agent-managed'"),
-        'confirmOrchestrationSession must set autobanState.enabled = true in agent-managed mode — this is the arm'
+    // Strip `//` lines before the negative assertions below, exactly as the
+    // _releaseSettledDispatchLocks / handleAutobanTurnEnd checks do. The arming
+    // block carries a comment that NAMES the call it is documenting the absence
+    // of ("so no _stopAutobanEngine() call"), and an un-stripped body reads that
+    // rationale as the very code it forbids.
+    const confirmBody = stripLineComments(
+        confirmNextDecl === -1 ? confirmAfterSig : confirmAfterSig.slice(0, confirmNextDecl + 1)
     );
     assert.ok(
-        confirmBody.indexOf('_stopAutobanEngine()') !== -1 &&
-        confirmBody.indexOf('_stopAutobanEngine()') < confirmBody.search(/enabled:\s*true/),
-        'confirmOrchestrationSession must stop the run-sheet engine BEFORE flipping the mode — two clocks on one board is the hazard the exclusive-mode model removes'
+        /orchestratorArmed:\s*true/.test(confirmBody),
+        'confirmOrchestrationSession must set orchestratorArmed = true — the mode axis is deleted, arming is a switch'
+    );
+    assert.ok(
+        !/_stopAutobanEngine\(\)/.test(confirmBody),
+        'confirmOrchestrationSession must NOT call _stopAutobanEngine — the schedule and orchestrator are independent switches'
     );
     assert.ok(
         /session\.md/.test(confirmBody) && /success:\s*false/.test(confirmBody),
@@ -611,21 +641,10 @@ async function run() {
         );
     }
 
-    // --- External mode runs NO clock, and the gate has more than one door ---
-    // Asserted on the source because the failure is a live setInterval, and a
-    // test that reads the mode back is exactly the test that passes while the
-    // clock runs.
-    // Gate on the mode that RUNS the run sheet, never on `!== 'external'`.
-    // `=== 'external'` was a correct proxy for "no run sheet here" while the
-    // axis had two values; adding `agent-managed` turned every one of these
-    // into a fall-through that installs the run-sheet clock in the mode where
-    // the orchestrator IS the automation. That is the two-clocks hazard the
-    // exclusive-mode model exists to remove, and it is SILENT — a live
-    // setInterval, no type error, no UI symptom.
-    // Scoped to each method BODY, never a fixed char window. A byte window
-    // tracks comment length as well as code: the gates below each carry a
-    // paragraph explaining why they exist, and a window sized to the code alone
-    // silently stops covering the assertion it was written for.
+    // --- The mode axis is deleted — no mode gates anywhere ---
+    // The schedule runs whenever `enabled` is true. The orchestrator runs
+    // whenever `orchestratorArmed` is true. Both can be on simultaneously.
+    // No method should gate on `automationMode !== 'scheduled'`.
     const methodBody = (marker) => {
         const start = providerSource.indexOf(marker);
         assert.ok(start !== -1, `${marker} must exist`);
@@ -634,63 +653,63 @@ async function run() {
         return next === -1 ? after : after.slice(0, next + 1);
     };
     assert.ok(
-        /automationMode !== 'scheduled'[\s\S]{0,300}?return;/.test(methodBody('private _startAutobanEngine(): void {')),
-        "_startAutobanEngine must refuse in every non-scheduled mode, at the top, after stopping any surviving timer"
+        !/automationMode !== 'scheduled'/.test(methodBody('private _startAutobanEngine(): void {')),
+        "_startAutobanEngine must NOT gate on automationMode — the mode axis is deleted"
     );
     assert.ok(
-        /automationMode !== 'scheduled'[\s\S]{0,300}?return;/.test(methodBody('public async resetAutobanTimersFromKanban()')),
-        'resetAutobanTimersFromKanban installs its OWN setInterval — it needs its own non-scheduled gate, beside and independent of the !enabled return (in agent-managed, `enabled` means the ORCHESTRATOR is armed)'
+        !/automationMode !== 'scheduled'/.test(methodBody('public async resetAutobanTimersFromKanban()')),
+        'resetAutobanTimersFromKanban must NOT gate on automationMode — the mode axis is deleted'
     );
     assert.ok(
-        /automationMode !== 'scheduled'[\s\S]{0,600}?return;/.test(methodBody('public async setAutobanPausedFromKanban(')),
-        'resume-from-pause is a THIRD timer-install path — `paused` survives a switch into external OR agent-managed, so it needs its own gate too'
+        !/automationMode !== 'scheduled'/.test(methodBody('public async setAutobanPausedFromKanban(')),
+        'setAutobanPausedFromKanban must NOT gate on automationMode — the mode axis is deleted'
     );
     // A FOURTH path: the updateAutobanState message arm. It must not force
     // `enabled` false in agent-managed (that would disarm the orchestrator),
     // but must never install the run-sheet clock behind it either.
     const updateArm = providerSource.slice(providerSource.indexOf("case 'updateAutobanState': {"));
     assert.ok(
-        /automationMode !== 'scheduled'[\s\S]{0,400}?_stopAutobanEngine\(\)/.test(updateArm.slice(0, 1800)),
-        'the updateAutobanState arm must stop — never start — the run-sheet engine in a non-scheduled mode'
+        !/automationMode !== 'scheduled'/.test(updateArm),
+        'the updateAutobanState arm must not gate on automationMode — the mode axis is deleted'
     );
-    // Arming the orchestrator must tear the run-sheet engine down FIRST. The
-    // arm now lives in confirmOrchestrationSession (Start only seats and
-    // interviews), and its caller — POST /orchestration/confirm, reached by the
-    // orchestrator agent itself — bypasses setAutomationModeFromKanban entirely,
-    // so it can fire while `scheduled` is armed and ticking.
+    // Arming the orchestrator sets the orchestratorArmed switch. The mode axis
+    // is deleted — no _stopAutobanEngine call, no exclusivity.
     assert.ok(
-        /_stopAutobanEngine\(\)[\s\S]{0,400}?automationMode: 'agent-managed'/.test(confirmBody),
-        'confirmOrchestrationSession must call _stopAutobanEngine() before switching the mode to agent-managed — its caller bypasses setAutomationModeFromKanban and would leave the run-sheet timers ticking'
+        /orchestratorArmed: true/.test(confirmBody),
+        'confirmOrchestrationSession must set orchestratorArmed: true — the mode axis is deleted, arming is a switch'
     );
     assert.ok(
-        providerSource.includes('_tickSurvivorSchedulerJobs'),
-        'surviving scheduler jobs (fetch-plans, reconcile) must fire from the run-sheet tick — _tickSurvivorSchedulerJobs is the delivery method'
+        !/_stopAutobanEngine\(\)/.test(confirmBody),
+        'confirmOrchestrationSession must NOT call _stopAutobanEngine — the schedule and orchestrator are independent switches'
     );
-    // Scoped to the tick BODY and asserted on ORDER, not on a byte window. A
-    // fixed-width window tracks the length of the run-sheet loop above it; the
-    // claim being made is positional, so test the positions.
-    const runSheetTickStart = providerSource.indexOf('private _enqueueRunSheetTick(batchSize: number): void {');
-    assert.ok(runSheetTickStart !== -1, '_enqueueRunSheetTick must exist');
-    const runSheetTickBody = providerSource.slice(runSheetTickStart, providerSource.indexOf('\n    /**', runSheetTickStart));
-    const stepsAt = runSheetTickBody.indexOf('_autobanTickColumn(');
-    const survivorAt = runSheetTickBody.indexOf('_tickSurvivorSchedulerJobs(');
-    const lastTickAt = runSheetTickBody.indexOf('_autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY');
+    // Survivor jobs run on their own activation-scoped timer, not the run-sheet tick.
     assert.ok(
-        stepsAt !== -1 && survivorAt !== -1 && lastTickAt !== -1 && stepsAt < survivorAt && survivorAt < lastTickAt,
-        'survivor scheduler jobs must tick inside the run-sheet tick body — after the run-sheet steps, before the lastTickAt update'
+        providerSource.includes('_startSurvivorJobsTimer'),
+        'survivor jobs (fetch-plans, reconcile) must run on their own _startSurvivorJobsTimer — independent of the schedule'
+    );
+    // NOTE: `_tickSurvivorSchedulerJobs` itself is KEPT — it is the delivery
+    // path for fetch-plans/reconcile and the plan's highest-consequence
+    // silent-failure risk ("cloud-VM plans quietly stop arriving"). What
+    // changed is only WHO calls it: the activation-scoped timer above, not the
+    // deleted run-sheet tick. Asserting its deletion (an earlier draft of this
+    // gate did) would demand the exact regression the plan warns about, and it
+    // contradicted the survivor-tick assertions twenty lines below.
+    assert.ok(
+        !/_tickSurvivorSchedulerJobs\(\)\s*;?\s*\n?\s*\}\s*,\s*AUTOBAN_RUN_SHEET_TICK/.test(providerSource),
+        'the survivor tick must not hang off the run-sheet tick key — it needs its own activation-scoped timer'
     );
     assert.ok(
         !providerSource.includes('_startAllSchedulerLoops'),
-        'the per-job scheduler engine (_startAllSchedulerLoops) is deleted — survivors ride the run-sheet tick'
+        'the per-job scheduler engine (_startAllSchedulerLoops) is deleted'
     );
     assert.ok(
         !providerSource.includes('_startSchedulerJobLoop') && !providerSource.includes('_stopSchedulerJobLoop'),
-        'the per-job scheduler loop methods are deleted — no per-job intervals, the run sheet is the one clock'
+        'the per-job scheduler loop methods are deleted — no per-job intervals'
     );
-    // BOTH survivors must reach a prompt. A tick that only builds fetch-plans
-    // leaves the reconcile checkbox wired to nothing — enabled, ticking, silent.
+    // BOTH survivors must reach a prompt. The survivor tick still exists,
+    // now called from _startSurvivorJobsTimer instead of the run-sheet tick.
     const survivorTickStart = providerSource.indexOf('private async _tickSurvivorSchedulerJobs()');
-    assert.ok(survivorTickStart !== -1, '_tickSurvivorSchedulerJobs must exist');
+    assert.ok(survivorTickStart !== -1, '_tickSurvivorSchedulerJobs must exist — called from the survivor timer');
     const survivorTickBody = providerSource.slice(survivorTickStart, providerSource.indexOf('\n    }\n', survivorTickStart));
     assert.ok(
         survivorTickBody.includes('buildFetchPlansPrompt(') && survivorTickBody.includes('buildReconcilePrompt('),
@@ -743,8 +762,12 @@ async function run() {
         'the external prompt must build with an empty board — no DB read, no snapshot builder, no absolute sqlite path'
     );
     assert.ok(
-        externalPromptBody.includes('getAutobanRunSheet()') && externalPromptBody.includes('DEFAULT_AUTOBAN_RUN_SHEET'),
-        'the external prompt must render the run sheet as DATA so an edited sheet flows into the emitted text for free'
+        !externalPromptBody.includes('getAutobanRunSheet()') && !externalPromptBody.includes('DEFAULT_AUTOBAN_RUN_SHEET'),
+        'the external prompt must not reference the deleted run sheet APIs — pipeline steps are hard-coded inline'
+    );
+    assert.ok(
+        externalPromptBody.includes('CREATED') && externalPromptBody.includes('planner') && externalPromptBody.includes('PLAN REVIEWED') && externalPromptBody.includes('coder'),
+        'the external prompt must include the pipeline steps (CREATED→planner, PLAN REVIEWED→coder) inline'
     );
     // The board-driving paragraph is ONE constant, not two copies. It now lives in
     // schedulerPresets (a dependency-free module both the reconcile preset and this
@@ -767,10 +790,8 @@ async function run() {
         literalCopies, 1,
         'the board-driving paragraph must exist as exactly ONE literal across the providers and the presets module'
     );
-    assert.ok(
-        DEFAULT_AUTOBAN_RUN_SHEET.length > 0 && DEFAULT_AUTOBAN_RUN_SHEET.every(s => s.sourceColumn && s.headRole),
-        'the run sheet the external prompt renders must name a column and a role per step'
-    );
+    // The run sheet constant is deleted — pipeline steps are hard-coded inline
+    // in the external prompt builder. No assertion needed on a deleted export.
 
     // --- comms is DELETED, not flagged off ---
     for (const rel of [

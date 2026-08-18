@@ -8,7 +8,8 @@ The Multi-agent planning team currently spawns a planner head plus two researche
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Multi-Agent Planning Head Plans Alone — Give the Team a Fan-Out Head Prompt](../plans/feature_plan_20260817174450_multi-agent-planning-head-plans-alone-instead-of-fanning-out.md) — **CREATED**
-- [ ] [The Multi-Agent Planning Team's Roster Is Parallel Planner Seats, Not Two Researchers](../plans/feature_plan_20260817174453_multi-agent-planning-roster-is-parallel-planners-not-researchers.md) — **CREATED**
-- [ ] [Team Member Seats Can Run Their Own Agent CLI Instead of Inheriting the Role's](../plans/feature_plan_20260817174454_team-member-seats-can-run-their-own-agent-cli.md) — **CREATED**
+- [ ] [Multi-Agent Planning Head Plans Alone — Give the Team a Fan-Out Head Prompt](../plans/feature_plan_20260817174450_multi-agent-planning-head-plans-alone-instead-of-fanning-out.md) — **PLAN REVIEWED**
+- [ ] [The Multi-Agent Planning Team's Roster Is Parallel Planner Seats, Not Two Researchers](../plans/feature_plan_20260817174453_multi-agent-planning-roster-is-parallel-planners-not-researchers.md) — **PLAN REVIEWED**
+- [ ] [Team Member Seats Can Run Their Own Agent CLI Instead of Inheriting the Role's](../plans/feature_plan_20260817174454_team-member-seats-can-run-their-own-agent-cli.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+

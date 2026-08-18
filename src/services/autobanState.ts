@@ -1,20 +1,11 @@
 /**
- * How a column decides WHEN to dispatch.
- *
- * `drain` (default) and `watch` are clock-driven: the engine installs an
- * interval per enabled column and dispatches a card each tick. That is the
- * supported default and always has been.
- *
- * `completion` is the opt-in alternative: no interval, one card in flight, and
- * the next dispatch is triggered by the turn-end signal for the previous one.
- * It is a custom mode for people who want strict one-in-one-out pacing — it
- * does NOT replace the clock.
+ * Per-column rule state. The triggerMode axis is deleted — the schedule
+ * calls the queue pop, and a self-pacing lead calls it directly. There is
+ * no completion-driven dispatch and no watch mode.
  */
-export type AutobanTriggerMode = 'drain' | 'watch' | 'completion';
 export type AutobanRuleState = {
     enabled: boolean;
     intervalMinutes: number;
-    triggerMode?: AutobanTriggerMode;
 };
 
 export type AutobanComplexityFilter = 'all' | 'low_and_below' | 'medium_and_below' | 'medium_and_above' | 'high_and_above';
@@ -31,75 +22,40 @@ export const ORCHESTRATOR_TERMINAL_NAME = 'Orchestrator';
 export const AUTOBAN_SOURCE_COLUMN = 'PLAN REVIEWED';
 
 /**
- * The automation axis is *what drives the board*.
+ * The automation axis is retained as a synthetic read-only value for
+ * backward compatibility with callers that still read it. The real state
+ * is two independent switches: `enabled` (schedule) and `orchestratorArmed`.
  *
- * `agent-managed` — Switchboard wakes the orchestrator agent every N minutes to
- * decide and take the next action. Judgement lives in the agent.
+ * `agent-managed` — the orchestrator is armed.
+ * `scheduled` — the schedule is enabled.
+ * `external` — neither switch is on.
  *
- * `scheduled` — Switchboard applies the run sheet every N minutes. Mechanical,
- * no agent deciding.
- *
- * `external` — Switchboard emits a copyable prompt for a tool that runs agent
- * cron jobs (Antigravity, a Claude scheduled agent). Switchboard runs no clock
- * and dispatches nothing.
- *
- * Exactly one is active. The orchestrator is the automation in agent-managed
- * mode; it is not a flag alongside the run sheet.
+ * Both switches can be on simultaneously. `getAutomationMode()` in
+ * TaskViewerProvider derives the synthetic value from the switches.
  */
 export type AutobanAutomationMode = 'agent-managed' | 'scheduled' | 'external';
 
 /**
- * One step of the run sheet: "if this team's head is alive and this column has
- * cards, send one card to that head."
- *
- * `headRole` names a TEAM HEAD, not a pool slot. Resolution prefers the head of
- * a team defined for that role and falls back to any alive terminal carrying it;
- * the head then delegates to its own members, which is what team mode is for.
- * There is no complexity routing and no role fallback chain here — a step either
- * has its team or it is skipped this tick.
- */
-/**
- * Tick key for the single run-sheet clock. Not a real column name, so it can
+ * Tick key for the schedule clock. Not a real column name, so it can
  * never collide with a `rules` entry or a source column.
  */
 export const AUTOBAN_RUN_SHEET_TICK_KEY = '__RUN_SHEET__';
-
-export type AutobanRunSheetStep = {
-    sourceColumn: string;
-    headRole: string;
-};
-
-/**
- * THE RUN SHEET. One clock, ordered steps, evaluated top to bottom every tick.
- *
- * Hard-coded for now and deliberately shaped as DATA rather than control flow,
- * so making it user-editable later is a config read plus an editor — not a
- * rewrite of the tick. Order matters: earlier steps feed later ones, so running
- * the planner step first lets a plan it produces be picked up by the coder step
- * on a subsequent tick rather than waiting a full extra interval.
- */
-export const DEFAULT_AUTOBAN_RUN_SHEET: readonly AutobanRunSheetStep[] = [
-    { sourceColumn: 'CREATED', headRole: 'planner' },
-    { sourceColumn: AUTOBAN_SOURCE_COLUMN, headRole: 'coder' }
-] as const;
 
 export type SingleColumnAutobanConfig = {
     enabled: boolean;
     intervalMinutes: number;
     batchSize: number;
     complexityFilter: AutobanComplexityFilter;
-    triggerMode?: AutobanTriggerMode;
     /**
-     * The WHEN control — a single schedule for the run sheet.
-     * null/undefined = OFF (default): the run sheet runs continuously,
-     * paced by completion (today's behaviour).
-     * A 5-field cron string = ON: the run sheet fires on the cron line.
+     * The WHEN control — a single schedule for the queue pop.
+     * null/undefined = OFF (default): the schedule runs on a fixed interval.
+     * A 5-field cron string = ON: the schedule fires on the cron line.
      */
     whenSchedule?: string | null;
 };
 
 export type OrchestrationConfig = {
-    intervalMinutes: number;   // wake interval for the orchestrator in agent-managed mode
+    intervalMinutes: number;   // wake interval for the orchestrator
 };
 
 export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationConfig = {
@@ -109,7 +65,7 @@ export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationConfig = {
 export function normalizeOrchestrationConfig(state?: Partial<OrchestrationConfig> | null): OrchestrationConfig {
     return {
         // Floor of 1 minute, no ceiling — "once every few hours" and "overnight"
-        // are valid wake intervals, same reasoning as the run-sheet interval.
+        // are valid wake intervals, same reasoning as the schedule interval.
         // Reads through the persisted value rather than defaulting past it.
         intervalMinutes: Math.max(1, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 10)
     };
@@ -120,7 +76,6 @@ export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
     intervalMinutes: 10,
     batchSize: 1,
     complexityFilter: 'all',
-    triggerMode: 'drain',
     whenSchedule: null
 };
 
@@ -129,7 +84,7 @@ export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanC
     const whenSchedule = typeof rawSchedule === 'string' && rawSchedule.trim() ? rawSchedule.trim() : null;
     return {
         enabled: state?.enabled === true,
-        // Floor of 1 minute only — no ceiling. The run-sheet interval is how often
+        // Floor of 1 minute only — no ceiling. The schedule interval is how often
         // the board advances, and "once every few hours" or "overnight" are valid
         // answers. A 60-minute cap was an arbitrary bound, not a constraint.
         intervalMinutes: Math.max(1, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 10),
@@ -137,21 +92,14 @@ export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanC
         complexityFilter: (['all', 'low_and_below', 'medium_and_below', 'medium_and_above', 'high_and_above'] as const).includes(state?.complexityFilter as any)
             ? state!.complexityFilter!
             : 'all',
-        triggerMode: normalizeAutobanTriggerMode(state?.triggerMode),
         whenSchedule
     };
 }
 
-/**
- * Unknown persisted values fall back to `drain` — the clock-driven default.
- * A config that predates `completion` normalises to the behaviour it already had.
- */
-export function normalizeAutobanTriggerMode(value: unknown): AutobanTriggerMode {
-    return value === 'watch' || value === 'completion' ? value : 'drain';
-}
-
 export type AutobanConfigState = {
     enabled: boolean;
+    /** Orchestrator switch — independent of the schedule. Both can be on. */
+    orchestratorArmed?: boolean;
     batchSize: number;
     complexityFilter: AutobanComplexityFilter;
     routingMode: AutobanRoutingMode;
@@ -161,16 +109,43 @@ export type AutobanConfigState = {
     pausedRemainingMs?: Record<string, number>;
     pairProgrammingMode: 'off' | 'cli-cli' | 'cli-ide' | 'ide-cli' | 'ide-ide';
     aggressivePairProgramming: boolean;
+    /** Synthetic read-only value derived from the two switches. Not authoritative. */
     automationMode?: AutobanAutomationMode;
-    /** Broadcast-only: the active run sheet, so the panel renders what the engine runs. */
-    runSheet?: AutobanRunSheetStep[];
     singleColumnConfig?: SingleColumnAutobanConfig;
     orchestrationConfig?: OrchestrationConfig;
     /** One-time notice shown in the Internal panel when a board-batch job is migrated. */
     migratedBoardBatchNotice?: string;
     /** One-time notice shown when custom scheduler jobs are dropped on read. */
     droppedCustomJobsNotice?: string;
+    /** One-time notice shown when a retired automationMode is detected on load.
+     * The schedule is forced off — the user must explicitly re-arm it. */
+    retiredAutomationModeNotice?: string;
 };
+
+/**
+ * Every `automationMode` value that has ever shipped. ALL of them are retired —
+ * the exclusive mode axis is deleted and replaced by two independent switches
+ * (`enabled` = queue schedule, `orchestratorArmed` = orchestrator wake), so a
+ * shipped install carrying ANY of these must not keep its clock running. The
+ * guard in `normalizeAutobanConfigState` does not test membership of this set
+ * (a state can carry an unrecognised value too); the set exists so the disarm
+ * notice can name the values a reader will actually find in `autoban.state`,
+ * and so the migration's blast radius is documented in one place.
+ *
+ * `agent-managed` / `orchestration` / `internal` never installed a schedule
+ * timer at all, which is why carrying `enabled: true` across the upgrade is a
+ * behaviour change on those installs and not merely a continuation.
+ */
+export const RETIRED_AUTOMATION_MODES = new Set([
+    'scheduled',
+    'agent-managed',
+    'external',
+    'run-sheet',
+    'scheduler',
+    'single-column',
+    'orchestration',
+    'internal'
+]);
 
 const DEFAULT_AUTOBAN_RULES: Record<string, AutobanRuleState> = {
     CREATED: { enabled: true, intervalMinutes: 10 },
@@ -262,33 +237,32 @@ export function getNextAutobanTerminalName(
     return uniqueName;
 }
 
-export function isWatchColumn(rule?: AutobanRuleState | null): boolean {
-    return rule?.triggerMode === 'watch' && rule?.enabled === true;
-}
-
 /**
- * The automation axis is *what drives the board*. `scheduled` and
- * `agent-managed` are the two clock-running modes; `external` emits a prompt
- * and runs nothing.
+ * The automation axis is retained as a synthetic read-only value for
+ * backward compatibility. The INVERTED default is `external` — a fresh
+ * install or an unrecognised persisted value does NOT auto-start a clock.
+ * This is the safe default: nothing runs until the user explicitly arms
+ * a switch.
  *
- * This is shipped state on ~4,000 installs, so the retired values MAP rather
- * than fall through a whitelist: `run-sheet` and `scheduler` were the earlier
- * pair (board progression vs. arbitrary prompts on a timer — both are
- * Switchboard running the clock, so both map to `scheduled`); `single-column`
- * was the run sheet under an older name; `orchestration` was a peer mode that
- * is now agent-managed mode. An install persisted as `internal` with
- * `orchestrationConfig.enabled === true` (the 150001 migration cohort) also
- * maps to `agent-managed` — the mode value carries the whole signal now. A
- * whitelist that fell through would silently disarm a shipped install's clock
- * — everything unrecognised lands on `scheduled`, the safe default that keeps
- * the board ticking.
+ * Retired values MAP for the synthetic field only — the GUARD in
+ * normalizeAutobanConfigState forces enabled: false regardless:
+ *  - `scheduled`, `run-sheet`, `scheduler`, `single-column` → `scheduled` (synthetic)
+ *  - `agent-managed`, `orchestration`, `internal` (with orchEnabled) → `agent-managed` (synthetic)
+ *  - `external` → `external`
+ *  - undefined / unrecognised → `external` (the inverted default)
+ *
+ * The mapping is for display only. A shipped install carrying a retired
+ * mode will show the mapped mode in the UI but will NOT dispatch — the
+ * guard sees the original retired value and forces enabled: false.
  */
 export function normalizeAutomationMode(value: unknown, orchEnabled?: boolean): AutobanAutomationMode {
     if (value === 'external') { return 'external'; }
+    if (value === 'agent-managed') { return 'agent-managed'; }
     if (value === 'orchestration' || (value === 'internal' && orchEnabled === true)) { return 'agent-managed'; }
-    // 'run-sheet', 'scheduler', 'single-column' and anything unrecognised all
-    // land on scheduled — it is the mechanical clock-running mode.
-    return 'scheduled';
+    if (value === 'scheduled' || value === 'run-sheet' || value === 'scheduler' || value === 'single-column') { return 'scheduled'; }
+    // Inverted default: external, not scheduled. A fresh install runs nothing
+    // until the user explicitly arms a switch.
+    return 'external';
 }
 
 export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> | null): AutobanConfigState {
@@ -309,14 +283,62 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
                 const intervalMinutes = normalizeFiniteCount(rule?.intervalMinutes, fallback.intervalMinutes, 1);
                 return [column, {
                     enabled: typeof rule?.enabled === 'boolean' ? rule.enabled : fallback.enabled,
-                    intervalMinutes,
-                    triggerMode: normalizeAutobanTriggerMode(rule?.triggerMode)
+                    intervalMinutes
                 }] as [string, AutobanRuleState];
             })
     );
 
+    // Detect a pre-two-switch persisted state. THE WHOLE MODE AXIS is retired,
+    // not just the five older aliases: `scheduled` was the common running mode
+    // on shipped installs, and under the old engine `enabled: true` meant "walk
+    // the run sheet over CREATED / PLAN REVIEWED". Under the new engine the same
+    // flag means "pop the DISPATCH queue on a timer" — so carrying `enabled`
+    // across the upgrade starts dispatching from a queue the user never staged.
+    // `agent-managed` is worse: it never installed a schedule timer at all, and
+    // a naive carry-over gives that install one it never had.
+    //
+    // The discriminator is therefore the ABSENCE of the new switch, not the
+    // value of the old one. `orchestratorArmed` is always written by this
+    // normaliser, so any state that has an `automationMode` but no
+    // `orchestratorArmed` predates the collapse and is disarmed exactly once;
+    // every state written after that carries the flag and is left alone. This
+    // is the inversion the plan calls for — under the old shape an unrecognised
+    // value meant "keep ticking the board", and there is no board tick left.
+    const rawAutomationMode = typeof state?.automationMode === 'string' ? state.automationMode : undefined;
+    const isRetiredMode = rawAutomationMode !== undefined
+        && state?.orchestratorArmed === undefined;
+
+    // Derive the two switches from the legacy mode if the new flags are absent.
+    const legacyMode = normalizeAutomationMode(state?.automationMode, (state as any)?.orchestrationConfig?.enabled);
+    const orchestratorArmed = state?.orchestratorArmed === true
+        || (state?.orchestratorArmed === undefined && legacyMode === 'agent-managed' && state?.enabled === true);
+    // `enabled` is the schedule switch. If the new flag is absent, derive from
+    // the legacy mode: scheduled → enabled, agent-managed/external → disabled.
+    // A retired mode ALWAYS forces enabled: false — the guard that prevents
+    // a shipped install from auto-dispatching after the mode axis is deleted.
+    let enabled = state?.enabled === true
+        || (state?.enabled === undefined && legacyMode === 'scheduled');
+    if (isRetiredMode) {
+        enabled = false;
+    }
+
+    // The notice is set in the normalized state so it reaches the broadcast.
+    // TaskViewerProvider latches the DISPLAY behind a workspaceState flag so it
+    // shows on exactly one activation — the same pattern as migratedBoardBatchNotice.
+    const retiredAutomationModeNotice = isRetiredMode
+        ? `Automation mode '${rawAutomationMode}'${RETIRED_AUTOMATION_MODES.has(rawAutomationMode!) ? '' : ' (unrecognised)'} is retired — the schedule and the orchestrator are now independent switches. The schedule has been turned off so nothing dispatches from a queue you did not stage; re-arm it explicitly from the Automation panel to resume.`
+        : undefined;
+
+    // Preserve unknown/legacy keys from the input state rather than dropping
+    // them. Deleted fields (triggerMode, runSheet) are stripped so they do not
+    // leak back into the persisted state. The normalized fields below override
+    // anything from the input.
+    const { triggerMode: _strippedTriggerMode, runSheet: _strippedRunSheet, ...preservedUnknownKeys } = (state ?? {}) as any;
+
     return {
-        enabled: state?.enabled === true,
+        ...preservedUnknownKeys,
+        enabled,
+        orchestratorArmed,
         batchSize: normalizeAutobanBatchSize(state?.batchSize),
         complexityFilter: (function(f: any) {
             if (f === 'low_only') return 'low_and_below';
@@ -345,14 +367,12 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
             return 'off';
         })((state as any)?.pairProgrammingMode, (state as any)?.pairProgrammingEnabled),
         aggressivePairProgramming: state?.aggressivePairProgramming === true,
-        automationMode: normalizeAutomationMode(state?.automationMode, (state as any)?.orchestrationConfig?.enabled),
+        automationMode: legacyMode,
         singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig),
-        // The mode value carries the whole signal now — `orchestrationConfig.enabled`
-        // is deleted. `intervalMinutes` is restored (it shipped 2026-07-08 and was
-        // narrowed out by 150001); the normaliser reads through the persisted value.
         orchestrationConfig: normalizeOrchestrationConfig(state?.orchestrationConfig),
         migratedBoardBatchNotice: typeof state?.migratedBoardBatchNotice === 'string' ? state.migratedBoardBatchNotice : undefined,
-        droppedCustomJobsNotice: typeof state?.droppedCustomJobsNotice === 'string' ? state.droppedCustomJobsNotice : undefined
+        droppedCustomJobsNotice: typeof state?.droppedCustomJobsNotice === 'string' ? state.droppedCustomJobsNotice : undefined,
+        retiredAutomationModeNotice
     };
 }
 
@@ -362,10 +382,6 @@ export function buildAutobanBroadcastState(
 ): AutobanConfigState {
     return {
         ...normalizeAutobanConfigState(state),
-        lastTickAt: Object.fromEntries(lastTickEntries),
-        // The panel renders the run sheet from this rather than hard-coding its own
-        // copy of the steps — so a future editable sheet reaches the UI for free
-        // instead of the two drifting apart.
-        runSheet: DEFAULT_AUTOBAN_RUN_SHEET.map(s => ({ ...s }))
+        lastTickAt: Object.fromEntries(lastTickEntries)
     };
 }

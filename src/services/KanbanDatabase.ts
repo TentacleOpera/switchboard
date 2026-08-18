@@ -4064,6 +4064,70 @@ export class KanbanDatabase {
         return true;
     }
 
+    public async listJobRuns(limit: number = 50): Promise<Array<{ id: number; timestamp: string; job: string; summary: string; source: string }>> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const rows: any[] = [];
+        const stmt = this._db.prepare(`SELECT id, timestamp, job, summary, source FROM job_runs ORDER BY id DESC LIMIT ?`);
+        try {
+            stmt.bind([limit]);
+            while (stmt.step()) {
+                rows.push(stmt.getAsObject());
+            }
+        } finally {
+            stmt.free();
+        }
+        return rows.map((r: any) => ({
+            id: Number(r.id),
+            timestamp: String(r.timestamp || ''),
+            job: String(r.job || ''),
+            summary: String(r.summary || ''),
+            source: String(r.source || ''),
+        }));
+    }
+
+    public async listJobInstructions(): Promise<Array<{ file: string; status: 'pending' | 'claimed' | 'done' | 'stuck'; claimed_ts: string | null; agent: string | null; result: string | null }>> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const rows: any[] = [];
+        const stmt = this._db.prepare(`SELECT file, status, claimed_ts, agent, result FROM job_instructions ORDER BY file ASC`);
+        try {
+            while (stmt.step()) {
+                rows.push(stmt.getAsObject());
+            }
+        } finally {
+            stmt.free();
+        }
+        return rows.map((r: any) => ({
+            file: String(r.file || ''),
+            status: r.status as 'pending' | 'claimed' | 'done' | 'stuck',
+            claimed_ts: r.claimed_ts ? String(r.claimed_ts) : null,
+            agent: r.agent ? String(r.agent) : null,
+            result: r.result ? String(r.result) : null,
+        }));
+    }
+
+    public async listBoardMoveRequests(limit: number = 50): Promise<Array<{ id: number; file: string; plan_id: string; to_column: string; status: string; reason: string; timestamp: string }>> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const rows: any[] = [];
+        const stmt = this._db.prepare(`SELECT id, file, plan_id, to_column, status, reason, timestamp FROM board_move_requests ORDER BY id DESC LIMIT ?`);
+        try {
+            stmt.bind([limit]);
+            while (stmt.step()) {
+                rows.push(stmt.getAsObject());
+            }
+        } finally {
+            stmt.free();
+        }
+        return rows.map((r: any) => ({
+            id: Number(r.id),
+            file: String(r.file || ''),
+            plan_id: String(r.plan_id || ''),
+            to_column: String(r.to_column || ''),
+            status: String(r.status || ''),
+            reason: String(r.reason || ''),
+            timestamp: String(r.timestamp || ''),
+        }));
+    }
+
     public async updateWorktreeStatus(id: number, status: 'merged' | 'abandoned'): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         this._db.run(

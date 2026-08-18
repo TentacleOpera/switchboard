@@ -100,6 +100,23 @@ export interface RemoteSyncHealth {
     lastPushError: string | null;
 }
 
+/**
+ * The columns that `queue` mode re-points at the session queue: the coding
+ * columns a remote move would otherwise fan out to a coder, plus the two
+ * staging targets that already mean "queue this". Everything else (CREATED,
+ * PLAN REVIEWED, CODE REVIEWED, ACCEPTANCE TESTED, COMPLETED, BACKLOG…) keeps
+ * mirroring through `onColumnMove` in queue mode exactly as it does in `full`
+ * — `queue` is an anti-stampede setting for coder dispatch, not a rule that
+ * every remote status change becomes work to code.
+ */
+const QUEUEABLE_TARGET_COLUMNS: ReadonlySet<string> = new Set([
+    'LEAD CODED',
+    'CODER CODED',
+    'INTERN CODED',
+    'CODED_AUTO',
+    'DISPATCH',
+]);
+
 const REMOTE_CONFIG_KEY = 'remote.config';
 const COMMENT_SEEN_CAP = 500;
 
@@ -749,13 +766,21 @@ export class RemoteControlService {
             refreshedThisCycle.add(remoteId);
 
             // ── Queue mode: stage instead of dispatch ──────────────────────
-            // A delta resolving to a dispatch column stages the card into the
+            // A delta resolving to a DISPATCH COLUMN stages the card into the
             // session queue (DISPATCH, next queue_position) and does NOT call
             // onColumnMove. The lead walks staged cards one at a time via
             // subtask 1's queue/next. No agent is woken — staging is
             // mechanical, and no judgement belongs in the correctness path of
             // the one mechanism whose value is having none.
-            if (mode === 'queue') {
+            //
+            // The dispatch-column test is load-bearing. `stateKeyToColumn` maps
+            // a remote state onto ANY local column, so an unguarded queue
+            // branch stages a card the remote user moved to COMPLETED — into
+            // the coding queue, to be coded again — and silently drops column
+            // mirroring for every non-coding state. Only the columns that would
+            // have started a coder are re-pointed at the queue; the rest keep
+            // today's mirror behaviour exactly.
+            if (mode === 'queue' && QUEUEABLE_TARGET_COLUMNS.has(targetColumn)) {
                 if (!this._deps.onStageForQueue) {
                     this._log(`Queue mode: onStageForQueue dep absent — cannot stage ${plan.planId}, skipping (no dispatch).`);
                     return;

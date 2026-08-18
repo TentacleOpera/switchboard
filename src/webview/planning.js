@@ -6310,28 +6310,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         if (window.SwitchboardMarkdownEditor) {
             window.SwitchboardMarkdownEditor.attach(textarea, {
-                renderPreview: (markdown) => {
-                    return new Promise((resolve, reject) => {
-                        const requestId = Date.now() + Math.random();
-                        const handler = (event) => {
-                            const msg = event.data;
-                            if (msg.type === 'markdownLiveRendered' && msg.requestId === requestId) {
-                                window.removeEventListener('message', handler);
-                                if (msg.error) {
-                                    reject(msg.error);
-                                } else {
-                                    resolve(msg.html || msg.htmlContent || '');
-                                }
-                            }
-                        };
-                        window.addEventListener('message', handler);
-                        vscode.postMessage({
-                            type: 'renderMarkdownLive',
-                            requestId,
-                            content: markdown
-                        });
-                    });
-                }
+                renderPreview: (markdown) => Promise.resolve(renderMarkdown(markdown))
             });
         }
 
@@ -7660,14 +7639,13 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const descTextarea = document.getElementById('ticket-edit-description');
         if (descTextarea && window.SwitchboardMarkdownEditor) {
             window.SwitchboardMarkdownEditor.attach(descTextarea, {
-                renderPreview: (markdown) => new Promise((resolve, reject) => {
+                renderPreview: (markdown) => new Promise((resolve) => {
                     const requestId = Date.now() + Math.random();
                     const handler = (event) => {
                         const msg = event.data;
                         if (msg.type === 'markdownLiveRendered' && msg.requestId === requestId) {
                             window.removeEventListener('message', handler);
-                            if (msg.error) reject(msg.error);
-                            else resolve(msg.html || msg.htmlContent || '');
+                            resolve(renderMarkdown(typeof msg.markdown === 'string' ? msg.markdown : markdown));
                         }
                     };
                     window.addEventListener('message', handler);

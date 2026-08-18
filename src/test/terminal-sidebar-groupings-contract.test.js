@@ -237,6 +237,87 @@ test('renderSidebarList renders the tab strip and is otherwise one workspace tre
     );
 });
 
+test('team subheaders are rendered as a tier in the sidebar hierarchy', () => {
+    // 1. buildTeamClaimMap filters on manual groups only
+    const claimMapFn = block(terminalsJs, 'function buildTeamClaimMap() {', 'function bucketRowsByTeam(');
+    assert.ok(
+        claimMapFn.includes("g.source !== 'manual'"),
+        'buildTeamClaimMap must filter on manual groups only so derived groups do not duplicate tiers'
+    );
+    // 1b. the claim reads the group's own roster, NOT getGroupMembers — that
+    // resolver intersects with the live set, so an exited seat would lose its
+    // claim, drop out of its team's tier and re-render as a loose row below it,
+    // leaving renderTeamTier's `Xx` count permanently 0.
+    assert.ok(
+        !/getGroupMembers\(/.test(claimMapFn),
+        'buildTeamClaimMap must not resolve through getGroupMembers — its live-set filter evicts exited seats from their team tier'
+    );
+    assert.ok(
+        /g\.order/.test(claimMapFn) && /g\.members/.test(claimMapFn),
+        'buildTeamClaimMap must claim off the manual group roster arrays (order + members)'
+    );
+
+    // 2. buildTeamClaimMap is called once in renderSidebarList, not inside row loops
+    const renderFn = block(terminalsJs, 'function renderSidebarList() {', 'function syncLayoutPickerUI()');
+    const claimMapCallCount = (renderFn.match(/buildTeamClaimMap\(\)/g) || []).length;
+    assert.strictEqual(
+        claimMapCallCount, 1,
+        'buildTeamClaimMap must be called once per renderSidebarList invocation'
+    );
+    assert.ok(
+        !/for\s*\([^)]*\)\s*\{[^}]*findGroupForTerminalName/.test(renderFn),
+        'findGroupForTerminalName must not be called inside render loops'
+    );
+
+    // 3. renderTeamTier uses the collapse key prefix 'team:' and calls saveLayoutSettings()
+    const teamTierFn = block(terminalsJs, 'function renderTeamTier(', 'function renderSidebarList()');
+    assert.ok(
+        teamTierFn.includes("'team:' +"),
+        'renderTeamTier must use team: collapse key prefix'
+    );
+    // The key must carry the LOCATION too. A team spanning a workspace and a
+    // worktree renders a tier in each; on a bare 'team:<id>' key those two
+    // separate tiers collapse in lockstep.
+    assert.ok(
+        /const locationKey = locationOwner\.fullPath/.test(teamTierFn)
+        && /'team:' \+ locationKey \+ ':' \+ bucket\.group\.id/.test(teamTierFn),
+        'the team collapse key must be location-scoped, or two tiers of one team collapse together'
+    );
+    // The tier `+` mirrors the enclosing header's spawn wiring rather than
+    // re-deriving it — no hardcoded picker key, which would mount the picker
+    // under a key no header renders.
+    assert.ok(
+        !/'parent:workspace-root'/.test(teamTierFn),
+        'the team tier + must not hardcode a picker key — it must reuse the enclosing header\'s'
+    );
+    assert.ok(
+        teamTierFn.includes('saveLayoutSettings()'),
+        'renderTeamTier collapse toggle must persist layout settings'
+    );
+
+    // 4. both direct and worktree runs go through bucketRowsByTeam
+    const directBucketCount = (renderFn.match(/bucketRowsByTeam\(parentGroup\.direct,\s*claimMap\)/g) || []).length;
+    const wtBucketCount = (renderFn.match(/bucketRowsByTeam\(wtGroup\.items,\s*claimMap\)/g) || []).length;
+    assert.ok(directBucketCount >= 1, 'direct rows must be bucketed by team');
+    assert.ok(wtBucketCount >= 1, 'worktree rows must be bucketed by team');
+
+    // 5. the rejected rationale comments are gone from both files
+    assert.ok(
+        !terminalsJs.includes('legible without a nesting tier'),
+        'rejected rationale comment must be removed from terminals.js'
+    );
+    assert.ok(
+        !terminalsHtml.includes('Replaces the nesting tier'),
+        'rejected rationale comment must be removed from terminals.html'
+    );
+
+    // 6. CSS classes exist in terminals.html
+    assert.ok(terminalsHtml.includes('.team-group'), 'terminals.html must define .team-group');
+    assert.ok(terminalsHtml.includes('.team-group-header'), 'terminals.html must define .team-group-header');
+    assert.ok(terminalsHtml.includes('.team-items'), 'terminals.html must define .team-items');
+    assert.ok(terminalsHtml.includes('.team-group.indent-team'), 'terminals.html must define .team-group.indent-team');
+});
+
 test('the lock indicator and the clickable sidebar title are both retired', () => {
     // updateLockIndicator wrote "<name> — locked" into .sidebar-title, duplicating
     // what the active tab now shows directly. Its click handler was a third,
@@ -842,60 +923,6 @@ test('focusSeatedTerminal assigns focusedPaneIndex and activeTerminalName withou
     );
 });
 
-test('the keepLock call-site count is still exactly 1 (no new keepLock callers)', () => {
-    // This change adds no keepLock caller — the team branch seats via
-    // switchToGroup, not assignToFocusedPane with keepLock.
-    const keepLockCallers = (terminalsJs.match(/assignToFocusedPane\([^)]*keepLock/g) || []).length;
-    assert.strictEqual(
-        keepLockCallers, 1,
-        'only handleLockedTerminalClick\'s free-slot branch may pass keepLock — the team branch must not add one'
-    );
-});
-
-// ---------------------------------------------------------------- role group consent and location scoping
-
-test('role groups are opt-in and never span a workspace or worktree', () => {
-    const derived = block(terminalsJs, 'function getDerivedGroups()', 'function getAllGroups()');
-    assert.ok(
-        /if \(groupPrefs\.autoRoleGroups\)/.test(derived),
-        'the role arm must be gated on consent — a second planner must not conjure a "Planners" tab'
-    );
-    assert.ok(
-        derived.includes('locationKeyForTerminal(t)') && /role \+ LOC_SEP \+ loc/.test(derived),
-        'the role key must carry a location component (NUL-separated), or two workspaces\' planners become one group'
-    );
-    // Slice from the worktree EMISSION loop, not from the first mention of
-    // `worktreeMap` — that is `const worktreeMap = new Map()` at the top of the
-    // function, so slicing there swallows the role arm's own consent gate and
-    // the assertion below can never pass against a correct implementation.
-    const worktreeArm = derived.slice(derived.indexOf('for (const [wt, count] of worktreeMap)'));
-    assert.ok(
-        !/autoRoleGroups/.test(worktreeArm),
-        'worktree groups stay automatic — they are location-keyed by construction and were not the complaint'
-    );
-});
-
-test('the role membership query filters on location, not role alone', () => {
-    const fn = block(terminalsJs, 'function getGroupMembers(group) {', 'function orderGroupMembers(');
-    const roleBranch = fn.slice(fn.indexOf("group.source === 'role'"), fn.indexOf("group.source === 'worktree'"));
-    assert.ok(
-        roleBranch.includes('locationKeyForTerminal(t) === group.location'),
-        'membership must use the same role+location predicate getDerivedGroups keys on'
-    );
-    assert.ok(
-        roleBranch.includes('!t.parentInstanceId'),
-        'delegate children stay excluded'
-    );
-});
-
-test('the role-grouping toggle is reachable with no group tabs on screen', () => {
-    // The » menu is the ONLY control that turns role grouping back on. It used
-    // to be built solely when there were tabs or hidden groups — both false in
-    // exactly the state the toggle exists to escape.
-    const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
-    assert.ok(
-        strip.includes('Group by role'),
-        'the strip must carry the role-grouping toggle'
 // ---------------------------------------------------------------- team seating (startTeam / START TEAM button)
 
 test('startTeam seats the whole team via switchToTeamGroup with a seatTeamWithoutGroup fallback', () => {
@@ -967,6 +994,60 @@ test('startTeam awaits fetchTerminalList before it seats', () => {
     );
 });
 
+test('the keepLock call-site count is still exactly 1 (no new keepLock callers)', () => {
+    // This change adds no keepLock caller — the team branch seats via
+    // switchToGroup, not assignToFocusedPane with keepLock.
+    const keepLockCallers = (terminalsJs.match(/assignToFocusedPane\([^)]*keepLock/g) || []).length;
+    assert.strictEqual(
+        keepLockCallers, 1,
+        'only handleLockedTerminalClick\'s free-slot branch may pass keepLock — the team branch must not add one'
+    );
+});
+
+// ---------------------------------------------------------------- role group consent and location scoping
+
+test('role groups are opt-in and never span a workspace or worktree', () => {
+    const derived = block(terminalsJs, 'function getDerivedGroups()', 'function getAllGroups()');
+    assert.ok(
+        /if \(groupPrefs\.autoRoleGroups\)/.test(derived),
+        'the role arm must be gated on consent — a second planner must not conjure a "Planners" tab'
+    );
+    assert.ok(
+        derived.includes('locationKeyForTerminal(t)') && /role \+ LOC_SEP \+ loc/.test(derived),
+        'the role key must carry a location component (NUL-separated), or two workspaces\' planners become one group'
+    );
+    // Slice from the worktree EMISSION loop, not from the first mention of
+    // `worktreeMap` — that is `const worktreeMap = new Map()` at the top of the
+    // function, so slicing there swallows the role arm's own consent gate and
+    // the assertion below can never pass against a correct implementation.
+    const worktreeArm = derived.slice(derived.indexOf('for (const [wt, count] of worktreeMap)'));
+    assert.ok(
+        !/autoRoleGroups/.test(worktreeArm),
+        'worktree groups stay automatic — they are location-keyed by construction and were not the complaint'
+    );
+});
+
+test('the role membership query filters on location, not role alone', () => {
+    const fn = block(terminalsJs, 'function getGroupMembers(group) {', 'function orderGroupMembers(');
+    const roleBranch = fn.slice(fn.indexOf("group.source === 'role'"), fn.indexOf("group.source === 'worktree'"));
+    assert.ok(
+        roleBranch.includes('locationKeyForTerminal(t) === group.location'),
+        'membership must use the same role+location predicate getDerivedGroups keys on'
+    );
+    assert.ok(
+        roleBranch.includes('!t.parentInstanceId'),
+        'delegate children stay excluded'
+    );
+});
+
+test('the role-grouping toggle is reachable with no group tabs on screen', () => {
+    // The » menu is the ONLY control that turns role grouping back on. It used
+    // to be built solely when there were tabs or hidden groups — both false in
+    // exactly the state the toggle exists to escape.
+    const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    assert.ok(
+        strip.includes('Group by role'),
+        'the strip must carry the role-grouping toggle'
     );
     assert.ok(
         !/if \(groupTabEls\.length > 0 \|\| hasHiddenGroups\)/.test(strip),

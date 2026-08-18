@@ -464,29 +464,48 @@
     <!-- SUB-TAB 3: JOBS -->
     <div class="shared-tab-content" id="jobs-fields" data-tab-content="jobs">
         <div class="conn-card">
-            <div class="conn-heading">Scheduled External Jobs & Context Exporter</div>
-            Standing background jobs scan the instruction inbox <code>.switchboard/instructions/</code> and apply declared board moves.
+            <div class="conn-heading">Scheduled External Jobs & Activity View</div>
+            <div>Standing background jobs scan the instruction inbox <code>.switchboard/instructions/</code> and apply declared board moves. Updated when Switchboard imports job activity.</div>
+            <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px;">
+                <button id="btn-copy-cron-prompt" class="btn-action" style="margin-top:0;">Copy Cron Prompt to Clipboard</button>
+                <button id="btn-refresh-jobs" class="btn-secondary" style="padding: 6px 12px; font-size: 11px; border: none; border-radius: 2px; cursor: pointer;">Refresh Activity</button>
+            </div>
+            <div id="jobs-action-result" class="status-msg"></div>
         </div>
 
-        <div class="conn-card">
+        <div class="conn-card" style="border-left-color: var(--accent-primary);">
             <div class="conn-heading">Standing Job Definitions</div>
-            <ul style="margin: 4px 0 0 16px; padding: 0;">
-                <li><code>memo-to-plans.md</code> — Converts memo entries into structured plan files</li>
-                <li><code>nightly-code-review.md</code> — Reviews completed plans for potential bugs</li>
-                <li><code>research-unknowns.md</code> — Resolves uncertain assumptions via research</li>
-            </ul>
+            <div id="standing-jobs-list" style="font-size: 11px;">
+                <div style="color: var(--text-secondary);">Loading standing jobs...</div>
+            </div>
         </div>
 
-        <div class="form-row">
-            <div class="conn-heading">Uploadable AI Surface Context</div>
-            <p style="font-size: 11px; margin-bottom: 8px;">Export <code>.switchboard/switchboard-spark.md</code> to upload as persistent system context to Gemini Spark or Claude Cowork.</p>
-            <button id="btn-regenerate-spark-context" class="btn-action">Re-generate Spark Context Skill</button>
-            <div id="spark-context-result" class="status-msg"></div>
+        <div class="conn-card" style="border-left-color: var(--accent-primary);">
+            <div class="conn-heading">Instruction Inbox & Lifecycle</div>
+            <div id="jobs-inbox-list" style="font-size: 11px; margin-bottom: 12px;">
+                <div style="color: var(--text-secondary);">Loading inbox lifecycle...</div>
+            </div>
+
+            <div style="border-top: 1px solid var(--border-color); padding-top: 10px; margin-top: 10px;">
+                <label for="instruction-body" style="display: block; font-size: 11px; color: var(--text-secondary); margin-bottom: 4px;">Drop New Instruction</label>
+                <textarea id="instruction-body" placeholder="Describe instruction for external agent..." style="width: 100%; max-width: 100%; box-sizing: border-box; min-height: 70px; margin-bottom: 6px;"></textarea>
+                <button id="btn-drop-instruction" class="btn-action">Drop Instruction</button>
+                <div id="drop-instruction-result" class="status-msg"></div>
+            </div>
+        </div>
+
+        <div class="conn-card" style="border-left-color: var(--accent-primary);">
+            <div class="conn-heading">Declared Board Moves</div>
+            <div id="declared-moves-list" style="font-size: 11px;">
+                <div style="color: var(--text-secondary);">Loading declared moves...</div>
+            </div>
         </div>
 
         <div class="form-row" style="margin-top: 16px;">
-            <div class="conn-heading">Recent Job Activity</div>
-            <div id="jobs-list" style="font-size: 11px; color: var(--text-secondary);">No job runs recorded yet. Standing jobs read instructions on scheduled passes.</div>
+            <div class="conn-heading">Uploadable AI Surface Context</div>
+            <p style="font-size: 11px; margin-bottom: 8px; color: var(--text-secondary);">Export <code>.switchboard/switchboard-spark.md</code> to upload as persistent system context to Gemini Spark or Claude Cowork.</p>
+            <button id="btn-regenerate-spark-context" class="btn-action">Re-generate Spark Context Skill</button>
+            <div id="spark-context-result" class="status-msg"></div>
         </div>
     </div>
 

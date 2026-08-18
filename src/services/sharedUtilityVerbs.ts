@@ -87,8 +87,8 @@ export async function handleRenderMarkdownLive(
     deps: SharedUtilityVerbDeps,
     msg: any
 ): Promise<any> {
+    let content = msg.content || '';
     try {
-        let content = msg.content || '';
         // Tickets edit-preview: resolve the ticket file's directory and rewrite
         // relative image paths to webview URIs (mirrors the view-mode path).
         // Non-ticket editor mounts send no provider/id → no rewrite.
@@ -104,7 +104,8 @@ export async function handleRenderMarkdownLive(
             type: 'markdownLiveRendered',
             requestId: msg.requestId,
             html: html,
-            htmlContent: html
+            htmlContent: html,
+            markdown: content
         };
         deps.push(okRes);
         return { ...okRes, success: true };
@@ -114,6 +115,7 @@ export async function handleRenderMarkdownLive(
             requestId: msg.requestId,
             html: '',
             htmlContent: '',
+            markdown: content,
             error: String(err)
         };
         deps.push(errRes);

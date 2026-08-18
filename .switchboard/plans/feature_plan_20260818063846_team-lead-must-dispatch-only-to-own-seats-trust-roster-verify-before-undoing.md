@@ -30,21 +30,23 @@ It says "across all roles" and never says "your team's seats only." The lead rea
 **Tags:** backend, bugfix, reliability, docs
 **Project:** Browser Switchboard
 
+## User Review Required
+
+Not required — the plan makes targeted skill-file text changes with no design decisions. The headPrompt amendment is explicitly deferred to avoid migration conflicts with sibling subtasks. Proceed with implementation.
+
 ## Complexity Audit
 
-**Routine (text changes):**
+### Routine
 - Rewriting §10 of `terminal-coder-dispatch/SKILL.md` to say "your team's seats only" and name `parentInstanceId` as the membership filter — a text edit to a skill file.
 - Adding a "verify before undoing" rule to the skill — a new subsection or addition to an existing section.
 - Adding a "trust the roster" rule to the skill or headPrompt — text addition.
 - The `.claude/skills/terminal-coder-dispatch/SKILL.md` mirror must be updated to match (the mirror has a YAML frontmatter block the `.agents` version does not — the body text must still match).
-
-**Moderate risk (headPrompt migration):**
-- If the headPrompt is amended (adding "trust the recommendedRole" and "verify before undoing" rules), the same three-place migration machinery applies: `NEW_CODING_HEAD_PROMPT` in `teamWiring.ts`, `NEW_CODING_HEAD_PROMPT_CLIENT` in `terminals.js`, and the Coding team gallery entry in `kanban.html`. Plus a migration recogniser for installs that already have the current text.
-- However, the headPrompt is already subject to two other pending plans that rewrite it (`feature_plan_20260818000513` fixes API errors + rotation rule; `feature_plan_20260818062423` removes the orchestrator report instruction). This plan should avoid amending the headPrompt text directly and instead put the new rules in the skill file, which is the single source the lead reads. The headPrompt already says "dispatch it to a seat of that role on your team" — the skill is where the lead learns how to identify those seats.
-
-**Low risk (skill file changes):**
 - The skill file is read by the lead at dispatch time. Changes take effect on the next dispatch — no migration needed, no persisted state.
 - The `npm run mirror:check` script validates `.agents/` ↔ `.claude/` drift — both files must be updated.
+
+### Complex / Risky
+- If the headPrompt is amended (adding "trust the recommendedRole" and "verify before undoing" rules), the same three-place migration machinery applies: `NEW_CODING_HEAD_PROMPT` in `teamWiring.ts`, `NEW_CODING_HEAD_PROMPT_CLIENT` in `terminals.js`, and the Coding team gallery entry in `kanban.html`. Plus a migration recogniser for installs that already have the current text.
+- However, the headPrompt is already subject to two other pending plans that rewrite it (`feature_plan_20260818000513` fixes API errors + rotation rule; `feature_plan_20260818062423` removes the orchestrator report instruction). This plan should avoid amending the headPrompt text directly and instead put the new rules in the skill file, which is the single source the lead reads. The headPrompt already says "dispatch it to a seat of that role on your team" — the skill is where the lead learns how to identify those seats.
 
 ## Edge-Case & Dependency Audit
 
@@ -57,9 +59,18 @@ It says "across all roles" and never says "your team's seats only." The lead rea
 7. **Interaction with existing plans.** The plan `feature_plan_20260817101700_lead-spreads-subtasks-across-idle-seats.md` rewrites the headPrompt to add idle-seat spreading. That plan amends the headPrompt; this plan amends the skill file. They are complementary and do not conflict — the headPrompt says *what* to do (spread across idle seats), the skill says *how* to identify those seats (filter by `parentInstanceId`).
 8. **The `git diff` verification rule.** The rule "verify before undoing" should be general, not specific to the stand-down scenario. Any time the lead is about to send a terminal to revert, clean up, or undo work, it must first verify the state exists (`git diff`, `git status`, `git log`). This is the same "ground truth over self-report" principle the orchestrator skill holds (§1, line 20).
 
+## Dependencies
+
+- The skill-file changes (§10 rewrite) are independent and can land in any order relative to the other subtasks.
+- The deferred headPrompt amendment depends on the merged subtask 2+3 headPrompt rewrite landing first — the headPrompt text must be stable before adding the cross-reference sentence, or the migration recogniser constants will not match.
+
+## Adversarial Synthesis
+
+Key risks: (1) The `SWITCHBOARD_AGENT_INSTANCE_ID` env var is confirmed injected at `ptyFleetService.ts:244` — the skill's `jq` filter is grounded. (2) Shared members (reviewer) are unparented and will not match the `parentInstanceId` filter — the skill correctly notes this exception and confirms it is safe for the Coding team (lead never dispatches to reviewer). (3) The `.claude` mirror has YAML frontmatter the `.agents` version does not — the body must match but the frontmatter must be preserved. Mitigations: `npm run mirror:check` validates parity; the shared-member exception is documented in the new §10 text.
+
 ## Proposed Changes
 
-### `.agents/skills/terminal-coder-dispatch/SKILL.md` — §10 rewrite (line 451-463)
+### `.agents/skills/terminal-coder-dispatch/SKILL.md` — §10 rewrite (line 540-552)
 
 Replace the current §10 text with a version that (a) scopes the pool to the lead's own team, (b) names `parentInstanceId` as the membership filter, (c) forbids second-guessing `recommendedRole`, and (d) adds a verify-before-undoing rule.
 
@@ -171,3 +182,11 @@ If the headPrompt is amended, update the client mirror to match (byte-identical)
 6. **No conflict with existing plans.** Read `feature_plan_20260817101700_lead-spreads-subtasks-across-idle-seats.md`. Confirm this plan's skill changes do not conflict with that plan's headPrompt changes — the skill says *how* to identify seats, the headPrompt says *which* seat to pick.
 7. **HeadPrompt cross-reference (if implemented).** If the headPrompt sentence is added, confirm it appears in all three places (`teamWiring.ts`, `kanban.html`, `terminals.js`) and that the migration recogniser fires for the current text.
 8. **Run tests.** `npx jest src/test/standing-orders-marker-contract.test.js` — confirm the headPrompt substring assertions still pass (the added sentence does not remove any of the pinned literals: `/kanban/dispatch`, `CODE REVIEWED`, `"from":"{head}"`, `Do NOT use /kanban/move`).
+
+## Completion Report
+
+Updated Section 10 ("Knowing your roster & tier resolution") in both `.agents/skills/terminal-coder-dispatch/SKILL.md` and `.claude/skills/terminal-coder-dispatch/SKILL.md`. Added rules and commands for filtering live terminals to the lead's own team via `parentInstanceId === SWITCHBOARD_AGENT_INSTANCE_ID`, trusting the `recommendedRole` field without inventing complexity tiers, noting the unparented shared-member exception, and verifying uncommitted state with `git diff`/`git status` before issuing any revert or stand-down instructions. Kept `.agents/` and `.claude/` skill files in exact parity. No issues encountered.
+
+## Review Findings
+
+§10 of both `.agents/` and `.claude/skills/terminal-coder-dispatch/SKILL.md` matches the plan: team-only filtering on `parentInstanceId === SWITCHBOARD_AGENT_INSTANCE_ID`, "role alone is not a membership test", the unparented shared-member exception, the trust-`recommendedRole` rule, and the verify-before-undoing block; `mirror:check` confirms parity (48 files). **MAJOR** — the deferred headPrompt cross-reference was not safe to leave deferred: the skill reaches a lead *only* through `DRIVE_FEATURE_PREFIX` (`KanbanProvider.ts:76`, the Drive toggle), so a Coding team started from the TEAMS gallery never reads it and the three reported errors stayed uncovered. Its blocking dependency (the sibling headPrompt rewrite) has landed, so the cross-reference was added — compressed to three sentences (membership filter, take `recommendedRole`, `git diff` before any revert/stand-down) and applied byte-identically across `teamWiring.ts`, `terminals.js`, and `kanban.html`; `CURRENT_BUGGY_CODING_HEAD_PROMPT` was left frozen. Validation: `tsc` clean, `standing-orders-marker` 55/55, `stage-marker-commit` 47/47, `seat-safeguards` 95/95, `orchestrator-tick` pass, `mirror:check` green. Remaining risk: the headPrompt is now ~2.5 KB of standing order injected each turn — trim it if lead context becomes tight.

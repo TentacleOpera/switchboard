@@ -944,13 +944,18 @@
     "test:contract:paste-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/paste-attribution-contract.test.js",
     "test:contract:dispatch-analysis-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-analysis-scope-contract.test.js",
     "test:contract:standing-orders-marker": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-marker-contract.test.js",
+    "test:contract:standing-orders-fleet-root": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-fleet-root-contract.test.js",
     "test:contract:seat-safeguards": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/seat-safeguards-fleet-prompt-path.test.js",
     "test:contract:team-scoped-routing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-scoped-role-routing.test.js",
+    "test:contract:terminal-groups-key": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-groups-key-unification-contract.test.js",
     "test:contract:link-presets-mirror": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/link-presets-mirror-contract.test.js",
     "test:contract:stage-marker-commit": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/stage-marker-commit-contract.test.js",
     "test:contract:minimal-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/minimal-prompt.test.js",
     "test:contract:unattended-batch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/unattended-batch-improvement-contract.test.js",
-    "test:contract:orchestrator-tick": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/orchestrator-tick-and-reports-contract.test.js"
+    "test:contract:orchestrator-tick": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/orchestrator-tick-and-reports-contract.test.js",
+    "test:contract:queue-pipeline": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/queue-pipeline-contract.test.js",
+    "test:contract:external-headed-team": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/external-headed-team-contract.test.js",
+    "test:contract:terminal-coder-dispatch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-coder-dispatch-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

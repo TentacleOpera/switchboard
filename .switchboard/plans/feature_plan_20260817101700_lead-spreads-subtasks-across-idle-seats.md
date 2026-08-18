@@ -8,7 +8,9 @@ A lead with three coders and three subtasks puts one on each. A lead that gets a
 
 The lead's dispatch behaviour is not code. It is prose, delivered as a `team-head`-scoped standing order, and the prose currently tells the lead to do exactly the wrong thing.
 
-`NEW_CODING_HEAD_PROMPT` (`src/services/teamWiring.ts:275-293`) is the shipped head prompt for the Coding team. Two of its clauses produce the reported behaviour:
+`CURRENT_BUGGY_CODING_HEAD_PROMPT` (`src/services/teamWiring.ts:383-404`) is the V2 head prompt that was shipped to every install that migrated from V1 — it is preserved verbatim as a named constant so the V2-to-V3 migration recogniser can match against it. Two of its clauses produce the reported behaviour:
+
+> **Note:** `NEW_CODING_HEAD_PROMPT` (`:352`) already holds the corrected V3 text (the spread rule). The constant rewrite is done; what remains is migrating the persisted V2 rows on existing installs. See the Superseded callout in Proposed Changes §1b.
 
 1. > *"Each subtask carries a recommendedRole; dispatch it to a seat of that role on your team. **If your team has no such seat, dispatch to a coder**"*
 
@@ -22,29 +24,29 @@ Nothing anywhere in the prompt mentions the other seats, their liveness, or whet
 
 ### Root cause
 
-**The head prompt encodes seat re-use as the assignment rule, and gives the lead no roster and no busy/idle signal to do anything else with.** Two halves:
+**The persisted head-prompt rows on existing installs encode seat re-use as the assignment rule, and give the lead no roster and no busy/idle signal to do anything else with.** The constant (`NEW_CODING_HEAD_PROMPT`) is already corrected to V3; the defect lives in the `terminals.standingOrders` rows that were written by the V2 text and have not yet been migrated. Two halves:
 
-- **The rule is wrong.** "give that coder the next subtask" is a sticky-assignment rule. It reads as continuity ("the coder who just finished has warm context") but the cost is the opposite: that seat's context is the one filling up, and a seat at its limit is a seat that starts truncating or compacting mid-subtask.
-- **The facts the right rule needs are available and never named.** `POST /terminals/verb/ptyListTerminals` already returns, per seat: `friendlyName`, `role`, `status`, `parentInstanceId`, `lastDataAt`, and — stamped by both hosts' plan-attribution pass (`TaskViewerProvider.ts:3235-3240`, `bootstrap.ts:1549-1554`) — `planId` and `planTitle` for whatever that seat currently has dispatched to it. A row with `planId: null` is a seat with nothing in flight. That is a ready-made idle signal the prompt never mentions, and the verb is already documented for exactly this audience in the `switchboard-orchestration` skill (`.agents/skills/switchboard-orchestration/SKILL.md:194`).
+- **The rule was wrong.** "give that coder the next subtask" is a sticky-assignment rule. It reads as continuity ("the coder who just finished has warm context") but the cost is the opposite: that seat's context is the one filling up, and a seat at its limit is a seat that starts truncating or compacting mid-subtask. The V3 constant fixes this; the migration carries the fix to already-persisted rows.
+- **The facts the right rule needs are available and never named in V2.** `POST /terminals/verb/ptyListTerminals` already returns, per seat: `friendlyName`, `role`, `status`, `parentInstanceId`, `lastDataAt`, and — stamped by both hosts' plan-attribution pass (`TaskViewerProvider.ts:3235-3240`, `bootstrap.ts:1549-1554`) — `planId` and `planTitle` for whatever that seat currently has dispatched to it. A row with `planId: null` is a seat with nothing in flight. That is a ready-made idle signal the V2 prompt never mentions, and the verb is already documented for exactly this audience in the `switchboard-orchestration` skill (`.agents/skills/switchboard-orchestration/SKILL.md:194`). V3 names it; the migration carries the naming to persisted rows.
 
-So this is a prompt-text defect with a migration obligation, not a missing mechanism. No new endpoint is required.
+So this is a migration obligation on a text fix that is already shipped in the constant, not a missing mechanism. No new endpoint is required.
 
 ### Why the fix is a text rewrite plus a migration, and nothing more
 
-The head prompt is shipped state in three places and persisted in a fourth, and the repo already has the exact machinery for rewriting it in place — built the last time this same prompt was rewritten:
+The head prompt is shipped state in three places and persisted in a fourth. The first three are **already V3**; the fourth (persisted rows) is the remaining work:
 
-- `NEW_CODING_HEAD_PROMPT` (`teamWiring.ts:275`) — the constant the order migration writes.
-- `NEW_CODING_HEAD_PROMPT_CLIENT` (`src/webview/terminals.js:8877`) — the client mirror, asserted **byte-identical** by `src/test/stage-marker-commit-contract.test.js:357`.
-- The Coding team gallery entry in `src/webview/kanban.html:4679` — asserted byte-identical by the same test file at `:373`.
-- `terminals.standingOrders` in every install's `kanban.db`, as a `team-head` row with `{head}` already substituted at install time.
+- `NEW_CODING_HEAD_PROMPT` (`teamWiring.ts:352`) — the constant the order migration writes. **Already V3 (spread rule).**
+- `NEW_CODING_HEAD_PROMPT_CLIENT` (`src/webview/terminals.js:9075`) — the client mirror, asserted **byte-identical** by `src/test/stage-marker-commit-contract.test.js:357`. **Already V3.**
+- The Coding team gallery entry in `src/webview/kanban.html:4689` — asserted byte-identical by the same test file at `:373`. **Already V3.**
+- `terminals.standingOrders` in every install's `kanban.db`, as a `team-head` row with `{head}` already substituted at install time. **Still V2 on installs that migrated V1→V2 and have not yet seen the V2 recogniser.**
 
-`migrateCodingTeamOrders` (`teamWiring.ts:1207`) already rewrites that persisted row on read, matched by a substitution-independent fragment (`OLD_HEADPROMPT_FRAGMENT`, `:1177`) via `indexOf` — never a constructed `RegExp`, because the substituted head name may contain regex metacharacters. `loadEffectiveStandingOrders` (`:1343`) applies it at every server read site and persists once, after `backupOnce`. The client mirrors it in `migrateCodingTeamOrdersClient` (`terminals.js:8992`). Adding a second recogniser to that pair is the whole migration.
+`migrateCodingTeamOrders` (`teamWiring.ts:1389`) already rewrites persisted V1 rows on read, matched by a substitution-independent fragment (`OLD_HEADPROMPT_FRAGMENT`, `:1359`) via `indexOf` — never a constructed `RegExp`, because the substituted head name may contain regex metacharacters. `loadEffectiveStandingOrders` (`:1521`) applies it at every server read site and persists once, after `backupOnce`. The client mirrors it in `migrateCodingTeamOrdersClient` (`terminals.js:9195`). Adding a second recogniser (V2→V3) to that pair is the whole remaining migration.
 
 ---
 
 ## Metadata
 
-- **Complexity:** 4
+- **Complexity:** 3
 - **Tags:** backend, bugfix, reliability
 - **Project:** Browser Switchboard
 
@@ -53,15 +55,16 @@ The head prompt is shipped state in three places and persisted in a fourth, and 
 ## Complexity Audit (Routine vs Complex/Risky)
 
 **Routine:**
-- Rewriting one string constant and its two byte-identical copies.
-- Adding one recogniser branch to a migration function and its client mirror — the same shape as the branch already there.
+- ~~Rewriting one string constant and its two byte-identical copies.~~ **Already done** — `NEW_CODING_HEAD_PROMPT`, `NEW_CODING_HEAD_PROMPT_CLIENT`, and the `kanban.html` gallery entry are all V3.
+- Adding one recogniser branch to `migrateCodingTeamOrders` and its client mirror `migrateCodingTeamOrdersClient` — the same shape as the V1 branch already there.
+- Extending the pin test with the V2 fragment negative assertion, the new spread-rule literals, and a V2 migration test case.
 
 **Complex / risky:**
-- **The recogniser fragment must not survive into the new text.** `stage-marker-commit-contract.test.js:391` already pins this for the V1 fragment: *"the new text must not contain the fragment the order converter matches on, or it re-converts forever."* The V2 fragment chosen here (`'note it and give that coder the next subtask'`) is the clause being deleted, so it is absent from V3 by construction — but the assertion must be extended to cover it, or a later editor can reintroduce the phrase and create an infinite rewrite.
-- **Nine load-bearing literals must survive.** `stage-marker-commit-contract.test.js:385-390` asserts the head prompt still contains `/kanban/dispatch`, `CODE REVIEWED`, `"from":"{head}"`, `Do NOT use /kanban/move`, `GET /kanban/feature`, `FEATURE planId`, `intern → coder → lead`, `seat fails review on the same subtask twice`, and `stop and report to the human instead of dispatching again`. A rewrite that drops any of them breaks the review handoff or the escalation ladder. This is an **insertion**, not a re-authoring.
+- **The recogniser fragment must not survive into the new text.** `stage-marker-commit-contract.test.js:391` already pins this for the V1 fragment: *"the new text must not contain the fragment the order converter matches on, or it re-converts forever."* The V2 fragment chosen here (`'note it and give that coder the next subtask'`) is the clause being deleted from V2, so it is absent from V3 by construction — but the assertion must be extended to cover it, or a later editor can reintroduce the phrase and create an infinite rewrite.
+- **Nine load-bearing literals must survive.** `stage-marker-commit-contract.test.js:385-393` asserts the head prompt still contains `/kanban/dispatch`, `CODE REVIEWED`, `"from":"{head}"`, `Do NOT use /kanban/move`, `GET /kanban/plan?planId=`, `FEATURE planId`, `intern → coder → lead`, `seat fails review on the same subtask twice`, and `stop and report to the human instead of dispatching again`. The V3 constant already satisfies all nine (the test was updated when the constant was rewritten). The new spread-rule literals (`ptyListTerminals`, `planId is null`, `Never give a seat a second subtask`, `while another seat of the same role is idle`) must be added to the pin test so a later edit cannot silently drop them.
 - **Three copies must stay byte-identical.** Two `assert.strictEqual` checks compare the client mirror and the gallery entry against the constant. A one-file edit fails the suite immediately, which is the intended behaviour of those pins — all three move together.
 - **The V1 branch must keep working.** An install that never adopted the V2 text still carries a V1 row. Its branch already rewrites to `NEW_CODING_HEAD_PROMPT`, so once that constant holds V3, V1 rows jump straight to V3 in one pass. No chaining, no ordering dependency between the two branches.
-- **Operator-edited head prompts must be left alone.** Both recognisers match on text. A lead whose team the operator edited in the TEAMS tab does not match either fragment and is untouched — deliberately, and the same rule the existing migration states (`:1204-1205`).
+- **Operator-edited head prompts must be left alone.** Both recognisers match on text. A lead whose team the operator edited in the TEAMS tab does not match either fragment and is untouched — deliberately, and the same rule the existing migration states (`:1386-1387`).
 
 ---
 
@@ -72,9 +75,9 @@ The head prompt is shipped state in three places and persisted in a fourth, and 
 | Install carrying the V1 head prompt (`'satisfied with it, hand it to review yourself'`) | Existing branch fires and writes V3 (the constant it already points at). One pass, no chaining. |
 | Install carrying the V2 head prompt | New branch fires, writes V3 with `{head}` substituted from the row's own `parent`. |
 | Install with an operator-edited head prompt | Neither fragment matches. Left untouched. |
-| Install with no team ever started | `terminals.standingOrders` has no `team-head` row; both transforms return their input by reference and `loadEffectiveStandingOrders` short-circuits (`:1349`). No write, no backup. |
+| Install with no team ever started | `terminals.standingOrders` has no `team-head` row; both transforms return their input by reference and `loadEffectiveStandingOrders` short-circuits (`:1531`). No write, no backup. |
 | Migration runs twice | Idempotent: V3 contains neither fragment, so the second pass recognises nothing and returns by reference. |
-| `describeStandingOrderMigrations` (the Link-up editor's "stale" badge) | Needs **no** change — it derives verdicts by running the same transforms and diffing by id (`:1297`), never by re-implementing a recogniser. The new branch is picked up for free. |
+| `describeStandingOrderMigrations` (the Link-up editor's "stale" badge) | Needs **no** change — it derives verdicts by running the same transforms and diffing by id (`:1479`), never by re-implementing a recogniser. The new branch is picked up for free. |
 | Team started **after** the change | `wireSpawnedTeam` installs V3 directly from the gallery's `headPrompt`; no migration involved. |
 | Lead with a single coder | The spread rule degenerates correctly: one seat, no idle sibling, so it gets the next subtask. The new text must not read as "refuse to dispatch when every seat is busy". |
 | Lead whose team has no seat of a subtask's `recommendedRole` | Preserved verbatim: fall back to a coder and say why in the status report. The new rule replaces *which* coder is unnamed, not the fallback itself. |
@@ -86,11 +89,30 @@ The head prompt is shipped state in three places and persisted in a fourth, and 
 
 ---
 
+## User Review Required
+
+No user decision needed. The V3 text is already shipped in the constant; this plan adds the V2→V3 migration recogniser to carry it to persisted rows. The recogniser fragment and migration shape are twinned from the existing V1 branch — no new design surface.
+
+---
+
+## Dependencies
+
+- **Sibling subtask — Relay Standing Orders on Terminal Startup:** the relay (subtask 1) delivers standing orders at seat startup. If the relay ships without this V2 migration, a V2-bearing install would relay the old sticky-assignment rule to the head at startup — the exact behaviour this subtask fixes. This migration should land **before or with** the relay so the relay delivers V3 text to V2-bearing installs.
+- No external dependencies. Uses `ptyListTerminals` as already shipped and the existing standing-order migration machinery.
+
+---
+
+## Adversarial Synthesis
+
+Key risks: the V2 recogniser fragment could survive into a future head-prompt rewrite and create an infinite conversion loop; the client mirror could drift from the host if the V2 branch is added to one but not the other; an operator-edited head prompt could be falsely matched. Mitigations: the fragment is the clause being deleted from V2, so it is absent from V3 by construction; the pin test is extended with a negative assertion; the `exists in exactly two files` parity test is extended to cover the V2 fragment; `indexOf` on a substitution-independent fragment (never `RegExp`) avoids metacharacter false matches, and operator-edited rows that don't contain the fragment pass through untouched — the same safety story the V1 branch already has.
+
+---
+
 ## Proposed Changes
 
 ### 1. `src/services/teamWiring.ts`
 
-**1a. New recogniser constant, beside the existing one (`:1177`):**
+**1a. New recogniser constant, beside the existing one (`:1359`):**
 
 ```ts
 export const OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review yourself';
@@ -108,31 +130,13 @@ export const OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review you
 export const OLD_HEADPROMPT_V2_FRAGMENT = 'note it and give that coder the next subtask';
 ```
 
-**1b. Rewrite `NEW_CODING_HEAD_PROMPT` (`:275`) — insertion, not re-authoring.** The two offending clauses are replaced; every other sentence, and all nine pinned literals, stay byte-identical:
+**1b. ~~Rewrite `NEW_CODING_HEAD_PROMPT` (`:275`) — insertion, not re-authoring.~~**
 
-- *"If your team has no such seat, dispatch to a coder and say why in your status report."* keeps its fallback but gains the selection rule.
-- *"When a coder reports a subtask finished, note it and give that coder the next subtask."* becomes a spread rule.
+> **Superseded:** Rewrite `NEW_CODING_HEAD_PROMPT` from V2 to V3 (spread rule).
+> **Reason:** The constant rewrite has already shipped. `NEW_CODING_HEAD_PROMPT` (`:352`) already holds the V3 spread-rule text. `CURRENT_BUGGY_CODING_HEAD_PROMPT` (`:383`) was added to preserve the V2 text verbatim as a named migration target. The client mirror (`NEW_CODING_HEAD_PROMPT_CLIENT`, `terminals.js:9075`) and the gallery entry (`kanban.html:4689`) are both byte-identical to the V3 constant. The pin test (`stage-marker-commit-contract.test.js:385-393`) was updated to assert `GET /kanban/plan?planId=` instead of `GET /kanban/feature`.
+> **Replaced with:** No constant edit. The remaining work is the V2 migration recogniser (§1c), the client mirror branch (§2), and the test extensions (§4). The V2 text to match against lives in `CURRENT_BUGGY_HEAD_PROMPT` (`:383`); the fragment `'note it and give that coder the next subtask'` is a confirmed substring of it (`:393`).
 
-The replacement clauses:
-
-```
-Before every dispatch, list your seats: POST /terminals/verb/ptyListTerminals
-with {} against the port in .switchboard/api-server-port.txt. Each row carries
-friendlyName, role, status and planId — a row whose planId is null is a seat
-with nothing in flight. Dispatch to an idle seat of the subtask's
-recommendedRole. If your team has no seat of that role, dispatch to an idle
-coder and say why in your status report. Never give a seat a second subtask
-while it still has one in flight, and never re-use a seat while another seat of
-the same role is idle — one seat worked round after round hits its context limit
-while its siblings sit unused. When a coder reports a subtask finished, note it
-and dispatch the next subtask by the same rule, which will usually be a
-different seat. If every seat of the needed role is busy, hold the remaining
-subtasks and dispatch on the next completion — do not queue two on one seat. The
-escalation ladder above outranks this rule: a subtask that failed review twice
-moves up a rung even if a same-role seat is idle.
-```
-
-**1c. Second branch in `migrateCodingTeamOrders` (`:1239`),** placed immediately after the V1 branch, matching its shape exactly:
+**1c. Second branch in `migrateCodingTeamOrders` (`:1389`),** placed immediately after the V1 branch (`:1421-1430`), matching its shape exactly:
 
 ```ts
 // Stale V2 team-head row: the feature-level headPrompt whose assignment rule
@@ -154,24 +158,24 @@ if (o.scope === 'team-head' && typeof o.instruction === 'string') {
 
 ### 2. `src/webview/terminals.js` — the client mirror
 
-- `NEW_CODING_HEAD_PROMPT_CLIENT` (`:8877`) updated to the new text, **byte-identical** to the constant (`stage-marker-commit-contract.test.js:357` compares them directly).
-- `migrateCodingTeamOrdersClient` (`:8992`) gains the twin branch, with its own local `OLD_HEADPROMPT_V2_FRAGMENT` var beside the existing `OLD_HEADPROMPT_FRAGMENT` var at `:9001` — the mirror is deliberately self-contained (a webview cannot import from `src/services/`), which is why parity is enforced by test rather than by sharing.
+- `NEW_CODING_HEAD_PROMPT_CLIENT` (`:9075`) is **already V3** and byte-identical to the constant (`stage-marker-commit-contract.test.js:357` compares them directly). No edit needed.
+- `migrateCodingTeamOrdersClient` (`:9195`) gains the twin V2 branch, with its own local `OLD_HEADPROMPT_V2_FRAGMENT` var beside the existing `OLD_HEADPROMPT_FRAGMENT` var at `:9228` — the mirror is deliberately self-contained (a webview cannot import from `src/services/`), which is why parity is enforced by test rather than by sharing. The V2 branch mirrors §1c exactly: `indexOf` on the fragment, rewrite to `NEW_CODING_HEAD_PROMPT_CLIENT` with `{head}` substituted, `drop` + `touched`.
 
 ### 3. `src/webview/kanban.html` — the gallery entry
 
-The Coding team's `headPrompt` (`:4679`) updated to the same text, byte-identical. This is the source a **newly forked** team carries, so a text-only fix here without the migration would leave every existing team on the old rule, and a migration without this would leave every new team on it.
+The Coding team's `headPrompt` (`:4689`) is **already V3**, byte-identical to the constant. No edit needed. This is the source a **newly forked** team carries; the migration (§1c + §2) carries the same text to existing teams.
 
 ### 4. `src/test/stage-marker-commit-contract.test.js` — extend the pins
 
-- `test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal')`: keep all nine literals; add the new spread-rule literals `ptyListTerminals`, `planId is null`, `Never give a seat a second subtask`, and `while another seat of the same role is idle`.
-- Same test: add a second negative assertion mirroring the existing one —
+- `test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal')` (`:385`): keep all nine literals (already updated to `GET /kanban/plan?planId=`); add the new spread-rule literals `ptyListTerminals`, `planId is null`, `Never give a seat a second subtask`, and `while another seat of the same role is idle`.
+- Same test: add a second negative assertion mirroring the existing V1 one at `:391` —
 
   ```js
   assert.ok(!NEW_CODING_HEAD_PROMPT.includes(OLD_HEADPROMPT_V2_FRAGMENT),
       'the new text must not contain the V2 fragment the order converter matches on, or it re-converts forever');
   ```
-- New migration test, twinning the existing V1 case: a `team-head` order carrying the V2 text (with a head name containing a regex metacharacter, e.g. `lead(1)`, to prove `indexOf` and not `RegExp`) is rewritten to `NEW_CODING_HEAD_PROMPT` with `{head}` substituted; running the transform twice yields the input by reference; an operator-edited `team-head` row is returned untouched.
-- New client-parity test: `migrateCodingTeamOrdersClient` contains the V2 fragment literal, so the webview and the host cannot disagree about which rows are stale.
+- New migration test, twinning the existing V1 case at `:465`: a `team-head` order carrying the V2 text (with a head name containing a regex metacharacter, e.g. `lead(1)`, to prove `indexOf` and not `RegExp`) is rewritten to `NEW_CODING_HEAD_PROMPT` with `{head}` substituted; running the transform twice yields the input by reference; an operator-edited `team-head` row is returned untouched.
+- New client-parity test: `migrateCodingTeamOrdersClient` contains the V2 fragment literal, so the webview and the host cannot disagree about which rows are stale. Twin the existing `OLD_HEADPROMPT_FRAGMENT exists in exactly two files` test at `:541` — extend it to assert `OLD_HEADPROMPT_V2_FRAGMENT` also exists in exactly two files (host + client mirror) and is byte-identical.
 
 ---
 
@@ -180,7 +184,7 @@ The Coding team's `headPrompt` (`:4679`) updated to the same text, byte-identica
 1. **Unit:** `node src/test/stage-marker-commit-contract.test.js` — green, including the three byte-identity comparisons and both negative fragment assertions.
 2. **Regression:** `node src/test/standing-orders-marker-contract.test.js` — green. Its four `headPrompt` substring assertions (`:369-376`) are all preserved by an insertion-only rewrite; if any fails, a load-bearing clause was dropped.
 3. **Migration on a real DB.** Take a copy of an install that has started the Coding team. Confirm the persisted `team-head` row carries the V2 text, launch, then re-read `terminals.standingOrders`: the row carries V3, `terminals.standingOrders.premigration.bak` exists and holds the pre-migration array, and a second launch performs no further write.
-4. **Idempotency.** Run the migration twice in-process over the same array; the second call returns the same array **by reference** (the short-circuit `loadEffectiveStandingOrders` depends on at `:1349`).
+4. **Idempotency.** Run the migration twice in-process over the same array; the second call returns the same array **by reference** (the short-circuit `loadEffectiveStandingOrders` depends on at `:1531`).
 5. **Link-up editor.** Open the standing-orders editor. The V2 row shows its stale badge with the V3 effective text — proving `describeStandingOrderMigrations` picked up the new branch with no edit.
 6. **UAT — spread on first dispatch.** Start the Coding team with three coders. Hand the lead a feature with three subtasks. Each subtask lands on a **different** coder. Verify with `ptyListTerminals` that all three rows have a non-null `planId`.
 7. **UAT — spread on completion.** Give the same team four subtasks. When the first coder reports, the fourth subtask goes to whichever seat is idle, **not** back to the reporter. If none is idle, the lead holds it and dispatches on the next completion instead of stacking two on one seat.

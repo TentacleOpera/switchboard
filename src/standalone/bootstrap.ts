@@ -48,11 +48,11 @@ import {
     rewriteStandingOrdersForRename,
     resolveTeamStanding,
 } from '../services/standingOrders';
-import { instantiateAgentGroupCore } from '../services/agentGroupInstantiation';
+import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from '../services/agentGroupInstantiation';
 // The pure migrators are deliberately NOT imported here — see the note at the
 // matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
 // only server-side reader of `terminals.standingOrders` in either host.
-import { wireSpawnedTeam, findTeamForHeadRole, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
+import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -230,6 +230,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         clearBeforePromptDelayMs: resolveStandalonePtyClearDelay(),
     });
 
+    let taskViewerProvider: TaskViewerProvider | null = null;
     const seatBlockCache = new Map<string, string>();
 
     /**
@@ -275,7 +276,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
         let out = text;
         if (dispatch && typeof dispatch === 'object') {
-            out = ensureDispatchProtocolDirectives(out);
+            const orchestratorActive = taskViewerProvider?.isOversightAgentRunning() ?? true;
+            out = ensureDispatchProtocolDirectives(out, orchestratorActive);
         }
         // Hoist the standing-orders config reads above the seat-block branch so
         // the team-commit gate can resolve team standing BEFORE seat options are
@@ -868,7 +870,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // TaskViewer: extensionUri, context, needsSetup=false. The message listener
     // is registered headlessly via initHeadlessVerbServing (extracted from
     // resolveWebviewView) so verb dispatch has a target without the sidebar.
-    const taskViewerProvider = new TaskViewerProvider(
+    taskViewerProvider = new TaskViewerProvider(
         { fsPath: repoRoot } as any,
         headlessContext,
         false
@@ -1402,61 +1404,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     //
                     // The role-config `addons.delegates` read path is RETIRED —
                     // delegate children are now authored exclusively as team
-                    // members in the TEAMS tab. Existing `addons.delegates` config
-                    // was imported into team definitions by `importDelegatesIntoTeams`
-                    // in `_loadAgentGroups` (one-time migration, never overwrites an
-                    // existing team). The team auto-start below is the sole source
-                    // of delegates now.
+                    // members in the TEAMS tab. Teams are started explicitly via
+                    // the START TEAM control or the START ON LOAD toggle; creating
+                    // a terminal with a head role no longer silently spawns its
+                    // team's members.
                     payload = { ...payload, delegates: [] };
                     delete payload.startupCommand;
-                    // Auto-start: if this is an UNPARENTED terminal whose role
-                    // heads a team, spawn that team's members alongside it. The
-                    // recursion guard is !payload.parentInstanceId &&
-                    // !payload._isTeamMember — members are parented by
-                    // construction (spawnDelegates passes
-                    // parent.agentInstanceId, ptyFleetService.ts:358), so they
-                    // cannot trigger. A SHARED member is unparented by
-                    // construction, so it carries _isTeamMember: true to
-                    // suppress the trigger — without this flag, a shared member
-                    // whose role heads another team would spawn that team
-                    // recursively. The team's members override role-config
-                    // delegates: one team per head role is the constraint. The
-                    // head is created first; spawnDelegates is best-effort, so
-                    // a cap refusal does not prevent the head from starting.
-                    // Declared OUTSIDE the auto-start block: `team` is block-scoped
-                    // to it, but the wiring call below (which needs the team's
-                    // prompt) sits after the block. Reading `team?.prompt` down
-                    // there was a ReferenceError, not a silent undefined —
-                    // optional chaining guards a null VALUE, never an undeclared
-                    // BINDING. A local rather than a payload field because the
-                    // prompt is only needed by wireSpawnedTeam, and payload is
-                    // wire-supplied.
-                    let teamPrompt: string | undefined;
-                    let teamHeadPrompt: string | undefined;
-                    if (!payload.parentInstanceId && !payload._isTeamMember) {
-                        // No root list here: this host has exactly ONE workspace root
-                        // (allRoots: [workspaceRoot], getKanbanDatabase: () => db), so
-                        // the writer/reader divergence the extension host has cannot
-                        // occur. If this host ever grows multiple roots, this is the
-                        // site that must grow `findTeamForHeadRoleInRoots` too.
-                        const headRole = payload.role || 'coder';
-                        const team = await findTeamForHeadRole(db, headRole);
-                        const memberCount = Array.isArray(team?.members) ? team.members.length : 0;
-                        console.log(
-                            !team
-                                ? `[bootstrap] Team auto-start: no team heads role '${headRole}' — starting a bare head`
-                                : memberCount === 0
-                                    ? `[bootstrap] Team auto-start: team '${team.name}' heads role '${headRole}' `
-                                      + `but defines ZERO members — starting a bare head, nothing to spawn`
-                                    : `[bootstrap] Team auto-start: role '${headRole}' -> team '${team.name}' `
-                                      + `(${memberCount} member definition(s))`
-                        );
-                        if (team && memberCount > 0) {
-                            payload = { ...payload, delegates: team.members, teamName: team.name };
-                            teamPrompt = team.prompt;
-                            teamHeadPrompt = team.headPrompt;
-                        }
-                    }
                     const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, targetCwd, payload.worktreePath, payload.parentInstanceId, undefined, {
                         hidden: payload.hidden === true,
                         // HOST-resolved, never from the wire — see CreateOptions.
@@ -1484,7 +1437,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // the fleet root and spawn root are identical by construction.
                         // (In the extension host, standing orders write to the latched
                         // _apiServerWorkspaceRoot rather than the spawn or definition root.)
-                        const wired = await wireSpawnedTeam({ db, settings, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates, prompt: teamPrompt, headPrompt: teamHeadPrompt });
+                        const wired = await wireSpawnedTeam({ db, settings, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates });
                         if (!wired.ok) {
                             wiringError = wired.error;
                         } else {
@@ -2140,8 +2093,9 @@ Each plan file must include:
     // recipient resolution uses `ptyFleetService.listActive()` directly (each
     // handle carries agentInstanceId / parentInstanceId / role) — NOT an HTTP
     // round-trip, and NOT the liveness snapshot (which carries only
-    // friendlyName / lastDataAt / status, no parent). The engine emits only
-    // { seatName, planFile, outcome, workspaceRoot }; this host resolves the
+    // friendlyName / lastDataAt / status, no parent). The engine emits
+    // { seatName, planFile, outcome, workspaceRoot } plus a composed `body` for
+    // `completed` and `stalled`; this host resolves the
     // recipient (parentInstanceId → live terminal, orchestrator fallback) and
     // delivers via `deliverPrompt` with clearBeforePrompt: false and standing
     // orders suppressed (machine-origin notification, not a dispatched task).
@@ -2215,8 +2169,8 @@ Each plan file must include:
             try {
                 // clearBeforePrompt: false — never wipe the recipient's conversation.
                 // standingOrders (4th arg) false — machine-origin, not a dispatched task.
-                // applySeatBlock (5th arg) false — a one-line machine notice has no
-                // task to constrain; the seat block is noise here.
+                // applySeatBlock (5th arg) false — a machine notice has no task to
+                // constrain; the seat block is noise here.
                 await deliverPrompt(handle, message, { clearBeforePrompt: false }, false, false);
             } catch (err) {
                 log(opts, `turn-end delivery to '${recipientName}' failed: ${err}`);
@@ -2405,6 +2359,62 @@ Each plan file must include:
         allowSecretWritesOverHttp: true,
         taskViewerVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             taskViewerProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
+        createExternalTeam: async (wsRoot: string, template: string, headName: string, featureId?: string) => {
+            // Standalone is single-root: `db` (module scope) is the only
+            // KanbanDatabase. `wsRoot` is accepted for interface parity with the
+            // VS Code host, which is multi-root.
+            if (!db) { return { success: false, error: 'Kanban DB not ready' }; }
+            const resolvedTemplate = await resolveExternalTeamTemplate(db, template);
+            if (!resolvedTemplate) {
+                return { success: false, error: `Template '${template}' not found` };
+            }
+            const settings: TerminalGroupsSettingsAccessor | undefined = {
+                get: (k, d) => kanbanProvider._getScopedSetting(k, d),
+                set: (k, v) => kanbanProvider._updateScopedSetting(k, v),
+            };
+            return instantiateExternalHeadedTeam({
+                db,
+                settings,
+                group: resolvedTemplate,
+                headName,
+                featureId,
+                cwd: wsRoot,
+                workspaceRoot: wsRoot,
+                liveDelegateCount: async () =>
+                    ptyFleetService.listActive().filter(t => t.parentInstanceId).length,
+                createDelegatesOnly: async (spec) => {
+                    const delegates: any[] = [];
+                    for (const d of spec.delegates) {
+                        const count = Math.max(1, Math.min(d.count || 1, 8));
+                        const baseName = `${spec.teamName || 'team'}-${d.label || d.role}`;
+                        for (let i = 0; i < count; i++) {
+                            const suffix = count > 1 ? `-${i + 1}` : '';
+                            const sharedName = `${baseName}${suffix}`;
+                            try {
+                                const created = await ptyFleetService.create(
+                                    d.role,
+                                    sharedName,
+                                    spec.cwd,
+                                    undefined,
+                                    undefined,
+                                    d.startupCommand,
+                                    { _isTeamMember: true }
+                                );
+                                delegates.push({
+                                    friendlyName: created.friendlyName,
+                                    agentInstanceId: created.agentInstanceId,
+                                    role: created.role,
+                                    status: created.status,
+                                });
+                            } catch (err) {
+                                return { success: false, delegates, error: err instanceof Error ? err.message : String(err) };
+                            }
+                        }
+                    }
+                    return { success: true, delegates };
+                },
+            });
+        },
         createFeature: async (wsRoot: string, name: string, planIds: string[], description?: string) => {
             try {
                 return await kanbanProvider.createFeatureFromPlanIds(wsRoot, name, planIds, description);

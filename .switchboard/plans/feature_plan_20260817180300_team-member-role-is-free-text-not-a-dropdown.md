@@ -66,6 +66,10 @@ The Head role `<select>` is a hardcoded eight-option list in the HTML (`kanban.h
 - **Tags:** ux, ui, frontend, bugfix
 - **Project:** Browser Switchboard
 
+## User Review Required
+
+Yes — before dispatch. The change reuses an existing roster helper pattern (`renderKanbanAssignedAgentOptions`) and does not widen product scope, but it touches the team-editor save path (`teamsTabSaveAgentGroup`) whose positional reader is load-bearing. A reviewer should confirm the `data-field` addressing and the unknown-role `preserve` path match the operator's mental model of "I can still edit a team that has a stale role without it being silently rewritten". No external research is blocked on review.
+
 ## Complexity Audit
 
 ### Routine
@@ -90,6 +94,14 @@ The Head role `<select>` is a hardcoded eight-option list in the HTML (`kanban.h
 - **Shipped team types:** `SHIPPED_TEAM_TYPES` (`kanban.html:4643+`) reference `researcher`, `coder`, `reviewer` — all in the roster. Forking one into a workspace team must render without an "unknown role" option.
 - **Persistence shape unchanged:** the saved `group.members[]` entries keep `{ role, count, scope, relationship, label?, startupCommand? }`. No migration; `teamWiring.ts` and `agentGroupInstantiation.ts` are untouched.
 - **Security:** role values become option `value` attributes. Custom agent roles are operator-authored strings, so escape them the way `renderKanbanAssignedAgentOptions` already does (`escapeAttr` / `escapeHtml`) — or build the options with `document.createElement('option')` and `textContent`, which sidesteps escaping entirely and is preferable in the DOM-built row.
+
+## Dependencies
+
+None. This is a self-contained client-side DOM change to `src/webview/kanban.html`. It depends only on state already in webview scope (`BUILT_IN_AGENT_LABELS` from `sharedDefaults.js`, `lastCustomAgents` from the `customAgents` message). No plan in `.switchboard/plans/` must land before or after it; no shared schema file (`verbSchemas.ts`) is touched; no provider arm or verb router is changed. The downstream consumers (`ptyFleetService.injectStartupCommand`, `teamWiring.ts`, `agentGroupInstantiation.ts`) are untouched — they already key on the role string, which the dropdown now guarantees is a real roster key.
+
+## Adversarial Synthesis
+
+Key risks: (1) the head select is populated once at form-open while member rows re-render at ADD-MEMBER click time, so a `customAgents` message landing mid-edit leaves the head dropdown stale relative to member rows; (2) the `data-field` guard `if (roleEl && countEl && scopeEl && relEl)` silently drops a row on any future row-builder regression — the same silent-drop failure mode the old `inputs.length >= 2` guard had, reinstalled with a different trigger; (3) the `(claimed)` annotation appends to `opt.textContent` and depends on `teamsTabRoleOptions` clearing `innerHTML` first, a coupling that breaks if the helper ever caches. Mitigations: adopt a `console.warn` on the dropped row for debuggability; add a one-line comment in the annotation loop documenting the innerHTML-clear dependency; optionally re-render the head select on the `customAgents` message when the form is open. The core approach — a call-time-built shared roster helper with a `preserve` path for unknown stored roles — is correct and needs no supersession.
 
 ## Proposed Changes
 
@@ -194,6 +206,14 @@ Stamp the other three as well, append `roleSel` in place of `roleIn`, and move t
 +        const relationship = relEl.value;
          const prev = existing.find(m => m.role === role);
          members.push({ role, count, scope, relationship, … });
++    } else {
++        // Defensive: a row missing any of the four data-field controls is a
++        // row-builder regression, not a user error. Warn so a debug session
++        // can find it — the old `inputs.length >= 2` guard swallowed this
++        // silently and saved teams one member short with no signal.
++        console.warn('[teamsTab] skipped a member row missing data-field controls:', r);
++        continue;
++    }
      }
  }
 ```
@@ -221,6 +241,10 @@ and populate it in `teamsTabShowGroupForm` **before** the `(claimed)` annotation
  for (const opt of headSel.options) {
      opt.disabled = false;
 -    opt.textContent = opt.value.charAt(0).toUpperCase() + opt.value.slice(1) + (claimedRoles.has(opt.value) ? ' (claimed)' : '');
++    // Append-only on top of the label `teamsTabRoleOptions` set above. This
++    // is safe ONLY because `teamsTabRoleOptions` clears `selectEl.innerHTML`
++    // first, so no `(claimed)` suffix from a previous form-open survives.
++    // If that helper ever caches, this becomes `Phone-a-Friend (claimed) (claimed)`.
 +    if (claimedRoles.has(opt.value)) { opt.textContent = `${opt.textContent} (claimed)`; }
  }
 -headSel.value = group?.headRole || 'lead';
@@ -230,10 +254,21 @@ Note `headSel.options` flattens optgroup children, so custom agents are annotate
 
 ## Verification Plan
 
+### Automated Tests
+
+None apply. This is a client-side DOM change inside `src/webview/kanban.html` (a single inline `<script>` block served as a webview), and the webview layer has no unit-test harness — the existing `renderKanbanAssignedAgentOptions` precedent it mirrors is also untested at that layer. The verb-return ratchet (`npm run verb-returns:check`), parity (`npm run parity:check`), and push-routing (`npm run push-routing:check`) gates are not affected because no provider arm, verb router, or `postMessage` call is changed. Verification is manual, below.
+
+### Manual Verification
+
 1. **Dropdown renders.** Open TEAMS → NEW TEAM. The member row's first control is a `<select>` listing Planner, Lead Coder, Coder, Intern, Reviewer, Acceptance Tester, Analyst, Ticket Updater, Researcher, Claude Designer, Jules, Phone-a-Friend, Project Manager, plus a "Custom Agents" group when any exist. No free-text role field remains.
 2. **Save round-trip.** Add two members with different roles, counts, scopes and relationships. Save, reopen the team. Every field comes back exactly as set — this is the regression the positional reader would break.
 3. **Head select.** The Head role dropdown lists the same roster (including Phone-a-Friend and custom agents), and a role already heading another team is suffixed `(claimed)` with a correctly-cased label — `Phone-a-Friend (claimed)`, not `Phone_a_friend (claimed)`.
-4. **Unknown stored role is preserved.** Hand-edit a stored team so a member has `role: "intren"`, reopen the editor: the select shows `intren (not configured)` and selects it. Save without touching that row and confirm the stored value is still `intren`, not `planner`.
-5. **Members actually spawn with their CLI.** Start a team whose member role is picked from the dropdown; the member terminal comes up running that role's configured agent CLI (branded row, startup curtain), not a bare shell.
-6. **Delete is still immediate.** The row `×` removes the row on one click, no confirmation.
-7. **Both hosts.** Repeat steps 1-3 in the VS Code kanban webview and in the browser cockpit's board page.
+4. **Unknown stored role is preserved.** In the webview devtools console, mutate the in-memory team before reopening the editor, e.g. `agentsTabAgentGroups.find(g => g.id === '<team-id>').members[0].role = 'intren'` (or edit the persisted agent-groups state the extension stores and reload). Reopen the editor for that team: the member's role select shows `intren (not configured)` and selects it. Save without touching that row and confirm the stored value is still `intren`, not `planner` — the `preserve` path is what prevents a silent rewrite.
+5. **Members actually spawn with their CLI.** Start a team whose member role is picked from the dropdown; the member terminal comes up running that role's configured agent CLI (branded row, startup curtain), not a bare shell. This is the downstream failure (`ptyFleetService.injectStartupCommand` → `if (!cmd) { return; }`) the dropdown prevents at the source.
+6. **Delete is still immediate.** The row `×` removes the row on one click, no confirmation. (Per workspace rule: no `confirm()` gates ever — `window.confirm` is a silent no-op in VS Code webviews.)
+7. **Both hosts.** Repeat steps 1-3 in the VS Code kanban webview and in the browser cockpit's board page (`npx switchboard`). The change is pure client-side DOM with no host dependency, so both render identically — but confirm it reaches for no `vscode.*` API.
+8. **Dropped-row warning (defensive).** Temporarily comment out one `data-field` stamp in `teamsTabAgentGroupMemberRow`, open the editor, add a member, save: the devtools console shows `[teamsTab] skipped a member row missing data-field controls:` and the team saves without that member. Restore the stamp.
+
+---
+
+**Recommendation:** Complexity 4 → Send to Coder. Single-file, reuses an existing roster pattern, but the load-bearing positional-reader fix and the unknown-role `preserve` path are not intern-trivial — a coder should own the save-path regression risk.

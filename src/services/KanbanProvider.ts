@@ -32,14 +32,13 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, mutateTerminalGroups, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
 import { createVscodeHostSeams, type HostSeams } from './hostSeams';
 import { validateVerbPayload } from './verbSchemas';
 import { BroadcastHub } from './broadcastHub';
 import type { AutobanConfigState } from './autobanState';
-import { DEFAULT_AUTOBAN_RUN_SHEET } from './autobanState';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { processDeclaredMoves, ingestJobActivity } from './ScheduledJobsService';
 import { ClickUpAutomationService } from './ClickUpAutomationService';
@@ -1268,18 +1267,15 @@ export class KanbanProvider implements vscode.Disposable {
             const cpStatus = this.getControlPlaneSelectionStatus(root);
             const projectContextEnabled = await this._resolveProjectContextEnabled(root);
 
-            const coderTerminalCount = this._taskViewerProvider
-                ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', root)).length
-                : 0;
-            // V60: codingHeadLive tracks the same thing the runQueue backend
-            // resolver does — a live coding HEAD (lead OR coder). coderTerminalCount
-            // counts 'coder' only, so a workspace with a live lead and zero
-            // coder-role terminals would show a disabled Run-queue button while
-            // the backend would have resolved that lead and dispatched fine.
-            // Fetch 'lead' only when coder count is 0 (the gap case).
-            const codingHeadLive = this._taskViewerProvider
-                ? (coderTerminalCount > 0 || (await this._taskViewerProvider.getAliveRoleTerminalNames('lead', root)).length > 0)
-                : false;
+            // V60: coderTerminalCount and codingHeadLive both read from
+            // terminals.groups in the DB config (the plan's path — same as
+            // resolveTeamMembersForHead), NOT getAliveRoleTerminalNames — that
+            // resolves through _readTerminalRegistryState which reads the
+            // deprecated state.json. codingHeadLive tracks the same thing the
+            // runQueue backend resolver does: a live coding HEAD (lead OR coder).
+            const _codingRoles1 = await this.resolveCodingRolesFromGroups(root);
+            const coderTerminalCount = _codingRoles1.coders.length;
+            const codingHeadLive = _codingRoles1.leads.length > 0 || _codingRoles1.coders.length > 0;
 
             // Every entry carries its surface so wsHub can filter the connect-time
             // resync per connection (see SURFACES / PANEL_SURFACES). Tag AS BUILT, not
@@ -2158,14 +2154,12 @@ export class KanbanProvider implements vscode.Disposable {
             // gates the data push — the auxiliary state messages below still post so the
             // webview stays in sync on config/column/agent state.
             const snapshotKey = `${workspaceId}|${this._projectFilter ?? ''}|${this._repoScopeFilter ?? ''}`;
-            const coderTerminalCount = this._taskViewerProvider
-                ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', resolvedWorkspaceRoot)).length
-                : 0;
-            // V60: codingHeadLive — see site 1 (connect-time resync) for the
-            // rationale. Lead fetch only when coder count is 0 (the gap case).
-            const codingHeadLive = this._taskViewerProvider
-                ? (coderTerminalCount > 0 || (await this._taskViewerProvider.getAliveRoleTerminalNames('lead', resolvedWorkspaceRoot)).length > 0)
-                : false;
+            // V60: coderTerminalCount and codingHeadLive read from
+            // terminals.groups in the DB config (the plan's path), not the
+            // deprecated state.json path.
+            const _codingRoles2 = await this.resolveCodingRolesFromGroups(resolvedWorkspaceRoot);
+            const coderTerminalCount = _codingRoles2.coders.length;
+            const codingHeadLive = _codingRoles2.leads.length > 0 || _codingRoles2.coders.length > 0;
             // coderTerminalCount is part of the snapshot, not just the payload. The Dispatch
             // view header renders it, and adding a coder terminal changes NO card — so a
             // cards-only hash would skip the push and freeze the header at its stale value
@@ -2462,22 +2456,15 @@ export class KanbanProvider implements vscode.Disposable {
             },
             // Queue-mode watch arming (subtask 3): after a poll cycle that
             // staged at least one card, arm the queue-level stall watch.
-            // Resolve the live coding head (lead first, then coder) so the
-            // watch's head matches the head the pop would dispatch to. If no
-            // head is live, pass null — the sweep's "no head seated" gate
-            // will attempt resolution again before notifying.
+            // Resolve the live coding head (lead first, then coder) from
+            // terminals.groups in the DB config (the plan's path — same as
+            // resolveTeamMembersForHead), NOT getAliveRoleTerminalNames —
+            // that reads the deprecated state.json. If no head is live, pass
+            // null — the sweep's "no head seated" gate will attempt resolution
+            // again before notifying.
             onArmQueueWatch: async (wsRoot, _headTerminal) => {
                 try {
-                    let headTerminal: string | null = null;
-                    if (this._taskViewerProvider) {
-                        const leads = await this._taskViewerProvider.getAliveRoleTerminalNames('lead', wsRoot);
-                        if (leads.length > 0) {
-                            headTerminal = leads[0];
-                        } else {
-                            const coders = await this._taskViewerProvider.getAliveRoleTerminalNames('coder', wsRoot);
-                            if (coders.length > 0) headTerminal = coders[0];
-                        }
-                    }
+                    const headTerminal = await this.resolveCodingHeadFromGroups(wsRoot);
                     const engine = this._globalPlanWatcher?.getEngine?.();
                     if (engine) { await engine.armQueueWatch(wsRoot, headTerminal); }
                 } catch (e) {
@@ -3817,13 +3804,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const featureWorktrees = allWorktrees
                 .filter(w => w.feature_id !== null && w.status === 'active')
                 .reduce((acc, w) => { acc[w.feature_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
-            const coderTerminalCount = this._taskViewerProvider
-                ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', resolvedWorkspaceRoot)).length
-                : 0;
-            // V60: codingHeadLive — see site 1 for the rationale.
-            const codingHeadLive = this._taskViewerProvider
-                ? (coderTerminalCount > 0 || (await this._taskViewerProvider.getAliveRoleTerminalNames('lead', resolvedWorkspaceRoot)).length > 0)
-                : false;
+            // V60: coderTerminalCount and codingHeadLive read from
+            // terminals.groups in the DB config (the plan's path), not the
+            // deprecated state.json path.
+            const _codingRoles3 = await this.resolveCodingRolesFromGroups(resolvedWorkspaceRoot);
+            const coderTerminalCount = _codingRoles3.coders.length;
+            const codingHeadLive = _codingRoles3.leads.length > 0 || _codingRoles3.coders.length > 0;
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -4021,13 +4007,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 this._lastWorkspaceSelectionSignature = nextSelectionSignature;
             }
             this._lastCards = cards;
-            const coderTerminalCount = this._taskViewerProvider
-                ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', resolvedWorkspaceRoot)).length
-                : 0;
-            // V60: codingHeadLive — see site 1 for the rationale.
-            const codingHeadLive = this._taskViewerProvider
-                ? (coderTerminalCount > 0 || (await this._taskViewerProvider.getAliveRoleTerminalNames('lead', resolvedWorkspaceRoot)).length > 0)
-                : false;
+            // V60: coderTerminalCount and codingHeadLive read from
+            // terminals.groups in the DB config (the plan's path), not the
+            // deprecated state.json path.
+            const _codingRoles4 = await this.resolveCodingRolesFromGroups(resolvedWorkspaceRoot);
+            const coderTerminalCount = _codingRoles4.coders.length;
+            const codingHeadLive = _codingRoles4.leads.length > 0 || _codingRoles4.coders.length > 0;
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -4960,6 +4945,88 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * Stored in the kanban DB config table (the blessed home for state/config),
      * so it is naturally per-workspace.
      */
+    /**
+     * Resolve alive coding-head terminal names from `terminals.groups` in the DB
+     * config — the same path `resolveTeamMembersForHead` in teamWiring.ts uses
+     * (db.getConfigJson(TERMINALS_GROUPS_KEY)), and the path subtask 1's plan
+     * specifies for team/head resolution. `getAliveRoleTerminalNames` is the
+     * wrong path: it resolves through `_readTerminalRegistryState`, which reads
+     * the deprecated `.switchboard/state.json`.
+     *
+     * `terminals.groups` carries team definitions written by `wireSpawnedTeam`.
+     * Each group has `headRole` ('lead', 'coder', etc.) and `name` (the head's
+     * terminal name). Liveness is checked via `getFleetLiveness()` — the same
+     * `_ptyLiveness` source the sweep's gate (4) uses for `livenessByName`, so
+     * a head resolved as alive here cannot be judged absent by gate (4).
+     *
+     * Returns `{ leads, coders }` — alive head terminal names for each role,
+     * sorted. Lead first, then coder — the order subtask 2's plan specifies.
+     */
+    public async resolveCodingRolesFromGroups(workspaceRoot: string): Promise<{ leads: string[]; coders: string[] }> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) return { leads: [], coders: [] };
+            // Read terminals.groups — same key and bare-key fallback as
+            // resolveTeamMembersForHead (teamWiring.ts ~1519-1541).
+            let groups: any[] = [];
+            try {
+                const raw = await db.getConfigJson<any[]>(TERMINALS_GROUPS_KEY, []) as any[];
+                groups = Array.isArray(raw) ? [...raw] : [];
+            } catch { /* key absent */ }
+            try {
+                const bare = await db.getConfigJson<any[]>('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+            if (!Array.isArray(groups) || groups.length === 0) return { leads: [], coders: [] };
+
+            // Build a liveness set from getFleetLiveness() — the same _ptyLiveness
+            // source the sweep's gate (4) uses for livenessByName.
+            const liveness = this._taskViewerProvider?.getFleetLiveness() ?? [];
+            const aliveNames = new Set<string>();
+            for (const entry of liveness) {
+                if (entry && entry.status !== 'exited' && entry.friendlyName) {
+                    aliveNames.add(entry.friendlyName);
+                }
+            }
+
+            const leads: string[] = [];
+            const coders: string[] = [];
+            for (const g of groups) {
+                if (!g || !g.headRole || !g.name) continue;
+                // The head's terminal name is group.name (set by wireSpawnedTeam
+                // at teamWiring.ts ~1043: `name: headName`).
+                const headName: string = String(g.name);
+                if (!aliveNames.has(headName)) continue;
+                const role = String(g.headRole).toLowerCase().replace(/[_-]+/g, ' ').trim();
+                if (role === 'lead') leads.push(headName);
+                else if (role === 'coder') coders.push(headName);
+            }
+            leads.sort();
+            coders.sort();
+            return { leads, coders };
+        } catch { return { leads: [], coders: [] }; }
+    }
+
+    /**
+     * Convenience: resolve the single coding head (lead first, then coder) from
+     * `terminals.groups`. Same order as subtask 2's plan specifies. Returns
+     * null when no head is live.
+     */
+    public async resolveCodingHeadFromGroups(workspaceRoot: string): Promise<string | null> {
+        const { leads, coders } = await this.resolveCodingRolesFromGroups(workspaceRoot);
+        if (leads.length > 0) return leads[0];
+        if (coders.length > 0) return coders[0];
+        return null;
+    }
+
     private async _resolveProjectContextEnabled(workspaceRoot: string): Promise<boolean> {
         try {
             const db = this._getKanbanDb(workspaceRoot);
@@ -5275,6 +5342,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // workspace (a local board worked at the desk while another is phone-driven
             // must stay unchanged). The global flag is the cheap short-circuit.
             remoteControlActive: await this._isRemoteActiveForDispatch(workspaceRoot, plans),
+            orchestratorActive: overrides?.orchestratorActive ?? this._taskViewerProvider?.isOversightAgentRunning?.() ?? true,
         };
 
         // §8 — Use shared _resolvePrdReferences helper instead of inline loop.
@@ -6007,7 +6075,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
      *   below is self-contained).
      */
     private _buildExternalAutomationPrompt(instruction?: string): string {
-        const steps = this._taskViewerProvider?.getAutobanRunSheet() ?? DEFAULT_AUTOBAN_RUN_SHEET;
+        // The run sheet is deleted. The pipeline steps are hard-coded here
+        // for the external prompt — the same two steps the old run sheet had.
+        const steps = [
+            { sourceColumn: 'CREATED', headRole: 'planner' },
+            { sourceColumn: 'PLAN REVIEWED', headRole: 'coder' }
+        ];
         const workLines = steps.map((step, i) =>
             `${i + 1}. Find the oldest plan in the ${step.sourceColumn} column and act on it as the ${step.headRole} team would — read the plan file under \`.switchboard/plans/\`, do the work it describes, and write a completion report when done.`
         );
@@ -7496,16 +7569,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // re-stage. Re-arming is idempotent and does NOT reset nudgeCount (a
         // re-stage is not a dispatch).
         try {
-            let headTerminal: string | null = null;
-            if (this._taskViewerProvider) {
-                const leads = await this._taskViewerProvider.getAliveRoleTerminalNames('lead', workspaceRoot);
-                if (leads.length > 0) {
-                    headTerminal = leads[0];
-                } else {
-                    const coders = await this._taskViewerProvider.getAliveRoleTerminalNames('coder', workspaceRoot);
-                    if (coders.length > 0) headTerminal = coders[0];
-                }
-            }
+            // Resolve from terminals.groups in the DB config (the plan's path
+            // — same as resolveTeamMembersForHead), NOT
+            // getAliveRoleTerminalNames — that reads the deprecated state.json.
+            const headTerminal = await this.resolveCodingHeadFromGroups(workspaceRoot);
             const engine = this._globalPlanWatcher?.getEngine?.();
             if (engine) { await engine.armQueueWatch(workspaceRoot, headTerminal); }
         } catch (armErr) {
@@ -11241,19 +11308,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 // in-flight predicate resolves team membership from, and what
                 // targetTerminalOverride dispatches to. The plan requires
                 // resolving the coding head, and states that pressing Run with
-                // no team seated is an error, not an auto-start. Try 'lead'
-                // first (the head of a coding team), then 'coder' (a solo
-                // coder can head its own team). If neither is alive, refuse.
-                let headTerminal = '';
-                if (this._taskViewerProvider) {
-                    const leads = await this._taskViewerProvider.getAliveRoleTerminalNames('lead', workspaceRoot);
-                    if (leads.length > 0) {
-                        headTerminal = leads[0];
-                    } else {
-                        const coders = await this._taskViewerProvider.getAliveRoleTerminalNames('coder', workspaceRoot);
-                        if (coders.length > 0) headTerminal = coders[0];
-                    }
-                }
+                // no team seated is an error, not an auto-start. Lead first,
+                // then coder. Reads from terminals.groups in the DB config
+                // (the plan's path — same as resolveTeamMembersForHead), NOT
+                // getAliveRoleTerminalNames — that resolves through
+                // _readTerminalRegistryState which reads the deprecated
+                // state.json.
+                const headTerminal = await this.resolveCodingHeadFromGroups(workspaceRoot) || '';
                 if (!headTerminal) {
                     this.postMessage({ type: 'showStatusMessage', message: 'No coding head is live. Seat a coding team (TEAMS tab or Setup) before pressing Run.', isError: true });
                     return { success: false, error: 'No coding head is live — seat a coding team first' };
@@ -11620,23 +11681,25 @@ ${FOCUS_DIRECTIVE}`;
                     if (!Array.isArray(value)) {
                         return { success: false, error: 'value must be an array for terminals.groups' };
                     }
-                    const baseIds: string[] = Array.isArray(msg?.baseIds)
-                        ? msg.baseIds.filter((id: any): id is string => typeof id === 'string')
-                        : [];
-                    const baseIdSet = new Set(baseIds);
-                    const clientIds = new Set(value.map((g: any) => g && g.id).filter(Boolean));
-                    const root = this._taskViewerProvider?._resolveWorkspaceRoot();
-                    const db = root ? KanbanDatabase.forWorkspace(root) : undefined;
+                    let db: any;
+                    try {
+                        const root = this._taskViewerProvider?._resolveWorkspaceRoot();
+                        db = root ? KanbanDatabase.forWorkspace(root) : undefined;
+                    } catch { /* no db — the scoped accessor still carries the write */ }
                     const settings: TerminalGroupsSettingsAccessor = {
                         get: (k, d) => this._getScopedSetting(k, d, msg.initiatorProject),
                         set: (k, v) => this._updateScopedSetting(k, v, msg.initiatorProject),
                     };
-                    const merged = await mutateTerminalGroups({ db, settings }, (current) => {
-                        const unseen = current.filter((g: any) => g && g.id && !baseIdSet.has(g.id) && !clientIds.has(g.id));
-                        return [...value, ...unseen];
-                    });
-                    this._broadcaster?.push({ type: 'settingResult', key, value: merged });
-                    return { success: true, key, value: merged };
+                    // Same helper KanbanService.saveSetting uses — the two arms
+                    // must be indistinguishable from the caller's side, and one
+                    // implementation is the only way to keep them that way.
+                    try {
+                        const merged = await saveTerminalGroupsGuarded({ db, settings, value, baseIds: msg?.baseIds });
+                        this._broadcaster?.push({ type: 'settingResult', key, value: merged });
+                        return { success: true, key, value: merged };
+                    } catch (err: any) {
+                        return { success: false, error: `terminals.groups save failed: ${err?.message || err}` };
+                    }
                 }
                 if (key.startsWith('roleConfig_')) {
                     const roleName = key.replace('roleConfig_', '');

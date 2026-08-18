@@ -167,3 +167,8 @@ Tests are skipped per session directive, and compilation is skipped per session 
 ## Recommendation
 
 Complexity 5 → **Send to Coder.**
+
+## Completion Report
+
+Implemented the Connections panel Jobs sub-tab activity view, connecting it to external agent job machinery and kanban DB tables (`job_runs`, `job_instructions`, `board_move_requests`). Added 3 read query methods to `KanbanDatabase`, 6 verb handler arms to `TaskViewerProvider`, updated `/connections/verb/` resolver routing in `LocalApiServer`, declared verb schemas in `verbSchemas.ts`, regenerated `protocol-catalog.json` & `verbAllowlist.ts`, and built the live multi-card UI with instruction dropping, claim clearing, prompt copying, and activity refresh in `connections.html` & `connections.js`. Files changed: `src/services/KanbanDatabase.ts`, `src/services/LocalApiServer.ts`, `src/services/verbSchemas.ts`, `src/services/TaskViewerProvider.ts`, `protocol-catalog.json`, `src/generated/verbAllowlist.ts`, `src/webview/connections.html`, `src/webview/connections.js`. No implementation issues encountered; all 6 verbs wired and catalogued successfully.
+

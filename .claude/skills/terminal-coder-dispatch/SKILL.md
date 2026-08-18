@@ -1,6 +1,6 @@
 ---
 name: terminal-coder-dispatch
-description: "Drive a feature's subtasks through a coder terminal — dispatch, callback, review, resend. The attended long-running single-coder pattern."
+description: "Drive a feature's subtasks through a coder terminal — dispatch, callback, review, resend. Attended, and unattended (§5.6: stated default actions, recorded questions, irreversible-only blocks)."
 user-invokable: false
 ---
 
@@ -339,7 +339,86 @@ git log --oneline -5    # recent commits, if the coder committed
 
 Check the diff against the plan's acceptance criteria and the project's standing engineering
 contracts (PRD). Verify the files the plan said to change were changed, and nothing the plan
-said not to touch was touched.
+said not to touch was touched. Where the plan names a mechanism, verify the seat used **that**
+mechanism. "The function exists and has other call sites" is not conformance — check what it
+reads from and whether the plan named it. An existing function can be reading a store that was
+deprecated months earlier, and nothing in a diff shows that.
+
+---
+
+## 5.5. The head drives, it does not design — authority, findings, mechanism, and git verbs
+
+The head's job is driving and conformance review. It does not invent architecture, does not add scope,
+and does not redesign in flight. When live reasoning conflicts with written instructions, resolve by
+the strict **authority order**:
+1. **The user** — the user's explicit words and directives always come first.
+2. **Project contracts** — `CLAUDE.md`, standing engineering rules, and the team commit contract.
+3. **The plan file** — last in authority, because it is agent-authored, but strictly binding on implementation details until amended.
+
+Your own live reasoning is not on this ladder. A head that treats its own live thoughts as top of the
+stack produces unreviewed drift that bypasses every gate. Three mandatory rules govern prompt contents:
+
+1. **Every finding cites a plan clause.** Quote the section or line the diff violates. A defect you
+cannot cite is not a finding: it is recorded as a question report (`.switchboard/orchestrator/reports/`), never dispatched to a seat as work.
+*Observed failure:* a head reviewed a resolver by confirming the function existed ("matches four existing
+call sites"), rather than checking whether it was the one the plan named. It accepted a dead store and
+propagated that wrong choice into review comments for two subsequent subtasks, turning one local error
+into a three-subtask defect.
+
+2. **Name the defect, never the mechanism.** A dispatch or fix prompt states what is wrong and which
+plan clause it breaks. It does not name the function, file, key, or design the seat should use.
+**The one exception:** where the plan itself names a mechanism, quote the plan verbatim — the plan's own
+words are more specific than the head's paraphrase and carry provenance the head's do not. Do not invent,
+paraphrase, or substitute an unstated mechanism.
+*Observed failure:* on discovering a resolver read a dead store, the head designed a replacement over a
+different source, dispatched it, contradicted that instruction in a follow-up, and then sent a third version.
+Three of four messages were the head's invented design, while the plan had specified the correct path all along.
+
+3. **Never issue a git verb to a team seat.** No `commit`, `push`, `branch`, `merge`, no exceptions.
+A team commits **once**, as its head, and the reviewer reviews that commit. Coders in a team never commit.
+Plan prose that uses "commit" as sequencing — "as subtask 4's first commit" — is ordering language and must
+be translated before entering a prompt: "do this first, as a separate step, before any deletion."
+*Observed failure:* plan sequencing prose ("as subtask 4's first commit") was copied verbatim into a dispatch
+prompt as "YOUR FIRST COMMIT". The seat committed immediately, sweeping seven subtasks plus unrelated files
+into an unscoped commit on `main` where project git policy strictly forbids unwinding it.
+
+---
+
+## 5.6. Driving unattended — default actions, recorded questions, and the irreversible-block bound
+
+A head agent pacing a queue with nobody at the machine must never convert uncertainty into a stop.
+The core asymmetry of unattended driving: **asking costs the whole night; acting wrongly on a reversible thing costs one card.**
+Git history, plan files and board columns are recoverable; elapsed time is not.
+
+**Which mode you are in.** You are attended only while a human is demonstrably reading — the user
+has written to you in this session and is still there. A head started by an automation (the
+orchestrator, an autoban wake, a `POST /kanban/queue/next` hand-off), or one whose last human
+message is many turns behind, is unattended, and this section governs. **When you cannot tell, you
+are unattended** — assuming attended wrongly costs the whole night, while assuming unattended
+wrongly costs one recorded question that a human reads anyway. Without this rule the mode has no
+entry condition and every head defaults to attended, which is the stall this section exists to remove.
+
+Every decision the role faces maps to a stated default action:
+
+| Decision | Unattended default |
+| :--- | :--- |
+| Which seat takes the next item | Decide. Idle seat over busy seat, per §7/§8. Never ask. |
+| Order of remaining work | Decide from the feature's sequencing section; silent or ambiguous → file order. |
+| A defect with no citable plan clause | Record a `question` report, take the most conservative action the plan already sanctions, continue. |
+| A seat fails the same subtask twice | Escalate per §6. Ladder exhausted → record `blocked`, leave the card, **move to the next queue item**. |
+| The team's work is complete | Commit as head. Working tree carrying foreign changes → commit an explicit file list and record what was excluded and why. |
+| A card looks superseded or redundant | Record it once as a `question`. Never delete. Never restate. |
+| A seat has reported and its next work is a different surface | Clear it, **in the same turn as the review**, before dispatching anything else. Not a later step, not a tidy-up. |
+| Keeping a seat's context across subtasks | Allowed only when the next subtask edits code that seat just wrote, stated in the dispatch, and **re-decided at every hand-off** — a once-justified exception does not carry forward. |
+| Any decision not listed above | Record a `question` report, take the most conservative action the plan already sanctions, continue. This is the fallback that makes the table complete — an unlisted decision class must never revert to asking, which is the bug this plan exists to fix. |
+| Anything irreversible | **Block.** Destructive git (reset, checkout `<path>`, restore, clean, stash drop, force push), pushing, deleting user data or board cards. Record and stop on these only. This overrides the catch-all row — an irreversible action has no sanctioned default. |
+
+Rules bounding unattended execution:
+
+- **A default is never an invention.** The action taken must be one the plan already sanctions. "Decide" resolves ambiguity about *which* sanctioned action; it never authorises a new one.
+- **Recording is not asking.** A `question` report (`.switchboard/orchestrator/reports/`) is an artefact a human reads on their own schedule. Writing one must never end the head's turn — the head records and then continues in the same turn.
+- **Recording does not end your turn.** The attended turn model says your turn ends after you dispatch a subtask. Unattended, recording a question and proceeding to the next queue item is a single turn — the head does not end its turn when it records, it takes the next queue item in the same turn.
+- **The head commits as the team's head, not via a seat.** §5.5 rule 3 prohibits issuing git verbs to team seats; the head's own commit is not a verb to a seat. Unattended, the head commits the team's work itself (per the "team's work is complete" row above).
 
 ---
 
@@ -357,9 +436,11 @@ Carry the specific defects from **both** attempts into the dispatch prompt so th
 not have to re-derive them. In your status report, state which seat you moved the subtask to and why.
 
 The ladder terminates:
-- If a seat that fails twice is already at `lead` tier, or your team has no seat above it, do **not**
+- Attended: If a seat that fails twice is already at `lead` tier, or your team has no seat above it, do **not**
   dispatch again and do not take the subtask yourself. Stop, report to the user with the findings from
   every attempt, and leave the card where it is.
+- Unattended: Exhausting the ladder retires **that card**, not the session — record `blocked` with the findings
+  from every attempt, leave the card, and proceed to the next queue item. A card that cannot be finished must not hold the cards behind it.
 - Escalation retires the **pairing, not the seat** — an escalated-off seat still receives other subtasks.
 - When you escalate off a seat, that seat is now at rest for this subtask: apply §7 (`ptyClearTerminal`)
   to it before assigning it different work.
@@ -382,16 +463,35 @@ Both hosts serve this verb with the same `{ name }` payload — the extension th
 send lock as `ptySendPrompt`, so a clear issued right after dispatching to another terminal
 cannot splice into an in-flight paste.
 
-**Why this step exists.** Because you pass `clearBeforePrompt: false` on every send, your
-coders are never cleared by the dispatch path — a coder that took subtask 1, then subtask 4,
-then a fix resend, carries all of it into subtask 7. Clearing at rest is what resets that
-context, and it costs nothing: the terminal is idle, minutes pass before you dispatch to it
-again, and nothing is waiting on the CLI's re-render. The alternative — letting the next
-prompt carry the clear — pays for `/clear` and its settle window *inside* the dispatch and
-destroys the conversation a resend depends on. The mandatory `clearBeforePrompt: false` rule
-above is unchanged: a resend to a terminal you did **not** rest still needs its context.
+**Why this step is mandatory for correctness.** Because you pass `clearBeforePrompt: false` on every
+send, your coders are never cleared by the dispatch path — a coder that took subtask 1, then subtask 4,
+then a fix resend, carries all of it into subtask 7. Clearing at rest is what resets that context. Leaving
+stale context in an active coder is a correctness bug, not an efficiency trade-off: accumulating multiple
+subtasks and conflicting instructions in a single context degrades reasoning and induces hallucinated
+conflicts. The alternative — letting the next prompt carry the clear — pays for `/clear` and its settle window
+*inside* the dispatch and destroys the conversation a resend depends on. The mandatory
+`clearBeforePrompt: false` rule above is unchanged: a resend to a terminal you did **not** rest still needs
+its context.
 
-Three rules, all load-bearing:
+Rules governing resting and prompt injection:
+
+- **Never message a seat that has not reported.** A seat you dispatched and have not heard from is
+  mid-turn; a message delivered to it injects into a running turn. The engine gates itself on exactly
+  this (`_runFeatureNudgeSweep` will not nudge a head inside `turnEndSilenceMs`); the head must gate
+  itself the same way. A `blocked` notice is silence, not a report, and does not make a send legal.
+- **Correcting an instruction already delivered is a clear plus one authoritative dispatch** — never a
+  second message layered on the first. Contradictory instructions in one context are worse than either
+  alone, and the seat cannot tell which one wins. The clear waits for that seat's report: a delivered
+  instruction cannot be recalled mid-turn, and the two rules either side of this one — never message a
+  seat that has not reported, only clear a terminal genuinely at rest — both still hold. Correcting is
+  what you do when the seat comes back; it is not an exception that lets you reach into a running turn.
+- **Clear at rest, always.** When a seat's completion has arrived and its next work is a different surface,
+  `ptyClearTerminal` before dispatching. Keeping context is a deliberate exception, taken only when the next
+  subtask edits the same code the seat just wrote, and stated in the dispatch when taken.
+- **Prefer an idle seat over a second item.** Before giving a seat its next item, check whether another
+  seat is idle. §8's sequencing still governs order; this governs placement.
+
+Three original rules, all load-bearing:
 
 - **Never clear yourself.** Your driving context is your own conversation across turns —
   there is no loop holding it and nothing to recover it from. `SWITCHBOARD_TERMINAL` is your
@@ -454,19 +554,77 @@ Each with the observable signal and the fix:
 
 ---
 
-## 10. Empty coder pool & tier resolution
+## 10. Knowing your roster & tier resolution
 
-Before dispatching, enumerate the live terminal pool with `ptyListTerminals` across all roles
-(`intern`, `coder`, `lead`, etc.).
+Before dispatching, enumerate the live terminal pool with `ptyListTerminals`.
+**Filter to your team's seats only** — a terminal is on your team when its
+`parentInstanceId` matches your own `SWITCHBOARD_AGENT_INSTANCE_ID`
+(injected into your environment at terminal creation). A terminal with no
+`parentInstanceId` (null/undefined) is a standalone seat — not on your team,
+never dispatch to it, never send it instructions. Role alone is not a
+membership test: two standalone coders and your team's coder all report
+`role: "coder"`, but only the one whose `parentInstanceId` matches yours is
+yours to drive.
 
-- If the required pool or seat is missing or too small for the feature, **stop and tell the user**
-  to create terminals — naming the Agents-tab **Agent Groups** control (which instantiates a wired team
-  in one action) and the `+` button in the column header (the single-terminal path). Do not attempt to
-  create terminals yourself; creation is not on the documented verb rail for agents, and each terminal
-  is a running agent CLI.
-- When escalating and the rung immediately above the failed seat is absent on your team (e.g. no coder
-  exists between intern and lead), dispatch to the highest available rung above it and state the skipped
-  rung in the dispatch prompt. Never fall back downward to the same tier or a lower tier.
+```bash
+# Enumerate, then filter to your team
+curl -s -X POST "$BASE/terminals/verb/ptyListTerminals" $AUTH \
+  -H "Content-Type: application/json" --max-time 10 -d '{}' | \
+  jq --arg myId "$SWITCHBOARD_AGENT_INSTANCE_ID" \
+     '.terminals | map(select(.status == "active" and .parentInstanceId == $myId))'
+```
+
+**Shared members** (e.g. a shared reviewer) are spawned unparented and will
+not match the `parentInstanceId` filter. This is correct for the Coding team:
+the lead never dispatches subtasks to the reviewer directly. If your team
+uses shared coders, identify them by the team-group membership in the
+terminals config instead.
+
+### Trust the roster — do not second-guess `recommendedRole`
+
+Each subtask's plan record carries a `recommendedRole` field (`lead` | `coder`
+| `intern`) — the seat the board would route it to. Use it. Do not invent your
+own complexity tiers or compare scores against a self-derived notion of what
+is "intern-tier" work. The operator seated the intern because they want it
+used; a subtask with `recommendedRole: "intern"` goes to the intern, full stop.
+If the recommended role is absent, treat it as `coder`. Do not re-derive it by
+reading the plan file's `Recommendation:` line — nothing in the system parses
+that line, and a remapped board would make it wrong.
+
+### If the required seat is missing or too small
+
+If the required pool or seat is missing or too small for the feature, **stop
+and tell the user** to create terminals — naming the Agents-tab **Agent Groups**
+control (which instantiates a wired team in one action) and the `+` button in
+the column header (the single-terminal path). Do not attempt to create
+terminals yourself; creation is not on the documented verb rail for agents, and
+each terminal is a running agent CLI.
+
+### When escalating and the rung above is absent
+
+When escalating and the rung immediately above the failed seat is absent on
+your team (e.g. no coder exists between intern and lead), dispatch to the
+highest available rung above it and state the skipped rung in the dispatch
+prompt. Never fall back downward to the same tier or a lower tier.
+
+### Verify before you undo
+
+Before sending any terminal a revert, cleanup, or stand-down instruction,
+verify the state you are undoing actually exists. A stand-down message sent
+to a clean terminal sends it hunting for damage that was never there — worse
+than the original error. One call:
+
+```bash
+git diff          # unstaged changes
+git diff --cached # staged changes
+git status --porcelain  # any modifications at all
+git log --oneline -5    # recent commits
+```
+
+If all four are empty (or show nothing relevant), the terminal is clean — say
+nothing to it. If there are changes, name the specific files and commits in
+your instruction. Never send a terminal to revert files you have not confirmed
+are modified.
 
 ---
 
@@ -475,5 +633,5 @@ Before dispatching, enumerate the live terminal pool with `ptyListTerminals` acr
 - **Short parallel fan-out** (90 s per join, 30 min per batch) → use `/delegates/dispatch` +
   `/delegates/await` (see the `delegates` skill). That is a different job.
 - **Unattended, deterministic column sweeps** with no agent watching → use the
-  `switchboard-orchestration` skill. This skill is attended driving by a reasoning agent, not
-  unattended automation.
+  `switchboard-orchestration` skill. This skill is driving by a reasoning agent — attended, or
+  unattended under §5.6 — not a deterministic sweep.

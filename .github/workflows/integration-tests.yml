@@ -176,6 +176,18 @@ jobs:
       - name: Standing-orders marker mirror (standingOrders.ts ≡ terminals.js literal)
         run: npm run test:contract:standing-orders-marker
 
+      # Standing orders are written to, and read from, ONE root per extension-host
+      # lifetime. This divergence is INVISIBLE at runtime in a single-root
+      # workspace — which is the only kind of workspace this CI has — so it is
+      # pinned by source shape: the latch has exactly one guarded assignment site,
+      # both wireSpawnedTeam call sites resolve their wiring DB from
+      # `_apiServerWorkspaceRoot` and neither accepts a caller-supplied root, and
+      # the /terminals/standing-orders editor routes resolve the same latched root
+      # delivery does. Split those and a team's orders live in two DBs depending on
+      # how it happened to be started, with every gate green.
+      - name: Standing-orders fleet root (latch + both writers + editor routes agree)
+        run: npm run test:contract:standing-orders-fleet-root
+
       # A seat safeguard configured on a terminal must ride EVERY prompt that seat
       # receives, not only board-composed ones. The failure this pins is silent by
       # construction: a lead relays a subtask over ptySendPrompt, the coder's
@@ -205,6 +217,19 @@ jobs:
       # has already produced — this step must stay AFTER it.
       - name: Team-scoped reviewer routing (origin precedence, teamRouting, override honoured)
         run: npm run test:contract:team-scoped-routing
+
+      # The roster the previous gate resolves against only exists if the backend and
+      # the terminals panel address the SAME config row. They did not: every panel-side
+      # read/write goes through saveSetting/getSetting, which prefix the key, while
+      # wireSpawnedTeam wrote the bare `terminals.groups` — two rows, and routing fell
+      # back to workspace-wide on every dispatch. Pins the unified key, the shipped
+      # bare-key import (once per id, bare row intact, deletes stay deleted), the
+      # baseIds set difference that lets a stale whole-array save keep a group it never
+      # read WITHOUT resurrecting one the operator deleted, both saveSetting arms
+      # sharing one implementation, and the write chain under a team-start race.
+      # Loads compiled helpers from out/ — must stay AFTER "Compile test outputs".
+      - name: Terminal groups key unification (roster survives the panel's whole-array save)
+        run: npm run test:contract:terminal-groups-key
 
       - name: Link presets mirror (linkPresets.ts ≡ LINK_PRESETS in terminals.js)
         run: npm run test:contract:link-presets-mirror
@@ -695,6 +720,15 @@ jobs:
       - name: Team auto-start workspace scope contract (multi-root resolution, legibility)
         run: npm run test:contract:team-autostart-scope
 
+      # The TEAMS tab is a tab of the BOARD webview — no terminal grid, no pane
+      # assignments, no layout — so a team started from it spawned off-screen and
+      # the operator saw a STARTING… button go quiet. Starting a team is the
+      # terminals panel's job (it seats from the pty verb response). This pins the
+      # removal: no startAgentGroup post, no start button/latch/result arm — while
+      # adoption, the #teams-flow-error rollback and the HOST verb arm all survive.
+      - name: TEAMS tab adopt-only contract (one start entry point)
+        run: npm run test:contract:teams-tab-no-start
+
       # Autoban config normalisation + completion-driven dispatch. This file existed
       # for months with NO npm script and NO CI step, so every assertion in it was
       # decorative — including the ones covering the retired terminal pools and the
@@ -720,15 +754,6 @@ jobs:
       # silence), that the Miscellaneous sweep is gone from BOTH trees, that the two
       # verb-rail traps survived the console deletion without duplicating the
       # canonical-column rule, and — behaviourally, against the real writer — the
-      # The TEAMS tab is a tab of the BOARD webview — no terminal grid, no pane
-      # assignments, no layout — so a team started from it spawned off-screen and
-      # the operator saw a STARTING… button go quiet. Starting a team is the
-      # terminals panel's job (it seats from the pty verb response). This pins the
-      # removal: no startAgentGroup post, no start button/latch/result arm — while
-      # adoption, the #teams-flow-error rollback and the HOST verb arm all survive.
-      - name: TEAMS tab adopt-only contract (one start entry point)
-        run: npm run test:contract:teams-tab-no-start
-
       # reports channel's exclusive-create, frontmatter flatten, traversal rejection
       # and lazy bootstrap. Also pins the turn-end mirror as WIRED in both hosts: a
       # report writer with no caller is the zero-caller failure the plan diagnosed
@@ -743,6 +768,31 @@ jobs:
       # here is an engine that never stops or one that stops with no reason shown.
       - name: Autoban no-valid-tickets stop contract
         run: npm run test:contract:autoban-no-valid-tickets
+
+      # The lead-paced pipeline's behavioural contract: the pop's queue source and
+      # in-flight predicate, the queue stall watch's bounds, remote queue intake, and
+      # the schedule as one more caller of the pop. Every failure mode here is silent
+      # and expensive — a queue source that falls through to PLAN REVIEWED drains a
+      # whole lane unattended overnight; a dispatchedAt-keyed in-flight predicate
+      # stops the pipeline dead after card one; an unbounded escalation trains the
+      # user to ignore the one notice that means work is stranded. None of them
+      # produce a compile error and none were covered before.
+      # Drives the real compiled services from out/, so this step must stay AFTER
+      # "Compile test outputs".
+      - name: Lead-paced queue pipeline contract
+        run: npm run test:contract:queue-pipeline
+
+      # External-headed team mode: the lead is a non-terminal agent, so every
+      # failure mode is a silent mis-route. The head must stay out of the group
+      # roster (a head name in `members` seats a pane that can never exist), the
+      # worker callback must point at the reports inbox rather than a ptySendPrompt
+      # dead click, and queue/next must skip targetTerminalOverride for an external
+      # head WITHOUT demoting a real terminal lead whose fleet snapshot is stale.
+      # None of that produces a compile error.
+      # Drives the real compiled services from out/, so this step must stay AFTER
+      # "Compile test outputs".
+      - name: External-headed team mode contract
+        run: npm run test:contract:external-headed-team
 
       # Terminal→plan attribution is a two-host join whose failure modes are all
       # silent: a role-only tier paints the wrong plan on a real pane, a shared
@@ -863,6 +913,17 @@ jobs:
       # PROJECT= spellings the skill's table dispatches on, and the boundary schema.
       - name: Dispatch-analysis scope + feature-atomicity contract
         run: npm run test:contract:dispatch-analysis-scope
+
+      # Terminal-coder-dispatch driving contract: pins the head's authority order,
+      # the cite-a-plan-clause / name-the-defect / no-git-verbs-to-seats rules, the
+      # §5.6 unattended mode (mode-entry rule, asymmetry sentence, all ten
+      # default-action rows including the catch-all, the irreversible block list,
+      # and the four bounding rules), and §6's unattended terminal rung — across
+      # BOTH the .agents copy and the .claude mirror. Wired during review: the test
+      # existed as a file with no package.json script and no CI step, so every
+      # deletion from either skill copy would have gone green.
+      - name: Terminal coder dispatch driving contract (attended + unattended bounds)
+        run: npm run test:contract:terminal-coder-dispatch
 
       - name: Run integration suite
         run: npm run test:integration:all

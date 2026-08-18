@@ -176,10 +176,6 @@
     /** Cached { visibleAgents, hasCommand } so a re-render rebuilds the picker
      *  without a round trip and without flashing an empty menu. */
     let rolePickerData = null;
-    /** Cached team definitions (from ptyListAgentGroups) so a re-render
-     *  rebuilds the team list and the role annotations without a round trip.
-     *  Array of { id, name, headRole, members, unassigned, unassignedReason }. */
-    let teamPickerData = null;
     /**
      * One-shot: scroll the picker into view on the render that OPENED it, and only
      * that render. .terminals-list is overflow-y:auto, so a `+` on a header at the
@@ -1006,8 +1002,7 @@
                     opt.value = team.id;
                     // Same summary the picker showed, so the operator sees what spawns
                     // before committing: "Coding — 3× coder, 1× reviewer (shared)".
-                    opt.textContent = `${team.name || team.id} — ${teamSpawnSummary(team)}`
-                        + (team.unassigned ? ' · no auto-start' : '');
+                    opt.textContent = `${team.name || team.id} — ${teamSpawnSummary(team)}`;
                     startTeamName.appendChild(opt);
                 }
 
@@ -1540,8 +1535,24 @@
             });
             if (res.ok) {
                 const data = await res.json();
-                if (key === 'terminals.groups' && data && Array.isArray(data.value)) {
-                    lastReadGroupIds = data.value.map(g => g && g.id).filter(Boolean);
+                if (key === 'terminals.groups' && data && data.success !== false && Array.isArray(data.value)) {
+                    // Adopt ONLY the ids this panel actually holds. The host
+                    // returns the merged array — client rows PLUS any stored
+                    // group the client never read — and those merged-in rows are
+                    // not in `terminalGroups`. Claiming to have seen one makes it
+                    // "seen and deleted" on the next whole-array save, which is
+                    // the clobber this guard exists to prevent. They stay unseen
+                    // until a real read (loadLayoutSettings / reloadTerminalGroups)
+                    // puts them in the in-memory array.
+                    const held = new Set((Array.isArray(value) ? value : [])
+                        .map(g => g && g.id).filter(Boolean));
+                    lastReadGroupIds = data.value.map(g => g && g.id).filter(id => id && held.has(id));
+                    if (data.value.length > held.size) {
+                        // The host merged rows we have never loaded — pull them in
+                        // so the panel (and its next baseIds) catches up. Cheap:
+                        // only fires when a stale save actually met unseen groups.
+                        reloadTerminalGroups();
+                    }
                 }
             }
         } catch { /* ignore */ }
@@ -2185,7 +2196,7 @@
         return svg;
     }
 
-    function renderTerminalRow(item) {
+    function renderTerminalRow(item, opts) {
         const itemDiv = document.createElement('div');
         const paneIndex = paneAssignments.indexOf(item.friendlyName);
         const isFocused = activeTerminalName === item.friendlyName;
@@ -2246,6 +2257,18 @@
             }
         }
 
+        if (isTeamHead(item.friendlyName)) {
+            const crown = document.createElement('span');
+            crown.className = 'item-crown-icon';
+            crown.setAttribute('aria-hidden', 'true');
+            crown.title = 'Team lead';
+            crown.innerHTML = CROWN_SVG;
+            if (item.status === 'exited') {
+                crown.classList.add('is-exited');
+            }
+            roleRow.appendChild(crown);
+        }
+
         const roleEl = document.createElement('div');
         roleEl.className = 'item-role';
         // Handle first on the subline: it is what the user needs to tell siblings apart.
@@ -2254,23 +2277,11 @@
             : item.role;
         roleRow.appendChild(roleEl);
 
-        // Group membership chip — shows which group claims this terminal, so
-        // membership is legible without a nesting tier in the sidebar tree.
-        // Uses the same findGroupForTerminalName resolution the lock path
-        // uses. A terminal in no group (null after Unassigned retirement)
-        // shows no chip.
-        //
-        // Overlap semantics: with the extras overlay, a terminal can be a
-        // member of multiple groups simultaneously (e.g. a coder added to
-        // Planners as an extra is also a derived member of Coders). The chip
-        // shows the FIRST claimant — findGroupForTerminalName returns manual
-        // groups first, then derived groups in getDerivedGroups() order. This
-        // is an intentional simplification: the chip names one group, not all,
-        // and the tab strip's per-group member count is the authoritative view
-        // for overlap. Collecting all claimants was considered and rejected —
-        // it would make the chip's width unpredictable and the row's layout
-        // unstable on every poll.
-        const claimingGroup = findGroupForTerminalName(item.friendlyName);
+        // Group membership chip — for a seat NOT rendered under a team subheader.
+        // Under a tier the chip is the tier's own name repeated on every row, so it is
+        // suppressed there. A seat claimed only by a derived role/worktree group has no
+        // tier, and the chip is still the only thing that names its claimant.
+        const claimingGroup = opts?.inTeamTier ? null : findGroupForTerminalName(item.friendlyName);
         if (claimingGroup) {
             const groupChip = document.createElement('span');
             groupChip.className = 'item-group-chip';
@@ -3322,6 +3333,156 @@
         return String(a.friendlyName || '').localeCompare(String(b.friendlyName || ''));
     }
 
+    /**
+     * name -> claiming MANUAL group, built once per render.
+     *
+     * findGroupForTerminalName calls getGroupMembers for every group, so calling it
+     * per row is O(rows x groups x members) on a path that runs on every fleet
+     * poll. Manual groups only: a started team registers itself as one
+     * (teamWiring.ts:1038), while derived role/worktree groups are queries — and a
+     * derived worktree group would duplicate the worktree tier this sits inside.
+     * First claimant wins, matching findGroupForTerminalName's precedence.
+     *
+     * Read straight off the group's own roster arrays rather than through
+     * getGroupMembers: that resolver intersects with the LIVE set
+     * (fleetList.filter(status !== 'exited')), so an exited seat would lose its
+     * claim, fall out of its team's tier and re-render as a loose row underneath
+     * it — and renderTeamTier's `Xx` count could never be nonzero. A tier is a
+     * place; a seat does not leave it by exiting. Ordering is irrelevant here
+     * (bucketRowsByTeam preserves the caller's already-sorted input order), and a
+     * roster name with no live or tombstoned row is simply never looked up.
+     */
+    function buildTeamClaimMap() {
+        const map = new Map();
+        for (const g of terminalGroups) {
+            if (!g || g.source !== 'manual') { continue; }
+            const roster = [
+                ...(Array.isArray(g.order) ? g.order : []),
+                ...(Array.isArray(g.members) ? g.members : [])
+            ];
+            for (const name of roster) {
+                if (name && !map.has(name)) { map.set(name, g); }
+            }
+        }
+        return map;
+    }
+
+    /**
+     * Split a sorted run of rows into per-team buckets plus the ungrouped
+     * remainder. Buckets are ordered by first appearance in the already-sorted
+     * input, so team order inherits compareTerminals' role tiering (a lead-headed
+     * team sorts above a coder-headed one) with no second comparator.
+     */
+    function bucketRowsByTeam(items, claimMap) {
+        const buckets = new Map();   // groupId -> { group, items: [] }
+        const loose = [];
+        for (const item of items) {
+            const g = claimMap.get(item.friendlyName);
+            if (!g) { loose.push(item); continue; }
+            let b = buckets.get(g.id);
+            if (!b) { b = { group: g, items: [] }; buckets.set(g.id, b); }
+            b.items.push(item);
+        }
+        return { buckets: [...buckets.values()], loose };
+    }
+
+    /**
+     * One team subheader plus its rows. Deliberately reuses the worktree tier's
+     * classes for the header internals so the three tiers read as one system; only
+     * the wrapper class differs, and it carries the indent + accent.
+     *
+     * The `+` targets the ENCLOSING location, not the team: a team is a roster, not
+     * a directory, and there is no "spawn into this team" operation (team members
+     * are spawned by the team start, teamWiring.ts).
+     */
+    function renderTeamTier(bucket, locationOwner) {
+        // Keyed on LOCATION + team, not team alone. A team whose seats span a
+        // workspace and a per-plan worktree renders a tier in each; on a bare
+        // 'team:<id>' key those two visually separate tiers would collapse in
+        // lockstep. The parent:/worktree: keys beside this one already avoid that
+        // by keying on the thing rendered (parent id, worktree path) rather than
+        // the thing named.
+        const locationKey = locationOwner.fullPath || locationOwner.id || 'root';
+        const key = 'team:' + locationKey + ':' + bucket.group.id;
+        const isCollapsed = collapsedGroups.has(key);
+        const div = document.createElement('div');
+        div.className = 'team-group indent-team' + (isCollapsed ? ' collapsed' : '');
+
+        const active = bucket.items.filter(i => i.status !== 'exited').length;
+        const exited = bucket.items.length - active;
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'team-group-header';
+        headerEl.title = `Team ${bucket.group.name}`;
+
+        const titleArea = document.createElement('div');
+        titleArea.className = 'worktree-title-area';
+
+        const icon = document.createElement('span');
+        icon.className = 'worktree-collapse-icon';
+        icon.textContent = '▼';
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'worktree-name';
+        nameEl.textContent = bucket.group.shortName || bucket.group.name;
+
+        const countEl = document.createElement('span');
+        countEl.className = 'worktree-count';
+        countEl.textContent = `${bucket.items.length} (${active}a/${exited}x)`;
+
+        titleArea.appendChild(icon);
+        titleArea.appendChild(nameEl);
+        titleArea.appendChild(countEl);
+
+        const newBtn = document.createElement('button');
+        newBtn.className = 'btn-group-new';
+        newBtn.textContent = '+';
+        newBtn.title = `Spawn terminal in ${locationOwner.name || locationOwner.basename || 'workspace'}`;
+        newBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // Spawn spec AND picker key are the enclosing header's, verbatim. A
+            // parentGroup carries `worktreesMap`; a wtGroup does not. The parent
+            // arm must reproduce the header's own `fullPath ? {parentRoot} :
+            // undefined` ternary and derive its key from the owner's id. An earlier
+            // version hardcoded the synthetic workspace-root key as the no-path
+            // fallback, which mounted the picker under a key no header renders (a
+            // real mapping with an empty parentFolder), so mountRolePicker never ran
+            // and the end-of-render garbage-collect swallowed pickerState.
+            if (locationOwner.worktreesMap) {
+                onNewTerminalClicked(
+                    locationOwner.fullPath ? { parentRoot: locationOwner.fullPath } : undefined,
+                    'parent:' + locationOwner.id
+                );
+            } else {
+                onNewTerminalClicked({ worktreePath: locationOwner.fullPath }, 'worktree:' + locationOwner.fullPath);
+            }
+        });
+
+        headerEl.appendChild(titleArea);
+        headerEl.appendChild(newBtn);
+
+        headerEl.addEventListener('click', () => {
+            if (collapsedGroups.has(key)) {
+                collapsedGroups.delete(key);
+            } else {
+                collapsedGroups.add(key);
+            }
+            saveLayoutSettings();
+            renderSidebarList();
+        });
+
+        div.appendChild(headerEl);
+
+        const itemsEl = document.createElement('div');
+        itemsEl.className = 'team-items';
+        for (const item of bucket.items) {
+            itemsEl.appendChild(renderTerminalRow(item, { inTeamTier: true }));
+        }
+        div.appendChild(itemsEl);
+
+        return div;
+    }
+
     function renderSidebarList() {
         syncLinkUpEnabled();
         let pickerRendered = false;
@@ -3483,6 +3644,8 @@
             }
         }
 
+        const claimMap = buildTeamClaimMap();
+
         for (const parentGroup of activeGroupsToRender) {
             const parentKey = 'parent:' + parentGroup.id;
             const isParentCollapsed = collapsedGroups.has(parentKey);
@@ -3564,7 +3727,11 @@
                 emptyNotice.textContent = '(no terminals — + to open)';
                 itemsContainer.appendChild(emptyNotice);
             } else {
-                for (const item of parentGroup.direct) {
+                const directSplit = bucketRowsByTeam(parentGroup.direct, claimMap);
+                for (const bucket of directSplit.buckets) {
+                    itemsContainer.appendChild(renderTeamTier(bucket, parentGroup));
+                }
+                for (const item of directSplit.loose) {
                     itemsContainer.appendChild(renderTerminalRow(item));
                 }
 
@@ -3634,7 +3801,11 @@
 
                     const wtItemsContainer = document.createElement('div');
                     wtItemsContainer.className = 'worktree-items';
-                    for (const item of wtGroup.items) {
+                    const wtSplit = bucketRowsByTeam(wtGroup.items, claimMap);
+                    for (const bucket of wtSplit.buckets) {
+                        wtItemsContainer.appendChild(renderTeamTier(bucket, wtGroup));
+                    }
+                    for (const item of wtSplit.loose) {
                         wtItemsContainer.appendChild(renderTerminalRow(item));
                     }
                     wtDiv.appendChild(wtItemsContainer);
@@ -4849,17 +5020,29 @@
                 titleEl.appendChild(brandImg);
             }
 
+            if (isTeamHead(assignedName)) {
+                const crown = document.createElement('span');
+                crown.className = 'pane-crown-icon';
+                crown.setAttribute('aria-hidden', 'true');
+                crown.title = 'Team lead';
+                crown.innerHTML = CROWN_SVG;
+                if (fleetItem && fleetItem.status === 'exited') {
+                    crown.classList.add('is-exited');
+                }
+                titleEl.appendChild(crown);
+            }
+
             const idxEl = document.createElement('span');
             const isPinned = Boolean(pinnedPanes[index]);
             idxEl.className = 'pane-index-chip' + (isPinned ? ' is-pinned' : '');
             idxEl.textContent = isPinned ? `📌P${index + 1}` : `P${index + 1}`;
             titleEl.appendChild(idxEl);
 
-            // The agent name was absent from the pane header entirely. Terse layouts
-            // (2x3/3x3) get the label alone — those headers already abbreviate the action
-            // buttons to single letters, and the P<n> chip plus the sidebar row carry the
-            // handle. Status suffixes attach to the HANDLE: "planner-2 (exited)" is
-            // meaningful, "CLAUDE CLI (exited)" is not.
+            // Terse layouts (2x3/3x3) get the HANDLE alone, not the agent label: every
+            // seat in a team runs the same CLI, so the label is identical across the
+            // grid while the handle is what tells them apart — and the brand icon
+            // already carries the CLI identity. Status suffixes attach to the HANDLE:
+            // "planner-2 (exited)" is meaningful, "CLAUDE CLI (exited)" is not.
             let handle = assignedName;
             if (fleetItem && fleetItem.status === 'exited') {
                 handle += ' (exited)';
@@ -4872,12 +5055,14 @@
             if (!agentLabel) {
                 nameSpan.textContent = handle;
             } else if (isTerseLayout()) {
-                nameSpan.textContent = agentLabel;
+                // Brand icon already carries the CLI identity; the handle (seat name)
+                // is the unique identifier that tells siblings apart in a dense grid.
+                nameSpan.textContent = handle;
             } else {
                 nameSpan.textContent = `${agentLabel} · ${handle}`;
             }
             titleEl.appendChild(nameSpan);
-            // Full identity stays reachable even when the terse header shows only the agent.
+            // Full identity stays reachable even when the terse header shows only the handle.
             titleEl.title = `${agentLabel ? agentLabel + ' — ' : ''}${handle}`;
             paneEl.setAttribute('aria-label', `Pane ${index + 1}: ${titleEl.title}`);
 
@@ -6373,6 +6558,45 @@
         renderPaneGrid();
     }, 200);
 
+    const CROWN_SVG = '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" xmlns="http://www.w3.org/2000/svg">'
+        + '<path d="M2 5l3 3 3-5 3 5 3-3-1.5 7h-9L2 5z"/>'
+        + '</svg>';
+
+    /**
+     * Whether `name` is the head (first member) of a registered team-spawned group.
+     * The head is the first entry in the group's members array, written by
+     * wireSpawnedTeam (teamWiring.ts:1039: `const groupMembers = [headName, ...childNames]`).
+     *
+     * Team-spawned groups are identified by their `team_` ID prefix (teamWiring.ts,
+     * `const groupId = opts.teamId || ('team_' + ...)`); operator-saved groups use
+     * `grp_` (saveCurrentAsGroup / saveSelectionAsGroup) and must NOT trigger a crown
+     * — both carry source: 'manual', so the ID prefix is the only discriminator.
+     *
+     * `externalHead` groups are excluded: for those, wireSpawnedTeam deliberately
+     * OMITS the head from members ("the head is a non-terminal agent and should not
+     * appear in getGroupMembers"), so members[0] is the first CODER. Crowning it
+     * would put the lead marker on a worker — the exact confusion this icon exists
+     * to remove. An external head has no seat, so no seat is crowned.
+     *
+     * Survives rename: renameTerminal updates g.members and g.order in-place, so
+     * members[0] tracks the renamed head. The group's `name` field is NOT updated on
+     * rename, which is why this uses members[0], not g.name.
+     *
+     * Defensive against empty/unloaded groups.
+     */
+    function isTeamHead(name) {
+        if (!name || !Array.isArray(terminalGroups)) { return false; }
+        return terminalGroups.some(g =>
+            g && typeof g.id === 'string' &&
+            g.id.startsWith('team_') &&
+            g.source === 'manual' &&
+            !g.externalHead &&
+            Array.isArray(g.members) &&
+            g.members.length > 0 &&
+            g.members[0] === name
+        );
+    }
+
     /**
      * The agent CLI label for a role, or '' when there isn’t one.
      *
@@ -6444,19 +6668,13 @@
             return;
         }
         // Claim the open synchronously, then fetch BEFORE committing pickerState, so
-        // the picker never renders empty and then repopulates. Fetch roles and
-        // teams in parallel — the team list and the role annotations render from
-        // the same picker open, so a serial pair would double the latency.
+        // the picker never renders empty and then repopulates.
         pickerOpening = groupKey;
-        const [data, teams] = await Promise.all([
-            fetchPtyVisibleRoles(),
-            fetchAgentGroups()
-        ]);
+        const data = await fetchPtyVisibleRoles();
         // A later click (or a cancel) superseded this one — discard the result.
         if (pickerOpening !== groupKey) { return; }
         pickerOpening = null;
         rolePickerData = data;
-        teamPickerData = teams;
         pickerState = { key: groupKey, targetSpec };
         pickerNeedsScroll = true;
         renderSidebarList();
@@ -6490,8 +6708,7 @@
         title.textContent = 'New terminal — pick a role';
         picker.appendChild(title);
 
-        // ── Role picker — annotated with auto-start team info ────────────
-        const teams = Array.isArray(teamPickerData) ? teamPickerData : [];
+        // ── Role picker ───────────────────────────────────────────────────
         const optionsEl = document.createElement('div');
         optionsEl.className = 'role-picker-options';
 
@@ -6500,17 +6717,6 @@
         const data = rolePickerData || { visibleAgents: {}, hasCommand: {} };
         const visible = data.visibleAgents;
         const hasCommand = data.hasCommand;
-        // Auto-start resolves to the non-unassigned team for a head role
-        // (findTeamForHeadRole filters !g.unassigned). An unassigned team heads
-        // the same role but does NOT auto-start — it is started explicitly from
-        // the sidebar's START TEAM control. Annotate only the auto-start winner
-        // so the picker says what picking the role will actually do.
-        const autoStartByHeadRole = {};
-        for (const t of teams) {
-            if (t && t.headRole && !t.unassigned && !autoStartByHeadRole[t.headRole]) {
-                autoStartByHeadRole[t.headRole] = t;
-            }
-        }
         const SYSTEM_ROLES = new Set(['orchestrator', 'mcp_monitor']);
         const roles = Object.keys(visible)
             .filter(k => visible[k] !== false && !SYSTEM_ROLES.has(k))
@@ -6532,33 +6738,10 @@
             btn.className = 'role-option';
             const meta = BUILT_IN_AGENT_LABELS.find(r => r.key === role);
             const label = meta ? meta.label : role;
-            const autoTeam = autoStartByHeadRole[role];
-            if (autoTeam) {
-                // Annotate: this role heads a team, so picking it spawns the
-                // team's members alongside the head. The note names the team and
-                // lists what spawns, so the control never silently produces five.
-                btn.classList.add('has-team');
-                const labelEl = document.createElement('span');
-                labelEl.className = 'role-option-label';
-                labelEl.textContent = label;
-                const note = document.createElement('span');
-                note.className = 'role-option-team-note';
-                const memberCount = (Array.isArray(autoTeam.members) ? autoTeam.members : [])
-                    .reduce((n, m) => n + (m.count || 1), 0);
-                note.textContent = memberCount > 0
-                    ? `starts ${autoTeam.name} · ${teamSpawnSummary(autoTeam)}`
-                    : `heads ${autoTeam.name} (no members)`;
-                btn.appendChild(labelEl);
-                btn.appendChild(note);
-                btn.title = hasCommand[role]
-                    ? `Open ${label} — auto-starts team "${autoTeam.name}" (${teamSpawnSummary(autoTeam)})`
-                    : `${label} — no agent CLI configured; auto-starts team "${autoTeam.name}" (${teamSpawnSummary(autoTeam)})`;
-            } else {
-                btn.textContent = label;
-                btn.title = hasCommand[role]
-                    ? `Open ${label} terminal`
-                    : `${label} — no agent CLI configured (plain shell)`;
-            }
+            btn.textContent = label;
+            btn.title = hasCommand[role]
+                ? `Open ${label} terminal`
+                : `${label} — no agent CLI configured (plain shell)`;
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 // Close NOW, not whenever the next render happens to run. The static
@@ -6799,15 +6982,12 @@
     }
 
     /**
-     * Surface team auto-start failures. The create response carries three
+     * Surface team start failures. The create response carries three
      * independent failure channels and the UI showed none of them, so a team
      * that half-spawned looked exactly like one that fully spawned. The fourth
      * (seatFallbackReason) is local: the team is on screen but not locked to
      * its group, so the next reconcile composes differently than the operator
      * expects.
-     *
-     * `teamAutoStart` is extension-host only; its ABSENCE means "no diagnosis
-     * available", never "zero members".
      */
     function reportTeamStart(data, delegates, seatFallbackReason) {
         if (data.delegateError) {
@@ -6820,11 +7000,6 @@
         }
         if (seatFallbackReason) {
             showPaneToast(`Team seated without its group — ${seatFallbackReason}.`);
-            return;
-        }
-        const wanted = data.teamAutoStart && data.teamAutoStart.memberDefinitions;
-        if (wanted > 0 && delegates.length === 0) {
-            showPaneToast(`Team "${data.teamAutoStart.team || 'unknown'}" defines ${wanted} member${wanted === 1 ? '' : 's'} but none started.`);
         }
     }
 
@@ -6870,6 +7045,10 @@
                 for (const w of workers) {
                     if (w?.friendlyName) { armStartupCurtain(w.friendlyName, true); }
                 }
+                // Members must be in fleetList before any seating: getGroupMembers()
+                // filters the group's stored names through a liveness set built from
+                // fleetList, so seating before this await resolves the team to its
+                // head alone.
                 await fetchTerminalList();
 
                 // Same three branches as the create path. Deliberately NOT
@@ -7044,10 +7223,6 @@
     async function openAllTerminals() {
         const { wanted, hasCommand } = await resolveGridAgents();
         if (wanted.size === 0) {
-                // Members must be in fleetList before any seating: getGroupMembers()
-                // filters the group's stored names through a liveness set built from
-                // fleetList, so seating before this await resolves the team to its
-                // head alone.
             console.warn('[Terminals] Open all: no visible agent roles configured');
             return;
         }
@@ -8541,6 +8716,10 @@
 
         if (targetTerm) {
             terminalBadges.set(targetTerm, { label: 'DONE', stamp: ++badgeStampSeq });
+            const isKnown = fleetList.some(t => t.friendlyName === targetTerm);
+            if (!isKnown) {
+                fetchTerminalList();
+            }
             renderSidebarList();
             renderPaneGrid();
             postFleetStateToShell();
@@ -8953,22 +9132,33 @@
     var NEW_CODING_HEAD_PROMPT_CLIENT =
         'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
         + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
-        + 'no such seat, dispatch to a coder and say why in your status report. Post a status report '
-        + 'to .switchboard/orchestrator/reports/ when a subtask is dispatched, and a finished report '
-        + 'when the feature is handed to review. When a seat fails review on the same subtask twice, '
-        + 'do not send that subtask to it a third time — escalate one rung along intern → coder → lead, '
-        + 'name the specific defects in the dispatch, and say in your status report which seat you moved '
-        + 'it to and why; if the seat that failed twice is a lead, or your team has no seat above it, '
-        + 'stop and report to the human instead of dispatching again. When a coder reports a subtask '
-        + 'finished, note it and give that coder the next subtask. Do not send anything to the '
-        + 'reviewer, and do not write review instructions — that is not your job. When every subtask of '
-        + 'the feature is finished, read the port from .switchboard/api-server-port.txt, confirm no '
-        + 'subtask is still outstanding via GET /kanban/feature, then make one call: POST /kanban/dispatch with '
-        + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — '
-        + 'that one call moves the card and dispatches the reviewer with the reviewer\'s own '
-        + 'prompt. Do NOT use /kanban/move: it moves the card and dispatches nobody. Only '
-        + 'advance the feature your team worked; leave other cards alone. Do not wait to be '
-        + 'asked.';
+        + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
+        + 'ptyListTerminals rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID — role alone '
+        + 'is not a membership test, and a standalone seat of the same role is not yours to drive. Take the '
+        + 'subtask\'s recommendedRole as the routing decision; do not invent complexity tiers. Before sending any '
+        + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
+        + 'review on the same subtask twice, do not send that subtask to it a third time — escalate '
+        + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
+        + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
+        + 'a lead, or your team has no seat above it, stop and report to the human instead of '
+        + 'dispatching again (or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+        + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
+        + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
+        + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
+        + 'cleared seat before rotation. Do not send anything to the reviewer, and do not write review '
+        + 'instructions — that is not your job. When every subtask of the feature is finished, read the '
+        + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
+        + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
+        + 'pwd> (that read returns one record per subtask, each with its kanbanColumn), then make one call: '
+        + 'POST /kanban/dispatch with '
+        + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}","workspaceRoot":'
+        + '"<your current working directory — run pwd>"} — that one call moves the card and dispatches '
+        + 'the reviewer with the reviewer\'s own prompt. Do NOT use /kanban/move: it moves the card and '
+        + 'dispatches nobody. Only advance the feature your team worked; leave other cards alone. Do '
+        + 'not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
+        + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
+        + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
+        + 'empty and stop.';
 
     /**
      * Client-side mirror of migrateTeamPairOrders from teamWiring.ts.
@@ -9075,6 +9265,13 @@
         // Substitution-independent fragment unique to the old per-subtask
         // headPrompt. The new feature-level text does not contain it.
         var OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review yourself';
+        // Mirror of BUGGY_HEADPROMPT_FRAGMENT in teamWiring.ts. Recognises the
+        // FIRST-GENERATION feature-level headPrompt (GET /kanban/feature, no
+        // workspaceRoot, same-coder stacking) that is already persisted as a
+        // team-head order on every install that adopted the Coding team before
+        // the fix. wireSpawnedTeam never overwrites an existing head order, so
+        // without this the corrected text reaches only brand-new teams.
+        var BUGGY_HEADPROMPT_FRAGMENT = 'give that coder the next subtask';
 
         for (var i = 0; i < orders.length; i++) {
             var o = orders[i];
@@ -9098,7 +9295,8 @@
             // metacharacters). Rewrite to the new feature-level text with
             // {head} substituted by the order's parent (the head name).
             if (o.scope === 'team-head' && typeof o.instruction === 'string') {
-                if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1) {
+                if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1
+                    || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1) {
                     var newInstruction = NEW_CODING_HEAD_PROMPT_CLIENT
                         .replace(/\{head\}/g, o.parent || '');
                     var copy = {};

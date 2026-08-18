@@ -409,7 +409,11 @@ async function run() {
                 // The definitions themselves, and the one line inside the bundle
                 // that composes them, are the permitted occurrences.
                 if (/^\s*export function ensure(CompletionDirective|OrchestratorReportDirective)\s*\(/.test(line)) { return; }
-                if (/return ensureOrchestratorReportDirective\(ensureCompletionDirective\(text\)\);/.test(line)) { return; }
+                // The bundle's own two-line body. It composes the pair under the
+                // orchestratorActive gate; both lines live inside
+                // ensureDispatchProtocolDirectives and are the permitted pairing.
+                if (/^\s*const withCompletion = ensureCompletionDirective\(text\);$/.test(line)) { return; }
+                if (/^\s*return ensureOrchestratorReportDirective\(withCompletion\);$/.test(line)) { return; }
                 offenders.push(`${rel}:${i + 1}`);
             });
         }
@@ -437,8 +441,8 @@ async function run() {
     // the two hosts on prompt content, which the PRD forbids.
     await check('both delivery chokepoints attach the dispatch protocol bundle', () => {
         for (const [file, needle] of [
-            ['src/services/TaskViewerProvider.ts', 'ensureDispatchProtocolDirectives(payload.data)'],
-            ['src/standalone/bootstrap.ts', 'ensureDispatchProtocolDirectives(out)'],
+            ['src/services/TaskViewerProvider.ts', 'ensureDispatchProtocolDirectives(payload.data, orchestratorActive)'],
+            ['src/standalone/bootstrap.ts', 'ensureDispatchProtocolDirectives(out, orchestratorActive)'],
         ]) {
             assert.ok(
                 read(file).includes(needle),

@@ -118,7 +118,7 @@ the whole point.
 Before the checks, decide which mode you are in. The host has already chosen
 the prompt it injected based on two facts — whether
 `.switchboard/orchestrator/session.md` exists and whether
-`orchestrationConfig.enabled` is true. You can verify `session.md` presence
+the orchestrator is armed (`orchestratorArmed`). You can verify `session.md` presence
 yourself against the filesystem; the armed/not-armed distinction is encoded in
 which prompt the host sent (resume vs interview), so follow the mode the
 injected prompt indicates:
@@ -186,7 +186,7 @@ When the user confirms (or alters and confirms) the goal:
    its session on disk.
 2. **Call `POST /orchestration/confirm`** against the port in
    `.switchboard/api-server-port.txt`. This is the only thing that arms the
-   session — it flips `orchestrationConfig.enabled` and applies the oversight
+   session — it sets `orchestratorArmed` and applies the oversight
    worktree topology. No file-watcher backstop arms on `session.md` appearing;
    the API call is the single mechanism.
 3. **Only then begin.** If the confirm returns `{ success: false }` (most
@@ -216,9 +216,9 @@ When handing off to a single team, execute these five steps in order, then exit:
 1. **Scope:** Determine the ready plans for this session using `## What Is Ready To Go`.
 2. **Launch:** Ensure the coding team is seated. If not live, spawn the team lead terminal.
 3. **Stage:** Move the scoped plans into `DISPATCH` (session queue) in execution order:
-   `POST /taskViewer/verb/stageForQueue` with `{ sessionIds: [...] }`.
+   `POST /kanban/verb/stageForQueue` with `{ sessionIds: [...] }`. The array order IS the queue order.
 4. **Dispatch card one:** Call `POST /kanban/queue/next` with `{ from: "<head terminal name>" }` to dispatch the first card to the lead.
-5. **Report and exit:** Post the handoff call to close your seat and finish:
+5. **Report and exit:** `POST /orchestration/handoff` closes your seat and finishes the session. It refuses with `409` if no coding head is live or the `DISPATCH` queue is empty — that refusal means you are not done, not that handoff is broken:
 
 ```bash
 PORT=$(cat .switchboard/api-server-port.txt); BASE="http://127.0.0.1:$PORT"

@@ -20,14 +20,18 @@ The team is a new entry in `SHIPPED_TEAM_TYPES` in `kanban.html`. No backend cha
 **Tags:** frontend, feature, ui
 **Project:** Browser Switchboard
 
+## User Review Required
+
+Not required — the plan is a static data addition with no design decisions. Proceed with implementation.
+
 ## Complexity Audit
 
-**Routine:**
+### Routine
 - Adding a `SHIPPED_TEAM_TYPES` entry is a static data addition — no new logic, no new endpoints.
 - The `analyst` role is already a first-class built-in role with a startup command, a sidebar portrait mapping (`portrait-agent`), and a grid slot.
 - The team prompt follows the same template as the other three shipped teams (callback + git safety + role-specific instruction).
 
-**Low risk:**
+### Complex / Risky
 - The gallery renderer (`teamsTabRenderGallery`) already iterates `SHIPPED_TEAM_TYPES` and renders cards for each. A new entry is picked up automatically.
 - `wireSpawnedTeam` handles `scope: 'per-team'` members with `relationship: 'reports-to-head'` — the analyst reports to the head, carried by the team-scoped standing order. No pair-scoped order is generated.
 
@@ -39,9 +43,17 @@ The team is a new entry in `SHIPPED_TEAM_TYPES` in `kanban.html`. No backend cha
 4. **Auto-start.** The team's `headRole` is `planner`. If the operator already has a `planner`-headed team adopted (Batch planners or Multi-agent planning), the auto-start collision resolver (`migrateAgentGroups` step 3 in `teamWiring.ts`) marks subsequent teams with the same head role as `unassigned`. This is correct — the operator picks which planner team to start explicitly.
 5. **Member count.** One analyst member (`count: 1, scope: 'per-team'`). The layout ladder resolves to `2h` (2 slots for head + 1 member).
 
+## Dependencies
+
+None — this plan is independent. It adds a new static team type entry; no other subtask in this feature touches `SHIPPED_TEAM_TYPES` or the shipped-team count assertion.
+
+## Adversarial Synthesis
+
+Key risks: (1) the contract test at `standing-orders-marker-contract.test.js:329` asserts `prompts.length === 3` — adding a fourth team with a `prompt` field bumps this to 4 and the assertion must be updated in the same change. (2) The `headPrompt` count assertion (line 362) asserts exactly 1 — the new team has no `headPrompt`, so this is unaffected. Mitigations: update the prompt-count assertion from 3 to 4; verify the headPrompt-count assertion still passes unchanged.
+
 ## Proposed Changes
 
-### `src/webview/kanban.html` — `SHIPPED_TEAM_TYPES` (after the Multi-agent planning entry, ~line 4716)
+### `src/webview/kanban.html` — `SHIPPED_TEAM_TYPES` (after the Multi-agent planning entry, ~line 4722)
 
 Add a new team type:
 
@@ -73,17 +85,20 @@ Add a new team type:
 
 The `analyst` role already resolves to `portrait-agent` via the fallback in `teamsTabPortraitId` (line 4747). The planner head resolves to `portrait-planner`. No change required.
 
-### `src/test/standing-orders-marker-contract.test.js` — update shipped-team count assertion
+### `src/test/standing-orders-marker-contract.test.js` — update shipped-team prompt count assertion (line 329)
 
-The marker contract test asserts the number of shipped teams and the prompt count. Adding a fourth team type with one `prompt` field increases both counts by one. Update the assertions:
+The marker contract test asserts `prompts.length === 3` (line 329) — the number of shipped team `prompt` fields. Adding a fourth team type with one `prompt` field increases this to 4. Update the assertion:
 
 ```javascript
-// The test at the top of the SHIPPED_TEAM_TYPES block asserts the number of
-// teams and the number of prompt: fields. Both increase by 1 (one new team,
-// one new prompt). Update the expected counts accordingly.
+// Line 329: change from 3 to 4
+assert.strictEqual(
+    prompts.length, 4,
+    `Expected 4 shipped team prompts, found ${prompts.length}. The gallery ships exactly ` +
+    'four team types (Batch planners, Coding, Multi-agent planning, Planning with analyst) and each must carry a prompt.'
+);
 ```
 
-The exact assertion lines to update depend on the test's current expected values — read the test and bump the team count and prompt count by 1.
+The `headPromptMatches.length` assertion (line 362) asserts exactly 1 — the new team has no `headPrompt`, so this is unaffected. The byte-identity assertion between `kanban.html` and `teamWiring.ts` (line 408) applies only to the Coding team's `headPrompt` — also unaffected.
 
 ## Verification Plan
 
@@ -93,3 +108,11 @@ The exact assertion lines to update depend on the test's current expected values
 4. **Analyst callback works.** Send a code-search task to the analyst. Confirm it reports back to the planner via `ptySendPrompt` when done.
 5. **Auto-start collision.** If Batch planners is already adopted, confirm the new team is marked `unassigned` and does not auto-start when a planner terminal is opened. It can still be started explicitly from the gallery.
 6. **Run tests.** `npx jest src/test/standing-orders-marker-contract.test.js` — confirm the updated team/prompt count assertions pass.
+
+## Completion Report
+
+Implemented the "Planning with analyst" team type in `SHIPPED_TEAM_TYPES` in `src/webview/kanban.html`. The team consists of a `planner` head and one `analyst` member with `relationship: 'reports-to-head'` and purpose-built instructions for code search and context gathering. Updated the test assertion in `src/test/standing-orders-marker-contract.test.js` to expect 4 shipped team prompts. No issues encountered.
+
+## Review Findings
+
+Reviewed in place; no CRITICAL or MAJOR findings against this subtask. Verified the `Planning with analyst` entry in `src/webview/kanban.html` (4 shipped types parse, `analyst` resolves to `portrait-agent` via the `teamsTabPortraitId` fallback at `kanban.html:4774`, `reports-to-head` is `member-receives` in `linkPresets.ts:107` so no pair-scoped order is minted, and `analyst` is in `GRID_BUILTIN_ROLES` at `terminals.js:7007`), plus the prompt-count bump to 4 in `src/test/standing-orders-marker-contract.test.js:329`. Validation: `standing-orders-marker-contract` 55/55, `stage-marker-commit-contract` 47/47, `tsc -p tsconfig.test.json` clean, `mirror:check` green. Files changed by this subtask: `src/webview/kanban.html`, `src/test/standing-orders-marker-contract.test.js`. Remaining risk: none specific to this entry — the head-role collision with the two other planner-headed teams is handled by `migrateAgentGroups` step 3 and is the intended behaviour.

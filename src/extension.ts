@@ -1093,18 +1093,18 @@ export async function activate(context: vscode.ExtensionContext) {
     globalPlanWatcher.getEngine().setTerminalLivenessProvider(() => taskViewerProvider.getFleetLiveness());
     // Queue-head resolver seam (subtask 3 fix): the queue nudge sweep calls
     // this to resolve the live coding head (lead first, then coder) when a
-    // watch's headTerminal is null — the "staged with no head" state. Role-
-    // aware: queries the terminal host for terminals tagged 'lead' or 'coder',
-    // not inferred from liveness (which carries only friendlyName/lastDataAt/
-    // status). Returns null when no head is live — the sweep then notifies the
-    // user. Same order as runQueue's backend resolver and the arming sites.
+    // watch's headTerminal is null — the "staged with no head" state. Reads
+    // from terminals.groups in the DB config (the plan's path — same as
+    // resolveTeamMembersForHead in teamWiring.ts), NOT getAliveRoleTerminalNames
+    // — that resolves through _readTerminalRegistryState which reads the
+    // deprecated state.json. Liveness is checked via getFleetLiveness() — the
+    // same _ptyLiveness source the sweep's gate (4) uses for livenessByName,
+    // so a head resolved as alive here cannot be judged 'absent' by gate (4).
+    // Returns null when no head is live.
     globalPlanWatcher.getEngine().setQueueHeadResolver(async (wsRoot) => {
         try {
-            const leads = await taskViewerProvider.getAliveRoleTerminalNames('lead', wsRoot);
-            if (leads.length > 0) return leads[0];
-            const coders = await taskViewerProvider.getAliveRoleTerminalNames('coder', wsRoot);
-            if (coders.length > 0) return coders[0];
-        } catch { /* fleet unavailable — return null, sweep notifies user */ }
+            return await kanbanProvider!.resolveCodingHeadFromGroups(wsRoot);
+        } catch { /* groups unavailable — return null, sweep notifies user */ }
         return null;
     });
     // Queue-level stall watch seam (subtask 3): the LocalApiServer's

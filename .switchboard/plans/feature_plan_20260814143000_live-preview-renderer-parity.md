@@ -344,3 +344,7 @@ CI additionally re-runs the existing suites unchanged: `test:contract:tickets-su
 ---
 
 **Recommendation: Send to Coder** (complexity 5).
+
+## Completion Report
+
+Switched markdown editor live preview rendering for Tickets, Planning, and Design panels to use `renderMarkdown`, achieving renderer parity between live preview and saved view mode. Added `markdown` source field to `handleRenderMarkdownLive` in `src/services/sharedUtilityVerbs.ts`, added `.md-live-preview .md-li-loose` styling rule to `src/webview/markdownEditor.js`, updated preview handlers in `src/webview/tickets.js`, `src/webview/planning.js`, and `src/webview/design.js`, and expanded contract tests in `src/test/sharedUtils-renderMarkdown.test.js`. Project panel preview was intentionally preserved with CommonMark rendering to match its view mode. No unexpected issues encountered.

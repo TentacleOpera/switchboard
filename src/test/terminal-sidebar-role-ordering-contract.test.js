@@ -81,11 +81,13 @@ test('compareTerminals encodes the documented total order', () => {
 });
 
 test('renderSidebarList sorts before iterating', () => {
-    const render = block(terminalsJs, 'function renderSidebarList() {', 'for (const item of parentGroup.direct) {');
+    const render = block(terminalsJs, 'function renderSidebarList() {', 'for (const item of directSplit.loose) {');
     assert.ok(/group\.direct\.sort\(compareTerminals\)/.test(render),
         'direct terminals must sort before rendering');
     assert.ok(/wtGroup\.items\.sort\(compareTerminals\)/.test(render),
         'worktree terminals must sort before rendering');
+    assert.ok(/bucketRowsByTeam\(parentGroup\.direct, claimMap\)/.test(render),
+        'direct rows must be bucketed by team AFTER sorting — bucketing preserves input order, so a bucket built from an unsorted run is unsorted');
 });
 
 test('fetchKanbanColumnStructure sends no workspaceRoot and shares body', () => {

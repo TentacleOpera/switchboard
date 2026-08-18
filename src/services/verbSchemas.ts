@@ -396,6 +396,27 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
+    // V60 session queue. Permissive and field-accurate per PRD contract #5:
+    // require only what the arms dereference. `sessionIds` is an array of
+    // plan/session ids — required for the two that act on a list, absent for
+    // `runQueue`, which reads the staged set from the board itself.
+    stageForQueue: {
+        fields: {
+            sessionIds: { type: 'array', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    reorderQueue: {
+        fields: {
+            sessionIds: { type: 'array', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    runQueue: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
     // External-mode copy-prompt. `instruction` is the optional user-typed line
     // that opens the prompt; `workspaceRoot` is optional (the arm resolves it).
     externalAutomationPrompt: {
@@ -1696,6 +1717,39 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
     },
     queryArchives: {},
     resetDatabase: {},
+    jobsList: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    jobsInboxList: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    jobsMovesList: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            limit: { type: 'number' },
+        },
+    },
+    jobsDropInstruction: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            body: { type: 'string', required: true },
+        },
+    },
+    jobsClearStuckClaim: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            file: { type: 'string', required: true },
+        },
+    },
+    jobsRefresh: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
 };
 
 export const VERB_SCHEMAS: Record<ProviderKey, Record<string, VerbSchema>> = {

@@ -950,18 +950,33 @@ test('BEHAVIOUR: ensureDispatchProtocolDirectives attaches both completion and r
     assert.strictEqual(doubleFormatted, formatted, 'ensureDispatchProtocolDirectives must be idempotent');
 });
 
+test('BEHAVIOUR: ensureDispatchProtocolDirectives suppresses orchestrator report when orchestratorActive=false', () => {
+    const raw = 'Please write the code according to the plan.';
+    const formatted = ensureDispatchProtocolDirectives(raw, false);
+    assert.ok(formatted.includes('COMPLETION REPORT:'), 'must still attach completion directive');
+    assert.ok(!formatted.includes('ORCHESTRATOR REPORT:'), 'must NOT attach orchestrator report directive when orchestratorActive=false');
+
+    // Default (no flag) still attaches both
+    const defaultFormatted = ensureDispatchProtocolDirectives(raw);
+    assert.ok(defaultFormatted.includes('ORCHESTRATOR REPORT:'), 'must attach orchestrator report directive by default');
+});
+
 test('TaskViewerProvider _ptyHostVerb handles dispatch payload and folded attribution', () => {
     assert.ok(
-        TASK_VIEWER_SRC.includes('ensureDispatchProtocolDirectives(payload.data)'),
-        'TaskViewerProvider must apply ensureDispatchProtocolDirectives when dispatch payload is present'
+        TASK_VIEWER_SRC.includes('ensureDispatchProtocolDirectives(payload.data, orchestratorActive)'),
+        'TaskViewerProvider must apply ensureDispatchProtocolDirectives when dispatch payload is present, '
+        + 'gated on the live orchestrator state'
     );
     assert.ok(
         TASK_VIEWER_SRC.includes("handleServiceVerb('attributePastedPrompt'"),
         'TaskViewerProvider must invoke attributePastedPrompt for folded attribution'
     );
     assert.ok(
-        TASK_VIEWER_SRC.includes("directivesAttached = ['COMPLETION REPORT', 'ORCHESTRATOR REPORT']"),
-        'TaskViewerProvider must record directivesAttached on dispatch'
+        TASK_VIEWER_SRC.includes('directivesAttached = orchestratorActive')
+        && TASK_VIEWER_SRC.includes("? ['COMPLETION REPORT', 'ORCHESTRATOR REPORT']")
+        && TASK_VIEWER_SRC.includes(": ['COMPLETION REPORT']"),
+        'TaskViewerProvider must record directivesAttached on dispatch, and the record must track the '
+        + 'gate — reporting ORCHESTRATOR REPORT when it was suppressed is a lie the dispatch log carries'
     );
     assert.ok(
         TASK_VIEWER_SRC.includes('attrRes.attributed === 0'),
@@ -971,8 +986,9 @@ test('TaskViewerProvider _ptyHostVerb handles dispatch payload and folded attrib
 
 test('standalone bootstrap handlePtyVerb and deliverPrompt handle dispatch payload', () => {
     assert.ok(
-        BOOTSTRAP_SRC.includes('ensureDispatchProtocolDirectives(out)'),
-        'bootstrap deliverPrompt must apply ensureDispatchProtocolDirectives on dispatch'
+        BOOTSTRAP_SRC.includes('ensureDispatchProtocolDirectives(out, orchestratorActive)'),
+        'bootstrap deliverPrompt must apply ensureDispatchProtocolDirectives on dispatch, '
+        + 'gated on the live orchestrator state'
     );
     assert.ok(
         BOOTSTRAP_SRC.includes("kanbanProvider.handleServiceVerb('attributePastedPrompt'"),

@@ -326,9 +326,9 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         if (value !== null) { prompts.push(value); }
     }
     assert.strictEqual(
-        prompts.length, 3,
-        `Expected 3 shipped team prompts, found ${prompts.length}. The gallery ships exactly ` +
-        'three team types (Batch planners, Coding, Multi-agent planning) and each must carry a prompt.'
+        prompts.length, 4,
+        `Expected 4 shipped team prompts, found ${prompts.length}. The gallery ships exactly ` +
+        'four team types (Batch planners, Coding, Multi-agent planning, Planning with analyst) and each must carry a prompt.'
     );
     for (const p of prompts) {
         assert.ok(
@@ -349,7 +349,7 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
 
     // ── headPrompt contract ──────────────────────────────────────────
     // The /prompt:\s*/g regex above is case-sensitive and does NOT match
-    // `headPrompt:` (capital P), so the 3-prompt count is unaffected. Pin
+    // `headPrompt:` (capital P), so the 4-prompt count is unaffected. Pin
     // the new field separately: exactly ONE headPrompt exists (only Coding),
     // and it must carry the dispatch instruction literals.
     const headPromptMatches = [];
@@ -374,6 +374,18 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         'Coding headPrompt must carry "from":"{head}" — the {head} token is substituted by wireSpawnedTeam with the head terminal name');
     assert.ok(headPrompt.includes('Do NOT use /kanban/move'),
         'Coding headPrompt must warn against /kanban/move — that endpoint moves the card and dispatches nobody, leaving the reviewer idle');
+    assert.ok(!headPrompt.includes('GET /kanban/feature'),
+        'Coding headPrompt must NOT reference GET /kanban/feature — that is a POST create endpoint. '
+        + 'Use GET /kanban/plan?planId= to check subtask status.');
+    assert.ok(headPrompt.includes('workspaceRoot'),
+        'Coding headPrompt must include workspaceRoot in the /kanban/dispatch body — '
+        + 'without it, fleet/worktree heads get "Plan not found".');
+    assert.ok(!headPrompt.includes('give that coder the next subtask'),
+        'Coding headPrompt must NOT say "give that coder the next subtask" — '
+        + 'stacking subtasks on the same coder causes context-wall losses.');
+    assert.ok(!headPrompt.includes('Post a status report to .switchboard/orchestrator/reports/'),
+        'Coding headPrompt must NOT hardcode the orchestrator report instruction — '
+        + 'it is now gated by the orchestratorActive flag in ensureDispatchProtocolDirectives.');
     // The shipped Coding reviewer member must declare
     // relationship: 'reports-to-head' (member-receives → no pair-scoped
     // bypass order on the lead). A future edit that reinstates
@@ -426,6 +438,51 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         headPrompt.includes(queueNextSentence),
         'kanban.html Coding headPrompt must carry the POST /kanban/queue/next standing order '
         + 'byte-identically to teamWiring.ts — a gallery-adopted team must pace its own pipeline.'
+    );
+
+    // ── unattended escalation clause ─────────────────────────────────
+    // The ladder's terminal rung must carry BOTH forms: attended (stop and
+    // report) and unattended (record the blocked card, take the next queue
+    // item). Without the unattended half, a head driving overnight ends its
+    // turn on the first twice-failed subtask and the queue stalls with cards
+    // behind it — the failure `.agents/skills/terminal-coder-dispatch/SKILL.md`
+    // §5.6 exists to remove. Standing orders survive a /clear, which is what
+    // makes this instruction durable across a head's context resets.
+    const unattendedEscalationSentence = 'stop and report to the human instead of dispatching again '
+        + '(or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+        + 'and proceed to the next queue item).';
+    assert.ok(
+        tsHeadPrompt.includes(unattendedEscalationSentence),
+        'NEW_CODING_HEAD_PROMPT must carry the unattended form of the escalation terminal rung — '
+        + 'without it an unattended head stalls the queue on the first twice-failed subtask.'
+    );
+    assert.ok(
+        headPrompt.includes(unattendedEscalationSentence),
+        'kanban.html Coding headPrompt must carry the unattended escalation clause byte-identically '
+        + 'to teamWiring.ts — a gallery-adopted team must not stall overnight.'
+    );
+
+    // ── the frozen migration snapshot must stay frozen ───────────────
+    // CURRENT_BUGGY_CODING_HEAD_PROMPT is not a delivered prompt: it is a
+    // byte-exact snapshot of what the first migration already wrote to disk on
+    // installs in the field, matched by `===` in isUntouchedCurrentCodingTeam.
+    // Any new wording swept into it (this exact regression happened once with
+    // the unattended clause) makes the recogniser match ZERO installs and the
+    // second migration silently never fires.
+    const buggyAnchor = /CURRENT_BUGGY_CODING_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
+    assert.ok(buggyAnchor, 'CURRENT_BUGGY_CODING_HEAD_PROMPT not found in teamWiring.ts');
+    const buggySnapshot = readQuotedChain(TEAM_WIRING_SRC, buggyAnchor.index + buggyAnchor[0].length);
+    assert.ok(buggySnapshot, 'could not read CURRENT_BUGGY_CODING_HEAD_PROMPT as a quoted chain');
+    assert.ok(
+        !buggySnapshot.includes('unattended'),
+        'CURRENT_BUGGY_CODING_HEAD_PROMPT is a frozen on-disk snapshot — new prompt wording '
+        + '(here: the unattended escalation clause) must go in NEW_CODING_HEAD_PROMPT only. '
+        + 'Editing the snapshot makes isUntouchedCurrentCodingTeam match no install at all.'
+    );
+    assert.notStrictEqual(
+        buggySnapshot, tsHeadPrompt,
+        'CURRENT_BUGGY_CODING_HEAD_PROMPT must differ from NEW_CODING_HEAD_PROMPT — if they are '
+        + 'equal the migration rewrites installs to the text they already have, forever.'
     );
 });
 

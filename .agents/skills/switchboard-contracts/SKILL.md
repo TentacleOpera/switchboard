@@ -25,13 +25,19 @@ time a managing agent needed them.
    The dispatch flow does **not** write the plan file (it only runs SQL), so any mtime
    advance reaching the watcher while `dispatched_at` is set is the agent's completion
    edit. **No agent-authored text is trusted** as a control signal — only the mtime
-   advance. Source: `src/services/GlobalPlanWatcherService.ts` (activity-light OFF-switch
-   comment + `clearWorkingState` on edit while `dispatchedAt` set).
+   advance. The mtime advance drives the activity light and the silence signal (the
+   queue watch's idle input); it is **no longer load-bearing for board progression** —
+   the completion-driven dispatch arm was deleted, and the next card is pulled by the
+   lead, the `Run queue` button, or the schedule calling the queue pop. Source:
+   `src/services/GlobalPlanWatcherService.ts` (activity-light OFF-switch comment +
+   `clearWorkingState` on edit while `dispatchedAt` set).
 
 3. **Plan files are write-once-at-the-end by dispatched agents.** The
    `CODING_COMPLETION_REPORT_DIRECTIVE` instructs the coder to append a completion summary
-   to the plan file *when finished*. Mid-work plan edits break completion detection for
-   everyone (they trip the mtime gate early). Source:
+   to the plan file *when finished*. Mid-work plan edits trip the mtime gate early,
+   clearing the activity light before the work is actually done — they no longer break
+   dispatch pacing (the completion-driven dispatch arm was deleted), but they still
+   produce a false "idle" signal for the queue watch. Source:
    `src/services/agentPromptBuilder.ts` (`CODING_COMPLETION_REPORT_DIRECTIVE`). The
    directive is deliberately non-overridable for code-touching roles — a post-override
    guard re-appends it idempotently so a `replace`-mode prompt override cannot silently

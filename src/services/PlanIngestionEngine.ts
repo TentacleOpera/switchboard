@@ -140,6 +140,12 @@ export interface QueueWatchRecord {
     /** Stamp of the one-shot "no coding head seated" user notice. Prevents
      *  repeating the same notice every tick while the state persists. */
     noHeadNotifiedAt?: number;
+    /** Stamp of the one-shot escalation to the user ("the lead is not
+     *  advancing"). Bounds escalation to ONE notice per stall: a second
+     *  escalation for the same stalled queue trains the user to ignore it.
+     *  Cleared by a real dispatch (the `onDispatch` re-arm and the in-flight
+     *  gate), so a queue that stalls again after progress escalates again. */
+    escalatedAt?: number;
 }
 
 export interface PlanIngestionHost {
@@ -263,11 +269,20 @@ export class PlanIngestionEngine {
                 // Re-arm: upgrade headTerminal if one is now seated, and reset
                 // nudge state on a dispatch. A re-stage (no onDispatch) is a
                 // no-op on the nudge state — the lead has not advanced.
-                existing[idx] = {
+                const rearmed: QueueWatchRecord = {
                     ...w,
                     headTerminal: headTerminal ?? w.headTerminal ?? null,
                     ...(opts?.onDispatch ? { lastNudgedAt: 0, nudgeCount: 0 } : {}),
                 };
+                if (opts?.onDispatch) {
+                    // A dispatch clears the whole stall state, not just the
+                    // nudge counter: the one-shot escalation re-arms, and the
+                    // one-shot "no head seated" notice re-arms too (a dispatch
+                    // proves a head exists, so a later absence is news again).
+                    delete rearmed.escalatedAt;
+                    delete rearmed.noHeadNotifiedAt;
+                }
+                existing[idx] = rearmed;
                 await db.setConfigJson(WATCH_KEY, existing);
                 return;
             }
@@ -1263,8 +1278,14 @@ export class PlanIngestionEngine {
                 kept.push(watch);
                 continue;
             }
+            // The queue is DISPATCH and only DISPATCH — the same predicate
+            // `dispatchNextFromQueue` pops with. Counting PLAN REVIEWED here
+            // would mean the watch never reaches this gate on a real board
+            // (PLAN REVIEWED is rarely empty), so a session that finished its
+            // staged work would keep nudging the lead to dispatch cards nobody
+            // staged instead of ending quietly.
             const queueCards = board.filter(p =>
-                p && (p.kanbanColumn === 'DISPATCH' || p.kanbanColumn === 'PLAN REVIEWED')
+                p && p.kanbanColumn === 'DISPATCH'
                 && (!p.dispatchedAt)
                 && (!p.featureId || p.featureId === '')
             );
@@ -1381,9 +1402,13 @@ export class PlanIngestionEngine {
                 && p.dispatchedTerminal === watch.headTerminal
             );
             if (inFlight) {
-                if (watch.nudgeCount > 0 || watch.lastNudgedAt > 0) {
+                if (watch.nudgeCount > 0 || watch.lastNudgedAt > 0 || watch.escalatedAt) {
                     watch.nudgeCount = 0;
                     watch.lastNudgedAt = 0;
+                    // Clearing `escalatedAt` re-arms the one-shot escalation:
+                    // the queue is moving again, so the NEXT stall is a new
+                    // stall and deserves its own notice.
+                    delete watch.escalatedAt;
                     mutated = true;
                 }
                 kept.push(watch);
@@ -1417,30 +1442,37 @@ export class PlanIngestionEngine {
                 continue;
             }
 
-            // (8) Escalation: on the second nudge with no dispatch in between,
-            // stop nudging and surface to the user. A nudge stream is what a
-            // poll is, and a head that ignores two nudges is not going to
-            // answer a third.
-            if (watch.nudgeCount >= 2) {
-                const body = `[switchboard:turn-end] Queue stall — coding head '${watch.headTerminal}' has not advanced the queue after ${watch.nudgeCount} nudge(s). ${queueCards.length} card(s) remain staged. The lead may be stuck, rate-limited, or gone.`;
-                try {
-                    this._turnEndNotifier({
-                        seatName: watch.headTerminal,
-                        planFile: '',
-                        outcome: 'stalled',
-                        workspaceRoot: folder,
-                        body,
-                    });
-                } catch (cbErr) {
-                    this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge escalation notifier failed: ${cbErr}`);
+            // (8) Escalation: one nudge, then escalate. A nudge stream is what
+            // a poll is, and a head that ignored the first nudge is not going
+            // to answer a second. The escalation itself is ALSO one-shot —
+            // `escalatedAt` bounds it, because a user told the same thing every
+            // silence window learns to ignore the notice, which is the failure
+            // this watch exists to prevent. A real dispatch clears both stamps
+            // (the `onDispatch` re-arm and the in-flight gate below), so a queue
+            // that stalls again after progress escalates again.
+            if (watch.nudgeCount >= 1) {
+                if (!watch.escalatedAt) {
+                    const body = `[switchboard:turn-end] Queue stall — coding head '${watch.headTerminal}' has not advanced the queue after ${watch.nudgeCount} nudge(s). ${queueCards.length} card(s) remain staged. The lead may be stuck, rate-limited, or gone.`;
+                    try {
+                        this._turnEndNotifier({
+                            seatName: watch.headTerminal,
+                            planFile: '',
+                            outcome: 'stalled',
+                            workspaceRoot: folder,
+                            body,
+                        });
+                    } catch (cbErr) {
+                        this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge escalation notifier failed: ${cbErr}`);
+                    }
+                    this._host.logger.appendLine(
+                        `[GlobalPlanWatcher] Queue nudge: escalating to user for ${watch.workspaceRoot} — head '${watch.headTerminal}' ignored ${watch.nudgeCount} nudge(s) (${queueCards.length} card(s) staged).`
+                    );
+                    watch.escalatedAt = nowMs;
+                    watch.lastNudgedAt = nowMs;
+                    mutated = true;
                 }
-                this._host.logger.appendLine(
-                    `[GlobalPlanWatcher] Queue nudge: escalating to user for ${watch.workspaceRoot} — head '${watch.headTerminal}' ignored ${watch.nudgeCount} nudge(s) (${queueCards.length} card(s) staged).`
-                );
-                // Keep the watch but stop nudging — a dispatch will reset
-                // nudgeCount via the onDispatch arm or the in-flight gate.
-                watch.lastNudgedAt = nowMs;
-                mutated = true;
+                // Keep the watch but stop nudging AND stop escalating. A
+                // dispatch resets the stall state; nothing else does.
                 kept.push(watch);
                 continue;
             }

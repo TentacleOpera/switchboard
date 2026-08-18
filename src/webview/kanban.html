@@ -4678,22 +4678,30 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'other agents may be working the same tree.',
                 headPrompt: 'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
                     + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
-                    + 'no such seat, dispatch to a coder and say why in your status report. Post a status report '
-                    + 'to .switchboard/orchestrator/reports/ when a subtask is dispatched, and a finished report '
-                    + 'when the feature is handed to review. When a seat fails review on the same subtask twice, '
-                    + 'do not send that subtask to it a third time — escalate one rung along intern → coder → lead, '
-                    + 'name the specific defects in the dispatch, and say in your status report which seat you moved '
-                    + 'it to and why; if the seat that failed twice is a lead, or your team has no seat above it, '
-                    + 'stop and report to the human instead of dispatching again. When a coder reports a subtask '
-                    + 'finished, note it and give that coder the next subtask. Do not send anything to the '
-                    + 'reviewer, and do not write review instructions — that is not your job. When every subtask of '
-                    + 'the feature is finished, read the port from .switchboard/api-server-port.txt, confirm no '
-                    + 'subtask is still outstanding via GET /kanban/feature, then make one call: POST /kanban/dispatch with '
-                    + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — '
-                    + 'that one call moves the card and dispatches the reviewer with the reviewer\'s own '
-                    + 'prompt. Do NOT use /kanban/move: it moves the card and dispatches nobody. Only '
-                    + 'advance the feature your team worked; leave other cards alone. Do not wait to be '
-                    + 'asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
+                    + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
+                    + 'ptyListTerminals rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID — role alone '
+                    + 'is not a membership test, and a standalone seat of the same role is not yours to drive. Take the '
+                    + 'subtask\'s recommendedRole as the routing decision; do not invent complexity tiers. Before sending any '
+                    + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
+                    + 'review on the same subtask twice, do not send that subtask to it a third time — escalate '
+                    + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
+                    + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
+                    + 'a lead, or your team has no seat above it, stop and report to the human instead of '
+                    + 'dispatching again (or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+                    + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
+                    + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
+                    + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
+                    + 'cleared seat before rotation. Do not send anything to the reviewer, and do not write review '
+                    + 'instructions — that is not your job. When every subtask of the feature is finished, read the '
+                    + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
+                    + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
+                    + 'pwd> (that read returns one record per subtask, each with its kanbanColumn), then make one call: '
+                    + 'POST /kanban/dispatch with '
+                    + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}","workspaceRoot":'
+                    + '"<your current working directory — run pwd>"} — that one call moves the card and dispatches '
+                    + 'the reviewer with the reviewer\'s own prompt. Do NOT use /kanban/move: it moves the card and '
+                    + 'dispatches nobody. Only advance the feature your team worked; leave other cards alone. Do '
+                    + 'not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
                     + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
                     + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
                     + 'empty and stop.'
@@ -4711,6 +4719,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
                     + 'Investigate the problem from your angle — read code, trace dependencies, and identify risks. '
                     + 'Report your findings to {child} for fan-in synthesis into a single plan.\n'
+                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
+                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
+                    + 'commit first, then correct forward. '
+                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
+                    + 'other agents may be working the same tree.'
+            },
+            {
+                name: 'Planning with analyst',
+                headRole: 'planner',
+                members: [
+                    { role: 'analyst', count: 1, scope: 'per-team', relationship: 'reports-to-head' }
+                ],
+                purpose: 'A planner with a general-purpose analyst that handles code search and context-gathering, saving the lead\'s tokens for synthesis.',
+                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
+                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
+                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
+                    + 'You are a general-purpose analyst for the planning lead. Your job is code search, dependency tracing, '
+                    + 'and context-gathering: read the codebase, trace imports and call sites, identify root causes, and report '
+                    + 'concise findings to {child}. Do not write plans yourself — your reports are input the lead synthesizes into '
+                    + 'the plan. When the lead dispatches a search or investigation task, do it thoroughly and report only what is '
+                    + 'relevant to the task.\n'
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
                     + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
                     + 'commit first, then correct forward. '
@@ -10875,12 +10904,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             startHint.textContent = 'Pick a mode below, then use the ON/OFF switch to start the automation.';
             container.appendChild(startHint);
 
-            // Mode radios — three exclusive modes.
+            // Mode radios. NOTE: the exclusive mode AXIS is deleted in the
+            // engine — `enabled` (queue schedule) and `orchestratorArmed` are
+            // two independent switches that may both be on. This selector is
+            // the legacy surface over them: picking a mode sets one switch and
+            // clears the other (setAutomationModeFromKanban), so it can express
+            // three of the four states. Replacing it with two switches plus a
+            // queue-state readout is the automation panel's own follow-up; what
+            // must not survive is a DESCRIPTION of a run sheet that no longer
+            // runs, because that is what a user reads to decide what is armed.
             const modeRow = document.createElement('div');
             modeRow.style.cssText = 'display:flex; align-items:center; gap:12px; padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:4px; flex-wrap:wrap;';
             const modeRadios = [
                 { value: 'agent-managed', label: 'Agent-managed', desc: 'Wake the orchestrator every N min to decide the next action.' },
-                { value: 'scheduled', label: 'Scheduled', desc: 'Apply the run sheet every N min. Mechanical, no agent deciding.' },
+                { value: 'scheduled', label: 'Scheduled', desc: 'Pop the Dispatch queue every N min: the live coding head gets the next staged card. Mechanical, no agent deciding.' },
                 { value: 'external', label: 'External', desc: 'Switchboard runs no clock. Copy a prompt for your external scheduler.' }
             ];
             modeRadios.forEach(m => {
@@ -10903,7 +10940,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // Mode description line
             const modeDescriptions = {
                 'agent-managed': 'Wake the orchestrator every N min to decide the next action.',
-                'scheduled': 'Apply the run sheet every N min. Mechanical, no agent deciding.',
+                'scheduled': 'Pop the Dispatch queue every N min: the live coding head gets the next staged card. Mechanical, no agent deciding.',
                 'external': 'Switchboard runs no clock. Copy a prompt for your external scheduler.'
             };
             const modeHelpText = document.createElement('div');
@@ -11163,18 +11200,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const timingExplanationSc = document.createElement('div');
                 timingExplanationSc.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                timingExplanationSc.textContent = 'On each interval the run sheet is worked top to bottom: for each step, if that column has cards and that team is free, one card is sent to the team lead. A step whose team is busy is skipped and picked up next interval.';
+                timingExplanationSc.textContent = 'On each interval the schedule pops the dispatch queue: the live coding head (lead first, then coder) receives the next eligible card. A 409 (team in flight) or empty queue stops the loop.';
                 columnRulesSectionSc.appendChild(timingExplanationSc);
 
-                // The run sheet, in execution order. Mirrors DEFAULT_AUTOBAN_RUN_SHEET
-                // in autobanState.ts — read-only for now; when the sheet becomes
-                // user-editable these rows gain column/team pickers and add/remove.
-                const runSheet = Array.isArray(state.runSheet) && state.runSheet.length > 0
-                    ? state.runSheet
-                    : [
-                        { sourceColumn: 'CREATED', headRole: 'planner' },
-                        { sourceColumn: 'PLAN REVIEWED', headRole: 'coder' }
-                    ];
+                // What the schedule actually does, per tick. The run sheet is
+                // deleted as a decision structure AND as a set of steps — there
+                // is one step now, and rendering the old CREATED→planner /
+                // PLAN REVIEWED→coder pair here would tell the user the board
+                // still feeds a planner lane on a timer. It does not: the
+                // schedule pops DISPATCH and nothing else.
+                const runSheet = [
+                    { sourceColumn: 'DISPATCH', headRole: 'coding' }
+                ];
                 runSheet.forEach((step, i) => {
                     const stepRow = document.createElement('div');
                     stepRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:3px 8px; font-size:10px; color:var(--text-primary);';
@@ -11189,13 +11226,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     columnRulesSectionSc.appendChild(stepRow);
                 });
 
-                // Cadence row — one clock for the whole run sheet.
+                // Cadence row — one clock for the queue pop.
                 const ruleRowSc = document.createElement('div');
                 ruleRowSc.style.cssText = 'display:flex; align-items:center; gap:6px; padding:6px 8px 4px 8px; font-size:10px;';
 
                 const ruleLblSc = document.createElement('span');
                 ruleLblSc.style.cssText = 'color:var(--text-secondary); white-space:nowrap;';
-                ruleLblSc.textContent = 'RUN SHEET';
+                ruleLblSc.textContent = 'QUEUE POP';
 
                 const everyLblSc = document.createElement('span');
                 everyLblSc.style.cssText = 'color:var(--text-secondary);';
@@ -11417,6 +11454,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const notice = document.createElement('div');
                     notice.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
                     notice.textContent = state.droppedCustomJobsNotice;
+                    automationRulesSectionSc.appendChild(notice);
+                }
+
+                // One-time notice for a retired automationMode. The schedule
+                // was forced off — the user must re-arm it explicitly.
+                if (state.retiredAutomationModeNotice) {
+                    const notice = document.createElement('div');
+                    notice.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
+                    notice.textContent = state.retiredAutomationModeNotice;
                     automationRulesSectionSc.appendChild(notice);
                 }
 

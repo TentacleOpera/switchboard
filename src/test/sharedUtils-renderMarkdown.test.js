@@ -186,6 +186,83 @@ async function run() {
     // exactly one blank line — never three newlines that survive as a double gap.
     rtCheck('double blank collapses to one', '- a\n\n\n- b', (m) => !/\n\n\n/.test(m));
 
+    // ── Live Preview Renderer Parity Contract Checks ──
+
+    // 1. Source check: sharedUtilityVerbs.ts includes markdown: content in okRes (pushed object) and errRes
+    const verbsSource = fs.readFileSync(
+        path.join(process.cwd(), 'src', 'services', 'sharedUtilityVerbs.ts'), 'utf8');
+    assert.ok(
+        /const okRes = \{[\s\S]*?markdown:\s*content/.test(verbsSource),
+        'handleRenderMarkdownLive must include markdown: content on okRes object'
+    );
+    assert.ok(
+        /const errRes = \{[\s\S]*?markdown:\s*content/.test(verbsSource),
+        'handleRenderMarkdownLive must include markdown: content on errRes object'
+    );
+
+    // 2. Source check: markdownEditor.js includes .md-live-preview .md-li-loose CSS rule
+    const editorSource = fs.readFileSync(
+        path.join(process.cwd(), 'src', 'webview', 'markdownEditor.js'), 'utf8');
+    assert.ok(
+        /\.md-live-preview\s+\.md-li-loose\s*\{/.test(editorSource),
+        'markdownEditor.js must include .md-live-preview .md-li-loose CSS rule'
+    );
+
+    // 3. Source check: project.js must NOT use renderMarkdown
+    const projectSource = fs.readFileSync(
+        path.join(process.cwd(), 'src', 'webview', 'project.js'), 'utf8');
+    assert.ok(
+        !projectSource.includes('renderMarkdown('),
+        'project.js must remain commonmark (no renderMarkdown calls)'
+    );
+
+    // 4. Source check: tickets.js, planning.js, design.js renderPreview bodies use renderMarkdown
+    const ticketsWebviewSource = fs.readFileSync(
+        path.join(process.cwd(), 'src', 'webview', 'tickets.js'), 'utf8');
+    const planningWebviewSource = fs.readFileSync(
+        path.join(process.cwd(), 'src', 'webview', 'planning.js'), 'utf8');
+    const designWebviewSource = fs.readFileSync(
+        path.join(process.cwd(), 'src', 'webview', 'design.js'), 'utf8');
+
+    assert.ok(
+        ticketsWebviewSource.includes('resolve(renderMarkdown('),
+        'tickets.js renderPreview must resolve via renderMarkdown'
+    );
+    assert.ok(
+        !/renderPreview:\s*\([^)]*\)\s*=>\s*new Promise\(\(resolve,\s*reject\)/.test(ticketsWebviewSource),
+        'tickets.js renderPreview must not have reject parameter'
+    );
+
+    assert.ok(
+        planningWebviewSource.includes('renderPreview: (markdown) => Promise.resolve(renderMarkdown(markdown))'),
+        'planning.js doc editor renderPreview must resolve locally'
+    );
+    assert.ok(
+        planningWebviewSource.includes('resolve(renderMarkdown('),
+        'planning.js ticket editor renderPreview must resolve via renderMarkdown'
+    );
+
+    assert.ok(
+        designWebviewSource.includes('renderPreview: (markdown) => Promise.resolve(renderMarkdown(markdown))'),
+        'design.js renderPreview must resolve locally'
+    );
+
+    // 5. externalizeAnchors idempotence check
+    const externalizeAnchorsStart = editorSource.indexOf('function externalizeAnchors(html)');
+    if (externalizeAnchorsStart !== -1) {
+        const externalizeAnchorsEnd = editorSource.indexOf('}', externalizeAnchorsStart);
+        window.eval(editorSource.slice(externalizeAnchorsStart, externalizeAnchorsEnd + 1));
+        const externalizeAnchors = window.externalizeAnchors;
+        if (typeof externalizeAnchors === 'function') {
+            const htmlWithLink = renderMarkdown('- see [docs](https://example.com)');
+            const externalizedOnce = externalizeAnchors(htmlWithLink);
+            const externalizedTwice = externalizeAnchors(externalizedOnce);
+            assert.strictEqual(externalizedOnce, externalizedTwice, 'externalizeAnchors must be idempotent on renderMarkdown output');
+            console.log('  ok - externalizeAnchors idempotence');
+            passed++;
+        }
+    }
+
     console.log(`\n${passed} assertions passed.\n`);
 }
 

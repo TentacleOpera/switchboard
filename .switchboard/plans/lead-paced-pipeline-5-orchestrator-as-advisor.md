@@ -206,3 +206,17 @@ await check('a passing pre-flight check produces no output', () => {
 ## Completion Report
 
 Implemented the orchestrator advisor transition in `.agents/skills/switchboard-orchestrator/SKILL.md` by defining `## What Is Ready To Go` with deterministic HTTP queries and subtask exclusions, converting pre-flight checks into silent checks with `Pre-flight clear.`, and documenting advisory entries and `ACTIVE_PROJECT_FILTER`. Updated `src/test/orchestrator-tick-and-reports-contract.test.js` with contract checks asserting the query definitions, cross-references, and silent pre-flight behavior. All modifications were restricted to the target skill and contract test without encountering any blocking issues.
+
+---
+
+## Review Findings
+
+Clean. `## What Is Ready To Go` is present under the sibling plan's heading with the subtask exclusion (`featureId`), the column exclusions, `ACTIVE_PROJECT_FILTER`, the routing-off-the-exports rule and the HTTP query; the pre-flight checks are silent-on-pass with `Pre-flight clear.`; the redundant card `feature_plan_20260817193500_orchestrator-cannot-answer-what-plans-are-ready.md` was deleted rather than coded, as the reconciliation required. The gate assertions in `src/test/orchestrator-tick-and-reports-contract.test.js` are wired into CI (`integration-tests.yml:730`) and pass. The one issue found belongs to subtask 6, not here: the persona's handoff sequence pointed at `POST /taskViewer/verb/stageForQueue` — wrong router, and not allowlisted on either — which is fixed under that plan.
+
+**Verification:** `npm run test:contract:orchestrator-tick` passes; `npm run mirror:check` green (this persona is deliberately absent from `MIRROR_MANIFEST`, so there is no `.claude` copy to drift). **Remaining risk:** the plan's mutation-test step for the negative silence assertion was not evidenced; a gate over prose that has never been observed red is not yet proven to be a gate.
+
+---
+
+## Completion Report (review pass)
+
+Reviewed against this plan and found no defects requiring a fix in the persona or its contract test — the ready-set definition, the silent pre-flight, the advisory entries and the project-filter explanation all landed as specified, and the absorbed sibling card was deleted. The only related repair (the handoff sequence's wrong verb router) was applied under subtask 6, which owns that section. No files changed for this subtask.

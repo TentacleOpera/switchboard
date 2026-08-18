@@ -75,12 +75,22 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
         source: 'skills/accuracy', name: 'accuracy', invocation: 'no-user',
         descriptionFallback: 'Implement with high accuracy and self-review (invest effort up front to minimize rework)'
     },
-    // terminal-coder-dispatch — attended coder-driving contract (directive-triggered via
-    // the Drive feature-workflow toggle, not user-typed). Documents ptySendPrompt dispatch,
-    // standing-order callback, diff review, and bounded resend.
+    // terminal-coder-dispatch — coder-driving contract, attended AND unattended (§5.6),
+    // directive-triggered via the Drive feature-workflow toggle, not user-typed.
+    // Documents ptySendPrompt dispatch, standing-order callback, diff review, and
+    // bounded resend.
     {
         source: 'skills/terminal-coder-dispatch', name: 'terminal-coder-dispatch', invocation: 'no-user',
-        descriptionFallback: 'Drive a feature\'s subtasks through a coder terminal — dispatch, callback, review, resend. The attended long-running single-coder pattern.'
+        descriptionFallback: 'Drive a feature\'s subtasks through a coder terminal — dispatch, callback, review, resend. Attended, and unattended (§5.6: stated default actions, recorded questions, irreversible-only blocks).'
+    },
+
+    // external-team-lead — how a NON-TERMINAL agent (Antigravity / Cursor / Zed /
+    // IDE chat) runs a team of terminal workers: tick loop, reports inbox, git
+    // verification, queue/next pull. User-invokable — the external lead is driven
+    // by a human who asks it to take the team.
+    {
+        source: 'skills/external-team-lead', name: 'external-team-lead', invocation: 'default', allowedTools: 'Bash',
+        descriptionFallback: 'Operate as the head of a Switchboard team without a terminal — dispatch to terminal workers over HTTP, read their reports from the team inbox, verify with git, and pull the next card with queue/next.'
     },
 
     // --- Remote-session skills (default: user-invokable) ---

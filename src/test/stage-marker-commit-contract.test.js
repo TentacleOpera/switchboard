@@ -46,6 +46,8 @@ const {
     describeStandingOrderMigrations,
     OLD_CODING_HEAD_PROMPT,
     NEW_CODING_HEAD_PROMPT,
+    CURRENT_BUGGY_CODING_HEAD_PROMPT,
+    BUGGY_HEADPROMPT_FRAGMENT,
     PRE_REWRITE_CALLBACK_INSTRUCTION,
     STANDING_ORDERS_PREMIGRATION_BAK_KEY
 } = require('../../out/services/teamWiring');
@@ -384,7 +386,7 @@ test('the shipped Coding reviewer is reports-to-head, and no shipped member is a
 
 test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal', () => {
     for (const lit of ['/kanban/dispatch', 'CODE REVIEWED', '"from":"{head}"', 'Do NOT use /kanban/move',
-        'GET /kanban/feature', 'FEATURE planId', 'intern → coder → lead', 'seat fails review on the same subtask twice',
+        'GET /kanban/plans?featureId=', 'FEATURE planId', 'intern → coder → lead', 'seat fails review on the same subtask twice',
         'stop and report to the human instead of dispatching again']) {
         assert.ok(NEW_CODING_HEAD_PROMPT.includes(lit), `missing load-bearing literal: ${lit}`);
     }
@@ -561,6 +563,51 @@ test('OLD_HEADPROMPT_FRAGMENT exists in exactly two files and is byte-identical'
         + 'host const and the terminals.js mirror. A third copy is an ungated drift site; import '
         + 'describeStandingOrderMigrations (or OLD_HEADPROMPT_FRAGMENT) instead. '
         + `Found: ${carriers.join(', ')}`);
+});
+
+// The second recogniser key. Same two-copy rule and same reason: the webview
+// cannot import, so teamWiring.ts and terminals.js each carry the literal.
+test('BUGGY_HEADPROMPT_FRAGMENT exists in exactly two files and is byte-identical', () => {
+    const hostWiringSrc = SRC('services', 'teamWiring.ts');
+    const hostMatch = hostWiringSrc.match(/const BUGGY_HEADPROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(hostMatch, 'BUGGY_HEADPROMPT_FRAGMENT not found in teamWiring.ts');
+    const clientMatch = TERMINALS_JS_SRC.match(/var BUGGY_HEADPROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(clientMatch, 'BUGGY_HEADPROMPT_FRAGMENT not found in terminals.js');
+    assert.strictEqual(clientMatch[1], hostMatch[1],
+        'BUGGY_HEADPROMPT_FRAGMENT drifted between teamWiring.ts and terminals.js — the two hosts '
+        + 'would migrate different sets of installs');
+    assert.ok(CURRENT_BUGGY_CODING_HEAD_PROMPT.includes(BUGGY_HEADPROMPT_FRAGMENT),
+        'the fragment must appear in the frozen on-disk snapshot it is meant to recognise');
+    assert.ok(!NEW_CODING_HEAD_PROMPT.includes(BUGGY_HEADPROMPT_FRAGMENT),
+        'the corrected text must not contain the fragment — a rewritten row would re-match forever');
+});
+
+// The group headPrompt and the persisted team-head standing order are two
+// different stores. migrateAgentGroups fixes the first; wireSpawnedTeam skips
+// the head order when one already exists (`if (!headExists)`), so only this
+// read-path recogniser reaches an install that already ran a Coding team on the
+// first-generation text. Without it the endpoint/workspaceRoot/rotation fixes
+// land on new teams only.
+test('a persisted team-head order carrying the first-generation headPrompt is rewritten to the corrected text', () => {
+    const installed = CURRENT_BUGGY_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1');
+    const raw = [{ id: 'o1', parent: 'lead-1', child: '', scope: 'team-head', teamId: 't1', instruction: installed }];
+    const out = migrateCodingTeamOrders(raw);
+    assert.notStrictEqual(out, raw, 'the recogniser did not fire — an already-migrated install keeps the buggy text forever');
+    const row = out.find(o => o.id === 'o1');
+    assert.ok(row, 'the rewritten row lost its id — the Link-up editor deletes by id');
+    assert.strictEqual(row.instruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1'),
+        'the rewritten instruction is not the corrected text with {head} substituted');
+    assert.ok(!row.instruction.includes('GET /kanban/feature'), 'the 404 read survived the migration');
+    assert.ok(row.instruction.includes('workspaceRoot'), 'the dispatch body still omits workspaceRoot');
+    // Idempotent: a second pass recognises nothing (reference short-circuit).
+    assert.strictEqual(migrateCodingTeamOrders(out), out, 'the migration is not idempotent — it would rewrite forever');
+});
+
+// An operator-edited head order must survive untouched. Neither fragment is
+// present, so neither recogniser may fire.
+test('a team-head order carrying neither recogniser fragment is left alone', () => {
+    const raw = [{ id: 'o9', parent: 'lead-1', child: '', scope: 'team-head', teamId: 't1', instruction: 'My own rules. Do what I say.' }];
+    assert.strictEqual(migrateCodingTeamOrders(raw), raw, 'an operator-edited head order was rewritten');
 });
 
 // ── loadEffectiveStandingOrders: migrate on WRITE, once ────────────────────

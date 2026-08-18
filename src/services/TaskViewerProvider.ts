@@ -15,7 +15,7 @@ import {
     makeStandingOrder,
     resolveTeamStanding,
 } from './standingOrders';
-import { writeOrchestratorReport } from './ScheduledJobsService';
+import { writeOrchestratorReport, writeInstruction, bootstrapInstructionsDirectory, ingestJobActivity } from './ScheduledJobsService';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConstitutionPath } from './constitutionUtils';
@@ -41,7 +41,7 @@ import { isPtyAvailable } from '../standalone/ptyBackend';
 // The extension is control plane: it never constructs a fleet and never sees
 // terminal bytes.
 import { PtyFleetService, PTY_IDE_NAME } from '../standalone/ptyFleetService';
-import { instantiateAgentGroupCore, InstantiateAgentGroupResult } from './agentGroupInstantiation';
+import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExternalTeamTemplate, InstantiateAgentGroupResult } from './agentGroupInstantiation';
 // The pure migrators are deliberately NOT imported here: every standing-orders
 // read in this file goes through `loadEffectiveStandingOrders`, which composes
 // them and persists the result. Importing them back would re-open the
@@ -135,9 +135,6 @@ import {
     DEFAULT_SINGLE_COLUMN_CONFIG,
     AUTOBAN_SOURCE_COLUMN,
     AUTOBAN_RUN_SHEET_TICK_KEY,
-    AutobanRunSheetStep,
-    DEFAULT_AUTOBAN_RUN_SHEET,
-    isWatchColumn,
     OrchestrationConfig,
     DEFAULT_ORCHESTRATION_CONFIG,
     ORCHESTRATOR_TERMINAL_NAME
@@ -577,18 +574,25 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     };
                 }
 
-                payload = { ...payload, data: ensureDispatchProtocolDirectives(payload.data) };
-                directivesAttached = ['COMPLETION REPORT', 'ORCHESTRATOR REPORT'];
+                const orchestratorActive = this.isOversightAgentRunning();
+                payload = { ...payload, data: ensureDispatchProtocolDirectives(payload.data, orchestratorActive) };
+                directivesAttached = orchestratorActive
+                    ? ['COMPLETION REPORT', 'ORCHESTRATOR REPORT']
+                    : ['COMPLETION REPORT'];
             }
 
             const applySO = payload?.standingOrders !== false;
             const applySeatBlock = payload?.addonsComposed !== true && payload?.seatBlock !== false;
             if (applySO || applySeatBlock) {
                 try {
-                    // Same root the /terminals/standing-orders routes write through
-                    // (LocalApiServer._resolveDbForRoot defaults to options.workspaceRoot).
-                    // NOT _getWorkspaceRoot(), which follows the board's active workspace
-                    // selection and would read a different DB after a workspace switch.
+                    // The LATCHED fleet root — pinned once per extension-host lifetime
+                    // in _startLocalApiServer. NOT _getWorkspaceRoot(), which follows the
+                    // board's active workspace selection and would read a different DB
+                    // after a workspace switch. The /terminals/standing-orders routes are
+                    // held to this same root via the getFleetOrdersDatabase option, NOT
+                    // via LocalApiServer's per-instance options.workspaceRoot — that one
+                    // is re-derived on every watchdog restart and would drift off the
+                    // running fleet.
                     const db = await this._getKanbanDb(this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '');
                     const listed = await this._ptyHostVerb('ptyListTerminals', {});
                     const terminals = listed?.terminals || [];
@@ -1162,8 +1166,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // V8's clearInterval/clearTimeout are interchangeable, so clearInterval works for both.
     private _autobanTimers = new Map<string, NodeJS.Timeout>();
     private _autobanLastTickAt = new Map<string, number>();
-    private _autobanWatchDisp?: { dispose(): any };
-    private _autobanWatchDebounceTimers = new Map<string, NodeJS.Timeout>();
     // WHEN control: cron-driven timer (replaces the fixed interval when whenSchedule is set).
     private _whenScheduleTimer?: NodeJS.Timeout;
     // Serialization queue: ensures only one column tick runs at a time to prevent terminal dispatch contention.
@@ -1173,28 +1175,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _singleColumnAutobanState: SingleColumnAutobanConfig = DEFAULT_SINGLE_COLUMN_CONFIG;
     private _migratedBoardBatchNotice: string | undefined;
     private _droppedCustomJobsNotice: string | undefined;
+    private _retiredAutomationModeNotice: string | undefined;
     private _postAutobanStateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private _activeDispatchSessions = new Map<string, string>();
-    // Cards autoban has dispatched and not yet heard back about: a
-    // workspace-relative plan-file key (see _autobanPlanFileKey) → the card id and
-    // the run-sheet column it came from. Cleared on turn-end, on stall-watchdog
-    // fire, or on engine stop — NOT by _releaseSettledDispatchLocks, whose lock is
-    // released within the same tick as the dispatch (the card leaves its column
-    // before the prompt is sent).
-    //
-    // Populated in EVERY trigger mode, because it answers two questions and only
-    // one of them is completion-mode's:
-    //  - "is this turn-end mine?"  — completion mode only, drives the next tick;
-    //  - "is any dispatched card still working?" — every mode, and it is what stops
-    //    _stopAutobanIfNoValidTicketsRemain from killing the engine the moment the
-    //    last CREATED card is dispatched, before the planner's output can reach
-    //    PLAN REVIEWED for the next run-sheet step to pick up.
-    private _autobanDispatchedPlanFiles = new Map<string, { cardId: string; sourceColumn: string }>();
-    // Stall watchdog: maps the same plan-file key → timeout handle. On fire it drops
-    // the tracking entry (so a seat that dies without reporting cannot wedge the
-    // engine open forever) and, in completion mode, surfaces the card as stuck.
-    // Nothing is ever dispatched from here. Same lifetime as the tracking map above.
-    private _autobanStallWatchdogs = new Map<string, NodeJS.Timeout>();
 
     /** Get the primary identifier for a dispatch card (planId-first, sessionId-legacy). */
     private _dispatchCardId(card: KanbanDispatchCard): string {
@@ -1389,6 +1372,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             void this._context.workspaceState.update('customJobs.dropped', true);
         }
 
+        // One-time notice for a retired automationMode. The normalizer already
+        // forced enabled: false — this latch controls the DISPLAY so the notice
+        // shows on exactly one activation, not every restart. Same pattern as
+        // boardBatch.migrated and customJobs.dropped.
+        const alreadyNoticedRetiredMode = this._context.workspaceState.get<boolean>('retiredAutomationMode.noticed') === true;
+        if (!alreadyNoticedRetiredMode) {
+            if (this._autobanState.retiredAutomationModeNotice) {
+                this._retiredAutomationModeNotice = this._autobanState.retiredAutomationModeNotice;
+            }
+            void this._context.workspaceState.update('retiredAutomationMode.noticed', true);
+        }
+
         // Ensure pair programming defaults to OFF on load regardless of previous session state
         this._autobanState.pairProgrammingMode = 'off';
 
@@ -1443,7 +1438,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public getAutomationMode(): string | undefined {
-        return this._autobanState.automationMode;
+        // The mode axis is deleted. Return a synthetic value for backward compat
+        // with callers that still read this — the two switches map back to the
+        // old modes so the panel can render during the transition.
+        if (this._autobanState.orchestratorArmed) { return 'agent-managed'; }
+        if (this._autobanState.enabled) { return 'scheduled'; }
+        return 'external';
     }
 
     /**
@@ -1453,7 +1453,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * implementation reads the mode and the armed flag, not a deleted config field.
      */
     public isOversightAgentRunning(): boolean {
-        return this._autobanState.automationMode === 'agent-managed' && this._autobanState.enabled;
+        return !!this._autobanState.orchestratorArmed;
     }
 
     /**
@@ -1507,8 +1507,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * Turn-end notification — the safeguard for an agent that never reports back
      * on its own. Called by `PlanIngestionEngine.setTurnEndNotifier` exactly once
      * per turn boundary (the engine gates on the `transitioned` boolean / the
-     * `!record.blockedAt` guard). The engine passes only the seat name, plan
-     * file, outcome and workspace root; THIS host resolves the recipient because
+     * `!record.blockedAt` guard). The engine passes the seat name, plan file,
+     * outcome, workspace root and — for `completed` and `stalled` — a composed
+     * `body`; THIS host resolves the recipient because
      * the engine has no fleet identity data and must stay host-agnostic.
      *
      * Recipient resolution: the seat's `parentInstanceId` → that terminal, if
@@ -1636,8 +1637,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     data: message,
                     clearBeforePrompt: false,
                     standingOrders: false,
-                    // Host-only opt-out: a one-line machine notice has no task
-                    // to constrain, so the seat block is noise. Stripped at the
+                    // Host-only opt-out: a machine notice has no task to
+                    // constrain, so the seat block is noise. Stripped at the
                     // HTTP boundary; an HTTP caller cannot set this.
                     seatBlock: false,
                 });
@@ -1651,169 +1652,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Completion-driven dispatch: called from inside the turn-end notifier
-     * closure (extension.ts / bootstrap.ts) when a seat finishes its turn.
+     * Turn-end notifier: called from inside the turn-end notifier closure
+     * (extension.ts / bootstrap.ts) when a seat finishes its turn.
      *
-     * On 'completed': clear the stall watchdog, remove the card from the
-     * dispatched-tracking maps, and enqueue a tick on the EXISTING
-     * _autobanTickQueue so the next eligible card is dispatched. Idempotent
-     * per card — a second completion for the same planFile is a no-op because
-     * the map entry was already removed.
-     *
-     * On 'blocked': clear the stall watchdog and remove from tracking, but do
-     * NOT advance — that lane halts and surfaces. The blocked card stays in
-     * its column for human attention.
-     *
-     * Guards: ignore a clear for a card autoban did not dispatch (not in
-     * _autobanDispatchedPlanFiles) and never restart a stopped or paused engine.
-     * Membership in _autobanDispatchedPlanFiles IS the single-fire gate — the
-     * entry is written once at dispatch and deleted on the first turn-end, so a
-     * duplicate report for the same plan file is a no-op.
-     *
-     * Deliberately NOT gated on `_activeDispatchSessions`. That map is the tick
-     * path's short-lived re-dispatch lock: `handleKanbanBatchTrigger` moves the
-     * card out of PLAN REVIEWED before the prompt is even sent, so
-     * `_releaseSettledDispatchLocks` drops the lock within the SAME tick (via
-     * `_stopAutobanIfNoValidTicketsRemain`). Gating a signal that arrives minutes
-     * later on a lock that lives milliseconds means the gate is always shut.
+     * The dispatch arm is deleted — the schedule calls the queue pop, and a
+     * self-pacing lead calls it directly. Turn-end detection survives to drive
+     * the activity light and feed subtask 3's queue watch. This method is now
+     * a no-op for dispatch purposes; it remains as the notifier hook so the
+     * turn-end signal path stays intact.
      */
     public handleAutobanTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string }): void {
-        // `stalled` is the feature-level nudge — not a per-dispatch turn end. The
-        // dispatched-plan map guard below already makes it a no-op (a nudge carries
-        // no planFile autoban dispatched), but the early return is explicitness, not
-        // a behaviour change: a stall is never a completion signal to advance on.
-        if (info.outcome === 'stalled') { return; }
-        // Never restart a stopped or paused engine.
-        if (!this._autobanState.enabled || this._autobanState.paused) { return; }
-        // Only single-column mode uses completion-driven dispatch.
-        if (this._autobanState.automationMode !== 'scheduled') { return; }
-
-        const key = this._autobanPlanFileKey(info.planFile, info.workspaceRoot);
-        const entry = key ? this._autobanDispatchedPlanFiles.get(key) : undefined;
-        if (!entry) { return; } // not a card autoban dispatched (or already reported)
-
-        // Retiring the in-flight record is mode-independent: the card stopped
-        // working whatever paced its dispatch, and the empty-column sweep needs to
-        // know that before it can auto-stop.
-        this._clearAutobanStallWatchdog(key);
-        this._autobanDispatchedPlanFiles.delete(key);
-
-        if (info.outcome === 'blocked') {
-            // Blocked: do NOT advance. The card stays in its column; the lane
-            // halts and surfaces for human attention.
-            console.log(`[Autoban] Turn-end 'blocked' for card ${entry.cardId} (${key}) — lane halts, not advancing.`);
-            return;
-        }
-
-        // Dispatching the NEXT card is opt-in. On `drain`/`watch` the interval
-        // already paces dispatch and enqueueing here would double-dispatch.
-        // When WHEN is set (ON), the cron timer is the sole firing source —
-        // suppress the completion trigger so it does not bypass the schedule.
-        if (!this._isCompletionTriggered(entry.sourceColumn)) {
-            return;
-        }
-        if (this._singleColumnAutobanState.whenSchedule) {
-            console.log(`[Autoban] Turn-end for card ${entry.cardId} (${key}) — suppressed, WHEN schedule owns firing.`);
-            return;
-        }
-
-        // Completed: walk the run sheet once to dispatch the next eligible card.
-        // Uses the EXISTING _autobanTickQueue for serialization. Steps whose lane
-        // still has a card in flight are skipped inside _enqueueRunSheetTick, which
-        // is what keeps ON DONE one-in-one-out PER LANE rather than fanning one
-        // report out into a dispatch for every step.
-        const batchSize = normalizeAutobanBatchSize(this._autobanState.batchSize);
-        this._enqueueRunSheetTick(batchSize);
-        console.log(`[Autoban] Turn-end 'completed' for card ${entry.cardId} (${key}) — enqueued next run-sheet pass.`);
-    }
-
-    /**
-     * Canonical key for the completion-driven dispatch tracking maps.
-     *
-     * The two ends of this join disagree about path shape and must be
-     * normalised or the lookup never matches: the dispatch side reads
-     * `KanbanDispatchCard.planFile`, which `_collectKanbanCardsInColumns`
-     * ABSOLUTISES (`path.resolve(workspaceRoot, …)`), while the turn-end side
-     * receives `KanbanPlanRecord.planFile`, which the DB stores RELATIVE
-     * (`_ensureRelativePlanFile`) and the sweep re-joins against a root.
-     * Workspace-relative POSIX is the shape both can reach.
-     */
-    private _autobanPlanFileKey(planFile: string, workspaceRoot?: string): string {
-        const raw = String(planFile || '').trim();
-        if (!raw) { return ''; }
-        const rel = (path.isAbsolute(raw) && workspaceRoot)
-            ? path.relative(workspaceRoot, raw)
-            : raw;
-        return rel.replace(/\\/g, '/').replace(/^\.\//, '');
-    }
-
-    /**
-     * Arm a stall watchdog for a dispatched card. If the timer fires before a
-     * completion/blocked turn-end, the card is surfaced as stuck — nothing is
-     * dispatched. The interval from the rule becomes the stall timeout: the
-     * timer stops being what decides work finished and becomes what notices
-     * work never finished.
-     *
-     * Keyed by plan-file key, not card id, so it shares the exact lifetime of
-     * the completion tracking it guards: armed at dispatch, cleared only by a
-     * turn-end, its own firing, or an engine stop.
-     */
-    private _armAutobanStallWatchdog(key: string, cardId: string): void {
-        if (!key) { return; }
-        // Clear any existing watchdog for this plan file first (idempotent).
-        this._clearAutobanStallWatchdog(key);
-
-        const rule = this._autobanState.rules[AUTOBAN_SOURCE_COLUMN];
-        const stallMs = Math.max(rule?.intervalMinutes ?? 10, 1) * 60 * 1000 * 3; // 3x interval as stall timeout
-
-        const handle = setTimeout(() => {
-            this._autobanStallWatchdogs.delete(key);
-            // Only act if the card is still awaiting a report. The tracking entry —
-            // not the tick path's dispatch lock — is what "still in flight" means.
-            const entry = this._autobanDispatchedPlanFiles.get(key);
-            if (!entry) { return; }
-            // Drop the record in every mode. A seat that died without reporting must
-            // not hold the in-flight guard open forever and block the empty-column
-            // sweep from ever stopping the engine.
-            this._autobanDispatchedPlanFiles.delete(key);
-            console.warn(`[Autoban] Stall watchdog: card ${cardId} (${key}) has not reported back after ${Math.round(stallMs / 1000)}s.`);
-            // Surface it only where the user is owed an explanation: in ON DONE the
-            // lane genuinely will not advance without that report. In clock mode the
-            // interval brings the next tick regardless, so a notice claiming a halt
-            // would be false.
-            if (this._isCompletionTriggered(entry.sourceColumn)) {
-                this._showTemporaryNotification(`Autoban: card ${cardId} appears stuck — no completion report received. Its lane is halted until you intervene.`);
-            }
-            // Do NOT dispatch. Do NOT stop the engine. Just surface.
-        }, stallMs);
-
-        this._autobanStallWatchdogs.set(key, handle);
-    }
-
-    /**
-     * Does this run-sheet lane already have a card autoban dispatched and has not
-     * heard back about?
-     *
-     * ON DONE's contract is one card in flight — but the run sheet turns one
-     * turn-end into a pass over EVERY step, so without this a single completion
-     * dispatches into both lanes and the in-flight count grows with each generation.
-     * That matters beyond tidiness: deleting `globalSessionCap` was justified on
-     * "report-paced dispatch is one-in-one-out and cannot outrun itself", and a
-     * fan-out per report is precisely how it outruns itself.
-     */
-    private _autobanLaneInFlight(sourceColumn: string): boolean {
-        for (const entry of this._autobanDispatchedPlanFiles.values()) {
-            if (entry.sourceColumn === sourceColumn) { return true; }
-        }
-        return false;
-    }
-
-    private _clearAutobanStallWatchdog(key: string): void {
-        const handle = this._autobanStallWatchdogs.get(key);
-        if (handle) {
-            clearTimeout(handle);
-            this._autobanStallWatchdogs.delete(key);
-        }
+        // Turn-end detection survives, but completion-driven dispatch is deleted.
+        // The schedule calls the queue pop; a self-pacing lead calls it directly.
+        // Nothing to do here — the notifier hook stays for the activity light.
     }
 
     private _initEventHandlers() {
@@ -2948,7 +2799,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     worktreePath: payload?.worktreePath,
                 });
             }
-            let teamAutoStart: any;   // declared here so the create arm and the post-verb block share it
             if (verb === 'ptyCreateTerminal' && payload) {
                 if (payload.parentRoot && !payload.cwd && !payload.worktreePath) {
                     payload = { ...payload, cwd: payload.parentRoot };
@@ -2963,12 +2813,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 //
                 // The role-config `addons.delegates` read path is RETIRED —
                 // delegate children are now authored exclusively as team members
-                // in the TEAMS tab. Existing `addons.delegates` config was
-                // imported into team definitions by `importDelegatesIntoTeams`
-                // in `_loadAgentGroups` (one-time migration, never overwrites an
-                // existing team). The team auto-start below is the sole source
-                // of delegates now.
-                const role = payload.role || 'coder';
+                // in the TEAMS tab. Teams are started explicitly via the START
+                // TEAM control or the START ON LOAD toggle; creating a terminal
+                // with a head role no longer silently spawns its team's members.
                 payload = { ...payload, delegates: [] };
                 delete payload.startupCommand;
                 // Host-resolved, like `delegates` above: the pty child (ptyHost.ts)
@@ -2982,93 +2829,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         .getConfiguration('switchboard')
                         .get<boolean>('terminal.claudeInlineRendering', true)
                 };
-                // Auto-start: if this is an UNPARENTED terminal whose role heads
-                // a team, spawn that team's members alongside it. The recursion
-                // guard is !payload.parentInstanceId && !payload._isTeamMember —
-                // members are parented by construction (spawnDelegates passes
-                // parent.agentInstanceId, ptyFleetService.ts:358), so they cannot
-                // trigger. A SHARED member is unparented by construction, so it
-                // carries _isTeamMember: true to suppress the trigger — without
-                // this flag, a shared member whose role heads another team would
-                // spawn that team recursively. A member whose role happens to
-                // head another team joins the team that spawned it and starts
-                // nothing of its own.
-                //
-                // The team's members override role-config delegates: one team
-                // per head role is the constraint, and the team definition IS
-                // the configuration. The head is created first by
-                // ptyCreateTerminal; spawnDelegates is best-effort (returns
-                // {children, error}), so a cap refusal does not prevent the
-                // head from starting. Wiring (standing orders + group
-                // registration) fires in the post-create hook below, which
-                // fires because result.delegates is non-empty.
-                if (!payload.parentInstanceId && !payload._isTeamMember) {
-                    let roots: string[] = [];
-                    try {
-                        // `payload.cwd` is already final for this lookup. The only value it
-                        // can consume — a KNOWN workspace root — is written by the
-                        // parentRoot -> cwd conversion at the top of this arm (:2192-2195),
-                        // above this block. The cwd block BELOW only ever writes the board's
-                        // selected root, which is already candidate #2, so its position
-                        // relative to this block cannot change the candidate list. Do not
-                        // reorder them "for symmetry"; it is a no-op with a real diff.
-                        roots = this._teamLookupRoots(payload.cwd, root || effectiveRoot);
-                        const match = await findTeamForHeadRoleInRoots(
-                            roots,
-                            (r) => this._getKanbanDbIfPresent(r),
-                            role
-                        );
-                        const memberCount = Array.isArray(match?.team?.members) ? match!.team.members.length : 0;
-                        if (match && memberCount > 0) {
-                            // teamHeadPrompt is written UNCONDITIONALLY (undefined included)
-                            // — payload is wire-supplied, and this spread is the only thing
-                            // that stops a caller from injecting a standing order delivered
-                            // to a lead on every message. Never make it conditional.
-                            payload = { ...payload, delegates: match.team.members, teamName: match.team.name, teamPrompt: match.team.prompt, teamHeadPrompt: match.team.headPrompt };
-                        }
-                        teamAutoStart = {
-                            role,
-                            roots,
-                            team: match?.team?.name ?? null,
-                            matchedRoot: match?.root ?? null,
-                            memberDefinitions: memberCount,
-                        };
-                        // THREE outcomes, three messages. "found a team" and "will spawn a
-                        // team" are different propositions: the seeded `Lead team` heads
-                        // `lead` with zero members in any workspace whose TEAMS tab was
-                        // opened, so the middle case is the one that reproduces the original
-                        // UAT report. Collapsing it into either neighbour re-hides the bug.
-                        console.log(
-                            !match
-                                ? `[TaskViewerProvider] Team auto-start: no team heads role '${role}' in `
-                                  + `[${roots.join(', ')}] — starting a bare head`
-                                : memberCount === 0
-                                    ? `[TaskViewerProvider] Team auto-start: team '${match.team.name}' from `
-                                      + `${match.root} heads role '${role}' but defines ZERO members — `
-                                      + `starting a bare head, nothing to spawn`
-                                    : `[TaskViewerProvider] Team auto-start: role '${role}' -> team `
-                                      + `'${match.team.name}' (${memberCount} member definition(s)) from ${match.root}`
-                        );
-                    } catch (err: any) {
-                        // Auto-start is a convenience; the TERMINAL is the product. The
-                        // pre-fix code wrapped this whole lookup in `catch { /* proceed
-                        // without auto-start */ }`, so a throw here used to cost nothing.
-                        // The candidate builder reaches the workspace/mapping resolvers and
-                        // `path.resolve(payload.cwd)` on a wire-supplied value, so it CAN
-                        // throw — and unguarded it would now fail the create itself. Keep
-                        // the terminal, keep the evidence: report on the response rather
-                        // than restoring the silent swallow this plan exists to remove.
-                        console.warn('[TaskViewerProvider] Team auto-start lookup failed — starting a bare head:', err);
-                        teamAutoStart = {
-                            role,
-                            roots,
-                            team: null,
-                            matchedRoot: null,
-                            memberDefinitions: 0,
-                            error: err?.message || String(err),
-                        };
-                    }
-                }
                 if (!payload.cwd && !payload.worktreePath) {
                     const selected = this._kanbanProvider?.getCurrentWorkspaceRoot();
                     if (selected) {
@@ -3229,9 +2989,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                     }
                 }
-                if (verb === 'ptyCreateTerminal' && result && teamAutoStart) {
-                    result.teamAutoStart = teamAutoStart;
-                }
             }
             if (verb === 'ptyListTerminals' && result && result.success !== false && Array.isArray(result.terminals)) {
                 this._ptyTerminalNames = (result.terminals || [])
@@ -3290,6 +3047,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             getLinearService: () => this._getLinearService(effectiveRoot),
             getNotionService: () => this._getNotionService(effectiveRoot),
             getKanbanDatabase: async (wsRoot?: string) => this._getKanbanDb(wsRoot || effectiveRoot),
+            // The standing-orders editor routes (GET/POST /terminals/standing-orders)
+            // must reach the LATCHED fleet root, not this instance's effectiveRoot.
+            // effectiveRoot is re-derived from the board's active selection on every
+            // watchdog restart; _apiServerWorkspaceRoot is not (see the latch above).
+            // Without this the editor lists and writes a DB the delivery chokepoints
+            // do not read — the same wrong-DB split team wiring was just fixed for.
+            getFleetOrdersDatabase: async () => this._getKanbanDb(this._apiServerWorkspaceRoot || effectiveRoot),
             getAuthToken: async () => {
                 // Retrieve from VS Code SecretStorage - returns empty string if not set
                 return await this._context.secrets.get('switchboard.apiToken') || '';
@@ -3323,6 +3087,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             },
             resolveTeamRoleTerminal: async (wsRoot, originTerminal, role) => this.resolveTeamRoleTerminal(wsRoot, originTerminal, role),
             resolveTeamMembers: async (wsRoot, headTerminal) => this.resolveTeamMembers(wsRoot, headTerminal),
+            createExternalTeam: async (wsRoot, template, headName, featureId) =>
+                this.instantiateExternalTeam(wsRoot || effectiveRoot, template, headName, featureId),
             armQueueWatch: async (wsRoot, headTerminal, opts) => {
                 if (this._planIngestionEngine) {
                     await this._planIngestionEngine.armQueueWatch(wsRoot, headTerminal, opts);
@@ -9916,13 +9682,11 @@ Each plan file must include:
     }
 
     private async _persistAutobanState(): Promise<void> {
-        if (this._autobanState.automationMode === 'scheduled') {
-            this._singleColumnAutobanState.enabled = this._autobanState.enabled;
-            this._singleColumnAutobanState.batchSize = this._autobanState.batchSize;
-            this._singleColumnAutobanState.complexityFilter = this._autobanState.complexityFilter;
-            this._singleColumnAutobanState.intervalMinutes = this._autobanState.rules[AUTOBAN_SOURCE_COLUMN]?.intervalMinutes ?? 10;
-            await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
-        }
+        // The mode axis is deleted — always sync single-column state.
+        this._singleColumnAutobanState.enabled = this._autobanState.enabled;
+        this._singleColumnAutobanState.batchSize = this._autobanState.batchSize;
+        this._singleColumnAutobanState.complexityFilter = this._autobanState.complexityFilter;
+        await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
         await this._context.workspaceState.update('autoban.state', this._autobanState);
     }
 
@@ -10184,15 +9948,11 @@ Each plan file must include:
     }
 
     private _getEnabledAutobanSourceColumns(): string[] {
-        if (this._autobanState.automationMode === 'scheduled') {
-            // Every run-sheet column counts. Returning only PLAN REVIEWED would
-            // auto-stop the engine the moment that column drained, stranding cards
-            // still sitting in CREATED that the planner step is there to pick up.
-            return Array.from(new Set(this._getAutobanRunSheet().map(s => s.sourceColumn)));
-        }
-        return Object.entries(this._autobanState.rules)
-            .filter(([, rule]) => rule.enabled)
-            .map(([column]) => column);
+        // The run sheet and per-column rules are deleted. The schedule dispatches
+        // via the queue pop, which reads DISPATCH / PLAN REVIEWED directly. This
+        // helper remains for the empty-column sweep, which checks whether any
+        // source column still has eligible cards.
+        return [AUTOBAN_SOURCE_COLUMN];
     }
 
     private _getEligibleAutobanCards(cardsInColumn: KanbanDispatchCard[]): KanbanDispatchCard[] {
@@ -10276,11 +10036,6 @@ Each plan file must include:
         return false;
     }
 
-    private _hasActiveWatchColumn(): boolean {
-        return this._getEnabledAutobanSourceColumns()
-            .some(col => isWatchColumn(this._autobanState.rules[col]));
-    }
-
     private async _stopAutobanIfNoValidTicketsRemain(workspaceRoot: string): Promise<boolean> {
         if (!this._autobanState.enabled) {
             return false;
@@ -10291,17 +10046,13 @@ Each plan file must include:
         if (this.isOversightAgentRunning()) {
             return false;
         }
-        if (this._hasActiveWatchColumn()) {
-            return false; // standing watcher — never auto-stop on empty
-        }
-        // Work still in flight is not an empty board. The run sheet is a PIPELINE —
-        // CREATED → planner feeds PLAN REVIEWED → coder — so dispatching the last
-        // CREATED card empties every enabled column while the planner is still
-        // running, and stopping here means its output lands in PLAN REVIEWED with
-        // the engine already off. That is the silent stop this feature exists to
-        // remove. The stall watchdog drops an entry whose seat never reports, so a
-        // dead agent cannot hold the engine open indefinitely.
-        if (this._autobanDispatchedPlanFiles.size > 0) {
+        // The schedule now pops the DISPATCH session queue, so "no work left"
+        // has to include the queue. Checking only the `rules` columns is the
+        // run sheet's question, and it has the worst possible answer for the
+        // headline flow: stage five plans into DISPATCH with CREATED and PLAN
+        // REVIEWED empty, and this sweep turns the schedule off within 60s —
+        // silently, while the work the user just staged sits there.
+        if (await this._autobanHasStagedQueueCards(workspaceRoot)) {
             return false;
         }
         const hasEligible = await this._autobanHasEligibleCardsInEnabledColumns(workspaceRoot);
@@ -10311,6 +10062,31 @@ Each plan file must include:
         }
         await this._stopAutobanForNoValidTickets();
         return true;
+    }
+
+    /**
+     * True when the DISPATCH session queue holds at least one un-dispatched
+     * top-level card — the same predicate `dispatchNextFromQueue` pops with
+     * (column DISPATCH, no `dispatchedAt`, empty `featureId`). Read directly
+     * from the board so it cannot disagree with the pop.
+     */
+    private async _autobanHasStagedQueueCards(workspaceRoot: string): Promise<boolean> {
+        try {
+            const db = await this._getKanbanDb(workspaceRoot);
+            if (!db) { return false; }
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+            const board: any[] = (await db.getBoard?.(wsId)) || [];
+            return board.some((p: any) =>
+                p && p.kanbanColumn === 'DISPATCH'
+                && !p.dispatchedAt
+                && (!p.featureId || p.featureId === '')
+            );
+        } catch (err) {
+            // Unreadable board is no evidence. Treat it as "there may be work"
+            // rather than stopping the schedule off a transient read failure.
+            console.warn('[Autoban] Staged-queue check failed:', err);
+            return true;
+        }
     }
 
     private async _createAutobanTerminal(role: string, requestedName?: string, cwd?: string, skipStatePoolUpdate: boolean = false, reveal: boolean = true): Promise<{ role: string; name: string } | undefined> {
@@ -10456,7 +10232,8 @@ Each plan file must include:
             ...this._autobanState,
             singleColumnConfig: this._singleColumnAutobanState,
             migratedBoardBatchNotice: this._migratedBoardBatchNotice,
-            droppedCustomJobsNotice: this._droppedCustomJobsNotice
+            droppedCustomJobsNotice: this._droppedCustomJobsNotice,
+            retiredAutomationModeNotice: this._retiredAutomationModeNotice
         }, this._autobanLastTickAt.entries());
     }
 
@@ -10520,14 +10297,6 @@ Each plan file must include:
         if (workspaceRoot) {
             await this._pruneStaleBackupRegistry(workspaceRoot);
         }
-        // External mode runs no clock. A persisted `enabled: true` left over
-        // from a prior scheduled-mode session must not broadcast "running" with
-        // no engine ticking behind it — force the flag false before the panel
-        // sees it.
-        if (this._autobanState.automationMode === 'external' && this._autobanState.enabled) {
-            this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, enabled: false });
-            this._stopAutobanEngine();
-        }
         this._kanbanProvider?.updateAutobanConfig(this._getAutobanBroadcastState());
         if (this._autobanState.enabled && !this._autobanState.paused) {
             this._startAutobanEngine();
@@ -10541,29 +10310,9 @@ Each plan file must include:
 
     /** Called by Kanban controls strip to toggle the shared Autoban engine state. */
     public async setAutobanEnabledFromKanban(enabled: boolean): Promise<void> {
-        // External mode runs no clock. Refuse the enable rather than letting the
-        // engine gate silently no-op — the gate leaves `enabled` true, so the
-        // panel would read "running" with no clock behind it. Force false and
-        // stop any surviving timer so the panel reflects reality.
-        if (enabled && this._autobanState.automationMode === 'external') {
-            this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, enabled: false });
-            this._stopAutobanEngine();
-            await this._persistAutobanState();
-            this._postAutobanStateNow();
-            return;
-        }
-
-        // Agent-managed mode: the orchestrator IS the automation. The ON/OFF
-        // toggle starts/stops the orchestrator, not the run-sheet engine.
-        if (this._autobanState.automationMode === 'agent-managed') {
-            if (enabled) {
-                await this.startOrchestratorFromKanban(undefined);
-            } else {
-                await this.stopOrchestratorFromKanban(undefined);
-            }
-            return;
-        }
-
+        // The mode axis is deleted. This toggle controls the schedule switch
+        // only. The orchestrator switch is controlled separately (via
+        // setAutomationModeFromKanban or the Start/Stop orchestrator buttons).
         const wasEnabled = this._autobanState.enabled;
         this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, enabled });
 
@@ -10735,7 +10484,7 @@ Each plan file must include:
         const sessionPath = path.join(root, '.switchboard', 'orchestrator', 'session.md');
         let sessionExists = false;
         try { await fs.promises.access(sessionPath); sessionExists = true; } catch { /* absent */ }
-        const armed = this._autobanState?.enabled === true;
+        const armed = !!this._autobanState?.orchestratorArmed;
         let kickoffPrompt: string;
         try {
             await fs.promises.access(personaPath);
@@ -10824,16 +10573,13 @@ Each plan file must include:
             return { success: false, error: 'no session file — write .switchboard/orchestrator/session.md before confirming' };
         }
 
-        // Arming block moved verbatim from startOrchestratorFromKanban. The
-        // run-sheet engine is torn down BEFORE the mode flips so a `scheduled`
-        // run sheet cannot survive the transition to `agent-managed` — two
-        // clocks dispatching the same board is the hazard the exclusive-mode
-        // model exists to remove. This ordering must survive the split.
-        this._stopAutobanEngine();
+        // Arming sets the orchestrator switch. The mode axis is deleted —
+        // there is no exclusivity between the schedule and the orchestrator,
+        // so no _stopAutobanEngine() call. The schedule (if armed) keeps
+        // ticking; the orchestrator wake interval is installed separately.
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
-            enabled: true,
-            automationMode: 'agent-managed'
+            orchestratorArmed: true
         });
         this._orchestrationSessionState = 'armed';
         await this._persistAutobanState();
@@ -10867,7 +10613,7 @@ Each plan file must include:
         if (this._orchestrationSessionState === 'handed-off') {
             return { success: false, status: 409, error: 'Session already handed off — cannot hand off twice' };
         }
-        if (this._autobanState?.enabled && this._autobanState?.automationMode === 'agent-managed') {
+        if (this._autobanState?.orchestratorArmed) {
             return { success: false, status: 409, error: 'Session already armed — cannot hand off an armed session' };
         }
 
@@ -10891,8 +10637,11 @@ Each plan file must include:
         }
 
         // Ground truth over self-report: always verify queue state against the board.
-        // The queue candidate predicate matches dispatchNextFromQueue in LocalApiServer.ts:
-        // column DISPATCH (or PLAN REVIEWED fallback) AND !dispatchedAt AND (!featureId || featureId === '').
+        // The queue candidate predicate matches dispatchNextFromQueue in LocalApiServer.ts
+        // exactly: column DISPATCH AND !dispatchedAt AND (!featureId || featureId === '').
+        // DISPATCH only — a handoff that "succeeded" off a full PLAN REVIEWED lane with
+        // an empty queue would exit the orchestrator having handed the lead nothing it
+        // will actually be given, which is the outage this gate exists to refuse.
         const isQueueable = (p: any): boolean =>
             !!p
             && (!p.dispatchedAt)
@@ -10908,15 +10657,12 @@ Each plan file must include:
         }
         const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
         const board: any[] = (await db.getBoard?.(wsId)) || [];
-        let candidates = board.filter((p: any) => p && p.kanbanColumn === 'DISPATCH' && isQueueable(p));
-        if (candidates.length === 0) {
-            candidates = board.filter((p: any) => p && p.kanbanColumn === 'PLAN REVIEWED' && isQueueable(p));
-        }
+        const candidates = board.filter((p: any) => p && p.kanbanColumn === 'DISPATCH' && isQueueable(p));
         if (candidates.length === 0) {
             return {
                 success: false,
                 status: 409,
-                error: 'Empty queue: no dispatchable top-level cards found in DISPATCH or PLAN REVIEWED — handoff requires un-dispatched top-level cards in the queue'
+                error: 'Empty queue: no dispatchable top-level cards in DISPATCH — stage the scoped plans into the session queue before handing off'
             };
         }
 
@@ -10940,8 +10686,14 @@ Each plan file must include:
         // posting its report and summary, so there is nothing in-flight to lose.
         await this._closeTerminal(ORCHESTRATOR_TERMINAL_NAME);
 
-        // 5. Do not arm and do not disarm. Leaves autobanState and timers untouched.
+        // 5. Clear the orchestrator switch — the lead owns the pipeline now.
+        // The schedule switch is independent and stays untouched.
         this._orchestrationSessionState = 'handed-off';
+        this._autobanState = normalizeAutobanConfigState({
+            ...this._autobanState,
+            orchestratorArmed: false
+        });
+        await this._persistAutobanState();
 
         this.postMessage({
             type: 'orchestrationHandoff',
@@ -10975,9 +10727,12 @@ Each plan file must include:
      */
     public async stopOrchestratorFromKanban(workspaceRoot?: string): Promise<void> {
         this._orchestrationSessionState = 'none';
+        // Clear the orchestrator switch. The schedule switch is independent
+        // and must not be touched here — stopping the orchestrator does not
+        // stop the schedule.
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
-            enabled: false
+            orchestratorArmed: false
         });
         await this._persistAutobanState();
         this._postAutobanStateNow();
@@ -11016,74 +10771,57 @@ Each plan file must include:
     }
 
     public async setAutomationModeFromKanban(msg: any): Promise<void> {
-        const newMode = msg.mode;
-        if (!['agent-managed', 'scheduled', 'external'].includes(newMode)) return;
+        // The mode axis is deleted. Two independent switches:
+        //  - scheduleEnabled (on/off, with interval or cron)
+        //  - orchestratorArmed (on/off, with wake interval)
+        // Both can be on simultaneously. The UI sends these flags directly;
+        // a legacy `mode` field is mapped for backward compatibility.
+
+        // Backward compat: map old mode field to the new switches.
+        if (msg.mode && msg.scheduleEnabled === undefined && msg.orchestratorArmed === undefined) {
+            if (msg.mode === 'scheduled') { msg.scheduleEnabled = msg.enabled ?? true; msg.orchestratorArmed = false; }
+            else if (msg.mode === 'agent-managed') { msg.scheduleEnabled = false; msg.orchestratorArmed = msg.enabled ?? true; }
+            else if (msg.mode === 'external') { msg.scheduleEnabled = false; msg.orchestratorArmed = false; }
+        }
 
         const wasEnabled = this._autobanState.enabled;
-
-        // If engine was enabled, stop it first.
         if (wasEnabled) {
             this._stopAutobanEngine();
         }
 
-        if (newMode === 'scheduled') {
-            const enabled = msg.enabled === undefined ? this._singleColumnAutobanState.enabled : !!msg.enabled;
-            const intervalMinutes = msg.intervalMinutes || this._singleColumnAutobanState.intervalMinutes || 10;
-            const batchSize = msg.batchSize || this._singleColumnAutobanState.batchSize || 1;
-            const complexityFilter = msg.complexityFilter || this._singleColumnAutobanState.complexityFilter || 'all';
-            const routingMode = msg.routingMode || this._autobanState.routingMode || 'dynamic';
-            const triggerMode = msg.triggerMode || this._singleColumnAutobanState.triggerMode || 'drain';
+        // Schedule switch
+        const scheduleEnabled = msg.scheduleEnabled === undefined ? this._autobanState.enabled : !!msg.scheduleEnabled;
+        const intervalMinutes = msg.intervalMinutes || this._singleColumnAutobanState.intervalMinutes || 10;
+        const batchSize = msg.batchSize || this._singleColumnAutobanState.batchSize || 1;
+        const complexityFilter = msg.complexityFilter || this._singleColumnAutobanState.complexityFilter || 'all';
+        const routingMode = msg.routingMode || this._autobanState.routingMode || 'dynamic';
 
-            this._singleColumnAutobanState = {
-                enabled,
-                intervalMinutes,
-                batchSize,
-                complexityFilter,
-                triggerMode
-            };
-            await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
+        this._singleColumnAutobanState = {
+            ...this._singleColumnAutobanState,
+            enabled: scheduleEnabled,
+            intervalMinutes,
+            batchSize,
+            complexityFilter
+        };
+        await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
 
-            const singleColumnSyntheticRules = {
-                [AUTOBAN_SOURCE_COLUMN]: { enabled: true, intervalMinutes, triggerMode }
-            };
+        // Orchestrator switch
+        const orchestratorArmed = msg.orchestratorArmed === undefined ? !!this._autobanState.orchestratorArmed : !!msg.orchestratorArmed;
+        const orchIntervalMinutes = msg.orchIntervalMinutes || this._autobanState.orchestrationConfig?.intervalMinutes || 10;
 
-            this._autobanState = normalizeAutobanConfigState({
-                ...this._autobanState,
-                enabled,
-                automationMode: 'scheduled',
-                rules: singleColumnSyntheticRules,
-                batchSize,
-                complexityFilter,
-                routingMode,
-                singleColumnConfig: this._singleColumnAutobanState
-            });
+        this._autobanState = normalizeAutobanConfigState({
+            ...this._autobanState,
+            enabled: scheduleEnabled,
+            orchestratorArmed,
+            batchSize,
+            complexityFilter,
+            routingMode,
+            singleColumnConfig: this._singleColumnAutobanState,
+            orchestrationConfig: { intervalMinutes: orchIntervalMinutes }
+        });
 
-            if (enabled) {
-                this._startAutobanEngine();
-            }
-        } else if (newMode === 'agent-managed') {
-            // Agent-managed: the orchestrator is the automation. The wake interval
-            // lives on orchestrationConfig.intervalMinutes. The mode carries the
-            // whole signal — no separate enabled flag. The engine is not started
-            // here; the ON/OFF toggle starts/stops the orchestrator.
-            const enabled = msg.enabled === undefined ? this._autobanState.enabled : !!msg.enabled;
-            const intervalMinutes = msg.intervalMinutes || this._autobanState.orchestrationConfig?.intervalMinutes || 10;
-            this._autobanState = normalizeAutobanConfigState({
-                ...this._autobanState,
-                enabled,
-                automationMode: 'agent-managed',
-                orchestrationConfig: { intervalMinutes }
-            });
-        } else {
-            // external — Switchboard emits a prompt and runs no clock. enabled is
-            // forced false and the engine is stopped so no surviving timer can
-            // re-arm behind the transition.
-            this._autobanState = normalizeAutobanConfigState({
-                ...this._autobanState,
-                enabled: false,
-                automationMode: newMode
-            });
-            this._stopAutobanEngine();
+        if (scheduleEnabled) {
+            this._startAutobanEngine();
         }
 
         await this._persistAutobanState();
@@ -11130,7 +10868,7 @@ Each plan file must include:
         this._singleColumnAutobanState = { ...this._singleColumnAutobanState, whenSchedule: validated };
         void this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
         // Restart the engine if enabled so the new schedule takes effect.
-        if (this._autobanState.enabled && this._autobanState.automationMode === 'scheduled') {
+        if (this._autobanState.enabled) {
             this._startAutobanEngine();
         }
         this._postAutobanStateNow();
@@ -11332,15 +11070,8 @@ Each plan file must include:
     /** Called by Kanban reset-timer button to restart countdown intervals and fire an immediate tick. */
     public async resetAutobanTimersFromKanban(): Promise<void> {
         if (!this._autobanState.enabled) { return; }
-        // The run sheet is SCHEDULED mode's clock. This path installs its own
-        // setInterval without going through _startAutobanEngine, so the engine
-        // gate alone does not cover it. The !enabled guard above is NOT cover:
-        // in agent-managed, `enabled` means "orchestrator armed", so it is
-        // legitimately true while no run sheet may tick.
-        if (this._autobanState.automationMode !== 'scheduled') {
-            console.log(`[Autoban] Timer reset refused — ${this._autobanState.automationMode} mode does not run the run sheet.`);
-            return;
-        }
+        // The mode axis is deleted — no mode gate. The schedule runs whenever
+        // enabled is true.
 
         if (this._autobanState.paused) {
             this._autobanState.paused = false;
@@ -11374,12 +11105,10 @@ Each plan file must include:
         } else {
             this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
             void this._scheduleQueuePop();
-            if (!this._isCompletionTriggered(AUTOBAN_SOURCE_COLUMN)) {
-                const timer = setInterval(() => {
-                    void this._scheduleQueuePop();
-                }, intervalMinutes * 60 * 1000);
-                this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
-            }
+            const timer = setInterval(() => {
+                void this._scheduleQueuePop();
+            }, intervalMinutes * 60 * 1000);
+            this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
         }
 
         await this._persistAutobanState();
@@ -11413,18 +11142,8 @@ Each plan file must include:
             // agent-managed (only `enabled` is touched), so without this the
             // resume branch below installs a live run-sheet interval in a mode
             // that must run none. Clear the paused flag so the state is honest,
-            // then install nothing.
-            if (this._autobanState.automationMode !== 'scheduled') {
-                this._autobanState.paused = false;
-                delete this._autobanState.pausedRemainingMs;
-                this._stopAutobanEngine();
-                console.log(`[Autoban] Resume refused — ${this._autobanState.automationMode} mode does not run the run sheet.`);
-                await this._persistAutobanState();
-                this._postAutobanStateNow();
-                return;
-            }
+            // The mode axis is deleted — no mode gate.
             this._autobanState.paused = false;
-            const { batchSize } = this._autobanState;
             const whenSchedule = this._singleColumnAutobanState.whenSchedule;
             if (whenSchedule) {
                 // WHEN mode: restart the cron timer. Do NOT fire an immediate
@@ -11444,25 +11163,18 @@ Each plan file must include:
             } else if (this._autobanState.pausedRemainingMs) {
                 const remainingMs = this._autobanState.pausedRemainingMs[AUTOBAN_RUN_SHEET_TICK_KEY];
                 const intervalMs = Math.max(this._singleColumnAutobanState.intervalMinutes || 10, 1) * 60 * 1000;
-                if (this._isCompletionTriggered(AUTOBAN_SOURCE_COLUMN)) {
-                    // Completion mode has no clock to resume — prime it and let the
-                    // next turn-end carry the chain.
-                    this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
+                // Clock mode: resume the countdown where it was paused, then fall
+                // back into the regular interval.
+                const resumeIn = Number.isFinite(remainingMs) ? Math.max(0, remainingMs) : intervalMs;
+                this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now() - (intervalMs - resumeIn));
+                const timeoutHandle = setTimeout(() => {
                     void this._scheduleQueuePop();
-                } else {
-                    // Clock mode: resume the countdown where it was paused, then fall
-                    // back into the regular interval.
-                    const resumeIn = Number.isFinite(remainingMs) ? Math.max(0, remainingMs) : intervalMs;
-                    this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now() - (intervalMs - resumeIn));
-                    const timeoutHandle = setTimeout(() => {
+                    const intervalHandle = setInterval(() => {
                         void this._scheduleQueuePop();
-                        const intervalHandle = setInterval(() => {
-                            void this._scheduleQueuePop();
-                        }, intervalMs);
-                        this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, intervalHandle);
-                    }, resumeIn);
-                    this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timeoutHandle);
-                }
+                    }, intervalMs);
+                    this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, intervalHandle);
+                }, resumeIn);
+                this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timeoutHandle);
             }
             if (!this._autobanEmptyColumnSweepTimer) {
                 this._autobanEmptyColumnSweepTimer = setInterval(async () => {
@@ -11618,12 +11330,8 @@ Each plan file must include:
                 this._activeDispatchSessions.delete(sessionId);
             }
         }
-        // Deliberately does NOT touch _autobanDispatchedPlanFiles or the stall
-        // watchdogs. This lock releases as soon as the card lands in its target
-        // column — which the dispatch itself does, before the prompt is sent — so
-        // piggy-backing the completion tracking here would clear it milliseconds
-        // after it was armed and leave completion-driven dispatch permanently dead.
-        // Those maps are cleared by the turn-end handler or _stopAutobanEngine.
+        // This lock releases as soon as the card lands in its target column —
+        // which the dispatch itself does, before the prompt is sent.
     }
 
 
@@ -12350,6 +12058,103 @@ Each plan file must include:
         });
     }
 
+    /**
+     * Instantiate an EXTERNAL-headed agent group: the lead is a non-terminal agent
+     * (Antigravity / Cursor / IDE chat), so no head terminal is spawned — only the
+     * workers. Same host seams as `instantiateAgentGroup` above and for the same
+     * reasons: standing orders land in the fleet root (`_apiServerWorkspaceRoot`),
+     * the arm calls `_ptyHostVerb` directly to preserve host-resolved delegates,
+     * `claudeInlineRendering` is threaded in because the pty child cannot read
+     * configuration, and `onCreated` refreshes the `runtime.terminals` mirror this
+     * host is the sole writer of. Without this wiring the HTTP endpoint would fall
+     * to LocalApiServer's host-agnostic fallback, which has none of them.
+     */
+    public async instantiateExternalTeam(
+        workspaceRoot: string,
+        template: string,
+        headName: string,
+        featureId?: string
+    ): Promise<{ success: boolean; teamId?: string; workers?: any[]; headPromptFile?: string; reportsDir?: string; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace root resolved' };
+        }
+        if (!this._ptyHostPort) {
+            return { success: false, error: 'PTY host unavailable on this platform/installation' };
+        }
+        const db = await this._getKanbanDb(resolvedRoot);
+        if (!db || !(await db.ensureReady())) {
+            return { success: false, error: 'Kanban DB not ready' };
+        }
+        const wiringDb = await this._getKanbanDb(this._apiServerWorkspaceRoot || resolvedRoot);
+        if (!wiringDb || !(await wiringDb.ensureReady())) {
+            return { success: false, error: 'Kanban DB not ready' };
+        }
+
+        const group = await resolveExternalTeamTemplate(wiringDb, template);
+        if (!group) {
+            return { success: false, error: `Template '${template}' not found` };
+        }
+
+        const kp = this._kanbanProvider;
+        const settings: TerminalGroupsSettingsAccessor | undefined = kp
+            ? {
+                get: (k, d) => kp._getScopedSetting(k, d),
+                set: (k, v) => kp._updateScopedSetting(k, v),
+            }
+            : undefined;
+
+        return instantiateExternalHeadedTeam({
+            db: wiringDb,
+            settings,
+            group,
+            headName,
+            featureId,
+            cwd: resolvedRoot,
+            workspaceRoot: resolvedRoot,
+            liveDelegateCount: async () => {
+                const listed = await this._ptyHostVerb('ptyListTerminals', {});
+                if (!listed?.success) { return 0; }
+                return [...(listed.terminals || []), ...(listed.hiddenTerminals || [])]
+                    .filter((t: any) => t.parentInstanceId && t.status === 'active').length;
+            },
+            createDelegatesOnly: async (spec) => {
+                const delegates: Array<{ friendlyName: string; role?: string; [k: string]: any }> = [];
+                const claudeInlineRendering = vscode.workspace
+                    .getConfiguration('switchboard')
+                    .get<boolean>('terminal.claudeInlineRendering', true);
+                for (const d of spec.delegates) {
+                    const count = Math.max(1, Math.min(d?.count || 1, 8));
+                    const baseName = `${spec.teamName || 'team'}-${d?.label || d?.role}`;
+                    for (let i = 0; i < count; i++) {
+                        const name = `${baseName}${count > 1 ? `-${i + 1}` : ''}`;
+                        const created = await this._ptyHostVerb('ptyCreateTerminal', {
+                            role: d?.role,
+                            name,
+                            cwd: spec.cwd,
+                            startupCommand: d?.startupCommand,
+                            claudeInlineRendering,
+                        });
+                        if (!created?.success || !created.terminal) {
+                            return {
+                                success: false,
+                                delegates,
+                                error: created?.error || `Failed to spawn worker '${name}'`,
+                            };
+                        }
+                        delegates.push({
+                            ...created.terminal,
+                            friendlyName: created.terminal.friendlyName || name,
+                            role: created.terminal.role || d?.role,
+                        });
+                    }
+                }
+                return { success: true, delegates };
+            },
+            onCreated: () => { void this._updatePtyMirrorRegistry?.(db); },
+        });
+    }
+
     public async handleSaveDefaultPromptOverrides(data: any): Promise<void> {
         if (data.overrides && typeof data.overrides === 'object') {
             await this.updateState((state: any) => {
@@ -12615,47 +12420,6 @@ Each plan file must include:
     }
 
     /**
-     * Enqueue an autoban tick so that column dispatches are always serialized.
-     * This prevents concurrent terminal sends from causing IDE lag and double-tap failures.
-     */
-    private _enqueueAutobanTick(column: string, batchSize: number): void {
-        this._autobanTickQueue = this._autobanTickQueue.then(async () => {
-            if (!this._autobanState.enabled) { return; }
-            try {
-                await this._autobanTickColumn(column, batchSize);
-            } catch (e) {
-                console.error(`[Autoban] Tick failed for column ${column}:`, e);
-            } finally {
-                this._autobanLastTickAt.set(column, Date.now());
-                this._postAutobanState();
-            }
-        });
-    }
-
-    /**
-     * Is this column on the opt-in completion trigger mode?
-     *
-     * Default is `drain`/`watch` — clock-driven, one interval per enabled column.
-     * `completion` is the custom mode: no interval, strict one-in-one-out, the next
-     * dispatch rides the previous card's turn-end signal. In single-column mode the
-     * single-column config carries the setting; otherwise it is per-rule.
-     */
-    private _isCompletionTriggered(column: string): boolean {
-        const mode = this._autobanState.automationMode === 'scheduled'
-            ? this._singleColumnAutobanState.triggerMode
-            : this._autobanState.rules[column]?.triggerMode;
-        return mode === 'completion';
-    }
-
-    /**
-     * Walk the run sheet once, in order, on the existing serialized tick queue.
-     *
-     * Every step is evaluated each tick — a step whose team is busy or whose
-     * column is empty is simply skipped, and the next step still gets its turn.
-     * Steps do NOT short-circuit each other: an unavailable planner team must not
-     * stop the coder team from picking up work that is already reviewed.
-     */
-    /**
      * The schedule's dispatch path. Instead of walking the run sheet, the
      * interval and cron timers call this — which resolves the live coding head
      * (lead first, then coder — the same order `runQueue` uses) and calls
@@ -12675,13 +12439,27 @@ Each plan file must include:
         if (!apiServer || typeof apiServer.dispatchNextFromQueue !== 'function') { return; }
 
         // Resolve the live coding head — lead first, then coder.
-        let headTerminal = '';
-        const leads = await this.getAliveRoleTerminalNames('lead', workspaceRoot);
-        if (leads.length > 0) {
-            headTerminal = leads[0];
-        } else {
-            const coders = await this.getAliveRoleTerminalNames('coder', workspaceRoot);
-            if (coders.length > 0) { headTerminal = coders[0]; }
+        //
+        // This MUST go through the same resolver `Run queue`, `stageForQueue`
+        // and the queue watch use (`terminals.groups` in the DB config, live
+        // per `getFleetLiveness()`), not `getAliveRoleTerminalNames` — that one
+        // resolves through `_readTerminalRegistryState`, i.e. the deprecated
+        // `.switchboard/state.json`, with `allowPtyFleet: false`. A pty-fleet
+        // team is invisible to it, so the schedule would silently no-op on
+        // exactly the seats the rest of this feature dispatches to; and if the
+        // registry happened to hold a stale name, `dispatchNextFromQueue` would
+        // reject it with a 400 because `from` resolves to no live team. The
+        // registry path stays as a fallback for editor-registered terminals
+        // that were never wired into a team group.
+        let headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(workspaceRoot)) || '';
+        if (!headTerminal) {
+            const leads = await this.getAliveRoleTerminalNames('lead', workspaceRoot);
+            if (leads.length > 0) {
+                headTerminal = leads[0];
+            } else {
+                const coders = await this.getAliveRoleTerminalNames('coder', workspaceRoot);
+                if (coders.length > 0) { headTerminal = coders[0]; }
+            }
         }
         if (!headTerminal) { return; } // no team seated — try again next tick
 
@@ -12705,55 +12483,6 @@ Each plan file must include:
         }
         this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
         this._postAutobanState();
-    }
-
-    private _enqueueRunSheetTick(batchSize: number): void {
-        this._autobanTickQueue = this._autobanTickQueue.then(async () => {
-            if (!this._autobanState.enabled || this._autobanState.paused) { return; }
-            for (const step of this._getAutobanRunSheet()) {
-                if (!this._autobanState.enabled || this._autobanState.paused) { return; }
-                // ON DONE is one card in flight PER LANE. A pass is triggered by one
-                // card's turn-end but walks every step, so without this a completion
-                // in the planner lane also dispatches into the coder lane and the
-                // in-flight count compounds each generation.
-                if (this._isCompletionTriggered(step.sourceColumn) && this._autobanLaneInFlight(step.sourceColumn)) {
-                    console.log(`[Autoban] Run sheet: ${step.sourceColumn} → '${step.headRole}' skipped — a card from this lane is still in flight (ON DONE).`);
-                    continue;
-                }
-                try {
-                    await this._autobanTickColumn(step.sourceColumn, batchSize, step.headRole);
-                } catch (e) {
-                    console.error(`[Autoban] Run-sheet step ${step.sourceColumn} → ${step.headRole} failed:`, e);
-                }
-            }
-            // Survivor scheduler jobs (fetch-plans, reconcile) no longer ride
-            // this tick — they have their own activation-scoped timer
-            // (_startSurvivorJobsTimer), so they fire with the run sheet off.
-            this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-            this._postAutobanState();
-            const workspaceRoot = this._resolveWorkspaceRoot();
-            if (workspaceRoot) {
-                await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
-            }
-        });
-    }
-
-    /**
-     * The active run sheet. Hard-coded today; this accessor is the single seam a
-     * persisted, user-edited sheet plugs into later without touching the tick.
-     */
-    private _getAutobanRunSheet(): readonly AutobanRunSheetStep[] {
-        return DEFAULT_AUTOBAN_RUN_SHEET;
-    }
-
-    /**
-     * Public wrapper for the run sheet so KanbanProvider's external-mode prompt
-     * builder reads the same seam the internal tick walks — a user-edited sheet
-     * then flows into the emitted prompt for free. Falls back to the default
-     * constant (same output as the private accessor today).
-     */
-    public getAutobanRunSheet(): readonly AutobanRunSheetStep[] {
-        return this._getAutobanRunSheet();
     }
 
     /**
@@ -12921,26 +12650,13 @@ Each plan file must include:
 
     /** Start the continuous Autoban background polling engine. */
     private _startAutobanEngine(): void {
-        // The run sheet is SCHEDULED mode's clock and no other mode's. Gate on
-        // the mode that runs it, never on `!== 'external'`: that was a correct
-        // proxy while the axis had two values, and became wrong the moment
-        // `agent-managed` was added — in agent-managed the orchestrator IS the
-        // automation, so a run-sheet interval here is the second clock the
-        // three-mode model exists to prevent. Stop any surviving timer first so
-        // an in-flight transition cannot leave one ticking, then refuse to
-        // install one. A silent no-op is indistinguishable from the bug it
-        // prevents — log the refusal, naming the mode.
-        if (this._autobanState.automationMode !== 'scheduled') {
-            this._stopAutobanEngine();
-            console.log(`[Autoban] Engine start refused — ${this._autobanState.automationMode} mode does not run the run sheet.`);
-            return;
-        }
+        // The schedule is one of two independent switches. No mode gate —
+        // the orchestrator can be armed simultaneously, and both call the
+        // queue pop. The pop's 409 arbitrates between them.
         this._stopAutobanEngine();
         const { batchSize } = this._autobanState;
 
-        // ONE CLOCK, ORDERED STEPS. The run sheet is walked top to bottom on each
-        // tick: for each step, if that column has cards and that team's head is
-        // available, send it one.
+        // The schedule calls the queue pop on each tick.
         const intervalMinutes = Math.max(this._singleColumnAutobanState.intervalMinutes || 10, 1);
         const whenSchedule = this._singleColumnAutobanState.whenSchedule;
 
@@ -12964,24 +12680,10 @@ Each plan file must include:
         } else {
             this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
             void this._scheduleQueuePop();
-            if (!this._isCompletionTriggered(AUTOBAN_SOURCE_COLUMN)) {
-                const timer = setInterval(() => {
-                    void this._scheduleQueuePop();
-                }, intervalMinutes * 60 * 1000);
-                this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
-            }
-        }
-
-        const workspaceRoot = this._resolveWorkspaceRoot();
-        if (workspaceRoot) {
-            try {
-                const db = KanbanDatabase.forWorkspace(workspaceRoot);
-                this._autobanWatchDisp = db.onColumnChanged((e: any) => {
-                    this._notifyAutobanWatchArrival(e.column, e.workspaceId);
-                });
-            } catch (err) {
-                console.error('[Autoban] Failed to subscribe to onColumnChanged:', err);
-            }
+            const timer = setInterval(() => {
+                void this._scheduleQueuePop();
+            }, intervalMinutes * 60 * 1000);
+            this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
         }
 
         // Safety-net: periodically check if all source columns are empty and auto-stop
@@ -12997,9 +12699,7 @@ Each plan file must include:
         this._postAutobanState();
         const scheduleDesc = whenSchedule
             ? `WHEN "${whenSchedule}"`
-            : this._isCompletionTriggered(AUTOBAN_SOURCE_COLUMN)
-                ? `every ${intervalMinutes}m (ON DONE: paced by turn-end)`
-                : `every ${intervalMinutes}m`;
+            : `every ${intervalMinutes}m`;
         console.log(
             `[Autoban] Engine started — schedule ${scheduleDesc}, queue pop dispatch.`
         );
@@ -13016,221 +12716,12 @@ Each plan file must include:
             clearInterval(this._autobanEmptyColumnSweepTimer);
             this._autobanEmptyColumnSweepTimer = undefined;
         }
-        if (this._autobanWatchDisp) {
-            try {
-                this._autobanWatchDisp.dispose();
-            } catch {}
-            this._autobanWatchDisp = undefined;
-        }
-        for (const timer of this._autobanWatchDebounceTimers.values()) {
-            clearTimeout(timer);
-        }
-        this._autobanWatchDebounceTimers.clear();
-
-        // Clear stall watchdogs and completion-driven dispatch tracking.
-        for (const handle of this._autobanStallWatchdogs.values()) {
-            clearTimeout(handle);
-        }
-        this._autobanStallWatchdogs.clear();
-        this._autobanDispatchedPlanFiles.clear();
 
         this._autobanState.paused = false;
         delete this._autobanState.pausedRemainingMs;
         this._autobanLastTickAt.clear();
         this._activeDispatchSessions.clear();
         this._autobanTickQueue = Promise.resolve();
-    }
-
-    private _notifyAutobanWatchArrival(column: string, workspaceRoot: string): void {
-        if (!this._autobanState.enabled || this._autobanState.paused) { return; }
-        if (!this._getEnabledAutobanSourceColumns().includes(column)) { return; }
-        if (!isWatchColumn(this._autobanState.rules[column])) { return; }
-
-        const existingTimer = this._autobanWatchDebounceTimers.get(column);
-        if (existingTimer) {
-            clearTimeout(existingTimer);
-        }
-
-        const timer = setTimeout(() => {
-            this._autobanWatchDebounceTimers.delete(column);
-            this._enqueueAutobanTick(column, this._autobanState.batchSize);
-        }, 750);
-        this._autobanWatchDebounceTimers.set(column, timer);
-    }
-
-    /** Process one tick for a given column: find cards, batch-dispatch up to batchSize. */
-    /**
-     * @param headRoleOverride  Run-sheet mode. Names the TEAM HEAD this step sends
-     *   to, bypassing complexity routing and the intern->coder->lead fallback
-     *   chain entirely: a run-sheet step is "if this team is available, send it a
-     *   card", so an unavailable team SKIPS this step rather than halting the
-     *   engine. The clock brings the next tick; a missing team is a condition, not
-     *   a failure. Column-rule mode (no override) keeps the old routing + halt.
-     */
-    private async _autobanTickColumn(sourceColumn: string, batchSize: number, headRoleOverride?: string): Promise<void> {
-        const workspaceRoot = this._resolveWorkspaceRoot();
-        if (!workspaceRoot) { return; }
-
-        const role = headRoleOverride || this._autobanColumnToRole(sourceColumn);
-        if (!role) { return; }
-        const instruction = this._autobanColumnToInstruction(sourceColumn);
-        // With strict column isolation, each column ticks independently — no shared-reviewer
-        // lane dedup is needed. The tick queue serialization and active dispatch sessions
-        // already prevent concurrent/duplicate dispatch.
-        const { cardsInColumn, currentColumnBySession } = await this._collectKanbanCardsInColumns(workspaceRoot, [sourceColumn]);
-        this._releaseSettledDispatchLocks(currentColumnBySession);
-
-        if (cardsInColumn.length === 0) {
-            await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
-            return;
-        }
-
-        const eligibleCards = this._getEligibleAutobanCards(cardsInColumn);
-        if (eligibleCards.length === 0) {
-            await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
-            return;
-        }
-
-        // Set by dispatchWithAutobanTerminal when a role has no dispatch target.
-        // The routed PLAN REVIEWED path escalates intern -> coder -> lead, so a
-        // missing intern terminal is NOT a reason to halt: the loud failure fires
-        // only once the whole fallback chain is exhausted (see below). Stopping
-        // the engine inside the helper would also let the escalation keep
-        // dispatching AFTER _stopAutobanEngine() cleared every tracking map.
-        let lastNoTargetRole: string | null = null;
-        const dispatchWithAutobanTerminal = async (
-            targetRole: string,
-            requestedCards: Array<Pick<KanbanDispatchCard, 'sessionId' | 'planId' | 'sourceColumn' | 'planFile'>>
-        ): Promise<boolean> => {
-            const selection = await this._selectAutobanTerminal(targetRole, workspaceRoot);
-            if ('reason' in selection) {
-                lastNoTargetRole = targetRole;
-                console.warn(`[Autoban] No eligible terminal available for ${targetRole}; ${requestedCards.length} queued plan(s) not dispatched to this role.`);
-                return false;
-            }
-            lastNoTargetRole = null;
-
-            const cards = requestedCards.slice();
-            if (cards.length === 0) {
-                return false;
-            }
-            const sessionIds = cards.map(card => this._dispatchCardId(card as KanbanDispatchCard));
-
-            cards.forEach(card => this._activeDispatchSessions.set(this._dispatchCardId(card as KanbanDispatchCard), card.sourceColumn));
-            const ok = await this.handleKanbanBatchTrigger(
-                targetRole,
-                sessionIds,
-                instruction,
-                workspaceRoot,
-                selection.terminalName
-            );
-            if (!ok) {
-                sessionIds.forEach(id => this._activeDispatchSessions.delete(id));
-                return false;
-            }
-
-            // Track dispatched cards in EVERY trigger mode. Completion mode reads this
-            // to match a turn-end to its card; every mode reads it to know work is
-            // still in flight, which is what keeps the empty-column sweep from
-            // stopping the engine while a dispatched agent is still running.
-            cards.forEach(card => {
-                const cardId = this._dispatchCardId(card as KanbanDispatchCard);
-                const key = this._autobanPlanFileKey((card as KanbanDispatchCard).planFile || '', workspaceRoot);
-                if (!key) { return; }
-                this._autobanDispatchedPlanFiles.set(key, { cardId, sourceColumn });
-                this._armAutobanStallWatchdog(key, cardId);
-            });
-            await this._announceAutobanDispatch(this._describeAutobanDispatchSourceColumns(cards), targetRole, sessionIds, workspaceRoot);
-
-            if (this._autobanState.enabled) {
-                await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
-            }
-
-            return true;
-        };
-
-        // Run-sheet step: one column, one team head, no routing and no fallback.
-        if (headRoleOverride) {
-            const batch = eligibleCards.slice(0, batchSize);
-            if (batch.length === 0) { return; }
-            const selection = await this._selectAutobanTerminal(headRoleOverride, workspaceRoot);
-            if ('reason' in selection) {
-                console.log(`[Autoban] Run sheet: ${sourceColumn} has ${batch.length} card(s) but no '${headRoleOverride}' team is available — skipping this step.`);
-                return;
-            }
-            console.log(`[Autoban] Run sheet: ${sourceColumn} → '${headRoleOverride}' team head ${selection.terminalName} (${batch.length} card(s)).`);
-            await dispatchWithAutobanTerminal(headRoleOverride, batch);
-            return;
-        }
-
-        // Complexity-aware routing for PLAN REVIEWED → Lead/Coder lanes
-        if (sourceColumn === 'PLAN REVIEWED' && this._kanbanProvider) {
-            const complexityFilter = this._autobanState.complexityFilter;
-            const routingMode = this._autobanState.routingMode;
-            const selectedCards = await this._selectAutobanPlanReviewedCards(workspaceRoot, eligibleCards, batchSize);
-
-            if (selectedCards.length === 0) {
-                await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
-                return;
-            }
-
-            const routedSessions: Record<'intern' | 'coder' | 'lead', Array<{ sessionId: string; planId: string; sourceColumn: string; planFile?: string }>> = {
-                intern: [],
-                coder: [],
-                lead: []
-            };
-            for (const card of selectedCards) {
-                const targetRole = this._autobanRoutePlanReviewedCard(card.complexity, routingMode);
-                routedSessions[targetRole].push({ sessionId: card.sessionId, planId: card.planId, sourceColumn: card.sourceColumn, planFile: card.planFile });
-            }
-
-            console.log(`[Autoban] PLAN REVIEWED routing (${complexityFilter}, ${routingMode}): ${routedSessions.intern.length} → intern, ${routedSessions.coder.length} → coder, ${routedSessions.lead.length} → lead`);
-
-            // Dispatch sequentially to avoid file and terminal lock contention.
-            // Fallback chain: if the preferred role has no terminal, escalate via getFallbackRole
-            // until lead (which has no further fallback).
-            for (const role of ['intern', 'coder', 'lead'] as const) {
-                if (routedSessions[role].length > 0) {
-                    let targetRole: 'intern' | 'coder' | 'lead' = role;
-                    let ok = await dispatchWithAutobanTerminal(targetRole, routedSessions[role]);
-                    while (!ok && targetRole !== 'lead') {
-                        const fallback = getFallbackRole(targetRole);
-                        console.log(`[Autoban] ${targetRole} dispatch failed, falling back to ${fallback}`);
-                        targetRole = fallback;
-                        ok = await dispatchWithAutobanTerminal(targetRole, routedSessions[role]);
-                    }
-                    // The fallback chain is exhausted and the last link had no
-                    // target at all. That is the "no target" loud failure the plan
-                    // requires — not a silent skip, and not a stop that fires
-                    // while a later role could still have taken the work.
-                    if (!ok && lastNoTargetRole) {
-                        await this._stopAutobanWithMessage(
-                            `Autoban stopped: no eligible terminal available for ${lastNoTargetRole} (and no fallback role has one).`
-                        );
-                        return;
-                    }
-                }
-            }
-            return;
-        }
-
-        const batch = eligibleCards.slice(0, batchSize);
-        if (batch.length === 0) {
-            await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
-            return;
-        }
-
-        const selection = await this._selectAutobanTerminal(role, workspaceRoot);
-        if ('reason' in selection) {
-            const reason = `Autoban stopped: no eligible terminal available for ${role} (${sourceColumn}).`;
-            console.warn(`[Autoban] ${reason}`);
-            await this._stopAutobanWithMessage(reason);
-            return;
-        }
-
-        // Default static routing for other columns
-        console.log(`[Autoban] ${this._describeAutobanDispatchSourceColumns(batch)}: dispatching ${batch.length} card(s) to ${role} via ${selection.terminalName}`);
-        await dispatchWithAutobanTerminal(role, batch);
     }
 
     public async handleBatchDispatchLow(workspaceRoot?: string): Promise<boolean> {
@@ -13467,6 +12958,97 @@ Each plan file must include:
                     case 'openInBrowser':
                         this._seams().commands.executeCommand('switchboard.openInBrowser');
                         return { success: true };
+                    case 'jobsList': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) return { success: false, error: 'No workspace open.' };
+                        await bootstrapInstructionsDirectory(workspaceRoot);
+                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                        await ingestJobActivity(workspaceRoot, db);
+                        const runs = await db.listJobRuns(100);
+                        const standingDir = path.join(workspaceRoot, '.switchboard', 'instructions', 'standing');
+                        const jobs: any[] = [];
+                        if (fs.existsSync(standingDir)) {
+                            const files = await fs.promises.readdir(standingDir);
+                            for (const f of files) {
+                                if (f.endsWith('.md') && !f.endsWith('.retired')) {
+                                    const p = path.join(standingDir, f);
+                                    const content = await fs.promises.readFile(p, 'utf8');
+                                    const jobMatch = content.match(/^job:\s*(.+)$/m);
+                                    const scheduleMatch = content.match(/^schedule:\s*(.+)$/m);
+                                    const readsMatch = content.match(/^reads:\s*(.+)$/m);
+                                    const writesMatch = content.match(/^writes:\s*(.+)$/m);
+                                    const name = jobMatch ? jobMatch[1].trim() : f.replace(/\.md$/, '');
+                                    const lastRunRow = runs.find(r => r.job === name);
+                                    jobs.push({
+                                        filename: f,
+                                        name,
+                                        schedule: scheduleMatch ? scheduleMatch[1].trim() : 'daily',
+                                        reads: readsMatch ? readsMatch[1].trim() : '',
+                                        writes: writesMatch ? writesMatch[1].trim() : '',
+                                        lastRun: lastRunRow ? { timestamp: lastRunRow.timestamp, summary: lastRunRow.summary } : null
+                                    });
+                                }
+                            }
+                        }
+                        return { success: true, jobs };
+                    }
+                    case 'jobsInboxList': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) return { success: false, error: 'No workspace open.' };
+                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                        await ingestJobActivity(workspaceRoot, db);
+                        const items = await db.listJobInstructions();
+                        return { success: true, items };
+                    }
+                    case 'jobsMovesList': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) return { success: false, error: 'No workspace open.' };
+                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                        const moves = await db.listBoardMoveRequests(data.limit || 50);
+                        return { success: true, moves };
+                    }
+                    case 'jobsDropInstruction': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) return { success: false, error: 'No workspace open.' };
+                        if (!data.body || typeof data.body !== 'string' || !data.body.trim()) {
+                            return { success: false, error: 'Instruction body is required.' };
+                        }
+                        const res = await writeInstruction(workspaceRoot, { kind: 'manual', from: 'ui', body: data.body });
+                        if (res.success) {
+                            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                            await ingestJobActivity(workspaceRoot, db);
+                        }
+                        return res;
+                    }
+                    case 'jobsClearStuckClaim': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) return { success: false, error: 'No workspace open.' };
+                        if (!data.file || typeof data.file !== 'string') {
+                            return { success: false, error: 'File parameter is required.' };
+                        }
+                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                        await ingestJobActivity(workspaceRoot, db);
+                        const items = await db.listJobInstructions();
+                        const normalizedTarget = data.file.startsWith('inbox/') ? data.file : `inbox/${data.file}`;
+                        const item = items.find(i => i.file === normalizedTarget || i.file === data.file);
+                        if (!item || item.status !== 'stuck') {
+                            return { success: false, error: `Refused: instruction '${data.file}' is not in stuck status.` };
+                        }
+                        const baseName = path.basename(item.file);
+                        const claimPath = path.join(workspaceRoot, '.switchboard', 'instructions', 'inbox', 'claimed', `${baseName}.claim`);
+                        if (fs.existsSync(claimPath)) {
+                            await fs.promises.unlink(claimPath);
+                        }
+                        await ingestJobActivity(workspaceRoot, db);
+                        return { success: true, file: claimPath };
+                    }
+                    case 'jobsRefresh': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) return { success: false, error: 'No workspace open.' };
+                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                        await ingestJobActivity(workspaceRoot, db);
+                        return { success: true };
+                    }
                     case 'linearLoadProject': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
@@ -14684,19 +14266,8 @@ Each plan file must include:
                             const wasEnabled = this._autobanState.enabled;
                             const { lastTickAt: _ignoredLastTickAt, ...incomingState } = data.state;
                             this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, ...incomingState });
-                            // External mode runs no clock. Refuse the enable so the
-                            // panel does not read "running" with no clock behind it —
-                            // the same lie _tryRestoreAutoban prevents on restart.
-                            if (this._autobanState.enabled && this._autobanState.automationMode === 'external') {
-                                this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, enabled: false });
-                                this._stopAutobanEngine();
-                            } else if (this._autobanState.automationMode !== 'scheduled') {
-                                // Agent-managed: `enabled` means "the orchestrator is
-                                // armed", NOT "the run sheet is armed". Do not force it
-                                // false — that would disarm the orchestrator — but never
-                                // install the run-sheet clock behind it either.
-                                this._stopAutobanEngine();
-                            } else if (this._autobanState.enabled && !wasEnabled) {
+                            // The mode axis is deleted — no mode-specific guards.
+                            if (this._autobanState.enabled && !wasEnabled) {
                                 this._startAutobanEngine();
                             } else if (!this._autobanState.enabled && wasEnabled) {
                                 this._stopAutobanEngine();

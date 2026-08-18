@@ -67,6 +67,10 @@ The head prompt must not hardcode member roles or counts. A team's roster is ope
 **Tags:** bugfix, backend, frontend
 **Project:** Browser Switchboard
 
+## User Review Required
+
+No user review required — the design is self-contained (runtime member discovery via existing `ptyListTerminals` API), the migration is additive and idempotent, and no new wire surface or UI control is introduced. The one cross-subtask concern (migration step ordering relative to the roster-retopologise sibling) is handled at the feature-restructuring level, not here.
+
 ## Complexity Audit
 
 ### Routine
@@ -101,6 +105,15 @@ The head prompt must not hardcode member roles or counts. A team's roster is ope
 **Shipped-state rule.** `terminals.agentGroups` is released state with adopted rows on real installs, so the change to it is a migration, not a clean break (per the repo's migration rule). The migration is additive — it sets one absent key — and re-running it is a no-op because `!headPrompt` no longer matches.
 
 **Security.** No new wire surface. The head prompt instructs the head to call `ptyListTerminals` and `ptySendPrompt`, both already reachable by every fleet terminal (each is handed the port file and `SWITCHBOARD_API_TOKEN`, `teamWiring.ts:43-45`). No team definition crosses the wire.
+
+## Dependencies
+
+- No session dependencies. The plan builds entirely on existing wiring (`wireSpawnedTeam` headPrompt installation path), existing migration patterns (`migrateAgentGroups` exact-value recogniser discipline), and existing test patterns (`standing-orders-marker-contract.test.js` byte-identity assertions).
+- **Cross-subtask ordering dependency (feature-level):** The migration recogniser matches `prompt === MULTI_AGENT_PLANNING_MEMBER_PROMPT` (the OLD shipped member prompt). If the roster-retopologise sibling plan's migration changes `prompt` BEFORE this migration runs, this recogniser stops matching and `headPrompt` is never added to already-adopted forks. This migration MUST run before the roster migration within `migrateAgentGroups`. This is resolved at the feature restructuring level (merge or explicit sequencing).
+
+## Adversarial Synthesis
+
+Key risks: the three-copy byte-identity contract is enforced only by a test (silent drift if the test is skipped); the migration recogniser depends on the OLD `prompt` string, creating a hard ordering dependency with the roster-retopologise sibling; and the head prompt assumes the head's agent CLI can make HTTP POST calls (a pre-existing platform constraint shared with the Coding team, not a new defect). Mitigations: the contract test is the guard and must assert all three copies; the ordering dependency is resolved by merging the two migrations or sequencing them; and the HTTP-call assumption is documented in the prompt text itself (the instructions name the port file and the POST endpoints).
 
 ## Proposed Changes
 
@@ -237,3 +250,7 @@ Add three cases to the `migrateAgentGroups` block:
 8. **Existing install.** Before upgrading, adopt the team on the old build (so an untouched fork with no `headPrompt` is on disk). Upgrade, reload the window, open the TEAMS tab (which triggers the group read path). Confirm the persisted team now carries the head prompt. Close the running head, start the team again, and confirm the `team-head` row appears in `GET /terminals/standing-orders` without a duplicate `team` row.
 9. **Operator edit is respected.** Edit the adopted team's head prompt to any text, reload, and confirm the migration leaves it alone.
 10. **Member-less team.** Edit the adopted team to have zero members, start it, and hand it a memo. It must say it has no members and plan alone — not hang waiting for reports.
+
+## Recommendation
+
+**Complexity: 5 → Send to Coder.** The change is a single-field addition plus an additive migration, following an exact existing pattern (`NEW_CODING_HEAD_PROMPT`). The three-copy contract and the migration recogniser are the only non-trivial parts, and both have direct precedents.

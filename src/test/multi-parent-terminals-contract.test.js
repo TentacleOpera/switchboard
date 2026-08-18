@@ -316,9 +316,13 @@ test('the solo-mode empty-fleet guard survived the rewrite', () => {
 });
 
 test('the terminal row block is shared by both levels, not reimplemented', () => {
-    assert.ok(/function renderTerminalRow\(item\)/.test(terminalsJs), 'the row block must be extracted, not inlined twice');
-    const calls = terminalsJs.match(/appendChild\(renderTerminalRow\(item\)\)/g) || [];
-    assert.strictEqual(calls.length, 2, 'direct terminals and worktree terminals must render through the same helper');
+    assert.ok(/function renderTerminalRow\(item/.test(terminalsJs), 'the row block must be extracted, not inlined twice');
+    const calls = terminalsJs.match(/appendChild\(renderTerminalRow\(item/g) || [];
+    // Exact, not >=. Three call sites: parent-direct loose rows, worktree loose
+    // rows, and the team tier's own rows. A `>=` here would let a fourth,
+    // hand-inlined row block land green — the exact failure this test exists to
+    // catch. Raise the number deliberately when a fourth legitimate site appears.
+    assert.strictEqual(calls.length, 3, 'direct terminals, worktree terminals and team tiers must render through the same helper');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

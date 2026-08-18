@@ -3,7 +3,7 @@ import * as path from 'path';
 import type { HostSeams } from './hostSeams';
 import type { BroadcastHub } from './broadcastHub';
 import { KanbanDatabase } from './KanbanDatabase';
-import { mutateTerminalGroups, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { saveTerminalGroupsGuarded, type TerminalGroupsSettingsAccessor } from './teamWiring';
 
 /**
  * Kanban Service — Feature A · A2b (Generic Verb Passthrough)
@@ -247,12 +247,6 @@ export class KanbanService {
             if (!Array.isArray(value)) {
                 return { success: false, error: 'value must be an array for terminals.groups' };
             }
-            const baseIds: string[] = Array.isArray(payload?.baseIds)
-                ? payload.baseIds.filter((id: any): id is string => typeof id === 'string')
-                : [];
-            const baseIdSet = new Set(baseIds);
-            const clientIds = new Set(value.map((g: any) => g && g.id).filter(Boolean));
-
             const settings: TerminalGroupsSettingsAccessor = {
                 get: (k, d) => this._ctx.getScopedSetting(k, d, payload?.initiatorProject),
                 set: (k, v) => this._ctx.updateScopedSetting(k, v, payload?.initiatorProject),
@@ -265,13 +259,16 @@ export class KanbanService {
                 } catch { /* ignore */ }
             }
 
-            const merged = await mutateTerminalGroups({ db, settings }, (current) => {
-                const unseen = current.filter((g: any) => g && g.id && !baseIdSet.has(g.id) && !clientIds.has(g.id));
-                return [...value, ...unseen];
-            });
-
-            this._ctx.broadcaster.push({ type: 'settingResult', key, value: merged });
-            return { success: true, key, value: merged };
+            // Shared with KanbanProvider's inline fallback — one merge, not two.
+            // A throw here means the stored array could not be read; report the
+            // failure rather than reporting a success that wrote nothing.
+            try {
+                const merged = await saveTerminalGroupsGuarded({ db, settings, value, baseIds: payload?.baseIds });
+                this._ctx.broadcaster.push({ type: 'settingResult', key, value: merged });
+                return { success: true, key, value: merged };
+            } catch (err: any) {
+                return { success: false, error: `terminals.groups save failed: ${err?.message || err}` };
+            }
         }
 
         if (key.startsWith('roleConfig_')) {

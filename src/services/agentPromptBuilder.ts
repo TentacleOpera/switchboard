@@ -163,6 +163,13 @@ export interface PromptBuilderOptions {
     aggressivePairProgramming?: boolean;
     /** Whether advanced regression analysis block is appended (reviewer role). */
     advancedReviewerEnabled?: boolean;
+    /**
+     * When false, the ORCHESTRATOR_REPORT_DIRECTIVE is suppressed (no orchestrator
+     * is running to consume the reports). Defaults to true (backward-compatible:
+     * callers that don't pass the flag get the current behavior). The
+     * COMPLETION_REPORT_DIRECTIVE is always appended regardless of this flag.
+     */
+    orchestratorActive?: boolean;
     /** When true, replaces theatrical reviewer voice with terse bullet-point findings. */
     reviewerConciseModeEnabled?: boolean;
     /** When true, reviewer appends a brief summary to the plan file instead of reproducing full sections. */
@@ -1003,8 +1010,12 @@ export function ensureOrchestratorReportDirective(text: string): string {
  * Idempotent — each member guards on its own sentinel. Add new dispatch-protocol
  * directives HERE, never at a call site.
  */
-export function ensureDispatchProtocolDirectives(text: string): string {
-    return ensureOrchestratorReportDirective(ensureCompletionDirective(text));
+export function ensureDispatchProtocolDirectives(text: string, orchestratorActive = true): string {
+    const withCompletion = ensureCompletionDirective(text);
+    if (!orchestratorActive) {
+        return withCompletion;
+    }
+    return ensureOrchestratorReportDirective(withCompletion);
 }
 
 /**
@@ -1778,7 +1789,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
         // coder/lead/intern so its completion handshake is override-proof — without this,
         // a reviewer `replace` override silently breaks completion detection (the card's
         // working-state light never clears).
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.orchestratorActive !== false);
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
@@ -1903,7 +1914,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.orchestratorActive !== false);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -1956,7 +1967,7 @@ For each plan:
             if (cavemanOutputEnabled) {
                 baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
             }
-            baseInstructions = ensureDispatchProtocolDirectives(baseInstructions);
+            baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.orchestratorActive !== false);
 
 
             // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
@@ -2009,7 +2020,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.orchestratorActive !== false);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -2048,7 +2059,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.orchestratorActive !== false);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.

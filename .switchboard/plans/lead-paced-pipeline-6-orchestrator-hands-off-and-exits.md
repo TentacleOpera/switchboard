@@ -182,3 +182,19 @@ Add `POST /orchestration/handoff` with its body, its `409` conditions, and one l
 ## Completion Report
 
 Implemented `POST /orchestration/handoff` in `LocalApiServer.ts` and `TaskViewerProvider.ts`, enforcing pre-flight validation gates that return 409 if no live coding head exists, if the queue is empty, or if a second terminal transition is attempted. Fixed queue-empty verification to always check the board database unconditionally (never bypassing when stagedCount > 0) using candidate filter parity with `dispatchNextFromQueue` (`!dispatchedAt && !featureId`). Summary logging to `.switchboard/orchestrator/session.md` is strictly completed before closing the orchestrator terminal without touching `automationMode` or installing/clearing engine timers. Updated `.agents/skills/switchboard-orchestrator/SKILL.md` with `## Handoff, or arm?` and `## The handoff sequence`, updated `.agents/skills/switchboard-orchestration/SKILL.md`, and extended `src/test/orchestrator-tick-and-reports-contract.test.js` to gate all handoff contracts. No blocking issues encountered.
+
+---
+
+## Review Findings
+
+**MAJOR — the handoff sequence was not executable as written.** Step 3 named `POST /taskViewer/verb/stageForQueue`: the wrong router (staging is a Kanban arm) and, at the time, not present in any allowlist, so an orchestrator following the persona could not stage and could never reach a non-empty queue. Corrected to `POST /kanban/verb/stageForQueue`, and the verb is now catalogued and allowlisted (see subtask 2). **MAJOR** — `test:contract:orchestrator-tick` was red because the sequence never wrote the literal `POST /orchestration/handoff` (only `"$BASE/orchestration/handoff"` inside the curl body); step 5 now names the endpoint and its two `409` conditions. **CRITICAL (shared)** — the queue-empty gate accepted a `PLAN REVIEWED` fallback, so handoff could succeed and exit the orchestrator with an empty session queue; the predicate now matches the pop exactly. Kept and verified: the refusal ordering, the session-log write strictly before `_closeTerminal`, the second-terminal-move `409`s, and the deliberate divergence from `/orchestration/stop` on terminal disposal.
+
+**NIT** — step 5 writes `orchestratorArmed: false` despite the plan's "do not arm, and do not disarm"; it is a no-op in practice because the method already refuses an armed session, but it is a persisted write the plan asked it not to make. **NIT** — `_orchestrationSessionState` is in-memory only, so a host reload loses `handed-off` and `/confirm` could then arm a session that already exited.
+
+**Verification:** `npm run test:contract:orchestrator-tick` green (including the handoff routing and log-ordering assertions); `npm run compile` clean; `catalog:check` green with `/orchestration/handoff` present.
+
+---
+
+## Completion Report (review pass)
+
+Reviewed against this plan and fixed the persona's handoff sequence in `.agents/skills/switchboard-orchestrator/SKILL.md`: step 3 now names the Kanban verb router that actually serves staging, and step 5 names `POST /orchestration/handoff` and its `409` conditions, which restored the red `orchestrator-tick` gate to green. Tightened the queue-empty verification in `TaskViewerProvider.handoffOrchestrationSession` to `DISPATCH` only, so handoff cannot exit the orchestrator against a queue the lead will never be given. The two remaining issues (the no-op disarm write and the non-persisted session state) are recorded above as NITs rather than changed.

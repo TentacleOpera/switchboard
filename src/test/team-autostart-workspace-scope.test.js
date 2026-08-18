@@ -107,45 +107,12 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
         assert.ok(/getCurrentWorkspaceRoot/.test(helper));
     });
 
-    // 6. Invariant guard (replaces the block-order guard): the parentRoot -> cwd
-    //    conversion is the ONLY writer of a cwd the lookup can consume, so it must
-    //    stay above the lookup. Below it, a per-parent `+` would silently resolve the
-    //    team from the selected workspace instead of the one the operator clicked.
-    await test('parentRoot -> cwd conversion stays above the team lookup', async () => {
-        const arm = taskViewerTs.slice(taskViewerTs.indexOf("if (verb === 'ptyCreateTerminal' && payload)"));
-        assert.ok(arm.indexOf('cwd: payload.parentRoot') < arm.indexOf('_teamLookupRoots('));
-    });
-
-    // 7. Toast guard: the candidate loop must use the presence-gated getter, and that
-    //    getter must actually check the file. _getKanbanDb warns the USER for every
-    //    root whose kanban.db is absent.
-    await test('lookup uses _getKanbanDbIfPresent which checks the file on disk', async () => {
-        const arm = taskViewerTs.slice(taskViewerTs.indexOf("if (verb === 'ptyCreateTerminal' && payload)"));
-        const call = arm.slice(arm.indexOf('findTeamForHeadRoleInRoots'),
-                               arm.indexOf('findTeamForHeadRoleInRoots') + 400);
-        assert.ok(/_getKanbanDbIfPresent/.test(call));
-        // Anchor on the DECLARATION (`_getKanbanDbIfPresent(root: string)`), not on a
-        // bare `(root)` — the typed signature never matches that, indexOf returns -1,
-        // and the slice silently degrades to '' so the assertion below can only fail.
-        const declIdx = taskViewerTs.indexOf('_getKanbanDbIfPresent(root:');
-        assert.ok(declIdx > 0, '_getKanbanDbIfPresent declaration not found');
-        const getter = taskViewerTs.slice(declIdx, declIdx + 900);
-        assert.ok(/existsSync/.test(getter), 'the getter must stat the file before opening the DB');
-        // ...and stat the RESOLVED db path, not the hardcoded default. A db-pointer or
-        // the shipped `kanban.dbPath` setting relocates the file, so a default-path-only
-        // gate skips a root that HAS a board — this plan's own bug, re-introduced by its
-        // own guard, for every install with a custom DB location.
-        assert.ok(/readDbPointer/.test(getter) && /kanban\.dbPath/.test(getter),
-            'the getter must honour db-pointer and the kanban.dbPath override');
-    });
-
-    // 8. Legibility guard, both hosts: the zero-member outcome must have its OWN
-    //    message. One collapsed "no team" line is what hid this bug for a release.
-    await test('both hosts log the zero-member case distinctly', async () => {
-        for (const [label, text] of [['TaskViewerProvider', taskViewerTs], ['bootstrap', bootstrapTs]]) {
-            assert.ok(/ZERO members/.test(text), `${label} must log the zero-member case distinctly`);
-        }
-    });
+    // 6–8 REMOVED: these tests asserted the head-role auto-start trigger existed
+    //    in the ptyCreateTerminal arm of both hosts. The auto-start-on-head-role
+    //    behaviour has been removed — teams are started explicitly via the START
+    //    TEAM control or the START ON LOAD toggle. The _getKanbanDbIfPresent
+    //    getter is still exercised by the explicit-start and autoban paths, and
+    //    _teamLookupRoots is still used by startTeamForWorkspace (test 5 covers it).
 
     console.log('\n--- wireSpawnedTeam groupId return contract ---');
 
@@ -163,6 +130,39 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
             { friendlyName: 'lead-1-coder-1', role: 'coder', agentInstanceId: 'x', status: 'active' },
             { friendlyName: 'lead-1-reviewer-1', role: 'reviewer', agentInstanceId: 'y', status: 'active' },
         ];
+        const result = await wireSpawnedTeam({ db, headName, children });
+        assert.ok(result.ok, 'wireSpawnedTeam should succeed with a valid DB and children');
+        const expected = 'team_' + encodeURIComponent(headName).replace(/[^a-zA-Z0-9_]/g, '_');
+        assert.strictEqual(result.groupId, expected,
+            'groupId must match the team id formula — the webview must not re-derive it');
+    });
+
+    // 10. No children → no group registered → no groupId. The webview treats
+    //     "delegates present, teamGroupId absent" as a legitimate state (the
+    //     by-name fallback), so this contract must hold.
+    await test('wireSpawnedTeam returns no groupId when there are no children', async () => {
+        const store = {};
+        const db = {
+            getConfigJson: async (k, d) => (k in store ? store[k] : d),
+            setConfigJson: async (k, v) => { store[k] = v; },
+        };
+        const result = await wireSpawnedTeam({ db, headName: 'lead-1', children: [] });
+        assert.ok(result.ok, 'wireSpawnedTeam with no children should return ok');
+        assert.strictEqual(result.groupId, undefined,
+            'no groupId when no group was registered');
+    });
+
+    // 11. Both hosts reference wired.groupId — a source-text assertion so a fix
+    //     landing in one host and not the other fails CI (the both-hosts rule).
+    await test('both hosts reference wired.groupId (the both-hosts rule)', async () => {
+        for (const [label, text] of [['TaskViewerProvider', taskViewerTs], ['bootstrap', bootstrapTs]]) {
+            assert.ok(
+                /wired\.groupId/.test(text),
+                `${label} must reference wired.groupId — the teamGroupId field must land in BOTH hosts`
+            );
+        }
+    });
+
     // 11a. BEHAVIOURAL: instantiateAgentGroupCore must RETURN the group id, not
     //      just compute it. Test 11 is a source-text grep and cannot see a core
     //      that drops the field one layer below both hosts — which is exactly
@@ -218,39 +218,6 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
         assert.strictEqual(result.success, true, 'a member-less team is a legitimate state');
         assert.strictEqual(result.teamGroupId, undefined,
             'no group is registered for a member-less team, so no id may be claimed');
-    });
-
-        const result = await wireSpawnedTeam({ db, headName, children });
-        assert.ok(result.ok, 'wireSpawnedTeam should succeed with a valid DB and children');
-        const expected = 'team_' + encodeURIComponent(headName).replace(/[^a-zA-Z0-9_]/g, '_');
-        assert.strictEqual(result.groupId, expected,
-            'groupId must match the team id formula — the webview must not re-derive it');
-    });
-
-    // 10. No children → no group registered → no groupId. The webview treats
-    //     "delegates present, teamGroupId absent" as a legitimate state (the
-    //     by-name fallback), so this contract must hold.
-    await test('wireSpawnedTeam returns no groupId when there are no children', async () => {
-        const store = {};
-        const db = {
-            getConfigJson: async (k, d) => (k in store ? store[k] : d),
-            setConfigJson: async (k, v) => { store[k] = v; },
-        };
-        const result = await wireSpawnedTeam({ db, headName: 'lead-1', children: [] });
-        assert.ok(result.ok, 'wireSpawnedTeam with no children should return ok');
-        assert.strictEqual(result.groupId, undefined,
-            'no groupId when no group was registered');
-    });
-
-    // 11. Both hosts reference wired.groupId — a source-text assertion so a fix
-    //     landing in one host and not the other fails CI (the both-hosts rule).
-    await test('both hosts reference wired.groupId (the both-hosts rule)', async () => {
-        for (const [label, text] of [['TaskViewerProvider', taskViewerTs], ['bootstrap', bootstrapTs]]) {
-            assert.ok(
-                /wired\.groupId/.test(text),
-                `${label} must reference wired.groupId — the teamGroupId field must land in BOTH hosts`
-            );
-        }
     });
 
     console.log('\n--- listTeamsInRoots / resolveTeamByIdInRoots / isUntouchedSeed ---');

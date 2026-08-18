@@ -59,12 +59,19 @@ Two further outcomes:
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The Coding Lead Paces Its Own Pipeline — `POST /kanban/queue/next`](../plans/lead-paced-pipeline-1-queue-next-endpoint.md) — **LEAD CODED**
-- [ ] [The Dispatch Column Becomes the Session Queue — Select Plans, Press Run, Walk Away](../plans/lead-paced-pipeline-2-dispatch-as-session-queue.md) — **LEAD CODED**
-- [ ] [A Dead Pacer Must Surface, Not End the Night Silently — Queue Watch on the Idle Sweep](../plans/lead-paced-pipeline-3-queue-idle-watch.md) — **LEAD CODED**
-- [ ] [Delete the Mode Axis and the Completion Hybrid — Keep a Plain Scheduler](../plans/lead-paced-pipeline-4-delete-the-mode-axis-and-hybrid.md) — **LEAD CODED**
-- [ ] [The Orchestrator Becomes an Advisor — Silent Ready Checks, Bounded Answers, Advice on Request](../plans/lead-paced-pipeline-5-orchestrator-as-advisor.md) — **LEAD CODED**
-- [ ] [The Orchestrator Hands Off and Exits — One Team Means No Resident Manager](../plans/lead-paced-pipeline-6-orchestrator-hands-off-and-exits.md) — **LEAD CODED**
-- [ ] [Remote Plans Enter the Queue, Not the Agents — Batch Intake With the Orchestrator as Sequencer](../plans/lead-paced-pipeline-7-remote-plans-enter-the-queue.md) — **LEAD CODED**
+- [ ] [The Coding Lead Paces Its Own Pipeline — `POST /kanban/queue/next`](../plans/lead-paced-pipeline-1-queue-next-endpoint.md) — **CODE REVIEWED**
+- [ ] [The Dispatch Column Becomes the Session Queue — Select Plans, Press Run, Walk Away](../plans/lead-paced-pipeline-2-dispatch-as-session-queue.md) — **CODE REVIEWED**
+- [ ] [A Dead Pacer Must Surface, Not End the Night Silently — Queue Watch on the Idle Sweep](../plans/lead-paced-pipeline-3-queue-idle-watch.md) — **CODE REVIEWED**
+- [ ] [Delete the Mode Axis and the Completion Hybrid — Keep a Plain Scheduler](../plans/lead-paced-pipeline-4-delete-the-mode-axis-and-hybrid.md) — **CODE REVIEWED**
+- [ ] [The Orchestrator Becomes an Advisor — Silent Ready Checks, Bounded Answers, Advice on Request](../plans/lead-paced-pipeline-5-orchestrator-as-advisor.md) — **CODE REVIEWED**
+- [ ] [The Orchestrator Hands Off and Exits — One Team Means No Resident Manager](../plans/lead-paced-pipeline-6-orchestrator-hands-off-and-exits.md) — **CODE REVIEWED**
+- [ ] [Remote Plans Enter the Queue, Not the Agents — Batch Intake With the Orchestrator as Sequencer](../plans/lead-paced-pipeline-7-remote-plans-enter-the-queue.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
+---
+
+## Review Findings (feature-level review pass)
+
+All seven subtasks reviewed against their plan files with cross-subtask regression analysis. Two CRITICALs, both on contended surfaces the feature-level reconciliation table owns: subtask 1's interim `PLAN REVIEWED` queue-source fallback survived subtask 2's landing (and was copied into subtask 3's watch and subtask 6's handoff gate), turning an empty queue into an unattended drain of the whole `PLAN REVIEWED` lane; and subtask 4's legacy-state guard covered only five older mode aliases, so a board persisted as `automationMode: 'scheduled', enabled: true` — the common shipped state on ~4,000 installs — came up with the schedule armed and dispatching. Eight MAJORs followed: an unbounded queue-watch escalation, a schedule resolving its head through the deprecated `state.json` registry while every sibling used `terminals.groups`, remote `queue` mode staging every mapped column rather than dispatch columns, a surviving empty-column sweep that disabled the schedule ~60s after staging, three new Kanban verbs absent from the catalog and allowlist (CI's `catalog:check` red, buttons dead in the browser host), a head-prompt sentence missing from its third mirror, and four CI gates red that were green at the pre-feature baseline. All fixed in place.
+
+**Verification:** `npm run compile` clean; all seven PRD gates green (`catalog`, `parity`, `push-routing`, `standalone-parity`, `kanban-dispatch-callers`, `verb-returns`, `mirror`); 92 of 100 contract gates green — the eight failures were confirmed already red at `2a911764`, the commit before this feature began. Added `src/test/queue-pipeline-contract.test.js` (18 behavioural checks over the real compiled services, CI-wired) because the plans named roughly twenty unit tests for subtasks 1, 2, 3 and 7 and none had been written; it was mutation-tested red against the restored fallback. **Remaining risk:** subtask 4 step 8's automation-panel redesign is not implemented — the exclusive three-mode selector survives, so arming the orchestrator through it still clears the schedule, contradicting the two-independent-switches end-state; and `_selectAutobanTerminal` is now orphaned.

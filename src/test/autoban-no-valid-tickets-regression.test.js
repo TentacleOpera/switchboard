@@ -19,9 +19,21 @@ function run() {
         /private\s+async\s+_autobanHasEligibleCardsInEnabledColumns\(workspaceRoot:\s*string\):\s*Promise<boolean>\s*\{[\s\S]*const\s+enabledColumns\s*=\s*this\._getEnabledAutobanSourceColumns\(\);[\s\S]*await\s+this\._collectKanbanCardsInColumns\(workspaceRoot,\s*enabledColumns\);[\s\S]*await\s+this\._autobanColumnHasEligibleCards\(column,\s*cardsByColumn\.get\(column\)\s*\|\|\s*\[\],\s*workspaceRoot\)/s,
         'Expected autoban no-work detection to scan all enabled columns before stopping.'
     );
+    // The run-sheet tick that used to chain
+    // _getEligibleAutobanCards → _selectAutobanPlanReviewedCards →
+    // _stopAutobanIfNoValidTicketsRemain is deleted; the schedule pops the
+    // DISPATCH session queue instead. The invariant the old assertion protected
+    // — no-work detection must use the SAME predicate the dispatch path uses,
+    // or the sweep stops the engine while dispatchable work exists — now lands
+    // on the queue. Staging five plans into DISPATCH with CREATED and PLAN
+    // REVIEWED empty must NOT stop the schedule.
     expectRegex(
-        /const\s+eligibleCards\s*=\s*this\._getEligibleAutobanCards\(cardsInColumn\);[\s\S]*const\s+selectedCards\s*=\s*await\s+this\._selectAutobanPlanReviewedCards\(workspaceRoot,\s*eligibleCards,\s*batchSize\);[\s\S]*await\s+this\._stopAutobanIfNoValidTicketsRemain\(workspaceRoot\);/s,
-        'Expected autoban no-work detection to reuse the same eligibility helpers used for dispatch filtering.'
+        /private\s+async\s+_autobanHasStagedQueueCards\(workspaceRoot:\s*string\):\s*Promise<boolean>\s*\{[\s\S]*kanbanColumn\s*===\s*'DISPATCH'[\s\S]*!p\.dispatchedAt[\s\S]*!p\.featureId/s,
+        'Expected a staged-queue check using the queue pop\'s own predicate (DISPATCH, un-dispatched, non-subtask).'
+    );
+    expectRegex(
+        /private\s+async\s+_stopAutobanIfNoValidTicketsRemain\(workspaceRoot:\s*string\):\s*Promise<boolean>\s*\{[\s\S]*await\s+this\._autobanHasStagedQueueCards\(workspaceRoot\)[\s\S]*await\s+this\._autobanHasEligibleCardsInEnabledColumns\(workspaceRoot\)[\s\S]*await\s+this\._stopAutobanForNoValidTickets\(\);/s,
+        'Expected the empty-column sweep to consult the DISPATCH queue BEFORE stopping the schedule.'
     );
 
     console.log('autoban no-valid-tickets regression test passed');

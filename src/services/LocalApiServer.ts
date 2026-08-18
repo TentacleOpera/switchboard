@@ -15,7 +15,8 @@ import {
     mutateStandingOrders,
     makeStandingOrder,
 } from './standingOrders';
-import { plausibleOriginTerminal, describeStandingOrderMigrations } from './teamWiring';
+import { plausibleOriginTerminal, describeStandingOrderMigrations, TERMINALS_GROUPS_KEY } from './teamWiring';
+import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
 import { parseComplexityScore } from './complexityScale';
 import {
     DEFAULT_KANBAN_COLUMNS,
@@ -27,7 +28,7 @@ import {
     CustomKanbanColumnConfig
 } from './agentConfig';
 import { WsHub } from './wsHub';
-import { PLANNING_VERBS, SETUP_VERBS } from '../generated/verbAllowlist';
+import { PLANNING_VERBS, SETUP_VERBS, TASKVIEWER_VERBS } from '../generated/verbAllowlist';
 import { validateVerbPayload } from './verbSchemas';
 import { isLoopbackHostHeader, isLoopbackOrigin } from '../utils/loopbackHostname';
 
@@ -277,6 +278,16 @@ interface LocalApiServerOptions {
      * Optional — absent in headless/test harnesses; rows then carry no field.
      */
     resolveRoutedRole?: (score: number) => 'lead' | 'coder' | 'intern';
+    /**
+     * Create an external-headed team (head is a non-terminal agent).
+     * Optional — absent in headless/test harnesses (server falls back to internal resolution).
+     */
+    createExternalTeam?: (
+        workspaceRoot: string,
+        template: string,
+        headName: string,
+        featureId?: string
+    ) => Promise<{ success: boolean; teamId?: string; workers?: any[]; headPromptFile?: string; reportsDir?: string; error?: string }>;
     planningVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     ticketsVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     designVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
@@ -345,6 +356,22 @@ interface LocalApiServerOptions {
      * headless/test harnesses (endpoints return 503).
      */
     getKanbanDatabase?: (workspaceRoot?: string) => Promise<any | null | undefined>;
+    /**
+     * KanbanDatabase accessor for the STANDING-ORDERS store specifically, resolved
+     * against the host's latched fleet root rather than this server instance's
+     * `workspaceRoot`. The two are the same value on a single-root host and on the
+     * server's first start, and they diverge after the liveness watchdog restarts
+     * the server following a workspace switch: `workspaceRoot` follows the board's
+     * new selection, the fleet (and the root its orders were installed in) does not.
+     * The delivery chokepoints read the latched root, so this editor surface must
+     * read and write the same one or it lists orders that are not in force and
+     * writes orders that are never delivered.
+     *
+     * Optional. Absent on the standalone host (exactly one root, so the question
+     * cannot arise) and in headless/test harnesses, where it falls back to
+     * `_resolveDbForRoot()` — today's behaviour.
+     */
+    getFleetOrdersDatabase?: () => Promise<any | null | undefined>;
     /**
      * Arm the unattended orchestration engine — the same path the AUTOMATION tab
      * "Start orchestrator" button takes (terminal + kickoff + autoban clock).
@@ -1307,7 +1334,7 @@ export class LocalApiServer {
         workspaceRoot: string,
         ref: string,
         rawColumn?: string,
-        dispatchOptions?: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string }
+        dispatchOptions?: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string; restrictToOriginTeam?: boolean }
     ): Promise<{ status: number; payload: any }> {
         const fail = (status: number, error: string): { status: number; payload: any } =>
             ({ status, payload: { success: false, error } });
@@ -1391,6 +1418,10 @@ export class LocalApiServer {
                         if (hit) {
                             teamOverride = hit;
                             teamRouting = `team-scoped: ${origin} → ${hit}`;
+                        } else if (dispatchOptions?.restrictToOriginTeam) {
+                            // Opt-in (the external-headed queue/next branch): a miss is a
+                            // refusal, never a fall-through to workspace-wide routing.
+                            return fail(409, `No ${gate.role} on ${origin}'s team — the card stays staged. Dispatching workspace-wide would hand this team's card to another team's terminal. Add a ${gate.role} seat to the team, or dispatch the card yourself with an explicit target.`);
                         } else {
                             teamRouting = `team-scoped: no ${gate.role} on ${origin}'s team — fell back to workspace-wide`;
                         }
@@ -1542,12 +1573,19 @@ export class LocalApiServer {
                 }
 
                 // ── Queue source ───────────────────────────────────────────
-                // DISPATCH-column cards first (subtask 2's queue), ordered by
-                // queue_position ASC NULLS LAST then board order. Until subtask
-                // 2 lands, fall back to PLAN REVIEWED in board order so this
-                // plan is independently shippable and testable. Subtask
-                // exclusion: empty `featureId` (switchboard-contracts #6) — a
-                // subtask nested under a feature must not leak into the pop.
+                // DISPATCH is THE queue, ordered by queue_position ASC NULLS
+                // LAST then board order. Subtask exclusion: empty `featureId`
+                // (switchboard-contracts #6) — a subtask nested under a feature
+                // must not leak into the pop.
+                //
+                // There is deliberately NO fallback to PLAN REVIEWED. The
+                // interim fallback existed only while subtask 2's `DISPATCH`
+                // queue was unlanded; with the queue live it is actively
+                // harmful — an empty queue would drain the whole PLAN REVIEWED
+                // lane unattended instead of ending the session, the queue
+                // watch would never reach its "queue empty → drop silently"
+                // gate, and a schedule would dispatch cards the user never
+                // staged. An empty DISPATCH is the session ending normally.
                 const isQueueable = (p: any): boolean =>
                     !!p
                     && (!p.dispatchedAt)
@@ -1570,13 +1608,9 @@ export class LocalApiServer {
                     return 0; // board order (getBoard returns updated_at DESC) preserved by stable sort
                 };
 
-                let candidates = board.filter((p: any) => p && p.kanbanColumn === 'DISPATCH' && isQueueable(p));
-                if (candidates.length > 0) {
-                    candidates = candidates.slice().sort(byQueueThenBoard);
-                } else {
-                    candidates = board.filter((p: any) => p && p.kanbanColumn === 'PLAN REVIEWED' && isQueueable(p));
-                    // PLAN REVIEWED fallback: board order only (no queue_position yet).
-                }
+                const candidates = board
+                    .filter((p: any) => p && p.kanbanColumn === 'DISPATCH' && isQueueable(p))
+                    .sort(byQueueThenBoard);
 
                 if (candidates.length === 0) {
                     return { status: 200, payload: { success: true, dispatched: null, reason: 'queue empty' } };
@@ -1584,12 +1618,54 @@ export class LocalApiServer {
                 const next = candidates[0];
 
                 // ── Dispatch ───────────────────────────────────────────────
-                // `undefined` column ⇒ complexity routing chooses the column;
-                // `targetTerminalOverride: from` forces the terminal to the
-                // requesting head (the lead asked, the lead receives).
+                // Detect whether `from` names an external head (non-terminal agent).
+                // An external head is not a live terminal, so targetTerminalOverride: from
+                // must be skipped to avoid dispatching to a non-existent terminal.
+                // The card is complexity-routed and dispatched to the routed role ON THIS
+                // TEAM, and the card info comes back so the external agent can drive its
+                // workers from there.
+                //
+                // The roster is the authority and it is decisive in BOTH directions:
+                // wireSpawnedTeam writes the head into `members`/`order` for a terminal
+                // head and omits it for an external head, so roster membership answers
+                // the question outright. The live-terminal list is only consulted when
+                // there is no roster resolver at all (headless hosts). Letting it
+                // override a roster that already named `from` would silently demote a
+                // real terminal lead — the VS Code host's list carries PTY names from
+                // the last fleet snapshot, so a freshly spawned or briefly-missing head
+                // would lose `targetTerminalOverride` and hand its own card to a coder,
+                // and a head whose terminal has died would silently reroute instead of
+                // failing the 409 the caller needs to see.
+                let isExternalHead: boolean;
+                if (hasRosterResolver) {
+                    isExternalHead = Array.isArray(roster) && !roster.includes(from);
+                } else {
+                    isExternalHead = false;
+                    if (this._options.getRegisteredTerminals) {
+                        try {
+                            const live = this._options.getRegisteredTerminals();
+                            if (Array.isArray(live) && !live.includes(from)) {
+                                isExternalHead = true;
+                            }
+                        } catch { /* ignore */ }
+                    }
+                }
+
+                // `restrictToOriginTeam` closes the workspace-wide escape hatch for the
+                // external branch only. Without the override, performKanbanDispatch
+                // resolves the routed role on the origin's team and, on a miss, falls
+                // back to workspace-wide routing — which would hand this team's card to
+                // another team's terminal. That leak is worse than a refusal twice over:
+                // the in-flight predicate keys on team membership, so a card held by a
+                // foreign terminal is invisible to it and the one-in-one-out pacing this
+                // endpoint exists to enforce silently stops applying.
+                const dispatchOpts = isExternalHead
+                    ? { originTerminal: from, restrictToOriginTeam: true }
+                    : { originTerminal: from, targetTerminalOverride: from };
+
                 const outcome = await this.performKanbanDispatch(
                     workspaceRoot, next.planId, undefined,
-                    { originTerminal: from, targetTerminalOverride: from }
+                    dispatchOpts
                 );
 
                 // A failed dispatch (no live terminal → 409, card not found →
@@ -1794,6 +1870,159 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanMove error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanMove failed' }));
+        }
+    }
+
+    /**
+     * POST /teams/create-external — create an external-headed team (non-terminal agent lead).
+     * Body: { template: string, headName: string, featureId?: string, workspaceRoot?: string }
+     */
+    private async _handleTeamsCreateExternal(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const template = String(body?.template || '').trim();
+            const headName = String(body?.headName || '').trim();
+            const featureId = body?.featureId ? String(body.featureId).trim() : undefined;
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+
+            if (!template) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: template' }));
+                return;
+            }
+            if (!headName) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: headName' }));
+                return;
+            }
+
+            // 1. Collision checks: headName must not match an existing terminal or group
+            const liveTerminals = this._options.getRegisteredTerminals?.() || [];
+            if (liveTerminals.includes(headName)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    error: `headName '${headName}' collides with an existing terminal`
+                }));
+                return;
+            }
+
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (db) {
+                try {
+                    // Both keys. `wireSpawnedTeam` registers under
+                    // TERMINALS_GROUPS_KEY ('switchboard.prompts.terminals.groups');
+                    // the bare 'terminals.groups' is the legacy key still merged in by
+                    // every reader. Checking only the bare key makes this guard a no-op
+                    // against every team the current code has ever registered — the
+                    // collision it exists to catch would sail straight through and
+                    // wireSpawnedTeam would upsert over the live team.
+                    const scopedGroups = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+                    const legacyGroups = await db.getConfigJson('terminals.groups', []) as any[];
+                    const rawGroups = [
+                        ...(Array.isArray(scopedGroups) ? scopedGroups : []),
+                        ...(Array.isArray(legacyGroups) ? legacyGroups : []),
+                    ];
+                    const targetId = 'team_' + encodeURIComponent(headName).replace(/[^a-zA-Z0-9_]/g, '_');
+                    const existingGroup = rawGroups.find((g: any) =>
+                        g && (g.id === targetId || g.name === headName)
+                    );
+                    if (existingGroup) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({
+                            success: false,
+                            error: `headName '${headName}' collides with an existing team or group id '${targetId}'`
+                        }));
+                        return;
+                    }
+                } catch { /* ignore */ }
+            }
+
+            // 2. Delegate to createExternalTeam option if provided
+            if (this._options.createExternalTeam) {
+                const result = await this._options.createExternalTeam(workspaceRoot, template, headName, featureId);
+                res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+                return;
+            }
+
+            // 3. Built-in template resolution & instantiation fallback.
+            //    ONE resolver, shared with the standalone host's createExternalTeam —
+            //    two copies of the template table drift silently, and the same
+            //    `template` string would then produce two different rosters depending
+            //    on which host served the request.
+            const resolvedTemplate = db ? await resolveExternalTeamTemplate(db, template) : null;
+
+            if (!resolvedTemplate) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Template '${template}' not found` }));
+                return;
+            }
+
+            if (!db) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Kanban DB not ready' }));
+                return;
+            }
+
+            const terminalVerb = this._options.terminalVerb;
+            const result = await instantiateExternalHeadedTeam({
+                db,
+                group: resolvedTemplate,
+                headName,
+                featureId,
+                cwd: workspaceRoot,
+                workspaceRoot,
+                apiPort: this._port,
+                liveDelegateCount: async () => {
+                    if (terminalVerb) {
+                        const listed = await terminalVerb('ptyListTerminals', {});
+                        if (listed?.success) {
+                            return [...(listed.terminals || []), ...(listed.hiddenTerminals || [])]
+                                .filter((t: any) => t.parentInstanceId && t.status === 'active').length;
+                        }
+                    }
+                    return 0;
+                },
+                createDelegatesOnly: async (spec) => {
+                    const delegates: Array<{ friendlyName: string; role?: string; [k: string]: any }> = [];
+                    if (terminalVerb) {
+                        for (const d of spec.delegates) {
+                            const count = Math.max(1, Math.min(d.count || 1, 8));
+                            const baseName = `${spec.teamName || 'team'}-${d.label || d.role}`;
+                            for (let i = 0; i < count; i++) {
+                                const suffix = count > 1 ? `-${i + 1}` : '';
+                                const name = `${baseName}${suffix}`;
+                                const res = await terminalVerb('ptyCreateTerminal', {
+                                    role: d.role,
+                                    name,
+                                    cwd: spec.cwd,
+                                });
+                                if (res?.success && res.terminal) {
+                                    delegates.push({
+                                        friendlyName: res.terminal.friendlyName || name,
+                                        role: d.role,
+                                        ...res.terminal,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    return { success: true, delegates };
+                },
+            });
+
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] _handleTeamsCreateExternal error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'createExternalTeam failed' }));
         }
     }
 
@@ -2647,7 +2876,7 @@ export class LocalApiServer {
             return;
         }
 
-        const db = await this._resolveDbForRoot();
+        const db = await this._resolveFleetOrdersDb();
         if (!db) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, available: false, orders: [] }));
@@ -2690,7 +2919,7 @@ export class LocalApiServer {
             return;
         }
 
-        const db = await this._resolveDbForRoot();
+        const db = await this._resolveFleetOrdersDb();
         if (!db) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
@@ -3160,6 +3389,21 @@ export class LocalApiServer {
         const getKanbanDatabase = this._options.getKanbanDatabase;
         if (!getKanbanDatabase) return null;
         return await getKanbanDatabase(wsRoot || this._options.workspaceRoot);
+    }
+
+    /**
+     * Resolve the KanbanDatabase holding the STANDING-ORDERS store — the host's
+     * latched fleet root, not this server instance's `workspaceRoot`. See
+     * `getFleetOrdersDatabase` on the options for why those are different roots.
+     * Falls back to `_resolveDbForRoot()` when the host supplies no accessor
+     * (standalone: one root; headless: no DB at all).
+     */
+    private async _resolveFleetOrdersDb(): Promise<any | null> {
+        const getFleetOrdersDatabase = this._options.getFleetOrdersDatabase;
+        if (getFleetOrdersDatabase) {
+            return (await getFleetOrdersDatabase()) || null;
+        }
+        return await this._resolveDbForRoot();
     }
 
     /** Resolve the workspace UUID the DB methods key on (not the root path). */
@@ -4151,6 +4395,8 @@ export class LocalApiServer {
                 await this._handleUpdateClickUpTask(taskId, req, res);
             } else if (pathname === '/kanban/dispatch' && req.method === 'POST') {
                 await this._handleKanbanDispatch(req, res);
+            } else if (pathname === '/teams/create-external' && req.method === 'POST') {
+                await this._handleTeamsCreateExternal(req, res);
             } else if (pathname === '/kanban/queue/next' && req.method === 'POST') {
                 await this._handleKanbanQueueNext(req, res);
             } else if (pathname === '/kanban/move' && req.method === 'POST') {
@@ -4221,6 +4467,8 @@ export class LocalApiServer {
                     await this._handleSetupVerb(verb, req, res);
                 } else if (PLANNING_VERBS.has(verb)) {
                     await this._handlePlanningVerb(verb, req, res);
+                } else if (TASKVIEWER_VERBS.has(verb)) {
+                    await this._handleTaskViewerVerb(verb, req, res);
                 } else {
                     // Fail loudly rather than 404-as-not-found: a Connections verb that
                     // is in neither allowlist is a wiring bug in the panel, and a silent
@@ -4228,7 +4476,7 @@ export class LocalApiServer {
                     res.writeHead(404, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
                         success: false,
-                        error: `Unknown connections verb '${verb}' — it is in neither SETUP_VERBS nor PLANNING_VERBS. Add the arm to its provider and run \`npm run catalog:generate\`.`
+                        error: `Unknown connections verb '${verb}' — it is in neither SETUP_VERBS, PLANNING_VERBS nor TASKVIEWER_VERBS. Add the arm to its provider and run \`npm run catalog:generate\`.`
                     }));
                 }
             } else if (pathname.startsWith('/taskViewer/verb/') && req.method === 'POST') {

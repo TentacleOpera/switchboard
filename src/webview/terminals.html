@@ -671,6 +671,43 @@
             padding-left: 4px;
         }
 
+        /* Team tier — one level inside a workspace or worktree. Header internals reuse
+           .worktree-* classes; only the wrapper, indent and accent are new. */
+        .team-group {
+            margin-bottom: 6px;
+            border-left: 1px solid var(--accent-violet, #c586c0);
+            padding-left: 4px;
+        }
+        .team-group.indent-team {
+            margin-left: 6px;
+        }
+        .team-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 3px 6px;
+            background: rgba(255, 255, 255, 0.025);
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .team-group-header:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .team-group.collapsed .worktree-collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .team-items {
+            padding-left: 6px;
+            margin-top: 3px;
+        }
+        .team-group.collapsed .team-items {
+            display: none;
+        }
+
         /* Logical Groups tier */
         .group-tier-header {
             display: flex;
@@ -878,9 +915,10 @@
             color: var(--text-primary);
             background: rgba(255, 255, 255, 0.06);
         }
-        /* Group membership chip on terminal rows. Replaces the nesting tier:
-           membership is legible inline without a tree level. Uses the same
-           --accent-violet the group affordance wears elsewhere. */
+        /* Group membership chip on terminal rows. Supplements the team tier for
+           derived claims (role/worktree groups have no tier); suppressed on rows
+           rendered under a team subheader. Uses the same --accent-violet the group
+           affordance wears elsewhere. */
         .item-group-chip {
             font-size: 9px;
             font-weight: 600;
@@ -1179,6 +1217,49 @@
            selector would be dead. updatePaneElement stamps this directly, where
            fleetItem.status is already in scope. */
         .pane-brand-icon.is-exited { opacity: 0.45; }
+        /* Team-lead mark. NO margin, for the reason spelled out on .pane-brand-icon
+           above: .pane-title already declares gap:6px, and a margin here stacks with
+           it into a lopsided lead gap. */
+        .pane-crown-icon {
+            flex-shrink: 0;
+            align-self: center;
+            width: 14px;
+            height: 14px;
+            color: var(--feature-accent, #D4A017);
+            opacity: 0.95;
+            pointer-events: none;
+        }
+        .pane-crown-icon.is-exited { opacity: 0.45; }
+        /* Dense grids: match the brand icon shrink — 1x3/2x3/3x3 have narrow columns */
+        .pane-grid.layout-1x3 .pane-crown-icon,
+        .pane-grid.layout-2x3 .pane-crown-icon,
+        .pane-grid.layout-3x3 .pane-crown-icon {
+            width: 12px;
+            height: 12px;
+        }
+        /* The crown is an inline <svg> in a <span> wrapper, not an <img> like
+           .pane-brand-icon — so the wrapper's box does NOT size the mark. CROWN_SVG
+           carries width="14" height="14" attributes, which win over the wrapper and
+           make the dense-grid 12px rule above a no-op (a 14px glyph spilling out of a
+           12px slot). Sizing the svg to the wrapper is what makes that rule real. */
+        .pane-crown-icon svg,
+        .item-crown-icon svg {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* margin-left, unlike the pane: .item-role-row declares gap:0, so the row
+           supplies no separation of its own. */
+        .item-crown-icon {
+            flex-shrink: 0;
+            width: 14px;
+            height: 14px;
+            color: var(--feature-accent, #D4A017);
+            opacity: 0.95;
+            pointer-events: none;
+            margin-left: 2px;
+        }
+        .item-crown-icon.is-exited { opacity: 0.45; }
         /* Dense grids: the title ellipsises first by flex design, so shrink the
            icon rather than drop it — at these densities the icon is the primary
            identifier. Scoped to the three ELLIPSISING layouts

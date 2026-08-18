@@ -57,6 +57,18 @@ export const AGENT_GROUP_CALLBACK_INSTRUCTION =
     + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.';
 
 /**
+ * Callback instruction for external-headed teams (head is a non-terminal agent
+ * like Antigravity, Cursor, or IDE chat). Directs workers to write structured
+ * report files into the team's dedicated reports inbox.
+ */
+export const EXTERNAL_HEAD_CALLBACK_INSTRUCTION =
+    '{child} is your head agent. When you finish a task, report to it — write a report file to '
+    + '.switchboard/teams/{teamId}/reports/ named report-<UTC-compact>-<kind>-<5 digits>.md '
+    + 'with frontmatter (from: <your seat name>, kind: finished|blocked|question|status, '
+    + 'planId: <plan id>, created: <UTC timestamp>) and a one-line message body. '
+    + 'Do not wait to be asked.';
+
+/**
  * The PRE-rewrite callback text — byte-identical to the shipped constant before
  * this change. Existing installs have per-member pair rows whose `instruction`
  * field carries this exact string. The migration recogniser matches against it
@@ -150,8 +162,27 @@ export interface MutateTerminalGroupsOptions {
 let _groupsWriteChain: Promise<unknown> = Promise.resolve();
 
 /**
+ * Ledger of bare-key group ids already imported into TERMINALS_GROUPS_KEY.
+ *
+ * The bare row is never deleted (downgrade safety, per the plan), so without a
+ * ledger the import re-runs on EVERY mutation and an operator who deletes a
+ * migrated team group gets it back on their next save — forever. Recording the
+ * ids makes the import genuinely once-per-id: a row the operator later removes
+ * stays removed, while a bare id written by a downgraded build is still new and
+ * still imports.
+ */
+const TERMINALS_GROUPS_BARE_IMPORTED_KEY = 'switchboard.prompts.terminals.groups.bareImportedIds';
+
+/**
  * Mutate terminal groups atomically inside _groupsWriteChain.
- * Handles bare 'terminals.groups' legacy migration idempotently on first read.
+ * Handles bare 'terminals.groups' legacy migration once per id on first read.
+ *
+ * A failure to READ the current array propagates — it must never be treated as
+ * "there was nothing stored", because the transform that follows WRITES. The
+ * sql.js heap-exhaustion failure this repo has hit before makes every read a
+ * candidate for throwing, and defaulting to `[]` there wipes the roster the
+ * guard exists to protect. Callers already handle a throw: `wireSpawnedTeam`
+ * turns it into `{ ok: false }`, and the saveSetting arms into an error result.
  */
 export async function mutateTerminalGroups(
     opts: MutateTerminalGroupsOptions,
@@ -162,29 +193,32 @@ export async function mutateTerminalGroups(
     const p = _groupsWriteChain.then(async () => {
         let current: any[] = [];
         if (settings) {
-            try {
-                const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
-                current = Array.isArray(raw) ? [...raw] : [];
-            } catch {
-                current = [];
-            }
+            const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
+            current = Array.isArray(raw) ? [...raw] : [];
         } else if (db) {
-            try {
-                const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []);
-                current = Array.isArray(raw) ? [...raw] : [];
-            } catch {
-                current = [];
-            }
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []);
+            current = Array.isArray(raw) ? [...raw] : [];
         }
 
-        // Shipped bare key migration: import bare 'terminals.groups' from db if present
+        // Shipped bare-key migration: import bare 'terminals.groups' rows this
+        // workspace has not imported before. Best effort — a legacy row that
+        // cannot be read must not fail a save of the current array.
+        let newlyImported: string[] = [];
         if (db) {
             try {
                 const bareRaw = await db.getConfigJson('terminals.groups', []);
                 if (Array.isArray(bareRaw) && bareRaw.length > 0) {
+                    const ledgerRaw = await db.getConfigJson(TERMINALS_GROUPS_BARE_IMPORTED_KEY, []);
+                    const imported = new Set<string>(
+                        Array.isArray(ledgerRaw) ? ledgerRaw.filter((x: any) => typeof x === 'string') : []
+                    );
                     const existingIds = new Set(current.map((g: any) => g && g.id).filter(Boolean));
                     for (const g of bareRaw) {
-                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                        if (!g || typeof g.id !== 'string' || imported.has(g.id)) { continue; }
+                        newlyImported.push(g.id);
+                        // Prefixed wins on an id collision — the row is already
+                        // here, so only the ledger entry is new.
+                        if (!existingIds.has(g.id)) {
                             current.push(g);
                             existingIds.add(g.id);
                         }
@@ -201,11 +235,54 @@ export async function mutateTerminalGroups(
         } else if (db) {
             await db.setConfigJson(TERMINALS_GROUPS_KEY, validated);
         }
+
+        // Ledger AFTER the array write. Marking an id imported before the write
+        // lands would strand it: the next pass skips it and the group is in
+        // neither row.
+        if (db && newlyImported.length > 0) {
+            try {
+                const ledgerRaw = await db.getConfigJson(TERMINALS_GROUPS_BARE_IMPORTED_KEY, []);
+                const imported = Array.isArray(ledgerRaw) ? ledgerRaw.filter((x: any) => typeof x === 'string') : [];
+                await db.setConfigJson(
+                    TERMINALS_GROUPS_BARE_IMPORTED_KEY,
+                    [...new Set([...imported, ...newlyImported])]
+                );
+            } catch { /* a lost ledger entry costs one extra idempotent import */ }
+        }
         result = validated;
     });
     _groupsWriteChain = p.catch(() => {});
     await p;
     return result;
+}
+
+/**
+ * The webview's whole-array save of `terminals.groups`, guarded.
+ *
+ * ONE implementation for both `saveSetting` arms (`KanbanService.saveSetting`
+ * and `KanbanProvider`'s inline fallback). Two copies of this merge is the
+ * partial fix the plan named: the next edit lands in one of them.
+ *
+ * `unseen = stored \ (baseIds ∪ clientIds)` — the ids the client never read and
+ * is not sending are appended back. A missing or malformed `baseIds` means "saw
+ * nothing", which degrades to a full union: the safe direction, and what an
+ * older webview build (which sends no `baseIds`) needs.
+ */
+export async function saveTerminalGroupsGuarded(opts: {
+    db?: MutateTerminalGroupsOptions['db'];
+    settings?: TerminalGroupsSettingsAccessor;
+    value: any[];
+    baseIds?: unknown;
+}): Promise<any[]> {
+    const { db, settings, value } = opts;
+    const baseIdSet = new Set<string>(
+        Array.isArray(opts.baseIds) ? opts.baseIds.filter((id: any): id is string => typeof id === 'string') : []
+    );
+    const clientIds = new Set(value.map((g: any) => g && g.id).filter(Boolean));
+    return mutateTerminalGroups({ db, settings }, (current) => {
+        const unseen = current.filter((g: any) => g && g.id && !baseIdSet.has(g.id) && !clientIds.has(g.id));
+        return [...value, ...unseen];
+    });
 }
 
 /** Config key for agent group definitions (team templates). */
@@ -273,6 +350,43 @@ export const OLD_CODING_HEAD_PROMPT =
  * load-bearing literals).
  */
 export const NEW_CODING_HEAD_PROMPT =
+    'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
+    + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
+    + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
+    + 'ptyListTerminals rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID — role alone '
+    + 'is not a membership test, and a standalone seat of the same role is not yours to drive. Take the '
+    + 'subtask\'s recommendedRole as the routing decision; do not invent complexity tiers. Before sending any '
+    + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
+    + 'review on the same subtask twice, do not send that subtask to it a third time — escalate '
+    + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
+    + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
+    + 'a lead, or your team has no seat above it, stop and report to the human instead of '
+    + 'dispatching again (or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+    + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
+    + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
+    + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
+    + 'cleared seat before rotation. Do not send anything to the reviewer, and do not write review '
+    + 'instructions — that is not your job. When every subtask of the feature is finished, read the '
+    + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
+    + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
+    + 'pwd> (that read returns one record per subtask, each with its kanbanColumn), then make one call: '
+    + 'POST /kanban/dispatch with '
+    + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}","workspaceRoot":'
+    + '"<your current working directory — run pwd>"} — that one call moves the card and dispatches '
+    + 'the reviewer with the reviewer\'s own prompt. Do NOT use /kanban/move: it moves the card and '
+    + 'dispatches nobody. Only advance the feature your team worked; leave other cards alone. Do '
+    + 'not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
+    + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
+    + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
+    + 'empty and stop.';
+
+/**
+ * The CURRENT (buggy) Coding team headPrompt — the text that the first migration
+ * (OLD_CODING_HEAD_PROMPT → NEW_CODING_HEAD_PROMPT) wrote to disk. This is what
+ * is on every install that already migrated. The second migration recogniser
+ * matches against this exact value and replaces it with the corrected text.
+ */
+export const CURRENT_BUGGY_CODING_HEAD_PROMPT =
     'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
     + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
     + 'no such seat, dispatch to a coder and say why in your status report. Post a status report '
@@ -378,6 +492,24 @@ export function migrateAgentGroups(groups: any[]): any[] | null {
                 `[teamWiring] Migration: converted untouched old Coding team `
                 + `'${g.id || g.name}' — reviewer relationship → reports-to-head, `
                 + `headPrompt → feature-level dispatch.`
+            );
+        }
+
+        // Step 1c: convert an install that already migrated to the current (buggy)
+        // headPrompt. Exact-value match on CURRENT_BUGGY_CODING_HEAD_PROMPT; an
+        // operator-edited group does not match and is left alone.
+        if (isUntouchedCurrentCodingTeam(g)) {
+            const convertedReviewerMembers = (Array.isArray(g.members) ? g.members : [])
+                .map((m: any) => m); // no member changes — only the headPrompt is wrong
+            g = {
+                ...g,
+                headPrompt: NEW_CODING_HEAD_PROMPT, // now the corrected text
+                members: convertedReviewerMembers,
+            };
+            changed = true;
+            console.log(
+                `[teamWiring] Migration: corrected buggy Coding team headPrompt `
+                + `'${g.id || g.name}' — API endpoint + workspaceRoot + rotation rule.`
             );
         }
 
@@ -598,6 +730,27 @@ function isUntouchedOldCodingTeam(group: any): boolean {
     if (!Array.isArray(members)) { return false; }
     return members.some((m: any) =>
         m && m.role === 'reviewer' && m.relationship === 'reviewer');
+}
+
+/**
+ * Recognise an install that already migrated from OLD_CODING_HEAD_PROMPT to the
+ * first-generation NEW_CODING_HEAD_PROMPT (which contained the GET /kanban/feature
+ * error, missing workspaceRoot, and rotation rule).
+ *
+ * Exact-value match on `headPrompt === CURRENT_BUGGY_CODING_HEAD_PROMPT`. An
+ * operator who edited the prompt does not match and is left alone.
+ *
+ * NEVER edit CURRENT_BUGGY_CODING_HEAD_PROMPT. It is a frozen snapshot of a
+ * string already written to ~4000 installs' disks, not a prompt that is
+ * delivered to anyone. Adding one word to it (an unattended-mode clause was
+ * swept into it once) makes this recogniser match zero installs, and the
+ * migration silently stops firing. New prompt wording goes in
+ * NEW_CODING_HEAD_PROMPT only.
+ */
+function isUntouchedCurrentCodingTeam(group: any): boolean {
+    if (!group || group.headRole !== 'lead') { return false; }
+    return typeof group.headPrompt === 'string'
+        && group.headPrompt === CURRENT_BUGGY_CODING_HEAD_PROMPT;
 }
 
 /**
@@ -861,6 +1014,23 @@ export interface WireSpawnedTeamOptions {
      * would be wrong for every team whose head is not a coding lead.
      */
     headPrompt?: string;
+    /**
+     * True when the team lead is a non-terminal external agent (Antigravity /
+     * Cursor / IDE chat). Uses EXTERNAL_HEAD_CALLBACK_INSTRUCTION for workers
+     * to write reports to .switchboard/teams/<teamId>/reports/, skips installing
+     * a team-head standing order, and excludes the headName from group.members
+     * (workers only).
+     */
+    externalHead?: boolean;
+    /**
+     * External-headed teams only: fired once the group registration has landed,
+     * with the roster that was actually persisted. The caller regenerates
+     * `.switchboard/teams/<teamId>/head-prompt.md` from it. Passed as a callback
+     * rather than imported directly because the writer lives in
+     * agentGroupInstantiation, which already imports this module — calling it
+     * from here would close an import cycle.
+     */
+    regenerateHeadPrompt?: (info: { groupId: string; memberNames: string[] }) => Promise<void> | void;
 }
 
 export interface WireSpawnedTeamResult {
@@ -920,11 +1090,16 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     // ── Build the team prompt ─────────────────────────────────────────
     // The prompt is carried as one team-scoped standing order. When the caller
     // supplies a `prompt` (from the team definition), use it with {child}
-    // interpolated to the head name. Otherwise build a default from the
-    // callback instruction + GIT_SAFETY_DIRECTIVE (imported, not copied).
+    // interpolated to the head name and {teamId} interpolated to the groupId.
+    // Otherwise build a default from the callback instruction (or external head callback)
+    // + GIT_SAFETY_DIRECTIVE (imported, not copied).
+    const callbackTemplate = opts.externalHead
+        ? EXTERNAL_HEAD_CALLBACK_INSTRUCTION.replace(/\{teamId\}/g, groupId)
+        : AGENT_GROUP_CALLBACK_INSTRUCTION;
+
     const teamPromptInstruction = prompt
-        ? prompt.replace(/\{child\}/g, headName)
-        : `${AGENT_GROUP_CALLBACK_INSTRUCTION.replace(/\{child\}/g, headName)}\n${GIT_SAFETY_DIRECTIVE}`;
+        ? prompt.replace(/\{child\}/g, headName).replace(/\{teamId\}/g, groupId)
+        : `${callbackTemplate.replace(/\{child\}/g, headName)}\n${GIT_SAFETY_DIRECTIVE}`;
 
     // ── Resolve pair-scoped relationships per child ───────────────────
     // Walk the member definitions and children together — children are in the
@@ -989,22 +1164,25 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                 ));
             }
 
-            // Head-facing order. Keyed on (scope, teamId) exactly like the member
-            // order, so a re-run of wireSpawnedTeam skips it rather than duplicating.
+            // Head-facing order (skipped for external heads — no head terminal).
+            // Keyed on (scope, teamId) exactly like the member order, so a re-run
+            // of wireSpawnedTeam skips it rather than duplicating.
             // Same mutator as the team order above — do not split this into a second
             // mutateStandingOrders call; that reopens a read-modify-write window.
-            const headPromptText = (opts.headPrompt || '').trim();
-            if (headPromptText) {
-                const headExists = next.some((o: StandingOrder) =>
-                    o.scope === 'team-head' && o.teamId === groupId);
-                if (!headExists) {
-                    next.push(makeStandingOrder(
-                        headName,   // parent = head (the delivery target for this scope)
-                        '',         // child = '' — old-build safety, see selectOrders
-                        headPromptText.replace(/\{head\}/g, headName),
-                        'team-head',
-                        groupId,
-                    ));
+            if (!opts.externalHead) {
+                const headPromptText = (opts.headPrompt || '').trim();
+                if (headPromptText) {
+                    const headExists = next.some((o: StandingOrder) =>
+                        o.scope === 'team-head' && o.teamId === groupId);
+                    if (!headExists) {
+                        next.push(makeStandingOrder(
+                            headName,   // parent = head (the delivery target for this scope)
+                            '',         // child = '' — old-build safety, see selectOrders
+                            headPromptText.replace(/\{head\}/g, headName),
+                            'team-head',
+                            groupId,
+                        ));
+                    }
                 }
             }
 
@@ -1030,14 +1208,16 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     // registration so open panels re-read the key before their next
     // whole-array save can clobber it.
     //
-    // source: 'manual' — loadLayoutSettings (terminals.js) silently discards
-    // any group whose source is not manual/role/worktree.
-    //
-    // NOT `members` — that name is taken by the member DEFINITIONS destructured
-    // from opts above. Shadowing it here was a TS2451 redeclaration that broke
-    // the build for the whole extension.
-    const groupMembers = [headName, ...childNames];
+    // For external-headed teams, exclude the headName from members and order —
+    // the head is a non-terminal agent and should not appear in getGroupMembers.
+    const groupMembers = opts.externalHead
+        ? [...childNames]
+        : [headName, ...childNames];
     const layout = layoutForTeamSize(groupMembers.length);
+    // Persisted so a reader can tell "members[0] is the head" from "the head is not a
+    // seat at all". Without it the terminals panel crowns members[0] — which for an
+    // external-headed team is the first CODER, since the head is excluded above.
+    const externalHead = opts.externalHead === true;
     const group = {
         id: groupId,
         name: headName,
@@ -1045,6 +1225,7 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
         layout,
         members: groupMembers,
         order: groupMembers,
+        externalHead,
     };
 
     try {
@@ -1068,6 +1249,7 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                         : layout,
                     members: groupMembers,
                     order: groupMembers,
+                    externalHead,
                 }
                 : group;
             const next = [...current];
@@ -1077,6 +1259,15 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     } catch (err: any) {
         // A failed group write must not undo a successful order install.
         return { ok: false, error: `Group registration failed: ${err?.message || err}` };
+    }
+
+    // Head-prompt regeneration (external heads only). Runs AFTER the group write
+    // so the file describes the persisted roster, never a roster the write
+    // rejected. A failure here leaves a stale file, not a broken team, so it
+    // must not fail the wiring.
+    if (opts.externalHead && opts.regenerateHeadPrompt) {
+        try { await opts.regenerateHeadPrompt({ groupId, memberNames: groupMembers }); }
+        catch (err) { console.warn('[teamWiring] regenerateHeadPrompt failed:', err); }
     }
 
     return { ok: true, groupId };
@@ -1180,6 +1371,30 @@ export function migrateTeamPairOrders(orders: StandingOrder[]): StandingOrder[] 
 export const OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review yourself';
 
 /**
+ * A substitution-independent fragment unique to the FIRST-GENERATION
+ * `NEW_CODING_HEAD_PROMPT` — the text `migrateAgentGroups` §1b already wrote to
+ * disk on every install that adopted the Coding team from `226b7f09` onward.
+ * That text carried the four defects this migration corrects (`GET
+ * /kanban/feature`, no `workspaceRoot`, same-coder stacking, a hardcoded
+ * orchestrator-report line).
+ *
+ * Fixing the group's `headPrompt` alone does not reach those installs:
+ * `wireSpawnedTeam` skips the head order when one already exists for the
+ * teamId (`if (!headExists)`), so the persisted `team-head` row keeps
+ * delivering the buggy text forever. This fragment is what makes the read-path
+ * migration see it.
+ *
+ * Exact-value matching cannot be used here — `{head}` was substituted with the
+ * live head name at install time — so this is matched by `indexOf`, exactly
+ * like `OLD_HEADPROMPT_FRAGMENT`. The corrected text does not contain it, so a
+ * rewritten row is never re-matched.
+ *
+ * **Two copies only: this one and the `terminals.js` mirror** (which cannot
+ * import). `stage-marker-commit-contract.test.js` gates both halves.
+ */
+export const BUGGY_HEADPROMPT_FRAGMENT = 'give that coder the next subtask';
+
+/**
  * Migrate stale Coding-team standing orders on read — the read-site
  * counterpart to the `migrateAgentGroups` Coding-team step (§1b).
  *
@@ -1234,13 +1449,18 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
             }
         }
 
-        // Stale team-head row carrying the old per-subtask headPrompt.
+        // Stale team-head row carrying EITHER the old per-subtask headPrompt
+        // (OLD_HEADPROMPT_FRAGMENT) or the first-generation feature-level one
+        // that shipped with the four API/rotation defects
+        // (BUGGY_HEADPROMPT_FRAGMENT). Both are stale for the same reason and
+        // both rewrite to the same corrected text.
         // {head} was already substituted at install time, so match on a
         // substitution-independent fragment by indexOf. On match, rewrite
         // the instruction to the new feature-level text with {head}
         // substituted by the order's parent (the head name).
         if (o.scope === 'team-head' && typeof o.instruction === 'string') {
-            if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1) {
+            if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1
+                || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1) {
                 const newInstruction = NEW_CODING_HEAD_PROMPT
                     .replace(/\{head\}/g, o.parent || '');
                 rewritten.push({ ...o, instruction: newInstruction });

@@ -191,6 +191,39 @@ export async function bootstrapOrchestratorReportsDirectory(workspaceRoot: strin
 }
 
 /**
+ * Lazily creates `.switchboard/teams/<teamId>/reports/claimed/` and returns the
+ * reports directory. Returns `null` when `.switchboard` is absent — same lazy
+ * guard as `bootstrapOrchestratorReportsDirectory`.
+ */
+export async function bootstrapTeamReportsDirectory(workspaceRoot: string, teamId: string): Promise<string | null> {
+    const sbDir = path.join(workspaceRoot, '.switchboard');
+    if (!fs.existsSync(sbDir)) {
+        // Lazy creation: do not eagerly pollute non-Switchboard workspaces
+        return null;
+    }
+    const reportsDir = path.join(sbDir, 'teams', teamId, 'reports');
+    const claimedDir = path.join(reportsDir, 'claimed');
+    await fs.promises.mkdir(claimedDir, { recursive: true });
+    return reportsDir;
+}
+
+/**
+ * Writes a report file to `.switchboard/teams/<teamId>/reports/` using the same
+ * `writeInboxFile` mechanics as orchestrator reports.
+ */
+export async function writeTeamReport(workspaceRoot: string, teamId: string, req: InstructionRequest): Promise<InstructionWriteResult> {
+    try {
+        const reportsDir = await bootstrapTeamReportsDirectory(workspaceRoot, teamId);
+        if (!reportsDir) {
+            return { success: false, error: '.switchboard directory does not exist' };
+        }
+        return writeInboxFile(reportsDir, req, 'report');
+    } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+}
+
+/**
  * Writes a report file to `.switchboard/orchestrator/reports/` using the same
  * `writeInboxFile` mechanics as the instructions inbox (exclusive-create with
  * retry, frontmatter flatten). The only TS writer for the reports channel —

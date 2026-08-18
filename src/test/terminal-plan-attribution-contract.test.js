@@ -386,16 +386,28 @@ test('the feature nudge sweep treats an empty liveness snapshot as no evidence',
         'the nudge body must name the remaining subtasks, their columns and their seats');
 });
 
-test("handleAutobanTurnEnd ignores outcome 'stalled'", () => {
-    const arm = taskViewerTs.substring(
-        taskViewerTs.indexOf('public handleAutobanTurnEnd('),
-        taskViewerTs.indexOf('private _autobanPlanFileKey(')
-    );
-    assert.ok(arm.length > 0, 'handleAutobanTurnEnd must exist');
-    assert.ok(arm.includes("if (info.outcome === 'stalled') { return; }"), 'a feature stall is never a completion signal to advance on');
-    const stalledAt = arm.indexOf("'stalled'");
-    const enabledAt = arm.indexOf('this._autobanState.enabled');
-    assert.ok(stalledAt >= 0 && enabledAt > stalledAt, 'the stalled early-return must precede the engine-state guards');
+test("handleAutobanTurnEnd never advances the board — for any outcome", () => {
+    // This used to be an early return on `outcome === 'stalled'`, guarding a
+    // handler that DID dispatch on 'completed'. Completion-driven dispatch is
+    // deleted: the schedule pops the queue on a clock and a self-pacing lead
+    // pops by asking, so turn-end no longer triggers anything. The invariant is
+    // unchanged and now stronger — a turn-end notice of ANY outcome must not
+    // move a card or start an agent. Pinning the deleted `'stalled'` guard
+    // instead would demand the hybrid back; pinning "dispatches nothing" is the
+    // property that mattered all along.
+    const start = taskViewerTs.indexOf('public handleAutobanTurnEnd(');
+    assert.ok(start >= 0, 'handleAutobanTurnEnd must exist');
+    const arm = taskViewerTs.slice(start, taskViewerTs.indexOf('\n    }', start));
+    for (const forbidden of [
+        'performKanbanDispatch',
+        'dispatchNextFromQueue',
+        '_autobanTickColumn',
+        'moveCardToColumn',
+        '_isCompletionTriggered',
+    ]) {
+        assert.ok(!arm.includes(forbidden),
+            `handleAutobanTurnEnd must not call ${forbidden} — turn-end drives the activity light and the queue watch's silence signal, never a dispatch`);
+    }
 });
 
 test('watchFeature / unwatchFeature are catalogued, allowlisted, schema\'d and return their state', () => {
@@ -495,6 +507,24 @@ test('composeCompletedTurnEndBody formats minutes when worked >= 120s', () => {
     const result = composeCompletedTurnEndBody(record, 'lead-1', 'long.md', nowMs);
     assert.ok(result.includes('column Coded, worked 14m'));
     assert.ok(!result.includes('feature '));
+});
+
+test('composeCompletedTurnEndBody drops the worked clause for an UNPARSEABLE dispatchedAt', () => {
+    // Not the same branch as a null stamp: a non-empty garbage stamp passes the
+    // truthiness gate and reaches Date.parse, which returns NaN. Without the
+    // Number.isFinite guard the header ships `worked NaNs` — a number the lead
+    // reads as evidence. This is the only test that can see that guard go.
+    const record = {
+        topic: 'Corrupt stamp',
+        kanbanColumn: 'CODED',
+        featureId: 'f9',
+        dispatchedAt: 'not-a-timestamp'
+    };
+    const result = composeCompletedTurnEndBody(record, 'coder-9', 'plan.md', Date.now());
+    assert.strictEqual(result.split('\n').length, 2);
+    assert.ok(!/worked/.test(result), `the worked clause must be absent for an unparseable stamp: ${result}`);
+    assert.ok(!/NaN|Infinity|undefined/.test(result), `no NaN/Infinity/undefined may reach the wire: ${result}`);
+    assert.ok(result.includes('(column CODED, feature f9).'), 'the surviving clauses must still render cleanly');
 });
 
 test('composeCompletedTurnEndBody flattens and truncates topic to 80 chars with ellipsis', () => {
