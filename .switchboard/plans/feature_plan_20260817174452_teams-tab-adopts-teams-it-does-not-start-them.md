@@ -31,6 +31,10 @@ Result, as observed in UAT: the flow panel's button reads `STARTING…`, `startA
 **Tags:** ux, ui, frontend
 **Project:** Browser Switchboard
 
+## User Review Required
+
+No user review required — the change removes a UI control from a panel that cannot render its result, keeping the adopt path intact. The host verb arm stays registered for external orchestration. No new mechanism, no migration.
+
 ## Complexity Audit
 
 ### Routine
@@ -62,11 +66,19 @@ Result, as observed in UAT: the flow panel's button reads `STARTING…`, `startA
 
 **No shipped-state migration.** Nothing on disk changes shape: `terminals.agentGroups` rows are untouched, the `startAgentGroup` verb stays registered, and the deleted state is webview-local.
 
+## Dependencies
+
+None — this plan is self-contained. No prerequisite plans or sessions. The `USE` adopt semantics already exist in `teamsTabAdoptAndStart`'s fork-and-persist half. The host `startAgentGroup` verb arm stays registered. The `START TEAM` control in the terminals panel is already correct and already the single entry point after this change.
+
+## Adversarial Synthesis
+
+Key risks: (1) deleting adoption along with the start — the plan correctly keeps `teamsTabAdopt` (fork-and-persist) and deletes only start bookkeeping; (2) a late `startAgentGroupResult` with no handler raising a UI error — verified the message switch has no `default:` arm, so deletion is safe; (3) the rollback in `saveAgentGroupResult` being deleted wholesale — the plan correctly preserves it and drops only the `teamsTabStartTeam(id)` call. Mitigations: contract test asserts `teamsTabAdopt(` and `saveAgentGroup` post survive; generated artefacts (`verbAllowlist.ts`, `protocol-catalog.json`) stay byte-unchanged.
+
 ## Proposed Changes
 
 ### `src/webview/kanban.html` — flow panel action becomes adopt-only
 
-Replace the action block in `teamsTabRenderFlow` (`:5032-5060`):
+Replace the action block in `teamsTabRenderFlow` (`:5071-5099`):
 
 ```js
             // Action — adopt only. Starting a team is the terminals panel's job:
@@ -94,9 +106,9 @@ Replace the action block in `teamsTabRenderFlow` (`:5032-5060`):
             panel.appendChild(actionDiv);
 ```
 
-The `starting` / `teamsTabStartingId` branch (`:5038-5047`) goes with it.
+The `starting` / `teamsTabStartingId` branch (`:5077-5086`) goes with it.
 
-Rename `teamsTabAdoptAndStart` → `teamsTabAdopt` and drop the start bookkeeping (`:5070-5091`):
+Rename `teamsTabAdoptAndStart` → `teamsTabAdopt` and drop the start bookkeeping (`:5109-5130`):
 
 ```js
         /**
@@ -122,9 +134,9 @@ Rename `teamsTabAdoptAndStart` → `teamsTabAdopt` and drop the start bookkeepin
         }
 ```
 
-Delete `teamsTabStartTeam` (`:5100-5108`) and the `teamsTabStartingId` declaration (`:4279`). Rename `teamsTabPendingStartId` (`:4275`) to `teamsTabPendingAdoptId` — it now only keys the rollback.
+Delete `teamsTabStartTeam` (`:5139`) and the `teamsTabStartingId` declaration (`:4280`). Rename `teamsTabPendingStartId` (`:4276`) to `teamsTabPendingAdoptId` — it now only keys the rollback.
 
-Rework the `saveAgentGroupResult` arm (`:9874-9913`) to keep the rollback and drop the start:
+Rework the `saveAgentGroupResult` arm (`:10044-10082`) to keep the rollback and drop the start:
 
 ```js
                 case 'saveAgentGroupResult': {
@@ -158,7 +170,7 @@ Rework the `saveAgentGroupResult` arm (`:9874-9913`) to keep the rollback and dr
                 }
 ```
 
-Delete the `startAgentGroupResult` case (`:9914-9928`). If the enclosing `switch` has a `default:` arm that surfaces unknown message types, replace the case with an empty `case 'startAgentGroupResult': break;` instead of deleting it, so a start initiated elsewhere cannot raise a spurious UI error.
+Delete the `startAgentGroupResult` case (`:10084-10098`). If the enclosing `switch` has a `default:` arm that surfaces unknown message types, replace the case with an empty `case 'startAgentGroupResult': break;` instead of deleting it, so a start initiated elsewhere cannot raise a spurious UI error. Verified: the message switch (`kanban.html:9049`) has no `default:` arm — safe to delete the case outright.
 
 Add the hint style beside `.teams-flow-error` in the tab's CSS block:
 
@@ -198,3 +210,21 @@ Add a source-text contract case to the TEAMS-tab coverage (or a new `teams-tab-n
 
 9. `+ Build your own` still opens the member editor, saves a custom team, and draws it as a fourth card.
 10. START ON LOAD still auto-starts a marked team on window load (open a window with a marked team and confirm the team spawns) — this plan does not touch that path.
+
+## Recommendation
+
+**Complexity: 3 → Send to Intern.** Single-file change (`kanban.html`), deletion of UI controls and state, adopt path preserved. No open decisions for the user.
+
+---
+
+## Completion Report
+
+Removed the start action from the board's TEAMS tab so the panel adopts and configures teams only. In `src/webview/kanban.html` the flow-panel action block now renders a single `USE` button gated on `!entry.adopted` (id `teams-flow-use-btn`), followed by a static `Start it from the terminals panel.` hint and the unchanged `#teams-flow-error` span; `teamsTabAdoptAndStart` was renamed `teamsTabAdopt` keeping only its fork-and-persist half, `teamsTabPendingStartId` became `teamsTabPendingAdoptId` (rollback key only), and `teamsTabStartTeam`, `teamsTabStartingId` and the `startAgentGroupResult` case were deleted — the message switch was re-confirmed to have no `default:` arm, so a late result from an HTTP-initiated start falls through harmlessly. The `saveAgentGroupResult` arm keeps its failed-adopt rollback (splice the optimistic push, revert `teamsTabPickedKey`, re-render, then write the error into `#teams-flow-error` after the re-render) and drops only the start sequencing; a `.teams-flow-hint` style was added beside `.teams-flow-error`. The host `startAgentGroup` verb arm in `KanbanProvider.ts` is deliberately untouched — this removes a UI control, not a capability — and a new `src/test/teams-tab-no-start-contract.test.js` (6 cases, registered as `npm run test:contract:teams-tab-no-start` and wired into `.github/workflows/integration-tests.yml`) pins the removal while asserting adoption, the rollback, the error span and the host arm all survive. Issues: `src/generated/verbAllowlist.ts` and `protocol-catalog.json` were already modified in this working tree before this task began, so the plan's "byte-unchanged by git diff" check cannot be read directly — both were verified to still contain `startAgentGroup` and neither was touched by this change; per the run's SKIP COMPILATION / SKIP TESTS directives no build was run, though the new contract test was executed once and passed 6/6.
+
+---
+
+## Conformance Review (reviewer, read-only)
+
+Reviewed the uncommitted work in `src/webview/kanban.html`, `src/test/teams-tab-no-start-contract.test.js`, `package.json` and `.github/workflows/integration-tests.yml` against this plan. **No defects found.** Every clause holds: the flow-panel action block is adopt-only with a single `USE` button gated on `!entry.adopted` (id `teams-flow-use-btn`, `kanban.html:5070-5093`), the static `Start it from the terminals panel.` hint is a plain span with no cross-panel navigation control, `#teams-flow-error` is still rendered and still written after the re-render, and `actionDiv` is never an empty flex row (hint + error span always present) so the diagram cannot shift. `teamsTabAdoptAndStart` → `teamsTabAdopt` keeps only fork-and-persist, `teamsTabPendingStartId` → `teamsTabPendingAdoptId` keys the rollback alone, and `teamsTabStartTeam`, `teamsTabStartingId` and `case 'startAgentGroupResult'` are gone with no dangling references anywhere in the file. The `saveAgentGroupResult` rollback survives intact (splice, `teamsTabPickedKey` revert, re-render, then the error write). The host `startAgentGroup` arm at `KanbanProvider.ts:12147` is untouched and still posts `startAgentGroupResult`. Independently verified that `src/webview/` now contains exactly one team-start call site — `fetch('/terminals/verb/ptyStartTeam')` in `terminals.js` — so the "one entry point, not two" rule is satisfied. `npm run test:contract:teams-tab-no-start` passes 6/6, and the script plus its CI step are both wired.
+
+Two notes, neither a defect. (1) Verification Plan step 2 ("Confirm `src/generated/verbAllowlist.ts` and `protocol-catalog.json` are byte-unchanged by `git diff`") cannot be read directly: both files carry unrelated pre-existing modifications in this worktree (the diff adds `reorderQueue`, `runQueue`, `stageForQueue`). Checked by content instead — `startAgentGroup` is present on both sides of both diffs, so the arm was not regenerated away by this change. (2) A fourth shipped team type (`Planning with analyst`) was added to `SHIPPED_TEAM_TYPES` by other work in the same file, so this plan's "the three cards" and "The three shipped cards always render" prose is now stale; the contract test does not hardcode a count and the new card takes the same `USE` + hint treatment, so nothing breaks.

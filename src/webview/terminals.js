@@ -6862,8 +6862,8 @@
             try { data = await res.json(); } catch { /* non-JSON body */ }
             if (data && data.success) {
                 // Arm curtains for the head and any delegates that carry a
-                // startup command, then refresh the fleet list and focus the
-                // head — same flow as createTerminal, applied to the team.
+                // startup command, then refresh the fleet list and seat the
+                // whole team — same flow as createTerminal, applied to the team.
                 const headName = data.terminal?.friendlyName || (data.created && data.created[0]);
                 if (headName) { armStartupCurtain(headName, true); }
                 const workers = Array.isArray(data.workers) ? data.workers : [];
@@ -6871,12 +6871,46 @@
                     if (w?.friendlyName) { armStartupCurtain(w.friendlyName, true); }
                 }
                 await fetchTerminalList();
-                if (headName) { assignToFocusedPane(headName); }
+
+                // Same three branches as the create path. Deliberately NOT
+                // assignToFocusedPane on the team branch: that helper drops the
+                // group lock, which would undo the seating on the next reconcile.
+                // The member-less case stays on assignToFocusedPane — wireSpawnedTeam
+                // registers no group for a childless team, and locking a
+                // one-terminal "team" into a group would be the opposite regression.
+                let seatFallbackReason = null;
+                if (!headName) {
+                    // Nothing to seat — the warnings below are still delivered.
+                } else if (workers.length === 0) {
+                    assignToFocusedPane(headName);
+                } else if (data.teamGroupId && await switchToTeamGroup(data.teamGroupId, headName)) {
+                    // Seated by the group lock — sized by the group's stored layout
+                    // and paged by seatActiveGroupPage.
+                } else {
+                    seatFallbackReason = data.teamGroupId
+                        ? 'its group did not load'
+                        : 'no group was registered';
+                    seatTeamWithoutGroup(headName, workers);
+                }
+
+                // NOT reportTeamStart: that helper reads data.wiringError, which is
+                // the field the CREATE path sets, and it early-returns on the first
+                // channel it finds. instantiateAgentGroupCore reports a wiring failure
+                // as success:true plus `error`, and that failure is EXACTLY the case
+                // that also forces the by-name seat — so an early-return chain would
+                // tell the operator the wiring failed and never that the team is
+                // unlocked from its group. Both notices must reach them, so the seat
+                // note rides along instead of competing for the toast.
+                const seatNote = seatFallbackReason
+                    ? ` Team seated without its group — ${seatFallbackReason}.`
+                    : '';
                 if (data.delegateError) {
-                    showPaneToast(`Team started with a delegate warning: ${data.delegateError}`);
+                    showPaneToast(`Team started with a delegate warning: ${data.delegateError}${seatNote}`);
                 } else if (data.error) {
                     // Terminals created but wiring failed — surface it.
-                    showPaneToast(`Team started with a warning: ${data.error}`);
+                    showPaneToast(`Team started with a warning: ${data.error}${seatNote}`);
+                } else if (seatNote) {
+                    showPaneToast(seatNote.trim());
                 }
             } else if (data && data.error) {
                 // Verbatim start failure — cap refusal, double-start refusal,
@@ -7010,6 +7044,10 @@
     async function openAllTerminals() {
         const { wanted, hasCommand } = await resolveGridAgents();
         if (wanted.size === 0) {
+                // Members must be in fleetList before any seating: getGroupMembers()
+                // filters the group's stored names through a liveness set built from
+                // fleetList, so seating before this await resolves the team to its
+                // head alone.
             console.warn('[Terminals] Open all: no visible agent roles configured');
             return;
         }

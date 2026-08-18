@@ -934,6 +934,7 @@
     "test:contract:terminal-operations-no-periodic-reopen": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-operations-no-periodic-reopen.test.js",
     "test:contract:multi-parent-terminals": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/multi-parent-terminals-contract.test.js",
     "test:contract:team-autostart-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-autostart-workspace-scope.test.js",
+    "test:contract:teams-tab-no-start": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/teams-tab-no-start-contract.test.js",
     "test:contract:autoban-state": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-state-regression.test.js",
     "test:contract:autoban-no-valid-tickets": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-no-valid-tickets-regression.test.js",
     "test:contract:terminal-plan-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-plan-attribution-contract.test.js",

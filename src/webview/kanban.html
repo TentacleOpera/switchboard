@@ -1475,6 +1475,10 @@
             font-size: 11px;
             color: var(--accent-red);
         }
+        .teams-flow-hint {
+            font-size: 10px;
+            color: var(--text-secondary);
+        }
 
         /* Secondary button — ported from implementation.html so .secondary-btn
            references in this file (EXPORT AS SKILL, Validate, CANCEL) are styled
@@ -4268,16 +4272,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // Agent Groups state
         let agentsTabAgentGroups = [];
         let agentsTabEditingGroupId = null;
-        // TEAMS tab card-row state: the picked card's key, and a pending
-        // start id sequenced on saveAgentGroupResult (the race guard for
-        // USE & START — the id is only started once the host confirms the
-        // save persisted it).
+        // TEAMS tab card-row state: the picked card's key, and the id of an
+        // optimistically-pushed adoption awaiting its saveAgentGroupResult —
+        // the rollback key when the host fails to persist it.
         let teamsTabPickedKey = null;
-        let teamsTabPendingStartId = null;
-        // Tracks an in-progress start so a gallery re-render (e.g. from
-        // getAgentGroups arriving after saveAgentGroupResult) does not reset
-        // the button from STARTING… back to START.
-        let teamsTabStartingId = null;
+        let teamsTabPendingAdoptId = null;
 
         function agentsTabSanitizeCustomAgentId(value) {
           const normalized = String(value || '')
@@ -5039,30 +5038,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             panel.appendChild(svg);
 
-            // Action button — label resolved from adoption state
+            // Action — ADOPT ONLY. Starting a team is the terminals panel's
+            // job: this panel has no terminal grid to seat one in, and the
+            // terminals panel's whole reaction to a backend team registration
+            // is reloadTerminalGroups(), which merges the group and seats
+            // nothing. A team started from here spawns off-screen.
             const actionDiv = document.createElement('div');
             actionDiv.className = 'teams-flow-action';
-            const btn = document.createElement('button');
-            btn.className = 'agents-tab-custom-agent-item-btn';
-            btn.id = 'teams-flow-start-btn';
-            // Preserve STARTING… state across re-renders (getAgentGroups
-            // arriving after saveAgentGroupResult would otherwise reset it).
-            const starting = teamsTabStartingId
-                && teamsTabCardKey(entry) === teamsTabStartingId;
-            if (starting) {
-                btn.disabled = true;
-                btn.textContent = 'STARTING…';
-            } else {
-                btn.textContent = entry.adopted ? 'START' : 'USE & START';
+            if (!entry.adopted) {
+                const btn = document.createElement('button');
+                btn.className = 'agents-tab-custom-agent-item-btn';
+                btn.id = 'teams-flow-use-btn';
+                btn.textContent = 'USE';
+                btn.addEventListener('click', () => teamsTabAdopt(entry.group));
+                actionDiv.appendChild(btn);
             }
-            btn.addEventListener('click', () => {
-                if (entry.adopted) {
-                    teamsTabStartTeam(entry.group.id);
-                } else {
-                    teamsTabAdoptAndStart(entry.group);
-                }
-            });
-            actionDiv.appendChild(btn);
+            const hint = document.createElement('span');
+            hint.className = 'teams-flow-hint';
+            hint.textContent = 'Start it from the terminals panel.';
+            actionDiv.appendChild(hint);
             const errorSpan = document.createElement('span');
             errorSpan.className = 'teams-flow-error';
             errorSpan.id = 'teams-flow-error';
@@ -5071,13 +5065,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         /**
-         * Fork a shipped type into the workspace's own teams (exactly as the
-         * old USE handler did), re-render, post saveAgentGroup, and record the
-         * pending start id. The start is sequenced on saveAgentGroupResult —
-         * never fired here — so the host has confirmed the id is persisted
-         * before ptyStartTeam resolves it.
+         * Fork a shipped type into the workspace's own teams and persist it.
+         * The card re-renders as an adopted team; starting it is the terminals
+         * panel's job. `teamsTabPendingAdoptId` is the rollback key, read by
+         * saveAgentGroupResult when the host fails to persist the fork.
          */
-        function teamsTabAdoptAndStart(type) {
+        function teamsTabAdopt(type) {
             const forked = {
                 id: 'group-' + type.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36),
                 name: type.name,
@@ -5087,34 +5080,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 ...(type.headPrompt ? { headPrompt: type.headPrompt } : {})
             };
             agentsTabAgentGroups.push(forked);
-            teamsTabPendingStartId = forked.id;
-            // Busy the button for the whole save round-trip. Without this the
-            // re-render below draws the now-adopted card with a live START, and
-            // a second click fires startAgentGroup for an id the host has not
-            // persisted yet — exactly the write-then-read race the sequencing
-            // on saveAgentGroupResult exists to close.
-            teamsTabStartingId = forked.id;
+            teamsTabPendingAdoptId = forked.id;
             teamsTabPickedKey = forked.id;
             teamsTabRenderAgentGroups();
             teamsTabRenderGallery();
             postKanbanMessage({ type: 'saveAgentGroup', group: forked });
-        }
-
-        /**
-         * Post the start message and surface the result. Disables the button
-         * and shows STARTING… until startAgentGroupResult arrives. On failure
-         * writes msg.error verbatim — the host's messages (cap refusal,
-         * double-start refusal, No team found with id) are good and must not
-         * be generified.
-         */
-        function teamsTabStartTeam(groupId) {
-            if (!groupId) return;
-            teamsTabStartingId = groupId;
-            const btn = document.getElementById('teams-flow-start-btn');
-            const errEl = document.getElementById('teams-flow-error');
-            if (btn) { btn.disabled = true; btn.textContent = 'STARTING…'; }
-            if (errEl) { errEl.textContent = ''; }
-            postKanbanMessage({ type: 'startAgentGroup', groupId });
         }
 
         function teamsTabRenderAgentGroups() {
@@ -10018,24 +9988,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   } else {
                     document.getElementById('agent-groups-error').textContent = msg.error || 'Failed to save agent group';
                   }
-                  // Race guard for USE & START: the start is sequenced on this
-                  // message, not on the post, so the host has confirmed the id
-                  // is persisted before ptyStartTeam resolves it. A failed save
-                  // aborts the start and surfaces the error — starting after a
-                  // failed save is the worst outcome (the id does not exist).
-                  if (teamsTabPendingStartId) {
-                    const id = teamsTabPendingStartId;
-                    teamsTabPendingStartId = null;
-                    if (msg.success) {
-                      teamsTabStartTeam(id);
-                    } else {
-                      // The save failed, so the forked id does not exist on the
-                      // host. Roll the optimistic push back: leaving it in the
-                      // local list draws an adopted card whose START resolves
-                      // nothing — a dead button, which the capability-gating
-                      // rule bars. The card reverts to its shipped type and
-                      // reads USE & START again.
-                      teamsTabStartingId = null;
+                  // Adoption rollback. The optimistic push happens in
+                  // teamsTabAdopt so the card redraws immediately; if the host
+                  // failed to persist the fork, leaving it drawn shows an
+                  // adopted card for a team the host has never seen.
+                  if (teamsTabPendingAdoptId) {
+                    const id = teamsTabPendingAdoptId;
+                    teamsTabPendingAdoptId = null;
+                    if (!msg.success) {
                       const idx = agentsTabAgentGroups.findIndex(g => g.id === id);
                       if (idx >= 0) {
                         const reverted = agentsTabAgentGroups[idx];
@@ -10047,24 +10007,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                       // After the re-render — teamsTabRenderFlow rebuilds the
                       // error span, so writing before it would be erased.
                       const errEl = document.getElementById('teams-flow-error');
-                      if (errEl) { errEl.textContent = msg.error || 'Failed to save team — start aborted.'; }
+                      if (errEl) { errEl.textContent = msg.error || 'Failed to adopt team.'; }
                     }
                   }
-                  break;
-                }
-                case 'startAgentGroupResult': {
-                  teamsTabStartingId = null;
-                  const btn = document.getElementById('teams-flow-start-btn');
-                  const errEl = document.getElementById('teams-flow-error');
-                  if (msg.success) {
-                    if (errEl) { errEl.textContent = ''; }
-                  } else {
-                    // Verbatim host error — cap refusal, double-start refusal,
-                    // No team found with id. These are good messages; do not
-                    // generify them.
-                    if (errEl) { errEl.textContent = msg.error || 'Failed to start team'; }
-                  }
-                  if (btn) { btn.disabled = false; btn.textContent = 'START'; }
                   break;
                 }
                 case 'deleteAgentGroupResult': {

@@ -896,6 +896,77 @@ test('the role-grouping toggle is reachable with no group tabs on screen', () =>
     assert.ok(
         strip.includes('Group by role'),
         'the strip must carry the role-grouping toggle'
+// ---------------------------------------------------------------- team seating (startTeam / START TEAM button)
+
+test('startTeam seats the whole team via switchToTeamGroup with a seatTeamWithoutGroup fallback', () => {
+    // START TEAM used to end on `assignToFocusedPane(headName)`, which seats
+    // exactly ONE terminal into the focused pane and drops the group lock — so
+    // the head landed in whatever grid was open and every member stayed
+    // invisible. The three branches below are the create path's, reused.
+    const fn = block(terminalsJs, 'async function startTeam(', 'const GRID_BUILTIN_ROLES = [');
+    assert.ok(
+        fn.includes('switchToTeamGroup(data.teamGroupId, headName)'),
+        'startTeam must seat the team by switching to the group id the backend returned'
+    );
+    assert.ok(
+        fn.includes('seatTeamWithoutGroup(headName, workers)'),
+        'startTeam must fall back to seating the team by name when no group is available'
+    );
+    assert.ok(
+        !/'team_'|"team_"|`team_/.test(fn),
+        'startTeam must NOT re-derive the group id client-side — the formula lives in wireSpawnedTeam'
+    );
+});
+
+test('startTeam calls assignToFocusedPane only on the member-less branch', () => {
+    const fn = block(terminalsJs, 'async function startTeam(', 'const GRID_BUILTIN_ROLES = [');
+    // The literal guard is the contract: a refactor that reinstates the
+    // unconditional seat has to delete this line, and CI catches it.
+    assert.ok(
+        fn.includes('workers.length === 0'),
+        'startTeam must guard assignToFocusedPane behind a workers.length === 0 check'
+    );
+    const teamBranch = fn.substring(fn.indexOf('} else if (data.teamGroupId'));
+    assert.ok(
+        teamBranch.length > 0 && !teamBranch.includes('assignToFocusedPane('),
+        'the team branch of startTeam must NOT call assignToFocusedPane — it drops the group lock'
+    );
+});
+
+test('startTeam delivers the seat-fallback notice alongside a wiring warning', () => {
+    // A wiring failure is EXACTLY the case that also forces the by-name seat
+    // (no group registered), so an early-return / else-if toast chain reports
+    // the wiring error and never that the team is unlocked from its group. The
+    // plan requires both notices to reach the operator.
+    const fn = block(terminalsJs, 'async function startTeam(', 'const GRID_BUILTIN_ROLES = [');
+    const toasts = fn.match(/showPaneToast\(`Team started with[^`]*`\)/g) || [];
+    assert.strictEqual(
+        toasts.length, 2,
+        'startTeam must carry both warning toasts (delegate warning, wiring warning)'
+    );
+    for (const t of toasts) {
+        assert.ok(
+            t.includes('${seatNote}'),
+            `the seat-fallback note must ride along with every warning toast, not compete with it: ${t}`
+        );
+    }
+});
+
+test('startTeam awaits fetchTerminalList before it seats', () => {
+    // getGroupMembers() filters the group's stored names through a liveness set
+    // built from fleetList, so seating before the refresh resolves the team to
+    // its head alone — the same ordering bug the create path was fixed for.
+    const fn = block(terminalsJs, 'async function startTeam(', 'const GRID_BUILTIN_ROLES = [');
+    const fetchIdx = fn.indexOf('await fetchTerminalList()');
+    const seatIdx = fn.indexOf('switchToTeamGroup(');
+    assert.ok(fetchIdx !== -1, 'startTeam must await fetchTerminalList()');
+    assert.ok(seatIdx !== -1, 'startTeam must seat via switchToTeamGroup');
+    assert.ok(
+        fetchIdx < seatIdx,
+        'fetchTerminalList must be awaited BEFORE seating, or the team resolves to its head alone'
+    );
+});
+
     );
     assert.ok(
         !/if \(groupTabEls\.length > 0 \|\| hasHiddenGroups\)/.test(strip),

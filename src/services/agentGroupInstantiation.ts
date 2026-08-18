@@ -63,6 +63,14 @@ export interface InstantiateAgentGroupResult {
 }
 
 export async function instantiateAgentGroupCore(
+    /**
+     * The terminals-group id `wireSpawnedTeam` registered for this team.
+     * The webview switches to this group to seat the whole team; the id
+     * formula is NOT to be re-derived client-side (see wireSpawnedTeam's
+     * WireSpawnedTeamResult comment). Absent when no group was registered
+     * (member-less team) or when wiring failed.
+     */
+    teamGroupId?: string;
     opts: InstantiateAgentGroupOptions
 ): Promise<InstantiateAgentGroupResult> {
     const { db, group, cwd, liveDelegateCount, createHeadWithDelegates, onCreated } = opts;
@@ -136,5 +144,6 @@ export async function instantiateAgentGroupCore(
         created,
         workers,
         delegateError: result.delegateError || undefined,
+        ...(wired.groupId ? { teamGroupId: wired.groupId } : {}),
     };
 }

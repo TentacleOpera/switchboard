@@ -32,6 +32,7 @@ const path = require('path');
 const assert = require('assert');
 
 const { findTeamForHeadRoleInRoots, wireSpawnedTeam, listTeamsInRoots, resolveTeamByIdInRoots, isUntouchedSeed, SEEDED_AGENT_GROUP } = require('../../out/services/teamWiring');
+const { instantiateAgentGroupCore } = require('../../out/services/agentGroupInstantiation');
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const taskViewerTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/TaskViewerProvider.ts'), 'utf8');
@@ -162,6 +163,63 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
             { friendlyName: 'lead-1-coder-1', role: 'coder', agentInstanceId: 'x', status: 'active' },
             { friendlyName: 'lead-1-reviewer-1', role: 'reviewer', agentInstanceId: 'y', status: 'active' },
         ];
+    // 11a. BEHAVIOURAL: instantiateAgentGroupCore must RETURN the group id, not
+    //      just compute it. Test 11 is a source-text grep and cannot see a core
+    //      that drops the field one layer below both hosts — which is exactly
+    //      the defect the START TEAM path shipped with. Both hosts funnel
+    //      ptyStartTeam through this core, so one behavioural case covers both.
+    await test('instantiateAgentGroupCore returns teamGroupId for a team with members', async () => {
+        const store = {};
+        const db = {
+            getConfigJson: async (k, d) => (k in store ? store[k] : d),
+            setConfigJson: async (k, v) => { store[k] = v; },
+        };
+        const headName = 'lead-1';
+        const result = await instantiateAgentGroupCore({
+            db,
+            group: { id: 'coding', name: 'Coding', headRole: 'lead', members: [{ role: 'coder', count: 2 }] },
+            cwd: '/ws',
+            liveDelegateCount: async () => 0,
+            createHeadWithDelegates: async () => ({
+                success: true,
+                terminal: { friendlyName: headName },
+                delegates: [
+                    { friendlyName: 'lead-1-coder-1', role: 'coder', status: 'active' },
+                    { friendlyName: 'lead-1-coder-2', role: 'coder', status: 'active' },
+                ],
+            }),
+        });
+        assert.strictEqual(result.success, true, 'the core must succeed');
+        const expected = 'team_' + encodeURIComponent(headName).replace(/[^a-zA-Z0-9_]/g, '_');
+        assert.strictEqual(result.teamGroupId, expected,
+            'the core must return teamGroupId — the webview switches to this group to seat the team');
+    });
+
+    // 11b. The member-less team registers no group, so the core must claim no id.
+    //      The webview's zero-member branch stays on assignToFocusedPane; a
+    //      fabricated id here would lock a one-terminal "team" into a group.
+    await test('instantiateAgentGroupCore returns no teamGroupId for a member-less team', async () => {
+        const store = {};
+        const db = {
+            getConfigJson: async (k, d) => (k in store ? store[k] : d),
+            setConfigJson: async (k, v) => { store[k] = v; },
+        };
+        const result = await instantiateAgentGroupCore({
+            db,
+            group: { id: 'feature-implementation', name: 'Lead team', headRole: 'lead', members: [] },
+            cwd: '/ws',
+            liveDelegateCount: async () => 0,
+            createHeadWithDelegates: async () => ({
+                success: true,
+                terminal: { friendlyName: 'lead-1' },
+                delegates: [],
+            }),
+        });
+        assert.strictEqual(result.success, true, 'a member-less team is a legitimate state');
+        assert.strictEqual(result.teamGroupId, undefined,
+            'no group is registered for a member-less team, so no id may be claimed');
+    });
+
         const result = await wireSpawnedTeam({ db, headName, children });
         assert.ok(result.ok, 'wireSpawnedTeam should succeed with a valid DB and children');
         const expected = 'team_' + encodeURIComponent(headName).replace(/[^a-zA-Z0-9_]/g, '_');

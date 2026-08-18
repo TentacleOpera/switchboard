@@ -720,6 +720,15 @@ jobs:
       # silence), that the Miscellaneous sweep is gone from BOTH trees, that the two
       # verb-rail traps survived the console deletion without duplicating the
       # canonical-column rule, and — behaviourally, against the real writer — the
+      # The TEAMS tab is a tab of the BOARD webview — no terminal grid, no pane
+      # assignments, no layout — so a team started from it spawned off-screen and
+      # the operator saw a STARTING… button go quiet. Starting a team is the
+      # terminals panel's job (it seats from the pty verb response). This pins the
+      # removal: no startAgentGroup post, no start button/latch/result arm — while
+      # adoption, the #teams-flow-error rollback and the HOST verb arm all survive.
+      - name: TEAMS tab adopt-only contract (one start entry point)
+        run: npm run test:contract:teams-tab-no-start
+
       # reports channel's exclusive-create, frontmatter flatten, traversal rejection
       # and lazy bootstrap. Also pins the turn-end mirror as WIRED in both hosts: a
       # report writer with no caller is the zero-caller failure the plan diagnosed
