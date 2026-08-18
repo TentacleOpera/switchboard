@@ -1,14 +1,23 @@
 # Team Icons: Choose or Customise an Icon per Team in the TEAMS Tab
 
 ## Goal
-Give every team a visual identity the operator picks: an `icon` field on the team definition, chosen from a built-in palette or supplied as a custom file, edited in the TEAMS tab of `kanban.html`. This is the authoring half of team icons; the strip and the team cockpit consume it.
+Give every team a visual identity the operator picks: an `icon` field on the team definition, edited in the TEAMS tab of `kanban.html`. This is the authoring half of team icons; the strip and the team cockpit consume it.
+
+> **Scope note — the built-in palette is a placeholder, on purpose.** The long-term
+> intent is custom pixel art for both teams and individual agents, specified in
+> `agent-and-team-pixel-art-pipeline.md`. This plan ships the *field, the picker and
+> the resolver* so the icon chain is unblocked immediately, using the icons already
+> in the repo as stand-in art. Nothing here should assume that art is permanent, and
+> nothing here may make swapping it a code change. When the pixel-art registry lands,
+> its manifest becomes the picker's source and the stand-in pack is dropped from the
+> palette — a one-line change to where the picker reads its list, not a rework.
 
 ### The problem, and the root cause
 Teams are currently identified by **name text plus a role-derived portrait**. `teamsTabGalleryCard` (`src/webview/kanban.html:4800`) renders an SVG `<use href="#portrait-<role>">` resolved by `teamsTabPortraitId` (`kanban.html:4736`), which maps `headRole` onto one of five hardcoded symbols — `portrait-planner`, `portrait-lead`, `portrait-coder`, `portrait-reviewer`, `portrait-agent` (defined at `kanban.html:3240`–`3286`).
 
 So the portrait describes the **head's role**, not the team. Three teams led by a `lead` are three identical icons. There is no per-team visual identity to put anywhere, which is why the fleet strip falls back to per-terminal CLI brand marks — those at least differ from each other.
 
-The asset side is already solved and unused: `/static/icons/` maps to the repo's `icons/` directory (`src/services/TaskViewerProvider.ts:3522`, and `src/standalone/bootstrap.ts:672` for the npx host), which contains a 100-piece flat sci-fi icon set alongside the brand and nav SVGs. Static art is served with `Cache-Control: public, max-age=3600` (`LocalApiServer.ts:920`) — no new route, no new caching decision.
+The delivery side is already solved and unused: `/static/icons/` maps to the repo's `icons/` directory (`src/services/TaskViewerProvider.ts:3522`, and `src/standalone/bootstrap.ts:672` for the npx host), and its path handling normalises a relative subpath (`LocalApiServer.ts:906`), so nested directories work without a new route. Static art is served with `Cache-Control: public, max-age=3600` (`LocalApiServer.ts:920`) — no new route, no new caching decision. The directory currently holds a 100-piece flat sci-fi set alongside the brand and nav SVGs; that set is the stand-in art referred to above.
 
 ### The trap this plan must not fall into
 `teamsTabSaveAgentGroup` (`kanban.html:5290`) **rebuilds the group object from scratch** on every save and drops every field it does not explicitly name. The literal at `kanban.html:5344` already carries four hand-written rescues for exactly this reason — `prompt`, `headPrompt`, `startOnLoad`, `startWorktree` — each with a comment explaining that an edit-and-save would otherwise silently clear the operator's setting. An `icon` field added anywhere else and not added *here* will be silently wiped the first time the operator edits any unrelated field of that team. This is the highest-risk line in the plan.
@@ -20,16 +29,20 @@ The asset side is already solved and unused: `/static/icons/` maps to the repo's
 ## Approach
 
 ### 1. The `icon` field
-Add `icon?: string` to the team definition stored at `terminals.agentGroups`. Two accepted forms, discriminated by prefix so no separate `iconKind` field is needed:
-- `pack:<filename>` — a file from the served `icons/` directory, resolved to `/static/icons/<encodeURIComponent(filename)>`. **Encoding is mandatory**: the pack filenames contain spaces (`25-1-100 Sci-Fi Flat icons-01.png`), so a raw interpolation yields a broken URL. Consider normalising the pack on disk to hyphenated names in this plan's implementation and referencing the normalised names — a one-time rename is cheaper than every consumer remembering to encode. If renamed, keep the originals in place (do not delete) so nothing else that may reference them breaks.
-- `data:image/...;base64,...` — a custom icon the operator supplied.
+Add `icon?: string` to the team definition stored at `terminals.agentGroups`. Three accepted forms, discriminated by prefix so no separate `iconKind` field is needed:
+- `art:<id>` — **the form that matters long term.** An id resolved through the manifest, not a filesystem path. Because the stored value is an id rather than a filename, re-drawing a piece, renaming a file, or moving the whole registry never invalidates a team's saved icon. Every team icon set during the placeholder period keeps working when the art underneath it is replaced.
+- `pack:<filename>` — a direct file under `icons/`, for the stand-in period only. **Encoding is mandatory**: the stand-in filenames contain spaces (`25-1-100 Sci-Fi Flat icons-01.png`), so raw interpolation yields a broken URL. Do not spend effort renaming the stand-in pack — it is leaving. Encode at the resolver and move on.
+- `data:image/...;base64,...` — a custom icon the operator supplied inline.
+
+Prefer `art:` for everything the picker offers. `pack:` exists so a stand-in choice is representable, and is the form that disappears with the stand-ins.
 
 Absent/empty `icon` → fall back to the existing role portrait. The fallback is load-bearing: every already-defined team has no icon, and none of them may render blank.
 
 ### 2. Picker UI in the TEAMS tab editor
 In the team form (alongside `#agent-groups-name` / `#agent-groups-head-role`, `kanban.html:5265`):
 - A current-icon preview button showing the resolved icon (or the role portrait when unset).
-- Clicking it opens an inline grid of the built-in palette. Populate the grid from a new `GET /terminals/icon-palette` returning the served filenames — do **not** hardcode 100 filenames into `kanban.html`, and do not glob client-side.
+- Clicking it opens an inline grid of the available art. Populate the grid from a single manifest-backed endpoint — `GET /terminals/icon-palette` — returning `[{ id, label, src, group }]`. Do **not** hardcode filenames into `kanban.html`, and do not glob client-side.
+  The endpoint reads a manifest, never a directory listing. That indirection is the whole reason the stand-in art can be swapped for pixel art without touching the picker: today the manifest is generated from the stand-in pack, later it is the pixel-art registry's `manifest.json`. Group entries by `group` so the picker can show `Agents`, `Teams` and `Stand-in` as separate sections and the stand-ins can be removed as a group.
 - A "custom…" affordance: a `<input type="file" accept="image/png,image/svg+xml,image/webp">`, read via `FileReader` to a data URI. Cap at **64 KB** after encoding and reject larger with an inline error. The value lands in `terminals.agentGroups`, which is a DB config blob read on every board load and relayed to panels — a megabyte of base64 per team would bloat every read.
 - A "reset to role portrait" entry that clears the field back to the default.
 - No confirmation dialogs anywhere in this flow, per CLAUDE.md. Reset and clear act immediately.
@@ -47,6 +60,8 @@ In the team form (alongside `#agent-groups-name` / `#agent-groups-head-role`, `k
 ### 5. One shared resolver
 Add a small helper — `teamIconSrc(group)` → URL string or `null` — colocated with the other team helpers, and use it from every consumer (card, flow node, and later the strip and the team cockpit). Do not let each surface re-implement the prefix parsing; that is how the brand-icon table ended up duplicated before `postFleetStateToShell` centralised it (`terminals.js:1361`).
 
+This resolver is the seam the pixel-art plan takes over. It must be the **only** place a stored `icon` value becomes a URL, so that adding `art:` resolution through the registry later is one function's worth of change across all five surfaces. Write it that way even though this plan has only two consumers.
+
 ## Edge cases
 - **Pack file removed from disk.** `/static/icons/...` 404s and the `<img>` renders a broken glyph. Give every `<img>` an `onerror` that swaps in the role portrait, so a missing asset degrades to the old behaviour rather than to a broken image.
 - **Two teams pick the same icon.** Allowed. The icon is decoration plus recognition, not a key. Do not add a uniqueness constraint — the operator may legitimately want two similar squads to look alike.
@@ -58,7 +73,8 @@ Add a small helper — `teamIconSrc(group)` → URL string or `null` — colocat
 ## Verification Plan
 1. `npm run compile` — clean.
 2. **The wipe regression, first and explicitly:** set a team's icon; then edit only that team's *name* and save; re-read `terminals.agentGroups` and confirm `icon` survived. Repeat for a member-row edit and for a prompt edit. This is the failure mode the plan exists to avoid — assert it, do not eyeball it.
-3. Unit: `teamIconSrc` — `pack:` form URL-encodes correctly (test with a spaced filename); `data:` form passes through; empty/absent returns `null`; a malformed value returns `null` rather than throwing.
+3. Unit: `teamIconSrc` — `art:` form resolves through the manifest; `pack:` form URL-encodes correctly (test with a spaced filename); `data:` form passes through; empty/absent returns `null`; a malformed value returns `null` rather than throwing.
+   Plus: an `art:<id>` whose manifest entry changes `src` still resolves — the stored value is untouched. This is the placeholder-swap guarantee; assert it now, while the art is still stand-in.
 4. Unit/server: `saveAgentGroup` rejects an `icon` that is neither prefix, and rejects an oversized data URI.
 5. Manual, installed VSIX: pick a pack icon for team A and a custom PNG for team B. Confirm both render on the gallery card and on the flow head node. Reload the board and confirm both persist.
 6. Manual: delete the picked pack file from `icons/`, reload, confirm the card falls back to the role portrait rather than a broken image.
