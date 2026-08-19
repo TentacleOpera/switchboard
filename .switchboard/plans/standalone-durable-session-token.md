@@ -53,6 +53,7 @@ The fix is not new storage. It is teaching `getAuthToken` to prefer a *stored* s
 
 **Complexity:** 4
 **Tags:** backend, auth, security, reliability, cli
+**Feature:** 6fb8574c-be7e-44be-9ad2-2272cf449d3c
 
 ## Proposed Changes
 

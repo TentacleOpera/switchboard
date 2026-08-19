@@ -36,6 +36,7 @@ The CLI was built as an alternative *entry point* to the extension, not as a ser
 
 **Complexity:** 5
 **Tags:** cli, devops, reliability, infrastructure
+**Feature:** 6fb8574c-be7e-44be-9ad2-2272cf449d3c
 
 ## Proposed Changes
 
