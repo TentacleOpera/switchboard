@@ -53,7 +53,7 @@ No user decision needed. The addon exclusion scope and the auto-arm watch config
 
 ## Adversarial Synthesis
 
-Key risks: (1) the auto-arm watch could fire on non-feature lead dispatches if the `isFeature` check is missing — mitigated by gating on `card.isFeature === true`; (2) the addon suppression could leak into non-drive leads if the `isDriveMode` check is wrong — mitigated by gating on both `driveMode === true` AND `featureMode === true`; (3) the coder branch suppression could break the non-feature coder path — mitigated by only applying it inside the `options?.featureMode` block. The plan correctly scopes all three.
+Key risks: (1) the auto-arm watch could fire on non-feature lead dispatches if the `isFeature` check is missing — mitigated by gating on `card.isFeature === true`; (2) the addon suppression could leak into non-drive leads if the `isDriveMode` check is wrong — mitigated by gating on both `driveMode === true` AND `featureMode === true`; (3) the coder branch suppression could break the non-feature coder path — mitigated by only applying it inside the `options?.featureMode` block; (4) the §3.5 skill update was duplicated in both this plan and the companion plan — resolved by assigning ownership to the companion plan (which is already restructuring the skill file) and marking this plan's §3.5 description as a reference only. The plan correctly scopes all three gating checks.
 
 ## Proposed Changes
 
@@ -168,7 +168,7 @@ This is the same DB write the `watchFeature` verb does at line 10831-10845 — j
 Feature watch: armed by the system (stopColumns: CODE REVIEWED). You will be nudged if you go idle with un-accepted subtasks. No action needed.
 ```
 
-**What gets updated in the skill:** The §3.5 section (line 276-301) should note that the system arms the watch automatically for drive-mode dispatches, and the manual arming path is only for non-drive or external-headed teams:
+**What gets updated in the skill:** The §3.5 section (line 276-301) update is **owned by the companion plan** (`inject-context-trim-skill-drive-mode-prompt-payload.md`, Part 2), which is already restructuring the skill file and includes the §3.5 update as one of its steps. Do NOT re-describe or re-apply the §3.5 change here — the companion plan's Part 2 handles it. This plan's responsibility is the extension-side auto-arm code (above) and the addon suppression (Part 1). The companion plan's §3.5 update will note:
 
 ```
 The feature watch is armed automatically by the system when a drive-mode feature is dispatched to your terminal. You do not need to arm it yourself. The manual arming path below is for external-headed teams or non-drive dispatches only.
@@ -229,7 +229,7 @@ The feature watch is armed automatically by the system when a drive-mode feature
 
 ## Dependencies & Sequencing
 
-- Part 2 (auto-arm watch) depends on the companion plan's Part 1 (enriched prompt no longer tells the agent to arm it) and Part 2 (skill updated to note auto-arming)
+- Part 2 (auto-arm watch) depends on the companion plan's Part 1 (enriched prompt no longer tells the agent to arm it) and Part 2 (skill updated to note auto-arming — **owned by the companion plan, not this plan**)
 - Part 1 (addon exclusion) is independent — can land anytime
 
 Recommended order: Part 1 anytime, Part 2 after the companion plan lands

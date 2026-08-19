@@ -58,7 +58,7 @@ No user decision needed — the design is fully specified from the observed fail
 
 ## Adversarial Synthesis
 
-Key risks: (1) the roster resolver's role-resolution path is non-trivial and the original plan's approach was factually wrong about `getFleetLiveness()` providing roles; (2) the enriched prompt could become stale if the team changes after dispatch but before the agent reads it — acceptable since the agent dispatches by name, not by roster freshness; (3) the skill trim could lose operational context if war stories are moved without back-references. Mitigations: Part 4 uses the correct role-resolution path (ptyListTerminals or agentGroups cross-reference); the roster is advisory; Part 2 requires back-references from the appendix to the original sections.
+Key risks: (1) the roster resolver's role-resolution path is non-trivial and the original plan's approach was factually wrong about `getFleetLiveness()` providing roles; (2) the enriched prompt could become stale if the team changes after dispatch but before the agent reads it — acceptable since the agent dispatches by name, not by roster freshness; (3) the skill trim could lose operational context if war stories are moved without back-references; (4) the operational block template originally used `$BASE` without defining it inline — resolved by adding `BASE="http://127.0.0.1:<port>"` to the API line so the agent never needs to look up the skill file to resolve the variable. Mitigations: Part 4 uses the correct role-resolution path (ptyListTerminals or agentGroups cross-reference) and explicitly identifies `members[0]` as the head to skip; the roster is advisory; Part 2 requires back-references from the appendix to the original sections.
 
 ## Proposed Changes
 
@@ -86,7 +86,7 @@ YOUR TEAM:
 - Coding-coder-2 (coder) — active
 - Coding-intern (intern) — active
 
-API: Port is <port> (http://127.0.0.1:<port>). Also in .switchboard/api-server-port.txt.
+API: Port is <port>. BASE="http://127.0.0.1:<port>" (also in .switchboard/api-server-port.txt).
 Your terminal name is in $SWITCHBOARD_TERMINAL.
 Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.
 
@@ -195,7 +195,7 @@ async _resolveTeamRosterForPrompt(workspaceRoot: string): Promise<Array<{ name: 
 This function:
 1. Reads `terminals.groups` from the DB (same path as `resolveCodingRolesFromGroups` — `TERMINALS_GROUPS_KEY` with bare-key fallback at line 5115)
 2. Finds the group with `headRole === 'lead'` and `teamGroup === true` and a live head (same liveness check as `resolveCodingRolesFromGroups`)
-3. Gets the `members` array (terminal names, head first — set by `wireSpawnedTeam` at teamWiring.ts:1293)
+3. Gets the `members` array (terminal-name strings, head first — `members[0]` is the head, set by `wireSpawnedTeam` at teamWiring.ts:1281-1293 where `groupMembers = [headName, ...childNames]`). Skip `members[0]` when building the roster — the head is the agent receiving this prompt.
 4. Gets liveness from `getFleetLiveness()` — `{ friendlyName, status }` only, used to set `active: boolean`
 5. Gets roles from one of:
    a. `_liveTerminalsProvider()` if registered (standalone) — returns `{ role, friendlyName, ... }`
