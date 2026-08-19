@@ -1,4 +1,10 @@
-# Add Unix domain socket transport to LocalApiServer so agents bypass sandbox loopback blocks
+# ~~Add Unix domain socket transport to LocalApiServer so agents bypass sandbox loopback blocks~~
+
+> **SUPERSEDED — do not implement.** Web research (2026-08-19) confirmed macOS Seatbelt blocks Unix domain socket `connect()` by default alongside TCP. The user's primary platform is macOS (Darwin 25.2.0). The Unix socket approach works on Linux but requires per-agent sandbox config on macOS that the extension cannot automate — making it a non-solution for the user's platform. Replaced by two new plans:
+> - `add-file-based-ipc-transport.md` — universal file-based IPC for sandboxed agents (all platforms, zero config)
+> - `add-mcp-stdio-transport.md` — MCP stdio server for platforms that support it (server runs outside sandbox, bypasses network restrictions entirely)
+>
+> This plan is retained as a historical record of the analysis. The `_handleRequest` remoteAddress finding (change #1b) remains valid if Unix sockets are revisited in the future.
 
 ## Goal
 
