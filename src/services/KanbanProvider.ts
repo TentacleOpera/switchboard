@@ -1785,7 +1785,7 @@ export class KanbanProvider implements vscode.Disposable {
         const targetColumn = column ?? vscode.ViewColumn.One;
         // preserveFocus is a REVIVAL affordance, not an open affordance (see open()).
         // `column` is supplied only by deserializeAgentControlPanel, so it is the
-        // honest discriminator. Never hardcode `preserveFocus: true` — the
+        // honest discriminator. preserveFocus must never be hardcoded on — the
         // panel-revival-retention-contract test forbids it.
         const isRevival = column !== undefined;
         if (this._agentControlPanel) {
