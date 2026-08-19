@@ -686,8 +686,18 @@ test('the reduced-motion variant overrides animation-name only, with a distinct 
         /@keyframes strip-term-done-pulse-reduced\s*\{/.test(shellHtml),
         '@keyframes strip-term-done-pulse-reduced must exist — a distinct name, not a second same-named declaration'
     );
-    const media = shellHtml.match(/@media \(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\}\s*\}/);
-    assert.ok(media, 'a prefers-reduced-motion media block must exist');
+    // Select the reduced-motion block by CONTENT, not by position. A bare
+    // `.match` (no /g) returns the FIRST @media block in the file, which is a
+    // silent-wrong-assertion hazard: a second reduced-motion block added
+    // elsewhere (e.g. the orchestrator icon's own guard) would either break
+    // this test for an unrelated reason or — worse — pass while checking the
+    // wrong block. Collect ALL reduced-motion blocks and select the one whose
+    // body contains `strip-term-done-pulse-reduced` — that is the block this
+    // test means. A second reduced-motion block elsewhere is harmless.
+    const allMedia = [...shellHtml.matchAll(/@media \(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\}\s*\}/g)];
+    assert.ok(allMedia.length > 0, 'at least one prefers-reduced-motion media block must exist');
+    const media = allMedia.find(m => /strip-term-done-pulse-reduced/.test(m[1]));
+    assert.ok(media, 'a prefers-reduced-motion media block containing strip-term-done-pulse-reduced must exist');
     assert.ok(/animation-name:\s*strip-term-done-pulse-reduced/.test(media[1]),
         'the reduced-motion variant must override animation-name only — duration, iteration count and fill-mode are inherited');
     // No second same-named @keyframes inside the media query (the rejected approach).

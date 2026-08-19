@@ -294,9 +294,10 @@
             object-fit: contain;
             pointer-events: none;
         }
-        /* The ONLY reduced-motion guard — the SVG's internal <style> was dropped
-           when it was inlined, so this rail-level rule is load-bearing. Freezes
-           the blinking lights in both lit and dimmed states. */
+        /* The ONLY reduced-motion guard for the inlined SVG — its internal
+           <style> was dropped when it was inlined, so this rail-level rule is
+           load-bearing. Freezes the blinking lights in both lit and dimmed
+           states. */
         @media (prefers-reduced-motion: reduce) {
             #strip-orchestrator .light-a,
             #strip-orchestrator .light-b {

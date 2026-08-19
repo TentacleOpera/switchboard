@@ -3207,18 +3207,22 @@ export class LocalApiServer {
             //   - terminal (default): the existing verbatim string — a script
             //     scanning for /awaiting confirmation/i (see
             //     orchestrator-tick-and-reports-contract.test.js) still matches.
-            // The spread `...(result || {})` comes AFTER `message` so result.success
-            // still overrides the default success:true, and a result-supplied
-            // message (none today) would win too.
+            // Spread the result FIRST so its `success` (true/false) and `mode`
+            // own those fields, then override `message` with the computed string
+            // — a result-supplied message (none today) would be replaced, which
+            // is the intent (the message is the API's semantic contract). A null
+            // result falls back to { success: true } so the response is still
+            // well-formed. Spreading after a literal `success: true` would trip
+            // TS2783 (duplicate key) AND silently let result.success override a
+            // key the reader sees first — spreading first is unambiguous.
             const message = result && result.success === false
                 ? 'Orchestration start failed: ' + (result.error || 'unknown error') + '. No terminal was seated.'
                 : result && result.mode === 'clipboard'
                     ? 'No terminal created — clipboard mode. The /switchboard launcher prompt is returned for the caller to run; no agent was seated. Call POST /orchestration/confirm after the user answers to arm.'
                     : 'Orchestrator seated and awaiting confirmation — pre-flight interview delivered. Call POST /orchestration/confirm after the user answers to arm.';
             res.end(JSON.stringify({
-                success: true,
-                message,
-                ...(result || {})
+                ...(result || { success: true }),
+                message
             }));
         } catch (err) {
             console.error('[LocalApiServer] orchestrationStart error:', err);
