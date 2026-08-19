@@ -26564,6 +26564,11 @@
       "prefix": false
     },
     {
+      "path": "/review/pre-check",
+      "method": "POST",
+      "prefix": false
+    },
+    {
       "path": "/research/dispatch",
       "method": "POST",
       "prefix": false

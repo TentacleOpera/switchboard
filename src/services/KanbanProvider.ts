@@ -10957,9 +10957,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     try {
                         // Pass the pre-resolved target to avoid a redundant re-resolve
                         // inside enqueuePhoneAFriend — the target was already resolved
-                        // above for grouping.
+                        // above for grouping. `mode` distinguishes pre-review (pipeline-
+                        // triggered sanity check) from post-batch (manual TEAMS tab
+                        // trigger). Absent → undefined → post-batch default (backward compat).
                         const resolvedTarget = { agentName: entry.agentName, targetKey };
-                        const result = await this._taskViewerProvider?.enqueuePhoneAFriend(entry.planFiles, entry.originRole, resolvedTarget);
+                        const mode = (msg.mode === 'pre-review' || msg.mode === 'post-batch') ? msg.mode : undefined;
+                        const result = await this._taskViewerProvider?.enqueuePhoneAFriend(entry.planFiles, entry.originRole, resolvedTarget, mode);
                         if (result) {
                             queued += result.queued;
                             if (result.fallback) { fallback = true; }

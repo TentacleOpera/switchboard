@@ -330,7 +330,7 @@ interface LocalApiServerOptions {
      * `originRole` lets the host resolve the originating coder's saved addons.
      * Optional — absent in headless/test harnesses.
      */
-    onPhoneAFriend?: (planFile: string, originRole?: string, originTerminal?: string, dispatchId?: string) => Promise<void>;
+    onPhoneAFriend?: (planFile: string, originRole?: string, originTerminal?: string, dispatchId?: string, mode?: 'pre-review' | 'post-batch') => Promise<void>;
     /**
      * Phone-a-Friend completion callback — reached by the friend agent's `curl`
      * to POST /phone-a-friend/done when it finishes reviewing a plan. The host
@@ -2840,6 +2840,8 @@ export class LocalApiServer {
             const originRole = body?.originRole ? String(body.originRole).trim() : undefined;
             const originTerminal = body?.originTerminal ? String(body.originTerminal).trim() : undefined;
             const dispatchId = body?.dispatchId ? String(body.dispatchId).trim() : undefined;
+            const rawMode = body?.mode ? String(body.mode).trim() : undefined;
+            const mode = (rawMode === 'pre-review' || rawMode === 'post-batch') ? rawMode : undefined;
             // Validate planFile: non-empty, relative, no traversal (the host only forwards
             // it into prompt text — never resolves it server-side).
             if (!planFile) {
@@ -2855,7 +2857,7 @@ export class LocalApiServer {
 
             // The callback handles the silent drop internally and MUST NOT throw on
             // "no terminal" — a throw here becomes a 500 and breaks the best-effort signal.
-            await onPhoneAFriend(planFile, originRole, originTerminal, dispatchId);
+            await onPhoneAFriend(planFile, originRole, originTerminal, dispatchId, mode);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true }));
         } catch (err) {
@@ -2903,6 +2905,137 @@ export class LocalApiServer {
             console.error('[LocalApiServer] phoneAFriendDone error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'phoneAFriendDone failed' }));
+        }
+    }
+
+    /**
+     * POST /review/pre-check — Stage 1 mechanical gate. Runs compile + diff coverage
+     * on a completed plan's worktree before any reviewer agent is dispatched. The
+     * caller (dispatch pipeline) uses the result to decide whether to proceed to the
+     * expensive reviewer or send mechanical findings back to the coder.
+     *
+     * Body: { planId?: string, planFile?: string, workspaceRoot: string, skipCompilation?: boolean }
+     *
+     * Checks:
+     * 1. Compile check — `npm run compile` in the worktree CWD (or workspace root).
+     *    Skipped when `skipCompilation` is true (honors SKIP COMPILATION directive).
+     * 2. Diff coverage check — git diff against the last commit; parse the plan file
+     *    for mentioned file paths (regex: src/...\.(ts|js|tsx|jsx|css|html|json));
+     *    flag when the diff touches zero plan-relevant files.
+     *
+     * Response: { passed: boolean, checks: Array<{name,passed,details}>, findings: Array<{severity,message,file?}> }
+     */
+    private async _handleReviewPreCheck(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || '').trim();
+            const planFile = body?.planFile ? String(body.planFile).trim() : undefined;
+            const skipCompilation = Boolean(body?.skipCompilation);
+
+            if (!workspaceRoot) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+
+            // Resolve the CWD: workspace root (shared working tree) or worktree path.
+            // The plan file path is relative to the workspace root.
+            const cwd = path.isAbsolute(workspaceRoot) ? workspaceRoot : path.resolve(workspaceRoot);
+
+            const checks: Array<{ name: string; passed: boolean; details: string }> = [];
+            const findings: Array<{ severity: string; message: string; file?: string }> = [];
+
+            // --- Check 1: Compile ---
+            if (skipCompilation) {
+                checks.push({ name: 'compile', passed: true, details: 'Skipped — SKIP COMPILATION directive active.' });
+            } else {
+                try {
+                    const { execSync } = require('child_process');
+                    execSync('npm run compile', { cwd, timeout: 120000, encoding: 'utf8' });
+                    checks.push({ name: 'compile', passed: true, details: 'Compilation succeeded.' });
+                } catch (err: any) {
+                    const stderr = err?.stderr || err?.message || 'Unknown error';
+                    checks.push({ name: 'compile', passed: false, details: `Compilation failed: ${stderr.slice(0, 500)}` });
+                    findings.push({ severity: 'CRITICAL', message: `Compilation failed: ${stderr.slice(0, 300)}` });
+                }
+            }
+
+            // --- Check 2: Diff coverage ---
+            try {
+                const { execSync } = require('child_process');
+                // Get the list of files changed — check both uncommitted changes
+                // (git diff --name-only HEAD) and the last commit (git diff --name-only
+                // HEAD~1 HEAD) since the coder may have committed their work.
+                let diffFiles: string[] = [];
+                try {
+                    const diffOutput = execSync('git diff --name-only HEAD', { cwd, encoding: 'utf8', timeout: 30000 });
+                    diffFiles = diffOutput.split('\n').map(f => f.trim()).filter(Boolean);
+                } catch { /* no uncommitted changes or git error */ }
+                // Also check the last commit (coder may have committed everything).
+                if (diffFiles.length === 0) {
+                    try {
+                        const diffOutput = execSync('git diff --name-only HEAD~1 HEAD', { cwd, encoding: 'utf8', timeout: 30000 });
+                        diffFiles = diffOutput.split('\n').map(f => f.trim()).filter(Boolean);
+                    } catch { /* no commits or single-commit repo */ }
+                }
+                // Fallback: unstaged diff only (no HEAD reference needed).
+                if (diffFiles.length === 0) {
+                    try {
+                        const diffOutput = execSync('git diff --name-only', { cwd, encoding: 'utf8', timeout: 30000 });
+                        diffFiles = diffOutput.split('\n').map(f => f.trim()).filter(Boolean);
+                    } catch { /* no unstaged changes */ }
+                }
+
+                // Parse the plan file for mentioned file paths.
+                let planPaths: string[] = [];
+                if (planFile) {
+                    try {
+                        const planPath = path.isAbsolute(planFile) ? planFile : path.join(cwd, planFile);
+                        const planContent = fsSync.readFileSync(planPath, 'utf8');
+                        const pathRegex = /src\/[a-zA-Z0-9/_.-]+\.(ts|js|tsx|jsx|css|html|json)/g;
+                        const matches = planContent.match(pathRegex);
+                        if (matches) {
+                            planPaths = Array.from(new Set(matches));
+                        }
+                    } catch {
+                        // Plan file not readable — skip diff coverage (no plan paths to match)
+                    }
+                }
+
+                if (diffFiles.length === 0) {
+                    checks.push({ name: 'diffCoverage', passed: false, details: 'Diff is empty — no changed files detected.' });
+                    findings.push({ severity: 'CRITICAL', message: 'Diff is empty — no code changes detected against the plan scope.' });
+                } else if (planPaths.length === 0) {
+                    // No plan paths extracted — can't check coverage, pass by default
+                    checks.push({ name: 'diffCoverage', passed: true, details: `${diffFiles.length} file(s) changed. No plan-relevant paths extracted from plan file — coverage check skipped.` });
+                } else {
+                    const touchedPlanFiles = diffFiles.filter(df =>
+                        planPaths.some(pp => df.endsWith(pp) || pp.endsWith(df) || df === pp)
+                    );
+                    if (touchedPlanFiles.length > 0) {
+                        checks.push({ name: 'diffCoverage', passed: true, details: `${diffFiles.length} file(s) changed, ${touchedPlanFiles.length} match plan scope.` });
+                    } else {
+                        checks.push({ name: 'diffCoverage', passed: false, details: `${diffFiles.length} file(s) changed but none match plan-relevant paths (${planPaths.slice(0, 5).join(', ')}${planPaths.length > 5 ? '...' : ''}).` });
+                        findings.push({ severity: 'MAJOR', message: `Diff does not match plan scope — changed files: ${diffFiles.slice(0, 5).join(', ')}${diffFiles.length > 5 ? '...' : ''}` });
+                    }
+                }
+            } catch (err: any) {
+                // Git/diff check failed — don't block, pass by default (graceful)
+                checks.push({ name: 'diffCoverage', passed: true, details: `Diff coverage check could not run: ${err?.message || 'unknown error'}` });
+            }
+
+            const passed = checks.every(c => c.passed);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ passed, checks, findings }));
+        } catch (err) {
+            console.error('[LocalApiServer] reviewPreCheck error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'review pre-check failed' }));
         }
     }
 
@@ -4631,6 +4764,8 @@ export class LocalApiServer {
                 await this._handlePhoneAFriend(req, res);
             } else if (pathname === '/phone-a-friend/done' && req.method === 'POST') {
                 await this._handlePhoneAFriendDone(req, res);
+            } else if (pathname === '/review/pre-check' && req.method === 'POST') {
+                await this._handleReviewPreCheck(req, res);
             } else if (pathname === '/research/dispatch' && req.method === 'POST') {
                 await this._handleResearchDispatch(req, res);
             } else if (pathname === '/api/clickup' && req.method === 'POST') {

@@ -1286,6 +1286,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         inFlight: string | null; dispatchedAt?: number;
         stallTimer?: NodeJS.Timeout;
         lastCompleted?: string;
+        mode?: 'pre-review' | 'post-batch';
     }>();
     // Stall notification threshold for Phone-a-Friend — if a plan is in flight
     // longer than this with no /phone-a-friend/done callback, emit a stalled
@@ -1293,6 +1294,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // would /clear a review still in flight — the original bug with a bigger
     // constant). A human or the orchestrator decides whether to force-advance.
     private static readonly PHONE_A_FRIEND_STALL_MS = 10 * 60 * 1000;
+    // Pre-review sequential gate waiters — keyed by `${targetKey}::${planFile}`.
+    // When POST /phone-a-friend/done fires for a plan, the waiter is resolved
+    // so the dispatch pipeline can proceed (or route FAIL findings to the coder).
+    private _preReviewWaiters = new Map<string, () => void>();
     private _isMigratingSettings: boolean = false;
 
     // Last-accessed tracking for background prefetch
@@ -3512,11 +3517,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     },
                 };
             })(),
-            onPhoneAFriend: async (planFile: string, originRole?: string, originTerminal?: string, dispatchId?: string) => {
+            onPhoneAFriend: async (planFile: string, originRole?: string, originTerminal?: string, dispatchId?: string, mode?: 'pre-review' | 'post-batch') => {
                 // Route the coder's batch-end POST to the Phone-a-Friend terminal dispatch.
                 // The callback handles the silent drop internally and MUST NOT throw on
                 // "no terminal" (a throw becomes a 500 and breaks the best-effort signal).
-                await this.dispatchPhoneAFriend(planFile, originRole || 'coder', originTerminal, dispatchId);
+                // `mode` distinguishes pre-review (pipeline-triggered sanity check) from
+                // post-batch (coder-triggered second pass). Default is post-batch (backward compat).
+                await this.dispatchPhoneAFriend(planFile, originRole || 'coder', originTerminal, dispatchId, mode);
             },
             onPhoneAFriendDone: (target: string, planFile?: string) => {
                 // Route the friend's completion POST to the per-target queue advance.
@@ -5762,14 +5769,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return { agentName, targetKey };
     }
 
-    public async dispatchPhoneAFriend(planFile: string | string[], originRole: string, originTerminal?: string, dispatchId?: string): Promise<void> {
+    public async dispatchPhoneAFriend(planFile: string | string[], originRole: string, originTerminal?: string, dispatchId?: string, mode?: 'pre-review' | 'post-batch'): Promise<void> {
         // Public void wrapper for the HTTP onPhoneAFriend callback — the coder's
         // batch-end POST sends a single plan. This is the AUTOMATIC path (no
         // queue entry) so queueOriginated=false — the done directive is NOT
         // appended. Delegates to the internal variant and swallows the boolean
-        // (a throw becomes a 500 on the HTTP path).
+        // (a throw becomes a 500 on the HTTP path). `mode` distinguishes pre-review
+        // (pipeline-triggered sanity check) from post-batch (coder-triggered second pass).
         try {
-            await this._dispatchPhoneAFriendInternal(planFile, originRole, originTerminal, dispatchId, undefined, false);
+            await this._dispatchPhoneAFriendInternal(planFile, originRole, originTerminal, dispatchId, undefined, false, mode);
         } catch (e) {
             console.error('[Phone-a-Friend] dispatchPhoneAFriend error:', e);
         }
@@ -5799,7 +5807,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         originTerminal?: string,
         dispatchId?: string,
         resolvedTargetKey?: string,
-        queueOriginated?: boolean
+        queueOriginated?: boolean,
+        mode?: 'pre-review' | 'post-batch'
     ): Promise<boolean> {
         const planFiles = (Array.isArray(planFile) ? planFile : [planFile])
             .filter(p => typeof p === 'string' && p.trim());
@@ -5873,9 +5882,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             // Single-plan text is byte-identical to the shipped prompt — the HTTP batch-end path still
             // sends exactly one plan and must not drift. The done directive is APPENDED (not woven in)
-            // so the base text stays byte-identical.
+            // so the base text stays byte-identical. Pre-review mode (pipeline-triggered sanity check)
+            // uses a different prompt: "did they implement it at all" — not deep analysis or bug-fixing.
             const apiPort = this.getLocalApiServerPort();
-            const basePrompt = planFiles.length === 1
+            const basePrompt = mode === 'pre-review'
+                ? `Pre-review check for plan ${planFiles[0]}. Read the plan file and the coder's git diff (git diff HEAD~<commit count> or git log --oneline -5 to find the coder's commits). Answer two questions: (1) Does the diff implement what the plan describes, or is it a stub/empty/partial? (2) Are there any obvious gaps a plan reader would catch? Report PASS or FAIL with specific findings in your completion report to the lead. Do NOT do deep analysis — that's the next stage. Focus on: did they implement it at all, and does it look like a real implementation? GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push.`
+                : planFiles.length === 1
                 ? `Read ${planFiles[0]} — this plan was just coded by another agent (origin role: ${originRole}, originTerminal: ${originTerminal || 'unknown'}, dispatch: ${dispatchId || 'none'}). Assume the implementation contains hidden bugs. Check the code against the plan, find and fix any issues you discover. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push. When done, summarize the bugs you found and the fixes you applied.`
                 : `Read these ${planFiles.length} plans — they were just coded by another agent (origin role: ${originRole}, originTerminal: ${originTerminal || 'unknown'}, dispatch: ${dispatchId || 'none'}):\n${planFiles.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n\nAssume each implementation contains hidden bugs. Work the list in order, one plan at a time: check the code against that plan, find and fix any issues you discover, then move to the next. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push. When done, summarize per plan the bugs you found and the fixes you applied.`;
             // Append the completion directive ONLY for queue-originated dispatches
@@ -5915,7 +5927,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * the whole list as one numbered batch prompt — the batch prompt stays as a
      * fallback and does not become dead code.
      */
-    public async enqueuePhoneAFriend(planFiles: string[], originRole: string, resolvedTarget?: { agentName: string; targetKey: string } | null): Promise<{ queued: number; unrouted: number; fallback: boolean }> {
+    public async enqueuePhoneAFriend(planFiles: string[], originRole: string, resolvedTarget?: { agentName: string; targetKey: string } | null, mode?: 'pre-review' | 'post-batch'): Promise<{ queued: number; unrouted: number; fallback: boolean }> {
         const valid = planFiles.filter(p => typeof p === 'string' && p.trim());
         if (valid.length === 0) { return { queued: 0, unrouted: 0, fallback: false }; }
 
@@ -5934,7 +5946,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // send all plans as one numbered prompt, no queue, no /done needed.
         // The batch prompt stays as a fallback and does not become dead code.
         if (this.suppressLocalApiServer) {
-            await this._dispatchPhoneAFriendInternal(valid, originRole, undefined, undefined, targetKey, false);
+            await this._dispatchPhoneAFriendInternal(valid, originRole, undefined, undefined, targetKey, false, mode);
             return { queued: valid.length, unrouted: 0, fallback: true };
         }
 
@@ -5943,14 +5955,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // multi-plan path in _dispatchPhoneAFriendInternal and stays as a fallback.
         const apiPort = this.getLocalApiServerPort();
         if (apiPort === 0) {
-            await this._dispatchPhoneAFriendInternal(valid, originRole, undefined, undefined, targetKey, false);
+            await this._dispatchPhoneAFriendInternal(valid, originRole, undefined, undefined, targetKey, false, mode);
             return { queued: valid.length, unrouted: 0, fallback: true };
         }
 
         // Get or create the per-target queue.
         let queue = this._phoneAFriendQueues.get(targetKey);
         if (!queue) {
-            queue = { agentName, originRole, pending: [], inFlight: null };
+            queue = { agentName, originRole, pending: [], inFlight: null, mode };
             this._phoneAFriendQueues.set(targetKey, queue);
         }
         queue.pending.push(...valid);
@@ -5991,7 +6003,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (queue.stallTimer) { clearTimeout(queue.stallTimer); queue.stallTimer = undefined; }
 
         const delivered = await this._dispatchPhoneAFriendInternal(
-            planFile, queue.originRole, undefined, undefined, targetKey, true
+            planFile, queue.originRole, undefined, undefined, targetKey, true, queue.mode
         );
 
         if (!delivered) {
@@ -6058,6 +6070,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         queue.lastCompleted = queue.inFlight;
         queue.inFlight = null;
         queue.dispatchedAt = undefined;
+        // Resolve any pre-review sequential gate waiter for this plan so the
+        // dispatch pipeline can proceed (or route FAIL findings to the coder).
+        const preReviewWaiterKey = `${target}::${queue.lastCompleted}`;
+        const preReviewWaiter = this._preReviewWaiters.get(preReviewWaiterKey);
+        if (preReviewWaiter) {
+            this._preReviewWaiters.delete(preReviewWaiterKey);
+            preReviewWaiter();
+        }
         void this._pumpPhoneAFriendQueue(target);
     }
 
@@ -21537,6 +21557,122 @@ What would you like to find?`;
             } catch { /* best-effort — fall back to fix-itself */ }
         }
 
+        // Stage 1: Mechanical gate — pre-check before reviewer dispatch.
+        // Runs compile + diff coverage via POST /review/pre-check. On failure,
+        // sends mechanical findings to the coder instead of dispatching the
+        // reviewer. On HTTP error, falls through to the reviewer (graceful
+        // degradation — never block on a failed gate call).
+        let reviewerPreCheckPassed = false;
+        if (role === 'reviewer') {
+            const preCheckPort = this.getLocalApiServerPort();
+            if (preCheckPort > 0) {
+                try {
+                    const http = require('http');
+                    const preCheckToken = await this.getApiToken();
+                    const planFileRelative = dispatchPlans[0]?.absolutePath
+                        ? path.relative(resolvedWorkspaceRoot, dispatchPlans[0].absolutePath)
+                        : undefined;
+                    const skipCompilation = Boolean(options?.additionalInstructions?.includes('SKIP COMPILATION'));
+                    const requestBody = JSON.stringify({
+                        planId: dispatchPlans[0]?.planId,
+                        planFile: planFileRelative,
+                        workspaceRoot: resolvedWorkspaceRoot,
+                        skipCompilation,
+                    });
+                    const preCheckResult = await new Promise<any>((resolve, reject) => {
+                        const req = http.request({
+                            hostname: '127.0.0.1',
+                            port: preCheckPort,
+                            path: '/review/pre-check',
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                ...(preCheckToken ? { 'Authorization': `Bearer ${preCheckToken}` } : {}),
+                            },
+                        }, (res: any) => {
+                            let body = '';
+                            res.on('data', (c: any) => { body += c; });
+                            res.on('end', () => {
+                                try { resolve(JSON.parse(body)); }
+                                catch { reject(new Error('Invalid JSON from pre-check')); }
+                            });
+                        });
+                        req.on('error', reject);
+                        req.setTimeout(130000, () => { req.destroy(); reject(new Error('Pre-check timed out')); });
+                        req.write(requestBody);
+                        req.end();
+                    });
+                    if (preCheckResult && preCheckResult.passed === false) {
+                        // Gate failed — send mechanical findings to the coder if we have one.
+                        if (reviewerCoderTerminal) {
+                            const findingsText = preCheckResult.findings?.map((f: any) =>
+                                `[${f.severity}] ${f.message}`
+                            ).join('\n') || 'Mechanical gate failed.';
+                            const checkDetails = preCheckResult.checks?.map((c: any) =>
+                                `${c.name}: ${c.passed ? 'PASS' : 'FAIL'} — ${c.details}`
+                            ).join('\n') || '';
+                            const coderReport = `MECHANICAL GATE FAILED — pre-check before reviewer dispatch found issues. Fix these and report back:\n\n${findingsText}\n\nCheck details:\n${checkDetails}`;
+                            try {
+                                await this._dispatchExecuteMessage(resolvedWorkspaceRoot, reviewerCoderTerminal, coderReport, {}, 'sidebar', true);
+                            } catch (sendErr) {
+                                console.error('[TaskViewerProvider] Failed to send mechanical findings to coder:', sendErr);
+                            }
+                            clearDispatchLock();
+                            this._seams().ui.showInformationMessage(`Mechanical gate failed for ${sessionId}. Findings sent to ${reviewerCoderTerminal}.`);
+                            return false;
+                        }
+                        // No coder terminal — fall through to reviewer (it will catch the issues).
+                    } else if (preCheckResult && preCheckResult.passed === true) {
+                        // Stage 2: Phone-a-friend pre-review (if configured).
+                        // This is a SEQUENTIAL gate — the reviewer dispatch is blocked
+                        // until the phone-a-friend completes. The phone-a-friend reports
+                        // its PASS/FAIL findings to the lead via the standing-order
+                        // ptySendPrompt completion report; the lead routes FAIL findings
+                        // to the coder. The pipeline does not read a verdict — the done
+                        // signal only unblocks the gate so the reviewer can be dispatched.
+                        // If phone-a-friend is not configured or falls back to batch mode
+                        // (no completion callback), Stage 2 is skipped (graceful
+                        // degradation to reviewer only).
+                        try {
+                            const paTarget = await this.resolvePhoneAFriendTarget('coder');
+                            if (paTarget && dispatchPlans[0]?.absolutePath) {
+                                const planFileRel = path.relative(resolvedWorkspaceRoot, dispatchPlans[0].absolutePath);
+                                // Register the gate waiter BEFORE enqueuing so the
+                                // done callback cannot fire before the waiter is set.
+                                const waiterKey = `${paTarget.targetKey}::${planFileRel}`;
+                                const gatePromise = new Promise<void>((resolveGate) => {
+                                    this._preReviewWaiters.set(waiterKey, resolveGate);
+                                });
+                                const enqueueResult = await this.enqueuePhoneAFriend([planFileRel], 'coder', paTarget, 'pre-review');
+                                if (enqueueResult.queued > 0 && !enqueueResult.fallback) {
+                                    // Queued with completion callback — await the done signal.
+                                    // The phone-a-friend reports its PASS/FAIL findings to the
+                                    // lead via the standing-order ptySendPrompt completion report;
+                                    // the lead routes FAIL findings to the coder. The pipeline
+                                    // does not read a verdict programmatically — the done signal
+                                    // only unblocks the gate so the reviewer can be dispatched.
+                                    await gatePromise;
+                                    // Phone-a-friend completed — proceed to reviewer.
+                                    reviewerPreCheckPassed = true;
+                                } else {
+                                    // Not queued (unrouted) or fallback (no completion callback) —
+                                    // skip Stage 2, proceed to reviewer.
+                                    this._preReviewWaiters.delete(waiterKey);
+                                    reviewerPreCheckPassed = true;
+                                }
+                            } else {
+                                // Phone-a-friend not configured — skip Stage 2, proceed to reviewer.
+                                reviewerPreCheckPassed = true;
+                            }
+                        } catch { /* phone-a-friend not configured — skip Stage 2 */ reviewerPreCheckPassed = true; }
+                    }
+                } catch (preCheckErr) {
+                    // HTTP call failed — graceful degradation, fall through to reviewer.
+                    console.error('[TaskViewerProvider] Pre-check HTTP call failed, falling through to reviewer:', preCheckErr);
+                }
+            }
+        }
+
         if (role === 'planner') {
             const plannerInstruction = (baseInstruction === 'improve-plan' || baseInstruction === 'enhance' || baseInstruction === 'dispatch-analysis') ? baseInstruction : undefined;
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('planner', dispatchPlans, effectiveWorkspaceRoot, {
@@ -21552,6 +21688,7 @@ What would you like to find?`;
                 originTerminal: targetAgent,
                 ...delegateOptions,
                 gitProhibitionEnabled,
+                reviewerPreCheckPassed,
                 ...(reviewerDelegationMode && reviewerCoderTerminal && originLead
                     ? { reviewerDelegationMode: true, reviewerCoderTerminal, reviewerOriginLead: originLead }
                     : {})
