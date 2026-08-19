@@ -70,7 +70,7 @@ No user review required. The approach reuses existing shipped infrastructure (`s
 ### Complex / Risky
 - **Blank-token fail-closed.** `_checkAuth` treats an empty `expected` as loopback-trust / allow everything (`LocalApiServer.ts:681`). A stored-but-blank `switchboard.apiToken` must fall through to the random token, never to the empty string. Trim before testing; treat trimmed-empty as unset. This is the security-critical case in the plan.
 - **TerminalWsGateway auth bypass.** `bootstrap.ts:2291` constructs `new TerminalWsGateway(ptyFleetService, async () => sessionToken)` — a *separate* closure that bypasses `getAuthToken` entirely. If `getAuthToken` is changed to prefer the stored secret but the WS gateway keeps using the raw `sessionToken`, HTTP and WS auth disagree: the board renders but terminals hang. Both paths must resolve the same token.
-- **One-time token TTL window.** Making the launch token reusable in durable mode requires a bounded TTL (e.g. 15 minutes from boot) rather than unbounded reuse. The `oneTimeConsumed` flag must become a timestamp-based expiry check in durable mode while keeping strict single-use in ephemeral mode.
+- **Enrolment-token supply, not lifetime.** The `sb_session` cookie expires after 8 hours (`LocalApiServer.ts:742`) and `oneTimeConsumed` retires the only token that can replace it, so today the board locks the operator out 8 hours after launch with no restart involved — recoverable only by restarting the server and killing every running agent. The fix is on-demand minting with each token still strictly single-use; `oneTimeConsumed` must **not** be relaxed into a timestamp check. A bounded reuse window from boot does not address this, because the window has closed by hour eight.
 - **Pre-existing token adoption.** An install may already hold a `switchboard.apiToken` set for the extension host. After this change, that value silently becomes the live session secret. The behaviour change is intended but must be logged unambiguously at boot.
 
 ## Edge-Case & Dependency Audit
@@ -125,17 +125,29 @@ getAuthToken: async () => resolvedToken,
 
 Without this change, the board renders (HTTP auth passes) but terminals hang (WS auth fails against the old `sessionToken`). Verification step 9 exists to catch exactly this, but the code change must be explicit, not implied.
 
-**3. Make the one-time token reusable while the durable secret is configured (`bootstrap.ts:2555`).**
+**3. Mint enrolment tokens on demand instead of one per boot (`bootstrap.ts:2555`).**
 
-`oneTimeConsumed` exists to stop a token leaking from shell history or a process list being replayed. That rationale holds for the ephemeral mode and should stay. In durable mode the exchange is no longer a one-shot bootstrap — it is how each additional device enrols — so single-use makes multi-device impossible by construction.
+A durable secret alone does **not** fix re-entry, and the reason is easy to miss: it makes the cookie *comparison* stable while leaving no way to *obtain* a cookie.
 
-Recommended split: keep strict single-use when running on the random `sessionToken`; when a durable token is configured, allow the launch URL to be exchanged repeatedly within a bounded window (a short TTL, e.g. 15 minutes from boot) rather than unbounded. That admits the phone and the laptop from the same printed URL without leaving a permanently valid enrolment link in the terminal scrollback. State the window in the startup banner.
+The `sb_session` cookie carries an 8-hour expiry (`LocalApiServer.ts:742`). Obtaining a new one requires the `?token=` exchange, and `oneTimeConsumed` retires the only token that ever exists after its first use. All three cookie-setting handlers (`/`, `/project`, the shell) accept no other credential. So **eight hours after launch the board locks the operator out with no restart involved — and the only recovery is restarting the server**, killing every running agent to regain a login. A bounded reuse window from boot (the earlier design in this slot) admits a second device at launch and does nothing at hour eight; the window has closed by then too.
+
+Fix the *supply* of enrolment tokens rather than the lifetime of one:
+
+- Keep every issued enrolment token **strictly single-use**. That property is why a token leaking into shell history or a process list is not a standing credential, and it must not be traded away — so `oneTimeConsumed` does **not** become a timestamp check.
+- Mint them **on demand**: an internal call generates a fresh token, returns the URL, and expires the previous unredeemed one. Keep the boot-time token exactly as it is today — that is the first-launch path and it already works.
+- Give each token a short TTL (minutes) so an unredeemed URL left in scrollback goes stale on its own.
+
+How the CLI authenticates to request a mint should be settled here rather than in code review: the CLI already has filesystem access to the encrypted store, so it can read the durable secret and present it as `Authorization: Bearer` — the credential path `_checkAuth` already supports (`LocalApiServer.ts:672`). This composes with Change 2: the mint endpoint must validate against the same `resolvedToken` both the HTTP and WS paths use, not a fourth copy. In ephemeral mode there is no stored secret for the CLI to read, so minting is unavailable and the boot-time token stays the only route — say so in the error rather than failing opaquely.
+
+Obtaining a token therefore requires an authenticated channel to the machine (a local shell or SSH), which is the same trust boundary the printed banner already assumes. Admitting a second device means running the command twice; re-entering at hour nine means running it once. No restart, no agent loss.
+
+This changes which command is load-bearing: `token show` (Change 4) becomes the enrolment mechanism, not a convenience for re-reading the banner.
 
 **4. Add `switchboard token` (`src/standalone/cli.ts`).**
 
 Three subcommands, following the existing `secrets` block's shape and its `resolveSecretKey` hard-error discipline:
 
-- `token show` — print the current board URL for a running instance, resolving the port through the existing `findRunningInstance` path so it cannot print a URL for a dead server.
+- `token show` — mint a fresh single-use enrolment token against a running instance and print the board URL, resolving the port through the existing `findRunningInstance` path so it cannot print a URL for a dead server. Per Change 3 this is the re-entry path, so it must work at any point in the server's life, not only near boot.
 - `token set <value>` / `token rotate` — write `switchboard.apiToken` via `createStandaloneHostSecrets` (`src/standalone/hostServices.ts:174`), `rotate` generating 32 random bytes. Both must warn that live sessions are invalidated. **No confirmation prompt** — per `CLAUDE.md`, rotate immediately and say what happened.
 - `token clear` — delete the key, returning the install to ephemeral-per-launch behaviour.
 
@@ -163,15 +175,17 @@ This is the intended behaviour, but it is a behaviour change on existing state a
 ## Verification Plan
 
 1. **Restart survives.** Launch, open the board via the token URL, confirm it loads. `Ctrl+C`, relaunch on the same port, hard-refresh the still-open tab → board loads with no re-auth. Fails today with a 401.
-2. **Second device enrols.** With a durable token set, exchange the launch URL in browser A, then in browser B. Both hold working sessions. Confirm `oneTimeConsumed` no longer blocks B.
-3. **TTL closes.** Past the enrolment window, the same URL 401s. Confirm the window is stated in the banner.
-4. **Ephemeral mode is unchanged.** With no stored token: second exchange 401s, restart invalidates the cookie. This is the regression fence on today's behaviour.
-5. **Blank-token fail-closed.** Store a whitespace-only `switchboard.apiToken`, launch, and confirm the server does **not** fall into empty-token loopback-trust: an unauthenticated request to a guarded route must still 401. This is the security-critical case in the plan.
-6. **Rotate invalidates.** `switchboard token rotate` against a running instance, then confirm existing cookies 401 and the new URL works.
-7. **`token show` refuses a dead server.** Stop the instance, run `token show`, confirm it reports no running instance rather than printing a stale port from `api-server-port.txt`.
-8. **Adoption logging.** Pre-set `switchboard.apiToken`, launch, confirm the banner names durable mode and the adoption.
-9. **WS upgrade agrees with HTTP.** Terminals must stream in every passing case above — `authorizeWsUpgrade` runs with `rejectWhenTokenEmpty: true` (`src/standalone/terminalWsGateway.ts:906`) against the same token resolver, so a token change that breaks only the WS path would otherwise show up as a board that renders and terminals that hang. This is the verification for Proposed Change 2 (TerminalWsGateway bypass fix).
-10. `npm run compile` clean; existing standalone and `loopback-hostname-contract` tests green.
+2. **Second device enrols.** `token show` twice, exchange one URL in browser A and the other in browser B. Both hold working sessions.
+3. **Each token stays single-use.** Replay an already-redeemed URL in a third browser → 401. This is the security property Change 3 must not lose.
+4. **Re-entry past cookie expiry.** Force the 8-hour expiry (clear the cookie, or shorten the expiry in a local build), then `token show` and confirm re-entry **without restarting the server** — verified by the PTYs still being alive and streaming afterwards. This is the case Change 3 exists for and the one that fails today.
+5. **Unredeemed tokens go stale.** Mint one, wait out its TTL, confirm 401. Mint two in a row and confirm the first is dead.
+6. **Ephemeral mode is unchanged.** With no stored token, a restart still invalidates the cookie and minting is refused with a clear message. Regression fence on today's behaviour.
+7. **Blank-token fail-closed.** Store a whitespace-only `switchboard.apiToken`, launch, and confirm the server does **not** fall into empty-token loopback-trust: an unauthenticated request to a guarded route must still 401. This is the security-critical case in the plan.
+8. **Rotate invalidates.** `switchboard token rotate` against a running instance, then confirm existing cookies 401 and the new URL works.
+9. **`token show` refuses a dead server.** Stop the instance, run `token show`, confirm it reports no running instance rather than printing a stale port from `api-server-port.txt`.
+10. **Adoption logging.** Pre-set `switchboard.apiToken`, launch, confirm the banner names durable mode and the adoption.
+11. **WS upgrade agrees with HTTP.** Terminals must stream in every passing case above — `authorizeWsUpgrade` runs with `rejectWhenTokenEmpty: true` (`src/standalone/terminalWsGateway.ts:906`) against the same token resolver, so a token change that breaks only the WS path would otherwise show up as a board that renders and terminals that hang. This is the verification for Proposed Change 2 (TerminalWsGateway bypass fix).
+12. `npm run compile` clean; existing standalone and `loopback-hostname-contract` tests green.
 
 ## Outstanding Questions
 
