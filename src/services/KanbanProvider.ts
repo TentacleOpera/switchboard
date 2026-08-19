@@ -3654,6 +3654,58 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         }
     }
 
+    /**
+     * Auto-arm a feature watch when a drive-mode FEATURE card is dispatched to a
+     * lead. The `stopColumns` value is deterministic for drive-mode leads —
+     * `["CODE REVIEWED"]` — because a drive-mode lead hands each subtask to the
+     * reviewer at CODE REVIEWED and its job per subtask ends there. Arming the
+     * watch here (instead of leaving it to the agent) removes the false stall
+     * notice that fired when an agent omitted the optional `stopColumns` line and
+     * the watch treated CODE REVIEWED subtasks as un-accepted.
+     *
+     * Same DB write the `watchFeature` verb performs (filter-then-push replaces,
+     * so re-arming is idempotent and never stacks duplicates). No-op when the
+     * card is not a feature, drive mode is off, the head terminal is not yet
+     * recorded, or the DB is unavailable. Best-effort: errors are logged, never
+     * thrown — a failed arm must not break the dispatch path.
+     */
+    private async _autoArmDriveModeFeatureWatch(
+        card: { isFeature?: boolean; planId: string; sessionId: string } | undefined,
+        workspaceRoot: string | undefined
+    ): Promise<void> {
+        if (!card?.isFeature || !workspaceRoot) return;
+        const featurePlanId = card.planId || card.sessionId || '';
+        if (!featurePlanId) return;
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) return;
+            const isDrive = (await db.getConfig('feature_drive_enabled')) === 'true';
+            if (!isDrive) return;
+            // The head terminal is the terminal the feature was just dispatched
+            // to. KanbanCard does not carry it, so read it back from the plan
+            // record's dispatchedAgent (recorded by _recordDispatchIdentity /
+            // the dispatch command before this point). An empty or 'unknown'
+            // value means the terminal is not yet resolved — skip arming rather
+            // than writing a watch with no head to nudge.
+            const rec = await db.getPlanBySessionId(card.sessionId);
+            const headTerminal = (rec?.dispatchedAgent || '').trim();
+            if (!headTerminal || headTerminal === 'unknown') return;
+            const WATCH_KEY = 'kanban.featureWatches';
+            const watches = await db.getConfigJson<FeatureWatchRecord[]>(WATCH_KEY, []);
+            const filtered = watches.filter(w => w.featureId !== featurePlanId);
+            filtered.push({
+                featureId: featurePlanId,
+                headTerminal,
+                armedAt: Date.now(),
+                lastNudgedAt: 0,
+                stopColumns: ['CODE REVIEWED'],
+            });
+            await db.setConfigJson(WATCH_KEY, filtered);
+        } catch (err) {
+            console.warn(`[KanbanProvider] Auto-arm feature watch failed for ${featurePlanId}:`, err);
+        }
+    }
+
     private _normalizeLegacyKanbanColumn(column: string | null | undefined): string {
         const normalized = String(column || '').trim();
         return normalized === 'CODED' ? 'LEAD CODED' : normalized;
@@ -9463,6 +9515,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                 await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
                             }
+                            // Auto-arm a feature watch for drive-mode feature
+                            // dispatches (stopColumns: CODE REVIEWED). No-op for
+                            // non-drive or non-feature cards.
+                            await this._autoArmDriveModeFeatureWatch(card, workspaceRoot);
                         }
                         if (!dispatched) {
                             // Dispatch failed — card is already persisted in target column
@@ -9564,6 +9620,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                     await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
                                 }
+                            }
+                            // Auto-arm a feature watch for drive-mode feature
+                            // dispatches to a lead (stopColumns: CODE REVIEWED).
+                            // No-op for non-drive or non-feature cards. Separate
+                            // from the pair-programming gate above so a feature
+                            // dispatched to a non-LEAD-CODED lead column still arms.
+                            if (role === 'lead') {
+                                const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
+                                await this._autoArmDriveModeFeatureWatch(card, workspaceRoot);
                             }
                         }
                         if (!dispatched && workspaceRoot) {

@@ -1997,6 +1997,17 @@ For each plan:
     }
 
     if (role === 'lead') {
+        // Drive-mode leads dispatch to coders and review diffs — they don't
+        // implement. The implementation-oriented addons (SKIP COMPILATION,
+        // SKIP TESTS, SUPPRESS WALKTHROUGH) describe the coders' work, not the
+        // head's; coders receive their own seat-scoped directive blocks
+        // independently. Suppress them when drive mode is active (gated on
+        // both driveMode AND featureMode — drive is feature-only). Accuracy
+        // Mode is not emitted in the lead board branch, so there is nothing
+        // to suppress here for it; it is handled on the coder branch below.
+        const isDriveMode = options?.driveMode === true && options?.featureMode === true;
+        const effectiveSkipBlock = isDriveMode ? '' : skipBlock;
+
         // §3/§4 — Gate batch rules on actual batches; suppress in feature mode.
         const batchRulesForLead = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? `${effectiveBatchExecutionRules}\n\n${challengeBlock}`.trim()
@@ -2022,11 +2033,11 @@ For each plan:
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
         const suffixBlock = assembleSuffix('lead', {
-            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
+            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock: effectiveSkipBlock, subagentBlock: effectiveSubagentBlock
         });
 
         const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
-        const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
+        const suppressWalkthroughBlock = isDriveMode ? '' : (suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '');
         const promptParts = [
             buildExecutionIntro('execute', plans, options?.featureMode, options?.driveMode),
             executionDirective,
@@ -2051,6 +2062,17 @@ For each plan:
         // feature's worktree assignments — enumerating subtasks in the prompt is pure
         // duplication.
         if (options?.featureMode) {
+            // Drive-mode feature coders dispatch subtasks to seats and review
+            // diffs rather than implementing themselves (featureSubagentBlock
+            // below reframes the role accordingly). The implementation addons
+            // (SKIP COMPILATION, SKIP TESTS, SUPPRESS WALKTHROUGH, Accuracy
+            // Mode) describe the seats' work, not this coder's, and the seats
+            // receive their own seat-scoped directive blocks independently.
+            // Suppress them when drive mode is active. Gated on both driveMode
+            // AND featureMode (this block is already feature-only).
+            const isDriveMode = options?.driveMode === true && options?.featureMode === true;
+            const effectiveSkipBlock = isDriveMode ? '' : skipBlock;
+
             const featurePlan = plans.find(p => !p.isSubtask);
             const featureFilePath = featurePlan?.absolutePath || '';
             // The feature-file reference itself stays under Drive — it is the coder's
@@ -2085,7 +2107,7 @@ For each plan:
             // gitBlock still included via assembleSuffix.
             const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled, stage: STAGE_BY_ROLE[role], planIds: plans.map(p => p.planId).filter((id): id is string => !!id) });
             const suffixBlock = assembleSuffix('coder', {
-                dispatchContextPrefix, gitBlock, antigravityBlock, skipBlock
+                dispatchContextPrefix, gitBlock, antigravityBlock, skipBlock: effectiveSkipBlock
             });
 
             const featureSubagentPolicy = options?.featureUseSubagentsEnabled ? 'useSubagents' : (options?.featureNoSubagentsEnabled ? 'noSubagents' : (options?.featureCustomSubagentName ? 'customSubagent' : 'default'));
@@ -2098,7 +2120,7 @@ For each plan:
                 ).trim();
 
             const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
-            const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
+            const suppressWalkthroughBlock = isDriveMode ? '' : (suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '');
             const promptParts = [
                 buildExecutionIntro('execute', plans, options?.featureMode, options?.driveMode),
                 featureExecutionBlock,
@@ -2112,7 +2134,7 @@ For each plan:
                 suppressWalkthroughBlock
             ].filter(Boolean).join('\n\n');
 
-            const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled);
+            const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), isDriveMode ? false : accurateCodingEnabled);
             return normalizeNewlines(coderPrompt);
         }
 
