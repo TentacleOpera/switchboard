@@ -1385,7 +1385,7 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private async _tryRecoverRoot(): Promise<boolean> {
-        if (!this._panel) {
+        if (!this._panel && !this._agentControlPanel) {
             this._stopRootRecovery();
             return true;
         }
@@ -1574,6 +1574,7 @@ export class KanbanProvider implements vscode.Disposable {
 
     dispose() {
         this._panel?.dispose();
+        this._agentControlPanel?.dispose();
         if (this._refreshDebounceTimer) clearTimeout(this._refreshDebounceTimer);
         // Clean up metadata debounce timers
         for (const timer of this._metadataDebounceTimers.values()) {
@@ -1778,7 +1779,7 @@ export class KanbanProvider implements vscode.Disposable {
         this._agentControlPanel.webview.html = html;
 
         this._agentControlPanel.webview.onDidReceiveMessage(
-            async (msg) => this._handleMessage(msg),
+            async (msg) => this._handleMessage(msg, 'agent-control'),
             undefined,
             this._disposables
         );
@@ -8423,9 +8424,60 @@ This step is what moves the plan forward in the Switchboard pipeline.
         return cards;
     }
 
-    private async _handleMessage(msg: any): Promise<any> {
+    private async _handleMessage(msg: any, source?: 'agent-control'): Promise<any> {
         switch (msg.type) {
             case 'ready': {
+                if (source === 'agent-control') {
+                    // The Agent Control panel shares this handler but MUST NOT drive
+                    // the primary panel's singletons: setting _webviewReady, draining
+                    // _pendingWebviewMessages, calling _scheduleBoardRefresh, or
+                    // awaiting switchboard.fullSync here would either corrupt the
+                    // board's cold-start ordering or trigger a multi-second file→DB
+                    // scan on every AC open/reveal/revival (the exact cost open()'s
+                    // reveal path is documented to avoid). With the board closed,
+                    // _initKanbanService would also rebind an existing broadcaster to
+                    // undefined via setWebview(this._panel?.webview).
+                    const workspaceRoot = this._resolveWorkspaceRoot();
+                    if (workspaceRoot) {
+                        if (this._currentWorkspaceRoot !== workspaceRoot) {
+                            this._currentWorkspaceRoot = workspaceRoot;
+                        }
+                        void this._getKanbanDb(workspaceRoot).ensureReady();
+                        // Only wire the service when no broadcaster exists yet (an
+                        // Agent-Control-only session with the board never opened).
+                        // Never rebind an existing broadcaster from here.
+                        if (!this._broadcaster) {
+                            this._initKanbanService();
+                        }
+                        this._pendingRootRecovery = false;
+                    } else {
+                        this._startRootRecovery();
+                    }
+
+                    // Connect-time full-state snapshot for the Agent Control panel.
+                    // The primary ready arm delivers via pushWebviewOnly, which targets
+                    // the broadcaster's BOUND webview (the board) — so an AC-only
+                    // session gets no snapshot, and with both open the AC panel's own
+                    // ready would re-render the BOARD instead. Post each snapshot
+                    // message directly to the Agent Control webview. Do NOT use
+                    // pushWebviewOnly (targets the board) or push() (would re-mirror
+                    // the whole snapshot to every connected WS client).
+                    if (this._agentControlPanel && workspaceRoot) {
+                        try {
+                            const panelScope = this._broadcaster?.getWebviewScope();
+                            const snapshotMessages = await this.getFullStateMessages(workspaceRoot, panelScope);
+                            for (const msg of snapshotMessages) {
+                                this._agentControlPanel.webview.postMessage(msg)
+                                    .then(undefined, () => { /* panel may have closed mid-flight */ });
+                            }
+                        } catch (err) {
+                            console.error('[KanbanProvider] agent-control ready full-state snapshot pull failed:', err);
+                        }
+                    }
+
+                    return { success: true };
+                }
+
                 this._webviewReady = true;
 
                 // Resolve the workspace root and ensure the broadcaster/service are wired

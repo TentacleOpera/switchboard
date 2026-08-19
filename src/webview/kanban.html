@@ -9610,19 +9610,53 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'settingResult': {
                     const { key, value } = msg;
                     if (key === 'selectedRole') {
-                        // Agent Control view: fall back to the browser-persisted role
-                        // (namespaced under `agentControl`) when the host supplied no
-                        // selectedRole. loadRoleConfigs() posts the getSetting that
-                        // arrives here, so this is the "after loadRoleConfigs resolves"
-                        // restore point. Prefer the host value when present. A stale
-                        // persisted role whose option no longer exists (e.g. a deleted
-                        // custom agent) is dropped so the selector stays on its default.
+                        // Agent Control view: the view's own persisted role (namespaced
+                        // under `agentControl`) is authoritative for the Agent Control
+                        // view. loadRoleConfigs() posts the getSetting that arrives
+                        // here, so this is the "after loadRoleConfigs resolves" restore
+                        // point. The TEAMS tab hydration arm calls loadRoleConfigs()
+                        // WITHOUT getCustomAgents, so #roleSelect's customAgentsGroup
+                        // optgroup may still be empty at this moment — a valid persisted
+                        // custom_agent_* role would then fail the option check below. In
+                        // that case keep _agentControlPendingRole alive for a later
+                        // settingResult (e.g. when the PROMPTS tab hydrates with
+                        // getCustomAgents); only drop it once the option list is
+                        // populated and genuinely lacks it (a deleted custom agent), or
+                        // once it has been consumed.
                         let _acRole = value;
-                        if (AGENT_CONTROL_VIEW && !_acRole && _agentControlPendingRole) {
+                        let _acPendingConsumed = false;
+                        if (AGENT_CONTROL_VIEW && _agentControlPendingRole) {
                             const _acSel = document.getElementById('roleSelect');
-                            if (_acSel && Array.from(_acSel.options).some(o => o.value === _agentControlPendingRole)) {
-                                _acRole = _agentControlPendingRole;
+                            const _acOpts = _acSel ? Array.from(_acSel.options) : [];
+                            // #roleSelect ships TEN hard-coded static <option> elements
+                            // at first paint plus an EMPTY <optgroup id="customAgentsGroup">
+                            // that updateCustomAgentsDropdown() fills only after
+                            // getCustomAgents returns. The TEAMS tab hydration arm calls
+                            // loadRoleConfigs() WITHOUT getCustomAgents, so a persisted
+                            // custom_agent_* role would fail the option check below and be
+                            // destroyed for the session. Defer ONLY custom_agent_* roles
+                            // until the custom-agent source has loaded; a non-custom role
+                            // is resolvable against the static options immediately.
+                            const _acIsCustom = _agentControlPendingRole.indexOf('custom_agent_') === 0;
+                            const _acCustomLoaded = lastCustomAgents.length > 0;
+                            const _acCanResolveNow = !_acIsCustom || _acCustomLoaded;
+                            if (_acCanResolveNow) {
+                                if (_acOpts.some(o => o.value === _agentControlPendingRole)) {
+                                    // The view's own persisted role wins over the host-global
+                                    // selectedRole (mirrored from EITHER view on every role
+                                    // change, so not a reliable per-view source of truth).
+                                    _acRole = _agentControlPendingRole;
+                                    _acPendingConsumed = true;
+                                } else {
+                                    // Static options present (non-custom) or custom list
+                                    // loaded but the role no longer exists (deleted custom
+                                    // agent) — drop it for good.
+                                    _acPendingConsumed = true;
+                                }
                             }
+                            // else: custom_agent_* role + custom list still empty — keep
+                            // _agentControlPendingRole alive for a later settingResult
+                            // (e.g. PROMPTS tab hydration, which posts getCustomAgents).
                         }
                         if (_acRole) {
                             currentRole = _acRole;
@@ -9634,7 +9668,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         }
                         handleRoleChange();
                         updateRoleDescription();
-                        if (AGENT_CONTROL_VIEW) { agentControlSet({ role: currentRole }); _agentControlPendingRole = null; }
+                        if (AGENT_CONTROL_VIEW) {
+                            // Only persist a role when one actually resolved — never
+                            // persist a default as a user choice.
+                            if (_acRole) { agentControlSet({ role: currentRole }); }
+                            if (_acPendingConsumed) { _agentControlPendingRole = null; }
+                        }
                     } else if (key.startsWith('roleConfig_')) {
                         const role = key.replace('roleConfig_', '');
                         roleConfigs[role] = value || JSON.parse(JSON.stringify(DEFAULT_CONFIG[role] || { prompt: '', addons: {} }));
