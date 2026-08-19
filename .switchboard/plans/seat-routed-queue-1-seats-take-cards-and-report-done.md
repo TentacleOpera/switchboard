@@ -30,9 +30,9 @@ This model has one trigger — the seat that just finished — driving a strictl
 
 It also cannot be reused as-is, which is why leaving it in place is not the safe option. Cards move on coding *start* and never on finish (`switchboard-contracts` #1) — `performKanbanDispatch` persists the move before dispatching (`:1450-1453`), so the card is in its coding column from the moment the seat gets it, and with no review hop it stays there. Coded is where a coded card belongs. Board position therefore never releases: card one would pin the team as busy forever and every later pop would 409.
 
-One pre-existing caller needs a guard, and only because it shares this function: the board's automation schedule (`_scheduleQueuePop`) pops on a timer and would push a second card into a working seat. One-line skip for seat-paced teams.
+**Assumption, not this plan's work: the scheduler does not fire into an active run.** The scheduler is a general task runner — its jobs are independent tasks ("advance one card", "do some research", "start orchestrating"), and "advance a card every 30 minutes" is a legitimate one. It has no overlap with a paced run beyond optionally kicking one off, because a job that dispatches must not fire while a run is live. That is a precondition on the job, owned by the scheduler.
 
-To be clear about what that guard is: the schedule timer is the *third* caller of this pop, and it is the reason the pop has an in-flight check to begin with — two callers (a human pressing `Run queue`, and the pacing agent) cannot meaningfully race. It is also half-landed: `lead-paced-pipeline` kept it deliberately, but its automation-panel redesign was never implemented, so the exclusive three-mode selector it was meant to replace survives and `_selectAutobanTerminal` is orphaned. The guard here is compatibility with something that currently exists, not an endorsement of it. If the timer is deleted, this line goes with it.
+Where that precondition is missing, it is a defect in the scheduler and must be fixed there, not defended against here. Do **not** add a seat-pacing special case to `_scheduleQueuePop` — a local guard would encode the arbitration framing this plan is removing, and would still leave every other dispatching job able to fire into a live run.
 
 Duplicate reports are the only other way to double-dispatch, and `dispatched_at` (V51, `KanbanDatabase.ts:412`) already answers it: set at dispatch, cleared on completion. A report from a seat holding no card is a no-op.
 
@@ -61,11 +61,9 @@ Duplicate reports are the only other way to double-dispatch, and `dispatched_at`
 
 6. **Serialize release → clear → pop as one operation** on the existing `_queueNextChain` (`:52`). Extract the pop's run body into a private helper both the public method and this handler enqueue — calling the public method from inside the chain deadlocks it, and there must remain one pop implementation.
 
-7. **Skip seat-paced teams in `_scheduleQueuePop`** (`TaskViewerProvider.ts:12969`) so a board schedule cannot fire into a working seat. Tell the operator rather than no-op'ing silently.
+7. **Arm the watch on the release too**, not only after a dispatch (`:1695`). A release that pops nothing because the dispatch *failed* leaves a staged queue and an idle team.
 
-8. **Arm the watch on the release too**, not only after a dispatch (`:1695`). A release that pops nothing because the dispatch *failed* leaves a staged queue and an idle team.
-
-9. **Update the pop's doc comment** (`:1500-1527`), which currently asserts that complexity routing picks only the column. Add the route to `protocol-catalog.json` and the verb allowlist — a missing catalog entry turns `catalog:check` red and leaves the control dead in the browser host.
+8. **Update the pop's doc comment** (`:1500-1527`), which currently asserts that complexity routing picks only the column. Add the route to `protocol-catalog.json` and the verb allowlist — a missing catalog entry turns `catalog:check` red and leaves the control dead in the browser host.
 
 ## Verification Plan
 
@@ -79,9 +77,8 @@ Extend `src/test/queue-pipeline-contract.test.js` rather than adding a parallel 
 6. **A report from a seat holding no card is a no-op.**
 7. **Clear failure does not block the pop** — `cleared: false` reported honestly, next card still dispatched. And `clearBeforePrompt` off is respected.
 8. **Release failure aborts cleanly** — no clear sent, no pop, `dispatched_at` still set, error returned verbatim.
-9. **Schedule refuses a seat-paced team.** With a schedule enabled and a seat-paced team seated, assert the timer dispatches nothing and the operator is told why. Then assert a *head*-paced team's schedule still fires exactly as today.
-10. **Head pacing is byte-for-byte unchanged** — every card to `from`, no `teamRouting`, the in-flight scan still refusing on board position (including for a card whose `dispatched_at` is cleared, where a cleared latch does **not** mean the team is free). This is the regression gate for ~4,000 installs, and an absent `pacing` field must behave identically to `'head'`.
-11. **Empty queue ends the run** — `dispatched: null`, reason `queue empty`, watch not left armed.
-12. **No seat for the routed role → 409, card stays staged** with its `queue_position` intact.
+9. **Head pacing is byte-for-byte unchanged** — every card to `from`, no `teamRouting`, the in-flight scan still refusing on board position (including for a card whose `dispatched_at` is cleared, where a cleared latch does **not** mean the team is free). This is the regression gate for ~4,000 installs, and an absent `pacing` field must behave identically to `'head'`.
+10. **Empty queue ends the run** — `dispatched: null`, reason `queue empty`, watch not left armed.
+11. **No seat for the routed role → 409, card stays staged** with its `queue_position` intact.
 
 `npm run compile` clean; `catalog:check` green; the seven PRD gates green, `kanban-dispatch-callers` especially.
