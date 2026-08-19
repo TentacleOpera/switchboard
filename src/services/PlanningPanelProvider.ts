@@ -1094,6 +1094,12 @@ export class PlanningPanelProvider {
     }
 
     private _setupDocsFolderWatcher(workspaceRoot: string | undefined): void {
+        if (this._docsFolderWatcher) {
+            this._docsFolderWatcher.dispose();
+            const idx = this._disposables.indexOf(this._docsFolderWatcher);
+            if (idx !== -1) { this._disposables.splice(idx, 1); }
+            this._docsFolderWatcher = undefined;
+        }
         if (!workspaceRoot) return;
 
         const docsDir = path.join(workspaceRoot, '.switchboard', 'docs');
@@ -6041,6 +6047,23 @@ Please format the updated output document strictly as follows:
         const onlineDocs = await this._sendOnlineDocsReady();
         await this._sendPlanningHtmlDocsReady();
         const importedDocsRes = await this._handleFetchImportedDocs(this._getWorkspaceRoot() || '');
+
+        // Arm file watchers. In VS Code these are also armed in open(), but
+        // open() never runs in the standalone host — fetchRoots is the first
+        // message the webview sends on page load (planning.js:9259), so this
+        // is the standalone initialization path. Each _setup* method disposes
+        // existing watchers before re-arming, so a double-call in VS Code is
+        // safe. By this point LocalFolderService's async config load has
+        // resolved, so getFolderPaths() returns the full configured set.
+        this._setupDocsFolderWatcher(this._getWorkspaceRoot() || this._getWorkspaceRoots()[0]);
+        this._setupLocalFolderWatchers();
+        this._setupPlanningHtmlFolderWatchers();
+        this._setupAntigravityWatcher();
+        this._setupKanbanPlansWatcher();
+        this._setupFeatureDocsWatcher();
+        this._setupConstitutionWatcher();
+        this._setupInsightsWatcher();
+
         const cyberAnimationDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberAnimation', false);
         this.postMessageToWebview({ type: 'cyberAnimationSetting', disabled: cyberAnimationDisabled });
         const cyberScanlinesDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberScanlines', false);

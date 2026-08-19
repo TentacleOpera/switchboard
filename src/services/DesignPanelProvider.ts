@@ -2550,6 +2550,17 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const designDocs = await this._sendDesignDocsReady();
                 const imagesDocs = await this._sendImagesDocsReady();
                 await this._sendActiveDesignDocState();
+                // Arm file watchers. In VS Code these are also armed in open(), but
+                // open() never runs in the standalone host — 'ready' is the first
+                // verb the webview sends on page load, so this is the standalone
+                // initialization path. Each _setup* method disposes existing
+                // watchers before re-arming, so a double-call in VS Code is safe.
+                // Stitch HTML watcher is armed on project selection, not here —
+                // _setupStitchHtmlFolderWatchers requires an active project ID.
+                this._setupHtmlFolderWatchers();
+                this._setupClaudeFolderWatchers();
+                this._setupDesignFolderWatchers();
+                this._setupImagesFolderWatchers();
                 // `type` is mandatory for the browser return-contract: transport.js only
                 // re-dispatches a body that carries one (and it dispatches the body as a
                 // SINGLE MessageEvent — an array body would not be fanned out). design.js

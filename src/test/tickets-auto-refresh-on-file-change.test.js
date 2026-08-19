@@ -15,6 +15,7 @@ function testTicketsAutoRefreshOnFileChange() {
     const providerTs = fs.readFileSync(path.join(__dirname, '../services/TicketsPanelProvider.ts'), 'utf8');
     const standaloneTs = fs.readFileSync(path.join(__dirname, '../standalone/hostServices.ts'), 'utf8');
     const bootstrapTs = fs.readFileSync(path.join(__dirname, '../standalone/bootstrap.ts'), 'utf8');
+    const vscodeShimTs = fs.readFileSync(path.join(__dirname, '../standalone/vscodeShim.ts'), 'utf8');
 
     // ── Fault 3: a change to a NON-selected ticket must still reload the sidebar ──
     // This is the single highest-value assertion in the file. The pre-fix arm updated the
@@ -156,16 +157,25 @@ function testTicketsAutoRefreshOnFileChange() {
     assert.match(
         standaloneTs,
         /export function createStandaloneFolderWatcher\(/,
-        'createStandaloneFolderWatcher must be exported so the standalone composition root can install it'
+        'createStandaloneFolderWatcher must remain exported — it is the proven fs.watch implementation the shim mirrors'
+    );
+    // ── Standalone: the shim's createFileSystemWatcher must be real ──
+    // The bootstrap override was removed — VscodeHostFileWatcher now routes
+    // through the shim directly. The shim must be backed by real fs.watch.
+    assert.match(
+        vscodeShimTs,
+        /export function createFileSystemWatcher[\s\S]*?fs\.watch\(/,
+        'vscodeShim.createFileSystemWatcher must be backed by real fs.watch — a no-op silently disables every folder watcher in the standalone host'
     );
     assert.match(
-        bootstrapTs,
-        /headlessSeams\.watcher\s*=\s*\{[\s\S]{0,200}?watchFolder:\s*createStandaloneFolderWatcher/,
-        'bootstrap must override headlessSeams.watcher.watchFolder with createStandaloneFolderWatcher — the vscodeShim createFileSystemWatcher is a no-op, so without this every standalone folder watcher arms cleanly and never fires'
+        vscodeShimTs,
+        /export class RelativePattern/,
+        'vscodeShim must export a RelativePattern class — VscodeHostFileWatcher constructs new vscode.RelativePattern(...) before calling createFileSystemWatcher, and without this the constructor is undefined and throws'
     );
+    // The bootstrap override must be GONE.
     assert.ok(
-        !/headlessSeams\.watcher\s*=\s*\{[\s\S]{0,200}?watchPattern:/.test(bootstrapTs),
-        'the override must stay scoped to watchFolder — replacing watchPattern/watchFile switches on unrelated subsystems with no test holding the line'
+        !/headlessSeams\.watcher\s*=\s*\{/.test(bootstrapTs),
+        'bootstrap must NOT override headlessSeams.watcher — the shim is now real, so the override is redundant and its presence would mask a shim regression'
     );
     // Layer 2 of the two-layer completion contract (PRD #7): without the API server the
     // provider has no port, _buildLocalAssetUrl returns undefined, and every ticket image

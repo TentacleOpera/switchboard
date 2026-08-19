@@ -26,6 +26,7 @@
  * `vscode` module (which isn't installed in the standalone runtime).
  */
 
+import * as fs from 'fs';
 import * as path from 'path';
 import { StandaloneHostSecrets } from './hostServices';
 
@@ -92,6 +93,21 @@ export class Uri {
     static file(path: string): Uri { return new Uri('file', path); }
     static parse(_value: string): Uri { return new Uri('file', ''); }
     with(_component: Partial<Uri>): Uri { return this; }
+}
+
+// ─── RelativePattern ────────────────────────────────────────────────────────
+// VscodeHostFileWatcher constructs `new vscode.RelativePattern(folder, glob)`
+// before calling workspace.createFileSystemWatcher. The shim must export this
+// class so that constructor resolves (otherwise it is `undefined` and throws
+// TypeError, breaking every folder/pattern/file watcher in the standalone host).
+
+export class RelativePattern {
+    readonly base: string;
+    readonly pattern: string;
+    constructor(base: string, pattern: string) {
+        this.base = base;
+        this.pattern = pattern;
+    }
 }
 
 // ─── WorkspaceFolder ────────────────────────────────────────────────────────
@@ -214,9 +230,79 @@ export namespace workspace {
             },
         });
     }
-    export function createFileSystemWatcher(_pattern: any, _ignoreCreate?: boolean, _ignoreChange?: boolean, _ignoreDelete?: boolean): { onDidCreate: Event<Uri>; onDidChange: Event<Uri>; onDidDelete: Event<Uri>; dispose(): void } {
+    export function createFileSystemWatcher(pattern: any, _ignoreCreate?: boolean, _ignoreChange?: boolean, _ignoreDelete?: boolean): { onDidCreate: Event<Uri>; onDidChange: Event<Uri>; onDidDelete: Event<Uri>; dispose(): void } {
         const noop = (): any => ({ dispose() {} });
-        return { onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose() {} };
+
+        // Resolve folder + glob from a RelativePattern ({ base, pattern }) or a
+        // bare glob string. VscodeHostFileWatcher always passes RelativePattern.
+        let folderPath: string;
+        let globPattern: string;
+        if (pattern && typeof pattern === 'object' && 'base' in pattern) {
+            folderPath = pattern.base;
+            globPattern = pattern.pattern || '**/*';
+        } else if (typeof pattern === 'string') {
+            folderPath = process.cwd();
+            globPattern = pattern;
+        } else {
+            return { onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose() {} };
+        }
+
+        const createHandlers: ((uri: Uri) => void)[] = [];
+        const changeHandlers: ((uri: Uri) => void)[] = [];
+        const deleteHandlers: ((uri: Uri) => void)[] = [];
+
+        // Simple glob → regex matcher. Handles **/*, **/*.md, bare filenames.
+        // No full glob library needed — the standalone host only uses these shapes.
+        const globToRegex = (glob: string): RegExp => {
+            if (glob === '**/*') return /.*/;
+            const re = glob
+                .replace(/\*\*/g, '<<GLOBSTAR>>')
+                .replace(/\*/g, '[^/]*')
+                .replace(/<<GLOBSTAR>>/g, '.*')
+                .replace(/\?/g, '.');
+            return new RegExp(re + '$');
+        };
+        const matcher = globToRegex(globPattern);
+
+        const emit = (eventType: string, filename: string | Buffer | null) => {
+            if (!filename) return;
+            const fullPath = path.resolve(folderPath, filename.toString());
+            const relativePath = path.relative(folderPath, fullPath);
+            if (!matcher.test(relativePath) && !matcher.test(path.basename(fullPath))) return;
+
+            const uri = { fsPath: fullPath } as Uri;
+            // fs.watch fires 'rename' for both create and delete; existence at
+            // delivery time distinguishes them (same approach as
+            // createStandaloneFolderWatcher in hostServices.ts).
+            if (!fs.existsSync(fullPath)) {
+                deleteHandlers.forEach(h => h(uri));
+            } else if (eventType === 'rename') {
+                createHandlers.forEach(h => h(uri));
+            } else {
+                changeHandlers.forEach(h => h(uri));
+            }
+        };
+
+        let watcher: fs.FSWatcher;
+        try {
+            watcher = fs.watch(folderPath, { persistent: false, recursive: true }, emit);
+        } catch {
+            // recursive fs.watch is macOS/Windows only; fall back to flat watch
+            // (covers the flat ticket folders this seam is used for).
+            try {
+                watcher = fs.watch(folderPath, { persistent: false }, emit);
+            } catch {
+                return { onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose() {} };
+            }
+        }
+        watcher.on('error', err => console.warn(`[vscodeShim watcher] ${folderPath}:`, err));
+
+        return {
+            onDidCreate: (handler: (uri: Uri) => void) => { createHandlers.push(handler); return { dispose: () => {} }; },
+            onDidChange: (handler: (uri: Uri) => void) => { changeHandlers.push(handler); return { dispose: () => {} }; },
+            onDidDelete: (handler: (uri: Uri) => void) => { deleteHandlers.push(handler); return { dispose: () => {} }; },
+            dispose: () => { try { watcher.close(); } catch {} }
+        };
     }
     export function findFiles(_include: any, _exclude?: any, _maxResults?: number): Thenable<Uri[]> { return Promise.resolve([]); }
     export function getWorkspaceFolder(_uri: Uri): WorkspaceFolder | undefined { return undefined; }
@@ -320,6 +406,7 @@ export function createStandaloneSecretStorage(secrets: StandaloneHostSecrets): S
 export default {
     EventEmitter,
     Uri,
+    RelativePattern,
     window,
     workspace,
     commands,

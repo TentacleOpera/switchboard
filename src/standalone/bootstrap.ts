@@ -17,7 +17,7 @@ import {
     validateDispatchPayload,
 } from '../services/agentPromptBuilder';
 import { writeOrchestratorReport } from '../services/ScheduledJobsService';
-import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets, createStandaloneFolderWatcher } from './hostServices';
+import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets } from './hostServices';
 import {
     getShellHtml as sharedGetShellHtml,
     getBoardHtml as sharedGetBoardHtml,
@@ -833,15 +833,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
 
     const headlessSeams: HostSeams = createVscodeHostSeams(workspaceRoot, secretStorage as any);
-    // vscodeShim.createFileSystemWatcher is a no-op, so VscodeHostFileWatcher.watchFolder
-    // attaches nothing under standalone — the Tickets display watcher arms cleanly and then
-    // never fires. Swap in the real fs.watch implementation. watchPattern/watchFile stay
-    // stubbed: they have no standalone consumer and turning them on would change unrelated
-    // subsystems without a test holding the line (same scoping as createHeadlessHostSeams).
-    headlessSeams.watcher = {
-        ...headlessSeams.watcher,
-        watchFolder: createStandaloneFolderWatcher
-    };
+    // vscodeShim.createFileSystemWatcher is now backed by real fs.watch, so
+    // VscodeHostFileWatcher's watchFolder/watchPattern/watchFile all work in
+    // standalone without a composition-root override.
     const headlessBroadcaster = new BroadcastHub({ webview: null, apiServer: null, headless: true });
     const panelStateStore = new PanelStateStore(headlessContext.globalState, 'standalone');
 

@@ -20,8 +20,12 @@ Fix all 13 broken file watchers in the standalone/browser host. Plan 1 fixes the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix no-op vscodeShim.createFileSystemWatcher — Root Cause of All Standalone Watcher Failures](../plans/feature_plan_20260819153323_fix-vscodeShim-createFileSystemWatcher-noop.md) — **PLAN REVIEWED**
-- [ ] [Arm Planning Panel Watchers in Standalone Host](../plans/feature_plan_20260819153324_arm-planning-panel-watchers-in-standalone.md) — **PLAN REVIEWED**
-- [ ] [Arm Design Panel Watchers in Standalone Host](../plans/feature_plan_20260819153325_arm-design-panel-watchers-in-standalone.md) — **PLAN REVIEWED**
+- [ ] [Fix no-op vscodeShim.createFileSystemWatcher — Root Cause of All Standalone Watcher Failures](../plans/feature_plan_20260819153323_fix-vscodeShim-createFileSystemWatcher-noop.md) — **CODER CODED**
+- [ ] [Arm Planning Panel Watchers in Standalone Host](../plans/feature_plan_20260819153324_arm-planning-panel-watchers-in-standalone.md) — **CODER CODED**
+- [ ] [Arm Design Panel Watchers in Standalone Host](../plans/feature_plan_20260819153325_arm-design-panel-watchers-in-standalone.md) — **CODER CODED**
 <!-- END SUBTASKS -->
+
+## Completion Summary
+
+All three subtasks implemented and reviewed. Plan 1 replaced the no-op `vscodeShim.createFileSystemWatcher` with a real `fs.watch`-backed implementation, added the missing `RelativePattern` class and `fs` import, removed the redundant bootstrap `watchFolder` override, and updated the test assertions (`vscodeShim.ts`, `bootstrap.ts`, `tickets-auto-refresh-on-file-change.test.js`). Plan 2 armed all 8 Planning panel watchers from `_handleFetchRoots` and made `_setupDocsFolderWatcher` idempotent (`PlanningPanelProvider.ts`). Plan 3 armed the 4 primary Design panel watchers from the `ready` verb handler (`DesignPanelProvider.ts`). No issues encountered; compilation and tests skipped per run directives.
 

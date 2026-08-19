@@ -261,3 +261,9 @@ assert.ok(
 6. **Tickets regression:** Confirm Tickets auto-refresh still works in standalone (was using the override, now uses the shim — both are `fs.watch`-backed).
 
 7. **TaskViewerProvider plan watcher:** Confirm `reinitializePlanWatcher` (triggered by workspace switch in Kanban) does not crash — `new vscode.RelativePattern(...)` now resolves to the shim's class.
+
+---
+
+## Completion Report
+
+Implemented the root-cause fix replacing the no-op `vscodeShim.createFileSystemWatcher` stub with a real `fs.watch`-backed implementation mirroring the proven `createStandaloneFolderWatcher` pattern, plus the critical `RelativePattern` class prerequisite. Files changed: `src/standalone/vscodeShim.ts` (added `fs` import, `RelativePattern` class + default-export entry, real `createFileSystemWatcher` with glob matcher, recursive/flat-watch fallback, create/change/delete dispatch via existence check), `src/standalone/bootstrap.ts` (removed the redundant `headlessSeams.watcher` override and the now-unused `createStandaloneFolderWatcher` import), and `src/test/tickets-auto-refresh-on-file-change.test.js` (added `vscodeShimTs` read and replaced the override-presence assertions with shim-real/RelativePattern-exists/override-gone assertions). No issues encountered; per standing orders compilation and tests were skipped, and no commit was made — changes left in the working tree for review.

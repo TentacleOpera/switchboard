@@ -120,3 +120,7 @@ No webview changes needed — `design.js` already sends `ready` on page load.
 6. **VS Code regression:** Open the Design panel in VS Code. Confirm all watchers still fire. Confirm no duplicate events from double-arming.
 
 7. **Auto-refresh preview:** With a file open in the HTML preview pane, modify it on disk. Confirm the preview auto-refreshes (the `_autoRefreshHtmlPreview` callback in each watcher should fire).
+
+## Completion Report
+
+Implemented the plan as written: armed the 4 primary Design-panel file watchers (`_setupHtmlFolderWatchers`, `_setupClaudeFolderWatchers`, `_setupDesignFolderWatchers`, `_setupImagesFolderWatchers`) from the `ready` verb handler in `src/services/DesignPanelProvider.ts` (after the initial doc sends, before the return). Stitch HTML watcher intentionally skipped — it requires an active project ID and is armed on project selection. No webview changes needed (`design.js` already sends `ready` on load). Single file changed: `src/services/DesignPanelProvider.ts` (lines 2553-2563). No issues encountered; all 4 methods are sync void and idempotent (dispose-before-rearm), so double-arming in VS Code is safe. Compile/tests skipped per run directives.

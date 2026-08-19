@@ -127,3 +127,7 @@ No other file changes needed. The webview already sends `fetchRoots` on page loa
 8. **VS Code regression:** Open the planning panel in VS Code. Confirm all watchers still fire correctly. Confirm no duplicate events (the dedup logic in each handler should suppress redundant refreshes).
 
 9. **Multi-root workspaces:** Confirm watchers are armed for all workspace roots, not just the active one.
+
+## Completion Report
+
+Implemented file watcher arming for all 8 Planning panel watchers inside `PlanningPanelProvider._handleFetchRoots`. Made `_setupDocsFolderWatcher` idempotent by disposing previous watcher before re-arming, matching the rest of the watcher setup methods. Changed file: `src/services/PlanningPanelProvider.ts`. No issues encountered during implementation.
