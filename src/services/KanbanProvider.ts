@@ -1384,6 +1384,29 @@ export class KanbanProvider implements vscode.Disposable {
         this._rootRecoveryDisposables = [];
     }
 
+    /**
+     * Post the connect-time full-state snapshot directly to the Agent Control
+     * webview. The primary ready arm delivers via pushWebviewOnly, which targets
+     * the broadcaster's BOUND webview (the board) — so an AC-only session gets
+     * no snapshot, and with both open the AC panel's own ready would re-render
+     * the BOARD instead. Do NOT use pushWebviewOnly (targets the board) or
+     * push() (would re-mirror the whole snapshot to every connected WS client).
+     * Shared by the AC ready arm and _tryRecoverRoot's AC arm.
+     */
+    private async _postAgentControlSnapshot(workspaceRoot: string): Promise<void> {
+        if (!this._agentControlPanel || !workspaceRoot) { return; }
+        try {
+            const panelScope = this._broadcaster?.getWebviewScope();
+            const snapshotMessages = await this.getFullStateMessages(workspaceRoot, panelScope);
+            for (const msg of snapshotMessages) {
+                this._agentControlPanel.webview.postMessage(msg)
+                    .then(undefined, () => { /* panel may have closed mid-flight */ });
+            }
+        } catch (err) {
+            console.error('[KanbanProvider] agent-control full-state snapshot pull failed:', err);
+        }
+    }
+
     private async _tryRecoverRoot(): Promise<boolean> {
         if (!this._panel && !this._agentControlPanel) {
             this._stopRootRecovery();
@@ -1399,6 +1422,14 @@ export class KanbanProvider implements vscode.Disposable {
         );
         this._initKanbanService();
         this._pendingRootRecovery = false;
+        // Mirror the AC ready arm: an Agent-Control-only session whose root
+        // resolved on a recovery tick (rather than at ready time) still needs
+        // its connect-time full-state snapshot delivered directly to the AC
+        // webview. Fire-and-forget like ensureReady above — recovery must not
+        // block on the snapshot pull. The board arm below is left exactly as is.
+        if (this._agentControlPanel) {
+            void this._postAgentControlSnapshot(workspaceRoot);
+        }
         if (this._webviewReady) {
             this._scheduleBoardRefresh(workspaceRoot);
         }
@@ -8454,25 +8485,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         this._startRootRecovery();
                     }
 
-                    // Connect-time full-state snapshot for the Agent Control panel.
-                    // The primary ready arm delivers via pushWebviewOnly, which targets
-                    // the broadcaster's BOUND webview (the board) — so an AC-only
-                    // session gets no snapshot, and with both open the AC panel's own
-                    // ready would re-render the BOARD instead. Post each snapshot
-                    // message directly to the Agent Control webview. Do NOT use
-                    // pushWebviewOnly (targets the board) or push() (would re-mirror
-                    // the whole snapshot to every connected WS client).
-                    if (this._agentControlPanel && workspaceRoot) {
-                        try {
-                            const panelScope = this._broadcaster?.getWebviewScope();
-                            const snapshotMessages = await this.getFullStateMessages(workspaceRoot, panelScope);
-                            for (const msg of snapshotMessages) {
-                                this._agentControlPanel.webview.postMessage(msg)
-                                    .then(undefined, () => { /* panel may have closed mid-flight */ });
-                            }
-                        } catch (err) {
-                            console.error('[KanbanProvider] agent-control ready full-state snapshot pull failed:', err);
-                        }
+                    // Connect-time full-state snapshot for the Agent Control panel
+                    // (see _postAgentControlSnapshot for why pushWebviewOnly/push are
+                    // wrong here). Shared with _tryRecoverRoot's AC arm. Guarded for
+                    // type-narrowing: the else branch above started root recovery when
+                    // workspaceRoot is null, and the helper no-ops on a null root too.
+                    if (workspaceRoot) {
+                        await this._postAgentControlSnapshot(workspaceRoot);
                     }
 
                     return { success: true };
