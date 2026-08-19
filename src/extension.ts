@@ -67,6 +67,7 @@ let terminalResetStatusBarItem: vscode.StatusBarItem;
 let kanbanStatusBarItem: vscode.StatusBarItem;
 let artifactsStatusBarItem: vscode.StatusBarItem;
 let ticketsStatusBarItem: vscode.StatusBarItem;
+let agentControlStatusBarItem: vscode.StatusBarItem;
 let projectStatusBarItem: vscode.StatusBarItem;
 let designStatusBarItem: vscode.StatusBarItem;
 let switchboardHubStatusBarItem: vscode.StatusBarItem;
@@ -1459,6 +1460,12 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(openTicketsPanelDisposable);
 
+    const openAgentControlPanelDisposable = registerSwitchboardCommand(
+        'switchboard.openAgentControlPanel',
+        async () => { await kanbanProvider!.openAgentControl(); }
+    );
+    context.subscriptions.push(openAgentControlPanelDisposable);
+
     const openSetupPanelDisposable = registerSwitchboardCommand('switchboard.openSetupPanel', async (section?: string) => {
         await setupPanelProvider.open(typeof section === 'string' ? section : undefined);
     });
@@ -2418,6 +2425,12 @@ export async function activate(context: vscode.ExtensionContext) {
     ticketsStatusBarItem.command = 'switchboard.openTicketsPanel';
     context.subscriptions.push(ticketsStatusBarItem);
 
+    agentControlStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99.4);
+    agentControlStatusBarItem.text = '$(hubot) Agent Control';
+    agentControlStatusBarItem.tooltip = 'Open Agent Control Panel';
+    agentControlStatusBarItem.command = 'switchboard.openAgentControlPanel';
+    context.subscriptions.push(agentControlStatusBarItem);
+
     projectStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
     projectStatusBarItem.text = '$(project) Project';
     projectStatusBarItem.tooltip = 'Open Project Management Panel';
@@ -2449,6 +2462,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
         const showTicketsButton = config.get<boolean>('statusBar.showTicketsButton', true);
+        const showAgentControlButton = config.get<boolean>('statusBar.showAgentControlButton', true);
         const showDesignButton = config.get<boolean>('statusBar.showDesignButton', true);
         const showProjectButton = config.get<boolean>('statusBar.showProjectButton', true);
         const showMemoButton = config.get<boolean>('statusBar.showMemoButton', true);
@@ -2462,6 +2476,7 @@ export async function activate(context: vscode.ExtensionContext) {
             projectStatusBarItem.hide();
             artifactsStatusBarItem.hide();
             ticketsStatusBarItem.hide();
+            agentControlStatusBarItem.hide();
             designStatusBarItem.hide();
             memoStatusBarItem.hide();
 
@@ -2476,6 +2491,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 enabledCount++;
             }
             if (showTicketsButton) {
+                enabledCount++;
+            }
+            if (showAgentControlButton) {
                 enabledCount++;
             }
             if (showProjectButton) {
@@ -2530,6 +2548,12 @@ export async function activate(context: vscode.ExtensionContext) {
                 ticketsStatusBarItem.hide();
             }
 
+            if (showAgentControlButton) {
+                agentControlStatusBarItem.show();
+            } else {
+                agentControlStatusBarItem.hide();
+            }
+
             if (showDesignButton) {
                 designStatusBarItem.show();
             } else {
@@ -2557,6 +2581,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
         const showTicketsButton = config.get<boolean>('statusBar.showTicketsButton', true);
+        const showAgentControlButton = config.get<boolean>('statusBar.showAgentControlButton', true);
         const showDesignButton = config.get<boolean>('statusBar.showDesignButton', true);
         const showProjectButton = config.get<boolean>('statusBar.showProjectButton', true);
         const showMemoButton = config.get<boolean>('statusBar.showMemoButton', true);
@@ -2570,12 +2595,13 @@ export async function activate(context: vscode.ExtensionContext) {
             lines.push(`[$(stop-circle) Reset](command:switchboard.deregisterAllTerminals)`);
         }
 
-        const hasPanels = showKanbanButton || showArtifactsButton || showTicketsButton || showProjectButton || showDesignButton;
+        const hasPanels = showKanbanButton || showArtifactsButton || showTicketsButton || showAgentControlButton || showProjectButton || showDesignButton;
         if (hasPanels) {
             if (lines.length > 2) lines.push('---');
             if (showKanbanButton) lines.push(`[$(table) Kanban](command:switchboard.openKanban)`);
             if (showArtifactsButton) lines.push(`[$(notebook) Artifacts](command:switchboard.openPlanningPanel)`);
             if (showTicketsButton) lines.push(`[$(tag) Tickets](command:switchboard.openTicketsPanel)`);
+            if (showAgentControlButton) lines.push(`[$(hubot) Agent Control](command:switchboard.openAgentControlPanel)`);
             if (showProjectButton) lines.push(`[$(project) Project](command:switchboard.openProjectPanel)`);
             if (showDesignButton) lines.push(`[$(symbol-color) Design](command:switchboard.openDesignPanel)`);
         }
@@ -2602,6 +2628,7 @@ export async function activate(context: vscode.ExtensionContext) {
             e.affectsConfiguration('switchboard.statusBar.showKanbanButton') ||
             e.affectsConfiguration('switchboard.statusBar.showArtifactsButton') ||
             e.affectsConfiguration('switchboard.statusBar.showTicketsButton') ||
+            e.affectsConfiguration('switchboard.statusBar.showAgentControlButton') ||
             e.affectsConfiguration('switchboard.statusBar.showDesignButton') ||
             e.affectsConfiguration('switchboard.statusBar.showProjectButton') ||
             e.affectsConfiguration('switchboard.statusBar.showMemoButton') ||
@@ -2631,6 +2658,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
         const showTicketsButton = config.get<boolean>('statusBar.showTicketsButton', true);
+        const showAgentControlButton = config.get<boolean>('statusBar.showAgentControlButton', true);
         const showDesignButton = config.get<boolean>('statusBar.showDesignButton', true);
         const showProjectButton = config.get<boolean>('statusBar.showProjectButton', true);
         const showMemoButton = config.get<boolean>('statusBar.showMemoButton', true);
@@ -2662,7 +2690,7 @@ export async function activate(context: vscode.ExtensionContext) {
             });
         }
 
-        const hasPanelItems = showKanbanButton || showArtifactsButton || showTicketsButton || showProjectButton || showDesignButton || showMemoButton;
+        const hasPanelItems = showKanbanButton || showArtifactsButton || showTicketsButton || showAgentControlButton || showProjectButton || showDesignButton || showMemoButton;
         if (hasPanelItems) {
             if (items.length > 0) {
                 items.push({ label: 'Panels', kind: vscode.QuickPickItemKind.Separator });
@@ -2686,6 +2714,13 @@ export async function activate(context: vscode.ExtensionContext) {
                     label: '$(tag) Tickets',
                     description: 'Open Tickets Panel',
                     command: 'switchboard.openTicketsPanel'
+                });
+            }
+            if (showAgentControlButton) {
+                items.push({
+                    label: '$(hubot) Agent Control',
+                    description: 'Open Agent Control Panel',
+                    command: 'switchboard.openAgentControlPanel'
                 });
             }
             if (showProjectButton) {
@@ -3639,6 +3674,11 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.registerWebviewPanelSerializer(TicketsPanelProvider.viewType, {
             deserializeWebviewPanel: async (panel, state) => {
                 await ticketsPanelProvider.revive(panel, state);
+            }
+        });
+        vscode.window.registerWebviewPanelSerializer('switchboard-agent-control', {
+            deserializeWebviewPanel: async (panel, state) => {
+                await kanbanProvider!.deserializeAgentControlPanel(panel, state);
             }
         });
     }

@@ -232,6 +232,15 @@ export function normalizeFeatureWorktreeMode(value: unknown): 'none' | 'per-feat
 export class KanbanProvider implements vscode.Disposable {
     private static readonly _AUTO_PULL_INTERVALS = new Set<number>([5, 15, 30, 60]);
     private _panel?: vscode.WebviewPanel;
+    /**
+     * Secondary editor panel rendering the Agent Control view of the same Kanban
+     * backend (loads kanban.html with `data-view="agent-control"`). One provider,
+     * one hub, one message handler — this panel shares the primary's push path via
+     * the secondary-delivery block in `postMessage()`. It owns NO readiness flag,
+     * NO pending queue, and NO dedup cache: those singletons belong to the primary
+     * board panel and must not be driven by this panel's lifecycle.
+     */
+    private _agentControlPanel?: vscode.WebviewPanel;
     private _pendingTab?: string;
     private _webviewReady = false;
     private _pendingWebviewMessages: any[] = [];
@@ -1727,6 +1736,80 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
+     * Open or reveal the Agent Control panel — a second top-level editor WebviewPanel
+     * served by the same provider/hub/handler as the board. It loads the same
+     * `kanban.html` with `data-view="agent-control"` injected onto `<body>` so the
+     * frontend renders the Agents/Teams/Prompts tabs instead of the board.
+     *
+     * Deliberately stripped vs `open()`: it does NOT reset `_webviewReady` or
+     * `_pendingWebviewMessages` (those belong to the primary panel's cold-start
+     * ordering), does NOT call `_initKanbanService`/`_setupSessionWatcher` (the
+     * broadcaster singleton is already wired to the primary), and does NOT start
+     * root-recovery or reset any dedup cache. On dispose it clears ONLY
+     * `_agentControlPanel` — resetting primary singletons from here would blank the
+     * board on its next refresh.
+     */
+    public async openAgentControl(column?: vscode.ViewColumn, restoredState?: any) {
+        const targetColumn = column ?? vscode.ViewColumn.One;
+        // preserveFocus is a REVIVAL affordance, not an open affordance (see open()).
+        // `column` is supplied only by deserializeAgentControlPanel, so it is the
+        // honest discriminator. Never hardcode `preserveFocus: true` — the
+        // panel-revival-retention-contract test forbids it.
+        const isRevival = column !== undefined;
+        if (this._agentControlPanel) {
+            this._agentControlPanel.reveal(targetColumn, isRevival);
+            return;
+        }
+
+        this._agentControlPanel = vscode.window.createWebviewPanel(
+            'switchboard-agent-control',
+            'AGENT CONTROL',
+            { viewColumn: targetColumn, preserveFocus: isRevival },
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+                localResourceRoots: [this._extensionUri]
+            }
+        );
+
+        this._agentControlPanel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
+
+        const html = injectInitialWebviewState(await this._getHtml(this._agentControlPanel.webview, 'agent-control'), restoredState);
+        this._agentControlPanel.webview.html = html;
+
+        this._agentControlPanel.webview.onDidReceiveMessage(
+            async (msg) => this._handleMessage(msg),
+            undefined,
+            this._disposables
+        );
+
+        this._agentControlPanel.onDidDispose(() => {
+            // Clear ONLY the secondary panel reference. The primary panel's readiness
+            // flag, pending queue, and dedup caches (_lastBoardSnapshotKey,
+            // _lastBoardSnapshotHash, _lastPushKey, _lastColumnsSignature, etc.) belong
+            // to the board panel and MUST NOT be reset from here — doing so would blank
+            // the board on its next refresh. The secondary panel has no queue and no
+            // ready flag, so there is nothing else to clean up.
+            this._agentControlPanel = undefined;
+        }, null, this._disposables);
+    }
+
+    /**
+     * Revive the Agent Control panel after a window reload. Mirrors
+     * `deserializeWebviewPanel`: discard the restored shell and re-create via
+     * `openAgentControl` so `retainContextWhenHidden` is set at creation time and
+     * the persisted `setState` payload is forwarded through `injectInitialWebviewState`.
+     */
+    public async deserializeAgentControlPanel(
+        panel: vscode.WebviewPanel,
+        state: any
+    ): Promise<void> {
+        await reviveWithRetention(panel, async (col, restoredState) => {
+            await this.openAgentControl(col, restoredState);
+        }, state);
+    }
+
+    /**
      * Dispose legacy session/state file watchers.
      * DB is the sole source of truth; no file watchers needed.
      */
@@ -2288,6 +2371,20 @@ export class KanbanProvider implements vscode.Disposable {
             } else {
                 this._pendingWebviewMessages.push(rendered);
             }
+        }
+        // Secondary panel (Agent Control): best-effort delivery with NO second WS
+        // mirror. The broadcaster above already mirrored to the wsHub; re-mirroring
+        // here would double-broadcast every push to browser clients. Render the
+        // factory form once against the hub's webview scope so a scoped payload sees
+        // the same scope the primary did — a bare function fails the webview's
+        // structured clone and is silently dropped. No pending queue and no ready
+        // flag: a closed panel simply drops its copy (the rejection handler absorbs a
+        // mid-flight close). When `_broadcaster` is absent the scope resolves to
+        // `undefined`, matching the primary's `message(undefined)` fallback above.
+        if (this._agentControlPanel) {
+            const scope = this._broadcaster?.getWebviewScope();
+            const secondaryRendered = typeof message === 'function' ? (message as Function)(scope) : message;
+            this._agentControlPanel.webview.postMessage(secondaryRendered).then(undefined, () => { /* panel may have closed mid-flight */ });
         }
     }
 
@@ -5086,12 +5183,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     // only injection read path. A standing global fallback would hand a design
     // system to every future project — explicitly rejected behaviour.
 
-    private async _buildFeatureDirectivePrefix(workspaceRoot: string): Promise<string> {
+    private async _buildFeatureDirectivePrefix(workspaceRoot: string, drivePreResolved?: boolean): Promise<string> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) return '';
         const ultracode = (await db.getConfig('feature_ultracode_enabled')) === 'true';
         const goal = (await db.getConfig('feature_goal_enabled')) === 'true';
-        const drive = (await db.getConfig('feature_drive_enabled')) === 'true';
+        const drive = drivePreResolved !== undefined ? drivePreResolved : ((await db.getConfig('feature_drive_enabled')) === 'true');
         if (!goal && !ultracode && !drive) return '';
         let prefix = '';
         // /goal must be position-zero for the host to parse it as a slash command.
@@ -5180,16 +5277,44 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         workspaceRoot: string,
         overrides?: Partial<PromptBuilderOptions>
     ): Promise<string> {
+        // ONE read of feature_drive_enabled per prompt build, resolved LAZILY. Every
+        // consumer (_buildFeatureDirectivePrefix, batchOptions.driveMode,
+        // mergedAddons.driveMode) awaits this instead of re-reading the key — three reads
+        // per prompt before it was centralised.
+        //
+        // Lazy, not eager, for two reasons. (1) `generateUnifiedPrompt` has early returns
+        // ABOVE every consumer — the custom-agent branch below and the dispatch-analysis
+        // planner branch — and the dispatch-analysis one returns without ever needing a
+        // DB. Resolving eagerly at the top of the function reaches _getKanbanDb on that
+        // path and throws on an instance without a VS Code context. (2) Both consumers are
+        // feature-gated, so a non-feature dispatch should never await ensureReady() (which
+        // awaits pending evictions and stats the file for cross-IDE staleness) just to
+        // resolve a flag it cannot use.
+        let driveMemo: boolean | undefined;
+        const resolveDrive = async (): Promise<boolean> => {
+            if (driveMemo !== undefined) { return driveMemo; }
+            if (!plans.some(p => p.isFeature)) { driveMemo = false; return driveMemo; }
+            const driveDb = this._getKanbanDb(workspaceRoot);
+            driveMemo = (driveDb && await driveDb.ensureReady())
+                ? ((await driveDb.getConfig('feature_drive_enabled')) === 'true')
+                : false;
+            return driveMemo;
+        };
+
         if (role.startsWith('custom_agent_')) {
             const customAgents = await this._getCustomAgents(workspaceRoot);
             const agentId = role.replace('custom_agent_', '');
             const agentConfig = customAgents.find(a => a.id === agentId || a.role === role);
             const roleConfigAddons = this._getRoleConfig(role)?.addons;
+            const primaryPlan = plans[0];
             const mergedAddons = {
                 ...agentConfig?.addons,
                 ...(roleConfigAddons || {}),
                 destinationColumn: overrides?.destinationColumn,
             };
+            if (primaryPlan?.isFeature && mergedAddons.applyFeatureDirectives === true) {
+                mergedAddons.driveMode = await resolveDrive();
+            }
 
             // §Git — neutral defaulting for custom agents. The UI radio `default` only
             // governs rendering, not persistence; a custom agent whose Prompts-tab UI was
@@ -5252,9 +5377,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const customPhoneSuffix = (mergedAddons.phoneAFriend && customApiPort)
                 ? `\n\n${PHONE_A_FRIEND_DIRECTIVE(customApiPort, role, customPhoneAFriendOriginTerminal, customPhoneAFriendDispatchId)}`
                 : '';
-            const primaryPlan = plans[0];
             if (primaryPlan?.isFeature && mergedAddons.applyFeatureDirectives === true) {
-                const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot);
+                const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive());
                 return `${prefix}${customBuilt}${customPhoneSuffix}`;
             }
             return `${customBuilt}${customPhoneSuffix}`;
@@ -5476,6 +5600,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (featurePromptTemplate) {
                 batchOptions.featurePromptTemplate = featurePromptTemplate;
             }
+            if (['lead', 'coder', 'intern'].includes(role) && await resolveDrive()) {
+                batchOptions.driveMode = true;
+            }
         } else {
             batchOptions.featureMode = false;
         }
@@ -5507,7 +5634,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // generic, not feature-specific, so applying it once to the whole payload is
         // correct. Allowlisted to the execution roles only.
         if (plans.some(p => p.isFeature) && ['lead', 'coder', 'intern'].includes(role)) {
-            const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot);
+            const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive());
             if (prefix) {
                 return `${prefix}${built}`;
             }
@@ -6884,7 +7011,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // no-op and the column never hides/shows on tick — the plan's headline
         // behavior. Bump the epoch (the helper's own doc lists "visible agents").
         this._markConfigDirty();
-        if (!this._panel) return;
+        // Accept EITHER panel: `visibleAgents` is consumed directly by the Agents and
+        // Teams tabs (pushed at the postMessage chokepoint), which the Agent Control
+        // panel renders. With the board closed and only Agent Control open, the old
+        // `!this._panel` guard early-returned and the tabs never received their
+        // visibility state. Board-render and integration-sync guards elsewhere stay
+        // gated on `_panel` alone — they do board-only work.
+        if (!this._panel && !this._agentControlPanel) return;
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return;
         const visibleAgents = await this._getVisibleAgents(workspaceRoot);
@@ -7520,6 +7653,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const planIds: string[] = [];
         let refused = 0;
         if (!db || !workspaceId) return { planIds, refused: ids.length, workspaceId };
+        // Plans in coded/reviewed/tested/completed columns have already been
+        // dispatched and must not be re-queued. DISPATCH itself is stageable
+        // (re-positioning). Mirrors the frontend STAGEABLE_COLUMNS gate.
+        const stageableColumns = new Set(['CREATED', 'BACKLOG', 'PLAN REVIEWED', 'DISPATCH']);
         for (const id of ids) {
             let plan = await db.getPlanByPlanId(id);
             if (!plan) { plan = await db.getPlanBySessionId(id); }
@@ -7528,6 +7665,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // card, never as their subtasks. Mirrors the staged-count contract
             // (!c.featureId) on the toggle and the Send-all set.
             if (plan.featureId && !plan.isFeature) { refused++; continue; }
+            // Refuse plans already past the dispatch stage — they have been
+            // dispatched and coding/review has begun or completed.
+            if (!stageableColumns.has(plan.kanbanColumn)) { refused++; continue; }
             planIds.push(plan.planId);
         }
         return { planIds, refused, workspaceId };
@@ -7550,7 +7690,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (!Array.isArray(ids) || ids.length === 0) return { success: false, staged: 0, refused: 0, error: 'No plans selected to stage' };
         const { planIds, refused, workspaceId } = await this._resolveStageablePlanIds(workspaceRoot, ids);
         if (planIds.length === 0) {
-            return { success: false, staged: 0, refused, error: refused > 0 ? 'No stageable plans selected (subtasks cannot be staged)' : 'No plans resolved' };
+            return { success: false, staged: 0, refused, error: refused > 0 ? 'No stageable plans selected (subtasks or already-dispatched plans cannot be staged)' : 'No plans resolved' };
         }
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) return { success: false, staged: 0, refused, error: 'Kanban database not ready' };
@@ -10679,6 +10819,78 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this.postMessage({ type: 'showStatusMessage', message: `Dispatched ${dispatchedCount} plans to Jules.`, isError: false });
                 return { success: true, dispatched: dispatchedCount };
             }
+            case 'phoneAFriendSelected': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
+                    return { success: false, error: 'workspaceRoot and sessionIds are required' };
+                }
+                // Resolve selected cards (same pattern as testingFailed / promptSelected)
+                let sourceCards = this._lastCards.filter(card =>
+                    card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
+                );
+                if (sourceCards.length === 0) {
+                    const dbCards = await this._buildCardsFromDbSessionIds(workspaceRoot, msg.sessionIds);
+                    if (dbCards.length === 0) {
+                        void this._seams().ui.showInformationMessage('No matching plans found.');
+                        return { success: false, error: 'No matching plans found.' };
+                    }
+                    sourceCards = dbCards;
+                }
+                // Per-card originRole resolution — each card's actual column determines the role.
+                // This handles CODED_AUTO collapsed view where cards from different coded columns
+                // (LEAD CODED, CODER CODED, INTERN CODED) may be selected together.
+                // _columnToRole maps: LEAD CODED → 'lead', CODER CODED → 'coder',
+                // INTERN CODED → 'intern', CODED → 'lead'. Fallback 'lead' for unknown columns.
+                //
+                // Then group by RESOLVED TARGET TERMINAL and enqueue per target. The queue
+                // dispatches one plan at a time — the next plan is sent only when the friend
+                // calls POST /phone-a-friend/done. A per-plan loop against the same target
+                // would `/clear` each review ~3s after starting it (the dispatch promise
+                // resolves on keystroke landing, not review completion), so only the last
+                // plan would ever actually be reviewed. Roles do not map 1:1 to terminals
+                // either: with no per-role targets configured (the default) lead, coder and
+                // intern all resolve to the same singleton, so grouping by role would still
+                // collide. Group by target, always.
+                const byTarget = new Map<string, { originRole: string; agentName: string; planFiles: string[] }>();
+                let unrouted = 0;
+                for (const card of sourceCards) {
+                    const planFile = card.planFile || '';
+                    if (!planFile) continue;
+                    const originRole = this._columnToRole(card.column) || 'lead';
+                    // Resolved here, not inside the enqueue, so plans sharing a terminal
+                    // share one queue. `originRole` is carried per group because the
+                    // enqueue re-resolves from it — a synthesised composite role would
+                    // miss the map and silently re-route to the singleton.
+                    const target = await this._taskViewerProvider?.resolvePhoneAFriendTarget(originRole);
+                    if (!target) { unrouted++; continue; }
+                    const entry = byTarget.get(target.targetKey);
+                    if (entry) { entry.planFiles.push(planFile); }
+                    else { byTarget.set(target.targetKey, { originRole, agentName: target.agentName, planFiles: [planFile] }); }
+                }
+                let queued = 0;
+                let fallback = false;
+                for (const [targetKey, entry] of byTarget.entries()) {
+                    try {
+                        // Pass the pre-resolved target to avoid a redundant re-resolve
+                        // inside enqueuePhoneAFriend — the target was already resolved
+                        // above for grouping.
+                        const resolvedTarget = { agentName: entry.agentName, targetKey };
+                        const result = await this._taskViewerProvider?.enqueuePhoneAFriend(entry.planFiles, entry.originRole, resolvedTarget);
+                        if (result) {
+                            queued += result.queued;
+                            if (result.fallback) { fallback = true; }
+                        }
+                    } catch (e) {
+                        console.error(`[KanbanProvider] Phone-a-Friend enqueue failed for ${entry.planFiles.join(', ')}:`, e);
+                    }
+                }
+                const unroutedSuffix = unrouted > 0 ? ` (${unrouted} skipped — Phone-a-Friend is off for that role)` : '';
+                const fallbackSuffix = fallback ? ' (no API server — sent as one batch prompt)' : '';
+                this.postMessage({ type: 'showStatusMessage',
+                    message: `Queued ${queued} plan(s) for Phone-a-Friend; sent the first.${unroutedSuffix}${fallbackSuffix}`,
+                    isError: false });
+                return { success: true, dispatched: queued, prompts: byTarget.size, unrouted };
+            }
             case 'completePlan': {
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
                 if (resolvedSessionId) {
@@ -11260,7 +11472,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: false, error: 'No plans selected to stage' };
                 }
                 const result = await this.stageForQueue(workspaceRoot, ids);
-                const refusedSuffix = result.refused > 0 ? ` (${result.refused} refused — subtasks cannot be staged)` : '';
+                const refusedSuffix = result.refused > 0 ? ` (${result.refused} refused — subtasks or already-dispatched plans cannot be staged)` : '';
                 const message = result.success
                     ? `Staged ${result.staged} plan(s) into the Dispatch queue.${refusedSuffix}`
                     : (result.error || 'Failed to stage plans');
@@ -12873,7 +13085,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
 
 
 
-    private async _getHtml(webview: vscode.Webview): Promise<string> {
+    private async _getHtml(webview: vscode.Webview, viewMarker?: 'agent-control'): Promise<string> {
         const paths = [
             vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'kanban.html'),
             vscode.Uri.joinPath(this._extensionUri, 'webview', 'kanban.html'),
@@ -12908,13 +13120,21 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
         content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
 
-        // Inject initial workspace root as a data attribute on <body>
+        // Inject initial workspace root as a data attribute on <body>, and — for the
+        // Agent Control view — the `data-view="agent-control"` marker the frontend
+        // switches on to render the Agents/Teams/Prompts tabs instead of the board.
+        // Both attributes ride the same `<body` replacement so a bare `<body` is never
+        // left in the document for a later replace to miss (a second `replace('<body')`
+        // would no longer match once the first has expanded the tag).
         const workspaceRoot = this._resolveWorkspaceRoot();
+        const viewAttr = viewMarker === 'agent-control' ? ' data-view="agent-control"' : '';
         if (workspaceRoot) {
             content = content.replace(
                 '<body',
-                `<body data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}"`
+                `<body data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}"${viewAttr}`
             );
+        } else if (viewAttr) {
+            content = content.replace('<body', `<body${viewAttr}`);
         }
 
         // Inject icon URIs for column button area

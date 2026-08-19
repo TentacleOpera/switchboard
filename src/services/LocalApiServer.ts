@@ -332,6 +332,16 @@ interface LocalApiServerOptions {
      */
     onPhoneAFriend?: (planFile: string, originRole?: string, originTerminal?: string, dispatchId?: string) => Promise<void>;
     /**
+     * Phone-a-Friend completion callback — reached by the friend agent's `curl`
+     * to POST /phone-a-friend/done when it finishes reviewing a plan. The host
+     * advances the per-target sequential queue (dispatches the next pending plan
+     * or emits a drain notice). `target` is the resolved target terminal key the
+     * queue is keyed on. The callback MUST NOT throw — a throw becomes a 500.
+     * Duplicate callbacks (nothing in flight) are silently ignored by the host.
+     * Optional — absent in headless/test harnesses.
+     */
+    onPhoneAFriendDone?: (target: string, planFile?: string) => void;
+    /**
      * Research hand-off — reached by the planner agent's `curl` when its "advise
      * research if unsure" add-on has a research prompt to delegate. The host checks
      * whether a `researcher`-role terminal is registered AND live; if so it resolves
@@ -372,6 +382,13 @@ interface LocalApiServerOptions {
      * `_resolveDbForRoot()` — today's behaviour.
      */
     getFleetOrdersDatabase?: () => Promise<any | null | undefined>;
+    /**
+     * Adopt the CALLING session as the orchestrator: record the seat and return the
+     * kickoff prompt instead of injecting it into a terminal the host created.
+     * Reached by `POST /orchestration/adopt` from the /switchboard launcher.
+     * Optional — absent in headless/test harnesses (returns 503).
+     */
+    orchestrationAdopt?: (workspaceRoot?: string, terminalName?: string) => Promise<any>;
     /**
      * Arm the unattended orchestration engine — the same path the AUTOMATION tab
      * "Start orchestrator" button takes (terminal + kickoff + autoban clock).
@@ -2849,6 +2866,47 @@ export class LocalApiServer {
     }
 
     /**
+     * POST /phone-a-friend/done — completion signal from the Phone-a-Friend agent.
+     * Body: { target: string }. The host advances the per-target sequential queue.
+     * Returns 200 on ack, 400 on bad body, 503 when no callback is wired.
+     * Callable by the orchestrator over HTTP to force-advance a wedged queue.
+     */
+    private async _handlePhoneAFriendDone(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        const onPhoneAFriendDone = this._options.onPhoneAFriendDone;
+        if (!onPhoneAFriendDone) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Phone-a-Friend completion not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const target = String(body?.target || '').trim();
+            if (!target) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: target' }));
+                return;
+            }
+            const planFile = body?.planFile ? String(body.planFile).trim() : undefined;
+            // The callback handles duplicate callbacks (nothing in flight) and
+            // planFile correlation internally. MUST NOT throw — a throw becomes
+            // a 500 and breaks the completion signal.
+            onPhoneAFriendDone(target, planFile);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+        } catch (err) {
+            console.error('[LocalApiServer] phoneAFriendDone error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'phoneAFriendDone failed' }));
+        }
+    }
+
+    /**
      * GET /terminals/standing-orders — list active standing orders for the current
      * workspace. Returns `{ success: true, available, orders }`; `available` is false
      * when no kanban DB is reachable so the webview can gate the UI honestly.
@@ -3072,6 +3130,43 @@ export class LocalApiServer {
             console.error('[LocalApiServer] researchDispatch error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'researchDispatch failed' }));
+        }
+    }
+
+    /**
+     * POST /orchestration/adopt — the caller IS the orchestrator. Body:
+     * { workspaceRoot?, terminalName? }. Returns { mode, prompt, seat, liveDelivery, note? }.
+     * Seats no terminal and does NOT arm — arming stays POST /orchestration/confirm.
+     */
+    private async _handleOrchestrationAdopt(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        const orchestrationAdopt = this._options.orchestrationAdopt;
+        if (!orchestrationAdopt) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Orchestration adopt not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+            const terminalName = typeof body?.terminalName === 'string' ? body.terminalName.trim() : undefined;
+            const result = await orchestrationAdopt(workspaceRoot, terminalName);
+            if (result && result.success !== false) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+            } else {
+                res.writeHead(result?.status || 400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: result?.error || 'orchestration adopt failed' }));
+            }
+        } catch (err) {
+            console.error('[LocalApiServer] orchestrationAdopt error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'orchestration adopt failed' }));
         }
     }
 
@@ -4366,8 +4461,10 @@ export class LocalApiServer {
                 } catch { /* health must never fail on a callback error */ }
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
+                    service: 'switchboard',
                     status: 'ok',
                     port: this._port,
+                    pid: process.pid,
                     roots: this._allRoots,
                     ...(terminals !== undefined ? { terminals, terminalCount: terminals.length } : {}),
                     ...(selectedWorkspaceRoot !== undefined ? { selectedWorkspaceRoot } : {})
@@ -4482,6 +4579,8 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/taskViewer/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/taskViewer/verb/'.length));
                 await this._handleTaskViewerVerb(verb, req, res);
+            } else if (pathname === '/orchestration/adopt' && req.method === 'POST') {
+                await this._handleOrchestrationAdopt(req, res);
             } else if (pathname === '/orchestration/start' && req.method === 'POST') {
                 await this._handleOrchestrationStart(req, res);
             } else if (pathname === '/orchestration/confirm' && req.method === 'POST') {
@@ -4506,6 +4605,8 @@ export class LocalApiServer {
                 await this._handlePostComment(req, res);
             } else if (pathname === '/phone-a-friend' && req.method === 'POST') {
                 await this._handlePhoneAFriend(req, res);
+            } else if (pathname === '/phone-a-friend/done' && req.method === 'POST') {
+                await this._handlePhoneAFriendDone(req, res);
             } else if (pathname === '/research/dispatch' && req.method === 'POST') {
                 await this._handleResearchDispatch(req, res);
             } else if (pathname === '/api/clickup' && req.method === 'POST') {
@@ -4577,6 +4678,8 @@ export class LocalApiServer {
                 await this._handleServePanelById('connections', req, res);
             } else if ((pathname === '/terminals' || pathname === '/terminals.html') && req.method === 'GET') {
                 await this._handleServePanelById('terminals', req, res);
+            } else if ((pathname === '/agent-control' || pathname === '/agent-control.html') && req.method === 'GET') {
+                await this._handleServePanelById('agent-control', req, res);
             } else if (pathname === '/design/asset' && req.method === 'GET') {
                 await this._handleDesignAsset(req, res);
             } else if (pathname.startsWith('/static/') && req.method === 'GET') {

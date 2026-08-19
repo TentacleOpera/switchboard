@@ -1340,6 +1340,30 @@
           color: var(--accent-red);
         }
 
+        .agents-tab-custom-agent-badge {
+          font-size: 9px;
+          padding: 2px 6px;
+          border-radius: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          font-weight: 600;
+          display: inline-flex;
+          align-items: center;
+          margin-left: 6px;
+        }
+
+        .agents-tab-custom-agent-badge.standalone {
+          background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+          color: var(--accent-teal);
+          border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        .agents-tab-custom-agent-badge.team-assigned {
+          background: color-mix(in srgb, var(--accent-blue, #3b82f6) 15%, transparent);
+          color: var(--accent-blue, #60a5fa);
+          border: 1px solid color-mix(in srgb, var(--accent-blue, #3b82f6) 30%, transparent);
+        }
+
         /* ── TEAMS tab — card row, flow diagram, portraits ─────────────── */
         /* Three-card row: each card is a clickable tile carrying a portrait,
            name, purpose and roster strip. The whole card is the click target. */
@@ -2872,6 +2896,17 @@
   -webkit-backdrop-filter: blur(10px);
 }
 
+/* Agent Control view (opt-in: host sets <body data-view="agent-control">).
+   Hide every tab except AGENTS/TEAMS/PROMPTS. Allow-listed so a future tab
+   added to the bar is hidden by default rather than silently appearing.
+   Absent attribute ⇒ neither rule matches and the board is unaffected. */
+body[data-view="agent-control"] .shared-tab-btn:not([data-tab="agents"]):not([data-tab="teams"]):not([data-tab="prompts"]) { display: none; }
+body[data-view="agent-control"] #kanban-tab-content,
+body[data-view="agent-control"] #automation-tab-content,
+body[data-view="agent-control"] #worktrees-tab-content,
+body[data-view="agent-control"] #uat-tab-content,
+body[data-view="agent-control"] #setup-tab-content { display: none !important; }
+
 /* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). kanban.html has its
    own inline copy of these tab styles, so the override must live here too. */
 body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
@@ -3213,7 +3248,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <input id="agents-tab-custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
 
             <p style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.4;">
-              Configure prompt add-ons and custom instructions in the <strong>PROMPTS</strong> tab after saving this agent.
+              Custom agents are standalone definitions available across workspaces. To assemble agents into teams with delegates, use the <strong>TEAMS</strong> tab. Configure prompt add-ons and instructions in the <strong>PROMPTS</strong> tab.
             </p>
             <div id="agents-tab-custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
             <div class="flex gap-2" style="margin-top: 10px;">
@@ -3320,16 +3355,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <label class="modal-label" for="agent-groups-name">Team name</label>
             <input id="agent-groups-name" class="modal-input" type="text" placeholder="e.g. Feature Implementation">
             <label class="modal-label" for="agent-groups-head-role">Head role</label>
-            <select id="agent-groups-head-role" class="modal-input">
-              <option value="lead">Lead</option>
-              <option value="coder">Coder</option>
-              <option value="planner">Planner</option>
-              <option value="reviewer">Reviewer</option>
-              <option value="intern">Intern</option>
-              <option value="tester">Tester</option>
-              <option value="analyst">Analyst</option>
-              <option value="researcher">Researcher</option>
-            </select>
+            <select id="agent-groups-head-role" class="modal-input"></select>
             <div style="font-size:11px; font-weight:600; margin-top:10px; margin-bottom:4px;">Members</div>
             <div id="agent-groups-members" style="display:flex; flex-direction:column; gap:4px;"></div>
             <button id="agent-groups-add-member" class="strip-btn" style="width:100%; margin-top:6px;">ADD MEMBER</button>
@@ -4375,10 +4401,29 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           document.getElementById('agents-tab-custom-agent-delete-error').textContent = '';
 
           agentsTabCustomAgents.forEach(agent => {
+            const role = agent.role || agentsTabToCustomAgentRole(agent.id);
+            // Check if agent role is used in any team (as head or member)
+            const teamsUsingAgent = agentsTabAgentGroups.filter(g =>
+              g.headRole === role || (g.members && g.members.some(m => m.role === role))
+            );
+            const isTeamAssigned = teamsUsingAgent.length > 0;
+            // Team names are operator free text (#agent-groups-name), so escapeAttr is
+            // load-bearing: a name carrying a double quote would otherwise terminate the
+            // title early and spill the rest into attributes on this span.
+            //
+            // Both tooltips say "this workspace" deliberately. Custom agents are
+            // machine-global (~/.switchboard/integration-config.json) but agentsTabAgentGroups
+            // holds only the selected workspace's terminals.agentGroups, so an unqualified
+            // "Standalone" would assert something this data cannot see — the agent may well
+            // head a team in another root.
+            const badgeHtml = isTeamAssigned
+              ? `<span class="agents-tab-custom-agent-badge team-assigned" title="Used in this workspace by: ${escapeAttr(teamsUsingAgent.map(t => t.name).join(', '))}">Team (${teamsUsingAgent.length})</span>`
+              : `<span class="agents-tab-custom-agent-badge standalone" title="Not used by any team in this workspace">Standalone</span>`;
+
             const item = document.createElement('div');
             item.className = 'agents-tab-custom-agent-item';
             item.innerHTML = `
-              <span class="agents-tab-custom-agent-item-name">${agent.name}</span>
+              <span class="agents-tab-custom-agent-item-name">${agent.name}${badgeHtml}</span>
               <span class="agents-tab-custom-agent-item-command">${agent.startupCommand}</span>
               <div class="agents-tab-custom-agent-item-actions">
                 <button class="agents-tab-custom-agent-item-btn edit" data-id="${agent.id}">EDIT</button>
@@ -4474,7 +4519,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // The boolean controls whether the PHONE_A_FRIEND_DIRECTIVE is
             // emitted in the prompt. The dispatch itself always fires when
             // the directive is present — the flag governs emission, not
-            // dispatch (see _dispatchPhoneAFriend).
+            // dispatch (see dispatchPhoneAFriend).
             const toggleRow = document.createElement('div');
             toggleRow.className = 'startup-row';
             toggleRow.style.gap = '6px';
@@ -4705,6 +4750,35 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
                     + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
                     + 'empty and stop.'
+            },
+            {
+                name: 'Review',
+                headRole: 'reviewer',
+                members: [
+                    { role: 'coder', count: 1, scope: 'per-team', relationship: 'reports-to-head' }
+                ],
+                purpose: 'Reviews finished features and delegates fixes to its coder.',
+                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
+                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
+                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
+                    + 'When the reviewer sends you fix instructions, implement the fixes in the same worktree, '
+                    + 'run verification checks (typecheck/tests as applicable), commit them, and report back to the '
+                    + 'reviewer naming what you changed and the verification results.\n'
+                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
+                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
+                    + 'commit first, then correct forward. '
+                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
+                    + 'other agents may be working the same tree.',
+                headPrompt: 'You are the reviewer on a review team. When work lands in your terminal, review it '
+                    + '(Stage 1: adversarial findings, Stage 2: balanced synthesis). Do NOT fix code yourself — send fix '
+                    + 'instructions to your coder at {coder} via POST /terminals/verb/ptySendPrompt with '
+                    + '{"name":"{coder}","data":"<fix instructions — name each file, the issue, and the fix needed. '
+                    + 'Tell the coder to run verification checks (typecheck/tests as applicable) and include results '
+                    + 'in their report.>","clearBeforePrompt":false} against the port in .switchboard/api-server-port.txt. '
+                    + 'After the coder reports back, re-review ONLY the coder\'s git diff. If issues remain, send another '
+                    + 'round of fix instructions. Loop until satisfied. If after 5 rounds the same critical issues persist, '
+                    + 'report to the originating lead that a new plan is needed. When review passes, report to the '
+                    + 'originating lead that the feature passed review, then update the plan file.'
             },
             {
                 name: 'Multi-agent planning',
@@ -5194,6 +5268,56 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return row;
         }
 
+        /**
+         * Roster for both the Head role select and every member row's role select.
+         * Built at call time, not cached: `lastCustomAgents` arrives asynchronously via
+         * the `customAgents` message and can land after the form is first opened.
+         *
+         * `preserve` re-injects a stored role that is no longer in the roster (a typo
+         * already saved, a deleted custom agent) as its own option. Without it a
+         * <select> silently snaps to its first option and the next save REWRITES the
+         * operator's team.
+         *
+         * Deliberately NOT filtered by lastVisibleAgents: visibility governs the
+         * terminal picker and the open-all grid, not team composition.
+         */
+        function teamsTabRoleOptions(selectEl, selectedRole) {
+            selectEl.innerHTML = '';
+            const add = (value, text, parent) => {
+                const o = document.createElement('option');
+                o.value = value; o.textContent = text;
+                (parent || selectEl).appendChild(o);
+            };
+            const known = new Set();
+            // Filtered by ROLE_KEYS, NOT the bare BUILT_IN_AGENT_LABELS list. The labels
+            // list carries `jules`, which is visibility-only (no startup-command input in
+            // the AGENTS tab, absent from DEFAULT_ROLE_CONFIG, absent from KanbanProvider's
+            // BUILTIN_ROLES). Offering it here authors a team seat that cannot boot a CLI.
+            // ROLE_KEYS is Object.keys(DEFAULT_ROLE_CONFIG) — exactly the spawnable set —
+            // so a role added there shows up here without a second edit.
+            const spawnable = new Set(ROLE_KEYS);
+            for (const r of BUILT_IN_AGENT_LABELS) {
+                if (!spawnable.has(r.key)) { continue; }
+                add(r.key, r.label); known.add(r.key);
+            }
+            const customAgents = (Array.isArray(lastCustomAgents) && lastCustomAgents.length)
+                ? lastCustomAgents
+                : (typeof agentsTabCustomAgents !== 'undefined' && Array.isArray(agentsTabCustomAgents) ? agentsTabCustomAgents : []);
+            if (customAgents.length) {
+                const grp = document.createElement('optgroup');
+                grp.label = 'Custom Agents';
+                for (const a of customAgents) {
+                    const r = a.role || (typeof agentsTabToCustomAgentRole === 'function' ? agentsTabToCustomAgentRole(a.id) : a.id);
+                    add(r, a.name || r, grp);
+                    known.add(r);
+                }
+                selectEl.appendChild(grp);
+            }
+            const want = selectedRole || 'coder';
+            if (!known.has(want)) { add(want, `${want} (not configured)`); }
+            selectEl.value = want;
+        }
+
         function teamsTabAgentGroupMemberRow(member) {
             // Member editor row: role, count, scope, relationship.
             // No per-member label or command — the tab composes roles, it never
@@ -5204,22 +5328,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             row.style.flexWrap = 'wrap';
             row.style.gap = '4px';
 
-            const roleIn = document.createElement('input');
-            roleIn.type = 'text'; roleIn.placeholder = 'role';
-            roleIn.style.flex = '1'; roleIn.style.minWidth = '60px';
-            roleIn.value = member.role || '';
+            const roleSel = document.createElement('select');
+            roleSel.dataset.field = 'role';
+            roleSel.style.flex = '1'; roleSel.style.minWidth = '110px';
+            teamsTabRoleOptions(roleSel, member.role);
 
             const countIn = document.createElement('input');
             countIn.type = 'number'; countIn.min = '1'; countIn.max = '8';
+            countIn.dataset.field = 'count';
             countIn.style.width = '50px';
             countIn.value = member.count ?? 1;
 
             const scopeSel = document.createElement('select');
+            scopeSel.dataset.field = 'scope';
             scopeSel.style.width = '90px';
             scopeSel.innerHTML = '<option value="per-team">per-team</option><option value="shared">shared</option>';
             scopeSel.value = member.scope || 'per-team';
 
             const relSel = document.createElement('select');
+            relSel.dataset.field = 'relationship';
             relSel.style.flex = '1'; relSel.style.minWidth = '100px';
             for (const p of MEMBER_RELATIONSHIP_PRESETS) {
                 const opt = document.createElement('option');
@@ -5233,20 +5360,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             delBtn.style.padding = '2px 8px';
             delBtn.textContent = '×';
 
-            row.appendChild(roleIn);
+            row.appendChild(roleSel);
             row.appendChild(countIn);
             row.appendChild(scopeSel);
             row.appendChild(relSel);
             row.appendChild(delBtn);
 
             function save() {
-                member.role = roleIn.value.trim() || 'coder';
+                member.role = roleSel.value.trim() || 'coder';
                 member.count = parseInt(countIn.value, 10) || 1;
                 member.scope = scopeSel.value;
                 member.relationship = relSel.value;
             }
-            [roleIn, countIn].forEach(el => el.addEventListener('blur', save));
-            [scopeSel, relSel].forEach(el => el.addEventListener('change', save));
+            countIn.addEventListener('blur', save);
+            [roleSel, scopeSel, relSel].forEach(el => el.addEventListener('change', save));
             delBtn.addEventListener('click', () => {
                 const membersDiv = document.getElementById('agent-groups-members');
                 if (membersDiv) { membersDiv.removeChild(row); }
@@ -5264,14 +5391,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // explicitly. The " (claimed)" suffix stays as information so the
             // operator knows which role already has an auto-start default.
             const headSel = document.getElementById('agent-groups-head-role');
+            teamsTabRoleOptions(headSel, group?.headRole || 'lead');
             const claimedRoles = new Set(agentsTabAgentGroups
                 .filter(g => g.id !== group?.id && !g.unassigned)
                 .map(g => g.headRole));
+            // No `opt.disabled = false` reset: the static <option> markup is gone and
+            // `teamsTabRoleOptions` builds every option fresh, so none is ever disabled.
             for (const opt of headSel.options) {
-                opt.disabled = false;
-                opt.textContent = opt.value.charAt(0).toUpperCase() + opt.value.slice(1) + (claimedRoles.has(opt.value) ? ' (claimed)' : '');
+                // Append-only on top of the label `teamsTabRoleOptions` set above. This
+                // is safe ONLY because `teamsTabRoleOptions` clears `selectEl.innerHTML`
+                // first, so no `(claimed)` suffix from a previous form-open survives.
+                // If that helper ever caches, this becomes `Phone-a-Friend (claimed) (claimed)`.
+                if (claimedRoles.has(opt.value)) { opt.textContent = `${opt.textContent} (claimed)`; }
             }
-            headSel.value = group?.headRole || 'lead';
             const membersDiv = document.getElementById('agent-groups-members');
             if (!membersDiv) return;
             membersDiv.innerHTML = '';
@@ -5318,13 +5450,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     ? (agentsTabAgentGroups.find(g => g.id === agentsTabEditingGroupId)?.members || [])
                     : [];
                 for (const r of rows) {
-                    const inputs = r.querySelectorAll('input');
-                    const selects = r.querySelectorAll('select');
-                    if (inputs.length >= 2 && selects.length >= 2) {
-                        const role = inputs[0].value.trim() || 'coder';
-                        const count = parseInt(inputs[1].value, 10) || 1;
-                        const scope = selects[0].value;
-                        const relationship = selects[1].value;
+                    // Addressed by data-field, NOT by index. The role control is a <select>
+                    // now, so an index-based read shifts both collections and the old
+                    // `inputs.length >= 2` guard rejected every row — saving a team with no
+                    // members and no error.
+                    const roleEl  = r.querySelector('[data-field="role"]');
+                    const countEl = r.querySelector('[data-field="count"]');
+                    const scopeEl = r.querySelector('[data-field="scope"]');
+                    const relEl   = r.querySelector('[data-field="relationship"]');
+                    if (roleEl && countEl && scopeEl && relEl) {
+                        const role = (roleEl.value || '').trim() || 'coder';
+                        const count = parseInt(countEl.value, 10) || 1;
+                        const scope = scopeEl.value;
+                        const relationship = relEl.value;
                         // Preserve label/startupCommand from the existing definition
                         // if this role was present before the edit.
                         const prev = existing.find(m => m.role === role);
@@ -5333,6 +5471,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             ...(prev?.label ? { label: prev.label } : {}),
                             ...(prev?.startupCommand ? { startupCommand: prev.startupCommand } : {}),
                         });
+                    } else {
+                        // Defensive: a row missing any of the four data-field controls is a
+                        // row-builder regression, not a user error. Warn so a debug session
+                        // can find it — the old `inputs.length >= 2` guard swallowed this
+                        // silently and saved teams one member short with no signal.
+                        console.warn('[teamsTab] skipped a member row missing data-field controls:', r);
+                        continue;
                     }
                 }
             }
@@ -5517,6 +5662,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // column when `collapseCodersEnabled` is true. Hoisted as a single shared
         // constant so the logical→DOM resolution stays consistent across all call sites.
         const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
+        /** Columns whose plans are eligible for staging into the DISPATCH queue.
+         *  Plans in coded/reviewed/tested/completed columns have already been
+         *  dispatched and must not be re-queued. DISPATCH itself is included so
+         *  a card already in the queue can be re-positioned by re-staging.
+         *  Mirrors the backend stageableColumns Set in _resolveStageablePlanIds. */
+        const STAGEABLE_COLUMNS = ['CREATED', 'BACKLOG', 'PLAN REVIEWED', 'DISPATCH'];
         /** Map a logical column id to its rendered DOM column id.
          *  When coders are collapsed, the three coder columns share the synthetic
          *  `col-CODED_AUTO` container; otherwise each maps to itself. */
@@ -5805,6 +5956,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         const ICON_DYNAMIC_ROUTING = '{{ICON_59}}';
         const ICON_RECOVER_SELECTED = '{{ICON_55}}';
         const ICON_TESTING_FAIL = '{{ICON_85}}';
+        const ICON_PHONE_A_FRIEND = '{{ICON_77}}';
         const ICON_CHAT = '{{ICON_CHAT}}';
         const ICON_CODE_MAP = '{{ICON_CODE_MAP}}';
         const ICON_ARCHIVE_SELECTED = '{{ICON_41}}';
@@ -5879,8 +6031,62 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   renderWorktreesTab();
                 }
 
+                // Persist the active sub-tab for the Agent Control view (namespaced
+                // state; no-op when the view mode is off).
+                if (AGENT_CONTROL_VIEW && AGENT_CONTROL_TABS.indexOf(tabName) !== -1) {
+                    agentControlSet({ activeTab: tabName });
+                }
+
             });
         });
+
+        // ── AGENT CONTROL VIEW MODE ─────────────────────────────────────────────
+        // Opt-in: the host sets <body data-view="agent-control"> to serve only the
+        // AGENTS/TEAMS/PROMPTS tabs. Absent ⇒ every branch below is skipped and the
+        // board behaves exactly as before. Persisted state is namespaced under
+        // `agentControl` so the board (which shares the same browser localStorage
+        // blob via data-panel="kanban") never reads or writes it. All getState()
+        // calls below sit well after the sb-initial-state seed block, preserving
+        // the panel-revival-retention contract ordering.
+        const AGENT_CONTROL_VIEW = document.body.dataset.view === 'agent-control';
+        const AGENT_CONTROL_TABS = ['agents', 'teams', 'prompts'];
+        let _agentControlPendingRole = null;
+
+        function agentControlGet() {
+            if (!AGENT_CONTROL_VIEW) { return null; }
+            try {
+                const s = vscode.getState() || {};
+                return s.agentControl || null;
+            } catch (_) { return null; }
+        }
+
+        function agentControlSet(patch) {
+            if (!AGENT_CONTROL_VIEW) { return; }
+            try {
+                const s = vscode.getState() || {};
+                s.agentControl = Object.assign({}, s.agentControl, patch);
+                vscode.setState(s);
+            } catch (_) {}
+        }
+
+        if (AGENT_CONTROL_VIEW) {
+            const _ac = agentControlGet();
+            const _acTab = (_ac && AGENT_CONTROL_TABS.indexOf(_ac.activeTab) !== -1) ? _ac.activeTab : 'agents';
+            _agentControlPendingRole = (_ac && _ac.role) || null;
+            // Move the active markers off KANBAN (hard-coded active in the HTML) onto
+            // the target tab BEFORE the initialTabBtn lookup below resolves
+            // .shared-tab-btn.active — otherwise the synthetic click() lands on the
+            // hidden KANBAN tab and renders a blank panel. The subsequent click() then
+            // hydrates the target tab unchanged via the existing handler arms.
+            const _kanbanBtn = document.querySelector('.shared-tab-btn[data-tab="kanban"]');
+            const _kanbanContent = document.getElementById('kanban-tab-content');
+            if (_kanbanBtn) { _kanbanBtn.classList.remove('active'); }
+            if (_kanbanContent) { _kanbanContent.classList.remove('active'); }
+            const _acTargetBtn = document.querySelector('.shared-tab-btn[data-tab="' + _acTab + '"]');
+            const _acTargetContent = document.getElementById(_acTab + '-tab-content');
+            if (_acTargetBtn) { _acTargetBtn.classList.add('active'); }
+            if (_acTargetContent) { _acTargetContent.classList.add('active'); }
+        }
 
         // Initialize the initially active tab
         const initialTabBtn = document.querySelector('.shared-tab-btn.active');
@@ -5932,6 +6138,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     handleRoleChange();
                     updateRoleDescription();
                     postKanbanMessage({ type: 'saveSetting', key: 'selectedRole', value: currentRole });
+                    if (AGENT_CONTROL_VIEW) { agentControlSet({ role: currentRole }); }
                 });
             }
 
@@ -6976,6 +7183,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                <img src="${ICON_TESTING_FAIL}" alt="Testing Failed" class="testing-fail-icon">
                            </button>`
                         : '';
+                    const phoneAFriendBtn = (def.kind === 'coded')
+                        ? `<button class="column-icon-btn" data-action="phoneAFriendSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Send selected plans to Phone-a-Friend for a second-pass review (no column advance)">
+                               <img src="${ICON_PHONE_A_FRIEND}" alt="Phone-a-Friend">
+                           </button>`
+                        : '';
                     // In backlog view, the CREATED column shows BACKLOG cards — a holding
                     // pen, not a pipeline stage. Suppress the four advance/prompt buttons
                     // so only the feature-group button remains. The same suppression applies
@@ -7029,6 +7241,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         ${copyDispatchPromptBtn}
                         ${featureAddBtn}
                         ${testingFailBtn}
+                        ${phoneAFriendBtn}
                     </div>`;
                 }
 
@@ -7140,7 +7353,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                     }
                     const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'copyDispatchPromptSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature' && action !== 'dispatchAnalyze' && action !== 'sendDispatchToCoder' && action !== 'addCoderTerminal' && action !== 'sendDispatchSetToCoders' && action !== 'runQueue' && action !== 'stageForQueue') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'copyDispatchPromptSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature' && action !== 'dispatchAnalyze' && action !== 'sendDispatchToCoder' && action !== 'addCoderTerminal' && action !== 'sendDispatchSetToCoders' && action !== 'runQueue' && action !== 'stageForQueue' && action !== 'phoneAFriendSelected') return;
 
                     switch (action) {
                         case 'moveSelected': {
@@ -7233,6 +7446,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
                             postKanbanMessage({ type: 'julesSelected', sessionIds: ids });
+                            ids.forEach(id => selectedCards.delete(id));
+                            break;
+                        }
+                        case 'phoneAFriendSelected': {
+                            const ids = getSelectedInColumn(column);
+                            if (ids.length === 0) return;
+                            postKanbanMessage({ type: 'phoneAFriendSelected', sessionIds: ids });
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
@@ -9390,16 +9610,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'settingResult': {
                     const { key, value } = msg;
                     if (key === 'selectedRole') {
-                        if (value) {
-                            currentRole = value;
+                        // Agent Control view: fall back to the browser-persisted role
+                        // (namespaced under `agentControl`) when the host supplied no
+                        // selectedRole. loadRoleConfigs() posts the getSetting that
+                        // arrives here, so this is the "after loadRoleConfigs resolves"
+                        // restore point. Prefer the host value when present. A stale
+                        // persisted role whose option no longer exists (e.g. a deleted
+                        // custom agent) is dropped so the selector stays on its default.
+                        let _acRole = value;
+                        if (AGENT_CONTROL_VIEW && !_acRole && _agentControlPendingRole) {
+                            const _acSel = document.getElementById('roleSelect');
+                            if (_acSel && Array.from(_acSel.options).some(o => o.value === _agentControlPendingRole)) {
+                                _acRole = _agentControlPendingRole;
+                            }
+                        }
+                        if (_acRole) {
+                            currentRole = _acRole;
                             const roleSelect = document.getElementById('roleSelect');
-                            if (roleSelect) roleSelect.value = value;
+                            if (roleSelect) roleSelect.value = _acRole;
                             if (currentRole.startsWith('custom_agent_') && !roleConfigs[currentRole]) {
                                 postKanbanMessage({ type: 'getSetting', key: `roleConfig_${currentRole}` });
                             }
                         }
                         handleRoleChange();
                         updateRoleDescription();
+                        if (AGENT_CONTROL_VIEW) { agentControlSet({ role: currentRole }); _agentControlPendingRole = null; }
                     } else if (key.startsWith('roleConfig_')) {
                         const role = key.replace('roleConfig_', '');
                         roleConfigs[role] = value || JSON.parse(JSON.stringify(DEFAULT_CONFIG[role] || { prompt: '', addons: {} }));
@@ -10009,6 +10244,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   agentsTabAgentGroups = msg.groups || [];
                   teamsTabRenderAgentGroups();
                   teamsTabRenderGallery();
+                  agentsTabRenderCustomAgentList();
                   break;
                 }
                 case 'saveAgentGroupResult': {
@@ -10198,15 +10434,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     btn.textContent = 'ASSIGN';
                 }
             }
-            // V60: Stage for queue is enabled whenever there is a selection —
-            // the selection order (selectedCards insertion order) IS the queue
-            // order. Staging a card already in DISPATCH re-positions it; that
-            // is allowed, not refused.
+            // V60: Stage for queue is enabled when at least one selected
+            // card is in a pre-dispatch column (CREATED, BACKLOG, PLAN
+            // REVIEWED) or already in DISPATCH (re-positioning). Cards in
+            // coded, reviewed, tested, or completed columns have already
+            // been dispatched and must not be re-queued.
             const stageBtn = document.getElementById('btn-stage-for-queue');
             if (stageBtn) {
-                const count = selectedCards.size;
-                stageBtn.disabled = count === 0;
-                stageBtn.textContent = count > 0 ? `STAGE FOR QUEUE (${count})` : 'STAGE FOR QUEUE';
+                let stageableCount = 0;
+                for (const id of selectedCards.keys()) {
+                    const card = currentCards.find(c => (c.planId || c.sessionId) === id);
+                    if (card && STAGEABLE_COLUMNS.includes(card.column)) {
+                        stageableCount++;
+                    }
+                }
+                stageBtn.disabled = stageableCount === 0;
+                stageBtn.textContent = stageableCount > 0
+                    ? `STAGE FOR QUEUE (${stageableCount})`
+                    : 'STAGE FOR QUEUE';
             }
         }
 

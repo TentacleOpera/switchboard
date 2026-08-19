@@ -148,6 +148,11 @@
         "category": "Switchboard"
       },
       {
+        "command": "switchboard.openAgentControlPanel",
+        "title": "Switchboard: Open Agent Control Panel",
+        "category": "Switchboard"
+      },
+      {
         "command": "switchboard.openProjectPanel",
         "title": "Switchboard: Open Project Panel",
         "category": "Switchboard"
@@ -732,6 +737,12 @@
           "description": "Controls visibility of the Open Tickets Panel button on the status bar.",
           "scope": "window"
         },
+        "switchboard.statusBar.showAgentControlButton": {
+          "type": "boolean",
+          "default": true,
+          "description": "Controls visibility of the Open Agent Control Panel button on the status bar.",
+          "scope": "window"
+        },
         "switchboard.statusBar.showDesignButton": {
           "type": "boolean",
           "default": true,
@@ -835,6 +846,7 @@
     "test:regression:plan-sync": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/plan-creation-integration-sync-regression.test.js",
     "test:regression:native-project-api": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/native-project-api-commands-regression.test.js",
     "test:contract:reviewer-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-reviewer-prompt-regression.test.js",
+    "test:contract:reviewer-prompt-behaviour": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/services/__tests__/agentPromptBuilder.test.js",
     "test:contract:pty-host-gating": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-host-gating-contract.test.js",
     "test:contract:verb-engine": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-headless-seams.test.js",
     "test:contract:verb-engine-kanban": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-kanban-headless.test.js",
@@ -935,6 +947,7 @@
     "test:contract:multi-parent-terminals": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/multi-parent-terminals-contract.test.js",
     "test:contract:team-autostart-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-autostart-workspace-scope.test.js",
     "test:contract:teams-tab-no-start": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/teams-tab-no-start-contract.test.js",
+    "test:contract:standalone-agent-isolation": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-agent-team-isolation-contract.test.js",
     "test:contract:autoban-state": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-state-regression.test.js",
     "test:contract:autoban-no-valid-tickets": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-no-valid-tickets-regression.test.js",
     "test:contract:terminal-plan-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-plan-attribution-contract.test.js",
@@ -955,7 +968,8 @@
     "test:contract:orchestrator-tick": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/orchestrator-tick-and-reports-contract.test.js",
     "test:contract:queue-pipeline": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/queue-pipeline-contract.test.js",
     "test:contract:external-headed-team": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/external-headed-team-contract.test.js",
-    "test:contract:terminal-coder-dispatch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-coder-dispatch-contract.test.js"
+    "test:contract:terminal-coder-dispatch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-coder-dispatch-contract.test.js",
+    "test:contract:feature-drive-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/feature-drive-prompt-reframe-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

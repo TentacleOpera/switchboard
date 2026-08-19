@@ -225,6 +225,11 @@ export function getBoardHtml(repoRoot: string, workspaceRoot: string, capabiliti
     return { html: content, csp };
 }
 
+export function getAgentControlHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
+    const result = getBoardHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+    return { ...result, html: injectBodyAttributes(result.html, 'data-view="agent-control"') };
+}
+
 export function getProjectHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
     const candidates = [
         path.join(repoRoot, 'dist', 'webview', 'project.html'),
@@ -524,12 +529,14 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
         { id: 'setup', label: 'Setup', icon: `${iconDir}/nav-setup.svg`, route: '/setup', enabled: setupEnabled, placement: 'bottom' },
         { id: 'connections', label: 'Connections', icon: `${iconDir}/nav-connections.svg`, route: '/connections', enabled: connectionsEnabled },
         { id: 'terminals', label: 'Terminals', icon: `${iconDir}/nav-terminals.svg`, route: '/terminals', enabled: terminalsEnabled },
+        { id: 'agent-control', label: 'Agents', icon: `${iconDir}/nav-agent-control.svg`, route: '/agent-control', enabled: true },
     ];
 }
 
 export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult | null {
     switch (id) {
         case 'board': return getBoardHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'agent-control': return getAgentControlHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'project': return getProjectHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'memo': return getMemoHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'tickets': return getTicketsHtml(repoRoot, workspaceRoot, capabilities, themeClass);
