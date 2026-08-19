@@ -14,6 +14,8 @@ Subtasks 1–3 give the queue a seat-routed pop, a self-advance endpoint and the
 
 That last case is new and is the one that can lose a night. In head pacing, an idle team with a staged queue always has a head to poke. In seat pacing, a seat that dies after being dispatched leaves *nobody* holding the instruction to advance — so the watch is not a backstop against forgetting, it is the only thing standing between a dead seat and a queue that never moves.
 
+**And the watch's own "is a seat working?" test has to change for the same reason the pop's did.** Cards never move on finish (`switchboard-contracts` #1), so every card this queue has ever coded is still sitting in a coding column. "A card is held in a coding column" therefore stops meaning "a seat is working" the moment the first card completes — under that test the watch would see a permanently busy team and never nudge anyone, which is the silent night in its purest form. The working-state latch `plans.dispatched_at` is the test, exactly as in subtask 1: set means a seat is working, cleared means that card is done and resting.
+
 **Where the field lives.** Team definitions are free-form JSON objects in the `terminals.groups` config blob, read through `resolveTeamMembersForHead` (`src/services/teamWiring.ts:1799`) and written through the serialized `mutateTerminalGroups` chain (`teamWiring.ts:162`). Adding `pacing: 'head' | 'seat'` there needs **no schema migration** — but it does need the project's unknown-key rule honoured: the webview saves the whole in-memory array, so a read-modify-write that drops fields it does not recognise will silently strip other features' team settings.
 
 ## Metadata
@@ -33,8 +35,8 @@ That last case is new and is the one that can lose a night. In head pacing, an i
 
 5. **Teach the watch who the pacer is.** In `_runQueueNudgeSweep`, resolve the addressee by pacing:
    - **head pacing** — unchanged. Do not refactor this path; it is the shipped behaviour and it works.
-   - **seat pacing, a card is held in a coding column** — the pacer is that card's `dispatchedTerminal`. Nudge that seat once with the state (its card, the staged count) and the instruction to `POST /kanban/queue/done` when finished, or with `outcome: 'failed'` if it cannot.
-   - **seat pacing, no card held and the queue is non-empty** — there is no agent to nudge. Skip the agent nudge entirely and escalate to the operator on the **first** pass, not the second. Waiting for a second pass to tell a human that nothing is running wastes an interval for no gain, because the thing a second nudge tests for — an agent that was merely slow — cannot apply when no agent holds the card.
+   - **seat pacing, a card has `dispatched_at` set** — the pacer is that card's `dispatchedTerminal`. Nudge that seat once with the state (its card, the staged count) and the instruction to `POST /kanban/queue/done` when finished, or with `outcome: 'failed'` if it cannot. Note the seat may well be alive and simply slow; one nudge, then escalate.
+   - **seat pacing, no card has `dispatched_at` set and the queue is non-empty** — nothing is working and there is no agent to nudge. Skip the agent nudge entirely and escalate to the operator on the **first** pass, not the second. Waiting a second pass to tell a human that nothing is running wastes an interval for no gain, because the thing a second nudge tests for — an agent that was merely slow — cannot apply when no seat holds the latch. Cards resting in coding columns are **not** evidence of work in progress and must not suppress this branch.
    - **queue empty** — drop silently, unchanged. This is a run ending normally.
 6. **Preserve the watch's four existing gates** (head live, head not mid-turn, nothing in flight, no turn-end this tick) with their meanings re-pointed at the resolved pacer rather than the head. Do not add a fifth gate; each existing one has a reason and the sweep is already the most interlocked code in this area.
 7. **Feed subtask 3's counter.** When the watch escalates on a held card, record it as a failed attempt for that card (subtask 3 owns the store) so a dead seat escalates up the ladder rather than pinning the queue behind a card nobody is working.
@@ -48,10 +50,11 @@ That last case is new and is the one that can lose a night. In head pacing, an i
 5. **`Run queue` in seat pacing** dispatches card one to the complexity-routed seat and the status message names both the mode and that seat.
 6. **`Run queue` with a head-only team** dispatches by degradation and says so.
 7. **`Run queue` with no team seated** errors and spawns nothing, in both modes.
-8. **Watch, seat pacing, card held.** Go idle with a card in `CODER CODED` and cards staged. Assert exactly one nudge to the **coder** (not the head), naming its card and the staged count.
-9. **Watch, seat pacing, nothing held, queue non-empty.** Assert **no** agent nudge, an operator escalation on the first pass, and that an attempt is recorded against the card per step 7.
-10. **Watch, queue empty.** Silent drop; no notification of any kind.
-11. **Watch, head pacing.** Byte-for-byte unchanged behaviour, including nudge count and escalation timing. Run this against the existing watch tests unmodified — if they need editing, the head path was changed and step 5 was violated.
-12. **Restart survival.** Set pacing, restart the host, assert the field and the watch state both survive.
+8. **Watch, seat pacing, latch set.** Go idle with a card in `CODER CODED` with `dispatched_at` set and cards staged. Assert exactly one nudge to the **coder** (not the head), naming its card and the staged count.
+9. **Watch, seat pacing, latch clear, queue non-empty.** Two coded cards resting in `INTERN CODED` and `CODER CODED` with `dispatched_at` cleared, and cards still staged. Assert **no** agent nudge and an operator escalation on the first pass. This is the test that catches the watch mistaking resting cards for work in progress — the failure mode that would make it silent for the whole run.
+10. **Watch, seat pacing, latch set, escalation records an attempt** against that card per step 7.
+11. **Watch, queue empty.** Silent drop; no notification of any kind.
+12. **Watch, head pacing.** Byte-for-byte unchanged behaviour, including nudge count and escalation timing. Run this against the existing watch tests unmodified — if they need editing, the head path was changed and step 5 was violated.
+13. **Restart survival.** Set pacing, restart the host, assert the field and the watch state both survive.
 
 `npm run compile` clean; the seven PRD gates green, with `parity` and `standalone-parity` specifically checked since this adds a control that both hosts must carry.

@@ -46,17 +46,24 @@ The persona already states that a resident orchestrator over a one-at-a-time pip
 
 4. **State the queue-watch difference in one sentence.** In head pacing the watch nudges the lead. In seat pacing it nudges the seat holding the card, and escalates to the operator on the first pass when no seat holds one — so an orchestrator that has handed off into a seat-paced queue should tell the operator that a dead seat surfaces to *them*, not to an agent.
 
-5. **Leave `POST /orchestration/handoff` unchanged.** Its `409` preconditions — a live coding head and a non-empty `DISPATCH` queue — both still hold in seat pacing: a seat-paced team still needs seats live, and `from` still resolves through a coding head for roster purposes. Changing the endpoint is out of scope; if its refusal text names "the lead" specifically, adjust the *text* only.
+5. **State what a finished seat-paced run looks like on the board.** This is the addition most likely to be omitted and most likely to cause a wrong read later. A completed seat-paced run leaves every card **resting in the coding column of the seat that coded it**, with `dispatched_at` cleared — nothing in `CODE REVIEWED`, nothing in `COMPLETED`. Cards move on coding start and never on finish (`switchboard-contracts` #1), and this mode adds no completion move.
 
-6. **Mirror to `.claude/skills/switchboard-orchestrator/SKILL.md`** if that path carries a copy, and to any registry description that enumerates the modes. The preceding feature's review found a prompt sentence missing from its third mirror; grep before declaring done.
+   Two consequences the persona must state, because an orchestrator reading the board without them will report the run as broken:
+   - **A card in a coding column is not evidence of work in progress.** The working-state latch is, and it is per-card. An orchestrator summarising board state must not describe resting cards as in-flight, and must not "help" by moving them.
+   - **`## The ready set` is unaffected but its complement is not.** Cards resting in coding columns are neither ready nor running; they are done. Say so, so the orchestrator does not offer to re-dispatch them.
+
+6. **Leave `POST /orchestration/handoff` unchanged.** Its `409` preconditions — a live coding head and a non-empty `DISPATCH` queue — both still hold in seat pacing: a seat-paced team still needs seats live, and `from` still resolves through a coding head for roster purposes. Changing the endpoint is out of scope; if its refusal text names "the lead" specifically, adjust the *text* only.
+
+7. **Mirror to `.claude/skills/switchboard-orchestrator/SKILL.md`** if that path carries a copy, and to any registry description that enumerates the modes. The preceding feature's review found a prompt sentence missing from its third mirror; grep before declaring done.
 
 ## Verification Plan
 
 1. **Gate assertions in `src/test/orchestrator-tick-and-reports-contract.test.js`:** the third option is present in `## Handoff, or arm?`; no remaining unconditional "to the lead" claim about `queue/next` anywhere in the persona; the seat-paced handoff variant exists and shares steps 1–3 and 5 with the head variant.
 2. **Mirror gate:** every copy of the persona carries the same three additions. Static assertion, since drift here is invisible at runtime.
 3. **Read-only assertion:** the persona contains no instruction to write the pacing field. Assert the absence explicitly — this is the boundary that keeps the orchestrator advisory.
-4. **Manual read-through** of the four edited sites in sequence, checking that an orchestrator following them on a *head*-paced team produces exactly today's behaviour. The regression risk here is entirely in over-editing.
-5. **One live handoff into a seat-paced queue:** the orchestrator scopes, stages three mixed-complexity plans, dispatches card one, and reports the seat it actually landed on and the fact that the seats pace from there. Assert the report names the destination returned by the call, not a lead.
-6. **One live handoff into a head-paced queue** to confirm the report is unchanged from today.
+4. **Gate assertion on the resting-state description:** the persona states that a finished seat-paced run leaves cards in coding columns with the latch cleared, and contains no instruction to move them.
+5. **Manual read-through** of the four edited sites in sequence, checking that an orchestrator following them on a *head*-paced team produces exactly today's behaviour. The regression risk here is entirely in over-editing.
+6. **One live handoff into a seat-paced queue:** the orchestrator scopes, stages three mixed-complexity plans, dispatches card one, and reports the seat it actually landed on and the fact that the seats pace from there. Assert the report names the destination returned by the call, not a lead.
+7. **One live handoff into a head-paced queue** to confirm the report is unchanged from today.
 
 No `npm run compile` dependency — this subtask touches no TypeScript. Persona gates and the mirror gate are the whole verification surface. Run it as the **only** agent stream in the persona file.

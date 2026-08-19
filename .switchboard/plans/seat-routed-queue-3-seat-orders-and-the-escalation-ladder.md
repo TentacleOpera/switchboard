@@ -42,11 +42,13 @@ Review is deliberately out of this pipeline, so the only failure signal is the s
 
 5. **On `outcome: 'failed'`** (inside the same critical section subtask 2 established, so the count and the requeue cannot interleave):
    - Read the card's attempt entry. Increment `attempts`; record the seat and the role that just failed.
-   - `attempts === 1` → re-stage the card at the **front** of the queue (`queue_position` below the current minimum, via the existing staging helper at `KanbanDatabase.ts:9974` rather than a hand-rolled UPDATE) with a routing override to `getFallbackRole(lastRole)`. Then continue the normal retire→clear→pop sequence, so the requeued card is the very next thing dispatched.
-   - `attempts >= 2`, **or** `lastRole === 'lead'` (the ladder's terminal rung) → **park**: leave the card out of `DISPATCH`, delete nothing, notify the operator with the card, both failing seats and both reasons, and **pop the next card anyway**. The queue keeps walking; that is the chosen failure policy.
+   - `attempts === 1` → **re-stage** the card into `DISPATCH` at the **front** of the queue (`queue_position` below the current minimum, via the existing staging helper at `KanbanDatabase.ts:9974` rather than a hand-rolled UPDATE) with a routing override to `getFallbackRole(lastRole)`. Then continue the normal release→clear→pop sequence, so the requeued card is the very next thing dispatched — and lands in the stronger seat's coding column on that dispatch, per the normal move-on-start rule.
+   - `attempts >= 2`, **or** `lastRole === 'lead'` (the ladder's terminal rung) → **park**: leave the card exactly where it is, in the coding column of the seat that failed it, with `dispatched_at` released. Move nothing, delete nothing. Notify the operator with the card, both failing seats and both reasons, and **pop the next card anyway**. The queue keeps walking; that is the chosen failure policy.
+
+   Note what "park" is *not*: there is no parking column and no move. A parked card is identifiable as a card in a coding column with a failure record against it, which is exactly what happened to it. Re-staging on escalation is a move **backwards** out of the coding column and is legitimate for the same reason the first dispatch was — the card moves because it is being dispatched again, not because it finished (`switchboard-contracts` #1).
 6. **Carry the override to the dispatch, not to the routing map.** The requeued card's role override belongs in the attempt entry and is read by the pop when it dispatches that card. Do **not** rewrite `kanban.routingMapConfig` or the card's stored complexity — the routing map is the operator's global setting and the complexity is a property of the plan. Mutating either to steer one card corrupts every future decision.
 7. **A stall counts as a failure.** When subtask 4's queue watch escalates on a seat that never reported, record it as an attempt for that card and take the same branch, so a dead seat escalates rather than pinning the queue.
-8. **Clean up.** Delete a card's attempt entry when it retires to `COMPLETED`, when it is parked, or when it leaves `DISPATCH` by any other route. Sweep entries for plan IDs that no longer exist on host start, so the blob cannot grow without bound.
+8. **Clean up.** Delete a card's attempt entry when the seat reports it finished, and when the operator moves the card by hand. **Keep** the entry while a card is parked — it is the only record of why that card is sitting in a coding column unfinished, and the operator needs it to decide what to do. Sweep entries for plan IDs that no longer exist on host start, so the blob cannot grow without bound.
 
 ## Verification Plan
 
@@ -54,11 +56,11 @@ Review is deliberately out of this pipeline, so the only failure signal is the s
 2. **Flip pacing to `head`.** Assert the seat orders are removed in the same mutation and no seat still carries one.
 3. **Mirror completeness.** A gate assertion that the seat-order body appears in every location the head `queue/next` sentence appears in. This is a static check and it is the only thing that stops mirror drift.
 4. **Escalate once.** Complexity-3 card dispatched to the intern; intern reports `failed`. Assert: attempts is 1, the card is at the front of `DISPATCH`, the next dispatch sends **that same card** to the **coder**, and the routing map and stored complexity are byte-for-byte unchanged.
-5. **Park on second failure.** Coder reports `failed` on the same card. Assert: the card is parked (not in `DISPATCH`, not deleted), the operator notification names both seats and both reasons, and the **next** card in the queue is dispatched.
+5. **Park on second failure.** Coder reports `failed` on the same card. Assert: the card is still in `CODER CODED` where the dispatch put it, `dispatched_at` released, no move recorded in `plan_events`, its attempt entry retained, the operator notification names both seats and both reasons, and the **next** card in the queue is dispatched.
 6. **Terminal rung.** A complexity-8 card failed by the lead parks on the *first* failure — `getFallbackRole('lead')` returns `lead`, and re-dispatching to the same seat is the loop this rule exists to prevent.
 7. **Stall counts as a failure.** Drive the watch's escalation with no `queue/done` call; assert an attempt is recorded and the card escalates.
 8. **Concurrency.** Fire `failed` and a schedule tick together, ≥50 iterations; assert `attempts` never double-increments and the card is never staged twice.
-9. **Blob hygiene.** Unknown keys in `queue.attempts` survive a write; entries are removed on retire, park and manual drag-out; orphans are swept on start.
+9. **Blob hygiene.** Unknown keys in `queue.attempts` survive a write; entries are removed on a finished report and on manual drag-out, **retained** while parked; orphans are swept on start.
 10. **No confirmation dialogs anywhere in this work** — parking notifies, it does not ask.
 
 `npm run compile` clean; the standing-orders contract gate (`src/test/standing-orders-marker-contract.test.js`) green; the seven PRD gates green.
