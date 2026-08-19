@@ -5169,6 +5169,128 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return null;
     }
 
+    /**
+     * Resolve the team roster (members minus the head) with per-member roles and
+     * liveness, for injection into the drive-mode dispatch prompt. Reads
+     * `terminals.groups` from the DB (same path as `resolveCodingRolesFromGroups`),
+     * finds the lead-headed team group with a live head, and returns one entry per
+     * non-head member with `{ name, role, active }`.
+     *
+     * Role resolution tries, in order:
+     *  1. `_liveTerminalsProvider()` (standalone host) — returns `{ role, friendlyName, ... }`
+     *  2. `_taskViewerProvider.listFleetTerminals()` (extension host) — returns `{ role, friendlyName, status }`
+     *  3. Fallback: `role: ''` (names + liveness only, no role labels)
+     *
+     * Liveness comes from `getFleetLiveness()` (cached snapshot, same source as the
+     * sweep's gate 4). `status !== 'exited'` means active.
+     *
+     * `members[0]` is the head for non-external-headed teams (set by `wireSpawnedTeam`
+     * at teamWiring.ts:1281: `groupMembers = [headName, ...childNames]`). For
+     * external-headed teams (`externalHead === true`), the head is excluded from
+     * `members` and no entry is skipped — all members are seats.
+     *
+     * Returns `null` when no lead-headed team group with a live head is found, which
+     * triggers the fallback to the static `DRIVE_FEATURE_PREFIX` in
+     * `_buildFeatureDirectivePrefix`.
+     */
+    private async _resolveTeamRosterForPrompt(workspaceRoot: string): Promise<Array<{ name: string; role: string; active: boolean }> | null> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) return null;
+            // Read terminals.groups — same key and bare-key fallback as
+            // resolveCodingRolesFromGroups / resolveTeamMembersForHead.
+            let groups: any[] = [];
+            try {
+                const raw = await db.getConfigJson<any[]>(TERMINALS_GROUPS_KEY, []) as any[];
+                groups = Array.isArray(raw) ? [...raw] : [];
+            } catch { /* key absent */ }
+            try {
+                const bare = await db.getConfigJson<any[]>('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+            if (!Array.isArray(groups) || groups.length === 0) return null;
+
+            // Build a liveness set from getFleetLiveness() — same _ptyLiveness
+            // source the sweep's gate (4) uses.
+            const liveness = this._taskViewerProvider?.getFleetLiveness() ?? [];
+            const livenessByName = new Map<string, string>();
+            for (const entry of liveness) {
+                if (entry && entry.friendlyName) {
+                    livenessByName.set(entry.friendlyName, entry.status || '');
+                }
+            }
+
+            // Find the first lead-headed team group with a live head.
+            let targetGroup: any = null;
+            for (const g of groups) {
+                if (!g || !g.headRole || !g.name) continue;
+                const role = String(g.headRole).toLowerCase().replace(/[_-]+/g, ' ').trim();
+                if (role !== 'lead') continue;
+                if (!g.teamGroup) continue;
+                const headName: string = String(g.name);
+                const headStatus = livenessByName.get(headName);
+                if (headStatus === 'exited') continue;
+                // Accept if liveness says non-exited, or if liveness is empty
+                // (fleet unavailable — don't block the roster on a missing snapshot).
+                targetGroup = g;
+                break;
+            }
+            if (!targetGroup) return null;
+
+            const members: string[] = Array.isArray(targetGroup.members) ? targetGroup.members.map(String) : [];
+            if (members.length === 0) return null;
+            const externalHead = targetGroup.externalHead === true;
+            // Skip members[0] (the head) for non-external-headed teams — the head is
+            // the agent receiving this prompt and doesn't need to be in its own roster.
+            const rosterNames = externalHead ? members : members.slice(1);
+            if (rosterNames.length === 0) return null;
+
+            // Resolve roles: try _liveTerminalsProvider (standalone) first, then
+            // _taskViewerProvider.listFleetTerminals() (extension host), then fallback.
+            let roleByName = new Map<string, string>();
+            if (this._liveTerminalsProvider) {
+                try {
+                    const live = await this._liveTerminalsProvider();
+                    if (Array.isArray(live)) {
+                        for (const t of live) {
+                            if (t && t.friendlyName) {
+                                roleByName.set(t.friendlyName, t.role || '');
+                            }
+                        }
+                    }
+                } catch { /* best effort */ }
+            }
+            if (roleByName.size === 0 && this._taskViewerProvider?.listFleetTerminals) {
+                try {
+                    const fleet = await this._taskViewerProvider.listFleetTerminals();
+                    if (Array.isArray(fleet)) {
+                        for (const t of fleet) {
+                            if (t && t.friendlyName) {
+                                roleByName.set(t.friendlyName, t.role || '');
+                            }
+                        }
+                    }
+                } catch { /* best effort */ }
+            }
+
+            const roster = rosterNames.map(name => {
+                const status = livenessByName.get(name);
+                const active = status !== 'exited'; // absent → treat as active (don't block on missing snapshot)
+                const role = roleByName.get(name) || '';
+                return { name, role, active };
+            });
+            return roster;
+        } catch { return null; }
+    }
+
     private async _resolveProjectContextEnabled(workspaceRoot: string): Promise<boolean> {
         try {
             const db = this._getKanbanDb(workspaceRoot);
@@ -5228,7 +5350,84 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     // only injection read path. A standing global fallback would hand a design
     // system to every future project — explicitly rejected behaviour.
 
-    private async _buildFeatureDirectivePrefix(workspaceRoot: string, drivePreResolved?: boolean): Promise<string> {
+    /**
+     * Build the enriched drive-mode operational block from injected context: team
+     * roster (with roles + liveness), plan IDs, API port, and compact operational
+     * rules. Replaces the one-line `DRIVE_FEATURE_PREFIX` pointer so the lead agent
+     * does not waste a turn re-discovering what the extension already knows.
+     *
+     * Returns `null` when no team roster resolves (no lead-headed team group with a
+     * live head), which triggers the fallback to the static `DRIVE_FEATURE_PREFIX`
+     * in `_buildFeatureDirectivePrefix` — preserving backward compatibility for
+     * non-team dispatches.
+     *
+     * The block intentionally does NOT include the `watchFeature` arming call —
+     * the companion plan (`drive-mode-addon-cleanup-auto-arm-watch.md`) moves that
+     * to the extension's auto-arm path.
+     */
+    private async _buildDrivePrefix(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<string | null> {
+        const roster = await this._resolveTeamRosterForPrompt(workspaceRoot);
+        if (!roster || roster.length === 0) return null;
+
+        // Read the API port from .switchboard/api-server-port.txt (best-effort).
+        // Fall back to the instruction string if the file is unavailable.
+        let portLine = 'read .switchboard/api-server-port.txt';
+        try {
+            const portFilePath = path.join(workspaceRoot, '.switchboard', 'api-server-port.txt');
+            if (fs.existsSync(portFilePath)) {
+                const portRaw = fs.readFileSync(portFilePath, 'utf8').trim();
+                if (portRaw && /^\d+$/.test(portRaw)) {
+                    portLine = `Port is ${portRaw}. BASE="http://127.0.0.1:${portRaw}" (also in .switchboard/api-server-port.txt)`;
+                }
+            }
+        } catch { /* best-effort */ }
+
+        // Build the roster lines.
+        const rosterLines = roster.map(m => {
+            const roleLabel = m.role ? ` (${m.role})` : '';
+            const statusLabel = m.active ? 'active' : 'exited';
+            return `- ${m.name}${roleLabel} — ${statusLabel}`;
+        });
+
+        // Collect plan IDs from the plans array (features + subtasks).
+        const planIds = plans
+            .map(p => p.planId)
+            .filter((id): id is string => !!id);
+
+        const block = [
+            'You are driving this feature through your team seats. Everything you need is below — do not look anything up.',
+            '',
+            'YOUR TEAM:',
+            ...rosterLines,
+            '',
+            `API: ${portLine}`,
+            'Your terminal name is in $SWITCHBOARD_TERMINAL.',
+            'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
+            '',
+            'DISPATCH (one call per subtask):',
+            'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
+            '  -d \'{"name":"<seat>","data":"Implement the plan at <path>. This subtask only.","clearBeforePrompt":false,"dispatch":{"planId":"<id>","role":"coder"}}\'',
+            '',
+            'REVIEW: On callback, review git diff — not the coder\'s self-report. Resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead.',
+            '',
+            'FEATURE WATCH: Armed by the system (stopColumns: CODE REVIEWED). You will be nudged if you go idle with un-accepted subtasks. No action needed.',
+            '',
+            'RULES:',
+            '- Do NOT query kanban.db directly. The plan IDs are in your prompt; use the API for anything else.',
+            '- Do NOT verify work before dispatching. The kanban column is the system\'s record, not a coder\'s claim.',
+            '- Clear a terminal only when at rest (completion received AND next work goes elsewhere).',
+            '- One subtask per terminal at a time. Use a second terminal for concurrency.',
+            '- Full protocol (escalation ladder, unattended mode, resting terminals, failure modes): .agents/skills/terminal-coder-dispatch/SKILL.md',
+        ];
+
+        if (planIds.length > 0) {
+            block.push('', 'PLAN IDs:', ...planIds.map(id => `- ${id}`));
+        }
+
+        return block.join('\n');
+    }
+
+    private async _buildFeatureDirectivePrefix(workspaceRoot: string, drivePreResolved?: boolean, plans?: BatchPromptPlan[]): Promise<string> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) return '';
         const ultracode = (await db.getConfig('feature_ultracode_enabled')) === 'true';
@@ -5239,7 +5438,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // /goal must be position-zero for the host to parse it as a slash command.
         if (goal) { prefix += `${GOAL_FEATURE_PREFIX}\n`; }
         if (ultracode) { prefix += `${ULTRACODE_FEATURE_PREFIX}\n\n`; }
-        if (drive) { prefix += `${DRIVE_FEATURE_PREFIX}\n\n`; }
+        if (drive) {
+            // Build the enriched operational block from injected context (team roster,
+            // plan IDs, API port, compact rules). Falls back to the static prefix when
+            // no team group is found or plans are absent (backward compat).
+            const driveBlock = (plans && plans.length > 0)
+                ? await this._buildDrivePrefix(workspaceRoot, plans)
+                : null;
+            prefix += `${driveBlock ?? DRIVE_FEATURE_PREFIX}\n\n`;
+        }
         return prefix;
     }
 
@@ -5423,7 +5630,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 ? `\n\n${PHONE_A_FRIEND_DIRECTIVE(customApiPort, role, customPhoneAFriendOriginTerminal, customPhoneAFriendDispatchId)}`
                 : '';
             if (primaryPlan?.isFeature && mergedAddons.applyFeatureDirectives === true) {
-                const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive());
+                const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive(), plans);
                 return `${prefix}${customBuilt}${customPhoneSuffix}`;
             }
             return `${customBuilt}${customPhoneSuffix}`;
@@ -5679,7 +5886,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // generic, not feature-specific, so applying it once to the whole payload is
         // correct. Allowlisted to the execution roles only.
         if (plans.some(p => p.isFeature) && ['lead', 'coder', 'intern'].includes(role)) {
-            const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive());
+            const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive(), plans);
             if (prefix) {
                 return `${prefix}${built}`;
             }

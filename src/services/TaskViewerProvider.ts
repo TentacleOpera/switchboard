@@ -1160,6 +1160,32 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return this._ptyLiveness;
     }
 
+    /**
+     * Public wrapper around `_ptyHostVerb('ptyListTerminals', {})` so KanbanProvider
+     * can resolve per-terminal roles for the drive-mode roster without reaching into
+     * the private verb rail. Returns the `terminals` array entries (each carrying
+     * `{ friendlyName, role, status, ... }`) plus any `hiddenTerminals` — the same
+     * union the parse-based dispatch backstop uses (see :643-646). Returns an empty
+     * array when the pty host is unavailable (fleet not booted, standalone without a
+     * host). Best-effort: any throw is caught and yields `[]`.
+     */
+    public async listFleetTerminals(): Promise<Array<{ friendlyName?: string; role?: string; status?: string; parentInstanceId?: any }>> {
+        try {
+            if (!this._ptyHostChild || !this._ptyHostPort) return [];
+            const res = await this._ptyHostVerb('ptyListTerminals', {});
+            if (!res || !res.success) return [];
+            const rows: any[] = [];
+            if (Array.isArray(res.terminals)) rows.push(...res.terminals);
+            if (Array.isArray(res.hiddenTerminals)) rows.push(...res.hiddenTerminals);
+            return rows.map((t: any) => ({
+                friendlyName: t?.friendlyName,
+                role: t?.role,
+                status: t?.status,
+                parentInstanceId: t?.parentInstanceId,
+            }));
+        } catch { return []; }
+    }
+
     // --- Single-flight coalescing guards (refresh-storm circuit-breaker) ---
     // Coalesce overlapping _refreshRunSheets / _syncFilesAndRefreshRunSheets calls
     // into one in-flight run + exactly one trailing run. Awaited callers observe a

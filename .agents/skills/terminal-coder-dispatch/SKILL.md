@@ -12,6 +12,29 @@ by construction. There is no loop to hold, no join to poll, no batch to manage.
 
 ---
 
+## 0. Quick Start
+
+1. Read your dispatch prompt — it contains your team roster, plan IDs, and the feature file path.
+2. Read the feature file for subtask sequencing.
+3. Dispatch the first subtask: POST /terminals/verb/ptySendPrompt with dispatch field.
+4. On callback: review git diff, not the coder's self-report.
+5. Resend fixes to the same terminal, or escalate after two failures.
+6. Clear a terminal only when at rest (completion + next work elsewhere).
+7. A feature watch is armed automatically by the system for drive-mode dispatches — no action needed.
+
+Everything else in this skill is reference for edge cases. Consult §1–§10 when you hit them.
+
+---
+
+## 0.1. Do NOT
+
+- Do NOT query kanban.db directly with sqlite3. Use the API endpoints (GET /kanban/plans, GET /kanban/plan). The plan IDs are in your dispatch prompt.
+- Do NOT grep the codebase to verify work before dispatching. The kanban column is the system's record — a different evidentiary class than a coder's self-report. Verification happens on callback (§5), not before dispatch.
+- Do NOT re-register standing orders. They were installed at team creation. Check with GET /terminals/standing-orders only if you suspect a problem.
+- Do NOT enumerate terminals more than once per startup. The roster is in your dispatch prompt.
+
+---
+
 ## 1. Addressing a terminal — the route table
 
 The API port is in `.switchboard/api-server-port.txt` (relative to the workspace root, which
@@ -275,6 +298,10 @@ to an idle agent terminal is a turn, same as a coder's report. Two outcomes:
 
 ### Arming the feature-level nudge (optional, for the whole feature)
 
+For **drive-mode dispatches**, the feature watch is armed automatically by the system —
+you do not need to call `watchFeature` yourself. The manual arming path below remains for
+non-drive or external-headed teams only.
+
 The per-dispatch backstop covers each dispatch you register. It does NOT cover the window where
 **no** dispatch is outstanding — you dropped the thread, your turn ended without you sending the
 next subtask, or a registration failed. For that, arm a feature watch on yourself:
@@ -354,27 +381,20 @@ stack produces unreviewed drift that bypasses every gate. Three mandatory rules 
 
 1. **Every finding cites a plan clause.** Quote the section or line the diff violates. A defect you
 cannot cite is not a finding: it is recorded as a question report (`.switchboard/orchestrator/reports/`), never dispatched to a seat as work.
-*Observed failure:* a head reviewed a resolver by confirming the function existed ("matches four existing
-call sites"), rather than checking whether it was the one the plan named. It accepted a dead store and
-propagated that wrong choice into review comments for two subsequent subtasks, turning one local error
-into a three-subtask defect.
+*(See Appendix: 2026-08-16 resolver accepted on existence, not plan-named source)*
 
 2. **Name the defect, never the mechanism.** A dispatch or fix prompt states what is wrong and which
 plan clause it breaks. It does not name the function, file, key, or design the seat should use.
 **The one exception:** where the plan itself names a mechanism, quote the plan verbatim — the plan's own
 words are more specific than the head's paraphrase and carry provenance the head's do not. Do not invent,
 paraphrase, or substitute an unstated mechanism.
-*Observed failure:* on discovering a resolver read a dead store, the head designed a replacement over a
-different source, dispatched it, contradicted that instruction in a follow-up, and then sent a third version.
-Three of four messages were the head's invented design, while the plan had specified the correct path all along.
+*(See Appendix: 2026-08-16 head invented design over plan-specified path)*
 
 3. **Never issue a git verb to a team seat.** No `commit`, `push`, `branch`, `merge`, no exceptions.
 A team commits **once**, as its head, and the reviewer reviews that commit. Coders in a team never commit.
 Plan prose that uses "commit" as sequencing — "as subtask 4's first commit" — is ordering language and must
 be translated before entering a prompt: "do this first, as a separate step, before any deletion."
-*Observed failure:* plan sequencing prose ("as subtask 4's first commit") was copied verbatim into a dispatch
-prompt as "YOUR FIRST COMMIT". The seat committed immediately, sweeping seven subtasks plus unrelated files
-into an unscoped commit on `main` where project git policy strictly forbids unwinding it.
+*(See Appendix: 2026-08-16 "first commit" prose swept seven subtasks into one unscoped commit)*
 
 ---
 
@@ -629,3 +649,36 @@ are modified.
 - **Unattended, deterministic column sweeps** with no agent watching → use the
   `switchboard-orchestration` skill. This skill is driving by a reasoning agent — attended, or
   unattended under §5.6 — not a deterministic sweep.
+
+---
+
+## Appendix: War Stories
+
+These are illustrative anecdotes from observed failure sessions, not operational rules.
+They are collected here so the operational sections (§1–§10) stay focused on what you must
+do now, not on what went wrong once. Each entry is back-referenced from its original section.
+
+### 2026-08-16: Resolver accepted on existence, not plan-named source
+
+A head reviewed a resolver by confirming the function existed ("matches four existing
+call sites"), rather than checking whether it was the one the plan named. It accepted a dead store and
+propagated that wrong choice into review comments for two subsequent subtasks, turning one local error
+into a three-subtask defect.
+
+*Back-reference: §5.5 rule 1 — "Every finding cites a plan clause."*
+
+### 2026-08-16: Head invented design over plan-specified path
+
+On discovering a resolver read a dead store, the head designed a replacement over a
+different source, dispatched it, contradicted that instruction in a follow-up, and then sent a third version.
+Three of four messages were the head's invented design, while the plan had specified the correct path all along.
+
+*Back-reference: §5.5 rule 2 — "Name the defect, never the mechanism."*
+
+### 2026-08-16: "First commit" prose swept seven subtasks into one unscoped commit
+
+Plan sequencing prose ("as subtask 4's first commit") was copied verbatim into a dispatch
+prompt as "YOUR FIRST COMMIT". The seat committed immediately, sweeping seven subtasks plus unrelated files
+into an unscoped commit on `main` where project git policy strictly forbids unwinding it.
+
+*Back-reference: §5.5 rule 3 — "Never issue a git verb to a team seat."*
