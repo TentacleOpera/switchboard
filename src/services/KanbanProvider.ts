@@ -1317,10 +1317,23 @@ export class KanbanProvider implements vscode.Disposable {
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
                 // `state: undefined` would leave the UI on its loading placeholder.
+                //
+                // Surface is `common`, NOT `kanban`: the terminals panel needs these
+                // entries too. A shell opened AFTER a seat was adopted must light its
+                // UFO icon on connect — terminals.js relays updateAutobanConfig to the
+                // shell rail (terminals.js:1175). But wsHub._filterResync keeps only
+                // items whose surface is in the connection's subscription set, and the
+                // terminals panel subscribes to surfaces=terminals,common
+                // (transport.js PANEL_SURFACES_MAP) — a `kanban`-tagged entry is DROPPED
+                // for it, so the icon never lights. `common` is in every panel's set, so
+                // kanban keeps receiving these (it subscribes to common) and terminals
+                // now does too. The live push-on-change path (autobanStateSync /
+                // updateAutobanConfig via this.postMessage) is UNTAGGED and already fans
+                // out to everyone — do not change it.
                 ...(this._autobanState
                     ? [
-                        { type: 'updateAutobanConfig', state: this._autobanState, surface: SURFACES.kanban },
-                        { type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode, surface: SURFACES.kanban },
+                        { type: 'updateAutobanConfig', state: this._autobanState, surface: SURFACES.common },
+                        { type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode, surface: SURFACES.common },
                     ]
                     : []),
             ];

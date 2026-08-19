@@ -1172,6 +1172,18 @@
                 // group vanishes with no error anywhere. No origin guard: this
                 // arrives via the wsHub broadcast rail (like terminalsChanged).
                 reloadTerminalGroups();
+            } else if ((message.type === 'autobanStateSync' || message.type === 'updateAutobanConfig') && message.state) {
+                // Orchestrator seat/armed state, relayed to the shell rail so
+                // its UFO icon can light/dim. Two carriers, same payload shape:
+                // `autobanStateSync` is the live push-on-change (fired by
+                // _postAutobanStateNow in TaskViewerProvider); `updateAutobanConfig`
+                // is the WS resync-on-connect twin (kanbanProvider.getFullState
+                // → updateAutobanConfig with the current _autobanState), so a
+                // shell opened AFTER a seat was adopted receives the state on
+                // connect without any extra endpoint. No origin guard: both
+                // arrive via the wsHub broadcast rail (transport.js unwraps wsHub
+                // frames as MessageEvents with origin ''), like terminalsChanged.
+                relayOrchestratorStateToShell(message.state);
             } else if (message.type === 'panelVisibility' && typeof message.visible === 'boolean') {
                 if (event.origin !== location.origin) { return; }
                 // The shell hides a panel by setting display:none on its IFRAME. This
@@ -1428,6 +1440,22 @@
         window.parent.postMessage({
             type: 'terminalFleetState',
             terminals
+        }, location.origin);
+    }
+
+    /* Relay orchestrator seat/armed state to the shell rail so its UFO icon can
+     * light (active) or dim (inactive). Mirrors postFleetStateToShell's
+     * embedded-frame guard and origin-targeting. The shell handler checks
+     * event.origin === location.origin on its end; this side uses the same
+     * target origin so a foreign framer cannot spoof the relay. */
+    function relayOrchestratorStateToShell(state) {
+        if (window.parent === window) { return; } // not embedded
+        const seat = state.orchestratorSeat || null;
+        window.parent.postMessage({
+            type: 'orchestratorState',
+            active: !!(state.orchestratorSeat || state.orchestratorArmed),
+            armed: !!state.orchestratorArmed,
+            seat: seat ? { terminalName: seat.terminalName || null, adoptedAt: seat.adoptedAt || null } : null
         }, location.origin);
     }
 

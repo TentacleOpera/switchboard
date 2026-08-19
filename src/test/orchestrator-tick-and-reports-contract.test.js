@@ -574,9 +574,18 @@ async function run() {
         );
 
         const provider = read('src/services/TaskViewerProvider.ts');
+        // Assert on the actual PUBLIC declaration. A bare
+        // `provider.includes('buildOrchestratorKickoffPrompt(')` is satisfied by
+        // the OLD private name `_buildOrchestratorKickoffPrompt(` too, so it
+        // would not prove the rename it was edited for. Require the public
+        // declaration AND the absence of the private underscore-prefixed name.
         assert.ok(
-            provider.includes('_buildOrchestratorKickoffPrompt('),
-            'TaskViewerProvider does not extract _buildOrchestratorKickoffPrompt'
+            /public\s+async\s+buildOrchestratorKickoffPrompt\(/.test(provider),
+            'TaskViewerProvider does not declare public async buildOrchestratorKickoffPrompt('
+        );
+        assert.ok(
+            !/_buildOrchestratorKickoffPrompt\(/.test(provider),
+            'TaskViewerProvider still contains _buildOrchestratorKickoffPrompt( — the private name the rename removed'
         );
         const occurrences = (provider.match(/no session file exists/g) || []).length;
         assert.strictEqual(

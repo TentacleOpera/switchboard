@@ -223,10 +223,85 @@
             margin-top: auto;
         }
         /* No fleet yet: the separator would be a hairline pinned above the theme
-           toggle with nothing under it. */
+           toggle with nothing under it. Retained as a defensive fallback even
+           though #strip-terminals now always holds the orchestrator icon
+           (ensureOrchestratorIcon keeps it present) — :only-child rule below
+           covers the persistent-icon case; this covers the theoretical empty
+           container should that ensure ever be bypassed. */
         #strip-terminals:empty {
             border-top: none;
             padding-top: 0;
+        }
+        /* The orchestrator icon is a persistent first child, so :empty no longer
+           matches once it is present — suppress the separator when it is the
+           only child so a lone dimmed UFO does not draw a divider above an empty
+           fleet list. :only-child already implies the container is non-empty, so
+           no :not(:empty) guard is needed (it was redundant). */
+        #strip-terminals > #strip-orchestrator:only-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+
+        /* Orchestrator rail icon — a UFO button at the top of #strip-terminals.
+           The SVG is INLINED into the shell document (not an <img src>), so these
+           rules reach its sub-elements directly. LIT (active): the cyan lights
+           blink (alternating .light-a / .light-b); the saucer, beam, and stars
+           are static — at 28x16px in a narrow vertical rail, positional movement
+           reads as jitter. DIMMED (inactive): everything frozen + faded via
+           opacity+grayscale. The @media (prefers-reduced-motion: reduce) block
+           is the ONLY reduced-motion guard now (the SVG's internal <style> was
+           dropped when it was inlined), so it is load-bearing — do not remove. */
+        #strip-orchestrator {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            padding: 4px 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 4px;
+            background: none;
+            border-left: none;
+            border-right: none;
+            border-top: none;
+            cursor: default;
+        }
+        #strip-orchestrator.orchestrator-dimmed {
+            opacity: 0.35;
+            filter: grayscale(0.8);
+        }
+        /* Dimmed: freeze the blinking lights. This now genuinely works because
+           the SVG is in the same document — the selector reaches .light-a/.light-b
+           inside the inline <svg>. */
+        #strip-orchestrator.orchestrator-dimmed .light-a,
+        #strip-orchestrator.orchestrator-dimmed .light-b {
+            animation: none !important;
+        }
+        #strip-orchestrator.orchestrator-active {
+            cursor: pointer;
+        }
+        /* Lit: the alternating blink. Only the lights animate — no hover bob, no
+           beam pulse, no star twinkle (all dropped per user decision). */
+        #strip-orchestrator.orchestrator-active .light-a {
+            animation: sb-orch-light-a 1.2s steps(2, end) infinite;
+        }
+        #strip-orchestrator.orchestrator-active .light-b {
+            animation: sb-orch-light-b 1.2s steps(2, end) infinite;
+        }
+        @keyframes sb-orch-light-a { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .25; } }
+        @keyframes sb-orch-light-b { 0%, 49% { opacity: .25; } 50%, 100% { opacity: 1; } }
+        #strip-orchestrator .strip-orch-icon {
+            width: 28px;
+            height: 16px;
+            object-fit: contain;
+            pointer-events: none;
+        }
+        /* The ONLY reduced-motion guard — the SVG's internal <style> was dropped
+           when it was inlined, so this rail-level rule is load-bearing. Freezes
+           the blinking lights in both lit and dimmed states. */
+        @media (prefers-reduced-motion: reduce) {
+            #strip-orchestrator .light-a,
+            #strip-orchestrator .light-b {
+                animation: none !important;
+            }
         }
 
         /* Settings cluster at the foot of the rail. The bottom anchor (the lone

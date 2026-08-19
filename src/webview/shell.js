@@ -224,6 +224,247 @@
         tooltipTarget = null;
     }
 
+    /* ── Orchestrator rail icon ─────────────────────────────────────────
+       A UFO button at the top of #strip-terminals that lights (animated cyan
+       lights) when an orchestrator session is active and dims when inactive.
+       Lit click → POST /orchestration/stop (end the session). Dimmed click →
+       POST /orchestration/start: the server decides — if a lead/coder agent is
+       configured it creates a pty terminal and delivers the persona prompt
+       (mode 'terminal'); otherwise it returns the /switchboard launcher text
+       (mode 'clipboard') for the shell to copy. State arrives via
+       `orchestratorState` postMessages relayed from terminals.js (which gets
+       autobanStateSync / updateAutobanConfig over the WS broadcast rail). */
+    let orchestratorActive = false;
+    let orchestratorSeat = null;
+    // In-flight guard for the dimmed-click /orchestration/start fetch. The
+    // server's seat guard cannot help here: the agent adopts the seat seconds
+    // or minutes after the terminal is created, so two rapid clicks both see
+    // an empty seat and spawn a second 'Orchestrator' terminal (renamed to
+    // 'orchestrator-2' by ptyFleetService.create's collision loop). A second
+    // click while a start fetch is pending is a silent no-op — cleared in both
+    // the success and failure paths. No confirmation dialog (CLAUDE.md).
+    let orchestrationStartInFlight = false;
+
+    /* Minimal transient message near the rail. Reuses the body-level
+       tooltip-overlay positioning pattern but auto-dismisses. textContent
+       only — never innerHTML. Declared as a function declaration so the
+       click handler's forward reference is safe (hoisted). */
+    function showStripToast(text) {
+        let toast = document.getElementById('strip-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'strip-toast';
+            toast.style.cssText = 'position:fixed; right:60px; bottom:12px; z-index:9999;'
+                + 'padding:6px 10px; border-radius:4px; background:var(--bg-elev,#222);'
+                + 'color:var(--text,#e0e0e0); font-size:11px; pointer-events:none;'
+                + 'box-shadow:0 2px 8px rgba(0,0,0,0.4); transition:opacity 0.3s;';
+            document.body.appendChild(toast);
+        }
+        toast.textContent = text;
+        toast.style.opacity = '1';
+        clearTimeout(toast._dismissTimer);
+        toast._dismissTimer = setTimeout(() => { toast.style.opacity = '0'; }, 3000);
+    }
+
+    function createOrchestratorIcon() {
+        const btn = document.createElement('button');
+        btn.id = 'strip-orchestrator';
+        btn.type = 'button';
+        btn.className = 'orchestrator-dimmed';
+        btn.setAttribute('aria-label', 'Orchestrator session');
+        btn.dataset.tooltip = 'Operator: inactive — click to start';
+
+        // Inline SVG (not an <img src>) so shell.html's CSS can select into the
+        // icon's sub-elements — the dimmed freeze and reduced-motion rules are
+        // inert when the SVG is a separate document. The SVG's internal <style>
+        // block is dropped; all animation rules live in shell.html. ids are
+        // prefixed (sb-orch-*) to avoid document-wide collisions now that they
+        // are global. aria-hidden="true" + no role/aria-labelledby so the icon
+        // does not double-announce beside the button's aria-label. Class names
+        // on sub-elements (.ufo, .beam, .light-a, .light-b, .star-a, .star-b)
+        // are kept — shell.html's selectors depend on them.
+        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" aria-hidden="true" shape-rendering="crispEdges" class="strip-orch-icon">'
+            + '<defs>'
+            + '<filter id="sb-orch-cyan-glow" x="-100%" y="-100%" width="300%" height="300%">'
+            + '<feGaussianBlur stdDeviation="3" result="blur"/>'
+            + '<feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>'
+            + '</filter>'
+            + '<linearGradient id="sb-orch-beam" x1="0" y1="0" x2="0" y2="1">'
+            + '<stop offset="0" stop-color="#00e5ff" stop-opacity=".22"/>'
+            + '<stop offset="1" stop-color="#00e5ff" stop-opacity="0"/>'
+            + '</linearGradient>'
+            + '</defs>'
+            + '<g fill="#00e5ff" filter="url(#sb-orch-cyan-glow)">'
+            + '<rect class="star-a" x="40" y="36" width="4" height="4"/>'
+            + '<rect class="star-b" x="268" y="54" width="4" height="4"/>'
+            + '<rect class="star-b" x="74" y="126" width="3" height="3"/>'
+            + '<rect class="star-a" x="248" y="132" width="3" height="3"/>'
+            + '</g>'
+            + '<g class="beam">'
+            + '<path d="M128 104h64l32 68H96z" fill="url(#sb-orch-beam)"/>'
+            + '<rect x="112" y="168" width="96" height="4" fill="#00e5ff" opacity=".16"/>'
+            + '</g>'
+            + '<g class="ufo">'
+            + '<g filter="url(#sb-orch-cyan-glow)" opacity=".35" fill="#00e5ff">'
+            + '<rect x="112" y="50" width="96" height="4"/>'
+            + '<rect x="88" y="70" width="144" height="20"/>'
+            + '<rect x="104" y="90" width="112" height="12"/>'
+            + '</g>'
+            + '<path d="M136 42h48v4h12v8h8v16h-88V54h8v-8h12z" fill="#1d2323"/>'
+            + '<rect x="136" y="46" width="48" height="4" fill="#5e6666"/>'
+            + '<rect x="124" y="54" width="72" height="16" fill="#363a3a"/>'
+            + '<rect x="132" y="50" width="56" height="4" fill="#a0a6a6"/>'
+            + '<rect x="136" y="54" width="48" height="12" fill="#0b0f0f"/>'
+            + '<rect x="144" y="54" width="32" height="4" fill="#00363a"/>'
+            + '<rect x="152" y="58" width="24" height="4" fill="#00e5ff" opacity=".55"/>'
+            + '<rect x="104" y="66" width="112" height="4" fill="#5e6666"/>'
+            + '<rect x="88" y="70" width="144" height="8" fill="#363a3a"/>'
+            + '<rect x="72" y="78" width="176" height="12" fill="#1d2323"/>'
+            + '<rect x="88" y="90" width="144" height="8" fill="#0b0f0f"/>'
+            + '<rect x="104" y="98" width="112" height="4" fill="#363a3a"/>'
+            + '<rect x="120" y="102" width="80" height="4" fill="#1d2323"/>'
+            + '<rect x="72" y="82" width="16" height="4" fill="#5e6666"/>'
+            + '<rect x="232" y="82" width="16" height="4" fill="#5e6666"/>'
+            + '<g fill="#00e5ff" filter="url(#sb-orch-cyan-glow)">'
+            + '<rect class="light-a" x="96" y="82" width="12" height="8"/>'
+            + '<rect class="light-b" x="120" y="86" width="12" height="8"/>'
+            + '<rect class="light-a" x="144" y="88" width="12" height="8"/>'
+            + '<rect class="light-b" x="168" y="88" width="12" height="8"/>'
+            + '<rect class="light-a" x="192" y="86" width="12" height="8"/>'
+            + '<rect class="light-b" x="216" y="82" width="12" height="8"/>'
+            + '</g>'
+            + '<rect x="156" y="98" width="8" height="8" fill="#00e5ff" filter="url(#sb-orch-cyan-glow)"/>'
+            + '</g>'
+            + '</svg>';
+
+        btn.addEventListener('click', () => {
+            if (orchestratorActive) {
+                // End immediately — no confirmation. The user is in control.
+                btn.dataset.tooltip = 'Orchestrator: stopping…';
+                fetch('/orchestration/stop', { method: 'POST', credentials: 'same-origin' })
+                    .then(res => res.json())
+                    .then(result => {
+                        if (result.success) {
+                            showStripToast('Orchestrator session ended');
+                        } else {
+                            showStripToast('Failed to stop orchestrator: ' + (result.error || 'unknown'));
+                        }
+                    })
+                    .catch(err => {
+                        showStripToast('Failed to stop orchestrator: ' + err.message);
+                    });
+            } else {
+                // Dimmed click: start the operator. The server decides the path
+                // — terminal (agent configured) or clipboard fallback (no agent).
+                // In-flight guard: a second click while a start fetch is pending
+                // is a silent no-op (double-click protection — see the module
+                // flag's comment for why the server seat guard cannot help).
+                if (orchestrationStartInFlight) { return; }
+                orchestrationStartInFlight = true;
+                btn.dataset.tooltip = 'Operator: starting…';
+                fetch('/orchestration/start', { method: 'POST', credentials: 'same-origin' })
+                    .then(res => res.json())
+                    .then(result => {
+                        if (result.success && result.mode === 'terminal') {
+                            showStripToast('Operator started — check the Orchestrator terminal');
+                        } else if (result.success && result.mode === 'clipboard') {
+                            // No agent configured — copy the prompt to clipboard.
+                            const text = result.prompt || 'Run /switchboard workflow to start orchestration';
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(text).then(() => {
+                                    showStripToast('Copied: ' + text);
+                                }).catch(() => {
+                                    showStripToast(text);
+                                });
+                            } else {
+                                showStripToast(text);
+                            }
+                        } else {
+                            showStripToast('Failed to start operator: ' + (result.error || 'unknown'));
+                        }
+                        // Restore the inactive tooltip after the attempt resolves
+                        // so a later hover is not stuck on 'starting…'.
+                        btn.dataset.tooltip = 'Operator: inactive — click to start';
+                    })
+                    .catch(err => {
+                        showStripToast('Failed to start operator: ' + err.message);
+                        btn.dataset.tooltip = 'Operator: inactive — click to start';
+                    })
+                    .finally(() => {
+                        orchestrationStartInFlight = false;
+                    });
+            }
+        });
+
+        // Insert as the first child of #strip-terminals. If the fleet container
+        // does not exist yet, create it and position it before the bottom
+        // cluster (settings/theme toggle) — mirroring renderTerminalSection's
+        // container-creation logic so a later fleet push reuses the same
+        // container instead of creating a second one.
+        let container = document.getElementById('strip-terminals');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'strip-terminals';
+            container.role = 'group';
+            container.setAttribute('aria-label', 'Fleet terminals');
+            const firstBottom = strip.querySelector('.strip-placement-bottom');
+            const themeBtn = strip.querySelector('.theme-toggle-btn');
+            if (firstBottom) {
+                strip.insertBefore(container, firstBottom);
+            } else if (themeBtn) {
+                strip.insertBefore(container, themeBtn);
+            } else {
+                strip.appendChild(container);
+            }
+        }
+        container.insertBefore(btn, container.firstChild);
+        // The fleet container owns the bottom anchor in CSS; the orchestrator
+        // icon rides above it. Reconcile so the anchor stays on the container.
+        applyBottomAnchor();
+        return btn;
+    }
+
+    /* Ensure the orchestrator rail icon exists independently of any
+       `orchestratorState` postMessage. renderOrchestratorIcon is the ONLY
+       other creator and it only runs when a state message arrives — on a cold
+       shell load with no autoban state change, NO icon would exist at all and
+       the start control would be unreachable. This is called (a) once during
+       shell init after the rail/manifest is built, and (b) at the END of
+       renderTerminalSection in BOTH branches — including the early-return
+       `!frames.has('terminals')` branch, which removes the container (and the
+       icon with it). Idempotent: a no-op when the icon already exists. */
+    function ensureOrchestratorIcon() {
+        if (document.getElementById('strip-orchestrator')) { return; }
+        createOrchestratorIcon();
+    }
+
+    function renderOrchestratorIcon(state) {
+        orchestratorActive = !!state.active;
+        orchestratorSeat = state.seat || null;
+        // Only update classes/tooltip on an icon that already exists —
+        // ensureOrchestratorIcon() owns creation (init + renderTerminalSection).
+        // Creating here would re-introduce the cold-load gap this function
+        // cannot close: it only runs when a state message arrives.
+        const icon = document.getElementById('strip-orchestrator');
+        if (!icon) { return; }
+        if (!orchestratorActive) {
+            icon.classList.remove('orchestrator-active');
+            icon.classList.add('orchestrator-dimmed');
+            icon.dataset.tooltip = 'Operator: inactive — click to start';
+            return;
+        }
+        icon.classList.remove('orchestrator-dimmed');
+        icon.classList.add('orchestrator-active');
+        const since = orchestratorSeat && orchestratorSeat.adoptedAt
+            ? new Date(orchestratorSeat.adoptedAt).toLocaleTimeString()
+            : '';
+        const where = orchestratorSeat && orchestratorSeat.terminalName
+            ? ' on ' + orchestratorSeat.terminalName : '';
+        icon.dataset.tooltip = since
+            ? 'Orchestrator: active' + where + ' since ' + since + ' — click to end session'
+            : 'Orchestrator: active — click to end session';
+    }
+
     // Delegation via mouseover/mouseout (these bubble; mouseenter/mouseleave do
     // not). The relatedTarget containment check stops flicker when moving
     // between a button and its own glyph child.
@@ -440,6 +681,11 @@
             // moves the anchor onto the Setup icon when one is present, so the
             // cluster reads `Setup | Toggle Theme` at the foot of the rail.
             applyBottomAnchor();
+            // The container.remove() above took the orchestrator icon with it.
+            // Re-create it so the rail control survives a terminals-panel-less
+            // rebuild — the start control must stay reachable without a state
+            // message (CRITICAL 1 regression guard).
+            ensureOrchestratorIcon();
             return;
         }
 
@@ -472,7 +718,15 @@
         }
         applyBottomAnchor();
 
-        container.innerHTML = '';
+        // Rebuild only the fleet terminal buttons. #strip-orchestrator (managed
+        // by renderOrchestratorIcon) is a first child of this container and
+        // MUST survive the rebuild — a plain innerHTML='' would wipe it every
+        // 5s poll and leave the rail dark until the next autoban state push.
+        // The orchestrator button carries no .strip-term-btn class, so removing
+        // those children is equivalent to the old wipe minus the orchestrator.
+        for (const child of Array.from(container.querySelectorAll(':scope > .strip-term-btn'))) {
+            child.remove();
+        }
         if (!Array.isArray(terminals) || terminals.length === 0) {
             pulsedDoneStamps.clear();
             return;
@@ -614,6 +868,11 @@
         for (const name of Array.from(pulsedDoneStamps.keys())) {
             if (!seenNames.has(name)) { pulsedDoneStamps.delete(name); }
         }
+        // The selective button removal above preserves #strip-orchestrator, but a
+        // future edit to this rebuild could still drop it. Ensure it exists at the
+        // end of every fleet rebuild so the rail control never vanishes without a
+        // state message (CRITICAL 1 regression guard).
+        ensureOrchestratorIcon();
     }
 
     function requestFleetState() {
@@ -675,6 +934,14 @@
 
         renderTerminalSection([]);
 
+        // The orchestrator rail icon must exist on a cold load with no
+        // orchestratorState message — without this the start control is
+        // unreachable until a seat changes. renderTerminalSection's own
+        // ensureOrchestratorIcon() call covers its branches, but the very first
+        // build goes through renderManifest before any fleet push, so ensure
+        // here too (idempotent).
+        ensureOrchestratorIcon();
+
         // Ask the terminals iframe for its fleet state once it's loaded. The iframe's
         // own postFleetStateToShell runs on init and on a 5s poll, but a transient
         // fetch failure in the iframe can leave the rail dark. This request ensures
@@ -728,6 +995,12 @@
         } else if (data.type === 'terminalFleetState' && Array.isArray(data.terminals)) {
             if (event.origin !== location.origin) { return; }
             renderTerminalSection(data.terminals);
+        } else if (data.type === 'orchestratorState') {
+            // Relayed from terminals.js (autobanStateSync / updateAutobanConfig
+            // over the WS broadcast rail). Origin-guarded: the relay targets
+            // location.origin, so a foreign framer cannot light the icon.
+            if (event.origin !== location.origin) { return; }
+            renderOrchestratorIcon(data);
         } else if (data.type === 'popoutTerminal' && typeof data.name === 'string') {
             if (event.origin !== location.origin) { return; }
             const slug = data.name.replace(/[^A-Za-z0-9_-]/g, '_');

@@ -396,7 +396,7 @@ interface LocalApiServerOptions {
      * when the user explicitly asks to arm automation. Optional — absent in
      * headless/test harnesses (returns 503).
      */
-    orchestrationStart?: (workspaceRoot?: string) => Promise<void>;
+    orchestrationStart?: (workspaceRoot?: string) => Promise<{ success: boolean; mode?: string; prompt?: string; error?: string }>;
     /**
      * Disarm the orchestrator — sets the automation enabled flag to false,
      * persists state, and broadcasts. Does NOT stop the autoban engine.
@@ -3197,9 +3197,29 @@ export class LocalApiServer {
         try {
             const body = await this._parseJsonBody(req);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
-            await orchestrationStart(workspaceRoot);
+            const result = await orchestrationStart(workspaceRoot);
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, message: 'Orchestrator seated and awaiting confirmation — pre-flight interview delivered. Call POST /orchestration/confirm after the user answers to arm.' }));
+            // The message is a script caller's only semantic signal, so it MUST
+            // match what actually happened — not a fixed string. Three cases:
+            //   - failure (result.success === false): say it failed
+            //   - clipboard (no agent configured): no terminal was created; the
+            //     prompt is returned for the caller to run
+            //   - terminal (default): the existing verbatim string — a script
+            //     scanning for /awaiting confirmation/i (see
+            //     orchestrator-tick-and-reports-contract.test.js) still matches.
+            // The spread `...(result || {})` comes AFTER `message` so result.success
+            // still overrides the default success:true, and a result-supplied
+            // message (none today) would win too.
+            const message = result && result.success === false
+                ? 'Orchestration start failed: ' + (result.error || 'unknown error') + '. No terminal was seated.'
+                : result && result.mode === 'clipboard'
+                    ? 'No terminal created — clipboard mode. The /switchboard launcher prompt is returned for the caller to run; no agent was seated. Call POST /orchestration/confirm after the user answers to arm.'
+                    : 'Orchestrator seated and awaiting confirmation — pre-flight interview delivered. Call POST /orchestration/confirm after the user answers to arm.';
+            res.end(JSON.stringify({
+                success: true,
+                message,
+                ...(result || {})
+            }));
         } catch (err) {
             console.error('[LocalApiServer] orchestrationStart error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });

@@ -35,6 +35,7 @@ import { PtyFleetService, PTY_IDE_NAME } from './ptyFleetService';
 import { resolveTeamScopedRoleTerminal } from '../services/teamWiring';
 import { isPtyAvailable } from './ptyBackend';
 import { SURFACES } from '../services/wsHub';
+import { ORCHESTRATOR_TERMINAL_NAME } from '../services/autobanState';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 import { TerminalWsGateway } from './terminalWsGateway';
 import { sendPromptToPty, clearPty, modelPty, writeSlashCommand } from './ptyPromptDelivery';
@@ -2363,6 +2364,95 @@ Each plan file must include:
         allowSecretWritesOverHttp: true,
         taskViewerVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             taskViewerProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
+        // POST /orchestration/stop — disarm the orchestrator, clear the seat,
+        // persist, broadcast, and archive the session file. The method is
+        // public on TaskViewerProvider and needs no VS Code APIs, so the
+        // standalone host can wire it directly. This unblocks the shell rail's
+        // UFO icon click-to-stop (the browser UI's only orchestrator off
+        // switch); without it the endpoint returns 503 in standalone mode.
+        orchestrationStop: async () => {
+            await taskViewerProvider.stopOrchestratorFromKanban(workspaceRoot);
+        },
+        // POST /orchestration/start — the shell rail's dimmed UFO click. Two
+        // paths, decided by whether a lead/coder agent is configured:
+        //   - Terminal path: create a pty terminal named 'Orchestrator', boot the
+        //     lead/coder CLI into it, wait for shell readiness, then deliver the
+        //     persona prompt (buildOrchestratorKickoffPrompt). The agent in the
+        //     terminal reads switchboard-orchestrator/SKILL.md, runs the
+        //     pre-flight, and adopts the seat itself via POST /orchestration/adopt.
+        //     The server does NOT seat the orchestrator — the agent does, after
+        //     reading the prompt. Mirrors startOrchestratorFromKanban's flow.
+        //   - Clipboard fallback (no agent configured, or pty unavailable): NO
+        //     terminal is created. Returns { mode:'clipboard', prompt } so the
+        //     shell copies the /switchboard launcher text. The agent that
+        //     receives it follows the chat-agent launcher flow.
+        // A seat guard mirrors the extension host: if a seat already exists with
+        // a live terminal, the persona prompt is redelivered to it instead of
+        // spawning a second terminal (double-click protection).
+        orchestrationStart: async (workspaceRootArg?: string) => {
+            const root = workspaceRootArg || workspaceRoot;
+            // 1. Seat guard: deliver to an already-seated, live terminal.
+            const seat = (taskViewerProvider as any)?._autobanState?.orchestratorSeat;
+            if (seat?.terminalName) {
+                const handle = ptyFleetService.get(seat.terminalName);
+                if (handle && handle.status === 'active') {
+                    try {
+                        const { prompt } = await taskViewerProvider.buildOrchestratorKickoffPrompt(root, undefined);
+                        await deliverPrompt(handle, prompt, getPromptDeliveryOptions());
+                        return { success: true, mode: 'terminal' };
+                    } catch (err: any) {
+                        return { success: false, mode: 'terminal', error: err instanceof Error ? err.message : String(err) };
+                    }
+                }
+                // Seat recorded but terminal not live — fall through to create a
+                // fresh terminal rather than reporting failure (recovers a dead
+                // seat, matching the plan's robustness intent).
+            }
+            // 2. Read the lead/coder startup command (lead is most capable).
+            const startupCommands = await taskViewerProvider.getStartupCommands(root);
+            const startupCommand = startupCommands['lead'] || startupCommands['coder'] || '';
+            if (startupCommand && startupCommand.trim() && ptyReady) {
+                // 3. Double-click protection: the seat guard above reads
+                //    _autobanState.orchestratorSeat, but the server NEVER seats —
+                //    the agent adopts later via POST /orchestration/adopt, seconds
+                //    or minutes after start. So two rapid clicks both see an empty
+                //    seat, and ptyFleetService.create renames on name collision
+                //    (while this.terminals.has(name)) producing 'Orchestrator' AND
+                //    'orchestrator-2' — two agents each told they are the
+                //    orchestrator. Before creating, check for an existing LIVE
+                //    terminal by the canonical name; if found, redeliver the
+                //    persona prompt to it instead of spawning a second one.
+                //    ORCHESTRATOR_TERMINAL_NAME is imported from autobanState.ts
+                //    rather than hardcoded to avoid drift vs the extension host.
+                const existing = ptyFleetService.get(ORCHESTRATOR_TERMINAL_NAME);
+                if (existing && existing.status === 'active') {
+                    try {
+                        const { prompt } = await taskViewerProvider.buildOrchestratorKickoffPrompt(root, undefined);
+                        await deliverPrompt(existing, prompt, getPromptDeliveryOptions());
+                        return { success: true, mode: 'terminal' };
+                    } catch (err: any) {
+                        return { success: false, mode: 'terminal', error: err instanceof Error ? err.message : String(err) };
+                    }
+                }
+                // 4. Terminal path. create() injects the boot command after its
+                //    internal SHELL_READINESS_DELAY_MS; the extra 1500ms mirrors
+                //    startOrchestratorFromKanban's post-create wait so the CLI
+                //    is ready to receive the persona prompt.
+                try {
+                    const handle = await ptyFleetService.create(
+                        'orchestrator', ORCHESTRATOR_TERMINAL_NAME, root, undefined, undefined, startupCommand.trim()
+                    );
+                    await new Promise(r => setTimeout(r, 1500));
+                    const { prompt } = await taskViewerProvider.buildOrchestratorKickoffPrompt(root, undefined);
+                    await deliverPrompt(handle, prompt, getPromptDeliveryOptions());
+                    return { success: true, mode: 'terminal' };
+                } catch (err: any) {
+                    return { success: false, mode: 'terminal', error: err instanceof Error ? err.message : String(err) };
+                }
+            }
+            // 5. Clipboard fallback: NO terminal created.
+            return { success: true, mode: 'clipboard', prompt: 'Run /switchboard workflow to start orchestration' };
+        },
         createExternalTeam: async (wsRoot: string, template: string, headName: string, featureId?: string) => {
             // Standalone is single-root: `db` (module scope) is the only
             // KanbanDatabase. `wsRoot` is accepted for interface parity with the

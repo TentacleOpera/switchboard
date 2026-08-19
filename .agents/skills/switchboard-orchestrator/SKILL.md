@@ -227,6 +227,22 @@ When the user confirms (or alters and confirms) the goal:
    commonly because `session.md` is absent), fix the cause and retry — do not
    begin ticking on a session that never armed.
 
+   **Arming is server-side only.** `POST /orchestration/confirm` sets
+   `orchestratorArmed` and applies the oversight worktree topology on the
+   server. It does **not** keep the agent process alive. Under self-wake mode
+   the agent itself is the only thing that wakes it — the server will not.
+   Ending your turn here without a wake mechanism running leaves the session
+   immediately dormant: no tick will ever fire, and every report the team
+   generates will sit unread.
+
+4. **Start the wake mechanism (self-wake mode only).** Before processing the
+   first tick, start the background wake loop per `## Self-Wake` — either the
+   provided `while true; do sleep N; done` script in a background terminal, or
+   your runtime's native scheduling equivalent. If you end your turn without
+   this running, the session is dead on arrival. Under handoff mode, skip this
+   step and proceed to `## The handoff sequence`, which exits the agent by
+   design.
+
 ```bash
 # Resolve BASE (see ## Port Discovery). A failed resolve means the board is
 # down — never that no terminals exist. Stop; do not fall through.
@@ -299,6 +315,11 @@ worse home for an essay than a terminal is — keep the report to the shape
 above and exit.
 
 ## Self-Wake
+
+> **This mechanism must be started as step 4 of the confirmation sequence** (see
+> `## On confirmation`), not discovered later. Ending the confirmation flow
+> without it running is the single most common way an orchestrator session dies
+> silently.
 
 When operating in self-wake or persistent orchestration mode, the orchestrator
 manages its own wakeup cycle using one of two mechanisms:
@@ -605,6 +626,8 @@ subtask -> integration -> main convergence.
 ## Session Completion
 
 When every feature is merged or escalated: write a final session-log summary (merged features, escalations outstanding). Stop the self-wake background script. The session is complete.
+
+**Ending the session early:** call `POST /orchestration/stop` to disarm and clear the seat. The user can also click the UFO icon in the shell rail to end the session from the browser UI.
 
 ## Escalation Boundary
 - **To the human (via session log):** planner-stage questions/warnings, merge conflicts

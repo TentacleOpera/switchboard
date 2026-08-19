@@ -3535,8 +3535,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             },
             orchestrationStart: async (wsRoot) => {
                 // POST /kanban/orchestration/start — an HTTP caller by definition, so the
-                // surface is known statically here. There is no body to stamp.
+                // surface is known statically here. There is no body to stamp. Returns a
+                // result object so the shell rail can branch on `mode` (terminal vs
+                // clipboard fallback). The extension host always takes the terminal path
+                // (startOrchestratorFromKanban creates/reuses the Orchestrator terminal).
                 await this.startOrchestratorFromKanban(wsRoot, undefined);
+                return { success: true, mode: 'terminal' };
             },
             orchestrationStop: async () => {
                 await this.stopOrchestratorFromKanban();
@@ -10783,7 +10787,7 @@ Each plan file must include:
      * the seat-a-terminal door injects it, the adopt door returns it over HTTP.
      * Duplicating this branch is how the two doors drift.
      */
-    private async _buildOrchestratorKickoffPrompt(
+    public async buildOrchestratorKickoffPrompt(
         root: string,
         initiatorProject?: string | null
     ): Promise<{ mode: 'interview' | 'resume' | 'stale-session' | 'no-persona'; prompt: string }> {
@@ -10852,7 +10856,7 @@ Each plan file must include:
         // seat when it is reachable, and say so when it is not.
         const adopted = this._autobanState.orchestratorSeat;
         if (adopted?.terminalName) {
-            const { prompt } = await this._buildOrchestratorKickoffPrompt(root, initiatorProject);
+            const { prompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject);
             const sent = await this._dispatchExecuteMessage(
                 root, adopted.terminalName, prompt, { orchestrationKickoff: true }, 'sidebar'
             );
@@ -11001,7 +11005,7 @@ Each plan file must include:
         // and is automation armed (autobanState.enabled)? The arming half moved to
         // confirmOrchestrationSession (called by POST /orchestration/confirm after the
         // user answers the pre-flight). See the ## Pre-flight section of the persona skill.
-        const { prompt: kickoffPrompt } = await this._buildOrchestratorKickoffPrompt(root, initiatorProject);
+        const { prompt: kickoffPrompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject);
         // Small delay so a freshly-created terminal's CLI is ready to receive.
         if (createdNew) { await new Promise(r => setTimeout(r, 1500)); }
         const kickoffSent = await this._dispatchExecuteMessage(
@@ -11067,7 +11071,7 @@ Each plan file must include:
         await this._persistAutobanState();
         this._postAutobanStateNow();
 
-        const { mode, prompt } = await this._buildOrchestratorKickoffPrompt(root, initiatorProject);
+        const { mode, prompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject);
         return { success: true, mode, prompt, seat, liveDelivery: !!resolvedName, ...(note ? { note } : {}) };
     }
 
