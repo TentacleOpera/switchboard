@@ -155,3 +155,6 @@ In `createHeadWithDelegates` (around line 12041-12054), add `teamName: spec.team
 4. **Manual check (standalone host, regression).** Start a Coding team via the standalone host (`npx` / CLI). Confirm the reviewer is still `Coding-reviewer` — the standalone path is unchanged and must not regress.
 
 > **Note:** Compilation and automated test execution are skipped for this run per session directives. The checks above remain the plan's verification contract for the implementing coder; they are simply not executed now.
+
+## Completion Report
+Implemented `teamName` forwarding on the extension host during agent group creation so that shared delegates derive their name as `<teamName>-<role>` (e.g. `Coding-reviewer`) rather than falling back to `team-<role>`. Added `teamName?: string` to `InstantiateAgentGroupOptions.createHeadWithDelegates` and passed `teamName: group?.name` in `src/services/agentGroupInstantiation.ts`, forwarded `teamName: spec.teamName` in `src/services/TaskViewerProvider.ts`, and added regression pin tests in `src/test/team-scoped-role-routing.test.js`. Files changed: `src/services/agentGroupInstantiation.ts`, `src/services/TaskViewerProvider.ts`, `src/test/team-scoped-role-routing.test.js`, and this plan file. No issues encountered.

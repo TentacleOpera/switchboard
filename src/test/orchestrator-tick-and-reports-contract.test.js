@@ -159,6 +159,75 @@ async function run() {
         assert.ok(!/Report what you find in plain terms/.test(persona), 'the six checks still instruct the agent to narrate every check');
     });
 
+    // The Aug 17 rewrite deleted whole load-bearing sections and nothing caught it,
+    // which is the failure the self-wake plan exists to repair. These four checks are
+    // the gate that repair asked for: every rule restored or added by that plan is
+    // asserted here, so the next rewrite that drops one fails CI instead of shipping.
+    await check('persona dispatches to the lead only — never to an individual coder terminal', () => {
+        assert.ok(
+            /never call `POST \/kanban\/dispatch`/i.test(persona),
+            'persona does not forbid POST /kanban/dispatch — the orchestrator routes straight to Coding-coder-1 and the lead is bypassed'
+        );
+        assert.ok(
+            /kanban\/queue\/next/.test(persona) && /ptySendPrompt/.test(persona),
+            'persona names no permitted lead-dispatch verb to replace the forbidden one'
+        );
+    });
+
+    await check('persona resolves the port through a health check, and says what a failure means', () => {
+        assert.ok(/\n## Port Discovery\n/.test(persona), 'persona has no ## Port Discovery section');
+        assert.ok(
+            /A port file is not liveness/i.test(persona),
+            'persona does not state that a port file is not liveness — it trusts a stale port and hits a dead socket'
+        );
+        assert.ok(
+            /does not mean no terminals exist/i.test(persona),
+            'persona does not state that a failed resolve means the board is down, not that the fleet is empty — that misdiagnosis is the reported bug'
+        );
+        assert.ok(
+            !/PORT=\$\(cat [^)]*api-server-port\.txt\)/.test(persona),
+            'a bare `cat` of the port file survives in the persona — it resolves a stale port with no /health probe'
+        );
+    });
+
+    await check('self-wake names a real interval source and owns the clearing it no longer receives', () => {
+        assert.ok(/\n## Self-Wake\n/.test(persona), 'persona has no ## Self-Wake section — the agent has no way to wake itself');
+        // The interval lives in VS Code workspaceState under the `autoban.state` key.
+        // It is not a file and no endpoint returns it; naming a path sends the agent
+        // to a `cat` that always fails.
+        assert.ok(
+            /There is no\s*`?\.switchboard\/autoban\.state`? file/.test(persona),
+            'persona does not say .switchboard/autoban.state is not a file — the agent cats a path that never existed and stalls looking for its interval'
+        );
+        // Strip the disclaimer above before forbidding the path, so the sentence that
+        // denies the file does not read as an instruction to open it.
+        assert.ok(
+            !/\.switchboard\/autoban\.state/.test(
+                persona.replace(/There is no\s*`?\.switchboard\/autoban\.state`? file/g, '')
+            ),
+            'persona points the agent at .switchboard/autoban.state — no such file exists; the wake interval is not readable from disk'
+        );
+        assert.ok(
+            /there is no deliverer to do it for you/i.test(persona),
+            'persona still claims every wake clears the terminal — a self-wake `echo WAKE` clears nothing, so the agent must be told it owns the clearing'
+        );
+        assert.ok(
+            /you are the deliverer/i.test(persona),
+            'the drop-not-queue rule is still attributed only to the host — under self-wake the sleep loop fires mid-pass and nobody drops it'
+        );
+    });
+
+    await check('the handoff bullet describes what the queue watch actually does', () => {
+        assert.ok(
+            !/queue.watch[^.]{0,80}dispatches subsequent cards/i.test(persona),
+            'persona claims the queue watch dispatches for the lead — it sends one nudge telling the lead to call POST /kanban/queue/next itself (PlanIngestionEngine queue sweep), then escalates once and stops'
+        );
+        assert.ok(
+            /lead-paced and queue-watched/.test(persona),
+            'persona no longer states the handoff pipeline is lead-paced — the lead self-paces and the watch is only a backstop'
+        );
+    });
+
     // ─── 2. The Miscellaneous sweep, in BOTH trees ───────────────────────────
     const mdFiles = [];
     const walk = (dir) => {
@@ -252,15 +321,19 @@ async function run() {
         );
     });
 
-    await check('step 2 hands off to a pointer that ships — not a gitignored plan file', () => {
-        assert.ok(/orchestration\/start/.test(launcher), 'step 2 does not call POST /orchestration/start');
+    await check('step 2 adopts this session — it does not seat a second terminal', () => {
+        assert.ok(/orchestration\/adopt/.test(launcher), 'step 2 does not call POST /orchestration/adopt');
         assert.ok(
-            !/orchestration-starts-as-a-conversation\.md/.test(launcher),
-            'the launcher points at a .switchboard/plans/ file — gitignored, not distributed, unreadable to the agent following the skill'
+            !/orchestration\/start/.test(launcher.replace(/Never call[\s\S]{0,200}/g, '')),
+            'step 2 still calls POST /orchestration/start — that door creates a separate Orchestrator terminal'
         );
         assert.ok(
             /does not arm|Does not arm/.test(launcher),
-            'the launcher must say POST /orchestration/start does not arm — otherwise it reads as the one-click arm it replaced'
+            'the launcher must say adopt does not arm — otherwise it reads as a one-click arm'
+        );
+        assert.ok(
+            !/orchestration-starts-as-a-conversation\.md/.test(launcher),
+            'the launcher points at a .switchboard/plans/ file — gitignored, not distributed'
         );
     });
 
@@ -480,6 +553,10 @@ async function run() {
     await check('both doors land on the same seat-and-interview method', () => {
         const api = read('src/services/LocalApiServer.ts');
         assert.ok(
+            /pathname === '\/orchestration\/adopt' && req\.method === 'POST'/.test(api),
+            'POST /orchestration/adopt is not routed in LocalApiServer'
+        );
+        assert.ok(
             /pathname === '\/orchestration\/confirm' && req\.method === 'POST'/.test(api),
             'POST /orchestration/confirm is not routed — the pre-flight would talk and never arm'
         );
@@ -494,6 +571,17 @@ async function run() {
         assert.ok(
             /session\.md[\s\S]{0,400}session-log\.md/.test(api),
             'GET /orchestrator/session-log does not prefer session.md with a legacy fallback — the shipped endpoint returns \'\' forever on unmigrated installs'
+        );
+
+        const provider = read('src/services/TaskViewerProvider.ts');
+        assert.ok(
+            provider.includes('_buildOrchestratorKickoffPrompt('),
+            'TaskViewerProvider does not extract _buildOrchestratorKickoffPrompt'
+        );
+        const occurrences = (provider.match(/no session file exists/g) || []).length;
+        assert.strictEqual(
+            occurrences, 1,
+            `the interview sentinel string ('no session file exists') occurs ${occurrences} times in TaskViewerProvider — expected exactly 1 (the extraction's whole purpose is that the branch is not duplicated)`
         );
     });
 

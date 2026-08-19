@@ -272,3 +272,13 @@ None apply. This is a client-side DOM change inside `src/webview/kanban.html` (a
 ---
 
 **Recommendation:** Complexity 4 → Send to Coder. Single-file, reuses an existing roster pattern, but the load-bearing positional-reader fix and the unknown-role `preserve` path are not intern-trivial — a coder should own the save-path regression risk.
+
+## Implementation Summary
+
+Implemented role `<select>` dropdown for team member rows and head role picker using a shared `teamsTabRoleOptions` helper populated from `BUILT_IN_AGENT_LABELS` and custom agents. Updated member row fields (`role`, `count`, `scope`, `relationship`) to use explicit `data-field` attributes and migrated `teamsTabSaveAgentGroup` to read fields by `data-field` instead of fragile positional indexing. Preserved unknown or legacy stored roles using a `(not configured)` fallback option to prevent accidental overwrites during saves.
+
+**Files Changed:**
+- `src/webview/kanban.html`
+
+**Issues Encountered:**
+- None. DOM parsing and data-field addressing verified.

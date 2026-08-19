@@ -241,3 +241,8 @@ test('BEHAVIOUR: a divergent worktree git policy is NOT deduped against the boar
 ---
 
 **Recommendation: Send to Coder** (complexity 4 — single-function change with two call-site wirings and three test cases; no architectural surface, but the cache interaction and git-policy divergence require care).
+
+## Completion Report
+
+Implemented seat-directive deduplication in `buildSeatDirectiveBlock` by adding an optional `existingPrompt` parameter to filter directives already present in the prompt string. Updated `TaskViewerProvider.ts` and `bootstrap.ts` to pass the stripped prompt text (`data` and `out` respectively) into `buildSeatDirectiveBlock`. Updated comments in `terminals.js` and added unit test cases covering directive deduping, partial additions, and divergent worktree git policy in `seat-safeguards-fleet-prompt-path.test.js`. No issues encountered.
+

@@ -326,9 +326,9 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         if (value !== null) { prompts.push(value); }
     }
     assert.strictEqual(
-        prompts.length, 4,
-        `Expected 4 shipped team prompts, found ${prompts.length}. The gallery ships exactly ` +
-        'four team types (Batch planners, Coding, Multi-agent planning, Planning with analyst) and each must carry a prompt.'
+        prompts.length, 5,
+        `Expected 5 shipped team prompts, found ${prompts.length}. The gallery ships exactly ` +
+        'five team types (Batch planners, Coding, Review, Multi-agent planning, Planning with analyst) and each must carry a prompt.'
     );
     for (const p of prompts) {
         assert.ok(
@@ -349,9 +349,9 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
 
     // ── headPrompt contract ──────────────────────────────────────────
     // The /prompt:\s*/g regex above is case-sensitive and does NOT match
-    // `headPrompt:` (capital P), so the 4-prompt count is unaffected. Pin
-    // the new field separately: exactly ONE headPrompt exists (only Coding),
-    // and it must carry the dispatch instruction literals.
+    // `headPrompt:` (capital P), so the 5-prompt count is unaffected. Pin
+    // the field: exactly TWO headPrompts exist (Coding and Review),
+    // and both must carry their respective dispatch/delegation literals.
     const headPromptMatches = [];
     const hpRe = /headPrompt:\s*/g;
     let hpM;
@@ -360,12 +360,12 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         if (value !== null) { headPromptMatches.push(value); }
     }
     assert.strictEqual(
-        headPromptMatches.length, 1,
-        `Expected exactly 1 shipped headPrompt (Coding only), found ${headPromptMatches.length}. ` +
-        'Only the Coding team type carries a head prompt — a planner or researcher head told to ' +
-        'advance cards to CODE REVIEWED would be actively wrong.'
+        headPromptMatches.length, 2,
+        `Expected exactly 2 shipped headPrompts (Coding and Review), found ${headPromptMatches.length}.`
     );
-    const headPrompt = headPromptMatches[0];
+    const codingHeadPrompt = headPromptMatches.find(hp => hp.includes('/kanban/dispatch'));
+    assert.ok(codingHeadPrompt, 'Coding headPrompt not found among shipped headPrompts');
+    const headPrompt = codingHeadPrompt;
     assert.ok(headPrompt.includes('/kanban/dispatch'),
         'Coding headPrompt must reference POST /kanban/dispatch — the endpoint that advances the card AND dispatches the reviewer');
     assert.ok(headPrompt.includes('CODE REVIEWED'),
@@ -403,6 +403,21 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         + 'pair-scoped bypass order on the head. The Coding reviewer must use '
         + 'relationship: \'reports-to-head\' instead.'
     );
+
+    // ── Review team headPrompt contract ──────────────────────────────
+    const reviewHeadPrompt = headPromptMatches.find(hp => hp.includes('You are the reviewer on a review team'));
+    assert.ok(reviewHeadPrompt, 'Review team headPrompt not found among shipped headPrompts');
+    const reviewHeadAnchor = /NEW_REVIEW_TEAM_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
+    assert.ok(reviewHeadAnchor, 'NEW_REVIEW_TEAM_HEAD_PROMPT not found in teamWiring.ts');
+    const tsReviewHeadPrompt = readQuotedChain(TEAM_WIRING_SRC, reviewHeadAnchor.index + reviewHeadAnchor[0].length);
+    assert.ok(tsReviewHeadPrompt, 'could not read NEW_REVIEW_TEAM_HEAD_PROMPT as a quoted chain');
+    assert.strictEqual(
+        reviewHeadPrompt, tsReviewHeadPrompt,
+        'Review headPrompt drift detected between kanban.html and teamWiring.ts.'
+    );
+    assert.ok(reviewHeadPrompt.includes('{coder}'), 'Review headPrompt must carry {coder} substitution placeholder');
+    assert.ok(reviewHeadPrompt.includes('Do NOT fix code yourself'), 'Review headPrompt must instruct reviewer not to fix code itself');
+    assert.ok(reviewHeadPrompt.includes('POST /terminals/verb/ptySendPrompt'), 'Review headPrompt must reference ptySendPrompt');
 
     // ── queue/next standing order ────────────────────────────────────
     // The Coding headPrompt must tell the lead to pull the next card via

@@ -189,3 +189,7 @@ The following assumption was flagged as uncertain in the prior version of this p
 ## Outstanding Questions
 - **[user]** Should a permanent automated mirror-sync check (CI `diff` between `.agents/workflows/switchboard.md` and `.claude/skills/switchboard/SKILL.md`, or a single-source-of-truth refactor that generates one from the other) be added to prevent future drift? — proceeding on the assumption that the manual sync check in the Verification Plan is sufficient for this change and that a CI check is a separate, follow-up task.
 - **[user]** Should a follow-up plan be created for the host-side file-lock mechanism (`.switchboard/daemon.lock` held via `flock`/`fcntl` by both hosts) to eliminate the stale-port-file false positive? — proceeding on the assumption that the fail-safe approach is sufficient for now and the file-lock mechanism is a separate, follow-up plan.
+
+## Completion Report
+
+Updated Step 1 health-check in both `.agents/workflows/switchboard.md` and `.claude/skills/switchboard/SKILL.md` to fail safe when a port file exists and `curl` returns a non-200 status. The launcher now avoids spawning a second server and overwriting the port file in sandboxed environments where loopback traffic is blocked, falling back to the recorded port with a clear user warning and recovery instruction. The port-reading logic also defensibly trims whitespace (`tr -d '[:space:]'`). No issues were encountered during implementation.

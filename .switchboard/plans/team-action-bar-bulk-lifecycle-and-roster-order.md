@@ -13,6 +13,44 @@ Roster order is a subtler gap. The group record carries an `order` array, writte
 ## Metadata
 - **Complexity:** 4
 - **Tags:** frontend, ui, ux, feature
+- **Project:** browser-switchboard
+- **Feature:** 72bda17f-bb0c-4ad9-b9b9-55c19fc9cba7
+
+## User Review Required
+No user review required — the client-side fan-out approach, action set, and drag-to-reorder design are fully specified.
+
+## Complexity Audit
+
+### Routine
+- Composing bulk actions by iterating the team's `members` and calling existing per-terminal verbs (`ptyClearTerminal`, `ptyCloseTerminal`).
+- Rendering action buttons in the cockpit header with visual distinction for destructive vs non-destructive actions.
+- Drag-to-reorder roster rows, writing the new `order` back via the existing `terminals.groups` save path.
+
+### Complex / Risky
+- The concurrency cap of 4 on the fan-out helper — the number is presented as a constant without rationale. Document why 4 (e.g. "bounds simultaneous requests to avoid overwhelming the local API server while keeping fan-out responsive for typical team sizes").
+- The CAS guard rejection on roster reorder — `baseIds` (`terminals.js:1494`) can reject a stale write. The operator needs visible feedback (a toast), not a silent snap-back.
+- RESTART MISSING scope — must clarify: restarts exited members from the *current* definition's roster, not from the stale group record's `members`. A member removed from the definition and then exited is not restarted.
+
+## Edge-Case & Dependency Audit
+- **Race Conditions:** A re-spawn during a bulk action upserts `members` and `order` (`teamWiring.ts:1052`). An in-flight bulk action may target a name no longer in the roster. Re-read the group at the start of each action and operate on that snapshot.
+- **Security:** No new attack surface. All verbs are existing per-terminal verbs called with existing terminal names. No caller-supplied data is interpolated into verb payloads.
+- **Side Effects:** CLOSE TEAM ends every member's process immediately. No confirm gate (per CLAUDE.md — `window.confirm()` is a silent no-op in VS Code webviews). Offer undo-by-restart via the toast instead.
+- **Dependencies & Conflicts:** Depends on team identity foundation (enumerating members, knowing the head) and team cockpit (the header this bar lives in). The roster reorder writes to `terminals.groups` via the existing save path — the same path the cockpit's namespaced persistence does not touch (the cockpit namespaces layout keys only, not group records). No conflict.
+
+## Adversarial Synthesis
+Key risks: (1) the concurrency cap of 4 is an unjustified magic number — document the rationale; (2) a CAS-rejected roster reorder snaps back silently — the operator needs a toast or visible signal; (3) RESTART MISSING scope is ambiguous when the definition was edited since spawn — clarify it restarts from the current definition's roster. Mitigations: document the cap rationale; show a toast on CAS rejection; clarify RESTART MISSING scope in the plan.
+
+## Proposed Changes
+
+### `src/webview/terminals.js`
+- **Context:** The panel has two fleet-wide bulk verbs (`clearAllTerminals` line 7299, `openAllTerminals`) and no scoped variants. Per-terminal clear and close are wired at lines 2354 and 2312.
+- **Logic:** Add a fan-out helper that iterates the team's `members`, calls existing per-terminal verbs with a concurrency cap of 4, and aggregates per-member results. Implement CLEAR TEAM, CLEAR MEMBERS (excluding head), CLOSE TEAM, RESTART MISSING (from current definition's roster), CLEAR BADGES. Implement drag-to-reorder writing the new `order` back via the existing `terminals.groups` save path.
+- **Edge Cases:** Re-read the group at the start of each action (re-spawn may have changed `members`). CLEAR MEMBERS excludes exactly the `head` name. RESTART MISSING computes the dead set from live status, not from `order` length, and uses the current definition's member specs. CAS rejection on reorder: show a toast ("roster changed — reordering cancelled") and re-read, do not force the write. No confirm gates anywhere (per CLAUDE.md).
+
+### `src/webview/terminals.html`
+- **Context:** The cockpit header (from the team-cockpit plan) needs room for team-verb controls.
+- **Logic:** Add action buttons in the cockpit header beside the icon and name. Destructive and non-destructive actions get visually distinct treatment (reuse `is-teal` for affirmative, readonly/red state var at line 1852).
+- **Edge Cases:** A definition that no longer exists — disable RESTART MISSING with a tooltip naming why, rather than failing on click.
 
 ## Dependencies
 - **Team identity foundation** — enumerating members and knowing the head.

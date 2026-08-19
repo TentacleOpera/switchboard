@@ -19,6 +19,55 @@ The resolver needed to target a lead already exists and is unused by this path: 
 ## Metadata
 - **Complexity:** 6
 - **Tags:** backend, frontend, api, devops, feature
+- **Project:** browser-switchboard
+- **Feature:** 72bda17f-bb0c-4ad9-b9b9-55c19fc9cba7
+
+## User Review Required
+No user review required — the `team-automation` source, `teamTarget` field, fleet-path delivery, and cockpit UI are fully specified. One clarification: `BOARD_DRIVING_CONTRACT` inclusion needs a flag on the job (`canMoveCards?: boolean` on `teamTarget`) so the preset knows whether to include it. Proceeding on the assumption that this flag is added.
+
+## Complexity Audit
+
+### Routine
+- Extending `ScheduledJob` with `source: 'team-automation'` and `teamTarget?: { groupId, role?, canMoveCards? }`.
+- Adding `'team-automation'` to `survivorSources` (`TaskViewerProvider.ts:26478`).
+- Listing automations in the team cockpit with label, interval, enabled, last run, last outcome.
+
+### Complex / Risky
+- The idle check for "lead busy" — the plan defers to the team queue's idle check, but the work queue is a separate subtask that may not have landed. The automation needs its own idle check, not a deferred one. If the queue exists, enqueue; if not, skip this run rather than interrupting.
+- The `BOARD_DRIVING_CONTRACT` inclusion — the preset needs to know whether the automation may move cards. Add `canMoveCards?: boolean` to `teamTarget` so the preset can conditionally include the contract.
+- RUN NOW vs tick in-flight — if the operator hits RUN NOW while a tick is running the same job, two deliveries land. RUN NOW must share the in-flight guard (`_schedulerInFlight`) with the tick.
+- The run-outcome storage — "in the job's own config or a small per-team run log" is not a decision. Pick job config (last-run timestamp, resolved target, skip reason) — simpler, no cleanup, no separate file. Last-run is sufficient for this feature.
+
+## Edge-Case & Dependency Audit
+- **Race Conditions:** The in-flight guard (`_schedulerInFlight`) must be claimed before the first await for both the tick and RUN NOW. The comment at `TaskViewerProvider.ts:26491` records that `_ensureSurvivorTerminal` can spend ~5s booting a CLI — the team arm is faster but the guard costs nothing and the hazard is identical. RUN NOW must share this guard with the tick.
+- **Security:** No new attack surface. `teamTarget.groupId` is matched against registered groups. `role` is matched against the team's roster. No caller-supplied data is interpolated into filesystem paths or shell commands.
+- **Side Effects:** A `team-automation` job ticks and delivers prompts to the lead terminal. The lead receives the prompt with the team's standing-orders block appended. No unaffiliated terminal is spawned (the exact behavior being fixed).
+- **Dependencies & Conflicts:** Depends on team identity foundation (stable `groupId`/`head` to target) and team cockpit (the surface for the per-team automation list and RUN NOW button). The `DROPPED_SOURCES` regression risk — if anyone later adds `team-automation` to that set, every team automation disappears on read with no error. Add a comment in `DROPPED_SOURCES` itself as defense in depth, plus the test.
+
+## Adversarial Synthesis
+Key risks: (1) the idle check defers to the work queue which may not exist — the automation needs its own idle check; (2) `BOARD_DRIVING_CONTRACT` inclusion needs a flag on the job; (3) RUN NOW must share the in-flight guard with the tick to prevent double delivery; (4) run-outcome storage must be picked (job config, not "or"); (5) `DROPPED_SOURCES` needs a defense-in-depth comment, not just a test. Mitigations: self-contained idle check; `canMoveCards` flag on `teamTarget`; shared in-flight guard; job config for outcomes; comment in `DROPPED_SOURCES`.
+
+## Proposed Changes
+
+### `src/services/GlobalIntegrationConfigService.ts`
+- **Context:** `ScheduledJob` has a vestigial `target` field (line 50) that nothing reads. `DROPPED_SOURCES` (line 481) filters `comms`, `board-batch`, and `custom` on every read.
+- **Logic:** Extend `ScheduledJob` with `source: … | 'team-automation'` (deliberately not `custom`, deliberately absent from `DROPPED_SOURCES`) and `teamTarget?: { groupId: string; role?: string; canMoveCards?: boolean }`. Add a comment in `DROPPED_SOURCES` saying "do not add `team-automation` — see scheduled-automation plan." Do not bump `SCHEDULER_SCHEMA_VERSION`.
+- **Edge Cases:** `target` stays untouched and unread — it is persisted on shipped installs, and `loadGlobal`/`saveGlobal` round-trip unknown keys. Leave it inert. Omitting `role` means the head. Omitting `canMoveCards` means the preset does not include `BOARD_DRIVING_CONTRACT`.
+
+### `src/services/TaskViewerProvider.ts`
+- **Context:** `_tickSurvivorSchedulerJobs` (line 26472) is the surviving clock. `survivorSources` is `new Set(['fetch-plans', 'reconcile'])` (line 26478). `_ensureSurvivorTerminal` (line 26440) spawns a fresh, unaffiliated terminal.
+- **Logic:** Add `'team-automation'` to `survivorSources`. Add a delivery arm that resolves the target through `resolveTeamScopedRoleTerminal` (`teamWiring.ts:1412`) and sends via the fleet path. Resolution order: registered roster → named role (or head) → live terminal → send; roster resolves but terminal dead → skip and record "lead not live"; team not registered → skip and surface. RUN NOW shares the `_schedulerInFlight` guard with the tick. Record run outcomes (last-run timestamp, resolved target, skip reason) in the job's own config.
+- **Edge Cases:** Do not spawn a replacement for a dead lead — silently starting an unaffiliated terminal is the exact behavior being fixed. The idle check must be self-contained — if the lead is busy, skip this run (or enqueue if the team queue exists). Do not defer to the queue as the only idle check. `_ensureSurvivorTerminal`'s spawn behavior stays for `fetch-plans` and `reconcile` — they are workspace-level jobs with no team.
+
+### `src/services/schedulerPresets.ts`
+- **Context:** Two presets live here. `BOARD_DRIVING_CONTRACT` (line 19) exists so every board-driving prompt carries one copy of the `move-card.js`-not-SQL rule.
+- **Logic:** Add `buildTeamAutomationPrompt` alongside the existing presets. Include `BOARD_DRIVING_CONTRACT` when `teamTarget.canMoveCards` is true.
+- **Edge Cases:** Prompt resolution keeps existing precedence: `promptOverride` first, then the source preset.
+
+### `src/webview/terminals.js` (and `terminals.html`)
+- **Context:** The team cockpit (from the cockpit plan) has no automation surface.
+- **Logic:** List automations whose `teamTarget.groupId` is this team: label, interval, enabled, last run, last outcome. Add / edit / enable / disable / delete (delete acts immediately, no confirm gate). RUN NOW fires the job once, off-schedule, sharing the in-flight guard. Show the resolved target explicitly or the reason it cannot resolve.
+- **Edge Cases:** Interval granularity reuses `intervalMinutes` as-is — do not introduce cron. A schedule pointing at a dead lead must look broken in the UI, not just fail quietly at 3am.
 
 ## Dependencies
 - **Team identity foundation** — a stable `groupId`/`head` to target and to survive a re-spawn.

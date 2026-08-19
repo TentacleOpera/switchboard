@@ -18,6 +18,44 @@ So: the feature is built, the storage is right, and it is invisible and unwritab
 ## Metadata
 - **Complexity:** 5
 - **Tags:** backend, frontend, api, ui, feature
+- **Project:** browser-switchboard
+- **Feature:** 72bda17f-bb0c-4ad9-b9b9-55c19fc9cba7
+
+## User Review Required
+No user review required — the API gap closures (`team-head` scope, `update` action), editor UI design, and resolver-reuse strategy are fully specified.
+
+## Complexity Audit
+
+### Routine
+- Adding `'team-head'` to the accepted scope list in `_handleStandingOrders` (`LocalApiServer.ts:2466`).
+- Adding an `action: 'update'` branch taking `{ id, instruction }`.
+- Rendering the editor panel in the team cockpit with team order, head order, and inherited orders.
+
+### Complex / Risky
+- The `update` action must preserve `id`, `scope`, `teamId`, `parent`, `child`, and `createdAt` — changing any of these reopens the re-spawn race. If an `updatedAt` field exists, `update` should set it; if not, note the lack of audit trail.
+- The "resend to members" action dispatches the updated block immediately — but must respect the idle check. Pasting into a busy agent interrupts it. Match the work queue plan's discipline: enqueue if busy, don't paste into a working agent.
+- The "empty instruction = delete" convention — the editor should call `delete` when the instruction is empty, not `update` with an empty string. The API `update` action should reject empty strings; the editor routes empty to `delete`.
+
+## Edge-Case & Dependency Audit
+- **Race Conditions:** `update` a team order, then `wireSpawnedTeam` for the same team — the edited instruction must survive because `wireSpawnedTeam` skips an existing `(scope, teamId)` row. This is the reason `update` must not change the key. The delete-then-add failure mode (where a re-spawn lands in the gap and reinstates the default) is what `update` exists to prevent.
+- **Security:** The `instruction` field is operator-authored text appended to prompts. No new attack surface — the existing `validateInstruction` guards it. The `update` action must run `validateInstruction` on the new instruction, same as `add`.
+- **Side Effects:** Editing a standing order changes what is appended to **future** prompts only; agents already running do not re-read it. The plan correctly says so and offers a "resend to members" action. The resend must respect the idle check.
+- **Dependencies & Conflicts:** Depends on team identity foundation (resolving the cockpit's team to the `teamId` its orders are keyed on) and team cockpit (the surface this editor lives in). The preview uses `applyStandingOrdersClient` (`terminals.js:8822`) which needs the whole fleet — the cockpit plan's "filter at render boundary, keep the model whole" ensures this. No conflict.
+
+## Adversarial Synthesis
+Key risks: (1) the `update` action must preserve all key fields to avoid reopening the re-spawn race — if `updatedAt` exists, set it; (2) "resend to members" must respect the idle check — pasting into a busy agent interrupts it, matching the work queue plan's discipline; (3) "empty instruction = delete" must be an editor-side routing to `delete`, not an API `update` with an empty string. Mitigations: preserve all key fields in `update`; check idle before resend, enqueue if busy; route empty instructions to `delete` in the editor.
+
+## Proposed Changes
+
+### `src/services/LocalApiServer.ts`
+- **Context:** `_handleStandingOrders` (line 2423) accepts only `['global', 'team', 'pair']` scopes and supports `add` and delete-by-id only. The backend writes `team-head` orders at spawn but the API refuses to accept one.
+- **Logic:** Add `'team-head'` to the accepted scope list at line 2466, requiring `teamId` for it exactly as `team` already does. Add an `action: 'update'` branch taking `{ id, instruction }`: validate with `validateInstruction`, then mutate in place through `mutateStandingOrders` preserving `id`, `scope`, `teamId`, `parent`, `child`, `createdAt` (and `updatedAt` if it exists). Reject empty `instruction` strings — the editor routes empty to `delete`.
+- **Edge Cases:** The error text for an unknown scope should name all four valid scopes. Keep every write inside `mutateStandingOrders` so it joins the module-level serialisation chain (`standingOrders.ts:39`).
+
+### `src/webview/terminals.js` (and `terminals.html`)
+- **Context:** The only standing-orders surface is the Link-up modal (`#link-standing-list`, `terminals.html:2074`), which is a parent/child pairing dialog with no team-scope support.
+- **Logic:** Add a panel in the team cockpit showing the team order (editable), head order (editable/creatable), and inherited orders (read-only). Save via `update` when a row exists and `add` when it does not. Delete removes immediately (no confirm gate). Show the resolved preview using `applyStandingOrdersClient` (`terminals.js:8822`). Offer a "resend to members" action.
+- **Edge Cases:** Read through `loadEffectiveStandingOrders`, never the raw config key (handles migration from legacy pair rows). The preview uses the whole fleet, not `scopedFleet()`. "Resend to members" must respect the idle check — enqueue if busy, don't paste into a working agent. Empty instruction routes to `delete`, not `update` with empty string. Gate on `standingOrdersAvailable` — no DB, no orders, show disabled state.
 
 ## Dependencies
 - **Team identity foundation** — resolving the cockpit's team to the `teamId` its orders are keyed on.

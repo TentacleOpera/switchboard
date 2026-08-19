@@ -96,10 +96,25 @@ export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanC
     };
 }
 
+/**
+ * The orchestrator seat when a session adopted the role in place (POST
+ * /orchestration/adopt) rather than the host seating a terminal named
+ * 'Orchestrator'. `terminalName` is the pty friendlyName when the caller could
+ * name itself (SWITCHBOARD_TERMINAL) — omitted when it could not, in which case
+ * the seat is real but has no live delivery channel and reads the reports inbox.
+ * Absent (the shipped default) = no adopted seat = pre-adopt behaviour.
+ */
+export interface OrchestratorSeat {
+    terminalName?: string;
+    adoptedAt: string;
+}
+
 export type AutobanConfigState = {
     enabled: boolean;
     /** Orchestrator switch — independent of the schedule. Both can be on. */
     orchestratorArmed?: boolean;
+    /** Orchestrator seat when adopted in place via POST /orchestration/adopt. */
+    orchestratorSeat?: OrchestratorSeat;
     batchSize: number;
     complexityFilter: AutobanComplexityFilter;
     routingMode: AutobanRoutingMode;
@@ -370,6 +385,14 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         automationMode: legacyMode,
         singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig),
         orchestrationConfig: normalizeOrchestrationConfig(state?.orchestrationConfig),
+        orchestratorSeat: (function (s: any) {
+            if (!s || typeof s !== 'object') return undefined;
+            const adoptedAt = typeof s.adoptedAt === 'string' ? s.adoptedAt : '';
+            if (!adoptedAt) return undefined;
+            const terminalName = typeof s.terminalName === 'string' && s.terminalName.trim()
+                ? s.terminalName.trim() : undefined;
+            return { terminalName, adoptedAt };
+        })((state as any)?.orchestratorSeat),
         migratedBoardBatchNotice: typeof state?.migratedBoardBatchNotice === 'string' ? state.migratedBoardBatchNotice : undefined,
         droppedCustomJobsNotice: typeof state?.droppedCustomJobsNotice === 'string' ? state.droppedCustomJobsNotice : undefined,
         retiredAutomationModeNotice

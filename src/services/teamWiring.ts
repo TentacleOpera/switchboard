@@ -174,6 +174,31 @@ let _groupsWriteChain: Promise<unknown> = Promise.resolve();
 const TERMINALS_GROUPS_BARE_IMPORTED_KEY = 'switchboard.prompts.terminals.groups.bareImportedIds';
 
 /**
+ * Flag existing team groups in the terminals.groups array with `teamGroup: true`.
+ * Team groups have IDs starting with 'team_' (from wireSpawnedTeam's groupId
+ * derivation). Manual groups use 'grp_' prefix (hardcoded, not user-editable),
+ * so prefix collision is impossible.
+ *
+ * Returns `null` when nothing changed (already fully flagged), so the caller
+ * does not write. Returns the converted array otherwise.
+ *
+ * This function is pure — it does not touch the DB.
+ */
+export function migrateTeamGroupFlags(groups: any[]): any[] | null {
+    if (!Array.isArray(groups) || groups.length === 0) { return null; }
+    let changed = false;
+    const next = groups.map(g => {
+        if (!g || typeof g !== 'object') { return g; }
+        if (g.id && typeof g.id === 'string' && g.id.startsWith('team_') && !g.teamGroup) {
+            changed = true;
+            return { ...g, teamGroup: true };
+        }
+        return g;
+    });
+    return changed ? next : null;
+}
+
+/**
  * Mutate terminal groups atomically inside _groupsWriteChain.
  * Handles bare 'terminals.groups' legacy migration once per id on first read.
  *
@@ -225,6 +250,11 @@ export async function mutateTerminalGroups(
                     }
                 }
             } catch { /* best effort migration */ }
+        }
+
+        const migrated = migrateTeamGroupFlags(current);
+        if (migrated !== null) {
+            current = migrated;
         }
 
         const next = await transform(current);
@@ -379,6 +409,18 @@ export const NEW_CODING_HEAD_PROMPT =
     + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
     + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
     + 'empty and stop.';
+
+export const NEW_REVIEW_TEAM_HEAD_PROMPT =
+    'You are the reviewer on a review team. When work lands in your terminal, review it '
+    + '(Stage 1: adversarial findings, Stage 2: balanced synthesis). Do NOT fix code yourself — send fix '
+    + 'instructions to your coder at {coder} via POST /terminals/verb/ptySendPrompt with '
+    + '{"name":"{coder}","data":"<fix instructions — name each file, the issue, and the fix needed. '
+    + 'Tell the coder to run verification checks (typecheck/tests as applicable) and include results '
+    + 'in their report.>","clearBeforePrompt":false} against the port in .switchboard/api-server-port.txt. '
+    + 'After the coder reports back, re-review ONLY the coder\'s git diff. If issues remain, send another '
+    + 'round of fix instructions. Loop until satisfied. If after 5 rounds the same critical issues persist, '
+    + 'report to the originating lead that a new plan is needed. When review passes, report to the '
+    + 'originating lead that the feature passed review, then update the plan file.';
 
 /**
  * The CURRENT (buggy) Coding team headPrompt — the text that the first migration
@@ -1170,15 +1212,39 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
             // Same mutator as the team order above — do not split this into a second
             // mutateStandingOrders call; that reopens a read-modify-write window.
             if (!opts.externalHead) {
+                let firstCoder = children.find(c => c?.role === 'coder')?.friendlyName || '';
+                if (!firstCoder && members && Array.isArray(members)) {
+                    let childIdx = 0;
+                    for (const def of members) {
+                        const count = Math.max(1, Math.min(def.count || 1, 8));
+                        for (let i = 0; i < count && childIdx < childNames.length; i++) {
+                            const memberName = childNames[childIdx++];
+                            if (def.role === 'coder' && !firstCoder) {
+                                firstCoder = memberName;
+                            }
+                        }
+                    }
+                }
                 const headPromptText = (opts.headPrompt || '').trim();
                 if (headPromptText) {
                     const headExists = next.some((o: StandingOrder) =>
                         o.scope === 'team-head' && o.teamId === groupId);
                     if (!headExists) {
+                        let replacedText = headPromptText.replace(/\{head\}/g, headName);
+                        if (firstCoder) {
+                            replacedText = replacedText.replace(/\{coder\}/g, firstCoder);
+                        } else if (headPromptText.includes('{coder}')) {
+                            // No coder child was found for this team, but the
+                            // head prompt references {coder}. The placeholder
+                            // survives into the installed standing order, so
+                            // the head would ptySendPrompt a terminal literally
+                            // named "{coder}" every round and fail silently.
+                            console.warn(`[teamWiring] team-head standing order for teamId=${groupId} (head=${headName}) contains {coder} placeholder but no coder child was found; placeholder left unsubstituted.`);
+                        }
                         next.push(makeStandingOrder(
                             headName,   // parent = head (the delivery target for this scope)
                             '',         // child = '' — old-build safety, see selectOrders
-                            headPromptText.replace(/\{head\}/g, headName),
+                            replacedText,
                             'team-head',
                             groupId,
                         ));
@@ -1222,6 +1288,7 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
         id: groupId,
         name: headName,
         source: 'manual' as const,
+        teamGroup: true,
         layout,
         members: groupMembers,
         order: groupMembers,
@@ -1244,6 +1311,7 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                     id: groupId,
                     name: headName,
                     source: 'manual' as const,
+                    teamGroup: true,
                     layout: (typeof existing.layout === 'string' && TERMINALS_LAYOUT_MODES.has(existing.layout))
                         ? existing.layout
                         : layout,

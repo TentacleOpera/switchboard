@@ -49,7 +49,8 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // /switchboard — local management console (absorbs the former switchboard-manage
     // skill body verbatim). allowedTools: Bash — the console drives curl/awk/stat.
     {
-        source: 'workflows/switchboard.md', name: 'switchboard', invocation: 'default', allowedTools: 'Bash',
+        source: 'workflows/switchboard.md', name: 'switchboard', invocation: 'default',
+        allowedTools: 'Bash, Read, Write, Glob, Grep',
         descriptionFallback: 'Local Switchboard management console — drive the board when the VS Code extension is running'
     },
     // /switchboard-cloud — cloud-VM plan-brake (former switchboard-chat body).

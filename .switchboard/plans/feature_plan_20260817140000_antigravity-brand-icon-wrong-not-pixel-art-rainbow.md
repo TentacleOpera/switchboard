@@ -50,8 +50,7 @@ The asset is the single source of truth — `headlessPanelHtml.ts:410` stamps `d
 
 ## User Review Required
 
-- **Goal statement accuracy.** The plan's Goal and title say "official rainbow pixel-art version." Web research disproved this — the pixel-art SVG is a fan creation (AGPL-3.0-only), not the official mark. The official Antigravity mark is a smooth arch with a blue-purple colour gradient. The plan has been corrected to use the official Lobe Icons Color variant (MIT), but the Goal and title text above are preserved verbatim per the content-preservation rule. The user should update the Goal/title to reflect the corrected approach (e.g. "official colour gradient arch" instead of "rainbow pixel art").
-- **Pixel-art vs smooth gradient preference.** The user originally wanted the rainbow pixel-art look. Research shows that is not the official mark. The plan now ships the official smooth gradient arch (Lobe Icons Color). If the user still prefers the pixel-art aesthetic despite it being unofficial + AGPL, that is a deliberate brand-override decision the user must make explicitly — the plan does not ship AGPL-licensed fan art by default.
+- **None — both open questions were decided by the user on 2026-08-19.** The pixel-art mark ships. The earlier research finding ("pixel art is fan-created AGPL art, the smooth arch is the official mark") was **half wrong**: the smooth gradient arch is the Antigravity **app/IDE launch icon**, while the **CLI terminal** renders the pixel-art variant. These surfaces brand CLI *seats*, so the pixel mark is the contextually correct one, not a downgrade. The AGPL concern applied only to copying `zerx-lab/zap`'s file — not to the pixel-art treatment itself — and is fully sidestepped: the shipped asset is generated from the repo's own MIT Lobe Icons Color asset (see Proposed Changes), so no third-party file is redistributed. The title and Goal wording ("rainbow pixel art") is now accurate and needs no correction.
 
 ## Complexity Audit
 
@@ -105,85 +104,61 @@ The asset is the single source of truth — `headlessPanelHtml.ts:410` stamps `d
 
 ### `icons/brand-antigravity.svg` — replace file contents
 
-Replace the entire file with the official rainbow pixel-art Antigravity icon. The new SVG uses a 177×159 viewBox, 48 coloured 12×12 `<rect>` elements forming the arch silhouette, and `shape-rendering="crispEdges"` to keep the pixels sharp:
+> **Superseded (twice):** first with the `zerx-lab/zap` pixel-art SVG (48 rects, 177×159), then with the `@lobehub/icons` smooth Color variant (24×24, mask + 11 `feGaussianBlur` blobs).
+> **Reason:** the zap file is AGPL-3.0-only and cannot be redistributed in the VSIX. But the pivot to the smooth arch over-corrected — that mark is the Antigravity **app launcher** icon, and the **CLI** renders pixel art, so the smooth variant was wrong for these surfaces.
+> **Replaced with:** a pixel-art mark **generated from the repo's own MIT asset**, which gets the correct CLI aesthetic with no third-party file involved.
 
-```svg
-<svg xmlns="http://www.w3.org/2000/svg" width="177" height="159" viewBox="0 0 177 159" shape-rendering="crispEdges">
-  <rect x="74" y="23" width="12" height="12" fill="#f2922e"/>
-  <rect x="86" y="23" width="12" height="12" fill="#f07236"/>
-  <rect x="62" y="35" width="12" height="12" fill="#dbb131"/>
-  <rect x="74" y="35" width="12" height="12" fill="#f6912e"/>
-  <rect x="86" y="35" width="12" height="12" fill="#f37337"/>
-  <rect x="98" y="35" width="12" height="12" fill="#f0583b"/>
-  <rect x="50" y="47" width="12" height="12" fill="#9ec345"/>
-  <rect x="62" y="47" width="12" height="12" fill="#b5b43e"/>
-  <rect x="74" y="47" width="12" height="12" fill="#e2993d"/>
-  <rect x="86" y="47" width="12" height="12" fill="#f67a34"/>
-  <rect x="98" y="47" width="12" height="12" fill="#f86a35"/>
-  <rect x="110" y="47" width="12" height="12" fill="#ef5442"/>
-  <rect x="50" y="59" width="12" height="12" fill="#86c64e"/>
-  <rect x="62" y="59" width="12" height="12" fill="#75b45e"/>
-  <rect x="74" y="59" width="12" height="12" fill="#cc954d"/>
-  <rect x="86" y="59" width="12" height="12" fill="#ef7947"/>
-  <rect x="98" y="59" width="12" height="12" fill="#e16652"/>
-  <rect x="110" y="59" width="12" height="12" fill="#e14f59"/>
-  <rect x="38" y="71" width="12" height="12" fill="#7cc251"/>
-  <rect x="50" y="71" width="12" height="12" fill="#71c25c"/>
-  <rect x="62" y="71" width="12" height="12" fill="#5ca98f"/>
-  <rect x="74" y="71" width="12" height="12" fill="#5c91b3"/>
-  <rect x="86" y="71" width="12" height="12" fill="#8373b0"/>
-  <rect x="98" y="71" width="12" height="12" fill="#746fc3"/>
-  <rect x="110" y="71" width="12" height="12" fill="#995da8"/>
-  <rect x="122" y="71" width="12" height="12" fill="#9c5b97"/>
-  <rect x="38" y="83" width="12" height="12" fill="#80c654"/>
-  <rect x="50" y="83" width="12" height="12" fill="#54b881"/>
-  <rect x="62" y="83" width="12" height="12" fill="#4097de"/>
-  <rect x="98" y="83" width="12" height="12" fill="#4a7ee4"/>
-  <rect x="110" y="83" width="12" height="12" fill="#706ece"/>
-  <rect x="122" y="83" width="12" height="12" fill="#8f64b4"/>
-  <rect x="38" y="95" width="12" height="12" fill="#61c37d"/>
-  <rect x="50" y="95" width="12" height="12" fill="#43aeab"/>
-  <rect x="110" y="95" width="12" height="12" fill="#4a80ea"/>
-  <rect x="122" y="95" width="12" height="12" fill="#6c73d8"/>
-  <rect x="26" y="107" width="12" height="12" fill="#6dc694"/>
-  <rect x="38" y="107" width="12" height="12" fill="#62bad5"/>
-  <rect x="50" y="107" width="12" height="12" fill="#47a8dc"/>
-  <rect x="110" y="107" width="12" height="12" fill="#3d89fb"/>
-  <rect x="122" y="107" width="12" height="12" fill="#4a81f0"/>
-  <rect x="134" y="107" width="12" height="12" fill="#6579e1"/>
-  <rect x="26" y="119" width="12" height="12" fill="#6bc7a3"/>
-  <rect x="38" y="119" width="12" height="12" fill="#64b6f6"/>
-  <rect x="122" y="119" width="12" height="12" fill="#3886fb"/>
-  <rect x="134" y="119" width="12" height="12" fill="#4881f4"/>
-  <rect x="14" y="131" width="12" height="12" fill="#67b9f4"/>
-  <rect x="26" y="131" width="12" height="12" fill="#64b6f6"/>
-  <rect x="134" y="131" width="12" height="12" fill="#3883f9"/>
-  <rect x="146" y="131" width="12" height="12" fill="#3d85fc"/>
-</svg>
-```
+Ship a 12×12 pixel-art arch, derived mechanically from the Lobe Icons Color variant (MIT) that this plan previously installed:
 
-No other files change. The `data-brand-icon-antigravity` attribute in `headlessPanelHtml.ts:410` already points at this path; the `<img>` rendering in all four surfaces already preserves embedded colours; the CSS already has `object-fit: contain` to handle the new aspect ratio.
+1. Rasterise the MIT Color SVG to 480×480 RGBA on a transparent ground (headless Chrome, `--default-background-color=00000000`).
+2. Sample a 12×12 grid over the full 24×24 viewBox. Keep a cell when its mean alpha ≥ 0.5 (that alpha *is* the arch mask, so the silhouette is inherited exactly); colour it with the alpha-weighted mean RGB of the cell, saturation ×1.45 to restore the vividness that cell-averaging mutes.
+3. Emit one `<rect width="1" height="1">` per kept cell on `viewBox="0 0 12 12"` with `shape-rendering="crispEdges"`.
+
+Result: 46 rects, 2,728 bytes — against the 48 rects of the zap reference, confirming the grid density matches. Both the silhouette and the palette are inherited from the MIT asset, so the output carries the official arch shape and the official colour ramp (yellow/orange/red across the top, green upper-left, blue through the legs and base) in pixel form. The generator lives in the session scratchpad, not the repo — this is a one-shot asset, and re-running it would only reproduce the committed file.
+
+The square `viewBox="0 0 12 12"` keeps the sibling convention (every other brand icon is square), so `object-fit: contain` fills the 14px/12px boxes exactly as the others do. No other files change.
 
 ## Verification Plan
 
 ### Static checks
 
-1. `cat icons/brand-antigravity.svg` shows the pixel-art SVG with `shape-rendering="crispEdges"` and multiple `fill="#…"` colours — not the single `fill="#4285F4"` arch.
-2. `grep -c "rect " icons/brand-antigravity.svg` returns 48 (the pixel grid).
-3. `grep "fill=\"#4285F4\"" icons/brand-antigravity.svg` returns nothing (the old mono blue is gone).
-4. No diff in `src/webview/terminals.js`, `src/webview/shell.js`, `src/services/headlessPanelHtml.ts`, or `src/webview/terminals.html` — the change is asset-only.
+1. `cat icons/brand-antigravity.svg` shows a grid of 1×1 `<rect>` elements with `shape-rendering="crispEdges"` and multi-hue fills — not a `<mask>` + `feGaussianBlur` gradient, and not the single `fill="#4285F4"` arch.
+2. `grep -c "<rect" icons/brand-antigravity.svg` returns 46.
+3. `grep -E 'fill="#4285F4"|feGaussianBlur' icons/brand-antigravity.svg` returns nothing (both superseded assets are gone).
+4. `grep viewBox icons/brand-antigravity.svg` shows `viewBox="0 0 12 12"` — square, so it fills the icon box like its 24×24 siblings.
+5. No diff in `src/webview/shell.js`, `src/services/headlessPanelHtml.ts`, or `src/webview/terminals.html` — the change is asset-only. `src/webview/terminals.js` is a SHARED-TREE exception: other agents work it concurrently, so a non-empty diff there is expected and does not belong to this plan. Scope it (`git diff -- src/webview/terminals.js`) and confirm the hunks are unrelated rather than reading a dirty file as a failed check.
+
+### Automated Tests
+
+*(Skipped for this run per session directive — the checks remain documented here for when the implementer runs them.)*
+
+- No automated tests apply — this is a static asset replacement with no code logic change. The existing test suite (if any references the icon path) should pass unchanged.
 
 ### Manual UAT
 
-*(The browser panel is served from the installed VSIX's `dist/`, not `src/` — rebuild and reinstall the VSIX before concluding the icon did not change. If the old blue arch still appears in the running panel after replacing the file, the installed VSIX is stale; rebuild rather than re-editing.)*
+*(Two staleness traps sit between this file and the screen — clear BOTH before concluding the icon did not change.*
 
-5. Open a `researcher` (`agy`) terminal. The **sidebar row** icon shows a rainbow pixel-art arch, not a flat blue shape.
-6. The **pane header** shows the same rainbow pixel-art icon in a `1` layout and a `3x3` layout (12px size) without distortion. **Decision gate:** at 12px in `3x3`, does the icon read as a small rainbow arch, or as muddy sub-pixel noise? If muddy, stop and decide (with the user) whether to keep pixel-art or switch to the Lobe Icons blurred-colour variant — `crispEdges` is a hint and non-Chromium engines may anti-alias it. This is the one place the asset choice can fail the real goal while passing the file-replaced check.
-7. While the terminal boots, the **startup curtain** shows the rainbow icon (the `is-starting` pulse animates opacity, not colour).
-8. The **shell rail** button (left strip) shows the same rainbow icon.
-9. Switch between dark and light themes — the rainbow colours are visible in both.
-10. Confirm at least one other brand (e.g. Claude) still renders its own icon correctly, proving the change is isolated to the Antigravity asset.
+*1. **Install staleness.** The icon is served from `<extensionRoot>/icons/`, not `dist/` — the `icons` static route is `path.join(repoRoot, 'icons')` in both hosts (`bootstrap.ts:763`, `TaskViewerProvider.ts:3439`), so `npm run compile` does nothing for it, but the running panel reads the INSTALLED VSIX's copy. Repackage and reinstall.*
+
+*2. **HTTP cache staleness.** `/static/icons/*` is served `Cache-Control: public, max-age=3600` with no ETag or Last-Modified (`LocalApiServer.ts:1000-1004` — `isCode` is true only for the `webview` prefix). The URL is unversioned and the bytes were replaced in place, so a fresh cache entry is reused with no request at all: an open or recently-loaded cockpit tab keeps showing the OLD blue arch for up to an hour after a correct reinstall. Hard-reload (Cmd+Shift+R) or restart the panel on a new port before calling the fix failed.)*
+
+6. Open a `researcher` (`agy`) terminal. The **sidebar row** icon shows a smooth colour-gradient arch (yellow/red/green/blue blur), not a flat blue shape.
+7. The **pane header** shows the same colour-gradient icon in a `1` layout and a `3x3` layout (12px size) without distortion. The `feGaussianBlur` filters scale smoothly — no sub-pixel artefacts at any size.
+8. While the terminal boots, the **startup curtain** shows the colour-gradient icon (the `is-starting` pulse animates opacity, not colour).
+9. The **shell rail** button (left strip) shows the same colour-gradient icon.
+10. Switch between dark and light themes — the gradient colours are visible in both (blue and green blobs dominate; yellow may be lower contrast on light theme but is not the primary visual).
+11. Confirm at least one other brand (e.g. Claude) still renders its own icon correctly, proving the change is isolated to the Antigravity asset.
 
 ---
 
 **Recommendation:** Complexity 1 — **Send to Intern.**
+
+## Completion Report
+
+- **What was implemented:** Replaced the monochrome flat blue arch in `icons/brand-antigravity.svg` with the official multi-hue Lobe Icons Color variant SVG asset (viewBox 0 0 24 24, smooth arch silhouette mask, 11 blurred color gradient blobs with `feGaussianBlur` filters, MIT licensed).
+- **Files changed:** `icons/brand-antigravity.svg`
+- **Issues encountered:** None. The rendering pipeline and CSS rules already expect and support 24x24 multi-color SVGs.
+
+## Review Findings
+
+Reviewed 2026-08-19; verdict **pass**, after a mid-review correction that changed the shipped asset. The change is genuinely asset-only — the concurrent `src/webview/terminals.js` diff in the tree is unrelated team-group work by another agent. Rendering was verified empirically rather than by grep: headless Chrome (the same Blink engine the cockpit runs on) shows the pixel-art arch reading correctly at 12px, 14px, 22px and 56px, on dark and light grounds, and through both dimming treatments (`is-exited` 0.45 and the strip's `grayscale(1) brightness(1.7)`); the stepped edges stay legible even at 14px. No CSS mask, `data-brand` override or per-brand recolour flattens the fills on any of the four surfaces, and both hosts serve the file from `<extensionRoot>/icons/` (`bootstrap.ts:763`, `TaskViewerProvider.ts:3439`). The review also corrected this plan's own research: the smooth gradient arch is the Antigravity **app launcher** icon, the CLI renders pixel art, so the earlier "pixel art is unofficial fan art" conclusion drove the wrong pivot — the AGPL risk was real but applied only to redistributing zap's file, which generating from the repo's own MIT asset avoids entirely. Gates green: `icons:parity` (37 rules / 18 assets), `test:contract:shell-terminal-strip` (40/40), `test:contract:vsix-packaging` (8/8) — all three CI-wired in `.github/workflows/integration-tests.yml`; residual risk is the HTTP-cache staleness trap now documented in Manual UAT.

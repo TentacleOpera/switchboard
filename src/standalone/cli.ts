@@ -190,7 +190,7 @@ async function probeHealth(port: number, hostname = '127.0.0.1', timeoutMs = 200
             res.on('end', () => {
                 try {
                     const json = JSON.parse(body);
-                    resolve(json.status === 'ok' && json.port === port);
+                    resolve(json.service === 'switchboard' && json.status === 'ok' && json.port === port);
                 } catch { resolve(false); }
             });
         });

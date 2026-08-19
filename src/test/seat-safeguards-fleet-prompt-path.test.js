@@ -217,6 +217,39 @@ test('BEHAVIOUR: the block is separated from the task text by a blank line, and 
     assert.ok(block.includes('\n\n'), 'Multiple directives must be joined by a blank line, as buildKanbanBatchPrompt joins them.');
 });
 
+test('BEHAVIOUR: omits directives the composed prompt already carries', () => {
+    const opts = { skipTests: true, cavemanOutput: true, gitProhibitionEnabled: true, gitBranchStrategy: 'current', gitCommitStrategy: 'whenDone', gitPushStrategy: 'noPush' };
+    const full = buildSeatDirectiveBlock(opts);
+    assert.strictEqual(
+        buildSeatDirectiveBlock(opts, `some board prompt\n\n${full}`),
+        '',
+        'A board-composed prompt that already carries every part must yield an empty seat block.'
+    );
+});
+
+test('BEHAVIOUR: still emits parts the composed prompt lacks', () => {
+    const opts = { skipTests: true, cavemanOutput: true };
+    const out = buildSeatDirectiveBlock(opts, `board prompt\n\n${SKIP_TESTS_DIRECTIVE}`);
+    assert.ok(out.includes(CAVEMAN_OUTPUT_DIRECTIVE), 'Caveman directive must still be delivered when absent from the composed prompt.');
+    assert.ok(!out.includes(SKIP_TESTS_DIRECTIVE), 'Skip-tests directive must NOT be re-delivered when already present.');
+});
+
+test('BEHAVIOUR: a divergent worktree git policy is NOT deduped against the board non-worktree policy', () => {
+    const boardOpts = { gitProhibitionEnabled: true, gitBranchStrategy: 'current', gitCommitStrategy: 'whenDone', gitPushStrategy: 'noPush', worktreeActive: false };
+    const seatOpts = { gitProhibitionEnabled: true, gitBranchStrategy: 'current', gitCommitStrategy: 'whenDone', gitPushStrategy: 'noPush', worktreeActive: true };
+    const boardBlock = buildSeatDirectiveBlock(boardOpts);
+    const seatBlock = buildSeatDirectiveBlock(seatOpts, `board prompt\n\n${boardBlock}`);
+    // If the two git policy lines differ (worktree flag changes the output), the
+    // seat's policy MUST still appear in the filtered block.
+    const boardGit = buildGitPolicyBlock({ branch: 'current', commit: 'whenDone', push: 'noPush', guardrail: true, worktreeActive: false });
+    const seatGit = buildGitPolicyBlock({ branch: 'current', commit: 'whenDone', push: 'noPush', guardrail: true, worktreeActive: true });
+    if (boardGit !== seatGit) {
+        assert.ok(seatBlock.includes(seatGit), 'A divergent worktree git policy must NOT be deduped — it is seat-scoped truth.');
+    }
+    // If they happen to be identical (worktree flag does not change the line for
+    // this clause set), the seat block is empty — also correct.
+});
+
 // ── 1. buildSeatDirectiveBlock exists and is a pure composer ─────────────
 
 test('agentPromptBuilder.ts exports buildSeatDirectiveBlock', () => {

@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { buildKanbanBatchPrompt, columnToPromptRole, buildFeatureSubagentClause, buildCustomAgentPrompt } from '../agentPromptBuilder';
+import { buildKanbanBatchPrompt, columnToPromptRole, buildFeatureSubagentClause, buildCustomAgentPrompt, CODING_COMPLETION_REPORT_DIRECTIVE, COMPLETION_STEP_FULL, COMPLETION_STEP_COMPACT } from '../agentPromptBuilder';
 
 suite('agentPromptBuilder', () => {
     const makePlans = (count: number) =>
@@ -195,6 +195,141 @@ suite('agentPromptBuilder', () => {
         test('cavemanOutputEnabled: undefined omits caveman directive', () => {
             const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {});
             assert.ok(!prompt.includes('CAVEMAN MODE'), 'Should NOT include CAVEMAN MODE directive');
+        });
+    });
+
+    suite('buildKanbanBatchPrompt — reviewer role behaviour', () => {
+        test('exactly one occurrence of COMPLETION REPORT: in default configuration', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {});
+            const count = (prompt.match(/COMPLETION REPORT:/g) || []).length;
+            assert.strictEqual(count, 1, `Expected exactly 1 COMPLETION REPORT: occurrence, found ${count}`);
+        });
+
+        test('exactly one occurrence of COMPLETION REPORT: with reviewerCompactPlanUpdateEnabled: true', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                reviewerCompactPlanUpdateEnabled: true
+            });
+            const count = (prompt.match(/COMPLETION REPORT:/g) || []).length;
+            assert.strictEqual(count, 1, `Expected exactly 1 COMPLETION REPORT: occurrence, found ${count}`);
+        });
+
+        test('exactly one occurrence of COMPLETION REPORT: with replace-mode defaultPromptOverride', () => {
+            const overrideText = 'Custom replace instructions without completion sentinel.';
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                defaultPromptOverrides: { reviewer: { text: overrideText, mode: 'replace' } }
+            });
+            const count = (prompt.match(/COMPLETION REPORT:/g) || []).length;
+            assert.strictEqual(count, 1, `Expected exactly 1 COMPLETION REPORT: occurrence in replace override mode, found ${count}`);
+        });
+
+        // Discriminating assertions — the count-of-token tests above are invariant
+        // across the bug (Defect A: sentinel miss) and the fix, so they cannot detect
+        // the duplicate. Pre-fix the count was 1 (from the appended generic directive
+        // alone); post-fix it is 1 (from the base step alone). These assertions check
+        // WHICH body carries the sentinel, so the broken shape (generic directive
+        // appended because the base step lost its prefix) fails here while the fixed
+        // shape passes. Imported constants, not hardcoded sentences, so a future reword
+        // cannot silently un-pin these.
+        test('default config: base step carries sentinel, generic directive body absent', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {});
+            assert.ok(prompt.includes(COMPLETION_STEP_FULL), 'Reviewer base step (COMPLETION_STEP_FULL) must carry the COMPLETION REPORT: sentinel in default config');
+            assert.ok(!prompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE), 'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended when the base step already carries the sentinel (would be the duplicate)');
+        });
+
+        test('reviewerCompactPlanUpdateEnabled: compact base step carries sentinel, generic directive body absent', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                reviewerCompactPlanUpdateEnabled: true
+            });
+            assert.ok(prompt.includes(COMPLETION_STEP_COMPACT), 'Reviewer compact base step (COMPLETION_STEP_COMPACT) must carry the COMPLETION REPORT: sentinel when compact mode is on');
+            assert.ok(!prompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE), 'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended when the compact base step already carries the sentinel (would be the duplicate)');
+        });
+
+        test('replace-mode defaultPromptOverride: generic directive appended, base step absent (override-proofing)', () => {
+            const overrideText = 'Custom replace instructions without completion sentinel.';
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                defaultPromptOverrides: { reviewer: { text: overrideText, mode: 'replace' } }
+            });
+            assert.ok(prompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE), 'Generic CODING_COMPLETION_REPORT_DIRECTIVE MUST be appended when a replace override wipes the base step (override-proofing direction)');
+            assert.ok(!prompt.includes(COMPLETION_STEP_FULL), 'Base step (COMPLETION_STEP_FULL) must be absent after a replace override wipes the composed base');
+            assert.ok(!prompt.includes(COMPLETION_STEP_COMPACT), 'Compact base step (COMPLETION_STEP_COMPACT) must be absent after a replace override wipes the composed base');
+        });
+
+        test('skip-tests disclosure absent with no skip flags; present with skipTests or skipCompilation', () => {
+            const defaultPrompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {});
+            assert.ok(!defaultPrompt.includes('Skip-tests disclosure:'), 'Skip-tests disclosure should be absent when no skip flags');
+            assert.ok(!defaultPrompt.includes('Verification was static-only'), 'Static-only text should be absent when no skip flags');
+
+            const skipTestsPrompt = buildKanbanBatchPrompt('reviewer', makePlans(1), { skipTests: true });
+            assert.ok(skipTestsPrompt.includes('Skip-tests disclosure:'), 'Skip-tests disclosure should be present when skipTests is true');
+            assert.ok(skipTestsPrompt.includes('Verification was static-only'), 'Static-only text should be present when skipTests is true');
+
+            const skipCompPrompt = buildKanbanBatchPrompt('reviewer', makePlans(1), { skipCompilation: true });
+            assert.ok(skipCompPrompt.includes('Skip-tests disclosure:'), 'Skip-tests disclosure should be present when skipCompilation is true');
+            assert.ok(skipCompPrompt.includes('Verification was static-only'), 'Static-only text should be present when skipCompilation is true');
+        });
+
+        test('ANTI-LEAKAGE RULE present in all four skip-flag combinations', () => {
+            const combos = [
+                {},
+                { skipTests: true },
+                { skipCompilation: true },
+                { skipTests: true, skipCompilation: true }
+            ];
+            for (const opts of combos) {
+                const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), opts);
+                assert.ok(prompt.includes('ANTI-LEAKAGE RULE'), `ANTI-LEAKAGE RULE must be present with options ${JSON.stringify(opts)}`);
+            }
+        });
+
+        test('CAVEMAN directive absent when cavemanOutputEnabled and reviewerConciseModeEnabled; present when caveman on and concise off', () => {
+            const concisePlusCaveman = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                cavemanOutputEnabled: true,
+                reviewerConciseModeEnabled: true
+            });
+            assert.ok(!concisePlusCaveman.includes('CAVEMAN MODE'), 'CAVEMAN MODE directive should be absent when concise mode is also enabled');
+
+            const cavemanOnly = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                cavemanOutputEnabled: true,
+                reviewerConciseModeEnabled: false
+            });
+            assert.ok(cavemanOnly.includes('CAVEMAN MODE'), 'CAVEMAN MODE directive should be present when concise mode is off');
+        });
+
+        test('Explain why something is a problem is absent from composed prompt', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                reviewerConciseModeEnabled: true
+            });
+            assert.ok(!prompt.includes('Explain why something is a problem'), 'Phantom override text must not be present');
+        });
+
+        test('step numbering is contiguous 1..N with no gaps or repeats in default and skip configurations', () => {
+            const checkNumbering = (prompt: string, expectedCount: number) => {
+                for (let i = 1; i <= expectedCount; i++) {
+                    assert.ok(prompt.includes(`\n${i}. `), `Expected step ${i}. in prompt`);
+                }
+                assert.ok(!prompt.includes(`\n${expectedCount + 1}. `), `Step ${expectedCount + 1}. should not exist`);
+            };
+
+            const defaultPrompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {});
+            checkNumbering(defaultPrompt, 9);
+
+            const skipPrompt = buildKanbanBatchPrompt('reviewer', makePlans(1), { skipTests: true });
+            checkNumbering(skipPrompt, 10);
+        });
+
+        test('Stage 1 and Stage 2 are present in every configuration', () => {
+            const configs = [
+                {},
+                { reviewerConciseModeEnabled: true },
+                { reviewerCompactPlanUpdateEnabled: true },
+                { reviewerConciseModeEnabled: true, reviewerCompactPlanUpdateEnabled: true, cavemanOutputEnabled: true }
+            ];
+            for (const cfg of configs) {
+                const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), cfg);
+                assert.ok(prompt.includes('Stage 1 (Grumpy):'), `Stage 1 missing for ${JSON.stringify(cfg)}`);
+                assert.ok(prompt.includes('Stage 2 (Balanced):'), `Stage 2 missing for ${JSON.stringify(cfg)}`);
+                assert.ok(prompt.includes('CRITICAL: Do not stop after Stage 1.'), `CRITICAL missing for ${JSON.stringify(cfg)}`);
+            }
         });
     });
 

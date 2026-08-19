@@ -52,6 +52,7 @@ export interface InstantiateAgentGroupOptions {
         name: string;
         cwd: string;
         delegates: any[];
+        teamName?: string;
     }) => Promise<AgentGroupCreateResult>;
     /** Host hook fired once terminals exist (e.g. the runtime.terminals mirror). */
     onCreated?: () => void;
@@ -109,6 +110,7 @@ export async function instantiateAgentGroupCore(
         name: group?.name,
         cwd,
         delegates: members,
+        teamName: group?.name,
     });
     if (!result?.success) {
         return { success: false, error: result?.error || 'Failed to create head terminal' };

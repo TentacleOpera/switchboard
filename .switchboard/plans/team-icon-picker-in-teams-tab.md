@@ -26,8 +26,48 @@ The delivery side is already solved and unused: `/static/icons/` maps to the rep
 ## Metadata
 - **Complexity:** 5
 - **Tags:** frontend, ui, ux, feature
+- **Project:** browser-switchboard
+- **Feature:** 72bda17f-bb0c-4ad9-b9b9-55c19fc9cba7
 
-## Approach
+## User Review Required
+No user review required — the `icon` field design (prefix-discriminated forms, shared resolver, wipe-trap carry-forward) is fully specified.
+
+## Complexity Audit
+
+### Routine
+- Adding an `icon?: string` field to the team definition and a carry-forward in the save literal.
+- Writing the `teamIconSrc(group)` resolver — prefix parsing, URL construction, fallback to `null`.
+- Rendering the chosen icon in the gallery card and flow head node (replacing the `<svg><use>` with an `<img>` when `icon` is set).
+
+### Complex / Risky
+- The `teamsTabSaveAgentGroup` wipe trap (`kanban.html:5344`) — the rebuild-from-scratch literal drops every field it does not explicitly name. The `icon` carry-forward is the highest-risk line in the plan.
+- The `GET /terminals/icon-palette` endpoint dependency — this plan is its first consumer, but the endpoint is specified in `agent-and-team-pixel-art-pipeline.md`. If that plan has not landed, the picker opens an empty grid.
+- The 64 KB data URI cap — `FileReader.readAsDataURL` reads the entire file into memory before the encoded size can be checked. A `file.size` check on the `<input>` change event is needed before reading to reject oversized files early.
+
+## Edge-Case & Dependency Audit
+- **Race Conditions:** `teamsTabSaveAgentGroup` rebuilds the group object from scratch on every save. A concurrent save (e.g. from a different code path that does not mount the picker form) could overwrite the `icon` field. The carry-forward from `prevGroup?.icon` mitigates this for code paths that save without the form.
+- **Security:** The `icon` field is stored in `terminals.agentGroups`, a DB config blob. A `data:` URI with a 64 KB cap bounds the bloat. Server-side validation in the `saveAgentGroup` handler must reject unrecognised prefixes and enforce the size cap — the webview is not the only writer of this key.
+- **Side Effects:** A `data:` URI in the config blob increases every board-load read size. The 64 KB cap bounds this; a dozen custom icons stays well under a megabyte.
+- **Dependencies & Conflicts:** Hard dependency on `GET /terminals/icon-palette` (specified in `agent-and-team-pixel-art-pipeline.md`). The `teamIconSrc` resolver created here is the seam the pixel-art plan extends — it must be the only place a stored `icon` value becomes a URL.
+
+## Dependencies
+- **Agent & Team Pixel Art Pipeline** — supplies the `GET /terminals/icon-palette` endpoint that populates the picker grid. Without it, the picker has no art to show. The pixel-art plan's endpoint must land before or alongside this plan.
+- **Team identity foundation** — not a hard dependency for the picker itself (the picker edits definitions, not live groups), but the `teamIconSrc` resolver is consumed by the shell strip and cockpit, which do depend on identity.
+
+## Adversarial Synthesis
+Key risks: (1) the `teamsTabSaveAgentGroup` wipe trap could silently clear the `icon` field on any unrelated edit — the carry-forward at the save literal is the mitigation and must be tested explicitly; (2) the picker depends on an endpoint from a sibling plan — if that plan hasn't landed, the picker is empty; (3) `FileReader.readAsDataURL` reads the full file before the size cap can be checked — a `file.size` pre-check is needed. Mitigations: explicit wipe-regression test (set icon, edit name, save, confirm icon survives); add the endpoint dependency to the Dependencies section; check `file.size` before reading.
+
+## Proposed Changes
+
+### `src/webview/kanban.html`
+- **Context:** The TEAMS tab editor form (`#agent-groups-name` / `#agent-groups-head-role`, line 5265) has no icon field. The save literal at line 5344 rebuilds the group from scratch and drops unnamed fields.
+- **Logic:** Add an icon picker UI (preview button, inline grid from `GET /terminals/icon-palette`, custom file input, reset entry). Add `...(iconValue ? { icon: iconValue } : {})` to the save literal at line 5344, with a comment matching the existing carry-forwards. Add `teamIconSrc(group)` helper. Render the chosen icon in `teamsTabGalleryCard` (line 4800) and `teamsTabRenderFlow` head node (line 4924).
+- **Edge Cases:** Check `file.size` on the `<input>` change event before `FileReader.readAsDataURL` — reject files whose raw size exceeds ~48 KB (encodes to ~64 KB base64). Give every art `<img>` an `onerror` that swaps in the role portrait — note this fires after a network round-trip, so a brief broken-image flash may appear on slow connections.
+
+### `src/services/LocalApiServer.ts` (or the `saveAgentGroup` handler)
+- **Context:** The webview is not the only writer of `terminals.agentGroups`.
+- **Logic:** Validate `icon` server-side: accept only `art:`, `pack:`, and `data:` prefixes; reject anything else; enforce the 64 KB cap on `data:` URIs.
+- **Edge Cases:** A `pack:` filename with spaces must be URL-encoded at the resolver, not at storage time — store the raw filename.
 
 ### 1. The `icon` field
 Add `icon?: string` to the team definition stored at `terminals.agentGroups`. Three accepted forms, discriminated by prefix so no separate `iconKind` field is needed:

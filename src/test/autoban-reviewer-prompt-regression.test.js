@@ -32,7 +32,7 @@ async function run() {
 
     // Prompt-content presence tests (not behavior tests) — guard against the
     // gate-wiring audit and skip-tests disclosure steps being silently dropped
-    // from DEFAULT_REVIEWER_BASE_INSTRUCTIONS. These assert text presence in
+    // from the reviewer's composed steps array (module-level step constants). These assert text presence in
     // the builder source, not that the reviewer actually acts on the steps.
     assert.ok(
         builderSource.includes('Gate-wiring audit: for every automated check named in the plan'),

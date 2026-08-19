@@ -118,3 +118,6 @@ window.addEventListener('focus', () => {
 
 ## Outstanding Questions
 - **[user]** The prior plan's root-cause analysis described the visibility-regain repair as missing/broken; the current code shows it is already shipped and deliberately avoids `clearTextureAtlas()`. Is the narrowed scope (focus handler only) the intended work, or was the prior plan authored against an older revision of `terminals.js` that genuinely lacked the latch? — proceeding on the assumption that the current code is the source of truth and the only net-new work is the focus handler.
+
+## Completion Report
+Implemented terminal renderer resynchronization on window focus in `src/webview/terminals.js`. The `window.focus` event handler now latches `needsRendererResync = true` across all live, non-disposed terminal entries and initiates fit ladders for visible panes, mirroring the existing `visibilitychange` repair path to fix stale or unpainted viewport pixels when switching windows without a tab visibility transition. Modified file: `src/webview/terminals.js`. No issues encountered.

@@ -1235,7 +1235,24 @@
 
         // Reordering columns in Setup never reaches this panel directly. Focus is the
         // moment the operator comes back, so refetch the structure then (throttle bypassed).
-        window.addEventListener('focus', () => fetchKanbanColumnStructure(true));
+        window.addEventListener('focus', () => {
+            fetchKanbanColumnStructure(true);
+            // Mirror the visibilitychange repair (lines 1290-1304): arm the latch on
+            // every live entry, then let the fit ladder schedule the actual repaint.
+            // `visibilitychange` does NOT fire on same-browser window blur/focus (the
+            // document stays 'visible'), so without this arm the corruption class goes
+            // unrepaired until a manual pane click. rebuildAtlas stays false: the atlas
+            // is intact on this path (see resyncPaneRenderer doc, lines 6226-6235).
+            for (const entry of terminalsMap.values()) {
+                if (!entry || entry.disposed || !entry.term) { continue; }
+                entry.needsRendererResync = true;
+            }
+            const slotCount = getSlotCount(effectiveLayout);
+            for (let i = 0; i < slotCount; i++) {
+                const name = paneAssignments[i];
+                if (name) { startFitLadder(name); }
+            }
+        });
 
         // Esc dismisses a peek, unless the caret is inside the peeked terminal —
         // then the key belongs to the program running there.
@@ -1597,7 +1614,12 @@
                     return { id: g.id, name: g.name, source: 'manual', layout: g.layout, members, order: members };
                 }
                 return null;
-            }).filter(Boolean);
+            }).filter(Boolean).map(g => {
+                if (g && typeof g.id === 'string' && g.id.startsWith('team_') && !g.teamGroup) {
+                    return { ...g, teamGroup: true };
+                }
+                return g;
+            });
             lastReadGroupIds = terminalGroups.map(g => g.id);
         }
         const savedActive = await loadSetting('terminals.activeGroupId', null);
@@ -1695,7 +1717,12 @@
                 g && typeof g.id === 'string' && typeof g.name === 'string' &&
                 LAYOUT_MODES.includes(g.layout) &&
                 (g.source === 'manual' || g.source === 'role' || g.source === 'worktree')
-            );
+            ).map(g => {
+                if (g.id.startsWith('team_') && !g.teamGroup) {
+                    return { ...g, teamGroup: true };
+                }
+                return g;
+            });
             const existingMap = new Map(terminalGroups.map(g => [g.id, g]));
             let changed = false;
             for (const g of validated) {
@@ -2499,7 +2526,7 @@
         }
 
         if (wasLocked) {
-            // clearGroupLock drops the lock, re-seats from the full live fleet
+            // clearGroupLock drops the lock, re-seats from the unassigned live fleet
             // honouring pins, and re-renders. It also calls saveLayoutSettings.
             clearGroupLock();
         } else {
@@ -2509,36 +2536,35 @@
     }
 
     /**
-     * Drop the group lock and re-seat the grid from the full live fleet.
+     * Drop the group lock and re-seat the grid from the unassigned live fleet.
      *
      * Formerly this only dropped the lock and repainted the sidebar, leaving
      * paneAssignments exactly as the departed group left them — the "All
      * terminals" affordance read as dead because, on screen, it was. Now it
-     * performs a real seating pass: pinned slots keep their occupant, remaining
-     * slots fill in compareTerminals order, and the layout resolves via
-     * smallestLayoutFitting (non-monotonic, so it can shrink).
+     * performs a real seating pass from the unassigned subset (terminals not
+     * claimed by any manual or derived group): pinned slots keep their occupant
+     * if it is still unassigned, remaining slots fill in compareTerminals order,
+     * and the layout resolves via smallestLayoutFitting (non-monotonic, so it
+     * can shrink).
      *
-     * The early return on `!activeGroupId` is removed: clicking "All" from an
-     * already-unlocked state is a legitimate "reset my composition" gesture and
-     * must do the seating pass.
+     * The early return on `!activeGroupId` is removed: clicking "Unassigned"
+     * from an already-unlocked state is a legitimate "reset my composition"
+     * gesture and must do the seating pass.
      */
     function clearGroupLock() {
         activeGroupId = null;
         activeGroupPage = 0;
 
-        // Re-seat from the full live fleet (no delegate children), honouring pins.
-        const live = fleetList
-            .filter(t => t.status !== 'exited' && !t.parentInstanceId)
-            .sort(compareTerminals);
-        const liveNames = live.map(t => t.friendlyName);
+        // Re-seat from the unassigned live fleet (no delegate children, no group
+        // members), honouring pins that are still unassigned.
+        const unassignedNames = getUnassignedTerminalNames();
         const maxSlots = getMaxSlotCount();
         const assignments = new Array(maxSlots).fill(null);
 
-        // Pinned slots keep their occupant if it is still live.
         for (let i = 0; i < pinnedPanes.length && i < maxSlots; i++) {
             if (pinnedPanes[i]) {
                 const occupant = paneAssignments[i];
-                if (occupant && liveNames.includes(occupant)) {
+                if (occupant && unassignedNames.includes(occupant)) {
                     assignments[i] = occupant;
                 } else {
                     pinnedPanes[i] = false;
@@ -2546,10 +2572,9 @@
             }
         }
 
-        // Fill remaining slots in compareTerminals order.
         const seated = new Set(assignments.filter(Boolean));
         let fillIdx = 0;
-        for (const name of liveNames) {
+        for (const name of unassignedNames) {
             if (seated.has(name)) { continue; }
             while (fillIdx < maxSlots && assignments[fillIdx] !== null) { fillIdx++; }
             if (fillIdx >= maxSlots) { break; }
@@ -2559,10 +2584,7 @@
 
         paneAssignments = assignments;
 
-        // Resolve the layout: smallest grid that fits the live count, capped at
-        // the largest rung. Non-monotonic, so it can shrink from the departed
-        // group's layout.
-        const targetLayout = smallestLayoutFitting(liveNames.length);
+        const targetLayout = smallestLayoutFitting(unassignedNames.length);
         currentLayout = targetLayout;
         effectiveLayout = targetLayout;
 
@@ -2782,6 +2804,11 @@
         return sortGroups([...terminalGroups, ...getDerivedGroups()]);
     }
 
+    function isTeamGroup(groupId) {
+        const g = getAllGroups().find(g => g.id === groupId);
+        return !!(g && g.teamGroup);
+    }
+
     function sortGroups(groups) {
         const pinned = new Set(groupPrefs.pinned);
         return groups.slice().sort((a, b) => {
@@ -2911,6 +2938,15 @@
         return null;
     }
 
+    function getUnassignedTerminalNames() {
+        const live = fleetList
+            .filter(t => t.status !== 'exited' && !t.parentInstanceId)
+            .sort(compareTerminals);
+        return live
+            .filter(t => !findGroupForTerminalName(t.friendlyName))
+            .map(t => t.friendlyName);
+    }
+
     /**
      * Add a terminal to the active group's membership. For manual groups,
      * appends to the group's own members array. For derived groups, appends
@@ -2922,6 +2958,11 @@
     function addTerminalToActiveGroup(name) {
         const group = getAllGroups().find(g => g.id === activeGroupId);
         if (!group) { return; }
+        // Team groups are managed exclusively by the team system (start/stop in
+        // the Teams tab). The sidebar must not inject terminals into a team —
+        // doing so causes the terminal to receive the team's standing orders on
+        // every prompt, making it believe it is a team member.
+        if (group.teamGroup) { return; }
         if (group.source === 'manual') {
             if (!group.members) { group.members = []; }
             if (!group.members.includes(name)) { group.members.push(name); }
@@ -2974,10 +3015,15 @@
         if (hasFreeSlot) {
             const isMemberOfActive = group && group.id === activeGroupId;
             if (!isMemberOfActive) {
-                // Add to the active group first, then seat with keepLock.
-                addTerminalToActiveGroup(name);
-                assignToFocusedPane(name, { keepLock: true });
-                return;
+                // Team groups are managed exclusively by the team system.
+                // Do not inject terminals into a team via sidebar clicks —
+                // fall through to the lock-drop path below, which drops the
+                // lock and seats the terminal normally.
+                if (!isTeamGroup(activeGroupId)) {
+                    addTerminalToActiveGroup(name);
+                    assignToFocusedPane(name, { keepLock: true });
+                    return;
+                }
             }
         }
 
@@ -3053,17 +3099,26 @@
         const tabRow = document.createElement('div');
         tabRow.className = 'group-tab-row';
 
-        // "All" tab — active when no group is locked. Clicking it drops the lock.
-        // Clicking the already-active "All" tab is inert (no-op).
+        // "Unassigned" tab — active when no group is locked. Clicking it drops the lock.
+        // Clicking the already-active tab resets composition to unassigned terminals.
+        const unassignedCount = getUnassignedTerminalNames().length;
         const allTab = document.createElement('button');
         allTab.type = 'button';
         allTab.className = 'group-tab' + (activeGroupId ? '' : ' active');
-        allTab.textContent = 'All';
-        allTab.title = activeGroupId ? 'Drop the lock and return to free composition' : 'Free composition mode';
+        allTab.title = activeGroupId
+            ? 'Drop the lock and show unassigned terminals'
+            : 'Unassigned terminals';
+
+        const allTabName = document.createElement('span');
+        allTabName.textContent = 'Unassigned';
+        allTab.appendChild(allTabName);
+
+        const allTabCount = document.createElement('span');
+        allTabCount.className = 'group-tab-count';
+        allTabCount.textContent = String(unassignedCount);
+        allTab.appendChild(allTabCount);
+
         allTab.addEventListener('click', () => {
-            // No !activeGroupId guard: clicking "All" from an already-unlocked
-            // state is a legitimate "reset my composition" gesture and
-            // clearGroupLock now performs a real seating pass in both cases.
             clearGroupLock();
         });
         tabRow.appendChild(allTab);
@@ -4659,6 +4714,12 @@
                     // the confirm Enter key for CLI agents — the same pipeline the kanban
                     // board's drag-drop uses via triggerAction → sendPromptToPty.
                     //
+                    // The prompt returned by promptSelected is already composed by
+                    // agentPromptBuilder. The delivery layer cannot be told that over HTTP
+                    // (addonsComposed is stripped at the boundary as a safeguard), so the seat
+                    // directive block dedupes itself against the prompt instead — see
+                    // buildSeatDirectiveBlock's existingPrompt argument.
+                    //
                     // clearBeforePromptFromConfig: true asks the host to resolve the
                     // switchboard.terminal.clearBeforePrompt config default for this
                     // delivery. The webview cannot read that setting (loadSetting only
@@ -4793,7 +4854,7 @@
             // is not in scope.
             if (activeGroupId) {
                 const group = getAllGroups().find(g => g.id === activeGroupId);
-                if (group) {
+                if (group && !group.teamGroup) {
                     if (group.source !== 'manual' && groupPrefs.extras && Array.isArray(groupPrefs.extras[activeGroupId])) {
                         groupPrefs.extras[activeGroupId] = groupPrefs.extras[activeGroupId].filter(n => n !== targetName);
                     } else if (group.source === 'manual' && Array.isArray(group.members)) {

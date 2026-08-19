@@ -21,6 +21,50 @@ That is the hard part of a queue — durable enqueue, exactly-once claim, crash 
 ## Metadata
 - **Complexity:** 8
 - **Tags:** backend, frontend, api, feature, reliability
+- **Project:** browser-switchboard
+- **Feature:** 72bda17f-bb0c-4ad9-b9b9-55c19fc9cba7
+
+## User Review Required
+Yes — one open decision: how completion is detected for non-plan queue items (`kind: 'prompt'`, `kind: 'card'`). The plan reuses plan-file mtime advance and the `agentCompleted` badge signal, but a prompt with no plan file has no mtime advance. Proceeding on the assumption that auto mode is restricted to `kind: 'plan'` items only, and manual mode (per-item "send now") is used for prompts and cards where the operator decides when the item is done. This limits the pump's auto-advance to plans, which have a reliable completion signal.
+
+## Complexity Audit
+
+### Routine
+- Creating `.switchboard/teams/<groupId>/queue/` with a `claimed/` subdirectory via the existing `bootstrapInstructionsDirectory` shape.
+- API endpoints: `GET`/`POST`/`DELETE`/`claim`/`reorder` on the team queue path.
+- Queue list UI in the team cockpit: position, kind, title, target, state.
+
+### Complex / Risky
+- Completion detection for non-plan items — a queued `prompt` or `card` with no plan file has no mtime advance and no `agentCompleted` signal. The pump would wait 24 hours (the claim staleness backstop) to declare it stalled. This is the biggest hole in the feature. Resolution: restrict auto mode to `kind: 'plan'` items; manual mode for prompts and cards.
+- Orchestrator conflict detection — the plan says "detect an active orchestrator and refuse to enable auto mode" but does not specify the detection mechanism (flag, lockfile, running process). Must be resolved before building the pump.
+- The traversal guard ordering — `groupId` and item id must be validated against path traversal (`../`, absolute paths, URL-encoded) **before** the DB lookup, not after. A malformed `groupId` with `../` must never reach the DB or the filesystem.
+- The claim mechanism — `claimInboxItemIn` (`ScheduledJobsService.ts:158`) creates a `<filename>.claim` sidecar. Verify it uses `wx` (atomic exclusive-create) for the sidecar, not `writeFile`. Two concurrent claims must yield exactly one winner.
+
+## Edge-Case & Dependency Audit
+- **Race Conditions:** Two cockpit windows on the same team both pump. The `wx` exclusive-create on enqueue and the atomic claim sidecar are the arbiters. Verify both use atomic create. A claim older than the 24-hour staleness window is reclaimable; a fresh one is not.
+- **Security:** `groupId` and item id are interpolated into filesystem paths. The traversal guard must reject `../`, absolute paths, and URL-encoded traversal before any filesystem call. Assert no file is created outside the team directory. Put the traversal guard before the DB validation.
+- **Side Effects:** The pump dispatches prompts to terminals. In auto mode, an operator who queues five plans and enables auto has five agents started without further interaction. The plan correctly makes auto mode opt-in per team, defaulting to manual.
+- **Dependencies & Conflicts:** Depends on team identity foundation (queue is keyed per team) and team cockpit (queue is displayed there). The orchestrator conflict — auto mode alongside an active orchestrator would double-dispatch the same plans. Must detect and refuse. The completion detection reuses the `agentCompleted` / badge signal, which depends on the plan-file mtime advance contract.
+
+## Adversarial Synthesis
+Key risks: (1) completion detection for non-plan items is the biggest hole — a prompt with no plan file has no completion signal, and the pump waits 24 hours; mitigated by restricting auto mode to plan items; (2) orchestrator conflict detection mechanism is unspecified — must identify how to detect an active orchestrator before building the pump; (3) traversal guard must precede DB validation to prevent path injection; (4) the claim sidecar mechanism must use atomic create. Mitigations: restrict auto mode to plans; specify the orchestrator detection mechanism; order the guards correctly; verify the claim primitive.
+
+## Proposed Changes
+
+### `src/services/ScheduledJobsService.ts` (or a new `TeamQueueService.ts`)
+- **Context:** `ScheduledJobsService.ts` contains a complete file-based work-inbox implementation with no callers outside its own module. `writeInboxFile` (line 65), `claimInboxItemIn` (line 158), `isInboxItemClaimedIn` (line 128) are directory-parameterised.
+- **Logic:** Create `.switchboard/teams/<groupId>/queue/` with a `claimed/` subdirectory via `bootstrapInstructionsDirectory`. Reuse `writeInboxFile`, `claimInboxItemIn`, `isInboxItemClaimedIn` by passing the team directory as `dirAbs`. Each item is a markdown file with frontmatter: `kind`, `planId`, `feature`, `enqueued_ts`, `target`, `priority`.
+- **Edge Cases:** Verify `claimInboxItemIn` uses `wx` (atomic exclusive-create) for the `.claim` sidecar. If it uses `writeFile`, fix it before relying on the claim guarantee. `bootstrapInstructionsDirectory` returns `null` when `.switchboard/` is absent (line 47) — match that: no `.switchboard/`, no queue, feature disabled with a reason.
+
+### `src/services/LocalApiServer.ts`
+- **Context:** No queue API endpoints exist.
+- **Logic:** Add `GET /terminals/teams/<groupId>/queue`, `POST` (enqueue), `POST /<id>/claim`, `DELETE /<id>`, `POST /reorder`. Validate `groupId` against path traversal first, then against registered groups. Cap item body size and reject at enqueue.
+- **Edge Cases:** Traversal guard before DB validation. Reject `groupId` or item id containing `../`, absolute paths, or URL-encoded traversal before any filesystem call. Assert no file is created outside the team directory.
+
+### `src/webview/terminals.js` (and `terminals.html`)
+- **Context:** No work queue UI exists. The kanban pane has drag-to-terminal dispatch (`terminals-kanban-pane-drag-to-terminal-dispatch` shipped).
+- **Logic:** Add a queue list in the team cockpit: position, kind, title, target, state (pending / claimed / running / done / stalled). Drag to reorder; drag out or immediate delete to remove (no confirm gate). "Send next now" and a mode toggle (manual / auto). Enqueue by dropping a kanban card onto the team. Show queue depth on the team's rail icon badge.
+- **Edge Cases:** Auto mode restricted to `kind: 'plan'` items (completion detection requires plan-file mtime advance). Manual mode for prompts and cards. Detect an active orchestrator and refuse auto mode with a message naming the conflict. Re-check the card's column at claim time, not at enqueue time. Cap item bodies and reject at enqueue with a clear error.
 
 ## Dependencies
 - **Team identity foundation** — the queue is keyed per team.

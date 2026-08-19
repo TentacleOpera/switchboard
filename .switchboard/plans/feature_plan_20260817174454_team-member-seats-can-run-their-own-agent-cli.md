@@ -60,6 +60,10 @@ One text input per member row, after `relationship`, placeholder showing what th
 **Tags:** feature, ui, ux, frontend
 **Project:** Browser Switchboard
 
+## User Review Required
+
+No user review required — the field already exists on the stored shape and is already honoured end to end by the spawn path. This plan exposes it in the editor and removes a lossy preservation shim. No new wire surface, no new stored key, no host change.
+
 ## Complexity Audit
 
 ### Routine
@@ -100,6 +104,15 @@ One text input per member row, after `relationship`, placeholder showing what th
 **Row width.** The member row is `flex-wrap: wrap` with `gap: 4px` (`:5194-5196`). Two more inputs wrap to a second line in a narrow panel rather than overflowing. Give the command input `flex: 1; min-width: 110px` and the label input `width: 70px`, matching the existing sizing idiom.
 
 **Curtains.** `startTeam` arms a startup curtain for every worker unconditionally (`terminals.js:6831-6834`), so a seat with its own command is covered exactly as one inheriting the role's is. No change.
+
+## Dependencies
+
+- No session dependencies. The plan builds on the existing `DelegateDefinition.startupCommand` field, the existing `injectStartupCommand` fallback logic, the existing `teamsTabAgentGroupMemberRow` row builder, and the existing `teamsTabSaveAgentGroup` save path.
+- No cross-subtask dependencies. This plan touches only the TEAMS-tab member editor UI in `kanban.html`. It does not touch `SHIPPED_TEAM_TYPES`, `migrateAgentGroups`, standing orders, or any migration logic. It is fully independent of the head-prompt and roster-retopologise subtasks.
+
+## Adversarial Synthesis
+
+Key risks: the `data-role` attribute trap (a member command input tagged `data-role` would be scooped into the global role-command map by `agentsTabCollectConfig`, clobbering the workspace's role setting on the next Agents-config save); the lossy `existing.find(m => m.role === role)` shim collapsing same-role members to the first row's values; and stale cached webview builds rendering the old 2-input row. Mitigations: use class-based selectors (`member-cmd`, `member-label`) with no `data-role` attribute, pinned by a source regex assertion; delete the shim and read from the row's own inputs; keep the `inputs.length >= 2` guard unchanged so stale builds degrade safely (missing `.member-cmd` → empty → no key stored → inherits role command).
 
 ## Proposed Changes
 
@@ -250,3 +263,7 @@ Add a behavioural round-trip test for the two-same-role case: given a stored gro
 9. **Two same-role rows survive.** Add two `coder` rows with different labels and different commands. Save, reopen: both rows keep their own values. Start the team: the terminals are named `<head>-<label>` per row and each boots its own command. This is the case that fails on the current build.
 10. **No global clobber.** With a member command set, go to the AGENTS tab and save the agent config (toggle any visibility checkbox). Reopen the AGENTS tab and confirm the role's global command is unchanged — the member input was not collected into it.
 11. **Standalone.** Repeat 4, 5, 7 against `npx switchboard` in a browser; the spawn path differs by host and the override is applied in `ptyFleetService` on both.
+
+## Recommendation
+
+**Complexity: 4 → Send to Coder.** Two inputs in an existing row builder, a shim deletion, and a source-level contract test. The `data-role` avoidance is the one non-obvious detail, and it is pinned by a regex assertion. No service-layer changes.

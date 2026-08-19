@@ -19,6 +19,44 @@ Solo mode makes `saveSetting` a no-op (`terminals.js:1491`) — deliberately. Th
 ## Metadata
 - **Complexity:** 7
 - **Tags:** frontend, ui, ux, feature
+- **Project:** browser-switchboard
+- **Feature:** 72bda17f-bb0c-4ad9-b9b9-55c19fc9cba7
+
+## User Review Required
+No user review required — the `scopedFleet()` filter-at-render-boundary design and the namespaced persistence strategy are fully specified.
+
+## Complexity Audit
+
+### Routine
+- Parsing `?team=<groupId>` from URL params (mirrors the existing `?solo=<name>` parse at `terminals.js:158`).
+- Hiding the group strip in team mode (extending the existing solo early-return at `terminals.js:3001`).
+- Rendering a team header (icon, name, member count) in place of the layout toolbar.
+
+### Complex / Risky
+- The `scopedFleet()` accessor — must filter at the render boundary only, never at fetch time. Several code paths need the whole fleet even in a scoped window (standing-orders resolver, stale-slot drop loop, dispatch-in-flight cleanup). A truncated `fleetList` would make those quietly wrong.
+- The namespaced persistence (`terminals.team.<groupId>.<key>`) — creates a storage leak. Namespaced layout keys are never cleaned up when a team's group record is deleted. Hook cleanup into the group-record deletion path (`terminals.js:3060`).
+- The `+` picker re-home from `group:*` to `team:<id>` — the GC at `renderSidebarList` must handle `team:<id>` keys, not just `group:*`. Verify the GC is key-agnostic before relying on "the fix is the same."
+
+## Edge-Case & Dependency Audit
+- **Race Conditions:** Two windows open on the same team both write the same namespaced keys — last-write-wins. On a non-focused window's next poll-driven re-render, its layout flips to the other window's setting without the operator touching it. Acceptable (the main panel has the same property across pop-outs today) but document the symptom.
+- **Security:** No new attack surface. The `teamScopeId` is parsed from the URL and used to filter render paths. It is never interpolated into a filesystem path or DB query — it is only matched against `terminals.groups` records in memory.
+- **Side Effects:** Namespaced layout keys accumulate in the DB config blob. Without cleanup on group deletion, orphaned keys persist indefinitely. Hook deletion into the tab-strip `×` handler at `terminals.js:3060`.
+- **Dependencies & Conflicts:** Depends on team identity foundation (`definitionId` / `head` / `teamKind` / `isSpawnedTeamGroup`) and team icon picker (header icon). The shell strip's `popoutTeam` message is the click entry point, but this plan can be built and tested by navigating to the URL directly. `applyStandingOrdersClient` (`terminals.js:8822`) must receive the unfiltered fleet, not `scopedFleet()` — this is the concrete bug that "filter at the render boundary" prevents.
+
+## Adversarial Synthesis
+Key risks: (1) namespaced layout keys create a storage leak — orphaned keys accumulate when team group records are deleted without cleanup; (2) the picker GC may not handle `team:<id>` keys, leaving a live picker invisible to garbage collection; (3) two windows on the same team race on namespaced keys, causing a non-focused window's layout to flip on the next poll. Mitigations: hook namespaced-key cleanup into the group-record deletion path; verify the GC is key-agnostic; document the two-window race symptom.
+
+## Proposed Changes
+
+### `src/webview/terminals.js`
+- **Context:** The page supports `?solo=<name>` scoped mode (parse at line 158, `init()` at lines 724–731, CSS at `terminals.html:1921`). Team mode is the same shape one level up — a filter over the fleet rather than a single pinned terminal.
+- **Logic:** Parse `?team=<groupId>` beside the solo parse. Add `scopedFleet()` accessor returning `fleetList` filtered to the team's `members` when `teamScopeId` is set, and `fleetList` unchanged otherwise. Route `renderSidebarList`, seating passes, `renderGroupTabStrip`, and the empty-state decision through it. Add namespaced persistence: when `teamScopeId` is set, read/write `terminals.team.<groupId>.<key>` for the layout family only. Hide the group strip (extend the solo early-return at line 3001). Re-home the `+` picker to `team:<id>`.
+- **Edge Cases:** Do not filter `fleetList` itself at fetch time. `applyStandingOrdersClient` (line 8822) must receive the unfiltered fleet. Hook namespaced-key cleanup into the group-record deletion path at line 3060. Verify the picker GC handles `team:<id>` keys. `switchToGroup` at line 2566 must guard against a team-scoped window silently becoming unscoped.
+
+### `src/webview/terminals.html`
+- **Context:** CSS at line 1921 hides the sidebar, toolbar, banner and group strip for solo mode. Team mode needs the sidebar visible.
+- **Logic:** Add `is-team-scoped` body class styles. Show the sidebar (unlike solo). Hide the group strip. Add a team header area where the layout toolbar sits in the full panel.
+- **Edge Cases:** The team header must accommodate the team-verb controls the action-bar plan adds. Keep the layout picker — choosing a grid for a four-member team is the first thing an operator will want.
 
 ## Dependencies
 - **Team identity foundation** — `definitionId` / `head` / `teamKind`, and `isSpawnedTeamGroup`.

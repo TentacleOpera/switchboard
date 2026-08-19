@@ -4,7 +4,7 @@ description: 'Tickets Panel Synchronization and Ergonomics'
 
 # Tickets Panel Synchronization and Ergonomics
 
-**Complexity:** 5
+**Complexity:** 4
 
 ## Goal
 

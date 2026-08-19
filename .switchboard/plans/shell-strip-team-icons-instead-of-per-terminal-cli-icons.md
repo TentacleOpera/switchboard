@@ -13,6 +13,44 @@ It renders per-CLI because that is the only identity available: teams have no ic
 ## Metadata
 - **Complexity:** 6
 - **Tags:** frontend, ui, ux, feature
+- **Project:** browser-switchboard
+- **Feature:** 72bda17f-bb0c-4ad9-b9b9-55c19fc9cba7
+
+## User Review Required
+No user review required — the panel-side aggregation, backward-compatible `teams` array, and rail mode toggle are fully specified.
+
+## Complexity Audit
+
+### Routine
+- Extending `postFleetStateToShell` to emit a second `teams` array beside the existing `terminals` array.
+- Rendering team buttons in `renderTerminalSection` using the same `<img>` pattern as existing per-terminal buttons.
+- Adding a rail mode toggle (teams / terminals) persisted alongside other strip prefs.
+
+### Complex / Risky
+- The aggregate light and pulse logic — `any-done wins`, `doneStamp = max` over members, pulse ledger keyed on `groupId` instead of terminal name. Must reuse `renderTerminalSection`'s existing pulse machinery verbatim to avoid forking the animation-resume logic.
+- The stable-order requirement — the `teams` array must be sorted panel-side (by definition order, then name) before sending, because the shell cannot sort by definition order it does not have.
+- The `popoutTeam` window-name dedup — the existing `shell.js:566` already-open-then-focus check would prevent a second window on the same team, contradicting the cockpit plan's allowance for two windows on the same team. Do not dedup team windows by name.
+
+## Edge-Case & Dependency Audit
+- **Race Conditions:** A team rebuild that removes a hovered button strands the tooltip overlay. The plan correctly calls `hideStripTooltip()` at the top of the rebuild — same hazard as per-terminal rebuilds.
+- **Security:** No new attack surface. The `teams` array is built panel-side from in-memory group records and icon resolvers. No caller-supplied data is interpolated into URLs.
+- **Side Effects:** The `teams` array increases the `postFleetStateToShell` payload size. Bounded by the number of teams (typically <10). Negligible.
+- **Dependencies & Conflicts:** Depends on team identity foundation (`definitionId` / `head` / `teamKind` / `isSpawnedTeamGroup` / `resolveDefinitionForGroup`) and team icon picker (`icon` field / `teamIconSrc` resolver). The `popoutTeam` click behaviour opens the team cockpit (`/terminals?team=<groupId>`), supplied by the cockpit plan. Window-name dedup must be skipped for teams to allow the cockpit plan's two-window scenario.
+
+## Adversarial Synthesis
+Key risks: (1) the `teams` array must be sorted panel-side before sending — the shell cannot sort by definition order it does not have; (2) the `popoutTeam` window-name dedup contradicts the cockpit plan's two-window allowance — do not dedup team windows by name; (3) the aggregate pulse ledger keyed on `groupId` must reuse the existing pulse machinery verbatim to avoid forking the animation-resume logic. Mitigations: sort panel-side; skip the already-open check for team pop-outs; reuse `renderTerminalSection`'s pulse machinery without modification.
+
+## Proposed Changes
+
+### `src/webview/terminals.js`
+- **Context:** `postFleetStateToShell` (line 1345) emits only a `terminals` array. The shell rail renders one button per terminal, painted with CLI brand marks.
+- **Logic:** Extend `postFleetStateToShell` to emit a `teams` array beside `terminals`. Each entry: `{ groupId, definitionId, name, head, iconUri, memberNames[], light, doneStamp, activeCount, exitedCount }`. Build it panel-side (the panel holds `fleetList`, group records, and icon resolvers). Sort by definition order, then name — never fleet-poll order. Keep sending `terminals` unchanged and complete.
+- **Edge Cases:** Aggregate `light` per team: `'done'` if any member has an unacknowledged completion badge, else `'active'` if any member is active, else `'exited'`. `doneStamp` = max over member stamps. A terminal in two groups: only groups where `isSpawnedTeamGroup(g)` is true become team buttons.
+
+### `src/webview/shell.js`
+- **Context:** `renderTerminalSection` (line 423) renders one `.strip-term-btn` per live terminal. The pulse ledger (`pulsedDoneStamps`, line 481) keys on terminal name.
+- **Logic:** Emit one button per team (in stable order), then one button per ungrouped terminal. Team button contents: team icon as `<img class="strip-team-icon">`, plus a small member-count badge. Key the pulse ledger on `groupId` instead of terminal name. Add a `popoutTeam` sibling to `popoutTerminal` (line 731) opening `/terminals?team=<groupId>`. Add a rail mode toggle (teams / terminals) persisted alongside other strip prefs.
+- **Edge Cases:** Do not dedup team windows by name — use a unique window name per open action or skip the already-open check for teams, to allow the cockpit plan's two-window scenario. Clicking a team with an unacknowledged completion is the acknowledgement — relay `clearTeamBadges` carrying `memberNames`. Keep `hideStripTooltip()` at the top of the function. Three-deep icon fallback: no team icon → role portrait → brand mark → role letter.
 
 ## Dependencies
 - **Team identity foundation** — `definitionId` / `head` / `teamKind` on the registered group, plus `resolveDefinitionForGroup`.

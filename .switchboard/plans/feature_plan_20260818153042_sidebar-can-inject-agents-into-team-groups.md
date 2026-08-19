@@ -340,3 +340,6 @@ This is a UX enhancement, not required for the fix. It addresses the user's comp
 
 ## Outstanding Questions
 - **[user]** Should `deleteGroup` be guarded for team groups (preventing sidebar deletion of team groups), or is the current behavior (deletion allowed as a stale-group cleanup path) correct? — proceeding on the assumption that deletion is allowed, since stale team groups need a cleanup path and the Teams tab may not show teams with no live terminals.
+
+## Completion Report
+Implemented team group protection against accidental terminal injection and membership mutation from the sidebar. Added `teamGroup: true` flag in `wireSpawnedTeam` registration and upsert paths, pure `migrateTeamGroupFlags` migration in `teamWiring.ts`, and in-memory load migrations in `terminals.js`. Guarded `addTerminalToActiveGroup`, `handleLockedTerminalClick`, and the pane-unassign click handler against mutating team groups. Modified `src/services/teamWiring.ts` and `src/webview/terminals.js`. No issues encountered.

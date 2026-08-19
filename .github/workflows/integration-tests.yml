@@ -381,6 +381,20 @@ jobs:
       - name: Reviewer prompt anti-artifact contract (directive presence, completion handshake co-existence)
         run: npm run test:contract:reviewer-prompt
 
+      # The source-presence gate above cannot see that a block is emitted twice,
+      # emitted when its condition is false, or no longer emitted at all — only
+      # that the literal still exists in the .ts file. This step runs the
+      # behavioural suite (buildKanbanBatchPrompt — reviewer role behaviour) that
+      # asserts the actual composed prompt: exactly one COMPLETION REPORT:
+      # occurrence in every configuration, the replace-override path still
+      # appends the generic directive, and the mode-variant selection is correct.
+      # Loads the real compiled builder from out/, which "Compile test outputs"
+      # above has already produced — this step must stay AFTER it. Does NOT run
+      # compile-tests itself: that would duplicate the compile gate above and
+      # double the compile cost for no added coverage.
+      - name: Reviewer prompt behaviour contract (composed prompt assertions, completion sentinel)
+        run: npm run test:contract:reviewer-prompt-behaviour
+
       - name: Kanban card-button drag guard contract
         run: npm run test:contract:drag-guard
 
@@ -729,6 +743,16 @@ jobs:
       - name: TEAMS tab adopt-only contract (one start entry point)
         run: npm run test:contract:teams-tab-no-start
 
+      # Adding or launching an agent while a team was selected appended it to that
+      # team's saved roster. The two stores must never be written together: custom
+      # agents are machine-global (integration-config.json), teams are per-workspace
+      # (kanban.db terminals.agentGroups). Pins the save/delete isolation on both
+      # handlers, and the TEAMS tab roster filter — the role dropdown is built from
+      # ROLE_KEYS, not the bare label list, which carries visibility-only `jules`
+      # (no role config, no startup command) and would author a seat that cannot boot.
+      - name: Standalone agent / team roster isolation contract
+        run: npm run test:contract:standalone-agent-isolation
+
       # Autoban config normalisation + completion-driven dispatch. This file existed
       # for months with NO npm script and NO CI step, so every assertion in it was
       # decorative — including the ones covering the retired terminal pools and the
@@ -924,6 +948,17 @@ jobs:
       # deletion from either skill copy would have gone green.
       - name: Terminal coder dispatch driving contract (attended + unattended bounds)
         run: npm run test:contract:terminal-coder-dispatch
+
+      # Feature Drive-mode prompt-body reframe: pins that ALL SIX execution-coded blocks
+      # flip when the Drive toggle is on (intro, AUTHORIZATION directive, feature
+      # orchestration directive, coder EXECUTION MODE block, coder FEATURE FILE trailing
+      # verb, custom-agent subagent clause) and that the Drive-off payload is unchanged
+      # across lead / coder / intern / planner / custom agents. Wired during review: the
+      # coder put these assertions in agent-prompt-builder-subagents.test.js, which has
+      # carried stale assertions since 2026-06, throws at its second test, and is invoked
+      # by no script and no CI step — so the new tests could never have run.
+      - name: Feature Drive-mode prompt reframe contract
+        run: npm run test:contract:feature-drive-prompt
 
       - name: Run integration suite
         run: npm run test:integration:all

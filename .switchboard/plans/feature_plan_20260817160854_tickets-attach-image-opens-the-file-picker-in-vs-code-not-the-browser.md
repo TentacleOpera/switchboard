@@ -6,7 +6,7 @@ Make the 🖼️ **Attach image** button in the Tickets ticket-editor work for a
 
 ### Problem analysis
 
-`src/webview/tickets.js:3113-3130` wires the markdown editor's `onAttachImage` callback to post a `ticketAttachImage` verb and wait for a `ticketImageAttached` push:
+`src/webview/tickets.js:3158-3175` wires the markdown editor's `onAttachImage` callback to post a `ticketAttachImage` verb and wait for a `ticketImageAttached` push:
 
 ```js
 onAttachImage: () => new Promise((resolve) => {
@@ -29,8 +29,8 @@ const picked = await this._seams().ui.showOpenDialog({
 
 That is correct in exactly one host — the VS Code webview, where the person clicking the button and the process opening the dialog share a window. It is wrong in both browser hosts:
 
-- **Browser cockpit backed by the running extension.** The browser posts to `POST /tickets/verb/ticketAttachImage` (`LocalApiServer.ts:3884` → `_handleTicketsVerb`, `:2143` → `TicketsPanelProvider.handleServiceVerb`, `:144`). `_seams().ui` is `VscodeHostUI` (`src/services/hostSeams.ts:406`), so a **modal VS Code open-dialog appears in the editor window** — a different application, often on a different screen or behind the browser, and on a remote-viewed cockpit on a different machine entirely. The HTTP request stays open until somebody dismisses that dialog. This is exactly the reported symptom.
-- **Standalone (`npx switchboard`).** `bootstrap.ts` injects `createVscodeHostSeams(...)` compiled against the vscode shim, and `src/standalone/vscodeShim.ts:136` makes `showOpenDialog` **reject**: `headlessReject('showOpenDialog')` (`:103`). The arm's `catch` calls `showErrorMessage`, which on this host only writes to the server console (`vscodeShim.ts:135`), then pushes `ticketImageAttached { success: false }`. `markdownEditor.js:372-379` strips the `![Uploading image…]()` placeholder, so the button visibly does **nothing** and no error reaches the browser.
+- **Browser cockpit backed by the running extension.** The browser posts to `POST /tickets/verb/ticketAttachImage` (`LocalApiServer.ts:4434` → `_handleTicketsVerb`, `:2631` → `TicketsPanelProvider.handleServiceVerb`, `:144`). `_seams().ui` is `VscodeHostUI` (`src/services/hostSeams.ts:406`), so a **modal VS Code open-dialog appears in the editor window** — a different application, often on a different screen or behind the browser, and on a remote-viewed cockpit on a different machine entirely. The HTTP request stays open until somebody dismisses that dialog. This is exactly the reported symptom.
+- **Standalone (`npx switchboard`).** `bootstrap.ts` injects `createVscodeHostSeams(...)` compiled against the vscode shim, and `src/standalone/vscodeShim.ts:136` makes `showOpenDialog` **reject**: `headlessReject('showOpenDialog')` (`:103`). The arm's `catch` calls `showErrorMessage`, which on this host only writes to the server console (`vscodeShim.ts:135`), then pushes `ticketImageAttached { success: false }`. `markdownEditor.js:379-386` strips the `![Uploading image…]()` placeholder, so the button visibly does **nothing** and no error reaches the browser.
 
 ### Root cause
 
@@ -42,11 +42,17 @@ In a browser host, the **client** reads the file (`<input type="file">` + `FileR
 
 **Deliberately NOT unified onto a single `<input type="file">` path.** The VS Code webview iframe is sandboxed without `allow-modals` (the documented reason `window.confirm()` is a silent no-op in this repo), and whether Chromium's file chooser survives that sandbox is unverified. The native dialog in that host is working today; replacing it with an unverified mechanism to save a five-line branch is a bad trade. Each host has exactly one behaviour; the user never sees a choice.
 
+**Why base64-in-JSON, not raw-binary upload.** The codebase has a precedent for raw-binary image upload: `ptyPasteImage` (`LocalApiServer.ts:2378-2408`) bypasses `_parseJsonBody` for `application/octet-stream`, reads raw chunks, and checks size on the actual bytes — avoiding the 33% base64 inflation. That path is special-cased inside the pty verb handler, not the tickets verb handler. Using it here would require adding a similar content-type branch to `_handleTicketsVerb` (`:2631`), a different code path with different error handling, and a non-JSON body that bypasses the schema-validation rail. The base64-in-JSON approach reuses `_handleAttachFile`'s proven validation (`:3947-4021`), flows through the same `_parseJsonBody` → `validateVerbPayload` → `handleServiceVerb` pipeline as every other tickets verb, and the 8 MB client-side pre-check keeps the inflated body under the 10 MB ceiling. The 33% bandwidth overhead is acceptable for image attachments.
+
 ## Metadata
 
 - **Complexity:** 5
 - **Tags:** bugfix, frontend, backend, ui
 - **Project:** Browser Switchboard
+
+## User Review Required
+
+The deliberate non-unification decision (keep the native dialog in the VS Code webview, use `<input type="file">` only in browser hosts) is a design trade-off that the user should confirm before implementation. The plan's reasoning — that the VS Code webview iframe sandbox may block Chromium's file chooser, and the native dialog works today — is sound but unverified. If the user prefers a single code path, the VS Code path would need a separate spike to confirm `<input type="file">` survives the sandbox. No other aspect requires user review; the security, validation, and edge-case handling are fully specified.
 
 ## Complexity Audit
 
@@ -54,15 +60,15 @@ In a browser host, the **client** reads the file (`<input type="file">` + `FileR
 
 - Adding a `case` to `TicketsPanelProvider._handleMessage` — the file has ~90 such arms.
 - Adding a `verbSchemas.ts` entry and regenerating `protocol-catalog.json` + `src/generated/verbAllowlist.ts` via `npm run catalog:generate`.
-- Base64 decode + extension allowlist + size cap: `LocalApiServer._handleAttachFile` (`:3400-3465`) is a working reference implementation of exactly this validation, including the strict `/^[A-Za-z0-9+/]*={0,2}$/` check that exists because `Buffer.from` silently ignores invalid base64.
+- Base64 decode + extension allowlist + size cap: `LocalApiServer._handleAttachFile` (`:3947-4021`) is a working reference implementation of exactly this validation, including the strict `/^[A-Za-z0-9+/]*={0,2}$/` check that exists because `Buffer.from` silently ignores invalid base64.
 - The collision-safe destination-name loop, `attachments/` mkdir, and the `ticketImageAttached` push shape are lifted verbatim from the existing arm.
 
 **Complex / Risky**
 
 1. **`fileName` is now attacker-controllable input.** The existing arm derives the name from a path the *host* dialog returned; the new arm takes a string from an HTTP client. It must be reduced with `path.basename()`, stripped of separators, and extension-checked against an allowlist before any `path.join`. A raw `path.join(attachmentsDir, msg.fileName)` with `../../` writes outside the workspace. This is the single highest-risk line in the change.
-2. **Transient user activation.** `input.click()` must be reached **synchronously** from the toolbar click. `markdownEditor.js:355-367` calls `onAttachImage()` with no intervening `await`, so activation is intact — but any `await` added ahead of `input.click()` inside the new browser path silently kills the picker in Safari and Chrome. Verified there is no `sandbox` attribute on the shell's panel iframes (`shell.js:377-385`), so the picker is not otherwise blocked.
-3. **A cancelled pick must resolve the promise.** `markdownEditor.js:361` inserts `![Uploading image…]()` *before* awaiting, and only removes it once the promise settles. `change` does not fire on cancel, so a naive implementation leaves that placeholder permanently welded into the user's description. Needs the `cancel` event plus a window-refocus fallback.
-4. **Body-size ceiling.** `_parseJsonBody` (`LocalApiServer.ts:1043-1056`) destroys the request above `_MAX_FILE_SIZE_BYTES` (10 MB) — measured on the **base64** body, which is ~4/3 of the file. The transport's `fetch` then rejects and no `ticketImageAttached` ever arrives, so the promise hangs and the placeholder sticks. A client-side 8 MB pre-check keeps the request under the ceiling for every file that has a chance of succeeding.
+2. **Transient user activation.** `input.click()` must be reached **synchronously** from the toolbar click. `markdownEditor.js:362-374` calls `onAttachImage()` with no intervening `await`, so activation is intact — but any `await` added ahead of `input.click()` inside the new browser path silently kills the picker in Safari and Chrome. Verified there is no `sandbox` attribute on the shell's panel iframes (`shell.js:377-385`), so the picker is not otherwise blocked.
+3. **A cancelled pick must resolve the promise.** `markdownEditor.js:367` inserts `![Uploading image…]()` *before* awaiting, and only removes it once the promise settles. `change` does not fire on cancel, so a naive implementation leaves that placeholder permanently welded into the user's description. Needs the `cancel` event plus a window-refocus fallback.
+4. **Body-size ceiling.** `_parseJsonBody` (`LocalApiServer.ts:1120-1129`) destroys the request above `_MAX_FILE_SIZE_BYTES` (10 MB) — measured on the **base64** body, which is ~4/3 of the file. The transport's `fetch` then rejects and no `ticketImageAttached` ever arrives, so the promise hangs and the placeholder sticks. A client-side 8 MB pre-check keeps the request under the ceiling for every file that has a chance of succeeding.
 5. **The verb-return-contract ratchet.** `scripts/check-verb-return-contract.js` caps `Tickets` at 55 `break;` statements and only ever lowers the ceiling. The new arm must `return` a value on **every** path — including its error paths — never `break`.
 
 ## Edge-Case & Dependency Audit
@@ -92,6 +98,14 @@ In a browser host, the **client** reads the file (`<input type="file">` + `FileR
 - The identical attach-image defect in the Planning/Project panels (`PlanningPanelProvider.ts:3063`). Same shape, separate surface, separate report. The verb added here is a directly reusable template.
 - Drag-and-drop and clipboard-paste image attach. Not reported, not implied by the picker fix.
 - **No migration.** No persisted state, settings key, or file layout changes shape; the new verb only adds a second way to produce a file in the `attachments/` directory that already exists.
+
+## Dependencies
+
+- None. This plan is self-contained — it adds a new verb arm, a schema entry, a client-side picker, and a contract test. No other plan must land first.
+
+## Adversarial Synthesis
+
+Key risks: (1) `fileName` is now attacker-controllable HTTP input — path traversal via `../../` must be blocked by `path.basename()` + separator strip before any `path.join`; the contract test pins this guard. (2) A cancelled file picker must resolve the promise or the `![Uploading image…]()` placeholder is permanently welded into the user's ticket description — the `cancel` listener plus window-refocus fallback covers this. (3) The 10 MB `_parseJsonBody` ceiling is measured on the base64 body (~4/3 of the file), so a 7.5 MB image silently destroys the request and hangs the promise — the client-side 8 MB pre-check prevents this. Mitigations are coded into the plan and pinned by the contract test.
 
 ## Proposed Changes
 
@@ -171,7 +185,7 @@ Also add `error` to the failure pushes in the **existing** `ticketAttachImage` a
 
 ### 2. `src/services/verbSchemas.ts` — declare the payload
 
-Beside the existing `ticketAttachImage` entry (`:1144-1151`):
+Beside the existing `ticketAttachImage` entry (`:1166-1173`):
 
 ```ts
 ticketAttachImageData: {
@@ -198,7 +212,7 @@ Confirm `ticketAttachImageData` lands in `TICKETS_VERBS`; without it `handleServ
 
 ### 4. `src/webview/tickets.js` — browser-side pick, then post the bytes
 
-Add a module-scope helper (near the other detail-pane helpers) and branch inside `onAttachImage` (`:3113`).
+Add a module-scope helper (near the other detail-pane helpers) and branch inside `onAttachImage` (`:3158`).
 
 ```js
 // Mirrors TICKET_IMAGE_MAX_BYTES in TicketsPanelProvider. Enforced here as
@@ -237,12 +251,12 @@ function pickTicketImageInBrowser() {
             const file = input.files && input.files[0];
             if (!file) { finish(null); return; }
             if (file.size > TICKET_IMAGE_MAX_BYTES) {
-                showTicketsAttachError(`"${file.name}" is larger than ${TICKET_IMAGE_MAX_BYTES / 1024 / 1024}MB.`);
+                showTicketsError(`"${file.name}" is larger than ${TICKET_IMAGE_MAX_BYTES / 1024 / 1024}MB.`);
                 finish(null);
                 return;
             }
             const reader = new FileReader();
-            reader.onerror = () => { showTicketsAttachError(`Could not read "${file.name}".`); finish(null); };
+            reader.onerror = () => { showTicketsError(`Could not read "${file.name}".`); finish(null); };
             reader.onload = () => {
                 const dataUrl = String(reader.result || '');
                 const comma = dataUrl.indexOf(',');
@@ -265,7 +279,9 @@ function pickTicketImageInBrowser() {
 }
 ```
 
-`showTicketsAttachError` is a one-line wrapper over the panel's existing inline status/toast helper — the browser has no `showErrorMessage`, so every failure in this path must surface in the page.
+> **Superseded:** `showTicketsAttachError` is a one-line wrapper over the panel's existing inline status/toast helper.
+> **Reason:** The panel already exports `showTicketsError(text)` (`tickets.js:378`), which calls `showTicketsStatus(text, true)` (`:365`) and renders to the tickets status footer. Creating a separate wrapper duplicates an existing function for no gain.
+> **Replaced with:** Use `showTicketsError(...)` directly in every browser-path failure branch. No new function is added.
 
 Then the branch in `onAttachImage`:
 
@@ -277,7 +293,7 @@ onAttachImage: () => new Promise((resolve) => {
             const msg = event.data;
             if (msg.type === 'ticketImageAttached' && msg.requestId === requestId) {
                 window.removeEventListener('message', handler);
-                if (!msg.success && msg.error) { showTicketsAttachError(msg.error); }
+                if (!msg.success && msg.error) { showTicketsError(msg.error); }
                 resolve(msg.success ? { path: msg.relativePath } : null);
             }
         };

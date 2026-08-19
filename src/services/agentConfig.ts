@@ -82,6 +82,8 @@ export interface CustomAgentAddons {
     featureCustomSubagentName?: string;
     featureWorkflowFilePathEnabled?: boolean;
     featureWorkflowFilePath?: string;
+    /** When true, the Drive toggle is active — reframe feature execution to dispatch to team seats. */
+    driveMode?: boolean;
 
     // Feature ultracode/goal directive opt-in (built-in lead/coder/intern get this
     // automatically; custom roles must opt in)

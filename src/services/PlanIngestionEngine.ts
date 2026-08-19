@@ -1536,6 +1536,41 @@ export class PlanIngestionEngine {
         }
     }
 
+    private async _syncFeatureMarkdownSubtasks(
+        db: KanbanDatabase,
+        featurePlanId: string,
+        content: string,
+        workspaceId: string
+    ): Promise<void> {
+        try {
+            const subtaskMatch = content.match(/<!-- BEGIN SUBTASKS[\s\S]*?-->([\s\S]*?)<!-- END SUBTASKS/i)
+                || content.match(/^##\s*Subtasks\s*\n([\s\S]*?)(?=\n##|\n<!--|$)/im);
+            if (subtaskMatch && subtaskMatch[1]) {
+                const linkedPaths: string[] = [];
+                for (const line of subtaskMatch[1].split('\n')) {
+                    const linkMatch = line.match(/\[([^\]]+)\]\(([^)]+)\)/);
+                    if (!linkMatch || !linkMatch[2]) continue;
+                    let target = linkMatch[2].trim();
+                    if (target.startsWith('../plans/')) {
+                        target = path.join('.switchboard', 'plans', target.slice('../plans/'.length));
+                    } else if (target.startsWith('.switchboard/plans/')) {
+                        // already root-relative
+                    } else if (target.startsWith('./')) {
+                        target = path.join('.switchboard', 'features', target.slice(2));
+                    } else {
+                        continue;
+                    }
+                    linkedPaths.push(target.replace(/\\/g, '/'));
+                }
+                await db.syncFeatureSubtasksByPaths(featurePlanId, linkedPaths, workspaceId);
+            }
+        } catch (err) {
+            this._host.logger.appendLine(
+                `[GlobalPlanWatcher] _syncFeatureMarkdownSubtasks failed for feature ${featurePlanId}: ${err instanceof Error ? err.message : String(err)}`
+            );
+        }
+    }
+
     private async _handlePlanFile(fsPath: string, workspaceRoot: string): Promise<void> {
         try {
             if (PlanIngestionEngine._pendingCreations.has(path.resolve(fsPath))) {
@@ -1680,6 +1715,7 @@ export class PlanIngestionEngine {
                 await db.insertFileDerivedPlan(newRecord);
                 if (relativePath.startsWith('.switchboard/features/')) {
                     await db.updateFeatureStatus(newRecord.planId, 1, '');
+                    await this._syncFeatureMarkdownSubtasks(db, newRecord.planId, content, workspaceId);
                     await this._retryPendingFeatureLinks(db, workspaceRoot);
                 } else if (metadata.feature) {
                     await this._applyFeatureLink(db, newRecord.planId, metadata.feature, relativePath, workspaceId, workspaceRoot);
@@ -1728,6 +1764,7 @@ export class PlanIngestionEngine {
                 await db.insertFileDerivedPlan(updatedRecord);
                 if (relativePath.startsWith('.switchboard/features/')) {
                     await db.updateFeatureStatus(updatedRecord.planId, 1, '');
+                    await this._syncFeatureMarkdownSubtasks(db, updatedRecord.planId, content, workspaceId);
                     await this._retryPendingFeatureLinks(db, workspaceRoot);
                     const tombKey = `${relativePath}|${workspaceId}`;
                     const tomb = this._recentlyDeletedColumns.get(tombKey);

@@ -24,8 +24,52 @@ Because `terminals.js:1541` drops unknown sources, and this extension is publish
 ## Metadata
 - **Complexity:** 4
 - **Tags:** backend, frontend, refactor, reliability
+- **Project:** browser-switchboard
+- **Feature:** 72bda17f-bb0c-4ad9-b9b9-55c19fc9cba7
 
-## Approach
+## User Review Required
+No user review required — the additive-fields compatibility strategy is determined, and the approach is fully specified with file paths and line numbers.
+
+## Complexity Audit
+
+### Routine
+- Adding three fields (`definitionId`, `head`, `teamKind`) to an existing object literal and upsert merge.
+- Threading one parameter (`definitionId`) through a single call site (`agentGroupInstantiation.ts:123`).
+- Writing three small helper functions (`isSpawnedTeamGroup`, `teamHeadName`, `resolveDefinitionForGroup`).
+
+### Complex / Risky
+- The serialisation whitelist check — if a layer between DB and panel strips unknown group keys, the fields silently vanish. This is a **design prerequisite** to investigate before coding, not a verification step.
+- The `head` vs `order[0]` contract — every consumer must read `head`, never infer from position. A consumer that infers from `order[0]` will disagree with one that reads `head` when they diverge.
+- The role-match fallback's temporal edge case — a definition whose `headRole` was edited after spawn no longer matches the live terminal's role. Acceptable (resolves on next spawn) but must be documented.
+
+## Edge-Case & Dependency Audit
+- **Race Conditions:** `wireSpawnedTeam` upserts `members` and `order` on re-spawn (`teamWiring.ts:1052`). A concurrent reader (e.g. a cockpit poll) may see a group mid-upsert. The `...existing` spread in the merge mitigates this — unknown keys survive — but a reader that caches the group at open time and never re-reads will go stale.
+- **Security:** No new attack surface. The fields are written by the spawn path, not by user input. `resolveDefinitionForGroup` reads from the DB, not from caller-supplied data.
+- **Side Effects:** Adding fields to the group record increases the size of `terminals.groups` in the DB config blob. Negligible (three short strings per team).
+- **Dependencies & Conflicts:** Every other subtask in this feature depends on this plan. The `isSpawnedTeamGroup` / `resolveDefinitionForGroup` / `teamHeadName` helpers are the seam. No conflicts with plans outside this feature — the fields are additive and ignored by old code.
+
+## Dependencies
+- None — this is the foundation plan. Every other subtask in this feature depends on the identity link and resolvers established here.
+
+## Adversarial Synthesis
+Key risks: (1) a serialisation whitelist between DB and panel could silently strip the new fields — must be investigated as a design prerequisite before coding; (2) the `head` vs `order[0]` contract is implicit and every consumer must honour it explicitly; (3) the role-match fallback has a temporal edge case when a definition's `headRole` is edited post-spawn. Mitigations: investigate the serialisation path before coding; document the `head`-not-`order[0]` contract in the helper functions' JSDoc; accept the temporal edge case as it resolves on next spawn.
+
+## Proposed Changes
+
+### `src/services/agentGroupInstantiation.ts`
+- **Context:** The sole real caller of `wireSpawnedTeam` does not pass the definition id today.
+- **Logic:** Pass `definitionId: group?.id` into the `wireSpawnedTeam` call at line 123.
+- **Edge Cases:** `group` may be `null` (manual spawn without a definition) — `group?.id` safely yields `undefined`, and `wireSpawnedTeam` treats an absent `definitionId` as "unknown definition" (fallback to role-match).
+
+### `src/services/teamWiring.ts`
+- **Context:** The group record written by `wireSpawnedTeam` lacks identity fields. The rename path does not rewrite `head`.
+- **Logic:** Add `definitionId?: string` to `WireSpawnedTeamOptions` (line 828). Stamp `definitionId`, `head` (`headName`), and `teamKind: 'spawned'` onto the group literal (line 1036) and upsert merge (line 1057). Add `isSpawnedTeamGroup(g)`, `teamHeadName(g)`, `resolveDefinitionForGroup(db, g)` exports. Extend `rewriteStandingOrdersForRename` to also rewrite `head` on any group where it matches the old name.
+- **Edge Cases:** Keep `source: 'manual'`, keep the existing `id` derivation, keep the `...existing` spread. Do not replace the merge with a fresh literal — the spread is what preserves unknown keys.
+
+### `src/webview/terminals.js`
+- **Context:** The panel reads group records from the DB via `loadLayoutSettings` (line 1541). If a serialisation layer whitelists group keys, the new fields are stripped.
+- **Logic:** Investigate the serialisation path between DB and panel. If a whitelist exists, widen it to pass through unknown keys (not just the three new names). This is a design prerequisite — do it before coding the fields, not during verification.
+- **Edge Cases:** `loadLayoutSettings` returns the object unchanged for `source === 'manual'` (line 1542) — confirm this path does not filter keys.
 
 ### 1. Thread the definition id through the spawn path
 - `src/services/agentGroupInstantiation.ts:123` — pass `definitionId: group?.id` into the `wireSpawnedTeam` call. Do **not** pass it as `teamId`: `teamId` selects the `terminals.groups` record id and the standing-order key, and changing that derivation would orphan every team-scoped standing order on existing installs (they are keyed `(scope, teamId)`, `teamWiring.ts:978`). `definitionId` is a new, separate field.

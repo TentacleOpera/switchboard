@@ -346,8 +346,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         if (ids.length) { planIds = [...new Set(ids)].sort(); }
                     }
                 } catch { /* stage-only beats a lost dispatch */ }
+                // `out` here is post-strip (standing orders already removed by
+                // stripStandingOrdersBlock at :306), which is what we want to
+                // test against — the SO block is handled by applyStandingOrders'
+                // own strip at :370.
                 const seatBlock = effectiveOpts
-                    ? buildSeatDirectiveBlock({ ...effectiveOpts, planIds })
+                    ? buildSeatDirectiveBlock({ ...effectiveOpts, planIds }, out)
                     : '';
                 if (seatBlock) {
                     const instanceId = handle?.agentInstanceId;
@@ -2544,7 +2548,7 @@ Each plan file must include:
     })
         .catch(err => log(opts, `team autostart failed: ${err}`));
 
-    return {
+    const instance = {
         server,
         port,
         url,
@@ -2558,7 +2562,21 @@ Each plan file must include:
             try { (taskViewerProvider as any).dispose?.(); } catch { /* ignore */ }
             try { (planningProvider as any).dispose?.(); } catch { /* ignore */ }
             try { await server.stop(); } catch { /* ignore */ }
-            try { fs.unlinkSync(portFile); } catch { /* ignore */ }
+            try { if (fs.existsSync(portFile)) fs.unlinkSync(portFile); } catch { /* ignore */ }
         },
     };
+
+    const syncUnlinkPortFile = () => {
+        try { if (fs.existsSync(portFile)) fs.unlinkSync(portFile); } catch { /* ignore */ }
+    };
+    const signalCleanup = async () => {
+        try { await instance.stop(); } catch { /* ignore */ }
+        process.exit(0);
+    };
+    process.once('SIGINT', signalCleanup);
+    process.once('SIGTERM', signalCleanup);
+    process.once('SIGHUP', signalCleanup);
+    process.on('exit', syncUnlinkPortFile);
+
+    return instance;
 }

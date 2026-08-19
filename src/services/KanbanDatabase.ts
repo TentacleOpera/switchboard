@@ -2697,9 +2697,52 @@ export class KanbanDatabase {
 
     public async clearFeatureIdForFeature(featurePlanId: string): Promise<boolean> {
         return this._persistedUpdate(
-            "UPDATE plans SET feature_id = '', updated_at = ? WHERE feature_id = ?",
+            "UPDATE plans SET feature_id = '', updated_at = ?",
             [new Date().toISOString(), featurePlanId]
         );
+    }
+
+    /**
+     * Synchronize subtasks for a feature from a list of relative plan file paths.
+     * Reconciles database state to match declarative markdown feature file subtask list:
+     * - Links unlinked subtasks (feature_id = '' or feature_id = featurePlanId)
+     * - Never steals plans belonging to a different feature (cross-feature guard)
+     * - Unlinks subtasks previously belonging to featurePlanId but no longer in linkedPaths
+     */
+    public async syncFeatureSubtasksByPaths(featurePlanId: string, linkedPaths: string[], workspaceId: string): Promise<void> {
+        if (!featurePlanId || !(await this.ensureReady()) || !this._db) return;
+
+        const normalizedPaths = new Set(linkedPaths.map(p => this._ensureRelativePlanFile(p)));
+        const targetPlans: KanbanPlanRecord[] = [];
+
+        for (const normPath of normalizedPaths) {
+            const plan = await this.getPlanByPlanFile(normPath, workspaceId);
+            if (plan) {
+                targetPlans.push(plan);
+            }
+        }
+
+        // 1. Link plans that match the linkedPaths
+        for (const plan of targetPlans) {
+            if (!plan.featureId || plan.featureId === '' || plan.featureId === featurePlanId) {
+                if (plan.featureId !== featurePlanId) {
+                    await this.updateFeatureStatus(plan.planId, 0, featurePlanId);
+                }
+            } else {
+                console.warn(
+                    `[KanbanDatabase] syncFeatureSubtasksByPaths: Plan ${plan.planFile} already belongs to feature ${plan.featureId}; skipping link to ${featurePlanId} (cross-feature guard)`
+                );
+            }
+        }
+
+        // 2. Unlink subtasks previously linked to this feature but removed from linkedPaths
+        const currentSubtasks = await this.getSubtasksByFeatureId(featurePlanId);
+        for (const subtask of currentSubtasks) {
+            const normSubtaskFile = this._ensureRelativePlanFile(subtask.planFile);
+            if (!normalizedPaths.has(normSubtaskFile)) {
+                await this.updateFeatureStatus(subtask.planId, 0, '');
+            }
+        }
     }
 
     /**

@@ -23,9 +23,9 @@ Two independent facts compose into the bug, both in `src/webview/markdownEditor.
 2. **`position: sticky` on the toolbar would currently be inert, because the shell is `overflow: hidden`.**
    `.md-editor-shell` sets `overflow: hidden` (`markdownEditor.js:19`) purely to clip the `border-radius: 6px` corners. `overflow: hidden` makes an element a scroll container, and a sticky descendant resolves its offsets against the **nearest scroll container ancestor** — which would be the shell itself. The shell's own scrollTop is permanently 0, so a sticky toolbar would simply sit at the shell's top and scroll away exactly as it does today. This is why the fix is two lines, not one: the `overflow: hidden` has to go, with the corner clipping re-expressed on the two children that actually paint the corners.
 
-The default view mode is `split` (`markdownEditor.js:218`), which is why nearly every editing session hits this. In `view-edit` mode the preview is `display: none`, the shell collapses to its 480px floor, and the textarea scrolls internally — which is why the toolbar appears to behave in that one mode and masked the bug.
+The default view mode is `split` (`markdownEditor.js:225`, where `globalViewMode = 'split'` is declared), which is why nearly every editing session hits this. In `view-edit` mode the preview is `display: none`, the shell collapses to its 480px floor, and the textarea scrolls internally — which is why the toolbar appears to behave in that one mode and masked the bug.
 
-This is a CSS-only defect in one shared file. All six attach sites (`planning.js:6281`, `planning.js:7631`, `tickets.js:3092`, `project.js:3107`, `design.js:1881`) and both hosts (VS Code webviews and the standalone browser cockpit via `headlessPanelHtml.ts`) load the same `markdownEditor.js`, so a single fix covers every surface.
+This is a CSS-only defect in one shared file. All five attach sites (`planning.js:6312`, `planning.js:7645`, `tickets.js:3124`, `project.js:3122`, `design.js:1897`) and both hosts (VS Code webviews and the standalone browser cockpit via `headlessPanelHtml.ts`, which serves the same `markdownEditor.js` from `/static/webview/`) load the same `markdownEditor.js`, so a single fix covers every surface.
 
 ## Metadata
 
@@ -33,15 +33,20 @@ This is a CSS-only defect in one shared file. All six attach sites (`planning.js
 - **Tags:** frontend, ui, bugfix
 - **Project:** Browser Switchboard
 
-## Complexity Audit (Routine vs Complex/Risky)
+## User Review Required
 
-**Routine.** One file, CSS only, no JavaScript, no state, no persistence, no host round-trips, no migration surface.
+No user review required. CSS-only fix to one shared file; no behavior, state, persistence, host-message contract, schema, or migration surface. The chosen approach (sticky toolbar) and the explicitly-out-of-scope alternative (definite-height internal scroll) are both recorded below for visibility, but neither requires a human decision to proceed.
 
+## Complexity Audit
+
+### Routine
+- One file, CSS only, no JavaScript, no state, no persistence, no host round-trips, no migration surface.
 - `.md-toolbar` gains `position: sticky; top: 0; z-index: 5` plus top-corner radii.
 - `.md-editor-shell` drops `overflow: hidden`.
 - `.md-body` gains the bottom-corner radii the shell used to clip (it already has `overflow: hidden`, so this is a one-property addition).
 
-**The one non-obvious bit** is why removing `overflow: hidden` is required rather than optional — see root cause #2. A reviewer who deletes only the sticky line, or only the overflow line, will produce a change that looks correct in the diff and does nothing in the product.
+### Complex / Risky
+- None. (The one non-obvious bit — why removing `overflow: hidden` is required rather than optional — is documented in root cause #2, not a risk: a reviewer who deletes only the sticky line, or only the overflow line, will produce a change that looks correct in the diff and does nothing in the product.)
 
 **Not risky because:**
 - Removing `overflow: hidden` from a `display: flex` element does not change layout: the flex formatting context already prevents margin collapse and float intrusion, which are the only other things `overflow: hidden` was buying here. Its sole live purpose was corner clipping, which is re-homed.
@@ -59,15 +64,21 @@ This is a CSS-only defect in one shared file. All six attach sites (`planning.js
 | **`view-preview` mode** | Shell is as tall as the rendered preview. Toolbar now sticks — a strict improvement (the Split/Edit/Preview switcher lives in the toolbar, so today you must scroll up just to switch back out of preview). |
 | **Content scrolling *under* the toolbar** | `.md-toolbar` already paints an opaque `var(--panel-bg2, #0a0a0a)` background, so text does not bleed through. No new background needed. |
 | **Table picker popover** | `.md-table-popover` is `position: absolute` inside `.md-table-picker-container` (`position: relative`) inside the toolbar, so it travels with the sticky toolbar and stays anchored to its button. It previously risked being clipped by the shell's `overflow: hidden` when opened; removing that clip is a second small win. Its `z-index: 1000` is inside the toolbar's new stacking context, so it still paints above the editor body. |
-| **Tickets: `#markdown-preview-tickets` and `.preview-content-wrapper` are both `overflow-y: auto`** | Sticky binds to whichever actually scrolls (the nearest scroll-container ancestor). Both have `top` padding above the shell, not a sticky header, so `top: 0` lands the toolbar flush at the top of the scrollport either way. |
+| **Tickets: `#markdown-preview-tickets` and `.preview-content-wrapper` are both `overflow-y: auto`** | > **Superseded:** Sticky binds to whichever actually scrolls (the nearest scroll-container ancestor). Both have `top` padding above the shell, not a sticky header, so `top: 0` lands the toolbar flush at the top of the scrollport either way. > **Reason:** This inverts the spec. `position: sticky` binds to the **nearest scroll-container ancestor regardless of whether it engages**, not "whichever actually scrolls." On Tickets the two scroll containers are nested, so the nearest is `#markdown-preview-tickets` — and it only scrolls because the `flex:1` + `min-height:0` chain hands it a definite height. The old phrasing hides the real failure mode. > **Replaced with:** Sticky binds to the nearest scroll-container ancestor, which on Tickets is `#markdown-preview-tickets` (it sits between the toolbar and `.preview-content-wrapper`). `#markdown-preview-tickets` engages as the real scroller **only because** it holds a definite height via `flex:1` + `min-height:0` inside the definite-height `.preview-panel-wrapper` (`height:100%`) chain; once it engages it absorbs the overflow and `.preview-content-wrapper` never scrolls. `top: 0` lands the toolbar flush at the top of the `#markdown-preview-tickets` scrollport. **Fragility:** if a future change strips `#markdown-preview-tickets`'s definite height (e.g. removes `min-height:0` or breaks the flex chain), its `overflow-y:auto` goes inert, scrollTop stays 0, and the sticky toolbar silently reverts to the original bug — the diff still reads `position: sticky; top: 0` and looks correct. Same trap class as the shell's `overflow:hidden` (root cause #2); verification step C/8 gates it. |
 | **Tickets: content below the editor (Comments, Attachments)** | When the operator scrolls past the end of the shell, the toolbar un-sticks at the shell's bottom edge and scrolls away with it — correct, since there is nothing left to format. |
 | **`.preview-panel-wrapper` is `position: relative; overflow: hidden`** (`planning.html:2484`) | It is an ancestor of the scrollport, not between the toolbar and the scrollport, so it does not capture the sticky. Verified. |
 | **Cyber/Claudify themes and the scanline overlay** | Themes only re-colour `#preview-pane` / `.markdown-editor`; `.cyber-scanlines` is a sibling of the pane, not an ancestor of the toolbar. Neither participates in sticky resolution. |
 | **`@media (max-width: 640px)`** | Only flips `.md-body` to column. Toolbar sticking is orthogonal. |
 | **Standalone browser cockpit** | `headlessPanelHtml.ts` serves the same `markdownEditor.js` from `/static/webview/`. Fix lands there with no separate change. |
-| **Design panel (`design.js:1881`)** | Its textarea carries inline `height: 100%`, which resolves to `auto` against the indefinite shell exactly like the CSS default. Same shell, same fix, no special-casing. |
+| **Design panel (`design.js:1897`)** | Its textarea carries inline `height: 100%`, which resolves to `auto` against the indefinite shell exactly like the CSS default. Same shell, same fix, no special-casing. |
 
-**Dependencies:** none. No new files, no host-message contract, no schema, no dependency on the extension API server. `src/webview/*.js` is copied verbatim to `dist/webview/` by the `CopyPlugin` pattern at `webpack.config.js:86`, so no build-config change either.
+## Dependencies
+
+- None. No new files, no host-message contract, no schema, no dependency on the extension API server. `src/webview/*.js` is copied verbatim to `dist/webview/` by the `CopyPlugin` pattern at `webpack.config.js:86`, so no build-config change either.
+
+## Adversarial Synthesis
+
+Key risks: (1) sticky binds to the **nearest scroll-container ancestor regardless of whether it engages** — on Tickets, two nested `overflow-y:auto` containers mean sticky binds to `#markdown-preview-tickets`, which works only because it holds a definite height via the `flex:1` + `min-height:0` chain; a future change that strips that definite height silently reverts the toolbar to inert (the same trap class as the shell's `overflow:hidden`). (2) The fix is a coupled three-line change — dropping only `overflow:hidden` OR only the sticky line produces a diff that looks correct and does nothing. Mitigations: the Tickets definite-height dependency is now recorded in the Edge-Case audit with its superseded-reasoning callout; verification steps B/3 and C/8 gate the coupled change and the Tickets scrollport; a screenshot diff (step D/13) gates the 5px corner-arc alignment visually.
 
 ## Proposed Changes
 
@@ -164,11 +175,15 @@ Build a VSIX from the change and test against the installed extension (`dist/` i
 **D. No-regression sweep across the other attach sites.**
 11. Project panel → Constitution (or System / Tuning) tab → Edit: toolbar pinned inside `.constitution-preview-pane`; short docs render exactly as before.
 12. Design panel → open a markdown design doc → Edit: no layout shift versus pre-fix; toolbar pinned.
-13. Short doc that fits entirely on screen (all panels): confirm the editor is visually identical to pre-fix — same 6px rounded frame, no square corners at top-left/top-right (toolbar radii) or bottom-left/bottom-right (`.md-body` radii), no double border, no gap between toolbar and body.
+13. Short doc that fits entirely on screen (all panels): confirm the editor is visually identical to pre-fix — same 6px rounded frame, no square corners at top-left/top-right (toolbar radii) or bottom-left/bottom-right (`.md-body` radii), no double border, no gap between toolbar and body. **Capture a screenshot diff (pre-fix vs post-fix) on at least one panel** so the 5px corner-arc alignment between the sticky toolbar's top radii and `.md-body`'s bottom radii is visually gated, not just asserted — the 5px value is derived (6px outer shell radius − 1px border = 5px inner) and a screenshot is the cheapest proof it lands on the same visual arc.
 14. `view-edit` mode on a long doc: shell still collapses to its 480px floor, the textarea still scrolls internally, toolbar still visible. Unchanged from pre-fix.
 15. Narrow the panel below 640px: `.md-body` still stacks to column, toolbar still pinned.
 
 **E. Standalone browser cockpit.**
 16. Open the Docs and Tickets panels in the browser cockpit (served from `/static/webview/markdownEditor.js`) and repeat steps 3 and 8. Behaviour must match the VS Code webviews — same file, same CSS.
 
-**Regression risk if a reviewer trims the diff:** dropping edit #1 (keeping `overflow: hidden` on the shell) makes edits #2 and #3 completely inert while still looking like a fix in review. Step B/3 is the gate that catches it.
+**Regression risk if a reviewer trims the diff:** dropping edit #1 (keeping `overflow: hidden` on the shell) makes edits #2 and #3 completely inert while still looking like a fix in review. Step B/3 is the gate that catches it. A second, subtler regression: on Tickets, if a future change strips `#markdown-preview-tickets`'s definite height (the `flex:1` + `min-height:0` chain), its `overflow-y:auto` goes inert and sticky silently reverts to the original bug — see the Edge-Case audit row and step C/8.
+
+---
+
+**Recommendation:** Complexity 2 (Very Low) — Send to Intern.

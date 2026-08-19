@@ -329,3 +329,62 @@ export function makeStandingOrder(
         ...(teamId ? { teamId } : {}),
     };
 }
+
+/**
+ * Deterministic id prefix for the reviewer-callback override order installed
+ * on a coder during delegation-mode review. The id is `review-callback:<coderName>`
+ * so the order can be found and removed without scanning instruction text.
+ */
+const REVIEW_CALLBACK_ID_PREFIX = 'review-callback:';
+
+/**
+ * Install a pair-scoped standing order on `coderName` that redirects its
+ * completion callback to `reviewerName` during a review-fix loop. The
+ * coder's team-scoped "report to lead" order stays in place — this pair
+ * order is more specific (names the reviewer explicitly) and is rendered
+ * alongside the team order so the coder knows to report to the reviewer
+ * for review-fix work.
+ *
+ * Idempotent: if an order with the same deterministic id already exists,
+ * it is replaced (not duplicated).
+ */
+export async function installReviewerCallbackOrder(
+    db: any,
+    coderName: string,
+    reviewerName: string
+): Promise<void> {
+    const id = REVIEW_CALLBACK_ID_PREFIX + coderName;
+    const instruction =
+        `${reviewerName} is your reviewer for this review cycle. When you complete fix instructions from the reviewer, `
+        + `report back to it — POST /terminals/verb/ptySendPrompt with `
+        + `{"name":"${reviewerName}","data":"<your report>","clearBeforePrompt":false} against the port in `
+        + `.switchboard/api-server-port.txt — naming what you changed and the verification results. Do not wait to be asked.`;
+    await mutateStandingOrders(db, async (orders) => {
+        const filtered = orders.filter(o => o.id !== id);
+        filtered.push({
+            id,
+            parent: coderName,
+            child: reviewerName,
+            instruction,
+            createdAt: Date.now(),
+            scope: 'pair',
+        });
+        return filtered;
+    });
+}
+
+/**
+ * Remove the reviewer-callback override order from `coderName`, restoring
+ * the coder's default callback target (the team lead). No-op when no such
+ * order exists.
+ */
+export async function removeReviewerCallbackOrder(
+    db: any,
+    coderName: string
+): Promise<void> {
+    const id = REVIEW_CALLBACK_ID_PREFIX + coderName;
+    await mutateStandingOrders(db, async (orders) => {
+        const next = orders.filter(o => o.id !== id);
+        return next.length === orders.length ? orders : next;
+    });
+}

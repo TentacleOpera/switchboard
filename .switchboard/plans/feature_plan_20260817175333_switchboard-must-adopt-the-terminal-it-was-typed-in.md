@@ -61,14 +61,28 @@ autoban state. It seats nothing. Nothing about arming needs to change.
 - **Tags:** backend, api, cli, bugfix
 - **Project:** Browser Switchboard
 
+## User Review Required
+
+Yes — before coding. The design adds a third orchestration door and a persisted
+seat record consulted on two live read paths. Review the architecture review and
+adversarial synthesis below (delivered in chat), and confirm:
+
+1. The distinct-door approach (new `POST /orchestration/adopt`) is preferred over
+   overloading `/orchestration/start` with an adopt mode (see Alternatives in chat).
+2. The degraded unnamed-terminal case (`liveDelivery: false`, notices via the
+   reports inbox) is an acceptable experience for a VS Code integrated terminal /
+   user shell, or whether the launcher should refuse to adopt when it cannot name
+   itself and fall back to the old seat-a-terminal behaviour.
+
 ## Complexity Audit (Routine vs Complex/Risky)
 
 **Routine**
 
-- Adding an HTTP route + handler to `LocalApiServer` alongside the three existing
-  `/orchestration/*` routes (`src/services/LocalApiServer.ts:3933-3938`) — the injected
-  callback pattern (`orchestrationStart` / `orchestrationConfirm`,
-  `src/services/LocalApiServer.ts:318`, `:334`) is copied line for line.
+- Adding an HTTP route + handler to `LocalApiServer` alongside the four existing
+  `/orchestration/*` routes (`start` / `confirm` / `handoff` / `stop`,
+  `src/services/LocalApiServer.ts:4485-4492`) — the injected callback pattern
+  (`orchestrationStart` / `orchestrationConfirm`, `src/services/LocalApiServer.ts:382`,
+  `:398`) is copied line for line.
 - Rewriting step 2 of `.agents/workflows/switchboard.md`.
 - Adding a row to the endpoint table in `.agents/skills/switchboard-orchestration/SKILL.md`.
 
@@ -79,12 +93,12 @@ autoban state. It seats nothing. Nothing about arming needs to change.
   `src/services/TaskViewerProvider.ts:10540-10578`. Adopt must return *the same text* —
   duplicating the branch is how the two doors drift. This is a pure extraction: the
   existing call site must keep behaving identically.
-- **A second `enabled`-adjacent field on `AutobanConfigState`.** `normalizeAutobanConfigState`
-  (`src/services/autobanState.ts:311-356`) is a **whitelist** — it rebuilds the object
-  field by field and silently drops anything it does not name. A new field that is not
-  added to the normaliser is written, persisted, and then erased on the next normalise
-  pass. Shipped installs have no `orchestratorSeat` key; absent must mean "no adopted
-  seat", which is the pre-change behaviour exactly (see Migration below).
+- **A second `enabled`-adjacent field on `AutobanConfigState`.** The normaliser entry
+  is required for **shape validation**, not drop-prevention.
+
+  > **Superseded:** `normalizeAutobanConfigState` (`src/services/autobanState.ts:268-377`) is a **whitelist** — it rebuilds the object field by field and silently drops anything it does not name. A new field that is not added to the normaliser is written, persisted, and then erased on the next normalise pass.
+  > **Reason:** Verified against the live code: the normaliser destructures `const { triggerType, runSheet, ...preservedUnknownKeys } = state` and returns `{ ...preservedUnknownKeys, enabled, ... }` — it **spreads and preserves** unknown keys, only overriding the explicitly-normalised fields. An `orchestratorSeat` key that is not named in the return object is therefore **preserved as-is**, not erased. The "silently dropped on every pass" failure mode does not exist.
+  > **Replaced with:** The normaliser entry is still required, but for a different reason: without it, a malformed seat (e.g. `{ terminalName: 'x' }` with no `adoptedAt`, or a non-object) is **preserved unvalidated** and surfaces raw at the read sites. The entry coerces the shape (require `adoptedAt`, trim/optional `terminalName`, drop non-objects to `undefined`) so the two read sites never see a half-record. Shipped installs have no `orchestratorSeat` key; absent → the entry returns `undefined` → pre-change behaviour exactly (see Migration below).
 - **Changing `notifyTurnEnd`'s recipient resolution.** This is the live delivery path for
   every completed/blocked seat. A wrong edit here silently stops orchestrator
   notifications. The change is additive and ordered: adopted seat first, existing parent
@@ -145,11 +159,48 @@ autoban state. It seats nothing. Nothing about arming needs to change.
   (`src/services/ClaudeCodeMirrorService.ts:52`, emitted at `:418`). Step 2 now asks the
   agent to read the persona skill and write `session.md`, so `Bash` alone is not enough.
 - **The existing contract test asserts the old behaviour.**
-  `src/test/orchestrator-tick-and-reports-contract.test.js:229-239` requires the launcher
-  to contain `orchestration/start` and the phrase "does not arm". It will fail on the
-  rewritten launcher and must be updated in the same change, not after.
+  `src/test/orchestrator-tick-and-reports-contract.test.js` (the "step 2 hands off to a
+  pointer that ships" check, around `:255-265`) requires the launcher to contain
+  `orchestration/start` and the phrase "does not arm". It will fail on the rewritten
+  launcher and must be updated in the same change, not after.
+
+## Dependencies
+
+- None — this plan is self-contained. It touches the launcher workflow, the
+  orchestrator persona skill, the orchestration HTTP-surface skill, the API server,
+  the provider, the autoban state module, the mirror service, and one contract test,
+  all of which are in-tree and edited in the same change. No sibling plan must land
+  first.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) the normaliser's unknown-key-preserve behaviour means
+the seat is never silently dropped — but a missing normaliser entry would let a
+malformed seat surface raw at the read sites, so the entry is mandatory for shape
+coercion, not optional; (2) `notifyTurnEnd` is the live delivery path for every seat —
+an ordering mistake in the additive seat check silently reroutes all orchestrator
+notices; (3) the unnamed-terminal adopt path returns `liveDelivery: false` and the
+start-button consult returns `success: true` without delivering a kickoff anywhere —
+a mild hollow-success smell the coder should surface as a note rather than bare
+success. Mitigations: the normaliser entry validates and drops half-records; the
+turn-end edit is strictly additive and ordered after the parent walk; the start-button
+unnamed path should carry an explanatory note. Stale line numbers throughout this plan
+(verified against the current tree) must not be trusted — locate every target by
+symbol/string anchor, not by line.
 
 ## Proposed Changes
+
+> **Stale line numbers.** Every `:NNNN` citation in this plan was verified against the
+> tree as of writing and is **off** — the source files have grown since the plan was
+> first drafted (e.g. `_handleOrchestrationStart` is at `LocalApiServer.ts:3089`, not
+> `:2601`; `startOrchestratorFromKanban` is at `TaskViewerProvider.ts:10340`, not
+> `:10401`; `notifyTurnEnd` is at `:1529`, not `:1389`; the kickoff builder is at
+> `:10479-10517`, not `:10540-10578`; the route table is at `:4485-4492`, not
+> `:3933-3938`; the `## Pre-flight` "one of two doors" text is at
+> `switchboard-orchestrator/SKILL.md:105-118`, not `:31-48`). **Locate each target by
+> function name / string sentinel / route path, not by line number.** The structural
+> claims (what the code does, in what order) have been re-verified and hold; only the
+> line addresses drifted.
 
 ### 1. `src/services/autobanState.ts` — persist the adopted seat
 
@@ -186,8 +237,19 @@ orchestratorSeat: (function (s: any) {
 
 ### 2. `src/services/TaskViewerProvider.ts` — extract the prompt, add adopt, consult the seat
 
-**(a) Extract the kickoff builder.** Lift `:10540-10578` verbatim into a private helper.
-`startOrchestratorFromKanban` then calls it; nothing about the text changes.
+**(a) Extract the kickoff builder.** Lift the three-way branch verbatim into a private
+helper. `startOrchestratorFromKanban` then calls it; nothing about the text changes.
+
+> **Clarification — the persona-not-installed catch path.** The current code wraps the
+> branch in `try { await fs.promises.access(personaPath); … } catch { kickoffPrompt = '… workflow is not yet installed …' }`.
+> That catch has **no mode label** today (the variable is just overwritten). The
+> extracted helper returns `{ mode, prompt }`, so the catch needs a mode too — use
+> `mode: 'interview'` (the fallback prompt is a stand-in for the interview path) or a
+> dedicated `'no-persona'` mode that the adopt handler surfaces as `mode: 'no-persona'`
+> in its response. Do **not** drop the catch: a workspace without the persona skill
+> installed must still get the "stand by" prompt from both doors, not an unhandled
+> rejection. The "verbatim" extraction therefore adds a mode return on the happy paths
+> and a labelled mode on the catch path — the only non-verbatim part of the lift.
 
 ```ts
 /**
@@ -233,7 +295,11 @@ if (adopted) {
     // Adopted without a name: the seat is real, we simply cannot address it.
     // Creating a terminal here would be the duplicate the adopt door removes.
     this._seams().ui.showInfoMessage('An agent session already holds the orchestrator seat. Talk to it there, or stop orchestration first.');
-    this.postMessage({ type: 'orchestratorStartResult', success: true });
+    // NOTE: success: true here is a mild hollow-success smell — the kickoff is
+    // NOT delivered anywhere by this click (the adopted session already has its
+    // prompt from the adopt call). Carry an explanatory note so the AUTOMATION
+    // tab does not read as "kickoff sent" when nothing was sent.
+    this.postMessage({ type: 'orchestratorStartResult', success: true, note: 'Adopted seat has no terminal name — kickoff was not re-delivered. The adopted session already holds the prompt.' });
     return;
 }
 ```
@@ -416,7 +482,8 @@ Add a row above the `/orchestration/start` row (`:131`):
 
 ### 8. `src/test/orchestrator-tick-and-reports-contract.test.js` — update the launcher contract
 
-Replace the step-2 check (`:229-239`). It currently *requires* the bug:
+Replace the step-2 check (the "step 2 hands off to a pointer that ships" check,
+around `:255-265`). It currently *requires* the bug:
 
 ```js
 await check('step 2 adopts this session — it does not seat a second terminal', () => {
@@ -508,3 +575,15 @@ whole purpose is that the branch is not duplicated.
     `allowed-tools: Bash, Read, Write, Glob, Grep`. `/switchboard` in a fresh Claude Code
     session can read the persona skill and write `session.md` without a tool-permission
     refusal.
+
+---
+
+**Recommendation:** Complexity 6 → **Send to Coder.** The change is majority-routine
+(route, handler, workflow rewrite, skill-doc rows, mirror tools) with two
+well-scoped moderate risks (the `notifyTurnEnd` additive edit on a live delivery path,
+and the prompt-builder extraction that must stay behaviour-identical including the
+persona-not-installed catch). Not intern-trivial, not lead-grade architectural.
+
+## Completion Report
+
+Implemented `/switchboard` terminal adoption mechanism (`POST /orchestration/adopt`) so the session running the launcher adopts the orchestrator seat in place instead of spawning a duplicate terminal. Added `OrchestratorSeat` type and shape normalisation in `src/services/autobanState.ts`, extracted `_buildOrchestratorKickoffPrompt`, implemented `adoptOrchestratorSeat`, updated `startOrchestratorFromKanban` / `stopOrchestratorFromKanban`, and routed `notifyTurnEnd` in `src/services/TaskViewerProvider.ts`. Exposed `POST /orchestration/adopt` route and handler in `src/services/LocalApiServer.ts`, updated `.agents/workflows/switchboard.md`, widened mirrored tools in `src/services/ClaudeCodeMirrorService.ts` / `.claude/skills/switchboard/SKILL.md`, updated skill documentation, and aligned the contract test in `src/test/orchestrator-tick-and-reports-contract.test.js`. Regenerated `protocol-catalog.json` and `src/generated/verbAllowlist.ts` with no issues encountered.

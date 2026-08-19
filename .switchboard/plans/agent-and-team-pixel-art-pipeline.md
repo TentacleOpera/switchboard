@@ -17,6 +17,54 @@ Per-agent portraits also have no file slot at all. Team icons get one from the i
 ## Metadata
 - **Complexity:** 4
 - **Tags:** frontend, ui, ux, refactor
+- **Project:** browser-switchboard
+- **Feature:** 72bda17f-bb0c-4ad9-b9b9-55c19fc9cba7
+
+## User Review Required
+No user review required — the naming convention, size contract, and resolver extension strategy are fully specified.
+
+## Complexity Audit
+
+### Routine
+- Adding `.pixel-art` CSS class to each webview stylesheet (separate documents, no shared sheet).
+- Changing `TEAMS_TAB_CELL` from 28 to 32 and verifying the card grid does not reflow.
+- Writing the `GET /terminals/icon-palette` listing endpoint (directory read, prefix classification, size guard).
+
+### Complex / Risky
+- The `resolveArt` vs `teamIconSrc` naming/signature inconsistency — the plan says "extend that function, do not add a second" but names the extended function `resolveArt(value)` with a different signature from `teamIconSrc(group)`. Must be reconciled: `resolveArt(value)` is the low-level resolver, `teamIconSrc(group)` is a thin wrapper.
+- The mtime query param availability — mtime is only known by the picker (via the listing endpoint), not by every render path (shell strip, cockpit header, sidebar rows). Non-picker render paths must accept stale cache or resolve mtime server-side.
+- The `TEAMS_TAB_CELL` 28 → 32 change is a real layout change — the card grid may reflow. The constant's comment says it is fixed "so better art cannot shift layout"; preserve that intent at the new value.
+
+## Edge-Case & Dependency Audit
+- **Race Conditions:** A regenerated PNG overwrites the same filename. A render path that has already fetched the old version shows stale art until the cache window expires (1 hour, `LocalApiServer.ts:920`). The mtime param busts the cache for picker-sourced URLs; non-picker paths accept the stale window.
+- **Security:** The listing endpoint reads the `icons/` directory. The existing traversal guard in `_handleServeStatic` (`LocalApiServer.ts:906`) protects the static serve path; the listing endpoint must not expose paths outside `icons/`.
+- **Side Effects:** Changing `TEAMS_TAB_CELL` from 28 to 32 shifts the TEAMS gallery layout. Every card is 4px wider/taller. Verify the grid does not reflow badly on common viewport sizes.
+- **Dependencies & Conflicts:** The `teamIconSrc` resolver is created by the team-icon-picker plan. This plan extends it (or extracts `resolveArt` as a low-level layer beneath it). The `GET /terminals/icon-palette` endpoint created here is consumed by the icon picker. The two plans are mutually dependent — the picker needs the endpoint, this plan needs the resolver seam.
+
+## Dependencies
+- **Team icon picker** — creates the `teamIconSrc(group)` resolver that this plan extends. The resolver must exist before this plan adds `art:` handling and mtime params. The two plans can land together but the resolver function must be created first (by the picker plan) and extended second (by this plan).
+
+## Adversarial Synthesis
+Key risks: (1) the `resolveArt` vs `teamIconSrc` naming/signature contradiction could result in two competing resolvers across five surfaces — must be reconciled as a low-level `resolveArt(value)` with `teamIconSrc(group)` as a wrapper; (2) the mtime cache-busting param is only available to the picker, not to every render path — non-picker paths accept stale cache within the 1-hour window; (3) the `TEAMS_TAB_CELL` 28→32 change is a real layout shift that must be verified. Mitigations: reconcile the resolver naming before coding; document the stale-cache acceptance for non-picker paths; verify the card grid after the constant change.
+
+## Proposed Changes
+
+### `src/webview/kanban.html` (and `terminals.html`, `shell.js` stylesheets)
+- **Context:** Display sizes are not integer multiples of the 32×32 art grid. `TEAMS_TAB_CELL = 28` renders at 1.1667×, which blurs raster pixel art.
+- **Logic:** Change `TEAMS_TAB_CELL` from 28 to 32. Add `.pixel-art { image-rendering: pixelated; -ms-interpolation-mode: nearest-neighbor; }` to each webview stylesheet. Set explicit `width`/`height` and `flex: none` on art elements to prevent flex stretching.
+- **Edge Cases:** Verify the card grid does not reflow badly at the new cell size. Add a dev-mode assertion logging when a rendered art element's computed box is not 32 or 64 CSS px.
+
+### `src/webview/kanban.html` (resolver extension)
+- **Context:** The icon-picker plan creates `teamIconSrc(group)` → URL or `null`. This plan needs to add `art:` prefix handling and mtime cache-busting.
+
+> **Superseded:** `resolveArt(value)` → URL or `null`, as a standalone function.
+> **Reason:** The icon-picker plan creates `teamIconSrc(group)` with a `group` parameter, not a raw value. Naming the extended function `resolveArt(value)` with a different signature creates two competing resolvers. "Extend that function, do not add a second" is contradicted by changing the name and parameter type.
+> **Replaced with:** Extract `resolveArt(value)` as the low-level resolver handling prefix parsing (`art:` → `/static/icons/<name>.png`, `pack:` → URL-encoded static path, `data:` → passthrough). Make `teamIconSrc(group)` a thin wrapper: `const v = group?.icon; return v ? resolveArt(v) : null;`. This preserves the icon-picker plan's `teamIconSrc` seam while adding `art:` handling in one place.
+
+### `src/services/LocalApiServer.ts` (listing endpoint)
+- **Context:** No endpoint exists to list available art in `icons/`. The picker needs a directory read, not hardcoded filenames.
+- **Logic:** Add `GET /terminals/icon-palette` — reads `icons/`, returns `[{ name, src, mtime, kind }]` where `kind` comes from the filename prefix (`agent-` / `team-` / other). Flag any `agent-*` / `team-*` PNG that is not 32×32 as a warning.
+- **Edge Cases:** The mtime returned here is used by the picker to bust cache. Non-picker render paths (shell strip, cockpit header) do not call this endpoint and must accept stale cache within the 1-hour window. Document this asymmetry.
 
 ## Non-goals
 - Authoring, drawing, or art-direction guidance. Art comes from an external generator; the app's only interest is the file's dimensions.

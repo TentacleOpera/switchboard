@@ -336,11 +336,11 @@ test('the lock indicator and the clickable sidebar title are both retired', () =
     );
 });
 
-test('the tab strip offers All, one tab per group, a delete on every tab, and a +', () => {
+test('the tab strip offers Unassigned, one tab per group, a delete on every tab, and a +', () => {
     const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
     assert.ok(
-        strip.includes("allTab.textContent = 'All'"),
-        'the strip must render a leading All tab'
+        strip.includes("allTabName.textContent = 'Unassigned'"),
+        'the strip must render a leading Unassigned tab'
     );
     assert.ok(
         strip.includes('clearGroupLock()'),
