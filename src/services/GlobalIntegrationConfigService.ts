@@ -46,12 +46,16 @@ export interface ScheduledJob {
     id: string;
     label: string;
     enabled: boolean;
-    source: 'reconcile' | 'custom' | 'fetch-plans';
+    source: 'reconcile' | 'custom' | 'fetch-plans' | 'team-automation';
     target: 'local-terminal' | 'antigravity' | 'cloud';
     intervalMinutes: number;
     promptOverride?: string;
     startupCommand?: string;
     sourceConfig: Record<string, unknown>;
+    teamTarget?: { groupId: string; role?: string; canMoveCards?: boolean };
+    lastRunAt?: number;
+    lastOutcome?: string;
+    lastTarget?: string;
 }
 
 /**
@@ -477,7 +481,8 @@ export class GlobalIntegrationConfigService {
 
     // ─── Scheduler accessors ────────────────────────────────────────────────
 
-    /** Sources that have been deleted. Jobs with these sources are dropped on read. */
+    /** Sources that have been deleted. Jobs with these sources are dropped on read.
+     * Do NOT add 'team-automation' — see scheduled-automation-targeted-at-a-team-lead.md. */
     private static readonly DROPPED_SOURCES = new Set(['comms', 'board-batch', 'custom']);
 
     /** Drop jobs whose source has been deleted (comms, board-batch, custom) on read. */

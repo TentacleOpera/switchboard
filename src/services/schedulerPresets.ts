@@ -99,3 +99,21 @@ git pull --all || true
 
 Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-path-only (no SQL).`;
 }
+
+/**
+ * The `team-automation` source preset: deliver a recurring or on-demand
+ * automation prompt to a specific team lead (or named role).
+ * Includes `BOARD_DRIVING_CONTRACT` when `canMoveCards` is true.
+ */
+export function buildTeamAutomationPrompt(job: {
+    promptOverride?: string;
+    teamTarget?: { groupId?: string; role?: string; canMoveCards?: boolean };
+    sourceConfig?: Record<string, unknown>;
+}): string {
+    const customPrompt = typeof job.sourceConfig?.prompt === 'string' ? job.sourceConfig.prompt.trim() : '';
+    const basePrompt = (job.promptOverride || '').trim() || customPrompt || 'Execute scheduled team automation tasks.';
+    if (job.teamTarget?.canMoveCards) {
+        return `${basePrompt}\n\n${BOARD_DRIVING_CONTRACT}`;
+    }
+    return basePrompt;
+}

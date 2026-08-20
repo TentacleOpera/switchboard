@@ -117,6 +117,7 @@ Per-terminal marks remain genuinely useful when debugging one agent. Add a rail 
 7. Manual, installed VSIX: start two teams plus one loose terminal. Rail shows two team icons and one CLI mark. Hover each — tooltip names the team, count, head, roster.
 8. Manual: let a member finish. The team button pulses once and holds the done light. Click it — the cockpit opens, the light clears, and it does not re-pulse on the next poll.
 9. Manual: toggle to terminals mode and confirm today's rail returns exactly; toggle back and confirm the mode persists across a shell reload.
+10. Manual: close the Terminals panel and confirm the container disappears and the Setup + theme cluster stays anchored at the foot of the rail.
 
 ---
 
@@ -156,5 +157,3 @@ Updated `shell-terminal-strip.test.js` markers: `renderTerminalSection(terminals
 - **All-exited teams**: still render with `light: 'exited'` — same as per-terminal exited behaviour.
 - **`localStorage` unavailable**: try/catch defaults to 'teams' mode.
 - **`pixel-art` class**: applied to team icon PNGs only, not to SVG brand-mark fallbacks.
-
-10. Manual: close the Terminals panel and confirm the container disappears and the Setup + theme cluster stays anchored at the foot of the rail.

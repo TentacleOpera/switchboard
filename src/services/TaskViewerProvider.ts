@@ -46,7 +46,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // read in this file goes through `loadEffectiveStandingOrders`, which composes
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 
 import * as cp from 'child_process';
@@ -57,7 +57,7 @@ import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog
 import { KanbanProvider } from './KanbanProvider';
 import type { SetupPanelProvider } from './SetupPanelProvider';
 import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock, clearTerminalInputLine, CLEAR_INPUT_LINE, CLEAR_INPUT_SETTLE_MS } from './terminalUtils';
-import { buildFetchPlansPrompt, buildReconcilePrompt } from './schedulerPresets';
+import { buildFetchPlansPrompt, buildReconcilePrompt, buildTeamAutomationPrompt } from './schedulerPresets';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
 import {
     CustomAgentConfig,
@@ -27385,43 +27385,216 @@ What would you like to find?`;
     }
 
     /**
-     * Tick the two surviving scheduler jobs (fetch-plans, reconcile) on their
+     * Tick the surviving scheduler jobs (fetch-plans, reconcile, team-automation) on their
      * own activation-scoped timer. Reads the scheduler config, filters to
-     * enabled jobs with surviving sources, and delivers the prompt to the job's
-     * terminal via the same sendRobustText path the old per-job tick used. The
-     * per-job in-flight guard is carried forward — a long-running fetch-plans
-     * must not be re-sent on the next tick.
+     * enabled jobs with surviving sources, and delivers the prompt via runSchedulerJob.
      */
     private async _tickSurvivorSchedulerJobs(): Promise<void> {
         const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
-        // Source allowlist, not a target check. `job.target` is vestigial: the
-        // target picker is deleted and the external-handoff surface (COPY PROMPT)
-        // went with it, so a stale 'antigravity'/'cloud' target has nowhere else
-        // to go. Local terminal is the only target now, for every surviving job.
-        const survivorSources = new Set(['fetch-plans', 'reconcile']);
+        const survivorSources = new Set(['fetch-plans', 'reconcile', 'team-automation']);
         for (const job of sched.jobs) {
             if (!job.enabled || !survivorSources.has(job.source)) continue;
-            // promptOverride precedence is preserved exactly — an empty override
-            // falls through to the source preset.
-            const prompt = (job.promptOverride || '').trim()
-                || (job.source === 'fetch-plans' ? buildFetchPlansPrompt(job) : buildReconcilePrompt());
-            if (!prompt) continue;
             if (this._schedulerInFlight.get(job.id)) continue;
+            void this.runSchedulerJob(job).catch(e =>
+                console.error(`[Autoban] Survivor scheduler job '${job.source}' tick failed:`, e)
+            );
+        }
+    }
 
-            // Claim the guard BEFORE the first await. _ensureSurvivorTerminal
-            // can spend ~5s booting a CLI, which is long enough for a second
-            // run-sheet tick to enter this loop and spawn a duplicate terminal.
-            this._schedulerInFlight.set(job.id, true);
+    /**
+     * Run a scheduled job on-demand (RUN NOW) or from the survivor scheduler tick.
+     * Shares `_schedulerInFlight` guard between tick and RUN NOW to prevent duplicate runs.
+     * Records outcome (lastRunAt, lastOutcome, lastTarget) in the job's config.
+     */
+    public async runSchedulerJob(jobOrId: string | ScheduledJob): Promise<{ success: boolean; outcome: string; target?: string }> {
+        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
+        const job = typeof jobOrId === 'string' ? sched.jobs.find(j => j.id === jobOrId) : jobOrId;
+        if (!job) {
+            return { success: false, outcome: 'job not found' };
+        }
+
+        if (this._schedulerInFlight.get(job.id)) {
+            return { success: false, outcome: 'job already in flight' };
+        }
+
+        this._schedulerInFlight.set(job.id, true);
+        let outcome = 'unknown';
+        let resolvedTarget: string | undefined;
+
+        try {
+            if (job.source === 'team-automation') {
+                const res = await this._deliverTeamAutomationJob(job);
+                outcome = res.outcome;
+                resolvedTarget = res.target;
+            } else if (job.source === 'fetch-plans' || job.source === 'reconcile') {
+                const prompt = (job.promptOverride || '').trim()
+                    || (job.source === 'fetch-plans' ? buildFetchPlansPrompt(job) : buildReconcilePrompt());
+                if (!prompt) {
+                    outcome = 'empty prompt';
+                } else {
+                    const terminal = await this._ensureSurvivorTerminal(job);
+                    if (!terminal) {
+                        outcome = 'terminal creation failed';
+                    } else {
+                        await sendRobustText(terminal, normalizeNewlines(prompt), true, undefined, {
+                            background: true,
+                            standingOrders: await this._resolveStandingOrdersForVsCode()
+                        });
+                        outcome = 'sent';
+                        resolvedTarget = terminal.name;
+                    }
+                }
+            } else {
+                outcome = `unsupported source '${job.source}'`;
+            }
+        } catch (e) {
+            outcome = e instanceof Error ? e.message : String(e);
+            console.error(`[Autoban] Survivor scheduler job '${job.source}' failed:`, e);
+        } finally {
+            this._schedulerInFlight.set(job.id, false);
+
+            // Record run outcome in the job's own config
             try {
-                const terminal = await this._ensureSurvivorTerminal(job);
-                if (!terminal) continue;
-                await sendRobustText(terminal, normalizeNewlines(prompt), true, undefined, { background: true, standingOrders: await this._resolveStandingOrdersForVsCode() });
-            } catch (e) {
-                console.error(`[Autoban] Survivor scheduler job '${job.source}' failed:`, e);
-            } finally {
-                this._schedulerInFlight.set(job.id, false);
+                const latestSched = await GlobalIntegrationConfigService.getSchedulerConfig();
+                const targetJob = latestSched.jobs.find(j => j.id === job.id);
+                if (targetJob) {
+                    targetJob.lastRunAt = Date.now();
+                    targetJob.lastOutcome = outcome;
+                    targetJob.lastTarget = resolvedTarget;
+                    await GlobalIntegrationConfigService.setSchedulerConfig(latestSched);
+                }
+            } catch (err) {
+                console.warn('[TaskViewerProvider] Failed to record scheduler job outcome:', err);
             }
         }
+
+        return { success: outcome === 'sent', outcome, target: resolvedTarget };
+    }
+
+    /**
+     * Deliver a team automation job into the team's live lead (or named role) terminal.
+     * Never spawns a fresh terminal on failure.
+     */
+    private async _deliverTeamAutomationJob(
+        job: ScheduledJob
+    ): Promise<{ success: boolean; outcome: string; target?: string }> {
+        const teamTarget = job.teamTarget;
+        if (!teamTarget || !teamTarget.groupId) {
+            return { success: false, outcome: 'no team groupId specified' };
+        }
+
+        const workspaceRoot = this._getWorkspaceRoot() || this._apiServerWorkspaceRoot || '';
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (!db || !await db.ensureReady()) {
+            return { success: false, outcome: 'Kanban DB not ready' };
+        }
+
+        // 1. Resolve registered group
+        let groups: any[] = [];
+        try {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? [...raw] : [];
+            const bare = await db.getConfigJson('terminals.groups', []) as any[];
+            if (Array.isArray(bare)) {
+                const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                for (const g of bare) {
+                    if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                        groups.push(g);
+                        existingIds.add(g.id);
+                    }
+                }
+            }
+        } catch { /* best effort */ }
+
+        const group = groups.find(g => g && g.id === teamTarget.groupId);
+        if (!group) {
+            return { success: false, outcome: 'team not registered' };
+        }
+
+        // 2. Query live terminals
+        const live: Array<{ name: string; role?: string; isWorking?: boolean }> = [];
+        if (this._ptyHostPort) {
+            try {
+                const res = await this._ptyHostVerb('ptyListTerminals', {});
+                if (res?.success && Array.isArray(res.terminals)) {
+                    for (const t of res.terminals) {
+                        if (t?.status === 'active') {
+                            live.push({ name: t.friendlyName, role: t.role, isWorking: !!t.isWorking });
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+        }
+        const registry = await this._getAliveAutobanTerminalRegistry(workspaceRoot);
+        for (const [name, info] of Object.entries(registry)) {
+            if (!live.some(l => l.name === name)) {
+                live.push({ name, role: (info as any)?.role });
+            }
+        }
+
+        // 3. Resolve target terminal
+        let targetName: string | undefined = undefined;
+        if (teamTarget.role) {
+            const wantedRole = teamTarget.role;
+            const origin = teamHeadName(group) || (Array.isArray(group.members) ? group.members[0] : 'lead');
+            targetName = (await resolveTeamScopedRoleTerminal({
+                db,
+                originName: origin,
+                role: wantedRole,
+                liveTerminals: live,
+                normalizeRole: (r) => this._normalizeAgentKey(r || '')
+            })) ?? undefined;
+
+            if (!targetName) {
+                // Determine whether role is missing from roster vs terminal dead
+                const normalizedWanted = this._normalizeAgentKey(wantedRole);
+                const groupRoster: string[] = Array.isArray(group.order) && group.order.length
+                    ? group.order
+                    : (Array.isArray(group.members) ? group.members : []);
+                const rosterHasRole = live.some(t => groupRoster.includes(t.name) && this._normalizeAgentKey(t.role) === normalizedWanted);
+                if (!rosterHasRole) {
+                    return { success: false, outcome: 'no such role in roster' };
+                }
+                return { success: false, outcome: 'lead not live' };
+            }
+        } else {
+            // Default to head
+            const headName = teamHeadName(group) || (Array.isArray(group.members) ? group.members[0] : undefined);
+            if (!headName) {
+                return { success: false, outcome: 'no head declared for team' };
+            }
+            const isLive = live.some(t => t.name === headName);
+            if (!isLive) {
+                return { success: false, outcome: 'lead not live' };
+            }
+            targetName = headName;
+        }
+
+        // 4. Idle check: do not interrupt busy agents
+        const targetEntry = live.find(t => t.name === targetName);
+        if (targetEntry?.isWorking) {
+            return { success: false, outcome: 'lead busy', target: targetName };
+        }
+
+        // 5. Build prompt
+        const prompt = (job.promptOverride || '').trim() || buildTeamAutomationPrompt(job);
+        if (!prompt) {
+            return { success: false, outcome: 'empty prompt', target: targetName };
+        }
+
+        // 6. Deliver via fleet dispatch path
+        const delivered = await this._dispatchExecuteMessage(
+            workspaceRoot,
+            targetName,
+            prompt,
+            { source: 'teamAutomation', jobId: job.id },
+            'scheduler'
+        );
+
+        if (delivered) {
+            return { success: true, outcome: 'sent', target: targetName };
+        }
+        return { success: false, outcome: 'delivery failed', target: targetName };
     }
 
     /**

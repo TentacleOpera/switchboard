@@ -9481,6 +9481,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 return { success: false, error: 'config is required' };
             }
+            case 'runSchedulerJob': {
+                if (this._taskViewerProvider && msg.jobId) {
+                    const result = await this._taskViewerProvider.runSchedulerJob(msg.jobId);
+                    return { success: result.success, outcome: result.outcome, target: result.target };
+                }
+                return { success: false, error: 'jobId is required' };
+            }
             case 'getAutobanConfig': {
                 return { success: true, type: 'updateAutobanConfig', state: this._autobanState };
             }

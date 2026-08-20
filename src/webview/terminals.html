@@ -2197,6 +2197,180 @@
             color: var(--text-primary);
             border-color: var(--accent-teal, #4ec9b0);
         }
+        /* Team Action Bar — five bulk verb buttons in the team header.
+           No confirm gates (per CLAUDE.md). Destructive actions get a
+           red-tinted hover; non-destructive reuse the orders button style. */
+        .team-action-bar {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: 8px;
+            flex-wrap: wrap;
+        }
+        .team-action-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.1));
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 3px;
+            white-space: nowrap;
+        }
+        .team-action-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--accent-teal, #4ec9b0);
+        }
+        .team-action-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .team-action-btn:disabled:hover {
+            color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--border-color, rgba(255,255,255,0.1));
+        }
+        .team-action-btn.is-destructive:hover {
+            color: var(--state-readonly, #e06c75);
+            border-color: var(--state-readonly, #e06c75);
+            background: rgba(224, 108, 117, 0.08);
+        }
+        /* Drag-to-reorder roster rows in team-scoped sidebar */
+        .terminal-item.is-draggable {
+            cursor: grab;
+        }
+        .terminal-item.is-dragging {
+            opacity: 0.4;
+            cursor: grabbing;
+        }
+        .terminal-item.is-drag-over {
+            border-top: 2px solid var(--accent-teal, #4ec9b0);
+        }
+        /* Team work queue panel — rendered below the team header in the
+           sidebar. Each row shows position, kind, title, target, state.
+           Drag to reorder; immediate delete (no confirm gate per CLAUDE.md). */
+        .team-queue-panel {
+            display: flex; flex-direction: column;
+            border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08));
+        }
+        .team-queue-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 6px 8px;
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+            color: var(--accent-violet, #c586c0);
+            letter-spacing: 0.5px;
+        }
+        .team-queue-mode-toggle {
+            display: flex; gap: 2px;
+            background: var(--panel-bg2, #252526);
+            border: 1px solid var(--border-color, #3c3c3c);
+            border-radius: 3px;
+            padding: 1px;
+        }
+        .team-queue-mode-btn {
+            background: transparent; border: none; cursor: pointer;
+            font-size: 10px; font-family: inherit;
+            padding: 2px 6px; border-radius: 2px;
+            color: var(--text-secondary);
+        }
+        .team-queue-mode-btn.active {
+            background: var(--accent-violet, #c586c0);
+            color: var(--panel-bg, #1e1e1e);
+        }
+        .team-queue-list {
+            display: flex; flex-direction: column;
+            max-height: 240px; overflow-y: auto;
+        }
+        .team-queue-item {
+            display: flex; align-items: center; gap: 6px;
+            padding: 4px 8px;
+            font-size: 11px;
+            cursor: grab;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .team-queue-item:hover {
+            background: rgba(255,255,255,0.04);
+        }
+        .team-queue-item.dragging {
+            opacity: 0.5;
+            cursor: grabbing;
+        }
+        .team-queue-item-pos {
+            font-size: 10px; color: var(--text-secondary);
+            width: 16px; text-align: right; flex-shrink: 0;
+        }
+        .team-queue-item-kind {
+            font-size: 9px; text-transform: uppercase;
+            padding: 1px 4px; border-radius: 2px;
+            background: rgba(255,255,255,0.08);
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+        .team-queue-item-kind.kind-plan {
+            background: rgba(78, 201, 176, 0.15);
+            color: var(--accent-teal, #4ec9b0);
+        }
+        .team-queue-item-kind.kind-prompt {
+            background: rgba(220, 220, 170, 0.15);
+            color: var(--accent-gold, #dcdcaa);
+        }
+        .team-queue-item-kind.kind-card {
+            background: rgba(197, 134, 192, 0.15);
+            color: var(--accent-violet, #c586c0);
+        }
+        .team-queue-item-title {
+            flex: 1; min-width: 0;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            color: var(--text-primary, #ccc);
+        }
+        .team-queue-item-state {
+            font-size: 9px; text-transform: uppercase;
+            padding: 1px 4px; border-radius: 2px;
+            flex-shrink: 0;
+        }
+        .team-queue-item-state.state-pending {
+            color: var(--text-secondary);
+            background: rgba(255,255,255,0.05);
+        }
+        .team-queue-item-state.state-claimed {
+            color: var(--accent-gold, #dcdcaa);
+            background: rgba(220, 220, 170, 0.1);
+        }
+        .team-queue-item-delete {
+            background: transparent; border: none; cursor: pointer;
+            color: var(--text-secondary);
+            font-size: 14px; line-height: 1;
+            padding: 0 2px; flex-shrink: 0;
+        }
+        .team-queue-item-delete:hover {
+            color: var(--state-readonly, #e06c75);
+        }
+        .team-queue-empty {
+            padding: 8px; font-size: 11px;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+        .team-queue-actions {
+            display: flex; gap: 4px; padding: 4px 8px;
+            border-top: 1px solid rgba(255,255,255,0.04);
+        }
+        .team-queue-send-btn {
+            background: rgba(78, 201, 176, 0.1);
+            border: 1px solid var(--accent-teal, #4ec9b0);
+            color: var(--accent-teal, #4ec9b0);
+            font-size: 10px; font-family: inherit;
+            cursor: pointer; padding: 2px 8px;
+            border-radius: 3px;
+        }
+        .team-queue-send-btn:hover {
+            background: rgba(78, 201, 176, 0.2);
+        }
+        .team-queue-send-btn:disabled {
+            opacity: 0.4; cursor: default;
+        }
         /* Pixel-art <img> treatment — one class per webview document (these
            documents share no sheet). Integer display sizes plus `pixelated`
            keep raster art hard-edged; applied to art <img> elements by the
@@ -2255,6 +2429,8 @@
                     title="Instruct one agent terminal to send a message to another">LINK UP</button>
             <button type="button" id="btn-team-orders" class="secondary-btn w-full"
                     title="View and edit standing orders for this team" hidden>STANDING ORDERS</button>
+            <button type="button" id="btn-team-automations" class="secondary-btn w-full"
+                    title="View and configure scheduled automations for this team" hidden>AUTOMATIONS</button>
         </div>
         <div id="terminals-list" class="terminals-list"></div>
     </div>
@@ -2320,11 +2496,11 @@
 
                 <label class="link-field-label" for="link-mode">Mode</label>
                 <select id="link-mode" class="link-select">
-                    <option value="instant">Instant — deliver this message once, now</option>
-                    <option value="standing">Standing orders — append to every prompt sent to the parent</option>
+                    <option value="instant">Instant — send once, right now</option>
+                    <option value="standing">Standing orders — append to every future message</option>
                 </select>
 
-                <label class="link-field-label" for="link-preset">Instruction preset</label>
+                <label class="link-field-label" for="link-preset">Preset</label>
                 <select id="link-preset" class="link-select"></select>
 
                 <label class="link-field-label" for="link-message">Instruction</label>
@@ -2400,6 +2576,71 @@
             <div class="modal-footer" style="display:flex; justify-content:space-between;">
                 <button type="button" id="btn-team-orders-resend" class="secondary-btn is-teal" title="Dispatch updated standing orders immediately to idle members">RESEND TO MEMBERS</button>
                 <button type="button" id="team-orders-done" class="secondary-btn">CLOSE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Team Automations modal -->
+    <div id="team-automations-modal" class="team-orders-modal" hidden>
+        <div class="team-orders-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3 id="team-automations-modal-title">Team automations</h3>
+                <button type="button" class="modal-close-btn" id="team-automations-modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="team-orders-body">
+                <div class="team-orders-notice">
+                    Automations run on a recurring interval or on demand (<strong>RUN NOW</strong>), delivering directly to the team's lead or named role.
+                </div>
+
+                <div id="team-automations-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+
+                <!-- Add/Edit form -->
+                <div id="team-auto-form" class="team-orders-section" style="margin-top: 10px; display: none;">
+                    <div class="team-orders-section-title" id="team-auto-form-title">Add Automation</div>
+                    <input type="hidden" id="team-auto-id" value="" />
+                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
+                        <div>
+                            <label class="link-field-label" for="team-auto-label">Label</label>
+                            <input type="text" id="team-auto-label" class="link-select" placeholder="e.g. Triage PRs, Reconcile tasks" />
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <div style="flex: 1;">
+                                <label class="link-field-label" for="team-auto-interval">Interval (minutes)</label>
+                                <input type="number" id="team-auto-interval" class="link-select" min="1" value="10" />
+                            </div>
+                            <div style="flex: 1;">
+                                <label class="link-field-label" for="team-auto-role">Target Role (empty = Team Lead)</label>
+                                <input type="text" id="team-auto-role" class="link-select" placeholder="e.g. reviewer, coder" />
+                            </div>
+                        </div>
+                        <div>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary); cursor: pointer;">
+                                <input type="checkbox" id="team-auto-can-move-cards" />
+                                Allow automation to move board cards (includes board driving contract)
+                            </label>
+                        </div>
+                        <div>
+                            <label class="link-field-label" for="team-auto-prompt">Prompt / Instructions</label>
+                            <textarea id="team-auto-prompt" class="team-orders-textarea" placeholder="Prompt instruction delivered on each run..."></textarea>
+                        </div>
+                        <div>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary); cursor: pointer;">
+                                <input type="checkbox" id="team-auto-enabled" checked />
+                                Enabled
+                            </label>
+                        </div>
+                        <div style="display: flex; gap: 6px; justify-content: flex-end;">
+                            <button type="button" id="team-auto-cancel" class="secondary-btn">CANCEL</button>
+                            <button type="button" id="team-auto-save" class="secondary-btn is-teal">SAVE</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="team-automations-error" class="link-error" hidden></div>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content:space-between;">
+                <button type="button" id="btn-team-auto-new" class="secondary-btn is-teal">+ NEW AUTOMATION</button>
+                <button type="button" id="team-automations-done" class="secondary-btn">CLOSE</button>
             </div>
         </div>
     </div>

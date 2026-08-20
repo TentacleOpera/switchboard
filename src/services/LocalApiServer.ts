@@ -34,6 +34,7 @@ import { PLANNING_VERBS, SETUP_VERBS, TASKVIEWER_VERBS } from '../generated/verb
 import { validateVerbPayload } from './verbSchemas';
 import { isLoopbackHostHeader, isLoopbackOrigin } from '../utils/loopbackHostname';
 import { listIconPalette } from './iconPalette';
+import { isSafeId as isSafeQueueId, listQueue, enqueueItem, claimItem, deleteItem, reorderQueue, releaseClaim, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
 
 /** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
  *  'lead_coded' / 'Lead Coded' all → 'LEAD CODED'. */
@@ -3710,6 +3711,170 @@ export class LocalApiServer {
     }
 
     /**
+     * Team work queue routes. All paths under `/terminals/teams/<groupId>/queue`.
+     *
+     *   GET   /terminals/teams/<groupId>/queue           — list items
+     *   POST  /terminals/teams/<groupId>/queue           — enqueue { kind, body, planId?, target?, priority? }
+     *   POST  /terminals/teams/<groupId>/queue/reorder    — set order { order: [id, ...] }
+     *   POST  /terminals/teams/<groupId>/queue/<id>/claim — claim an item
+     *   DELETE /terminals/teams/<groupId>/queue/<id>      — delete an item
+     *
+     * Security: `groupId` and item `id` are validated against path traversal
+     * by `isSafeQueueId` BEFORE any DB lookup or filesystem call. The guard
+     * rejects `../`, absolute paths, URL-encoded traversal, and any character
+     * outside [a-zA-Z0-9._-].
+     */
+    private async _handleTeamQueueRoute(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        // Parse: /terminals/teams/<groupId>/queue[/<itemId>[/claim]]
+        const parts = pathname.slice('/terminals/teams/'.length).split('/');
+        // parts[0] = groupId, parts[1] = 'queue', parts[2] = itemId or 'reorder', parts[3] = 'claim'
+        const groupId = parts[0] ? decodeURIComponent(parts[0]) : '';
+        const resource = parts[1] || '';
+
+        if (resource !== 'queue') {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Not found' }));
+            return;
+        }
+
+        // ── Traversal guard: BEFORE any DB lookup or filesystem call ──
+        if (!isSafeQueueId(groupId)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Invalid groupId (path traversal rejected)' }));
+            return;
+        }
+
+        const itemId = parts[2] ? decodeURIComponent(parts[2]) : '';
+        const action = parts[3] || '';
+
+        // Validate itemId if present (also before any filesystem call).
+        if (itemId && !isSafeQueueId(itemId)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Invalid item id (path traversal rejected)' }));
+            return;
+        }
+
+        const workspaceRoot = this._options.workspaceRoot || '';
+
+        // GET /terminals/teams/<groupId>/queue — list
+        if (req.method === 'GET' && !itemId) {
+            try {
+                const result = await listQueue(workspaceRoot, groupId);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'list failed' }));
+            }
+            return;
+        }
+
+        // POST /terminals/teams/<groupId>/queue — enqueue
+        if (req.method === 'POST' && !itemId) {
+            try {
+                const body = await this._parseJsonBody(req);
+                if (!body) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Invalid JSON body' }));
+                    return;
+                }
+                const kind = String(body.kind || 'prompt').trim();
+                const itemBody = String(body.body || '');
+                if (!itemBody && kind !== 'plan') {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'body is required for non-plan items' }));
+                    return;
+                }
+                if (itemBody.length > MAX_QUEUE_ITEM_BODY) {
+                    res.writeHead(413, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Item body exceeds ${MAX_QUEUE_ITEM_BODY} bytes` }));
+                    return;
+                }
+                const result = await enqueueItem(workspaceRoot, groupId, {
+                    kind,
+                    body: itemBody,
+                    planId: body.planId ? String(body.planId) : undefined,
+                    feature: body.feature ? String(body.feature) : undefined,
+                    target: body.target ? String(body.target) : 'head',
+                    priority: typeof body.priority === 'number' ? body.priority : 0,
+                });
+                res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'enqueue failed' }));
+            }
+            return;
+        }
+
+        // POST /terminals/teams/<groupId>/queue/reorder — reorder
+        if (req.method === 'POST' && itemId === 'reorder' && !action) {
+            try {
+                const body = await this._parseJsonBody(req);
+                if (!body || !Array.isArray(body.order)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'order array is required' }));
+                    return;
+                }
+                // Validate every id in the order array before calling reorder.
+                for (const id of body.order) {
+                    if (!isSafeQueueId(String(id))) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: `Invalid item id in order: '${id}'` }));
+                        return;
+                    }
+                }
+                const result = await reorderQueue(workspaceRoot, groupId, body.order.map(String));
+                res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'reorder failed' }));
+            }
+            return;
+        }
+
+        // POST /terminals/teams/<groupId>/queue/<id>/claim — claim
+        if (req.method === 'POST' && itemId && itemId !== 'reorder' && action === 'claim') {
+            try {
+                let agentId = 'team-queue-pump';
+                try {
+                    const body = await this._parseJsonBody(req);
+                    if (body?.agent) { agentId = String(body.agent); }
+                } catch { /* body optional for claim */ }
+                const result = await claimItem(workspaceRoot, groupId, itemId, agentId);
+                res.writeHead(result.success ? 200 : 409, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'claim failed' }));
+            }
+            return;
+        }
+
+        // DELETE /terminals/teams/<groupId>/queue/<id> — delete
+        if (req.method === 'DELETE' && itemId && itemId !== 'reorder' && !action) {
+            try {
+                const result = await deleteItem(workspaceRoot, groupId, itemId);
+                res.writeHead(result.success ? 200 : 404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'delete failed' }));
+            }
+            return;
+        }
+
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Not found' }));
+    }
+
+    /**
      * POST /terminals/standing-orders — add or delete a standing order.
      * Body: `{ action: 'add'|'delete', parent, child, instruction?, scope?, teamId? }`.
      * For `global`/`team` scope, `parent`/`child` are not required; `team` requires `teamId`.
@@ -5333,6 +5498,8 @@ export class LocalApiServer {
                 await this._handleStandingOrdersWrite(req, res);
             } else if (pathname === '/terminals/relay' && req.method === 'POST') {
                 await this._handleTerminalsRelay(req, res);
+            } else if (pathname.startsWith('/terminals/teams/') && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
+                await this._handleTeamQueueRoute(pathname, req, res);
             } else if (pathname.startsWith('/terminals/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/terminals/verb/'.length));
                 await this._handleTerminalVerb(verb, req, res);

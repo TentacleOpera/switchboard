@@ -828,6 +828,17 @@
                 badge.textContent = String(memberCount);
                 btn.appendChild(badge);
 
+                // Queue-depth badge — shows pending work count on the rail
+                // icon so depth is visible without opening the cockpit.
+                // Only shown when there are queued items.
+                const qDepth = team.queueDepth || 0;
+                if (qDepth > 0) {
+                    const qBadge = document.createElement('span');
+                    qBadge.className = 'strip-team-queue-depth';
+                    qBadge.textContent = String(qDepth);
+                    btn.appendChild(qBadge);
+                }
+
                 btn.addEventListener('click', () => {
                     const termFrame = frames.get('terminals');
                     // Clicking a team with an unacknowledged completion IS the

@@ -424,6 +424,21 @@
             padding: 1px 3px;
             pointer-events: none;
         }
+        /* Queue-depth badge — top-right corner, accent-violet to distinguish
+           from the member-count badge (bottom-right). Shows pending work. */
+        .strip-team-queue-depth {
+            position: absolute;
+            top: 1px;
+            right: 2px;
+            font-size: 9px;
+            font-weight: 700;
+            line-height: 1;
+            color: var(--accent-violet, #c586c0);
+            background: var(--panel-bg, #1a1a2e);
+            border-radius: 3px;
+            padding: 1px 3px;
+            pointer-events: none;
+        }
         /* Rail mode toggle — sits at the top of the fleet container, after the
            orchestrator icon. Same sizing as other strip icons. */
         .strip-rail-mode-btn {
