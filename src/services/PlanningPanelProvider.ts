@@ -3625,22 +3625,26 @@ Start by checking which documents exist, then present the menu.`;
                 try {
                     const allRoots = Array.from(this._getAllowedRoots());
                     const allArchived: any[] = [];
+                    const workspaceItems = this._buildKanbanWorkspaceItems();
                     for (const root of allRoots) {
                         try {
                             const archiveDb = KanbanDatabase.getArchiveInstanceIfPresent(root);
                             if (!archiveDb) continue;
                             const workspaceId = await this._getWorkspaceId(root);
                             const plans = await archiveDb.getCompletedPlansCold(workspaceId, 500, 0);
+                            const effectiveRoot = this._resolveEffectiveWorkspaceRoot(root);
+                            const wsLabel = workspaceItems.find(
+                                item => item.workspaceRoot === effectiveRoot
+                            )?.label || path.basename(effectiveRoot);
                             for (const p of plans) {
-                                allArchived.push({ ...p, workspaceRoot: root });
+                                allArchived.push({ ...p, workspaceRoot: effectiveRoot, workspaceLabel: wsLabel });
                             }
                         } catch { /* no archive for this root, skip */ }
                     }
                     if (requestId !== this._latestRequestIds.get(guardKey)) { return { success: false, error: 'Stale request' }; }
-                    const workspaceItems = this._buildKanbanWorkspaceItems();
-                    this._postMessageToWebview({ type: 'archivedPlansReady', plans: allArchived, workspaceItems });
+                    this.postMessageToProjectWebview({ type: 'archivedPlansReady', plans: allArchived, workspaceItems });
                 } catch (err) {
-                    this._postMessageToWebview({ type: 'archivedPlansReady', plans: [], error: String(err) });
+                    this.postMessageToProjectWebview({ type: 'archivedPlansReady', plans: [], error: String(err) });
                 }
                 break;
             }
@@ -3657,13 +3661,14 @@ Start by checking which documents exist, then present the menu.`;
                         }
                     }
                     if (fs.existsSync(absPath)) {
-                        const content = fs.readFileSync(absPath, 'utf8');
-                        this._postMessageToWebview({ type: 'archivedPlanDetailReady', content, planFile });
+                        const content = await fs.promises.readFile(absPath, 'utf8');
+                        const renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content);
+                        this.postMessageToProjectWebview({ type: 'archivedPlanDetailReady', content: renderedHtml, rawContent: content, planFile });
                     } else {
-                        this._postMessageToWebview({ type: 'archivedPlanDetailReady', content: 'Plan file not found on disk.', planFile });
+                        this.postMessageToProjectWebview({ type: 'archivedPlanDetailReady', error: 'Plan file not found on disk.', planFile });
                     }
                 } catch (err) {
-                    this._postMessageToWebview({ type: 'archivedPlanDetailReady', content: 'Error reading plan: ' + String(err), planFile });
+                    this.postMessageToProjectWebview({ type: 'archivedPlanDetailReady', error: 'Error reading plan: ' + String(err), planFile });
                 }
                 break;
             }
@@ -3671,11 +3676,12 @@ Start by checking which documents exist, then present the menu.`;
                 try {
                     const wsRoot = typeof msg.workspaceRoot === 'string' ? msg.workspaceRoot : '';
                     const root = wsRoot || this._getAllowedRoots().values().next().value || '';
-                    const archivePath = path.join(root, '.switchboard', 'kanban-archive.db');
+                    const archivePath = KanbanDatabase.resolveArchiveDbPath(root);
                     const prompt = `Read and follow .switchboard/protocols/archive/SKILL.md to query the Switchboard archive for workspace: ${root}.\n\nThe archive is a SQLite cold store at ${archivePath}. Use sqlite3 (read-only) to query it.\n\nWhat would you like to find?`;
-                    this._postMessageToWebview({ type: 'archivesPromptCopied', prompt });
+                    await this._seams().clipboard.writeText(prompt);
+                    this.postMessageToProjectWebview({ type: 'archivesPromptCopied', prompt });
                 } catch (err) {
-                    this._postMessageToWebview({ type: 'archivesPromptCopied', error: String(err) });
+                    this.postMessageToProjectWebview({ type: 'archivesPromptCopied', error: String(err) });
                 }
                 break;
             }
