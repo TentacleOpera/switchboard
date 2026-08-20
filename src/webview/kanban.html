@@ -3366,6 +3366,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <input id="agent-groups-name" class="modal-input" type="text" placeholder="e.g. Feature Implementation">
             <label class="modal-label" for="agent-groups-head-role">Head role</label>
             <select id="agent-groups-head-role" class="modal-input"></select>
+            <div style="font-size:11px; font-weight:600; margin-top:10px; margin-bottom:4px;">Team icon</div>
+            <div id="agent-groups-icon-picker" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <button id="agent-groups-icon-preview" type="button" class="strip-btn" style="padding:4px; width:40px; height:40px; display:flex; align-items:center; justify-content:center;" title="Choose icon"></button>
+              <span id="agent-groups-icon-label" style="font-size:11px; color:var(--text-secondary);">Role portrait (default)</span>
+              <button id="agent-groups-icon-reset" type="button" class="strip-btn" style="font-size:10px; padding:2px 8px;" title="Reset to role portrait">RESET</button>
+            </div>
+            <input type="hidden" id="agent-groups-icon-value">
+            <div id="agent-groups-icon-grid" class="agents-tab-inline-form" style="display:none; position:relative; margin-top:6px; padding:8px; max-height:240px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; background:var(--panel-bg2);">
+              <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap;">
+                <span style="font-size:10px; font-weight:600;">Pick an icon</span>
+                <label class="strip-btn" style="font-size:10px; padding:2px 8px; cursor:pointer;">
+                  CUSTOM…
+                  <input id="agent-groups-icon-file" type="file" accept="image/png,image/svg+xml,image/webp" style="display:none;">
+                </label>
+                <button id="agent-groups-icon-grid-close" type="button" class="strip-btn" style="font-size:10px; padding:2px 8px; margin-left:auto;">CLOSE</button>
+              </div>
+              <div id="agent-groups-icon-grid-items" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(36px, 1fr)); gap:4px;"></div>
+              <div id="agent-groups-icon-error" style="min-height:0; color:var(--accent-red); font-size:10px; margin-top:4px;"></div>
+            </div>
             <div style="font-size:11px; font-weight:600; margin-top:10px; margin-bottom:4px;">Members</div>
             <div id="agent-groups-members" style="display:flex; flex-direction:column; gap:4px;"></div>
             <button id="agent-groups-add-member" class="strip-btn" style="width:100%; margin-top:6px;">ADD MEMBER</button>
@@ -4912,6 +4931,78 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return null;
         }
 
+        /**
+         * Team icon resolver — the ONLY place a stored team `icon` value
+         * becomes a URL for the TEAMS tab surfaces (gallery card, flow head
+         * node). Thin wrapper over `resolveArt` (the low-level prefix parser):
+         * reads `group.icon`, hands it to `resolveArt`, returns the URL or
+         * null. The shell strip and cockpit have their own consumers of
+         * `resolveArt`; this helper is the TEAMS-tab seam so adding `art:`
+         * handling later is one function's change across all surfaces.
+         *
+         * No mtime here: the TEAMS tab does not call the listing endpoint on
+         * every render, so it accepts stale cache within the 1-hour static
+         * window (the picker passes mtime only when constructing the
+         * cache-busting URL for a freshly-picked icon).
+         *
+         * Absent/empty `icon` → null → caller falls back to the role portrait.
+         */
+        function teamIconSrc(group) {
+            const v = group && group.icon ? group.icon : null;
+            return v ? resolveArt(v) : null;
+        }
+
+        /**
+         * Build a portrait element for a team/group: an `<img>` when the group
+         * has a resolved icon, else the inline SVG `<use>` role portrait. Used
+         * by the gallery card and the flow head node so both surfaces agree.
+         *
+         * `size` is the integer display size (TEAMS_TAB_CELL for the card, CELL
+         * for the flow diagram). The `<img>` gets `flex:none` + explicit
+         * width/height so a flex parent cannot stretch it to a fractional box
+         * (which would silently reintroduce pixel-art blur), plus `.pixel-art`
+         * for `image-rendering: pixelated`.
+         *
+         * `onerror` swaps the broken `<img>` for the role portrait SVG so a
+         * missing/deleted asset degrades to the old behaviour rather than a
+         * broken-image glyph. Note this fires after a network round-trip, so a
+         * brief broken-image flash may appear on slow connections.
+         */
+        function teamsTabPortraitEl(group, size) {
+            const src = teamIconSrc(group);
+            if (src) {
+                const img = document.createElement('img');
+                img.src = src;
+                img.alt = (group.name || group.id || 'team') + ' icon';
+                img.width = size;
+                img.height = size;
+                img.className = 'teams-card-portrait pixel-art';
+                img.style.flex = 'none';
+                img.addEventListener('error', () => {
+                    // Swap in the role portrait SVG so a 404 (deleted PNG,
+                    // bad pack ref) degrades gracefully — no broken glyph.
+                    const fallback = teamsTabPortraitSvgEl(group.headRole, size);
+                    img.replaceWith(fallback);
+                });
+                return img;
+            }
+            return teamsTabPortraitSvgEl(group.headRole, size);
+        }
+
+        /** Inline-SVG role portrait — the fallback arm of teamsTabPortraitEl. */
+        function teamsTabPortraitSvgEl(role, size) {
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', String(size));
+            svg.setAttribute('height', String(size));
+            svg.setAttribute('class', 'teams-card-portrait');
+            const useEl = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+            useEl.setAttribute('href', '#' + teamsTabPortraitId(role));
+            useEl.setAttribute('width', String(size));
+            useEl.setAttribute('height', String(size));
+            svg.appendChild(useEl);
+            return svg;
+        }
+
         /** Cell size for portrait <use> — fixed so better art cannot shift layout.
          *  32 (not 28): the art grid is 32x32, and a 24-unit viewBox at 28px is
          *  a 1.1667x fractional scale that blurs raster pixel art. 32 is 1x. */
@@ -4971,17 +5062,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const key = teamsTabCardKey(entry);
             if (key === teamsTabPickedKey) { card.classList.add('is-picked'); }
 
-            // Portrait
-            const portraitSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            portraitSvg.setAttribute('width', String(TEAMS_TAB_CELL));
-            portraitSvg.setAttribute('height', String(TEAMS_TAB_CELL));
-            portraitSvg.setAttribute('class', 'teams-card-portrait');
-            const useEl = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-            useEl.setAttribute('href', '#' + teamsTabPortraitId(group.headRole));
-            useEl.setAttribute('width', String(TEAMS_TAB_CELL));
-            useEl.setAttribute('height', String(TEAMS_TAB_CELL));
-            portraitSvg.appendChild(useEl);
-            card.appendChild(portraitSvg);
+            // Portrait — chosen team icon (`<img>`) when set, else the inline
+            // role portrait SVG. teamsTabPortraitEl handles both arms + the
+            // 404 fallback so a deleted PNG degrades to the role portrait.
+            card.appendChild(teamsTabPortraitEl(group, TEAMS_TAB_CELL));
 
             // Name
             const nameDiv = document.createElement('div');
@@ -5243,11 +5327,34 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const nodeSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
                 nodeSvg.setAttribute('width', String(CELL));
                 nodeSvg.setAttribute('height', String(CELL));
-                const useEl = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-                useEl.setAttribute('href', '#' + teamsTabPortraitId(node.role));
-                useEl.setAttribute('width', String(CELL));
-                useEl.setAttribute('height', String(CELL));
-                nodeSvg.appendChild(useEl);
+                // Head node: render the team icon (`<image>`) when set, else
+                // the role portrait `<use>`. Members always use their role
+                // portrait — the team icon is the team's identity, not the
+                // members'. `<image>` is the SVG embed of `<img>`; `.pixel-art`
+                // is not applicable inside SVG (image-rendering is set inline).
+                const headIconSrc = node.isHead ? teamIconSrc(group) : null;
+                if (headIconSrc) {
+                    const imageEl = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+                    imageEl.setAttribute('href', headIconSrc);
+                    imageEl.setAttribute('width', String(CELL));
+                    imageEl.setAttribute('height', String(CELL));
+                    imageEl.setAttribute('preserveAspectRatio', 'xMidYMid');
+                    imageEl.style.imageRendering = 'pixelated';
+                    imageEl.addEventListener('error', () => {
+                        const useFallback = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+                        useFallback.setAttribute('href', '#' + teamsTabPortraitId(node.role));
+                        useFallback.setAttribute('width', String(CELL));
+                        useFallback.setAttribute('height', String(CELL));
+                        imageEl.replaceWith(useFallback);
+                    });
+                    nodeSvg.appendChild(imageEl);
+                } else {
+                    const useEl = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+                    useEl.setAttribute('href', '#' + teamsTabPortraitId(node.role));
+                    useEl.setAttribute('width', String(CELL));
+                    useEl.setAttribute('height', String(CELL));
+                    nodeSvg.appendChild(useEl);
+                }
                 g.appendChild(nodeSvg);
                 // Label below the node
                 const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -5540,6 +5647,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (promptEl) { promptEl.value = group?.prompt || ''; }
             const headPromptEl = document.getElementById('agent-groups-head-prompt');
             if (headPromptEl) { headPromptEl.value = group?.headPrompt || ''; }
+            // Load the existing icon value (or clear for a new team) and render
+            // the preview. The hidden input is the source of truth for save.
+            teamsTabSetIconValue(group?.icon || '');
             document.getElementById('agent-groups-error').textContent = '';
             document.getElementById('agent-groups-inline-form').classList.remove('hidden');
             setTimeout(() => document.getElementById('agent-groups-name').focus(), 0);
@@ -5549,7 +5659,261 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             agentsTabEditingGroupId = null;
             document.getElementById('agent-groups-inline-form').classList.add('hidden');
             document.getElementById('agent-groups-error').textContent = '';
+            // Collapse the icon grid so a re-open starts clean.
+            const grid = document.getElementById('agent-groups-icon-grid');
+            if (grid) { grid.style.display = 'none'; }
+            const gridErr = document.getElementById('agent-groups-icon-error');
+            if (gridErr) { gridErr.textContent = ''; }
         }
+
+        // ── Icon picker ───────────────────────────────────────────────────
+        // Three accepted icon forms (discriminated by prefix, no iconKind):
+        //   art:<name>  → /static/icons/<name>.png  (long-term; regenerating
+        //                 art overwrites the same filename, refs survive)
+        //   pack:<file> → /static/icons/<url-encoded file>  (stand-in pack;
+        //                 spaced filenames encoded at resolve time)
+        //   data:...    → custom inline icon (64 KB cap after base64 encoding)
+        // Absent/empty → role portrait fallback. The hidden input holds the
+        // raw value; the preview button renders the resolved icon or the role
+        // portrait. The grid populates from GET /terminals/icon-palette (via
+        // the getIconPalette verb — the webview cannot fetch the HTTP endpoint
+        // directly). No confirmation dialogs anywhere (CLAUDE.md): reset and
+        // custom-clear act immediately.
+
+        /** 64 KB cap on the encoded data URI (raw file ~48 KB → ~64 KB base64). */
+        const ICON_DATA_URI_MAX_BYTES = 64 * 1024;
+        /** Raw file size that encodes to ~64 KB base64 (4/3 ratio + overhead). */
+        const ICON_FILE_MAX_RAW_BYTES = 48 * 1024;
+        /** Cached palette so a second grid open doesn't re-fetch. */
+        let _iconPaletteCache = null;
+
+        /** Read the current icon value from the hidden input. */
+        function teamsTabIconValue() {
+            const el = document.getElementById('agent-groups-icon-value');
+            return el ? (el.value || '').trim() : '';
+        }
+
+        /** Set the icon value, refresh the preview + label, clear grid errors. */
+        function teamsTabSetIconValue(value) {
+            const el = document.getElementById('agent-groups-icon-value');
+            if (el) { el.value = value || ''; }
+            teamsTabRenderIconPreview();
+            const gridErr = document.getElementById('agent-groups-icon-error');
+            if (gridErr) { gridErr.textContent = ''; }
+        }
+
+        /** Render the preview button: the resolved icon `<img>` or the role
+         *  portrait SVG. Falls back to the role portrait on `<img>` error. */
+        function teamsTabRenderIconPreview() {
+            const btn = document.getElementById('agent-groups-icon-preview');
+            const label = document.getElementById('agent-groups-icon-label');
+            if (!btn || !label) { return; }
+            btn.innerHTML = '';
+            const headRole = document.getElementById('agent-groups-head-role')?.value || 'lead';
+            const value = teamsTabIconValue();
+            const src = value ? resolveArt(value) : null;
+            if (src) {
+                const img = document.createElement('img');
+                img.src = src;
+                img.alt = 'team icon';
+                img.width = 32; img.height = 32;
+                img.className = 'pixel-art';
+                img.style.flex = 'none';
+                img.addEventListener('error', () => {
+                    btn.innerHTML = '';
+                    btn.appendChild(teamsTabPortraitSvgEl(headRole, 32));
+                });
+                btn.appendChild(img);
+                label.textContent = value.startsWith('data:') ? 'Custom icon'
+                    : value.startsWith('art:') ? ('art: ' + value.slice(4))
+                    : value.startsWith('pack:') ? ('pack: ' + value.slice(5))
+                    : value;
+            } else {
+                btn.appendChild(teamsTabPortraitSvgEl(headRole, 32));
+                label.textContent = 'Role portrait (default)';
+            }
+        }
+
+        /** Open the grid: fetch the palette (cached), group by kind, render. */
+        async function teamsTabOpenIconGrid() {
+            const grid = document.getElementById('agent-groups-icon-grid');
+            const items = document.getElementById('agent-groups-icon-grid-items');
+            const gridErr = document.getElementById('agent-groups-icon-error');
+            if (!grid || !items) { return; }
+            grid.style.display = 'block';
+            if (gridErr) { gridErr.textContent = ''; }
+            items.innerHTML = '';
+            // Loading placeholder while the verb round-trips.
+            const loading = document.createElement('div');
+            loading.style.cssText = 'grid-column:1/-1; font-size:10px; color:var(--text-secondary); padding:4px;';
+            loading.textContent = 'Loading icons…';
+            items.appendChild(loading);
+
+            let icons = _iconPaletteCache;
+            if (!icons) {
+                try {
+                    postKanbanMessage({ type: 'getIconPalette' });
+                    // The iconPalette push arrives async via the message listener;
+                    // wait for it with a short timeout so the grid isn't blank.
+                    icons = await teamsTabWaitForIconPalette(3000);
+                } catch {
+                    icons = null;
+                }
+            }
+            if (!icons || icons.length === 0) {
+                loading.textContent = 'No icons found in icons/.';
+                return;
+            }
+            _iconPaletteCache = icons;
+            items.innerHTML = '';
+
+            // Group by kind so the picker can show Agents / Teams / Stand-in
+            // as separate sections — the stand-in pack drops as one group
+            // once real art lands.
+            const groups = { agent: [], team: [], other: [] };
+            for (const ic of icons) {
+                (groups[ic.kind] || groups.other).push(ic);
+            }
+            const groupLabels = { agent: 'Agents', team: 'Teams', other: 'Stand-in' };
+            const currentValue = teamsTabIconValue();
+            for (const kind of ['agent', 'team', 'other']) {
+                const arr = groups[kind];
+                if (!arr || arr.length === 0) { continue; }
+                const header = document.createElement('div');
+                header.style.cssText = 'grid-column:1/-1; font-size:10px; font-weight:600; color:var(--text-secondary); margin-top:4px;';
+                header.textContent = groupLabels[kind];
+                items.appendChild(header);
+                for (const ic of arr) {
+                    const cell = document.createElement('button');
+                    cell.type = 'button';
+                    cell.title = ic.name + (ic.sizeWarning ? ' — ' + ic.sizeWarning : '');
+                    cell.style.cssText = 'padding:2px; width:36px; height:36px; display:flex; align-items:center; justify-content:center; border:1px solid ' +
+                        (resolveArt('pack:' + ic.name) === resolveArt(currentValue) ? 'var(--accent-teal)' : 'var(--border)') +
+                        '; border-radius:3px; background:var(--panel-bg); cursor:pointer; position:relative;';
+                    const img = document.createElement('img');
+                    img.src = ic.src;
+                    img.alt = ic.name;
+                    img.width = 32; img.height = 32;
+                    img.className = 'pixel-art';
+                    img.style.flex = 'none';
+                    cell.appendChild(img);
+                    if (ic.sizeWarning) {
+                        const badge = document.createElement('span');
+                        badge.textContent = '!';
+                        badge.style.cssText = 'position:absolute; top:0; right:1px; font-size:9px; color:var(--accent-red); font-weight:700;';
+                        badge.title = ic.sizeWarning;
+                        cell.appendChild(badge);
+                    }
+                    // Store as pack:<name> (the stand-in form); real art uses
+                    // art:<name> but the picker offers whatever is on disk.
+                    // The filename IS the id — store the raw filename.
+                    const storeValue = ic.kind === 'agent' || ic.kind === 'team'
+                        ? 'art:' + ic.name.replace(/\.png$/i, '')
+                        : 'pack:' + ic.name;
+                    cell.addEventListener('click', () => {
+                        teamsTabSetIconValue(storeValue);
+                        teamsTabCloseIconGrid();
+                    });
+                    items.appendChild(cell);
+                }
+            }
+        }
+
+        function teamsTabCloseIconGrid() {
+            const grid = document.getElementById('agent-groups-icon-grid');
+            if (grid) { grid.style.display = 'none'; }
+        }
+
+        /** Wait for the `iconPalette` message push (set by the message listener). */
+        function teamsTabWaitForIconPalette(timeoutMs) {
+            return new Promise((resolve) => {
+                let done = false;
+                const finish = (val) => { if (!done) { done = true; cleanup(); resolve(val); } };
+                const handler = (event) => {
+                    const msg = event.data;
+                    if (msg && msg.type === 'iconPalette') {
+                        finish(Array.isArray(msg.icons) ? msg.icons : []);
+                    }
+                };
+                window.addEventListener('message', handler);
+                const timer = setTimeout(() => finish(_iconPaletteCache), timeoutMs);
+                function cleanup() {
+                    window.removeEventListener('message', handler);
+                    clearTimeout(timer);
+                }
+            });
+        }
+
+        /** Handle the custom file input: check raw size BEFORE reading (a large
+         *  file read into memory then rejected wastes RAM), then read as a data
+         *  URI and enforce the 64 KB encoded cap. */
+        function teamsTabHandleIconFile(file) {
+            const gridErr = document.getElementById('agent-groups-icon-error');
+            if (!file) { return; }
+            if (file.size > ICON_FILE_MAX_RAW_BYTES) {
+                if (gridErr) { gridErr.textContent = `File too large (${Math.round(file.size/1024)} KB). Max ~48 KB raw (encodes to 64 KB).`; }
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => {
+                const dataUri = String(reader.result || '');
+                if (dataUri.length > ICON_DATA_URI_MAX_BYTES) {
+                    if (gridErr) { gridErr.textContent = `Encoded icon too large (${Math.round(dataUri.length/1024)} KB). Max 64 KB.`; }
+                    return;
+                }
+                teamsTabSetIconValue(dataUri);
+                teamsTabCloseIconGrid();
+            };
+            reader.onerror = () => {
+                if (gridErr) { gridErr.textContent = 'Failed to read file.'; }
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // ── Icon picker event wiring (bound once) ─────────────────────────
+        (function teamsTabWireIconPicker() {
+            const preview = document.getElementById('agent-groups-icon-preview');
+            const reset = document.getElementById('agent-groups-icon-reset');
+            const closeBtn = document.getElementById('agent-groups-icon-grid-close');
+            const fileInput = document.getElementById('agent-groups-icon-file');
+            if (preview) {
+                preview.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const grid = document.getElementById('agent-groups-icon-grid');
+                    if (grid && grid.style.display === 'block') {
+                        teamsTabCloseIconGrid();
+                    } else {
+                        void teamsTabOpenIconGrid();
+                    }
+                });
+            }
+            if (reset) {
+                reset.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    teamsTabSetIconValue('');
+                });
+            }
+            if (closeBtn) {
+                closeBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    teamsTabCloseIconGrid();
+                });
+            }
+            if (fileInput) {
+                fileInput.addEventListener('change', () => {
+                    const file = fileInput.files && fileInput.files[0];
+                    teamsTabHandleIconFile(file);
+                    // Reset the input so the same file can be re-picked.
+                    fileInput.value = '';
+                });
+            }
+            // Re-render the preview when the head role changes — the fallback
+            // portrait depends on it.
+            const headSel = document.getElementById('agent-groups-head-role');
+            if (headSel) {
+                headSel.addEventListener('change', teamsTabRenderIconPreview);
+            }
+        })();
 
         function teamsTabSaveAgentGroup() {
             const name = document.getElementById('agent-groups-name').value.trim();
@@ -5617,10 +5981,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const prevGroup = agentsTabEditingGroupId
                 ? agentsTabAgentGroups.find(g => g.id === agentsTabEditingGroupId) || null
                 : null;
+            // Icon carry-forward: the picker IS an editor field (read from the
+            // hidden input), but a code path that saves without mounting the
+            // form would leave the input empty and silently wipe the icon —
+            // the same wipe trap that startOnLoad/startWorktree/pacing need
+            // explicit rescues for. Fall back to prevGroup?.icon so a save
+            // cannot blank it. The hidden input is populated by
+            // teamsTabShowGroupForm on every form open.
+            const iconValue = teamsTabIconValue() || prevGroup?.icon || '';
             const group = {
                 id, name, headRole, members,
                 ...(promptText ? { prompt: promptText } : {}),
                 ...(headPromptText ? { headPrompt: headPromptText } : {}),
+                ...(iconValue ? { icon: iconValue } : {}),
                 ...(prevGroup?.startOnLoad ? { startOnLoad: true } : {}),
                 ...(prevGroup?.startWorktree ? { startWorktree: prevGroup.startWorktree } : {}),
                 ...(prevGroup?.pacing ? { pacing: prevGroup.pacing } : {}),
@@ -10407,6 +10780,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   teamsTabRenderAgentGroups();
                   teamsTabRenderGallery();
                   agentsTabRenderCustomAgentList();
+                  break;
+                }
+                case 'iconPalette': {
+                  // Cache the palette so the picker grid doesn't re-fetch on
+                  // every open. teamsTabWaitForIconPalette resolves its promise
+                  // from this cache; a direct grid open also reads it.
+                  _iconPaletteCache = Array.isArray(msg.icons) ? msg.icons : [];
                   break;
                 }
                 case 'saveAgentGroupResult': {

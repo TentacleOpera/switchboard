@@ -65,6 +65,7 @@ import { resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentitySe
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { importPlanFiles } from './PlanFileImporter';
 import { matchWorktreePath } from './worktreeResolver';
+import { listIconPalette, validateTeamIcon, type IconPaletteEntry } from './iconPalette';
 
 /**
  * Feature workflow mode directives, prepended at position-zero of a feature prompt
@@ -12879,11 +12880,40 @@ ${FOCUS_DIRECTIVE}`;
                     return { success: false, groups: [], error: e?.message || 'Failed to load agent groups' };
                 }
             }
+            case 'getIconPalette': {
+                // The kanban webview cannot fetch GET /terminals/icon-palette
+                // directly (VS Code webview CSP + no auth cookie), so the TEAMS
+                // tab icon picker requests the palette via this verb. Shares
+                // `listIconPalette` with the HTTP endpoint so both hosts agree.
+                // The icons dir is the extension/repo root's `icons/` folder —
+                // the same root `staticRoutes['icons']` serves in both hosts.
+                try {
+                    const iconsRoot = path.join(this._extensionUri.fsPath, 'icons');
+                    const icons: IconPaletteEntry[] = await listIconPalette([iconsRoot]);
+                    this.postMessage({ type: 'iconPalette', icons });
+                    return { success: true, icons };
+                } catch (e: any) {
+                    this.postMessage({ type: 'iconPalette', icons: [] });
+                    return { success: false, icons: [], error: e?.message || 'Failed to read icon palette' };
+                }
+            }
             case 'saveAgentGroup': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.group || typeof msg.group !== 'object') {
                     this.postMessage({ type: 'saveAgentGroupResult', success: false, error: 'Missing group data or workspace' });
                     return { success: false, error: 'Missing group data or workspace' };
+                }
+                // Server-side icon validation: the webview is not the only
+                // writer of terminals.agentGroups, so reject unrecognised
+                // prefixes and enforce the 64 KB data-URI cap here too. Accept
+                // only art:/pack:/data: prefixes; anything else is dropped or
+                // rejected. An invalid icon fails the save rather than being
+                // silently stripped — the operator should know the value did
+                // not persist.
+                const iconErr = validateTeamIcon(msg.group.icon);
+                if (iconErr) {
+                    this.postMessage({ type: 'saveAgentGroupResult', success: false, error: iconErr });
+                    return { success: false, error: iconErr };
                 }
                 try {
                     await this._saveAgentGroup(workspaceRoot, msg.group);
