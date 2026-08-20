@@ -3660,6 +3660,12 @@ Start by checking which documents exist, then present the menu.`;
                             if (fs.existsSync(candidate)) { absPath = candidate; break; }
                         }
                     }
+                    // SECURITY: must be within an allowed workspace root
+                    const isAllowed = Array.from(this._getAllowedRoots()).some(r => path.resolve(absPath).startsWith(path.resolve(r)));
+                    if (!isAllowed) {
+                        this.postMessageToProjectWebview({ type: 'archivedPlanDetailReady', error: 'File not in workspace.', planFile });
+                        break;
+                    }
                     if (fs.existsSync(absPath)) {
                         const content = await fs.promises.readFile(absPath, 'utf8');
                         const renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content);

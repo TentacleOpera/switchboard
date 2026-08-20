@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-08-20T12:26:38.081Z",
+  "generatedAt": "2026-08-20T12:32:16.056Z",
   "summary": {
     "totalArms": 629,
     "totalVerbs": 541,
@@ -1385,302 +1385,302 @@
         },
         {
           "verb": "fetchArchivedPlanDetail",
-          "line": 3646,
+          "line": 3651,
           "dynamic": false
         },
         {
           "verb": "queryArchivesPrompt",
-          "line": 3669,
-          "dynamic": false
-        },
-        {
-          "verb": "fetchKanbanPlans",
           "line": 3681,
           "dynamic": false
         },
         {
+          "verb": "fetchKanbanPlans",
+          "line": 3694,
+          "dynamic": false
+        },
+        {
           "verb": "openKanbanPlan",
-          "line": 3791,
+          "line": 3804,
           "dynamic": false
         },
         {
           "verb": "fetchKanbanPlanPreview",
-          "line": 3807,
+          "line": 3820,
           "dynamic": false
         },
         {
           "verb": "copyKanbanPlanPrompt",
-          "line": 3813,
+          "line": 3826,
           "dynamic": false
         },
         {
           "verb": "copyFeaturePlannerPrompt",
-          "line": 3842,
+          "line": 3855,
           "dynamic": false
         },
         {
           "verb": "moveKanbanPlanColumn",
-          "line": 3867,
+          "line": 3880,
           "dynamic": false
         },
         {
           "verb": "planShown",
-          "line": 3892,
+          "line": 3905,
           "dynamic": false
         },
         {
           "verb": "setKanbanPlanComplexity",
-          "line": 3899,
+          "line": 3912,
           "dynamic": false
         },
         {
           "verb": "deleteKanbanPlan",
-          "line": 3947,
+          "line": 3960,
           "dynamic": false
         },
         {
           "verb": "fetchKanbanPlanLog",
-          "line": 4003,
+          "line": 4016,
           "dynamic": false
         },
         {
           "verb": "getFeatureDetails",
-          "line": 4026,
+          "line": 4039,
           "dynamic": false
         },
         {
           "verb": "addSubtaskToFeature",
-          "line": 4047,
+          "line": 4060,
           "dynamic": false
         },
         {
           "verb": "removeSubtaskFromFeature",
-          "line": 4082,
+          "line": 4095,
           "dynamic": false
         },
         {
           "verb": "deleteFeature",
-          "line": 4107,
+          "line": 4120,
           "dynamic": false
         },
         {
           "verb": "createFeature",
-          "line": 4140,
+          "line": 4153,
           "dynamic": false
         },
         {
           "verb": "updateFeatureConfig",
-          "line": 4191,
+          "line": 4204,
           "dynamic": false
         },
         {
           "verb": "loadConstitutionFiles",
-          "line": 4198,
+          "line": 4211,
           "dynamic": false
         },
         {
           "verb": "getConstitutionStatus",
-          "line": 4224,
+          "line": 4237,
           "dynamic": false
         },
         {
           "verb": "readConstitutionFile",
-          "line": 4245,
+          "line": 4258,
           "dynamic": false
         },
         {
           "verb": "saveConstitutionFile",
-          "line": 4297,
+          "line": 4310,
           "dynamic": false
         },
         {
           "verb": "getProjectContextEnabled",
-          "line": 4356,
+          "line": 4369,
           "dynamic": false
         },
         {
           "verb": "setProjectContextEnabled",
-          "line": 4366,
+          "line": 4379,
           "dynamic": false
         },
         {
           "verb": "getProjectPrd",
-          "line": 4377,
+          "line": 4390,
           "dynamic": false
         },
         {
           "verb": "saveProjectPrd",
-          "line": 4409,
+          "line": 4422,
           "dynamic": false
         },
         {
           "verb": "invokePrdBuilder",
-          "line": 4449,
+          "line": 4462,
           "dynamic": false
         },
         {
           "verb": "copyPrdBuildPrompt",
-          "line": 4469,
+          "line": 4482,
           "dynamic": false
         },
         {
           "verb": "toggleConstitutionAddon",
-          "line": 4478,
+          "line": 4491,
           "dynamic": false
         },
         {
           "verb": "copyConstitutionPrompt",
-          "line": 4487,
+          "line": 4500,
           "dynamic": false
         },
         {
           "verb": "copyConstitutionUpdatePrompt",
-          "line": 4524,
+          "line": 4537,
           "dynamic": false
         },
         {
           "verb": "invokeConstitutionBuilder",
-          "line": 4570,
+          "line": 4583,
           "dynamic": false
         },
         {
           "verb": "invokeConstitutionUpdater",
-          "line": 4593,
+          "line": 4606,
           "dynamic": false
         },
         {
           "verb": "invokeSystemBuilder",
-          "line": 4614,
+          "line": 4627,
           "dynamic": false
         },
         {
           "verb": "copySystemBuildPrompt",
-          "line": 4641,
+          "line": 4654,
           "dynamic": false
         },
         {
           "verb": "openArchitectTerminal",
-          "line": 4661,
+          "line": 4674,
           "dynamic": false
         },
         {
           "verb": "copyArchitectPrompt",
-          "line": 4688,
+          "line": 4701,
           "dynamic": false
         },
         {
           "verb": "deleteConstitutionFile",
-          "line": 4699,
+          "line": 4712,
           "dynamic": false
         },
         {
           "verb": "getConstitutionPaths",
-          "line": 4713,
+          "line": 4726,
           "dynamic": false
         },
         {
           "verb": "addConstitutionPath",
-          "line": 4725,
+          "line": 4738,
           "dynamic": false
         },
         {
           "verb": "removeConstitutionPath",
-          "line": 4751,
+          "line": 4764,
           "dynamic": false
         },
         {
           "verb": "setConstitutionPath",
-          "line": 4768,
+          "line": 4781,
           "dynamic": false
         },
         {
           "verb": "saveFileContent",
-          "line": 4804,
+          "line": 4817,
           "dynamic": false
         },
         {
           "verb": "linearLoadAutomationCatalog",
-          "line": 4963,
+          "line": 4976,
           "dynamic": false
         },
         {
           "verb": "openTicketsPanel",
-          "line": 4975,
+          "line": 4988,
           "dynamic": false
         },
         {
           "verb": "openExternalUrl",
-          "line": 4984,
+          "line": 4997,
           "dynamic": false
         },
         {
           "verb": "copyToClipboard",
-          "line": 4996,
+          "line": 5009,
           "dynamic": false
         },
         {
           "verb": "copyDiagramPrompt",
-          "line": 5000,
+          "line": 5013,
           "dynamic": false
         },
         {
           "verb": "improveFeature",
-          "line": 5005,
+          "line": 5018,
           "dynamic": false
         },
         {
           "verb": "createOnlineDocument",
-          "line": 5067,
+          "line": 5080,
           "dynamic": false
         },
         {
           "verb": "setUploadLocation",
-          "line": 5164,
+          "line": 5177,
           "dynamic": false
         },
         {
           "verb": "syncDocToOnline",
-          "line": 5188,
+          "line": 5201,
           "dynamic": false
         },
         {
           "verb": "getSyncConfig",
-          "line": 5245,
+          "line": 5258,
           "dynamic": false
         },
         {
           "verb": "loadInsights",
-          "line": 5261,
+          "line": 5274,
           "dynamic": false
         },
         {
           "verb": "readInsight",
-          "line": 5283,
+          "line": 5296,
           "dynamic": false
         },
         {
           "verb": "runTuningExtract",
-          "line": 5307,
+          "line": 5320,
           "dynamic": false
         },
         {
           "verb": "runTuningGovernance",
-          "line": 5344,
+          "line": 5357,
           "dynamic": false
         },
         {
           "verb": "updateInsightStatus",
-          "line": 5353,
+          "line": 5366,
           "dynamic": false
         },
         {
           "verb": "deleteInsight",
-          "line": 5367,
+          "line": 5380,
           "dynamic": false
         },
         {
           "verb": "copyInsightLink",
-          "line": 5381,
+          "line": 5394,
           "dynamic": false
         }
       ]
@@ -9587,7 +9587,8 @@
     },
     "queryArchivesPrompt": {
       "payloadKeys": [
-        "type"
+        "type",
+        "workspaceRoot"
       ],
       "siteCount": 1
     },
@@ -13837,7 +13838,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4817,
+      "line": 4830,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13851,7 +13852,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4841,
+      "line": 4854,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13865,7 +13866,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4851,
+      "line": 4864,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13873,20 +13874,6 @@
         "success",
         "conflict",
         "diskContent",
-        "tab"
-      ]
-    },
-    {
-      "verb": "saveFileContentResult",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4860,
-      "receiver": "pushTo:planning",
-      "provider": "Planning",
-      "payloadKeys": [
-        "type",
-        "success",
-        "error",
         "tab"
       ]
     },
@@ -13908,7 +13895,21 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4939,
+      "line": 4886,
+      "receiver": "pushTo:planning",
+      "provider": "Planning",
+      "payloadKeys": [
+        "type",
+        "success",
+        "error",
+        "tab"
+      ]
+    },
+    {
+      "verb": "saveFileContentResult",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 4952,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": "dynamic"
@@ -13917,7 +13918,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4950,
+      "line": 4963,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -23255,7 +23256,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 738,
+      "line": 764,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23266,7 +23267,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 748,
+      "line": 774,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23277,7 +23278,7 @@
       "verb": "readConstitutionFile",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 758,
+      "line": 784,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23289,7 +23290,7 @@
       "verb": "readConstitutionFile",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 765,
+      "line": 791,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23301,7 +23302,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 867,
+      "line": 893,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23312,7 +23313,7 @@
       "verb": "getConstitutionStatus",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 973,
+      "line": 999,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23323,7 +23324,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1075,
+      "line": 1101,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23334,7 +23335,7 @@
       "verb": "fetchKanbanPlanPreview",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1095,
+      "line": 1121,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23346,7 +23347,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1104,
+      "line": 1130,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23357,7 +23358,7 @@
       "verb": "copyInsightLink",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1141,
+      "line": 1167,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23368,7 +23369,7 @@
       "verb": "updateInsightStatus",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1144,
+      "line": 1170,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23381,7 +23382,7 @@
       "verb": "updateInsightStatus",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1147,
+      "line": 1173,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23394,7 +23395,7 @@
       "verb": "deleteInsight",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1150,
+      "line": 1176,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23406,7 +23407,7 @@
       "verb": "loadInsights",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1158,
+      "line": 1184,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23417,7 +23418,7 @@
       "verb": "webviewReady",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1200,
+      "line": 1226,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -23427,7 +23428,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1397,
+      "line": 1423,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23438,7 +23439,7 @@
       "verb": "getProjectPrd",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1508,
+      "line": 1534,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23450,7 +23451,7 @@
       "verb": "getProjectContextEnabled",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1514,
+      "line": 1540,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23461,7 +23462,7 @@
       "verb": "setProjectContextEnabled",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1534,
+      "line": 1560,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23473,7 +23474,7 @@
       "verb": "copyKanbanPlanPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1730,
+      "line": 1756,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23486,7 +23487,7 @@
       "verb": "moveKanbanPlanColumn",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1750,
+      "line": 1776,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23499,7 +23500,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1843,
+      "line": 1869,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23510,7 +23511,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1880,
+      "line": 1906,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23521,7 +23522,7 @@
       "verb": "planShown",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1916,
+      "line": 1942,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23532,7 +23533,7 @@
       "verb": "fetchKanbanPlanPreview",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1921,
+      "line": 1947,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23544,7 +23545,7 @@
       "verb": "saveFileContent",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2001,
+      "line": 2027,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23558,7 +23559,7 @@
       "verb": "deleteKanbanPlan",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2024,
+      "line": 2050,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23571,7 +23572,7 @@
       "verb": "moveKanbanPlanColumn",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2026,
+      "line": 2052,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23584,7 +23585,7 @@
       "verb": "setKanbanPlanComplexity",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2043,
+      "line": 2069,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23597,7 +23598,7 @@
       "verb": "fetchKanbanPlanLog",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2049,
+      "line": 2075,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23609,7 +23610,7 @@
       "verb": "deleteKanbanPlan",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2052,
+      "line": 2078,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23622,7 +23623,7 @@
       "verb": "uploadPlanAttachment",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2062,
+      "line": 2088,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23635,7 +23636,7 @@
       "verb": "importPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2074,
+      "line": 2100,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -23645,7 +23646,7 @@
       "verb": "createPlan",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2081,
+      "line": 2107,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -23655,7 +23656,7 @@
       "verb": "copyChatPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2093,
+      "line": 2119,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23667,7 +23668,7 @@
       "verb": "improvePlan",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2107,
+      "line": 2133,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23681,7 +23682,7 @@
       "verb": "copyArchitectPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2121,
+      "line": 2147,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23692,7 +23693,7 @@
       "verb": "copyArchitectPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2127,
+      "line": 2153,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23703,7 +23704,7 @@
       "verb": "copyArchitectPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2133,
+      "line": 2159,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23714,7 +23715,7 @@
       "verb": "moveKanbanPlanColumn",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2367,
+      "line": 2393,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23727,7 +23728,7 @@
       "verb": "copyFeaturePlannerPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2407,
+      "line": 2433,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23740,7 +23741,7 @@
       "verb": "moveKanbanPlanColumn",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2430,
+      "line": 2456,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23753,7 +23754,7 @@
       "verb": "getFeatureDetails",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2444,
+      "line": 2470,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23765,7 +23766,7 @@
       "verb": "fetchKanbanPlanPreview",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2462,
+      "line": 2488,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23777,7 +23778,7 @@
       "verb": "improveFeature",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2505,
+      "line": 2531,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23792,7 +23793,7 @@
       "verb": "deleteFeature",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2524,
+      "line": 2550,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23805,7 +23806,7 @@
       "verb": "saveFileContent",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2548,
+      "line": 2574,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23819,7 +23820,7 @@
       "verb": "saveFileContent",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2622,
+      "line": 2648,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23833,7 +23834,7 @@
       "verb": "setKanbanPlanComplexity",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2658,
+      "line": 2684,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23846,7 +23847,7 @@
       "verb": "deleteKanbanPlan",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2667,
+      "line": 2693,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23859,7 +23860,7 @@
       "verb": "removeSubtaskFromFeature",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2680,
+      "line": 2706,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23871,7 +23872,7 @@
       "verb": "fetchKanbanPlanPreview",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2724,
+      "line": 2750,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23883,7 +23884,7 @@
       "verb": "addSubtaskToFeature",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2762,
+      "line": 2788,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23896,7 +23897,7 @@
       "verb": "readConstitutionFile",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2926,
+      "line": 2952,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23908,7 +23909,7 @@
       "verb": "getConstitutionPaths",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2931,
+      "line": 2957,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23919,7 +23920,7 @@
       "verb": "readConstitutionFile",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3002,
+      "line": 3028,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23931,7 +23932,7 @@
       "verb": "invokeConstitutionBuilder",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3011,
+      "line": 3037,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23942,7 +23943,7 @@
       "verb": "copyConstitutionPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3017,
+      "line": 3043,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23953,7 +23954,7 @@
       "verb": "invokeConstitutionUpdater",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3023,
+      "line": 3049,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23964,7 +23965,7 @@
       "verb": "copyConstitutionUpdatePrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3029,
+      "line": 3055,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23975,7 +23976,7 @@
       "verb": "toggleConstitutionAddon",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3036,
+      "line": 3062,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23986,7 +23987,7 @@
       "verb": "toggleConstitutionAddon",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3042,
+      "line": 3068,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23997,7 +23998,7 @@
       "verb": "deleteConstitutionFile",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3048,
+      "line": 3074,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24009,7 +24010,7 @@
       "verb": "getConstitutionPaths",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3059,
+      "line": 3085,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24020,7 +24021,7 @@
       "verb": "addConstitutionPath",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3068,
+      "line": 3094,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24031,7 +24032,7 @@
       "verb": "setConstitutionPath",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3106,
+      "line": 3132,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24043,7 +24044,7 @@
       "verb": "removeConstitutionPath",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3114,
+      "line": 3140,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24055,7 +24056,7 @@
       "verb": "renderMarkdownLive",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3157,
+      "line": 3183,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24067,7 +24068,7 @@
       "verb": "createFeature",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3215,
+      "line": 3241,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24082,7 +24083,7 @@
       "verb": "saveConstitutionFile",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3256,
+      "line": 3282,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24096,7 +24097,7 @@
       "verb": "saveConstitutionFile",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3273,
+      "line": 3299,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24110,7 +24111,7 @@
       "verb": "deleteConstitutionFile",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3284,
+      "line": 3310,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24122,7 +24123,7 @@
       "verb": "invokeSystemBuilder",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3294,
+      "line": 3320,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24134,7 +24135,7 @@
       "verb": "copySystemBuildPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3304,
+      "line": 3330,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24146,7 +24147,7 @@
       "verb": "saveProjectPrd",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3321,
+      "line": 3347,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24159,7 +24160,7 @@
       "verb": "invokePrdBuilder",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3338,
+      "line": 3364,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24171,7 +24172,7 @@
       "verb": "copyPrdBuildPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3348,
+      "line": 3374,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24183,7 +24184,7 @@
       "verb": "readInsight",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3491,
+      "line": 3517,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24195,7 +24196,7 @@
       "verb": "loadInsights",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3496,
+      "line": 3522,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24206,7 +24207,7 @@
       "verb": "runTuningExtract",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3508,
+      "line": 3534,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24217,7 +24218,7 @@
       "verb": "runTuningGovernance",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3514,
+      "line": 3540,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24228,7 +24229,7 @@
       "verb": "loadInsights",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3520,
+      "line": 3546,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24239,7 +24240,7 @@
       "verb": "fetchArchivedPlanDetail",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3604,
+      "line": 3648,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24251,7 +24252,7 @@
       "verb": "fetchArchivedPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3615,
+      "line": 3662,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24262,17 +24263,18 @@
       "verb": "queryArchivesPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3620,
+      "line": 3668,
       "receiver": "vscode",
       "payloadKeys": [
-        "type"
+        "type",
+        "workspaceRoot"
       ]
     },
     {
       "verb": "submitComment",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3759,
+      "line": 3807,
       "receiver": "vscode",
       "payloadKeys": [
         "type",

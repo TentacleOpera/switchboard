@@ -196,3 +196,7 @@ Key risks: (1) SQL query using `status = 'archived'` instead of `status = 'compl
 - Enables the archive skill to move out of `.agents/skills/` (reducing CLI system prompt noise).
 
 **Recommendation:** Complexity 4 → Send to Coder.
+
+## Completion Report
+
+Implemented the Archives tab in the Project panel. The tab button, content container (workspace filter, search input, QUERY ARCHIVES button, refresh button, list pane, preview pane), and CSS were already in place from prior commits. The webview JS (tab switching, state persistence, `renderArchivedPlans` with workspace/search filtering, `archivedPlansReady`/`archivedPlanDetailReady`/`archivesPromptCopied` message handlers) and the PlanningPanelProvider handlers (`fetchArchivedPlans` using `getCompletedPlansCold`, `fetchArchivedPlanDetail` with markdown rendering, `queryArchivesPrompt` using `resolveArchiveDbPath`) were also already committed. The stale `queryArchives` handler was already removed from TaskViewerProvider.ts and implementation.html. My contribution: added a SECURITY check to `fetchArchivedPlanDetail` (path must be within an allowed workspace root before reading — previously an absolute path outside workspace roots could be read), and regenerated the stale `protocol-catalog.json` with correct line numbers. Files changed: `src/services/PlanningPanelProvider.ts` (security fix), `protocol-catalog.json` (regenerated). No issues encountered.
