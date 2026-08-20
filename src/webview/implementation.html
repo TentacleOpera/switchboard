@@ -3408,22 +3408,6 @@
             container.appendChild(input);
             container.appendChild(btn);
 
-            const archiveBtn = document.createElement('button');
-            archiveBtn.id = 'btn-query-archives';
-            archiveBtn.className = 'action-btn';
-            archiveBtn.style.marginTop = '4px';
-            archiveBtn.style.width = '100%';
-            archiveBtn.style.opacity = '0.85';
-            archiveBtn.innerText = pendingDispatch ? 'DISPATCHING...' : 'QUERY ARCHIVES';
-            archiveBtn.title = 'Ask Analyst to query archived plans';
-            archiveBtn.disabled = !isReady || pendingDispatch;
-            archiveBtn.onclick = () => {
-                markDispatchPending('analyst');
-                archiveBtn.disabled = true;
-                archiveBtn.innerText = 'DISPATCHING...';
-                vscode.postMessage({ type: 'queryArchives' });
-            };
-            container.appendChild(archiveBtn);
 
 
 

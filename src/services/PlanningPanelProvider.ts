@@ -3617,6 +3617,68 @@ Start by checking which documents exist, then present the menu.`;
                 await this._seams().commands.executeCommand('switchboard.initiatePlan');
                 break;
             }
+            case 'fetchArchivedPlans': {
+                const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
+                const guardKey = 'archived-plans';
+                if (requestId <= (this._latestRequestIds.get(guardKey) || 0)) { return { success: false, error: 'Stale request' }; }
+                this._latestRequestIds.set(guardKey, requestId);
+                try {
+                    const allRoots = Array.from(this._getAllowedRoots());
+                    const allArchived: any[] = [];
+                    for (const root of allRoots) {
+                        try {
+                            const archiveDb = KanbanDatabase.getArchiveInstanceIfPresent(root);
+                            if (!archiveDb) continue;
+                            const workspaceId = await this._getWorkspaceId(root);
+                            const plans = await archiveDb.getCompletedPlansCold(workspaceId, 500, 0);
+                            for (const p of plans) {
+                                allArchived.push({ ...p, workspaceRoot: root });
+                            }
+                        } catch { /* no archive for this root, skip */ }
+                    }
+                    if (requestId !== this._latestRequestIds.get(guardKey)) { return { success: false, error: 'Stale request' }; }
+                    const workspaceItems = this._buildKanbanWorkspaceItems();
+                    this._postMessageToWebview({ type: 'archivedPlansReady', plans: allArchived, workspaceItems });
+                } catch (err) {
+                    this._postMessageToWebview({ type: 'archivedPlansReady', plans: [], error: String(err) });
+                }
+                break;
+            }
+            case 'fetchArchivedPlanDetail': {
+                const planFile = typeof msg.planFile === 'string' ? msg.planFile : '';
+                if (!planFile) break;
+                try {
+                    // Resolve relative to workspace roots
+                    let absPath = planFile;
+                    if (!path.isAbsolute(planFile)) {
+                        for (const root of this._getAllowedRoots()) {
+                            const candidate = path.join(root, planFile);
+                            if (fs.existsSync(candidate)) { absPath = candidate; break; }
+                        }
+                    }
+                    if (fs.existsSync(absPath)) {
+                        const content = fs.readFileSync(absPath, 'utf8');
+                        this._postMessageToWebview({ type: 'archivedPlanDetailReady', content, planFile });
+                    } else {
+                        this._postMessageToWebview({ type: 'archivedPlanDetailReady', content: 'Plan file not found on disk.', planFile });
+                    }
+                } catch (err) {
+                    this._postMessageToWebview({ type: 'archivedPlanDetailReady', content: 'Error reading plan: ' + String(err), planFile });
+                }
+                break;
+            }
+            case 'queryArchivesPrompt': {
+                try {
+                    const wsRoot = typeof msg.workspaceRoot === 'string' ? msg.workspaceRoot : '';
+                    const root = wsRoot || this._getAllowedRoots().values().next().value || '';
+                    const archivePath = path.join(root, '.switchboard', 'kanban-archive.db');
+                    const prompt = `Read and follow .switchboard/protocols/archive/SKILL.md to query the Switchboard archive for workspace: ${root}.\n\nThe archive is a SQLite cold store at ${archivePath}. Use sqlite3 (read-only) to query it.\n\nWhat would you like to find?`;
+                    this._postMessageToWebview({ type: 'archivesPromptCopied', prompt });
+                } catch (err) {
+                    this._postMessageToWebview({ type: 'archivesPromptCopied', error: String(err) });
+                }
+                break;
+            }
             case 'fetchKanbanPlans': {
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
                 const guardKey = 'kanban-plans';

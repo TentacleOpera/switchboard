@@ -15201,37 +15201,6 @@ Each plan file must include:
                         await this.handleSetPresetDbPath(data.preset);
                         return { success: true };
                     }
-                    case 'queryArchives': {
-                        const archConfig = this._seams().pathConfig;
-                        const archivePath = archConfig.getConfigStringWithDefault('archive.dbPath', '');
-                        const archiveConfigured = !!archivePath;
-
-                        let duckdbInstalled = false;
-                        try {
-                            const execFileAsync = promisify(cp.execFile);
-                            await execFileAsync('duckdb', ['--version']);
-                            duckdbInstalled = true;
-                        } catch {
-                            // DuckDB not available
-                        }
-
-                        const instruction = `Help me query the DuckDB archive. Use the DuckDB CLI directly:
-- Run queries: duckdb "${archivePath || '<db_path>'}" "SELECT * FROM conversations LIMIT 10;"
-- List tables: duckdb "${archivePath || '<db_path>'}" "SHOW TABLES;"
-
-Current status: ${archiveConfigured ? 'Archive configured at ' + archivePath : 'Archive not yet configured — help me set it up'}
-${duckdbInstalled ? 'DuckDB CLI is installed and ready' : 'DuckDB CLI needs to be installed first'}
-
-What would you like to find?`;
-
-                        await this._handleSendAnalystMessage(
-                            instruction,
-                            'analyst',
-                            data.workspaceRoot
-                        );
-                        return { success: true };
-                    }
-
                     case 'resetDatabase': {
                         await this.handleResetDatabase();
                         return { success: true };

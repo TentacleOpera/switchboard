@@ -223,13 +223,13 @@
             flex-direction: column;
             background: var(--panel-bg);
             min-height: 0;
-        }.constitution-preview-pane, .tuning-preview-pane {
+        }.constitution-preview-pane, .tuning-preview-pane, .archives-preview-pane {
             flex: 1;
             overflow-y: auto;
             padding: 16px;
             background: var(--panel-bg);
             min-height: 0;
-        }#kanban-preview-content, #features-preview-content {
+        }#kanban-preview-content, #features-preview-content, #archives-preview-content {
             padding: 16px;
             overflow-y: auto;
             flex: 1;
@@ -1275,6 +1275,7 @@
         <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
         <button class="shared-tab-btn" data-tab="system">SYSTEM</button>
         <button class="shared-tab-btn" data-tab="tuning">TUNING</button>
+        <button class="shared-tab-btn" data-tab="archives">ARCHIVES</button>
     </div>
     <div class="container">
         <!-- Kanban tab -->
@@ -1509,6 +1510,34 @@
                             <div class="empty-state">Select an insight to preview</div>
                         </div>
                         <textarea id="tuning-editor" class="markdown-editor"></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Archives tab -->
+        <div id="archives-content" class="shared-tab-content">
+            <div class="controls-strip">
+                <select id="archives-workspace-filter">
+                    <option value="">All Workspaces</option>
+                </select>
+                <input type="text" id="archives-search" placeholder="Search archived plans..." class="search-input" />
+                <button class="strip-btn" id="btn-query-archives-prompt" data-tooltip="Copy a prompt for an agent to query the archives">QUERY ARCHIVES</button>
+                <button class="strip-btn" id="btn-refresh-archives" title="Refresh archived plans">Refresh</button>
+            </div>
+            <div class="content-row">
+                <div id="archives-list-pane">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">No archived plans found. Click Refresh to load.</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div class="cyber-scanlines"></div>
+                    <div id="archives-preview-pane" class="archives-preview-pane">
+                        <div id="archives-preview-content">
+                            <div class="empty-state">Select an archived plan to view</div>
+                        </div>
                     </div>
                 </div>
             </div>

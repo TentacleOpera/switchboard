@@ -906,6 +906,19 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
         },
     },
     // 2c: setupTicketsWatcher + saveLocalTicketFile moved to TICKETS_VERB_SCHEMAS.
+    // Archives tab verbs
+    fetchArchivedPlans: {
+        fields: {
+            requestId: { type: 'number' },
+        },
+    },
+    fetchArchivedPlanDetail: {
+        fields: {
+            planFile: { type: 'string', required: true },
+            requestId: { type: 'number' },
+        },
+    },
+    queryArchivesPrompt: {},
 };
 
 // Ticket-source verbs moved to the Tickets panel (slice 2b). These schemas moved
@@ -1715,7 +1728,6 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
             preset: { type: 'string', required: true },
         },
     },
-    queryArchives: {},
     resetDatabase: {},
     jobsList: {
         fields: {

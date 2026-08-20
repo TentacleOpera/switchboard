@@ -47,6 +47,8 @@
                 applySidebarState('tuning', state.tuningListCollapsed);
             } else if (targetTab === 'projects') {
                 applySidebarState('projects', state.projectsListCollapsed);
+            } else if (targetTab === 'archives') {
+                applySidebarState('archives', state.archivesListCollapsed);
             }
 
             if (activeTab === 'kanban') {
@@ -63,6 +65,8 @@
                 vscode.postMessage({ type: 'loadConstitutionFiles' });
             } else if (activeTab === 'tuning') {
                 vscode.postMessage({ type: 'loadInsights', workspaceRoot: tuningWorkspaceFilter ? tuningWorkspaceFilter.value : '' });
+            } else if (activeTab === 'archives') {
+                vscode.postMessage({ type: 'fetchArchivedPlans', requestId: Date.now() });
             }
 
         });
@@ -97,6 +101,7 @@
         systemListCollapsed: false,
         tuningListCollapsed: false,
         projectsListCollapsed: false,
+        archivesListCollapsed: false,
         switchboardTheme: 'afterburner'
     };
 
@@ -108,6 +113,7 @@
     state.systemListCollapsed = persistedState.systemListCollapsed || false;
     state.tuningListCollapsed = persistedState.tuningListCollapsed || false;
     state.projectsListCollapsed = persistedState.projectsListCollapsed || false;
+    state.archivesListCollapsed = persistedState.archivesListCollapsed || false;
 
     // Toast notification — replaces alert() which is a silent no-op in VS Code webviews.
     // type: 'error' | 'success' | 'info'
@@ -155,6 +161,9 @@
         } else if (activeTab === 'projects') {
             state.projectsListCollapsed = !state.projectsListCollapsed;
             applySidebarState('projects', state.projectsListCollapsed);
+        } else if (activeTab === 'archives') {
+            state.archivesListCollapsed = !state.archivesListCollapsed;
+            applySidebarState('archives', state.archivesListCollapsed);
         }
 
         // Persist state
@@ -166,7 +175,8 @@
             constitutionListCollapsed: state.constitutionListCollapsed,
             systemListCollapsed: state.systemListCollapsed,
             tuningListCollapsed: state.tuningListCollapsed,
-            projectsListCollapsed: state.projectsListCollapsed
+            projectsListCollapsed: state.projectsListCollapsed,
+            archivesListCollapsed: state.archivesListCollapsed
         });
     }
 
@@ -713,6 +723,41 @@
                 break;
             case 'featureError':
                 showToast(msg.message || 'Error occurred', 'error');
+                break;
+            case 'archivedPlansReady':
+                _archivedPlansCache = msg.plans || [];
+                if (msg.workspaceItems && archivesWorkspaceFilter) {
+                    const currentVal = archivesWorkspaceFilter.value;
+                    archivesWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
+                    for (const ws of msg.workspaceItems) {
+                        const opt = document.createElement('option');
+                        opt.value = ws.workspaceRoot;
+                        opt.textContent = ws.label;
+                        archivesWorkspaceFilter.appendChild(opt);
+                    }
+                    archivesWorkspaceFilter.value = currentVal;
+                }
+                renderArchivedPlans();
+                break;
+            case 'archivedPlanDetailReady':
+                if (archivesPreviewContent) {
+                    if (msg.error) {
+                        archivesPreviewContent.innerHTML = `<div class="empty-state" style="color: var(--vscode-errorForeground, #ff6b6b);">Error: ${escapeHtml(msg.error)}</div>`;
+                    } else if (msg.content) {
+                        archivesPreviewContent.innerHTML = `<div class="markdown-body">${msg.html || msg.content}</div>`;
+                    }
+                }
+                break;
+            case 'archivesPromptCopied':
+                if (msg.prompt) {
+                    navigator.clipboard.writeText(msg.prompt).then(() => {
+                        showToast('Archive query prompt copied to clipboard', 'success');
+                    }).catch(() => {
+                        showToast('Failed to copy prompt to clipboard', 'error');
+                    });
+                } else {
+                    showToast(msg.error || 'Failed to generate archive prompt', 'error');
+                }
                 break;
             case 'kanbanPlanColumnChanged':
                 if (msg.success) {
@@ -3535,6 +3580,94 @@
     // Tuning is excluded by design. See plan
     // feature_plan_20260715105236_restore-review-mode-modal-project-panel.md.
     const REVIEWABLE_TABS = ['kanban', 'features', 'projects', 'constitution', 'system'];
+
+    // ─── Archives tab ───────────────────────────────────────────────────────────
+    let _archivedPlansCache = [];
+    let _archivesSelectedPlan = null;
+    const archivesListPane = document.getElementById('archives-list-pane');
+    const archivesPreviewContent = document.getElementById('archives-preview-content');
+    const archivesSearchInput = document.getElementById('archives-search');
+    const archivesWorkspaceFilter = document.getElementById('archives-workspace-filter');
+    const btnQueryArchivesPrompt = document.getElementById('btn-query-archives-prompt');
+    const btnRefreshArchives = document.getElementById('btn-refresh-archives');
+
+    function renderArchivedPlans() {
+        if (!archivesListPane) return;
+        const searchTerm = (archivesSearchInput && archivesSearchInput.value || '').toLowerCase();
+        const wsFilter = archivesWorkspaceFilter ? archivesWorkspaceFilter.value : '';
+        const filtered = _archivedPlansCache.filter(p => {
+            if (wsFilter) {
+                const pRoot = p.workspaceRoot || p.workspace_root || '';
+                if (normalizeRoot(pRoot) !== normalizeRoot(wsFilter)) return false;
+            }
+            if (!searchTerm) return true;
+            const topic = (p.topic || '').toLowerCase();
+            const planFile = (p.plan_file || p.planFile || '').toLowerCase();
+            return topic.includes(searchTerm) || planFile.includes(searchTerm);
+        });
+        // Clear existing items (keep sidebar toggle row)
+        const toggleRow = archivesListPane.querySelector('.sidebar-toggle-row');
+        archivesListPane.innerHTML = '';
+        if (toggleRow) archivesListPane.appendChild(toggleRow);
+        if (filtered.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'empty-state';
+            empty.textContent = _archivedPlansCache.length === 0 ? 'No archived plans found.' : 'No plans match your search.';
+            archivesListPane.appendChild(empty);
+            return;
+        }
+        for (const plan of filtered) {
+            const item = document.createElement('div');
+            item.className = 'kanban-plan-item';
+            item.dataset.planId = plan.plan_id || plan.planId || plan.id || '';
+            item.dataset.planFile = plan.plan_file || plan.planFile || '';
+            const topic = plan.topic || plan.title || (plan.plan_file || plan.planFile || '').split('/').pop() || 'Untitled';
+            const wsLabel = plan.workspaceLabel || plan.workspace_label || '';
+            const column = plan.kanban_column || plan.kanbanColumn || plan.status || '';
+            const updated = plan.updated_at || plan.updatedAt || '';
+            const mtime = updated ? new Date(updated).getTime() : 0;
+            const displayTime = mtime > 0 ? formatRelativeTime(mtime) : '';
+            const complexityClass = _complexityToCssClass(plan.complexity);
+
+            item.innerHTML = `
+                <div style="width: 100%;">
+                    <div class="kanban-plan-topic">${escapeHtml(topic)}</div>
+                    <div class="kanban-plan-meta" style="margin-top: 4px;">
+                        ${escapeHtml(wsLabel)}${column ? ' · ' + escapeHtml(column) : ''}${displayTime ? ' · ' + escapeHtml(displayTime) : ''}
+                    </div>
+                    <div class="kanban-plan-actions">
+                        <span class="complexity-dot ${complexityClass}" title="Complexity: ${escapeHtml(plan.complexity || 'Unknown')}" style="margin-left: auto;"></span>
+                    </div>
+                </div>
+            `;
+
+            item.addEventListener('click', () => {
+                document.querySelectorAll('#archives-list-pane .kanban-plan-item').forEach(el => el.classList.remove('selected'));
+                item.classList.add('selected');
+                _archivesSelectedPlan = plan;
+                vscode.postMessage({ type: 'fetchArchivedPlanDetail', planFile: plan.plan_file || plan.planFile || '', requestId: Date.now() });
+            });
+            archivesListPane.appendChild(item);
+        }
+    }
+
+    if (archivesSearchInput) {
+        archivesSearchInput.addEventListener('input', () => renderArchivedPlans());
+    }
+    if (archivesWorkspaceFilter) {
+        archivesWorkspaceFilter.addEventListener('change', () => renderArchivedPlans());
+    }
+    if (btnRefreshArchives) {
+        btnRefreshArchives.addEventListener('click', () => {
+            vscode.postMessage({ type: 'fetchArchivedPlans', requestId: Date.now() });
+        });
+    }
+    if (btnQueryArchivesPrompt) {
+        btnQueryArchivesPrompt.addEventListener('click', () => {
+            const wsRoot = archivesWorkspaceFilter ? archivesWorkspaceFilter.value : '';
+            vscode.postMessage({ type: 'queryArchivesPrompt', workspaceRoot: wsRoot });
+        });
+    }
 
     function getReviewContext(tab) {
         switch (tab) {
