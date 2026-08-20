@@ -1932,6 +1932,104 @@
         }
         .link-standing-item .delete-btn:hover { color: var(--state-readonly, #e06c75); }
 
+        /* Team Standing Orders Modal */
+        .team-orders-modal {
+            position: fixed; inset: 0;
+            background: rgba(0, 0, 0, 0.65);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 200;
+        }
+        .team-orders-modal[hidden] { display: none; }
+        .team-orders-content {
+            background: var(--panel-bg, #1e1e1e);
+            border: 1px solid var(--border-color, #333);
+            border-radius: 6px;
+            width: 600px;
+            max-width: 90vw;
+            max-height: 85vh;
+            display: flex; flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }
+        .team-orders-body {
+            padding: 16px;
+            overflow-y: auto;
+            display: flex; flex-direction: column; gap: 14px;
+        }
+        .team-orders-section {
+            display: flex; flex-direction: column; gap: 6px;
+        }
+        .team-orders-section-header {
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .team-orders-section-title {
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+            color: var(--accent-violet, #c586c0);
+            letter-spacing: 0.5px;
+        }
+        .team-orders-notice {
+            font-size: 11px; color: var(--text-secondary); line-height: 1.4;
+            padding: 6px 10px; background: rgba(255, 255, 255, 0.03);
+            border-left: 2px solid var(--accent-teal, #4ec9b0);
+            border-radius: 2px;
+        }
+        .team-orders-textarea {
+            width: 100%; min-height: 60px; resize: vertical;
+            background: var(--panel-bg2, #252526);
+            border: 1px solid var(--border-color, #3c3c3c);
+            border-radius: 3px; color: var(--text-primary, #ccc);
+            font-family: inherit; font-size: 11px; padding: 6px 8px;
+            box-sizing: border-box;
+        }
+        .team-orders-textarea:focus {
+            outline: none; border-color: var(--accent-teal, #4ec9b0);
+        }
+        .team-orders-preview {
+            background: var(--panel-bg2, #1a1a1a);
+            border: 1px solid var(--border-color, #333);
+            border-radius: 3px; padding: 8px;
+            font-family: monospace; font-size: 10px;
+            color: var(--text-secondary, #aaa);
+            max-height: 120px; overflow-y: auto;
+            white-space: pre-wrap; word-break: break-word;
+            margin: 0;
+        }
+        .inherited-orders-list {
+            display: flex; flex-direction: column; gap: 4px;
+            max-height: 100px; overflow-y: auto;
+            border: 1px solid var(--border-color, #333);
+            border-radius: 3px; padding: 6px;
+            background: rgba(0,0,0,0.15);
+        }
+        .inherited-order-item {
+            font-size: 10px; color: var(--text-secondary);
+            display: flex; gap: 6px; align-items: baseline;
+        }
+        .inherited-order-badge {
+            font-size: 9px; text-transform: uppercase;
+            padding: 1px 4px; border-radius: 2px;
+            background: rgba(255,255,255,0.08);
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+        .team-header-orders {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-left: 6px;
+        }
+        .team-header-orders:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--accent-violet, #c586c0);
+        }
+
         .fill-grid-form {
             display: flex; flex-direction: column; gap: 6px;
             padding: 8px; border-bottom: 1px solid var(--border-color);
@@ -2024,6 +2122,81 @@
             color: var(--text-secondary);
             font-size: 14px;
         }
+        /* Team-scoped mode: the sidebar stays visible (unlike solo), but the
+           group tab strip is hidden — its purpose is switching between groups
+           and this window is locked to one. The layout toolbar stays so the
+           operator can choose a grid for the team. The solo-status element is
+           reused for the team not-found / connecting states. */
+        body.is-team-scoped .group-tab-strip > .group-tab-row {
+            display: none !important;
+        }
+        body.is-team-scoped .solo-status-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+        body.is-team-scoped .solo-status-container a {
+            text-decoration: underline;
+            cursor: pointer;
+        }
+        /* Team header — rendered into #group-tab-strip by renderTeamHeader().
+           Reuses the strip's positioning so no new layout area is needed. */
+        .team-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 8px;
+            min-height: 32px;
+        }
+        .team-header-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--accent-gold, #dcdcaa);
+            flex-shrink: 0;
+        }
+        .team-header-icon.is-generic-group {
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .team-header-name {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+        .team-header-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .team-header-count {
+            font-size: 11px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+        .team-header-add {
+            background: transparent;
+            border: 1px solid var(--border-color, rgba(255,255,255,0.1));
+            color: var(--text-secondary);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+            padding: 2px 8px;
+            flex-shrink: 0;
+        }
+        .team-header-add:hover {
+            color: var(--text-primary);
+            border-color: var(--accent-teal, #4ec9b0);
+        }
         /* Pixel-art <img> treatment — one class per webview document (these
            documents share no sheet). Integer display sizes plus `pixelated`
            keep raster art hard-edged; applied to art <img> elements by the
@@ -2080,6 +2253,8 @@
                     title="Save the current pane arrangement as a named group">SAVE AS GROUP</button>
             <button type="button" id="btn-link-up" class="secondary-btn w-full"
                     title="Instruct one agent terminal to send a message to another">LINK UP</button>
+            <button type="button" id="btn-team-orders" class="secondary-btn w-full"
+                    title="View and edit standing orders for this team" hidden>STANDING ORDERS</button>
         </div>
         <div id="terminals-list" class="terminals-list"></div>
     </div>
@@ -2165,6 +2340,66 @@
             <div class="modal-footer">
                 <button type="button" id="link-cancel" class="secondary-btn">CANCEL</button>
                 <button type="button" id="link-send" class="secondary-btn is-teal" disabled>SEND</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Team Standing Orders modal -->
+    <div id="team-orders-modal" class="team-orders-modal" hidden>
+        <div class="team-orders-content">
+            <div class="modal-header">
+                <h3 id="team-orders-modal-title">Team standing orders</h3>
+                <button type="button" class="modal-close-btn" id="team-orders-modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="team-orders-body">
+                <div class="team-orders-notice">
+                    Editing a standing order changes what is appended to <strong>future</strong> prompts only; agents already running do not re-read it.
+                </div>
+
+                <!-- Team order section -->
+                <div class="team-orders-section">
+                    <div class="team-orders-section-header">
+                        <span class="team-orders-section-title">Team order (all members receive)</span>
+                        <div class="team-orders-actions" style="display:flex; gap:6px;">
+                            <button type="button" id="team-order-save" class="secondary-btn is-teal">SAVE</button>
+                            <button type="button" id="team-order-delete" class="secondary-btn" style="display:none;">DELETE</button>
+                        </div>
+                    </div>
+                    <textarea id="team-order-text" class="team-orders-textarea" placeholder="Standing instruction appended to all member prompts..."></textarea>
+                </div>
+
+                <!-- Head order section -->
+                <div class="team-orders-section">
+                    <div class="team-orders-section-header">
+                        <span class="team-orders-section-title">Head order (head/lead receives)</span>
+                        <div class="team-orders-actions" style="display:flex; gap:6px;">
+                            <button type="button" id="team-head-order-save" class="secondary-btn is-teal">SAVE</button>
+                            <button type="button" id="team-head-order-delete" class="secondary-btn" style="display:none;">DELETE</button>
+                        </div>
+                    </div>
+                    <textarea id="team-head-order-text" class="team-orders-textarea" placeholder="Standing instruction appended to head prompt only..."></textarea>
+                </div>
+
+                <!-- Inherited orders (read-only) -->
+                <div class="team-orders-section">
+                    <span class="team-orders-section-title">Inherited orders (read-only)</span>
+                    <div id="team-inherited-orders-list" class="inherited-orders-list"></div>
+                </div>
+
+                <!-- Resolved preview -->
+                <div class="team-orders-section">
+                    <div class="team-orders-section-header">
+                        <span class="team-orders-section-title">Resolved prompt preview</span>
+                        <select id="team-orders-preview-target" class="link-select" style="max-width: 180px;"></select>
+                    </div>
+                    <pre id="team-orders-preview-block" class="team-orders-preview"></pre>
+                </div>
+
+                <div id="team-orders-error" class="link-error" hidden></div>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content:space-between;">
+                <button type="button" id="btn-team-orders-resend" class="secondary-btn is-teal" title="Dispatch updated standing orders immediately to idle members">RESEND TO MEMBERS</button>
+                <button type="button" id="team-orders-done" class="secondary-btn">CLOSE</button>
             </div>
         </div>
     </div>

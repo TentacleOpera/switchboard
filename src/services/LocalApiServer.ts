@@ -3738,9 +3738,9 @@ export class LocalApiServer {
         }
 
         const action = String(body?.action || '').trim();
-        if (action !== 'add' && action !== 'delete') {
+        if (action !== 'add' && action !== 'update' && action !== 'delete') {
             res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: "action must be 'add' or 'delete'" }));
+            res.end(JSON.stringify({ success: false, error: "action must be 'add', 'update', or 'delete'" }));
             return;
         }
 
@@ -3753,14 +3753,14 @@ export class LocalApiServer {
                 const teamId = typeof body?.teamId === 'string' ? body.teamId.trim() : '';
 
                 // Validate scope
-                if (!['global', 'team', 'pair'].includes(scope)) {
+                if (!['global', 'team', 'pair', 'team-head'].includes(scope)) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: "scope must be 'global', 'team', or 'pair'" }));
+                    res.end(JSON.stringify({ success: false, error: "scope must be 'global', 'team', 'pair', or 'team-head'" }));
                     return;
                 }
 
-                // parent/child are required for pair scope; for global/team they
-                // are optional (a global order has no partner terminal).
+                // parent/child are required for pair scope; for global/team/team-head they
+                // are optional (a global order has no partner terminal; team/team-head carry teamId and parent=head).
                 if (scope === 'pair') {
                     if (!parent || !child) {
                         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -3773,9 +3773,9 @@ export class LocalApiServer {
                         return;
                     }
                 }
-                if (scope === 'team' && !teamId) {
+                if ((scope === 'team' || scope === 'team-head') && !teamId) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: 'teamId is required for team scope' }));
+                    res.end(JSON.stringify({ success: false, error: `teamId is required for ${scope} scope` }));
                     return;
                 }
 
@@ -3794,6 +3794,49 @@ export class LocalApiServer {
 
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, order: added }));
+                return;
+            }
+
+            if (action === 'update') {
+                const id = typeof body?.id === 'string' ? body.id.trim() : '';
+                if (!id) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'id is required for update' }));
+                    return;
+                }
+
+                const instruction = typeof body?.instruction === 'string' ? body.instruction : '';
+                const instructionErr = validateInstruction(instruction);
+                if (instructionErr) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: instructionErr }));
+                    return;
+                }
+
+                let updated: StandingOrder | undefined;
+                let found = false;
+                await mutateStandingOrders(db, async (orders) => {
+                    return orders.map(o => {
+                        if (o.id === id) {
+                            found = true;
+                            updated = {
+                                ...o,
+                                instruction,
+                            };
+                            return updated;
+                        }
+                        return o;
+                    });
+                });
+
+                if (!found) {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Standing order with id '${id}' not found` }));
+                    return;
+                }
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, order: updated }));
                 return;
             }
 

@@ -103,3 +103,6 @@ Editing a standing order changes what is appended to **future** prompts only; ag
 9. Manual: create a head order on a team that had none; confirm only the head receives it and members do not.
 10. Manual: a team spawned on an older build — open the editor and confirm it shows the migrated team-scoped order, not legacy pair rows.
 11. Manual: "resend to members" delivers the updated block to every live member.
+
+## Completion Report
+Implemented team standing orders API extensions and cockpit editor UI. In `src/services/LocalApiServer.ts`, added `team-head` scope support with required `teamId` validation, added `action: 'update'` branch validating instructions and preserving all metadata in-place, and expanded unknown scope error text to name all four valid scopes. In `src/webview/terminals.html` and `src/webview/terminals.js`, created the team standing orders editor modal with editable team and head orders, read-only inherited orders list, resolved prompt preview via `applyStandingOrdersClient`, immediate deletion, empty string delete routing, and idle-checked prompt resend to live members. Files changed: `src/services/LocalApiServer.ts`, `src/webview/terminals.html`, `src/webview/terminals.js`. No issues encountered.

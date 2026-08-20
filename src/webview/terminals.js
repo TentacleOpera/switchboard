@@ -2853,6 +2853,9 @@
             if (Array.isArray(groupPrefs.pinned)) {
                 groupPrefs.pinned = groupPrefs.pinned.filter(pid => pid !== id);
             }
+            // Clean up namespaced layout keys (terminals.team.<id>.*) so they
+            // do not accumulate as storage orphans when a team group is deleted.
+            deleteNamespacedTeamKeys(id);
         } else if (group) {
             // Derived group (role/worktree): suppress, don't destroy.
             // groupPrefs.hidden is the shipped key — no new groupPrefs field.
@@ -2890,6 +2893,11 @@
      * gesture and must do the seating pass.
      */
     function clearGroupLock() {
+        // Guard: in team-scoped mode, clearing the lock would unscope the
+        // window and its namespaced writes would land under the wrong prefix.
+        // The group strip is hidden so this should not be reached from UI, but
+        // guard against programmatic calls.
+        if (teamScopeId) { return; }
         activeGroupId = null;
         activeGroupPage = 0;
 
@@ -2970,6 +2978,12 @@
         // switch's own render show the new group. dismissPeek early-returns when
         // no peek is active.
         dismissPeek();
+        // Guard: a team-scoped window must never silently become unscoped. Its
+        // namespaced layout keys would then write under the wrong prefix. The
+        // group strip is hidden in team mode so this path should not be reached,
+        // but guard anyway — a programmatic call (e.g. switchToTeamGroup) is
+        // allowed to switch to the scoped team itself, but not away from it.
+        if (teamScopeId && id !== teamScopeId) { return; }
         if (soloTerminalName) {
             document.body.classList.remove('is-solo');
             soloTerminalName = null;
@@ -3373,6 +3387,11 @@
             // live for every ungrouped terminal clicked under a lock (the
             // Unassigned pseudo-group was retired by the deletion plan, so
             // findGroupForTerminalName returns null instead of a fallback).
+            // In team-scoped mode, do not drop the lock — just seat the terminal.
+            if (teamScopeId) {
+                locateTerminal(name);
+                return;
+            }
             activeGroupId = null;
             activeGroupPage = 0;
             saveLayoutSettings();
@@ -3412,6 +3431,107 @@
         members.splice(toIndex, 0, name);
         setGroupOrder(group, members);
         switchToGroup(activeGroupId, { keepPage: true });
+    }
+
+    /**
+     * Render the team header in the group-tab-strip area (above the pane grid,
+     * outside listEl). Shows the team icon, name, member count, and a `+`
+     * button that opens the role picker under a `team:<id>` key. Returns true
+     * when it mounted the picker, so the GC at the bottom of renderSidebarList
+     * does not null a live picker — the same contract renderGroupTabStrip
+     * satisfies for `group:*` keys.
+     *
+     * For a non-team group (derived role/worktree, or a hand-saved selection
+     * that is not a spawned team), degrades to a generic "group view" header
+     * with no team-specific chrome.
+     */
+    function renderTeamHeader() {
+        if (!teamScopeId || !groupTabStripEl) { return false; }
+        groupTabStripEl.innerHTML = '';
+
+        const group = getScopedTeamGroup();
+        if (!group) { return false; }
+
+        const isTeam = isSpawnedTeamGroup(group);
+        const header = document.createElement('div');
+        header.className = 'team-header' + (isTeam ? '' : ' is-generic-group');
+
+        const iconArea = document.createElement('div');
+        iconArea.className = 'team-header-icon';
+        if (isTeam) {
+            // Crown icon for the team head — mirrors the sidebar crown.
+            iconArea.innerHTML = CROWN_SVG;
+            iconArea.title = 'Team';
+        } else {
+            iconArea.textContent = '#';
+            iconArea.title = 'Group';
+        }
+        header.appendChild(iconArea);
+
+        const nameArea = document.createElement('div');
+        nameArea.className = 'team-header-name';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'team-header-title';
+        nameEl.textContent = group.shortName || group.name || 'Team';
+        nameArea.appendChild(nameEl);
+
+        const members = getGroupMembers(group);
+        const active = members.filter(n => {
+            const t = fleetList.find(ft => ft.friendlyName === n);
+            return t && t.status !== 'exited';
+        }).length;
+        const exited = members.length - active;
+        const countEl = document.createElement('span');
+        countEl.className = 'team-header-count';
+        countEl.textContent = `${members.length} (${active}a/${exited}x)`;
+        nameArea.appendChild(countEl);
+        header.appendChild(nameArea);
+
+        // `+` button — opens the role picker under a `team:<id>` key so it
+        // survives the listEl.innerHTML wipe on every fleet poll. The key
+        // is key-agnostic for the GC at the bottom of renderSidebarList.
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'team-header-add';
+        addBtn.textContent = '+';
+        addBtn.title = 'New terminal in this team';
+        const addKey = 'team:' + teamScopeId;
+        addBtn.addEventListener('click', () => {
+            // Spawn into the team's workspace context. The team's members
+            // determine the target spec; use the head's parentRoot if
+            // available, falling back to undefined (workspace root).
+            const headName = teamHeadName(group);
+            const headTerm = headName ? fleetList.find(t => t.friendlyName === headName) : null;
+            const targetSpec = headTerm && headTerm.parentRoot
+                ? { parentRoot: headTerm.parentRoot }
+                : undefined;
+            onNewTerminalClicked(targetSpec, addKey);
+        });
+        header.appendChild(addBtn);
+
+        const ordersBtn = document.createElement('button');
+        ordersBtn.type = 'button';
+        ordersBtn.className = 'team-header-orders';
+        ordersBtn.textContent = 'ORDERS';
+        ordersBtn.title = 'Team standing orders';
+        ordersBtn.addEventListener('click', () => {
+            openTeamOrdersModal();
+        });
+        header.appendChild(ordersBtn);
+
+        groupTabStripEl.appendChild(header);
+
+        // Mount the picker if one is open for this team. Same pattern as
+        // renderGroupTabStrip's `group:*` picker — mounted in the strip
+        // element (outside listEl) so the innerHTML wipe does not destroy it.
+        let pickerRendered = false;
+        if (pickerState && pickerState.key === 'team:' + teamScopeId) {
+            const picker = mountRolePicker(pickerState.targetSpec);
+            groupTabStripEl.appendChild(picker);
+            pickerRendered = true;
+        }
+
+        return pickerRendered;
     }
 
     /**
@@ -3878,6 +3998,8 @@
 
     function renderSidebarList() {
         syncLinkUpEnabled();
+        const btnTeamOrders = document.getElementById('btn-team-orders');
+        if (btnTeamOrders) { btnTeamOrders.hidden = !teamScopeId; }
         let pickerRendered = false;
         listEl.innerHTML = '';
         // The empty state and the pane grid are in the MAIN area; the workspace groups
@@ -4288,7 +4410,8 @@
         if (!LAYOUT_MODES.includes(mode)) return;
         // A deliberate layout/composer gesture exits a locked group unless the lock
         // itself is the one asking for the layout (switchToGroup passes keepLock).
-        if (activeGroupId && !opts.keepLock) {
+        // In team-scoped mode, the lock is the team scope — never drop it.
+        if (activeGroupId && !opts.keepLock && !teamScopeId) {
             activeGroupId = null;
             activeGroupPage = 0;
             saveLayoutSettings();
@@ -7022,15 +7145,14 @@
      */
     function isTeamHead(name) {
         if (!name || !Array.isArray(terminalGroups)) { return false; }
-        return terminalGroups.some(g =>
-            g && typeof g.id === 'string' &&
-            g.id.startsWith('team_') &&
-            g.source === 'manual' &&
-            !g.externalHead &&
-            Array.isArray(g.members) &&
-            g.members.length > 0 &&
-            g.members[0] === name
-        );
+        return terminalGroups.some(g => {
+            if (!g || typeof g.id !== 'string') { return false; }
+            if (!g.id.startsWith('team_') || g.source !== 'manual' || g.externalHead) { return false; }
+            // Prefer the explicit `head` field; fall back to members[0] for
+            // legacy rows that predate the head stamp.
+            if (typeof g.head === 'string' && g.head) { return g.head === name; }
+            return Array.isArray(g.members) && g.members.length > 0 && g.members[0] === name;
+        });
     }
 
     /**
@@ -7785,7 +7907,9 @@
     function fillEmptyPanes(opts) {
         const persist = !opts || opts.persist !== false;
         const slotCount = getSlotCount(effectiveLayout);
-        const unseated = fleetList
+        // In team-scoped mode, only seat team members into empty panes.
+        const candidateFleet = scopedFleet();
+        const unseated = candidateFleet
             .filter(t => t.status !== 'exited' && !paneAssignments.includes(t.friendlyName))
             .map(t => t.friendlyName);
         if (unseated.length === 0) { return 0; }
@@ -10230,6 +10354,361 @@
         }
         document.addEventListener('keydown', (e) => {
             const modal = document.getElementById('link-modal');
+            if (!modal || modal.hidden) { return; }
+            if (e.key === 'Escape') { e.stopPropagation(); closeModal(); }
+        }, true);
+    })();
+
+    let currentTeamOrdersTeamId = null;
+    let currentTeamOrderRow = null;
+    let currentHeadOrderRow = null;
+
+    function setTeamOrdersError(msg) {
+        const errEl = document.getElementById('team-orders-error');
+        if (!errEl) return;
+        if (!msg) {
+            errEl.hidden = true;
+            errEl.textContent = '';
+        } else {
+            errEl.hidden = false;
+            errEl.textContent = msg;
+        }
+    }
+
+    async function openTeamOrdersModal() {
+        const modal = document.getElementById('team-orders-modal');
+        if (!modal) return;
+
+        const group = getScopedTeamGroup() || (terminalGroups.length > 0 ? terminalGroups[0] : null);
+        if (!group) {
+            showPaneToast('No team group found');
+            return;
+        }
+
+        currentTeamOrdersTeamId = group.id;
+        const titleEl = document.getElementById('team-orders-modal-title');
+        if (titleEl) {
+            titleEl.textContent = `Standing orders — ${group.name || group.shortName || 'Team'}`;
+        }
+
+        setTeamOrdersError(null);
+        modal.hidden = false;
+
+        await refreshTeamOrdersUI();
+    }
+
+    async function refreshTeamOrdersUI() {
+        await fetchStandingOrders();
+
+        const group = terminalGroups.find(g => g && g.id === currentTeamOrdersTeamId) || getScopedTeamGroup();
+        const teamId = currentTeamOrdersTeamId;
+        const members = group ? getGroupMembers(group) : [];
+        const headName = group ? teamHeadName(group) : '';
+
+        // Find existing orders for this team
+        currentTeamOrderRow = standingOrders.find(o => (o.scope === 'team') && o.teamId === teamId) || null;
+        currentHeadOrderRow = standingOrders.find(o => (o.scope === 'team-head') && o.teamId === teamId) || null;
+
+        const teamOrderText = document.getElementById('team-order-text');
+        const teamOrderDeleteBtn = document.getElementById('team-order-delete');
+        if (teamOrderText) {
+            teamOrderText.value = currentTeamOrderRow ? currentTeamOrderRow.instruction : '';
+            teamOrderText.disabled = !standingOrdersAvailable;
+        }
+        if (teamOrderDeleteBtn) {
+            teamOrderDeleteBtn.style.display = currentTeamOrderRow ? 'inline-block' : 'none';
+            teamOrderDeleteBtn.disabled = !standingOrdersAvailable;
+        }
+
+        const headOrderText = document.getElementById('team-head-order-text');
+        const headOrderDeleteBtn = document.getElementById('team-head-order-delete');
+        if (headOrderText) {
+            headOrderText.value = currentHeadOrderRow ? currentHeadOrderRow.instruction : '';
+            headOrderText.disabled = !standingOrdersAvailable;
+        }
+        if (headOrderDeleteBtn) {
+            headOrderDeleteBtn.style.display = currentHeadOrderRow ? 'inline-block' : 'none';
+            headOrderDeleteBtn.disabled = !standingOrdersAvailable;
+        }
+
+        const teamOrderSaveBtn = document.getElementById('team-order-save');
+        const headOrderSaveBtn = document.getElementById('team-head-order-save');
+        const resendBtn = document.getElementById('btn-team-orders-resend');
+        if (teamOrderSaveBtn) teamOrderSaveBtn.disabled = !standingOrdersAvailable;
+        if (headOrderSaveBtn) headOrderSaveBtn.disabled = !standingOrdersAvailable;
+        if (resendBtn) resendBtn.disabled = !standingOrdersAvailable;
+
+        // Render inherited orders
+        const inheritedList = document.getElementById('team-inherited-orders-list');
+        if (inheritedList) {
+            inheritedList.innerHTML = '';
+            const inherited = standingOrders.filter(o => {
+                const scope = o.scope || 'pair';
+                if (scope === 'global') return true;
+                if (scope === 'pair') {
+                    return members.includes(o.parent) || (o.child && members.includes(o.child));
+                }
+                return false;
+            });
+            if (inherited.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'inherited-order-item';
+                empty.style.color = 'var(--text-secondary)';
+                empty.style.fontStyle = 'italic';
+                empty.textContent = 'None';
+                inheritedList.appendChild(empty);
+            } else {
+                for (const o of inherited) {
+                    const item = document.createElement('div');
+                    item.className = 'inherited-order-item';
+                    const badge = document.createElement('span');
+                    badge.className = 'inherited-order-badge';
+                    badge.textContent = o.scope === 'global' ? 'GLOBAL' : `PAIR (${o.parent}→${o.child})`;
+                    const text = document.createElement('span');
+                    text.textContent = o.instruction;
+                    item.appendChild(badge);
+                    item.appendChild(text);
+                    inheritedList.appendChild(item);
+                }
+            }
+        }
+
+        // Preview target dropdown
+        const previewTargetSel = document.getElementById('team-orders-preview-target');
+        if (previewTargetSel) {
+            const curVal = previewTargetSel.value;
+            previewTargetSel.innerHTML = '';
+            const targets = members.slice();
+            if (headName && !targets.includes(headName)) {
+                targets.unshift(headName);
+            }
+            if (targets.length === 0) {
+                targets.push('member');
+            }
+            for (const t of targets) {
+                const opt = document.createElement('option');
+                opt.value = t;
+                opt.textContent = t === headName ? `${t} (Head)` : `${t} (Member)`;
+                previewTargetSel.appendChild(opt);
+            }
+            if (curVal && targets.includes(curVal)) {
+                previewTargetSel.value = curVal;
+            }
+        }
+
+        updateTeamOrdersPreview();
+    }
+
+    function updateTeamOrdersPreview() {
+        const previewEl = document.getElementById('team-orders-preview-block');
+        const previewTargetSel = document.getElementById('team-orders-preview-target');
+        if (!previewEl || !previewTargetSel) return;
+
+        const targetName = previewTargetSel.value;
+        const previewOutput = applyStandingOrdersClient('Prompt text...', targetName, standingOrders, liveNameSet());
+        const markerIdx = previewOutput.indexOf(STANDING_ORDERS_MARKER);
+        if (markerIdx !== -1) {
+            previewEl.textContent = previewOutput.substring(markerIdx);
+        } else {
+            previewEl.textContent = '(No standing orders apply to this terminal)';
+        }
+    }
+
+    async function deleteStandingOrderById(id, successMsg) {
+        if (!id) return;
+        try {
+            const res = await fetch('/terminals/standing-orders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'delete', id })
+            });
+            const data = await res.json();
+            if (!data.success) { setTeamOrdersError(data.error || 'Delete failed'); return; }
+            if (successMsg) showPaneToast(successMsg);
+            await refreshTeamOrdersUI();
+        } catch (err) {
+            setTeamOrdersError(err.message || String(err));
+        }
+    }
+
+    async function saveTeamOrder() {
+        setTeamOrdersError(null);
+        const teamId = currentTeamOrdersTeamId;
+        if (!teamId) return;
+        const group = terminalGroups.find(g => g && g.id === teamId) || getScopedTeamGroup();
+        const headName = group ? teamHeadName(group) : '';
+        const text = (document.getElementById('team-order-text')?.value || '').trim();
+
+        if (!text) {
+            // Empty instruction routes to delete
+            if (currentTeamOrderRow) {
+                await deleteStandingOrderById(currentTeamOrderRow.id, 'Team order deleted');
+            }
+            return;
+        }
+
+        try {
+            if (currentTeamOrderRow) {
+                const res = await fetch('/terminals/standing-orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'update', id: currentTeamOrderRow.id, instruction: text })
+                });
+                const data = await res.json();
+                if (!data.success) { setTeamOrdersError(data.error || 'Update failed'); return; }
+                showPaneToast('Team order updated');
+            } else {
+                const res = await fetch('/terminals/standing-orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'add', scope: 'team', teamId, parent: headName || '', instruction: text })
+                });
+                const data = await res.json();
+                if (!data.success) { setTeamOrdersError(data.error || 'Add failed'); return; }
+                showPaneToast('Team order created');
+            }
+            await refreshTeamOrdersUI();
+        } catch (err) {
+            setTeamOrdersError(err.message || String(err));
+        }
+    }
+
+    async function saveHeadOrder() {
+        setTeamOrdersError(null);
+        const teamId = currentTeamOrdersTeamId;
+        if (!teamId) return;
+        const group = terminalGroups.find(g => g && g.id === teamId) || getScopedTeamGroup();
+        const headName = group ? teamHeadName(group) : '';
+        const text = (document.getElementById('team-head-order-text')?.value || '').trim();
+
+        if (!text) {
+            // Empty instruction routes to delete
+            if (currentHeadOrderRow) {
+                await deleteStandingOrderById(currentHeadOrderRow.id, 'Head order deleted');
+            }
+            return;
+        }
+
+        try {
+            if (currentHeadOrderRow) {
+                const res = await fetch('/terminals/standing-orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'update', id: currentHeadOrderRow.id, instruction: text })
+                });
+                const data = await res.json();
+                if (!data.success) { setTeamOrdersError(data.error || 'Update failed'); return; }
+                showPaneToast('Head order updated');
+            } else {
+                const res = await fetch('/terminals/standing-orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'add', scope: 'team-head', teamId, parent: headName || '', instruction: text })
+                });
+                const data = await res.json();
+                if (!data.success) { setTeamOrdersError(data.error || 'Add failed'); return; }
+                showPaneToast('Head order created');
+            }
+            await refreshTeamOrdersUI();
+        } catch (err) {
+            setTeamOrdersError(err.message || String(err));
+        }
+    }
+
+    async function resendStandingOrdersToMembers() {
+        setTeamOrdersError(null);
+        const teamId = currentTeamOrdersTeamId;
+        if (!teamId) return;
+        const group = terminalGroups.find(g => g && g.id === teamId) || getScopedTeamGroup();
+        const members = group ? getGroupMembers(group) : [];
+        if (members.length === 0) {
+            showPaneToast('No members in team');
+            return;
+        }
+
+        const liveMembers = members.filter(n => fleetList.some(t => t.friendlyName === n && t.status === 'active'));
+        if (liveMembers.length === 0) {
+            showPaneToast('No active members currently online');
+            return;
+        }
+
+        let idleCount = 0;
+        let busyCount = 0;
+
+        for (const name of liveMembers) {
+            const inFlight = dispatchInFlight.get(name) || 0;
+            if (inFlight > 0) {
+                busyCount++;
+                continue;
+            }
+
+            idleCount++;
+            try {
+                await fetch('/terminals/verb/ptySendPrompt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        data: '[OPERATOR NOTICE] Standing orders updated for team.',
+                        clearBeforePrompt: false
+                    })
+                });
+            } catch (err) {
+                console.warn(`[Terminals] Failed to resend standing orders to ${name}:`, err);
+            }
+        }
+
+        let msg = `Resent standing orders to ${idleCount} idle member(s)`;
+        if (busyCount > 0) {
+            msg += ` (${busyCount} busy member(s) skipped)`;
+        }
+        showPaneToast(msg);
+    }
+
+    (function wireTeamOrdersModal() {
+        const closeBtn = document.getElementById('team-orders-modal-close');
+        const doneBtn = document.getElementById('team-orders-done');
+        const saveTeamBtn = document.getElementById('team-order-save');
+        const deleteTeamBtn = document.getElementById('team-order-delete');
+        const saveHeadBtn = document.getElementById('team-head-order-save');
+        const deleteHeadBtn = document.getElementById('team-head-order-delete');
+        const resendBtn = document.getElementById('btn-team-orders-resend');
+        const btnTeamOrders = document.getElementById('btn-team-orders');
+        const previewTargetSel = document.getElementById('team-orders-preview-target');
+
+        const closeModal = () => {
+            const modal = document.getElementById('team-orders-modal');
+            if (modal) { modal.hidden = true; }
+        };
+
+        if (closeBtn) closeBtn.addEventListener('click', closeModal);
+        if (doneBtn) doneBtn.addEventListener('click', closeModal);
+        if (btnTeamOrders) btnTeamOrders.addEventListener('click', openTeamOrdersModal);
+        if (saveTeamBtn) saveTeamBtn.addEventListener('click', saveTeamOrder);
+        if (deleteTeamBtn) deleteTeamBtn.addEventListener('click', () => {
+            if (currentTeamOrderRow) {
+                deleteStandingOrderById(currentTeamOrderRow.id, 'Team order deleted');
+            }
+        });
+        if (saveHeadBtn) saveHeadBtn.addEventListener('click', saveHeadOrder);
+        if (deleteHeadBtn) deleteHeadBtn.addEventListener('click', () => {
+            if (currentHeadOrderRow) {
+                deleteStandingOrderById(currentHeadOrderRow.id, 'Head order deleted');
+            }
+        });
+        if (resendBtn) resendBtn.addEventListener('click', resendStandingOrdersToMembers);
+        if (previewTargetSel) previewTargetSel.addEventListener('change', updateTeamOrdersPreview);
+
+        const teamText = document.getElementById('team-order-text');
+        const headText = document.getElementById('team-head-order-text');
+        for (const el of [teamText, headText]) {
+            if (el) {
+                el.addEventListener('keydown', (e) => { e.stopPropagation(); });
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            const modal = document.getElementById('team-orders-modal');
             if (!modal || modal.hidden) { return; }
             if (e.key === 'Escape') { e.stopPropagation(); closeModal(); }
         }, true);
