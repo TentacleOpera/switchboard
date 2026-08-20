@@ -2,7 +2,7 @@
 
 ## Goal
 
-Restore custom scheduler jobs, stop silently destroying the ones users still have, and give a dispatching job the one precondition it needs: don't fire into a target that is already working.
+Restore custom scheduler jobs, stop silently destroying the ones users still have, and give the dispatching run-sheet tick the one precondition it needs: don't fire into a target that is already working.
 
 ### Problem analysis
 
@@ -20,42 +20,219 @@ private static readonly DROPPED_SOURCES = new Set(['comms', 'board-batch', 'cust
 
 **2. The drop is destructive on the next write.** `_filterDroppedSources` runs on read, and the comment at `:492` states the consequence: dropped jobs *"stay inert in the file until the next legitimate `setSchedulerConfig` write, which reads through this filter and persists the list without them."* So a user's custom jobs survive right up until they change any scheduler setting, and are then written away permanently with no notice at write time. This is a shipped feature with records in `integration-config.json` on the whole install base — per the project's migration rule this is exactly the case that must import rather than drop.
 
-**3. A dispatching job can fire into a working target.** This is the only concurrency rule the scheduler needs, and it is per-target, not global. `_scheduleQueuePop` (`src/services/TaskViewerProvider.ts:12969`) instead loops `batchSize` times per tick and relies on the pop's `409` to stop it — arbitration standing in for a precondition. That framing is what made the schedule look like a competing pacer; it is not one. A job that would dispatch checks whether its target is busy and skips the tick if so.
+**3. The run-sheet dispatch tick can fire into a working team.** The only concurrency rule the dispatch path needs is per-team, not global. `_scheduleQueuePop` (`src/services/TaskViewerProvider.ts:13016`) loops `batchSize` times per tick and relies on `dispatchNextFromQueue`'s `409` to stop it — arbitration standing in for a precondition. That framing is what made the schedule look like a competing pacer; it is not one. The tick should fire once and treat a 409 (team busy) as a silent skip, not an error.
+
+> **Superseded:** "A dispatching job can fire into a working target. … A job that would dispatch checks whether its target is busy and skips the tick if so."
+> **Reason:** The original framing conflated two separate mechanisms. There is no `ScheduledJob` that dispatches cards — the `ScheduledJob` sources (`reconcile`, `custom`, `fetch-plans`) all run **prompts in terminals** (non-dispatching). The card-advancing dispatch is the **run-sheet autoban tick** (`_scheduleQueuePop`), a separate mechanism driven by the autoban interval/cron timer, not by the scheduler jobs list. The busy-target precondition applies to the run-sheet tick, not to a `ScheduledJob`. Restored custom jobs run prompts (like fetch-plans/reconcile) and are NOT dispatching — they are unaffected by the busy-target rule.
+> **Replaced with:** The run-sheet dispatch tick (`_scheduleQueuePop`) fires once per tick. A 409 from `dispatchNextFromQueue` (team already in flight) is a silent skip — the team is busy, try again next tick. No separate pre-check is needed: the 409 is the atomic busy-target check, evaluated inside `dispatchNextFromQueue`'s serialized critical section (`LocalApiServer.ts:1540-1590`). A pre-check before the attempt would duplicate the board read + team resolution and introduce a TOCTOU window for no benefit.
 
 There is no mode axis here and nothing to make exclusive. Two jobs on different targets run concurrently because they always could.
 
 ## Metadata
 
-**Complexity:** 3
-**Tags:** backend, bugfix, reliability
+**Complexity:** 5
 
-## Implementation
+> **Superseded:** Complexity: 3
+> **Reason:** The plan touches 5 files (`GlobalIntegrationConfigService.ts`, `TaskViewerProvider.ts`, `autobanState.ts`, `kanban.html`, and the survivor prompt path), adds new webview UI for custom-job create/edit/delete, and carries a data-consistency risk: the round-trip preservation fix must not destroy `comms`/`board-batch` records on the ~4,000-install base. That is multi-file coordination with one moderate, well-scoped data-preservation risk — a Mixed 5, not a routine 3.
+> **Replaced with:** Complexity: 5 (Mixed — majority routine, one moderate well-scoped data-consistency risk + moderate UI work extending existing patterns).
 
-1. **Remove `'custom'` from `DROPPED_SOURCES`.** Leave `comms` and `board-batch` — those sources really are gone. Custom jobs then resolve on read again, and any that have been sitting inert in `integration-config.json` come back on their own.
+**Tags:** backend, bugfix, reliability, ui
 
-2. **Stop the destructive write.** `setSchedulerConfig` must not persist a list with unknown-source jobs stripped. Round-trip jobs whose source it does not recognise instead of dropping them, the same way `loadGlobal`/`saveGlobal` already round-trip unknown top-level keys (`:508`). A source can be filtered from *execution* without being deleted from *storage*, and only those two are separable concerns here.
+## User Review Required
 
-3. **Clear the one-time notice.** `customJobs.dropped` in `workspaceState` (`TaskViewerProvider.ts:1416-1422`) and the `autobanState.ts:133` notice field both announce a drop that no longer happens. Reset the flag so a user who saw the notice is not left believing their jobs are gone.
+- **Per-job interval for custom jobs.** The plan's original step 4 says "setting an interval" for a custom job, but the current architecture has **no per-job timer** — survivor jobs (`fetch-plans`, `reconcile`) ride a single shared activation-scoped timer (`_startSurvivorJobsTimer`, `TaskViewerProvider.ts:27172`) with `intervalMinutes: 0` (vestigial). Custom jobs can either (a) ride that same shared timer (simplest, matches the existing pattern, but "interval" is cosmetic), or (b) get a real per-job interval (requires a new timer mechanism — new scope). Proceeding on assumption (a): custom jobs ride the shared survivor timer. See **Outstanding Questions**.
 
-4. **Restore whatever the custom-job UI needs to be editable again** — creating, labelling, enabling and setting an interval and prompt for a `custom` job. `promptOverride` and `startupCommand` are already on the shape, so this is surfacing fields rather than designing new ones. **No confirmation dialogs**, including on delete.
+## Complexity Audit
 
-5. **Add the busy-target precondition.** Before a job that dispatches fires, resolve its target and skip the tick if that target is already working. Skipping is normal and silent — it is not an error and must not disable the job. Non-dispatching jobs (`fetch-plans`, `reconcile`, plan improvement, research) have no such check: they do not fire into a team.
+### Routine
+- Remove `'custom'` from `DROPPED_SOURCES` — one-line set edit (`GlobalIntegrationConfigService.ts:481`).
+- Clear the one-time notice flags (`customJobs.dropped` workspaceState, `droppedCustomJobsNotice` autobanState field) — reset to false/empty so a user who saw the retire notice is not left believing their jobs are gone.
+- Add `'custom'` to the `survivorSources` allowlist in `_tickSurvivorSchedulerJobs` (`TaskViewerProvider.ts:27205`) so restored custom jobs actually execute.
+- Remove the `batchSize` loop from `_scheduleQueuePop` — replace the `for` loop with a single `dispatchNextFromQueue` call. The loop is already effectively single-dispatch: the 409 on the second iteration caps it at one card per tick (one team, one in-flight card). Removing it is cleanup, not a throughput change.
 
-6. **Drop the `batchSize` loop from `_scheduleQueuePop`.** One fire, one card. The job's interval is its pacing; a loop that dispatches until refused is the arbitration shape being removed. Keep the interval and the cron.
+### Complex / Risky
+- **Round-trip preservation in `setSchedulerConfig`.** The fix must preserve `comms`/`board-batch` (and any future unknown-source) jobs in storage while filtering them from execution. This is the data-loss gate for the install base — a regression here silently destroys user records on the next scheduler setting change. Must merge incoming jobs with raw persisted dropped-source jobs rather than overwriting with the filtered list.
+- **Custom-job UI restoration.** The current webview (`kanban.html:11680-11734`) only renders two hardcoded checkboxes (fetch-plans, reconcile); the "+ ADD JOB" surface is deleted (`:11703` comment). Restoring create/edit/delete/label/enable for custom jobs is new webview work — the largest single piece. No confirmation dialogs (project rule; `window.confirm` is a silent no-op in VS Code webviews).
 
-7. **Do not add pacing-mode awareness anywhere in the scheduler.** The precondition is "is this target busy", which is true or false regardless of what is pacing the target. A special case per pacing mode would reintroduce the coupling this plan deletes.
+## Edge-Case & Dependency Audit
+
+**Race Conditions**
+- `setSchedulerConfig` read-modify-write: the round-trip merge reads raw `globalConfig.scheduler.jobs`, merges dropped-source jobs, and writes back. A concurrent writer could land between the read and write. The existing `_snapshotBeforeWrite` backup (`:155-199`) mitigates data loss, but the merge should re-read inside the write to avoid clobbering a concurrent addition. Low risk — scheduler config writes are infrequent and user-driven.
+- The 409 in `dispatchNextFromQueue` is serialized via the critical-section lock (`LocalApiServer.ts:1540-1544`), so the busy-target check is atomic. No pre-check TOCTOU because there is no pre-check — the 409 is the check.
+
+**Security**
+- No new attack surface. Custom jobs run `promptOverride` text in a terminal — same trust model as the existing survivor jobs. No new network endpoints.
+
+**Side Effects**
+- Removing `'custom'` from `DROPPED_SOURCES` causes inert custom jobs in existing `integration-config.json` files to **come back to life on read**. A user who had a custom job with a stale/broken `promptOverride` will now see it execute on the next survivor tick. This is the intended restore, but the prompt content is user-authored and may be outdated. The plan does not validate prompt content — that is the user's responsibility (they authored it).
+- `getDroppedCustomJobLabels()` (`GlobalIntegrationConfigService.ts:608-616`) and `getMigratedBoardBatchInterval()` (`:592-600`) read raw config bypassing the filter. After removing `custom` from `DROPPED_SOURCES`, `getDroppedCustomJobLabels` will still find custom jobs (it reads raw), but the notice that consumes it is being cleared — so this is harmless. Leave the raw-read helpers in place; they are still correct for `comms`/`board-batch`.
+
+**Dependencies & Conflicts**
+- `CODING_COLUMNS` (`LocalApiServer.ts:57`) = `{'LEAD CODED', 'CODER CODED', 'INTERN CODED'}` — the in-flight predicate. The busy-target 409 checks whether any card in these columns has a `dispatchedTerminal` in the team's roster (`:1576-1590`). No change needed here.
+- `normalizeAutobanBatchSize` default is 1 (`autobanState.ts:17`), but users can set 2-5. With the loop removed, the `batchSize` field becomes vestigial for the dispatch path. Do NOT remove the field from `AutobanConfigState` (install-base migration) — just stop looping on it in `_scheduleQueuePop`.
+
+## Dependencies
+
+None — this plan is self-contained. No other plan or session must land first.
+
+## Adversarial Synthesis
+
+Key risks: (1) the round-trip merge in `setSchedulerConfig` is the data-loss gate — a botched merge destroys `comms`/`board-batch` records on the install base; (2) restored custom jobs with stale `promptOverride` content execute immediately on the next tick with no validation; (3) the custom-job UI is the largest piece and the webview has no existing add-job surface to extend. Mitigations: the merge re-reads raw jobs and preserves dropped-source entries by source match; the restore is the user's own data coming back (they authored the prompts); the UI follows the existing checkbox/UPSERT pattern with an added create/delete flow, no confirmation dialogs.
+
+## Proposed Changes
+
+### `src/services/GlobalIntegrationConfigService.ts`
+
+**Context:** The scheduler config service owns job persistence. `DROPPED_SOURCES` (`:481`) filters jobs on read; `setSchedulerConfig` (`:574-581`) writes back the filtered list, destroying dropped-source jobs.
+
+**Logic:**
+
+1. **Remove `'custom'` from `DROPPED_SOURCES`** (`:481`):
+   ```ts
+   private static readonly DROPPED_SOURCES = new Set(['comms', 'board-batch']);
+   ```
+   Leave `comms` and `board-batch` — those sources are genuinely gone. Custom jobs then resolve on read again, and any inert in `integration-config.json` come back on their own.
+
+2. **Make `setSchedulerConfig` preserve dropped-source jobs in storage** (`:574-581`). The current implementation calls `_ensureSchedulerMigration` (which filters) and writes the filtered list. Fix: read the **raw** persisted jobs, keep any whose source is in `DROPPED_SOURCES` (execution-filtered but storage-preserved), and merge them with the incoming list so a write never strips them:
+   ```ts
+   public static async setSchedulerConfig(config: Partial<SchedulerConfig>): Promise<void> {
+       const globalConfig = await this.loadGlobal();
+       const rawJobs = Array.isArray(globalConfig.scheduler?.jobs) ? globalConfig.scheduler!.jobs! : [];
+       // Preserve execution-filtered sources in STORAGE (comms, board-batch).
+       // They are filtered from execution by _filterDroppedSources on read, but
+       // must survive a write so the next read-after-write doesn't destroy them.
+       const preserved = rawJobs.filter(j => this.DROPPED_SOURCES.has(j.source as string));
+       const nextSchema = config.schemaVersion ?? (globalConfig.scheduler?.schemaVersion ?? SCHEDULER_SCHEMA_VERSION);
+       const nextJobs = config.jobs ?? this._filterDroppedSources(rawJobs);
+       // Merge: incoming jobs (no dropped sources) + preserved dropped-source jobs.
+       const incomingIds = new Set(nextJobs.map(j => j.id));
+       const merged = [...nextJobs, ...preserved.filter(j => !incomingIds.has(j.id))];
+       globalConfig.scheduler = { schemaVersion: nextSchema, jobs: merged };
+       await this.saveGlobal(globalConfig);
+   }
+   ```
+   This separates the two concerns the plan identifies: a source can be filtered from **execution** without being deleted from **storage**. `loadGlobal`/`saveGlobal` already round-trip unknown top-level keys (`:506-508`); this extends the same principle to job-level unknown sources.
+
+**Edge Cases:**
+- If `config.jobs` is not provided (caller only updating `schemaVersion`), fall back to the filtered raw jobs + preserved dropped-source jobs — so a schema-only write doesn't destroy anything.
+- Deduplicate by `id`: if an incoming job somehow shares an id with a preserved one, the incoming wins (the user is actively editing that record).
+
+### `src/services/TaskViewerProvider.ts`
+
+**Context:** The run-sheet dispatch tick (`_scheduleQueuePop`, `:13016-13068`) and the survivor job runner (`_tickSurvivorSchedulerJobs`, `:27199-27229`) are the two execution paths. The dispatch tick loops `batchSize` times; the survivor runner only allows `fetch-plans` and `reconcile`.
+
+**Logic:**
+
+3. **Clear the one-time notice** (`:1447-1453`). The `customJobs.dropped` workspaceState flag and the `_droppedCustomJobsNotice` field both announce a drop that no longer happens. Reset the flag so a user who saw the notice is not left believing their jobs are gone:
+   - Set `this._droppedCustomJobsNotice = ''` (or `undefined`) on activation.
+   - Reset `workspaceState` `customJobs.dropped` to `undefined` so the notice logic does not re-latch. The notice block at `:1448-1453` should be removed entirely (custom jobs are no longer dropped), OR converted to a one-time "custom jobs restored" notice — but a restore notice is optional and adds latch complexity; simplest is to clear silently.
+
+4. **Add `'custom'` to the survivor sources allowlist** (`:27205`) so restored custom jobs execute:
+   ```ts
+   const survivorSources = new Set(['fetch-plans', 'reconcile', 'custom']);
+   ```
+   The prompt for a custom job is `job.promptOverride` (already on the `ScheduledJob` shape, `:52`). Update the prompt resolution at `:27210-27211` to handle `custom`:
+   ```ts
+   const prompt = (job.promptOverride || '').trim()
+       || (job.source === 'fetch-plans' ? buildFetchPlansPrompt(job)
+           : job.source === 'reconcile' ? buildReconcilePrompt()
+           : '');  // custom: promptOverride is the prompt; empty = skip
+   if (!prompt) continue;
+   ```
+   A custom job with no `promptOverride` is a no-op skip (not an error) — same as a fetch-plans job with no remote branches.
+
+   > **Clarification (not a new requirement):** Custom jobs ride the **shared survivor timer** (`_startSurvivorJobsTimer`, `:27172`), the same timer fetch-plans/reconcile use. The `intervalMinutes` field is vestigial (`:11722` webview comment confirms `intervalMinutes: 0` for survivor jobs). There is no per-job timer mechanism in the current architecture. If per-job intervals are required, that is separate new scope — see **Outstanding Questions**.
+
+5. **Add the busy-target precondition to the run-sheet tick** (`_scheduleQueuePop`, `:13016-13068`). Replace the `batchSize` loop with a single dispatch call. The 409 from `dispatchNextFromQueue` is the atomic busy-target check — treat it as a silent skip:
+
+   > **Superseded:** "Before a job that dispatches fires, resolve its target and skip the tick if that target is already working. … Drop the `batchSize` loop from `_scheduleQueuePop`. One fire, one card."
+   > **Reason:** The 409 from `dispatchNextFromQueue` (`LocalApiServer.ts:1576-1590`) already IS the busy-target precondition — it checks whether any card in a coding column (`LEAD CODED`/`CODER CODED`/`INTERN CODED`) has a `dispatchedTerminal` in the team's roster, atomically inside the serialized critical section. A separate pre-check before the attempt would duplicate the board read + team resolution and open a TOCTOU window. The `batchSize` loop is already effectively single-dispatch: the second iteration always 409s (one team, one in-flight card) and breaks. Removing it is cleanup, not a throughput change — `DEFAULT_AUTOBAN_BATCH_SIZE` is 1 (`autobanState.ts:17`), and even at batchSize=5 only one card dispatches per tick.
+   > **Replaced with:** Call `dispatchNextFromQueue` **once** per tick. A 409 = team busy → silent skip (not an error, does not disable the schedule). A 200 with `dispatched === null` = queue empty → done. A 200 with a dispatched card = fired. No loop, no pre-check — the 409 is the precondition.
+
+   ```ts
+   private async _scheduleQueuePop(): Promise<void> {
+       if (!this._autobanState.enabled || this._autobanState.paused) { return; }
+       const workspaceRoot = this._resolveWorkspaceRoot();
+       if (!workspaceRoot) { return; }
+       const apiServer = this._localApiServer;
+       if (!apiServer || typeof apiServer.dispatchNextFromQueue !== 'function') { return; }
+
+       // Resolve the live coding head — lead first, then coder (same resolver
+       // runQueue/stageForQueue use). See existing comment at :13023-13035.
+       let headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(workspaceRoot)) || '';
+       if (!headTerminal) {
+           const leads = await this.getAliveRoleTerminalNames('lead', workspaceRoot);
+           if (leads.length > 0) {
+               headTerminal = leads[0];
+           } else {
+               const coders = await this.getAliveRoleTerminalNames('coder', workspaceRoot);
+               if (coders.length > 0) { headTerminal = coders[0]; }
+           }
+       }
+       if (!headTerminal) { return; } // no team seated — try again next tick
+
+       // One fire, one card. The 409 from dispatchNextFromQueue IS the
+       // busy-target precondition (checked atomically inside its critical
+       // section). A 409 = team busy → silent skip, not an error.
+       try {
+           const outcome = await apiServer.dispatchNextFromQueue({ workspaceRoot, from: headTerminal });
+           const status = outcome?.status ?? 500;
+           if (status === 409) { /* team in flight — skip silently */ }
+           else if (status >= 200 && status < 300 && outcome?.payload?.dispatched === null) { /* queue empty */ }
+           else if (status < 200 || status >= 300) {
+               console.warn(`[Autoban] Schedule queue pop returned ${status}: ${outcome?.payload?.error ?? 'unknown'}`);
+           }
+       } catch (e) {
+           console.error('[Autoban] Schedule queue pop failed:', e);
+       }
+       this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
+       this._postAutobanState();
+   }
+   ```
+
+6. **Do not add pacing-mode awareness anywhere in the scheduler.** The precondition is "is this team busy", which is true or false regardless of what is pacing the team. A special case per pacing mode would reintroduce the coupling this plan deletes.
+
+### `src/services/autobanState.ts`
+
+**Context:** The `droppedCustomJobsNotice` field (`:133-134`) carries the one-time retire notice to the webview.
+
+**Logic:**
+
+7. **Clear the notice field.** After the activation logic in `TaskViewerProvider.ts` resets `customJobs.dropped`, the `droppedCustomJobsNotice` field should be empty so the webview (`kanban.html:11736-11742`) does not render a "jobs stopped" notice for jobs that now run again. Do NOT remove the field from the type (install-base migration — old state blobs may carry it); just clear it on load.
+
+### `src/webview/kanban.html`
+
+**Context:** The automation panel renders survivor jobs as two hardcoded checkboxes (`:11680-11734`). The "+ ADD JOB" surface is deleted (`:11703`). The `droppedCustomJobsNotice` renders at `:11736-11742`.
+
+**Logic:**
+
+8. **Restore the custom-job UI** — creating, labelling, enabling, and setting a prompt for a `custom` job. `promptOverride` and `startupCommand` are already on the `ScheduledJob` shape (`:52-53`), so this is surfacing fields, not designing new ones. The UI should:
+   - Render existing custom jobs from `window.__schedulerConfig.jobs` (filtered to `source === 'custom'`) as editable rows: label, enable checkbox, prompt textarea, delete button.
+   - Provide a "+ ADD CUSTOM JOB" button that creates a new job with `source: 'custom'`, `target: 'local-terminal'`, a generated `id`, `intervalMinutes: 0` (vestigial — rides shared timer), and empty `sourceConfig`.
+   - On save, UPSERT via `setSchedulerConfig` (same message pattern as the survivor checkbox at `:11726`).
+   - **No confirmation dialogs** — delete buttons delete immediately (project rule; `window.confirm` is a silent no-op in VS Code webviews).
+
+**Edge Cases:**
+- The `updateSchedulerConfig` handler (`:10216-10229`) re-renders on change — ensure custom-job rows are included in the re-render path.
+- A custom job with an empty `promptOverride` is a no-op at execution time (the survivor runner skips it). The UI should allow saving an empty prompt (the user may fill it in later) but could show a dimmed "no prompt set" hint.
 
 ## Verification Plan
 
-1. **A custom job in an existing `integration-config.json` resolves after the change** — the install-base restore path, tested against a real file containing custom, `comms` and `board-batch` jobs. Custom comes back; the other two stay filtered.
+### Automated Tests
+
+1. **A custom job in an existing `integration-config.json` resolves after the change** — the install-base restore path, tested against a real file containing custom, `comms` and `board-batch` jobs. Custom comes back; the other two stay filtered from execution.
 2. **`setSchedulerConfig` preserves unknown-source jobs.** Write an unrelated scheduler setting and assert the `comms`/`board-batch` records are still in the file afterward. This is the data-loss gate.
 3. **Round-trip a custom job** through create → save → reload → edit → save, asserting nothing is lost and unknown fields survive.
 4. **The one-time notice does not reappear**, and a workspace that already latched `customJobs.dropped` is reset.
-5. **Busy target skips.** A card-advancing job whose target is mid-run does not dispatch, does not error, is not disabled, and fires normally on the next tick once the target is free.
+5. **Busy target skips.** A run-sheet tick whose team is mid-run (a card in `LEAD CODED`/`CODER CODED`/`INTERN CODED` with a `dispatchedTerminal`) does not dispatch, does not error, is not disabled, and fires normally on the next tick once the team is free.
 6. **Free target fires.**
-7. **Concurrent jobs on different targets both fire in the same tick** — e.g. a plan-improvement job and a card-advancing job against a free target. This is the test asserting there is no global exclusivity.
-8. **A non-dispatching job is never blocked by a busy team.**
+7. **Concurrent jobs on different clocks both fire in the same tick window** — e.g. a survivor job (fetch-plans, on the survivor timer) and a run-sheet dispatch tick (on the autoban timer) against a free team. This is the test asserting there is no global exclusivity between the two timer mechanisms.
+8. **A non-dispatching survivor job is never blocked by a busy team.** The busy-target check is only in `_scheduleQueuePop`, not in `_tickSurvivorSchedulerJobs`.
 9. **One card per fire.** Assert a single dispatch per tick with the `batchSize` loop gone, and that the interval and cron still schedule as before.
 10. **No confirmation dialogs** anywhere in the custom-job UI.
 
-`npm run compile` clean; the seven PRD gates green.
+> **Note:** Per session directives, `npm run compile` and automated tests are NOT executed during this planning run. The checks above remain written down for the implementer to run.
+
+## Outstanding Questions
+
+- **[user]** Should custom jobs support per-job intervals, or ride the shared survivor timer? The plan's original step 4 says "setting an interval," but the current architecture has no per-job timer — survivor jobs use `intervalMinutes: 0` (vestigial) on a single shared activation-scoped timer. — proceeding on the assumption that custom jobs ride the shared survivor timer (matching fetch-plans/reconcile), and the interval field is cosmetic/vestigial. If real per-job intervals are required, that is separate new scope (a new timer mechanism).

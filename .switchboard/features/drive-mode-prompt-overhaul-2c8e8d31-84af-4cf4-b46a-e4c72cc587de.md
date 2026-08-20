@@ -13,8 +13,8 @@ The team lead agent wastes a full turn on discovery work the extension already h
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Inject Context Into Drive-Mode Prompt, Trim Skill File](../plans/inject-context-trim-skill-drive-mode-prompt-payload.md) — **PLAN REVIEWED**
-- [ ] [Drive-Mode Addon Cleanup + Auto-Arm Feature Watch](../plans/drive-mode-addon-cleanup-auto-arm-watch.md) — **PLAN REVIEWED**
+- [ ] [Inject Context Into Drive-Mode Prompt, Trim Skill File](../plans/inject-context-trim-skill-drive-mode-prompt-payload.md) — **CODE REVIEWED**
+- [ ] [Drive-Mode Addon Cleanup + Auto-Arm Feature Watch](../plans/drive-mode-addon-cleanup-auto-arm-watch.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -22,3 +22,11 @@ The team lead agent wastes a full turn on discovery work the extension already h
 - **Plan A (Inject Context)** must land first — it replaces the static prefix with the enriched prompt and trims the skill file.
 - **Plan B (Addon Cleanup + Auto-Arm)** depends on Plan A's enriched prompt being in place (it should not include the `watchFeature` arming call since the system arms it). Plan B's addon exclusion is independent and could land in parallel, but the auto-arm watch change should wait for Plan A.
 - Recommended order: Plan A → Plan B.
+
+## Completion Summary
+
+Both subtasks implemented and committed. **Plan A** (inject-context-trim-skill): replaced static `DRIVE_FEATURE_PREFIX` with `_buildDrivePrefix` building an enriched operational block (team roster with roles+liveness, plan IDs, API port, compact rules); added `_resolveTeamRosterForPrompt` (roles via `_liveTerminalsProvider` then `listFleetTerminals`, liveness via `getFleetLiveness`) and public `listFleetTerminals` wrapper on TaskViewerProvider; trimmed SKILL.md with Quick Start §0, Do NOT §0.1, war stories moved to Appendix with back-references, §3.5 auto-arming note. Falls back to static prefix when no team found. **Plan B** (addon-cleanup-auto-arm): suppressed implementation addons (SKIP COMPILATION, SKIP TESTS, SUPPRESS WALKTHROUGH, Accuracy Mode) from drive-mode lead and feature-mode coder prompts gated on `driveMode && featureMode`; added `_autoArmDriveModeFeatureWatch` in KanbanProvider triggerAction handler arming feature watch with `stopColumns: ['CODE REVIEWED']` on drive-mode feature dispatch to lead. Files changed: `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`, `src/services/agentPromptBuilder.ts`, `.agents/skills/terminal-coder-dispatch/SKILL.md`. No issues encountered.
+
+## Review Findings
+
+The combined review kept the prompt-context and addon behavior, synchronized the Claude skill mirror, repaired feature-watch mutation races, and added/wired focused regression contracts. Changed review files include `src/services/KanbanDatabase.ts`, `src/services/KanbanProvider.ts`, `src/services/PlanIngestionEngine.ts`, both terminal/drive contract tests, `package.json`, `.github/workflows/integration-tests.yml`, and `.claude/skills/terminal-coder-dispatch/SKILL.md`. TypeScript test compilation and all focused contracts passed; the exact VS Code grep suites compiled and linted cleanly but the local downloaded Electron executable was unavailable, so CI now runs both under `xvfb-run`. Remaining risk is external-process config contention beyond the in-process serialization boundary and unrelated mirror drift in three other skills.

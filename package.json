@@ -961,6 +961,7 @@
     "test:contract:seat-safeguards": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/seat-safeguards-fleet-prompt-path.test.js",
     "test:contract:team-scoped-routing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-scoped-role-routing.test.js",
     "test:contract:terminal-groups-key": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-groups-key-unification-contract.test.js",
+    "test:contract:terminal-groups-headrole": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-groups-headrole-contract.test.js",
     "test:contract:link-presets-mirror": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/link-presets-mirror-contract.test.js",
     "test:contract:stage-marker-commit": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/stage-marker-commit-contract.test.js",
     "test:contract:minimal-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/minimal-prompt.test.js",
@@ -969,7 +970,8 @@
     "test:contract:queue-pipeline": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/queue-pipeline-contract.test.js",
     "test:contract:external-headed-team": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/external-headed-team-contract.test.js",
     "test:contract:terminal-coder-dispatch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-coder-dispatch-contract.test.js",
-    "test:contract:feature-drive-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/feature-drive-prompt-reframe-contract.test.js"
+    "test:contract:feature-drive-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/feature-drive-prompt-reframe-contract.test.js",
+    "test:contract:drive-mode-prompt-overhaul": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/drive-mode-prompt-overhaul-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

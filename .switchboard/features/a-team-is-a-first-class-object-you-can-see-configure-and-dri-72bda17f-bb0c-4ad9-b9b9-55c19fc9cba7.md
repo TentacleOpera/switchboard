@@ -22,15 +22,15 @@ This feature makes the team the unit the UI is built around. It starts with an i
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Scheduled Automation Targeted at a Team Lead](../plans/scheduled-automation-targeted-at-a-team-lead.md) — **PLAN REVIEWED**
-- [ ] [Team Action Bar: Bulk Lifecycle and Roster Order](../plans/team-action-bar-bulk-lifecycle-and-roster-order.md) — **PLAN REVIEWED**
-- [ ] [Shell Strip: Team Icons in Place of Per-Terminal CLI Icons](../plans/shell-strip-team-icons-instead-of-per-terminal-cli-icons.md) — **PLAN REVIEWED**
-- [ ] [Team Icons: Choose or Customise an Icon per Team in the TEAMS Tab](../plans/team-icon-picker-in-teams-tab.md) — **PLAN REVIEWED**
-- [ ] [Link a Live Team Back to Its Definition (Team Identity Foundation)](../plans/team-identity-link-live-team-to-its-definition.md) — **PLAN REVIEWED**
-- [ ] [Team Work Queue: Queue Work to a Team Instead of Dispatching One Prompt at a Time](../plans/team-work-queue.md) — **PLAN REVIEWED**
-- [ ] [Team Standing Orders: Make the Team and Team-Head Scopes Editable](../plans/team-standing-orders-editor.md) — **PLAN REVIEWED**
-- [ ] [Team Cockpit: A `?team=<id>` Scoped Terminals View](../plans/team-cockpit-scoped-terminals-view.md) — **PLAN REVIEWED**
-- [ ] [Agent & Team Pixel Art: Drop PNGs in `icons/`, Render Them Everywhere](../plans/agent-and-team-pixel-art-pipeline.md) — **PLAN REVIEWED**
+- [ ] [Scheduled Automation Targeted at a Team Lead](../plans/scheduled-automation-targeted-at-a-team-lead.md) — **LEAD CODED**
+- [ ] [Team Action Bar: Bulk Lifecycle and Roster Order](../plans/team-action-bar-bulk-lifecycle-and-roster-order.md) — **LEAD CODED**
+- [ ] [Shell Strip: Team Icons in Place of Per-Terminal CLI Icons](../plans/shell-strip-team-icons-instead-of-per-terminal-cli-icons.md) — **LEAD CODED**
+- [ ] [Team Icons: Choose or Customise an Icon per Team in the TEAMS Tab](../plans/team-icon-picker-in-teams-tab.md) — **LEAD CODED**
+- [ ] [Link a Live Team Back to Its Definition (Team Identity Foundation)](../plans/team-identity-link-live-team-to-its-definition.md) — **LEAD CODED**
+- [ ] [Team Work Queue: Queue Work to a Team Instead of Dispatching One Prompt at a Time](../plans/team-work-queue.md) — **LEAD CODED**
+- [ ] [Team Standing Orders: Make the Team and Team-Head Scopes Editable](../plans/team-standing-orders-editor.md) — **LEAD CODED**
+- [ ] [Team Cockpit: A `?team=<id>` Scoped Terminals View](../plans/team-cockpit-scoped-terminals-view.md) — **LEAD CODED**
+- [ ] [Agent & Team Pixel Art: Drop PNGs in `icons/`, Render Them Everywhere](../plans/agent-and-team-pixel-art-pipeline.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

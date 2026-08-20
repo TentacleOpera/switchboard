@@ -46,7 +46,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // read in this file goes through `loadEffectiveStandingOrders`, which composes
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 
 import * as cp from 'child_process';
@@ -1308,11 +1308,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // reload would replay reviews nobody re-requested, so it is correct that a
     // restart drops all pending state. Keyed on the resolved target terminal.
     private _phoneAFriendQueues = new Map<string, {
-        agentName: string; originRole: string; pending: string[];
-        inFlight: string | null; dispatchedAt?: number;
+        agentName: string;
+        pending: Array<{ planFile: string; originRole: string; originTerminal?: string; mode?: 'pre-review' | 'post-batch' }>;
+        inFlight: { planFile: string; originRole: string; originTerminal?: string; mode?: 'pre-review' | 'post-batch' } | null;
+        dispatchedAt?: number;
         stallTimer?: NodeJS.Timeout;
         lastCompleted?: string;
-        mode?: 'pre-review' | 'post-batch';
     }>();
     // Stall notification threshold for Phone-a-Friend — if a plan is in flight
     // longer than this with no /phone-a-friend/done callback, emit a stalled
@@ -1323,7 +1324,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Pre-review sequential gate waiters — keyed by `${targetKey}::${planFile}`.
     // When POST /phone-a-friend/done fires for a plan, the waiter is resolved
     // so the dispatch pipeline can proceed (or route FAIL findings to the coder).
-    private _preReviewWaiters = new Map<string, () => void>();
+    private _preReviewWaiters = new Map<string, Array<(result: { verdict?: 'PASS' | 'FAIL'; findings?: string }) => void>>();
     private _isMigratingSettings: boolean = false;
 
     // Last-accessed tracking for background prefetch
@@ -3181,6 +3182,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             },
             resolveTeamRoleTerminal: async (wsRoot, originTerminal, role) => this.resolveTeamRoleTerminal(wsRoot, originTerminal, role),
             resolveTeamMembers: async (wsRoot, headTerminal) => this.resolveTeamMembers(wsRoot, headTerminal),
+            resolveTeamPacing: async (wsRoot, headTerminal) => this.resolveTeamPacing(wsRoot, headTerminal),
+            clearTerminalContext: async (wsRoot, terminalName) => this.clearTerminalContext(wsRoot, terminalName),
+            notifyOperator: (wsRoot, message) => this.notifyOperator(wsRoot, message),
             createExternalTeam: async (wsRoot, template, headName, featureId) =>
                 this.instantiateExternalTeam(wsRoot || effectiveRoot, template, headName, featureId),
             armQueueWatch: async (wsRoot, headTerminal, opts) => {
@@ -3551,11 +3555,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // post-batch (coder-triggered second pass). Default is post-batch (backward compat).
                 await this.dispatchPhoneAFriend(planFile, originRole || 'coder', originTerminal, dispatchId, mode);
             },
-            onPhoneAFriendDone: (target: string, planFile?: string) => {
+            onPhoneAFriendDone: (target: string, planFile?: string, result?: 'PASS' | 'FAIL', findings?: string) => {
                 // Route the friend's completion POST to the per-target queue advance.
                 // planFile is correlated against queue.inFlight to reject spurious
                 // callbacks. Duplicate callbacks (nothing in flight) are silently ignored.
-                this.handlePhoneAFriendDone(target, planFile);
+                this.handlePhoneAFriendDone(target, planFile, result, findings);
             },
             onDispatchResearch: async (workspaceRoot: string, prompt: string) => {
                 // Route the planner's "advise research if unsure" hand-off to an active
@@ -5756,11 +5760,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      */
     public async resolvePhoneAFriendTarget(
         originRole: string,
-        originTerminal?: string
+        originTerminal?: string,
+        requireEnabled: boolean = false
     ): Promise<{ agentName: string; targetKey: string } | null> {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot('');
         if (!resolvedWorkspaceRoot) { return null; }
         const roleConfig: any = this.getRoleConfig(`roleConfig_${originRole}`);
+        if (requireEnabled && roleConfig?.addons?.phoneAFriend !== true) { return null; }
         const targetOverride = typeof originTerminal === 'string' && originTerminal
             ? roleConfig?.addons?.phoneAFriendTargets?.[originTerminal]
             : undefined;
@@ -5924,7 +5930,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // later curl advances the queue spuriously. The queue is not the only
             // writer to that terminal.
             const prompt = (queueOriginated && apiPort > 0)
-                ? basePrompt + PHONE_A_FRIEND_DONE_DIRECTIVE(apiPort, targetKey, planFiles[0])
+                ? basePrompt + PHONE_A_FRIEND_DONE_DIRECTIVE(apiPort, targetKey, planFiles[0], mode)
                 : basePrompt;
 
             const sendLockKey = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name || agentName)) || agentName;
@@ -5953,7 +5959,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * the whole list as one numbered batch prompt — the batch prompt stays as a
      * fallback and does not become dead code.
      */
-    public async enqueuePhoneAFriend(planFiles: string[], originRole: string, resolvedTarget?: { agentName: string; targetKey: string } | null, mode?: 'pre-review' | 'post-batch'): Promise<{ queued: number; unrouted: number; fallback: boolean }> {
+    public async enqueuePhoneAFriend(planFiles: string[], originRole: string, resolvedTarget?: { agentName: string; targetKey: string } | null, mode?: 'pre-review' | 'post-batch', originTerminal?: string): Promise<{ queued: number; unrouted: number; fallback: boolean }> {
         const valid = planFiles.filter(p => typeof p === 'string' && p.trim());
         if (valid.length === 0) { return { queued: 0, unrouted: 0, fallback: false }; }
 
@@ -5972,7 +5978,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // send all plans as one numbered prompt, no queue, no /done needed.
         // The batch prompt stays as a fallback and does not become dead code.
         if (this.suppressLocalApiServer) {
-            await this._dispatchPhoneAFriendInternal(valid, originRole, undefined, undefined, targetKey, false, mode);
+            await this._dispatchPhoneAFriendInternal(valid, originRole, originTerminal, undefined, targetKey, false, mode);
             return { queued: valid.length, unrouted: 0, fallback: true };
         }
 
@@ -5981,17 +5987,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // multi-plan path in _dispatchPhoneAFriendInternal and stays as a fallback.
         const apiPort = this.getLocalApiServerPort();
         if (apiPort === 0) {
-            await this._dispatchPhoneAFriendInternal(valid, originRole, undefined, undefined, targetKey, false, mode);
+            await this._dispatchPhoneAFriendInternal(valid, originRole, originTerminal, undefined, targetKey, false, mode);
             return { queued: valid.length, unrouted: 0, fallback: true };
         }
 
         // Get or create the per-target queue.
         let queue = this._phoneAFriendQueues.get(targetKey);
         if (!queue) {
-            queue = { agentName, originRole, pending: [], inFlight: null, mode };
+            queue = { agentName, pending: [], inFlight: null };
             this._phoneAFriendQueues.set(targetKey, queue);
         }
-        queue.pending.push(...valid);
+        queue.pending.push(...valid.map(planFile => ({ planFile, originRole, originTerminal, mode })));
 
         // Start the head if nothing is in flight.
         if (queue.inFlight === null) {
@@ -6021,15 +6027,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return;
         }
 
-        const planFile = queue.pending.shift()!;
-        queue.inFlight = planFile;
+        const item = queue.pending.shift()!;
+        const { planFile } = item;
+        queue.inFlight = item;
         queue.dispatchedAt = Date.now();
 
         // Clear any prior stall timer before starting a new one.
         if (queue.stallTimer) { clearTimeout(queue.stallTimer); queue.stallTimer = undefined; }
 
         const delivered = await this._dispatchPhoneAFriendInternal(
-            planFile, queue.originRole, undefined, undefined, targetKey, true, queue.mode
+            planFile, item.originRole, item.originTerminal, undefined, targetKey, true, item.mode
         );
 
         if (!delivered) {
@@ -6041,6 +6048,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 planFile, queue.agentName, queue.pending.length);
             queue.inFlight = null;
             queue.dispatchedAt = undefined;
+            this._resolvePreReviewWaiter(targetKey, planFile, {});
             // Recurse to dispatch the next plan (or drain).
             void this._pumpPhoneAFriendQueue(targetKey);
             return;
@@ -6057,7 +6065,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // correlates on planFile, so a deliberate advance cannot skip the wrong plan.
         queue.stallTimer = setTimeout(() => {
             const q = this._phoneAFriendQueues.get(targetKey);
-            if (!q || q.inFlight !== planFile) { return; } // already advanced via /done
+            if (!q || q.inFlight?.planFile !== planFile) { return; } // already advanced via /done
             const elapsedMs = Date.now() - (q.dispatchedAt ?? Date.now());
             const elapsedMin = Math.round(elapsedMs / 60000);
             this._emitPhoneAFriendNotice('stalled',
@@ -6078,7 +6086,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * that clobbered the terminal — ignored, not advanced.
      * Duplicate callbacks (nothing in flight) are silently ignored.
      */
-    public handlePhoneAFriendDone(target: string, planFile?: string): void {
+    private _resolvePreReviewWaiter(target: string, planFile: string, result: { verdict?: 'PASS' | 'FAIL'; findings?: string }): void {
+        const key = `${target}::${planFile}`;
+        const waiters = this._preReviewWaiters.get(key);
+        const waiter = waiters?.shift();
+        if (waiters?.length === 0) { this._preReviewWaiters.delete(key); }
+        waiter?.(result);
+    }
+
+    public handlePhoneAFriendDone(target: string, planFile?: string, result?: 'PASS' | 'FAIL', findings?: string): void {
         const queue = this._phoneAFriendQueues.get(target);
         if (!queue || queue.inFlight === null) {
             // Duplicate callback or unknown target — ignore.
@@ -6088,22 +6104,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Correlate: if planFile is provided and does not match the in-flight plan,
         // this is a spurious callback from a non-queue dispatch that clobbered the
         // terminal. Do NOT advance — the real review is still in flight.
-        if (planFile && queue.inFlight && planFile !== queue.inFlight) {
-            this._apiServerDiagnosticsChannel.appendLine(`[Phone-a-Friend] /done for target='${target}' planFile='${planFile}' — does not match inFlight='${queue.inFlight}', spurious callback ignored.`);
+        if (planFile && planFile !== queue.inFlight.planFile) {
+            this._apiServerDiagnosticsChannel.appendLine(`[Phone-a-Friend] /done for target='${target}' planFile='${planFile}' — does not match inFlight='${queue.inFlight.planFile}', spurious callback ignored.`);
             return;
         }
         if (queue.stallTimer) { clearTimeout(queue.stallTimer); queue.stallTimer = undefined; }
-        queue.lastCompleted = queue.inFlight;
+        const completed = queue.inFlight;
+        queue.lastCompleted = completed.planFile;
         queue.inFlight = null;
         queue.dispatchedAt = undefined;
-        // Resolve any pre-review sequential gate waiter for this plan so the
-        // dispatch pipeline can proceed (or route FAIL findings to the coder).
-        const preReviewWaiterKey = `${target}::${queue.lastCompleted}`;
-        const preReviewWaiter = this._preReviewWaiters.get(preReviewWaiterKey);
-        if (preReviewWaiter) {
-            this._preReviewWaiters.delete(preReviewWaiterKey);
-            preReviewWaiter();
-        }
+        const verdict = completed.mode === 'pre-review' ? (result || 'FAIL') : result;
+        const verdictFindings = completed.mode === 'pre-review' && !result
+            ? (findings || 'Phone-a-Friend pre-review completed without a PASS/FAIL verdict.')
+            : findings;
+        this._resolvePreReviewWaiter(target, queue.lastCompleted, { verdict, findings: verdictFindings });
         void this._pumpPhoneAFriendQueue(target);
     }
 
@@ -10100,6 +10114,146 @@ Each plan file must include:
     }
 
     /**
+     * Resolve the pacing mode of the team headed by `headTerminal`: `'seat'`
+     * when the team is toggled to seat-paced dispatch, `'head'` otherwise.
+     * Reads the SAME team group `resolveTeamMembers` does (via
+     * `resolveTeamPacingForHead`), so the pacing decision and the roster
+     * derive from one definition. Public so the LocalApiServer composition root
+     * can wire it as the `resolveTeamPacing` callback for the seat-paced
+     * `queue/done` / `queue/next` paths. Returns `'head'` on any failure or
+     * when the head names no live team — never null — so callers can use it as
+     * a defaulting oracle (absent reads as `'head'`, the regression gate).
+     */
+    public async resolveTeamPacing(
+        workspaceRoot: string,
+        headTerminal: string
+    ): Promise<'head' | 'seat'> {
+        try {
+            const db = await this._getKanbanDb(workspaceRoot);
+            if (!db || !await db.ensureReady()) { return 'head'; }
+            return await resolveTeamPacingForHead({ db, originName: headTerminal });
+        } catch (err) {
+            console.warn('[TaskViewerProvider] resolveTeamPacing failed:', err);
+            return 'head';
+        }
+    }
+
+    /**
+     * Clear a seat terminal's context (clipboard-paste `/clear`) after it
+     * reports a card done via `POST /kanban/queue/done`, so a finisher does not
+     * keep the prior card's context indefinitely. Reuses the dispatch clear
+     * path's clipboard paste + per-terminal send lock — a hand-rolled
+     * `sendText('/clear')` gets swallowed by CLI slash-command mode. Respects
+     * `terminal.clearBeforePrompt`: when off, no clear is sent and `cleared` is
+     * false. A clear failure is logged and reported via `cleared: false`; the
+     * caller (LocalApiServer) does NOT abort the pop on it. Public so the
+     * composition root can wire it as the `clearTerminalContext` callback.
+     *
+     * Resolution mirrors the dispatch delivery path: PTY fleet first (the
+     * browser cockpit's terminals), then registered VS Code terminals, then
+     * open VS Code terminals by normalized name. Returns `{cleared: false}`
+     * when the terminal is not found or the config gate is off — never throws.
+     */
+    public async clearTerminalContext(
+        workspaceRoot: string,
+        terminalName: string
+    ): Promise<{ cleared: boolean; error?: string }> {
+        const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
+        if (!clearBeforePrompt) {
+            return { cleared: false };
+        }
+        const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
+        const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
+
+        // PTY fleet first — same precedence as _attemptDirectTerminalPush. A
+        // PTY clear goes through ptySendPrompt with an empty payload and
+        // clearBeforePrompt: true, which the pty host turns into a clipboard
+        // paste of /clear (the same path dispatch uses).
+        if (this._ptyHostPort) {
+            const normalizedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+            try {
+                const res = await this._ptyHostVerb('ptyListTerminals', {});
+                if (res?.success && Array.isArray(res.terminals)) {
+                    const target = res.terminals.find((t: any) => t.friendlyName === terminalName)
+                        || res.terminals.find((t: any) => this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === normalizedTarget);
+                    if (target && target.status === 'active') {
+                        const clearRes = await this._ptyHostVerb('ptySendPrompt', {
+                            name: target.friendlyName,
+                            data: '',
+                            clearBeforePrompt: true,
+                            clearBeforePromptDelayMs: resolvePtyClearDelay(vscode.workspace.getConfiguration('switchboard')),
+                            // Empty payload — this is a pure /clear, no prompt.
+                            addonsComposed: true
+                        });
+                        if (clearRes?.success) { return { cleared: true }; }
+                        return { cleared: false, error: clearRes?.error || 'ptySendPrompt clear reported failure' };
+                    }
+                }
+            } catch (err) {
+                console.warn(`[TaskViewerProvider] clearTerminalContext PTY clear failed for '${terminalName}':`, err);
+            }
+        }
+
+        // Registered VS Code terminals, then open terminals by normalized name.
+        let terminal: vscode.Terminal | undefined;
+        if (this._registeredTerminals) {
+            terminal = this._registeredTerminals.get(terminalName)
+                || this._registeredTerminals.get(this._suffixedName(terminalName));
+            if (!terminal) {
+                const normalized = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+                for (const [name, t] of this._registeredTerminals.entries()) {
+                    if (this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized) {
+                        terminal = t;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!terminal) {
+            const openTerminals = vscode.window.terminals || [];
+            const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+            terminal = openTerminals.find(t => this._normalizeAgentKey(t.name) === strippedTarget);
+        }
+        if (!terminal || terminal.exitStatus !== undefined) {
+            return { cleared: false, error: `terminal '${terminalName}' not found or exited` };
+        }
+
+        const sendLockKey =
+            this._normalizeAgentKey(this._stripIdeSuffix(terminal.name || terminalName)) || terminalName;
+        try {
+            await withTerminalSendLock(sendLockKey, async () => {
+                terminal!.show();
+                await pasteTextViaClipboard(terminal!, '/clear', { acquireFocus: true, clearInputLine: true });
+                await new Promise(r => setTimeout(r, 1000));
+                terminal!.sendText('', true);
+                await new Promise(r => setTimeout(r, clearDelay));
+            });
+            return { cleared: true };
+        } catch (err) {
+            console.error(`[TaskViewerProvider] clearTerminalContext clipboard paste failed for '${terminalName}':`, err);
+            return { cleared: false, error: err instanceof Error ? err.message : String(err) };
+        }
+    }
+
+    /**
+     * Notify the operator of a non-fatal event that needs human attention —
+     * used by the escalation ladder's park case (a card that failed at lead and
+     * has no higher seat to step up to). Surfaces the message via a VS Code
+     * warning message AND the API server diagnostics channel, WITHOUT blocking
+     * the queue — the pop proceeds regardless. No confirmation dialog
+     * (CLAUDE.md: never add confirmation dialogs). Public so the composition
+     * root can wire it as the `notifyOperator` callback. Never throws.
+     */
+    public notifyOperator(_workspaceRoot: string, message: string): void {
+        try {
+            this._apiServerDiagnosticsChannel.appendLine(`[park] ${message}`);
+            vscode.window.showWarningMessage(message);
+        } catch (err) {
+            console.warn('[TaskViewerProvider] notifyOperator failed:', err);
+        }
+    }
+
+    /**
      * Resolve a terminal display name to the delegate-identity fields that the parent
      * directive needs. This is a no-op for terminals with no live delegate children and
      * for VS Code terminals, so the overwhelmingly common case costs zero extra round-trips
@@ -10835,9 +10989,14 @@ Each plan file must include:
      */
     public async buildOrchestratorKickoffPrompt(
         root: string,
-        initiatorProject?: string | null
+        initiatorProject?: string | null,
+        deliveryMode?: 'host' | 'self'
     ): Promise<{ mode: 'interview' | 'resume' | 'stale-session' | 'no-persona'; prompt: string }> {
-        const personaPath = path.join(root, '.agents', 'skills', 'switchboard-orchestrator', 'SKILL.md');
+        const sharedLogicPath = path.join(root, '.agents', 'skills', 'switchboard-orchestrator', 'SKILL.md');
+        const runsheetName = deliveryMode === 'self'
+            ? 'switchboard-orchestrator-external'
+            : 'switchboard-orchestrator-internal';
+        const runsheetPath = path.join(root, '.agents', 'skills', runsheetName, 'SKILL.md');
         let projectFilter = '';
         try {
             projectFilter = (await this._kanbanProvider?.resolveAuthoringProject(root, initiatorProject)) || '';
@@ -10847,9 +11006,19 @@ Each plan file must include:
         try { await fs.promises.access(sessionPath); sessionExists = true; } catch { /* absent */ }
         const armed = !!this._autobanState?.orchestratorArmed;
         try {
-            await fs.promises.access(personaPath);
+            await fs.promises.access(sharedLogicPath);
+            await fs.promises.access(runsheetPath);
+            // Read the runtime-specific runsheet and the shared logic, then
+            // concatenate: runsheet preamble + shared logic body. The combined
+            // document replaces the old single-file persona. The branch-specific
+            // instruction (interview / resume / stale-session) is appended after.
+            const runsheetBody = await fs.promises.readFile(runsheetPath, 'utf8');
+            const sharedBody = await fs.promises.readFile(sharedLogicPath, 'utf8');
+            const personaContent = runsheetBody.trimEnd() + '\n\n---\n\n' + sharedBody;
             const baseLines = [
-                `You are the Switchboard orchestrator. Read and follow .agents/skills/switchboard-orchestrator/SKILL.md now.`,
+                `You are the Switchboard orchestrator. Read and follow the combined document below (runsheet + shared orchestration logic).`,
+                ``,
+                personaContent,
                 ``,
                 `UNATTENDED=true`,
                 `WORKSPACE_ROOT=${root}`,
@@ -10876,7 +11045,7 @@ Each plan file must include:
                 return { mode: 'stale-session', prompt };
             }
         } catch {
-            const prompt = `You are the Switchboard orchestrator. The orchestrator workflow is not yet installed (.agents/skills/switchboard-orchestrator/SKILL.md). Stand by — do not take autonomous action.`;
+            const prompt = `You are the Switchboard orchestrator. The orchestrator workflow is incomplete: the shared logic or required runtime runsheet is missing. Stand by — do not take autonomous action.`;
             return { mode: 'no-persona', prompt };
         }
     }
@@ -10902,7 +11071,7 @@ Each plan file must include:
         // seat when it is reachable, and say so when it is not.
         const adopted = this._autobanState.orchestratorSeat;
         if (adopted?.terminalName) {
-            const { prompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject);
+            const { prompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject, 'host');
             const sent = await this._dispatchExecuteMessage(
                 root, adopted.terminalName, prompt, { orchestrationKickoff: true }, 'sidebar'
             );
@@ -11051,7 +11220,7 @@ Each plan file must include:
         // and is automation armed (autobanState.enabled)? The arming half moved to
         // confirmOrchestrationSession (called by POST /orchestration/confirm after the
         // user answers the pre-flight). See the ## Pre-flight section of the persona skill.
-        const { prompt: kickoffPrompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject);
+        const { prompt: kickoffPrompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject, 'host');
         // Small delay so a freshly-created terminal's CLI is ready to receive.
         if (createdNew) { await new Promise(r => setTimeout(r, 1500)); }
         const kickoffSent = await this._dispatchExecuteMessage(
@@ -11117,8 +11286,9 @@ Each plan file must include:
         await this._persistAutobanState();
         this._postAutobanStateNow();
 
-        const { mode, prompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject);
-        return { success: true, mode, prompt, seat, liveDelivery: !!resolvedName, ...(note ? { note } : {}) };
+        const liveDelivery = !!resolvedName;
+        const { mode, prompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject, liveDelivery ? 'host' : 'self');
+        return { success: true, mode, prompt, seat, liveDelivery, ...(note ? { note } : {}) };
     }
 
     /**
@@ -21589,20 +21759,29 @@ What would you like to find?`;
         // reviewer. On HTTP error, falls through to the reviewer (graceful
         // degradation — never block on a failed gate call).
         let reviewerPreCheckPassed = false;
+        let reviewerPhoneAFriendPassed = false;
         if (role === 'reviewer') {
             const preCheckPort = this.getLocalApiServerPort();
             if (preCheckPort > 0) {
                 try {
                     const http = require('http');
                     const preCheckToken = await this.getApiToken();
+                    const preCheckRoot = dispatchPlans[0]?.workingDir || effectiveWorkspaceRoot;
                     const planFileRelative = dispatchPlans[0]?.absolutePath
-                        ? path.relative(resolvedWorkspaceRoot, dispatchPlans[0].absolutePath)
+                        ? path.relative(preCheckRoot, dispatchPlans[0].absolutePath)
                         : undefined;
+                    let baseBranch: string | undefined;
+                    if (dispatchPlans[0]?.worktreePath) {
+                        const preCheckDb = await this._getKanbanDb(resolvedWorkspaceRoot);
+                        const worktrees = preCheckDb ? await preCheckDb.getWorktrees() : [];
+                        baseBranch = worktrees.find(w => path.resolve(w.path) === path.resolve(dispatchPlans[0].worktreePath!))?.base_branch || undefined;
+                    }
                     const skipCompilation = Boolean(options?.additionalInstructions?.includes('SKIP COMPILATION'));
                     const requestBody = JSON.stringify({
                         planId: dispatchPlans[0]?.planId,
                         planFile: planFileRelative,
-                        workspaceRoot: resolvedWorkspaceRoot,
+                        workspaceRoot: preCheckRoot,
+                        baseBranch,
                         skipCompilation,
                     });
                     const preCheckResult = await new Promise<any>((resolve, reject) => {
@@ -21652,45 +21831,58 @@ What would you like to find?`;
                         // Stage 2: Phone-a-friend pre-review (if configured).
                         // This is a SEQUENTIAL gate — the reviewer dispatch is blocked
                         // until the phone-a-friend completes. The phone-a-friend reports
-                        // its PASS/FAIL findings to the lead via the standing-order
-                        // ptySendPrompt completion report; the lead routes FAIL findings
-                        // to the coder. The pipeline does not read a verdict — the done
-                        // signal only unblocks the gate so the reviewer can be dispatched.
+                        // its PASS/FAIL verdict through the correlated done signal. FAIL
+                        // findings are sent back to the coder and block reviewer dispatch.
                         // If phone-a-friend is not configured or falls back to batch mode
                         // (no completion callback), Stage 2 is skipped (graceful
                         // degradation to reviewer only).
+                        reviewerPreCheckPassed = true;
                         try {
-                            const paTarget = await this.resolvePhoneAFriendTarget('coder');
+                            const paTarget = await this.resolvePhoneAFriendTarget('coder', reviewerCoderTerminal, true);
                             if (paTarget && dispatchPlans[0]?.absolutePath) {
-                                const planFileRel = path.relative(resolvedWorkspaceRoot, dispatchPlans[0].absolutePath);
+                                const planFileRel = path.relative(preCheckRoot, dispatchPlans[0].absolutePath);
                                 // Register the gate waiter BEFORE enqueuing so the
                                 // done callback cannot fire before the waiter is set.
                                 const waiterKey = `${paTarget.targetKey}::${planFileRel}`;
-                                const gatePromise = new Promise<void>((resolveGate) => {
-                                    this._preReviewWaiters.set(waiterKey, resolveGate);
+                                let gateResolver: ((result: { verdict?: 'PASS' | 'FAIL'; findings?: string }) => void) | undefined;
+                                const gatePromise = new Promise<{ verdict?: 'PASS' | 'FAIL'; findings?: string }>((resolveGate) => {
+                                    gateResolver = resolveGate;
+                                    const waiters = this._preReviewWaiters.get(waiterKey) || [];
+                                    waiters.push(resolveGate);
+                                    this._preReviewWaiters.set(waiterKey, waiters);
                                 });
-                                const enqueueResult = await this.enqueuePhoneAFriend([planFileRel], 'coder', paTarget, 'pre-review');
-                                if (enqueueResult.queued > 0 && !enqueueResult.fallback) {
-                                    // Queued with completion callback — await the done signal.
-                                    // The phone-a-friend reports its PASS/FAIL findings to the
-                                    // lead via the standing-order ptySendPrompt completion report;
-                                    // the lead routes FAIL findings to the coder. The pipeline
-                                    // does not read a verdict programmatically — the done signal
-                                    // only unblocks the gate so the reviewer can be dispatched.
-                                    await gatePromise;
-                                    // Phone-a-friend completed — proceed to reviewer.
-                                    reviewerPreCheckPassed = true;
-                                } else {
-                                    // Not queued (unrouted) or fallback (no completion callback) —
-                                    // skip Stage 2, proceed to reviewer.
-                                    this._preReviewWaiters.delete(waiterKey);
-                                    reviewerPreCheckPassed = true;
+                                const removeGateWaiter = () => {
+                                    const waiters = this._preReviewWaiters.get(waiterKey);
+                                    if (waiters && gateResolver) {
+                                        const index = waiters.indexOf(gateResolver);
+                                        if (index >= 0) { waiters.splice(index, 1); }
+                                        if (waiters.length === 0) { this._preReviewWaiters.delete(waiterKey); }
+                                    }
+                                };
+                                let enqueueResult: { queued: number; unrouted: number; fallback: boolean };
+                                try {
+                                    enqueueResult = await this.enqueuePhoneAFriend([planFileRel], 'coder', paTarget, 'pre-review', reviewerCoderTerminal);
+                                } catch (enqueueErr) {
+                                    removeGateWaiter();
+                                    throw enqueueErr;
                                 }
-                            } else {
-                                // Phone-a-friend not configured — skip Stage 2, proceed to reviewer.
-                                reviewerPreCheckPassed = true;
+                                if (enqueueResult.queued > 0 && !enqueueResult.fallback) {
+                                    const preReviewResult = await gatePromise;
+                                    if (preReviewResult.verdict === 'FAIL' && reviewerCoderTerminal) {
+                                        const coderReport = `PHONE-A-FRIEND PRE-REVIEW FAILED — fix these gaps before reviewer dispatch:\n\n${preReviewResult.findings || 'The pre-review agent reported FAIL without details.'}`;
+                                        await this._dispatchExecuteMessage(resolvedWorkspaceRoot, reviewerCoderTerminal, coderReport, {}, 'sidebar', true);
+                                        clearDispatchLock();
+                                        this._seams().ui.showInformationMessage(`Phone-a-Friend pre-review failed for ${sessionId}. Findings sent to ${reviewerCoderTerminal}.`);
+                                        return false;
+                                    }
+                                    reviewerPhoneAFriendPassed = preReviewResult.verdict === 'PASS';
+                                } else {
+                                    removeGateWaiter();
+                                }
                             }
-                        } catch { /* phone-a-friend not configured — skip Stage 2 */ reviewerPreCheckPassed = true; }
+                        } catch (phoneAFriendErr) {
+                            console.error('[TaskViewerProvider] Phone-a-Friend pre-review failed, falling through to reviewer:', phoneAFriendErr);
+                        }
                     }
                 } catch (preCheckErr) {
                     // HTTP call failed — graceful degradation, fall through to reviewer.
@@ -21715,6 +21907,7 @@ What would you like to find?`;
                 ...delegateOptions,
                 gitProhibitionEnabled,
                 reviewerPreCheckPassed,
+                reviewerPhoneAFriendPassed,
                 ...(reviewerDelegationMode && reviewerCoderTerminal && originLead
                     ? { reviewerDelegationMode: true, reviewerCoderTerminal, reviewerOriginLead: originLead }
                     : {})
@@ -23999,6 +24192,8 @@ What would you like to find?`;
         // queue and would fire after dispose, writing to a disposed provider.
         this._phoneAFriendQueues.forEach(q => { if (q.stallTimer) { clearTimeout(q.stallTimer); q.stallTimer = undefined; } });
         this._phoneAFriendQueues.clear();
+        this._preReviewWaiters.forEach(waiters => waiters.forEach(resolve => resolve({})));
+        this._preReviewWaiters.clear();
         if (this._postAutobanStateDebounceTimer) {
             clearTimeout(this._postAutobanStateDebounceTimer);
             this._postAutobanStateDebounceTimer = null;

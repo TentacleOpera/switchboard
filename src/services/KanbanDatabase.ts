@@ -1584,6 +1584,7 @@ export class KanbanDatabase {
     private _initPromise: Promise<boolean> | null = null;
     private _lastInitError: string | null = null;
     private _writeTail: Promise<void> = Promise.resolve();
+    private _configUpdateTails = new Map<string, Promise<void>>();
     private _loadedMtime: number = 0;       // mtimeMs of kanban.db when last loaded into memory
     private _lastStatCheckMs: number = 0;   // Date.now() of last fs.stat() call (debounce)
     private static readonly STAT_DEBOUNCE_MS = 500; // Don't re-stat more often than this
@@ -5452,6 +5453,26 @@ export class KanbanDatabase {
 
     public async setConfigJson(key: string, value: unknown): Promise<boolean> {
         return this.setConfig(key, JSON.stringify(value));
+    }
+
+    public async updateConfigJson<T>(key: string, defaultValue: T, updater: (current: T) => T | Promise<T>): Promise<T> {
+        let result = defaultValue;
+        const previous = this._configUpdateTails.get(key) ?? Promise.resolve();
+        const update = previous.catch(() => {}).then(async () => {
+            result = await updater(await this.getConfigJson<T>(key, defaultValue));
+            if (!(await this.setConfigJson(key, result))) {
+                throw new Error(`Failed to update config key '${key}'`);
+            }
+        });
+        this._configUpdateTails.set(key, update);
+        try {
+            await update;
+            return result;
+        } finally {
+            if (this._configUpdateTails.get(key) === update) {
+                this._configUpdateTails.delete(key);
+            }
+        }
     }
 
 

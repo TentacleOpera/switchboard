@@ -42,6 +42,36 @@ Duplicate reports are the only other way to double-dispatch, and `dispatched_at`
 **Tags:** backend, api, feature
 **Feature:** 69d427d8-cf87-4977-825b-d3553b869745
 
+## User Review Required
+
+- **The `pacing` field is read here but written by subtask 3.** This plan ships inert until a team is toggled to seat pacing — the correct intermediate state. No user decision needed to proceed; flagged for awareness.
+- **The in-flight scan is skipped for seat pacing, not removed.** Head pacing keeps it byte-for-byte. This is the load-bearing design call; review it before coding.
+
+## Complexity Audit
+
+### Routine
+- Adding a `pacing` arg to an existing method signature and resolving it absent → `'head'`.
+- Branching on the new field instead of the existing `isExternalHead` boolean — same dispatch opts, different gate.
+- Reusing `clearWorkingState` (already shipped) and `phone-a-friend/done`'s 200-no-op contract (already shipped).
+- Catalog/verb-allowlist registration — mechanical.
+
+### Complex / Risky
+- **Extracting the pop's run body into a private helper** shared by the public method and the `queue/done` handler, both enqueued on `_queueNextChain`. Calling the public method from inside the chain deadlocks it; getting this wrong stalls the entire pipeline.
+- **The `/clear` of the finishing seat** when the next card routes to the *same* seat — two clears (done-clear + dispatch-clear) hit one terminal's send lock. Ordering must be done-clear → dispatch-clear → prompt, all inside the chain.
+- **`outcome: 'failed'` accepted before subtask 2 lands** — the degraded path must not drop the card silently.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** The seat-paced path has one trigger (the finishing seat) driving a serial sequence on `_queueNextChain`. No race to arbitrate — this is why the in-flight scan is skipped. Duplicate reports are answered by `clearWorkingState`'s `IS NOT NULL` gate (returns `transitioned: false` → no-op). The mtime watcher clearing first is also a silent 200 (same gate).
+- **Security:** `queue/done` accepts `from` (seat name) and `planId`. `planId`, when given, must match the card the seat holds (`dispatchedTerminal === from` + `dispatched_at` set). A seat cannot release another seat's card.
+- **Side Effects:** `clearWorkingState` NULLs `dispatched_at`, `last_liveness_at`, `blocked_at` — a clean widened reset. No card move. The watch is armed on release too (step 7), so a failed dispatch that pops nothing still leaves a guarded idle team.
+- **Dependencies & Conflicts:** Reads `pacing` from the team definition (subtask 3 writes it). Accepts `outcome: 'failed'` and forwards it — subtask 2 owns the failure branch. The two can land in either order; the degraded behaviour when subtask 2 is absent is specified in step 4 below.
+
+## Dependencies
+
+- `seat-routed-queue-3-choosing-seat-pacing-and-the-idle-watch.md` — writes the `pacing` field this plan reads. Order-independent: absent reads as `'head'`, so this plan is inert until subtask 3 toggles a team.
+- `seat-routed-queue-2-seat-orders-and-the-escalation-ladder.md` — owns the `outcome: 'failed'` branch inside the critical section this plan establishes. Can land before or after; degraded behaviour specified.
+
 ## Implementation
 
 1. **Add `pacing?: 'head' | 'seat'` to `dispatchNextFromQueue`'s args.** Resolve it as: the explicit argument → the requesting team's stored field (subtask 3 owns writing it; absent reads as `'head'`) → `'head'`.
@@ -55,16 +85,21 @@ Duplicate reports are the only other way to double-dispatch, and `dispatched_at`
    - Clear the latch via the existing `clearWorkingState(planFile, workspaceId)` (`KanbanDatabase.ts:9935`) — the same off-switch the plan-file watcher uses. Do not write `dispatched_at` directly and do not add a second clearing function. It returns true only on a real transition, which is the duplicate answer for free.
    - **Do not move the card.** It is already in its coding column, it got coded, it stays there. `CODE REVIEWED` would assert a review that never ran and `COMPLETED` an acceptance nobody gave — both make the board lie to downstream consumers including the archive's role attribution (`ArchiveManager.ts:135`).
    - Clear the reporting seat's context, then pop the next card.
-   - `outcome` is `'finished'` (default) or `'failed'`; accept and forward it without acting on it — subtask 2 owns the failure path, so the two can land in either order.
+   - `outcome` is `'finished'` (default) or `'failed'`; accept and forward it. **Degraded behaviour when subtask 2 has not landed:** `outcome: 'failed'` releases the latch and pops the next card — the failed card rests in its coding column (not re-staged, not moved). This is safe (the card stays coded) but the card is not retried until subtask 2's branch exists. When subtask 2 lands, the `failed` branch inside this same critical section re-stages before the pop.
    - `planId`, when given, must match the card the seat holds.
+   - **The `reason` field must disambiguate `duplicate` from `queue empty`.** A seat that retries a `queue/done` call (network retry) gets `200` with `reason: "duplicate"` — it must not read this as "the run is over." Only `dispatched: null` with `reason: "queue empty"` means stop.
 
-5. **Clear the finishing seat.** `/clear` is pasted onto the *receiving* terminal at dispatch (`TaskViewerProvider.ts:21197-21223`), and the next card usually routes to a different seat, so the finisher would otherwise keep its context indefinitely. Reuse that clipboard-paste path and its per-terminal send lock (`:21176`) via a host callback — a hand-rolled `sendText('/clear')` gets swallowed by CLI slash-command mode (`:21198`). Respect `terminal.clearBeforePrompt`. A clear failure is logged and does not abort the pop.
+5. **Clear the finishing seat.** `/clear` is pasted onto the *receiving* terminal at dispatch (`TaskViewerProvider.ts:21197-21223`), and the next card usually routes to a different seat, so the finisher would otherwise keep its context indefinitely. Reuse that clipboard-paste path and its per-terminal send lock (`:21176`) via a host callback — a hand-rolled `sendText('/clear')` gets swallowed by CLI slash-command mode (`:21198`). Respect `terminal.clearBeforePrompt`. A clear failure is logged and does not abort the pop. **Clear ordering when the next card routes to the same seat:** the done-clear runs first (inside the chain, before the pop), then the dispatch-clear runs (inside the pop's dispatch path), then the prompt. Both clears hit the same terminal's send lock serially — done-clear acquires, releases, dispatch-clear acquires, releases, prompt pastes. This is correct by construction because the chain serializes release → clear → pop, but it must be documented so a future editor does not reorder.
 
 6. **Serialize release → clear → pop as one operation** on the existing `_queueNextChain` (`:52`). Extract the pop's run body into a private helper both the public method and this handler enqueue — calling the public method from inside the chain deadlocks it, and there must remain one pop implementation.
 
 7. **Arm the watch on the release too**, not only after a dispatch (`:1695`). A release that pops nothing because the dispatch *failed* leaves a staged queue and an idle team.
 
 8. **Update the pop's doc comment** (`:1500-1527`), which currently asserts that complexity routing picks only the column. Add the route to `protocol-catalog.json` and the verb allowlist — a missing catalog entry turns `catalog:check` red and leaves the control dead in the browser host.
+
+## Adversarial Synthesis
+
+Key risks: (1) the pop-helper extraction can deadlock the chain if the public method is called from inside it — mitigated by extracting a private helper both callers enqueue. (2) `outcome: 'failed'` before subtask 2 lands silently drops the card from the retry path — mitigated by documenting the degraded behaviour (card rests coded, not re-staged) and specifying that subtask 2's branch re-stages before the pop. (3) a `200 no-op` (duplicate) misread as `queue empty` by an autonomous seat — mitigated by disambiguating the `reason` field. (4) clear-ordering when the next card routes to the same finisher — mitigated by chain serialization (done-clear → dispatch-clear → prompt) and documenting the invariant.
 
 ## Verification Plan
 
@@ -81,5 +116,17 @@ Extend `src/test/queue-pipeline-contract.test.js` rather than adding a parallel 
 9. **Head pacing is byte-for-byte unchanged** — every card to `from`, no `teamRouting`, the in-flight scan still refusing on board position (including for a card whose `dispatched_at` is cleared, where a cleared latch does **not** mean the team is free). This is the regression gate for ~4,000 installs, and an absent `pacing` field must behave identically to `'head'`.
 10. **Empty queue ends the run** — `dispatched: null`, reason `queue empty`, watch not left armed.
 11. **No seat for the routed role → 409, card stays staged** with its `queue_position` intact.
+12. **`reason` disambiguation** — a duplicate `queue/done` returns `200` with `reason: "duplicate"` and `dispatched` reflecting the prior pop (not `null`); an empty-queue pop returns `dispatched: null` with `reason: "queue empty"`. A seat must be able to tell them apart from the body alone.
+13. **Degraded `failed` before subtask 2** — report `outcome: 'failed'` with subtask 2 absent; the latch releases, the next card pops, and the failed card rests in its coding column (not re-staged, not moved). No card is dropped from the board.
 
 `npm run compile` clean; `catalog:check` green; the seven PRD gates green, `kanban-dispatch-callers` especially.
+
+---
+
+## Completion Report
+
+Implemented seat-paced queue dispatch and the `queue/done` completion signal in `src/services/LocalApiServer.ts`, `src/services/teamWiring.ts`, and `src/services/TaskViewerProvider.ts`. Extracted the pop's run body into `_runQueuePop` (shared by `dispatchNextFromQueue` and the new `_runQueueDone` handler, both serialized on `_queueNextChain` — no deadlock). Added `pacing?: 'head' | 'seat'` to `dispatchNextFromQueue`, branching on pacing (or external head) to route cards to the complexity-selected seat via `restrictToOriginTeam`, and skipping the in-flight scan for seat pacing (head pacing byte-for-byte unchanged). Added `POST /kanban/queue/done` (`_handleKanbanQueueDone` + `_runQueueDone`): finds the active card held by `from`, clears the latch via `clearWorkingState` (200 no-op on duplicate/watcher-first via `IS NOT NULL` gate), clears the finishing seat via the new `clearTerminalContext` callback (clipboard-paste `/clear`, respects `terminal.clearBeforePrompt`), pops the next card, arms the watch on release-failure, and disambiguates `reason: "duplicate"` (prior `dispatched` non-null) from `reason: "queue empty"` (`dispatched: null`) via a per-seat `_lastSeatPop` cache. `outcome: 'failed'` accepted and forwarded (degraded: releases + pops, card rests coded). Wired `resolveTeamPacing` (via new `resolveTeamPacingForHead` in teamWiring.ts) and `clearTerminalContext` callbacks in TaskViewerProvider's LocalApiServer options. Regenerated `protocol-catalog.json` (apiEndpointCount 80→81) and `src/generated/verbAllowlist.ts`; `catalog:check` green. No issues encountered; compilation and tests skipped per directives.
+
+## Review Findings
+
+Reviewed `src/services/LocalApiServer.ts` and extended `src/test/queue-pipeline-contract.test.js`; duplicate-pop cache entries are now workspace-scoped and escalation overrides survive failed dispatch attempts. `compile-tests`, `compile`, `catalog:check`, `kanban-dispatch-callers:check`, and the wired queue contract passed, including new resting-card and failed-retry regressions. No remaining plan-specific risk was found; unrelated push-routing and Claude-mirror repository gates remain red from concurrent changes outside this plan.

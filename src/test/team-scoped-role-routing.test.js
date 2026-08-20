@@ -19,11 +19,19 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { Readable } = require('stream');
+const { execFileSync } = require('child_process');
 
-const { resolveTeamScopedRoleTerminal, plausibleOriginTerminal } =
-    require('../../out/services/teamWiring');
-const { buildKanbanBatchPrompt } = require('../../out/services/agentPromptBuilder');
+const {
+    resolveTeamScopedRoleTerminal,
+    plausibleOriginTerminal,
+    migrateAgentGroups,
+    OLD_REVIEW_TEAM_HEAD_PROMPT,
+    NEW_REVIEW_TEAM_HEAD_PROMPT,
+} = require('../../out/services/teamWiring');
+const { buildKanbanBatchPrompt, PHONE_A_FRIEND_DONE_DIRECTIVE } = require('../../out/services/agentPromptBuilder');
 const { LocalApiServer } = require('../../out/services/LocalApiServer');
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -781,6 +789,8 @@ async function item9() {
         // Self-fix threshold language (outer conditional).
         assert.ok(prompt.includes('under approximately 100 lines'),
             'delegation render must contain the self-fix threshold language');
+        assert.ok(prompt.includes('apply valid small fixes directly or delegate broader fixes'),
+            'delegation execution block must not override the self-fix threshold');
         // Two-tier mechanical/judgment distinction within the delegation branch.
         assert.ok(prompt.includes('specify the exact fix'),
             'delegation render must contain the mechanical-fix instruction');
@@ -824,8 +834,19 @@ async function item9() {
             'delegation render must NOT contain the inline-fix execution-block tail');
         assert.ok(!prompt.includes('the code fixes, and the plan update'),
             'delegation render must NOT contain the fix-itself base-instructions closer');
-        assert.ok(prompt.includes('the fix instructions to your coder'),
-            'delegation render must contain the delegation base-instructions closer');
+        assert.ok(prompt.includes('the direct fixes or fix instructions to your coder, as applicable'),
+            'delegation render must contain the conditional completion closer');
+    });
+
+    await test('render: pre-check note names only gates that actually passed', () => {
+        const mechanicalOnly = buildKanbanBatchPrompt('reviewer', renderPlans, { reviewerPreCheckPassed: true });
+        assert.ok(mechanicalOnly.includes('passed a mechanical pre-check'));
+        assert.ok(!mechanicalOnly.includes('phone-a-friend sanity review'));
+        const both = buildKanbanBatchPrompt('reviewer', renderPlans, {
+            reviewerPreCheckPassed: true,
+            reviewerPhoneAFriendPassed: true,
+        });
+        assert.ok(both.includes('and a phone-a-friend sanity review'));
     });
 
     await test('render: delegation OFF emits fix-itself text and suppresses delegation text (backward-compat pin)', () => {
@@ -901,7 +922,18 @@ async function item9() {
         assert.ok(teamWiringTs.includes('export const NEW_REVIEW_TEAM_HEAD_PROMPT ='));
         assert.ok(teamWiringTs.includes('You are the reviewer on a review team'));
         assert.ok(teamWiringTs.includes('{coder}'));
-        assert.ok(teamWiringTs.includes('Do NOT fix code yourself'));
+        assert.ok(teamWiringTs.includes('approximately 100 lines directly'));
+        assert.ok(teamWiringTs.includes('let the coder choose the fix'));
+    });
+
+    await test('review team migration replaces only the untouched shipped head prompt', () => {
+        const untouched = { id: 'review-team', headRole: 'reviewer', headPrompt: OLD_REVIEW_TEAM_HEAD_PROMPT, members: [] };
+        const migrated = migrateAgentGroups([untouched]);
+        assert.ok(migrated);
+        assert.strictEqual(migrated[0].headPrompt, NEW_REVIEW_TEAM_HEAD_PROMPT);
+        const customized = { ...untouched, headPrompt: `${OLD_REVIEW_TEAM_HEAD_PROMPT} custom` };
+        const customResult = migrateAgentGroups([customized]);
+        assert.ok(!customResult || customResult[0].headPrompt === customized.headPrompt);
     });
 
     await test('kanban.html: Review team preset exists in SHIPPED_TEAM_TYPES with reviewer headRole and coder member', () => {
@@ -909,6 +941,116 @@ async function item9() {
         assert.ok(kanbanHtml.includes("headRole: 'reviewer'"));
         assert.ok(kanbanHtml.includes("{ role: 'coder', count: 1, scope: 'per-team', relationship: 'reports-to-head' }"));
     });
+}
+
+async function item10() {
+    console.log('\n── Item 10: tiered review mechanical gate ──');
+
+    const gitEnv = {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Switchboard Test',
+        GIT_AUTHOR_EMAIL: 'switchboard@example.invalid',
+        GIT_COMMITTER_NAME: 'Switchboard Test',
+        GIT_COMMITTER_EMAIL: 'switchboard@example.invalid',
+    };
+    const makeRepo = ({ compilePass, changedFile }) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-review-precheck-'));
+        fs.mkdirSync(path.join(root, 'src'));
+        fs.mkdirSync(path.join(root, '.switchboard', 'plans'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+            scripts: { compile: compilePass ? 'node -e "process.exit(0)"' : 'node -e "process.exit(1)"' }
+        }));
+        fs.writeFileSync(path.join(root, 'src', 'target.ts'), 'export const target = 1;\n');
+        fs.writeFileSync(path.join(root, '.switchboard', 'plans', 'plan.md'), '## Scope\n`src/target.ts`\n');
+        execFileSync('git', ['init'], { cwd: root, env: gitEnv, stdio: 'ignore' });
+        execFileSync('git', ['add', 'package.json', 'src/target.ts', '.switchboard/plans/plan.md'], { cwd: root, env: gitEnv });
+        execFileSync('git', ['commit', '-m', 'initial'], { cwd: root, env: gitEnv, stdio: 'ignore' });
+        const changedPath = path.join(root, changedFile);
+        fs.mkdirSync(path.dirname(changedPath), { recursive: true });
+        fs.appendFileSync(changedPath, 'export const changed = true;\n');
+        execFileSync('git', ['add', changedFile], { cwd: root, env: gitEnv });
+        execFileSync('git', ['commit', '-m', 'implementation'], { cwd: root, env: gitEnv, stdio: 'ignore' });
+        return root;
+    };
+    const invoke = async (root, extra = {}) => {
+        const server = new LocalApiServer({
+            workspaceRoot: root,
+            clickupMetadataPath: '',
+            linearMetadataPath: '',
+            getClickUpService: () => null,
+            getLinearService: () => null,
+            getNotionService: () => null,
+            getAuthToken: async () => '',
+            allRoots: [root],
+        });
+        const req = Readable.from([JSON.stringify({
+            workspaceRoot: root,
+            planFile: '.switchboard/plans/plan.md',
+            ...extra,
+        })]);
+        req.headers = {};
+        let statusCode = 0;
+        let responseBody = '';
+        const res = {
+            writeHead: code => { statusCode = code; },
+            end: body => { responseBody = String(body || ''); },
+        };
+        await server._handleReviewPreCheck(req, res);
+        assert.strictEqual(statusCode, 200);
+        return JSON.parse(responseBody);
+    };
+    const withRepo = async (options, fn) => {
+        const root = makeRepo(options);
+        try { await fn(root); }
+        finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+
+    await test('tiered gate disables the retired post-batch double trigger and honors the toggle', () => {
+        assert.ok(/phoneAFriendEnabled:\s*false/.test(kanbanProviderTs));
+        assert.ok(taskViewerTs.includes("resolvePhoneAFriendTarget('coder', reviewerCoderTerminal, true)"));
+        assert.ok(taskViewerTs.includes("roleConfig?.addons?.phoneAFriend !== true"));
+    });
+
+    await test('pre-review completion directive carries correlated verdict fields', () => {
+        const directive = PHONE_A_FRIEND_DONE_DIRECTIVE(7777, 'friend', 'plan.md', 'pre-review');
+        assert.ok(directive.includes('"result":"<PASS_OR_FAIL>"'));
+        assert.ok(directive.includes('"findings":"<JSON_ESCAPED_FINDINGS>"'));
+        assert.ok(!PHONE_A_FRIEND_DONE_DIRECTIVE(7777, 'friend', 'plan.md').includes('PASS_OR_FAIL'));
+    });
+
+    await test('pre-check passes compile and plan-relevant diff coverage', () => withRepo(
+        { compilePass: true, changedFile: 'src/target.ts' },
+        async root => {
+            const result = await invoke(root);
+            assert.strictEqual(result.passed, true);
+            assert.deepStrictEqual(result.checks.map(c => [c.name, c.passed]), [['compile', true], ['diffCoverage', true]]);
+        }
+    ));
+    await test('pre-check reports compile failure', () => withRepo(
+        { compilePass: false, changedFile: 'src/target.ts' },
+        async root => {
+            const result = await invoke(root);
+            assert.strictEqual(result.passed, false);
+            assert.strictEqual(result.checks.find(c => c.name === 'compile').passed, false);
+        }
+    ));
+    await test('pre-check rejects a diff outside plan scope', () => withRepo(
+        { compilePass: true, changedFile: 'src/other.ts' },
+        async root => {
+            const result = await invoke(root);
+            assert.strictEqual(result.passed, false);
+            assert.strictEqual(result.checks.find(c => c.name === 'diffCoverage').passed, false);
+        }
+    ));
+    await test('pre-check honors skipCompilation while retaining diff coverage', () => withRepo(
+        { compilePass: false, changedFile: 'src/target.ts' },
+        async root => {
+            const result = await invoke(root, { skipCompilation: true });
+            assert.strictEqual(result.passed, true);
+            assert.ok(result.checks.find(c => c.name === 'compile').details.includes('Skipped'));
+            assert.strictEqual(result.checks.find(c => c.name === 'diffCoverage').passed, true);
+        }
+    ));
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -925,6 +1067,7 @@ async function main() {
     await item7();
     await item8();
     await item9();
+    await item10();
 
     console.log(`\n${passed} passed, ${failed} failed`);
     process.exit(failed > 0 ? 1 : 0);

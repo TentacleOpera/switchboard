@@ -17,6 +17,7 @@ In External-Headed Team Mode:
 - **Workers are terminal agents.** They execute subtasks in terminal ptys, code in worktrees/branches, and report completion by writing markdown report files to `.switchboard/teams/<teamId>/reports/`.
 - **State and instructions persist on disk.** Your instructions, roster, and active feature are stored in `.switchboard/teams/<teamId>/head-prompt.md`.
 - **Verification is empirical.** You verify code changes with `git`, not by trusting self-reports.
+- **Plan files are the source of truth.** You read them, dispatch based on them, and review against them. You never rewrite, edit, or restructure plan content. Your only write to a plan file is the completion-report append (if you are also coding), never a rewrite of the plan's content sections.
 - **Lead-Paced Pipeline.** When your current feature passes review, you pull the next staged card with `POST /kanban/queue/next`.
 
 ---
@@ -118,7 +119,9 @@ git -C <worktree> diff <base>..HEAD
       "clearBeforePrompt": false
     }'
   ```
-- **Hand whole feature to review when all subtasks pass:**
+- **Hand whole feature to review when all subtasks pass — ONLY if your team has a reviewer seat:**
+  Check your team roster (from `head-prompt.md` or `ptyListTerminals`) for a seat with role "reviewer".
+  If your team has a reviewer:
   ```bash
   curl -X POST "$BASE/kanban/dispatch" \
     -H "Content-Type: application/json" \
@@ -128,6 +131,7 @@ git -C <worktree> diff <base>..HEAD
       "from": "<your-agent-name>"
     }'
   ```
+  If your team has NO reviewer seat, do NOT move the card. Write a finished report to `.switchboard/orchestrator/reports/` naming the feature and its planId, and stop. The card stays where it is.
 
 ### Step 5: Pull Next Feature (Queue Next)
 When the reviewer reports that the feature passed review:

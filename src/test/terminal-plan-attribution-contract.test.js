@@ -430,8 +430,8 @@ test('watchFeature / unwatchFeature are catalogued, allowlisted, schema\'d and r
         kanbanProviderTs.indexOf("case 'watchFeature': {"),
         kanbanProviderTs.indexOf("case 'julesSelected': {")
     );
-    assert.ok(arms.includes('return { success: true, watch: next, watches: filtered };'), 'watchFeature must return the armed watch in the body');
-    assert.ok(arms.includes('return { success: true, removed, watches: filtered };'), 'unwatchFeature must return the resulting state in the body');
+    assert.ok(arms.includes('return { success: true, watch: next, watches: updated };'), 'watchFeature must return the armed watch in the body');
+    assert.ok(arms.includes('return { success: true, removed, watches: updated };'), 'unwatchFeature must return the resulting state in the body');
     assert.ok(!/vscode\./.test(arms), 'the watch arms must touch only db + config (contract #3) so standalone serves them unchanged');
     assert.ok(arms.includes("db.getConfigJson<FeatureWatchRecord[]>('kanban.featureWatches'".replace('(', '(')) || arms.includes('kanban.featureWatches'),
         'watch state lives in the config table, not state.json and not a new table');

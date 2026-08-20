@@ -416,7 +416,8 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         'Review headPrompt drift detected between kanban.html and teamWiring.ts.'
     );
     assert.ok(reviewHeadPrompt.includes('{coder}'), 'Review headPrompt must carry {coder} substitution placeholder');
-    assert.ok(reviewHeadPrompt.includes('Do NOT fix code yourself'), 'Review headPrompt must instruct reviewer not to fix code itself');
+    assert.ok(reviewHeadPrompt.includes('approximately 100 lines directly'), 'Review headPrompt must carry the self-fix threshold');
+    assert.ok(reviewHeadPrompt.includes('let the coder choose the fix'), 'Review headPrompt must preserve judgment-call autonomy');
     assert.ok(reviewHeadPrompt.includes('POST /terminals/verb/ptySendPrompt'), 'Review headPrompt must reference ptySendPrompt');
 
     // ── queue/next standing order ────────────────────────────────────
@@ -477,7 +478,21 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         + 'to teamWiring.ts — a gallery-adopted team must not stall overnight.'
     );
 
-    // ── the frozen migration snapshot must stay frozen ───────────────
+    // ── role-boundary guardrails ─────────────────────────────────────
+    assert.ok(
+        tsHeadPrompt.includes('PLAN FILES ARE THE SOURCE OF TRUTH'),
+        'NEW_CODING_HEAD_PROMPT must carry the plan-immutability directive'
+    );
+    assert.ok(
+        tsHeadPrompt.includes('If your team has a reviewer seat'),
+        'NEW_CODING_HEAD_PROMPT must make CODE REVIEWED dispatch conditional on reviewer seat'
+    );
+    assert.ok(
+        tsHeadPrompt.includes('If your team has NO reviewer seat'),
+        'NEW_CODING_HEAD_PROMPT must specify behavior when team has no reviewer seat'
+    );
+
+    // ── the frozen migration snapshots must stay frozen ──────────────
     // CURRENT_BUGGY_CODING_HEAD_PROMPT is not a delivered prompt: it is a
     // byte-exact snapshot of what the first migration already wrote to disk on
     // installs in the field, matched by `===` in isUntouchedCurrentCodingTeam.
@@ -498,6 +513,19 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         buggySnapshot, tsHeadPrompt,
         'CURRENT_BUGGY_CODING_HEAD_PROMPT must differ from NEW_CODING_HEAD_PROMPT — if they are '
         + 'equal the migration rewrites installs to the text they already have, forever.'
+    );
+
+    const preRoleBoundaryAnchor = /PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
+    assert.ok(preRoleBoundaryAnchor, 'PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT not found in teamWiring.ts');
+    const preRoleBoundarySnapshot = readQuotedChain(TEAM_WIRING_SRC, preRoleBoundaryAnchor.index + preRoleBoundaryAnchor[0].length);
+    assert.ok(preRoleBoundarySnapshot, 'could not read PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT as a quoted chain');
+    assert.ok(
+        !preRoleBoundarySnapshot.includes('PLAN FILES ARE THE SOURCE OF TRUTH'),
+        'PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT is a frozen snapshot of pre-guardrail text — new prompt wording must go in NEW_CODING_HEAD_PROMPT only'
+    );
+    assert.notStrictEqual(
+        preRoleBoundarySnapshot, tsHeadPrompt,
+        'PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT must differ from NEW_CODING_HEAD_PROMPT'
     );
 });
 
@@ -983,7 +1011,7 @@ new Function('exports', 'module', 'require', tsc.transpileModule(TEAM_WIRING_SRC
     compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
 }).outputText)(teamWiringModule.exports, teamWiringModule, teamWiringRequire);
 
-const { wireSpawnedTeam, TERMINALS_LAYOUT_MODES } = teamWiringModule.exports;
+const { wireSpawnedTeam, TERMINALS_LAYOUT_MODES, SEAT_QUEUE_DONE_ORDER_BODY } = teamWiringModule.exports;
 
 /**
  * The panel's own layout whitelist, read out of terminals.js rather than
@@ -1196,6 +1224,22 @@ test('wireSpawnedTeam: unknown keys on stored roster row survive upsert', async 
     assert.strictEqual(groups[0].customFlag, 'preserved-value', 'custom keys must survive');
     assert.strictEqual(groups[0].uiCollapsed, true, 'custom boolean flags must survive');
     assert.deepStrictEqual(groups[0].members, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-coder-3']);
+});
+
+test('wireSpawnedTeam: switching back to head pacing removes the persisted field and seat orders', async () => {
+    const db = makeInMemoryDb();
+    const args = { db, headName: HEAD_NAME, children: CODER_CHILDREN };
+    await wireSpawnedTeam({ ...args, pacing: 'seat' });
+    let groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    let orders = await db.getConfigJson('terminals.standingOrders', []);
+    assert.strictEqual(groups[0].pacing, 'seat');
+    assert.strictEqual(orders.filter(o => o.instruction === SEAT_QUEUE_DONE_ORDER_BODY).length, 2);
+
+    await wireSpawnedTeam(args);
+    groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    orders = await db.getConfigJson('terminals.standingOrders', []);
+    assert.ok(!Object.prototype.hasOwnProperty.call(groups[0], 'pacing'));
+    assert.strictEqual(orders.filter(o => o.instruction === SEAT_QUEUE_DONE_ORDER_BODY).length, 0);
 });
 
 test('wireSpawnedTeam: null/non-object stored entry with matching id is replaced', async () => {

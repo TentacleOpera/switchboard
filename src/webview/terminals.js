@@ -9219,7 +9219,10 @@
      * finished. {head} is substituted with the live head name.
      */
     var NEW_CODING_HEAD_PROMPT_CLIENT =
-        'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
+        'You lead this team. Your coders work the subtasks of one feature. '
+        + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
+        + 'Read the plan, dispatch based on it, review against it — never modify its content. '
+        + 'Each subtask carries '
         + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
         + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
         + 'ptyListTerminals rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID — role alone '
@@ -9238,7 +9241,9 @@
         + 'instructions — that is not your job. When every subtask of the feature is finished, read the '
         + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
         + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
-        + 'pwd> (that read returns one record per subtask, each with its kanbanColumn), then make one call: '
+        + 'pwd> (that read returns one record per subtask, each with its kanbanColumn). '
+        + 'Check your team roster (the YOUR TEAM block in your prompt or ptyListTerminals) for a seat '
+        + 'with role "reviewer". If your team has a reviewer seat, make one call: '
         + 'POST /kanban/dispatch with '
         + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}","workspaceRoot":'
         + '"<your current working directory — run pwd>"} — that one call moves the card and dispatches '
@@ -9247,7 +9252,10 @@
         + 'not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
         + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
         + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
-        + 'empty and stop.';
+        + 'empty and stop. '
+        + 'If your team has NO reviewer seat, do NOT move the card to CODE REVIEWED — that is not your role. '
+        + 'Post a finished report to .switchboard/orchestrator/reports/ naming the feature and its planId, '
+        + 'and stop. The card stays where it is.';
 
     /**
      * Client-side mirror of migrateTeamPairOrders from teamWiring.ts.
@@ -9361,6 +9369,12 @@
         // the fix. wireSpawnedTeam never overwrites an existing head order, so
         // without this the corrected text reaches only brand-new teams.
         var BUGGY_HEADPROMPT_FRAGMENT = 'give that coder the next subtask';
+        // Mirror of PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT in teamWiring.ts. Recognises
+        // the feature-level headPrompt before the role-boundary guardrails (conditional
+        // CODE REVIEWED advance + plan-immutability directive). {head} is substituted
+        // on disk, so match by indexOf — same as OLD_HEADPROMPT_FRAGMENT and
+        // BUGGY_HEADPROMPT_FRAGMENT.
+        var PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT = 'then make one call: ';
 
         for (var i = 0; i < orders.length; i++) {
             var o = orders[i];
@@ -9385,7 +9399,8 @@
             // {head} substituted by the order's parent (the head name).
             if (o.scope === 'team-head' && typeof o.instruction === 'string') {
                 if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1
-                    || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1) {
+                    || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1
+                    || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1) {
                     var newInstruction = NEW_CODING_HEAD_PROMPT_CLIENT
                         .replace(/\{head\}/g, o.parent || '');
                     var copy = {};

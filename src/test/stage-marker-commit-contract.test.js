@@ -47,7 +47,9 @@ const {
     OLD_CODING_HEAD_PROMPT,
     NEW_CODING_HEAD_PROMPT,
     CURRENT_BUGGY_CODING_HEAD_PROMPT,
+    PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT,
     BUGGY_HEADPROMPT_FRAGMENT,
+    PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT,
     PRE_REWRITE_CALLBACK_INSTRUCTION,
     STANDING_ORDERS_PREMIGRATION_BAK_KEY
 } = require('../../out/services/teamWiring');
@@ -387,7 +389,8 @@ test('the shipped Coding reviewer is reports-to-head, and no shipped member is a
 test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal', () => {
     for (const lit of ['/kanban/dispatch', 'CODE REVIEWED', '"from":"{head}"', 'Do NOT use /kanban/move',
         'GET /kanban/plans?featureId=', 'FEATURE planId', 'intern → coder → lead', 'seat fails review on the same subtask twice',
-        'stop and report to the human instead of dispatching again']) {
+        'stop and report to the human instead of dispatching again', 'PLAN FILES ARE THE SOURCE OF TRUTH',
+        'If your team has NO reviewer seat']) {
         assert.ok(NEW_CODING_HEAD_PROMPT.includes(lit), `missing load-bearing literal: ${lit}`);
     }
     assert.ok(!NEW_CODING_HEAD_PROMPT.includes('satisfied with it, hand it to review yourself'),
@@ -578,7 +581,19 @@ test('BUGGY_HEADPROMPT_FRAGMENT exists in exactly two files and is byte-identica
         + 'would migrate different sets of installs');
     assert.ok(CURRENT_BUGGY_CODING_HEAD_PROMPT.includes(BUGGY_HEADPROMPT_FRAGMENT),
         'the fragment must appear in the frozen on-disk snapshot it is meant to recognise');
-    assert.ok(!NEW_CODING_HEAD_PROMPT.includes(BUGGY_HEADPROMPT_FRAGMENT),
+});
+
+test('PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT exists in exactly two files and is byte-identical', () => {
+    const hostWiringSrc = SRC('services', 'teamWiring.ts');
+    const hostMatch = hostWiringSrc.match(/const PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(hostMatch, 'PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT not found in teamWiring.ts');
+    const clientMatch = TERMINALS_JS_SRC.match(/var PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(clientMatch, 'PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT not found in terminals.js');
+    assert.strictEqual(clientMatch[1], hostMatch[1],
+        'PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT drifted between teamWiring.ts and terminals.js');
+    assert.ok(PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT.includes(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT),
+        'the fragment must appear in the frozen snapshot it is meant to recognise');
+    assert.ok(!NEW_CODING_HEAD_PROMPT.includes(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT),
         'the corrected text must not contain the fragment — a rewritten row would re-match forever');
 });
 
@@ -601,6 +616,18 @@ test('a persisted team-head order carrying the first-generation headPrompt is re
     assert.ok(row.instruction.includes('workspaceRoot'), 'the dispatch body still omits workspaceRoot');
     // Idempotent: a second pass recognises nothing (reference short-circuit).
     assert.strictEqual(migrateCodingTeamOrders(out), out, 'the migration is not idempotent — it would rewrite forever');
+});
+
+test('a persisted team-head order carrying the pre-role-boundary headPrompt is rewritten to the corrected text', () => {
+    const installed = PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1');
+    const raw = [{ id: 'o2', parent: 'lead-1', child: '', scope: 'team-head', teamId: 't1', instruction: installed }];
+    const out = migrateCodingTeamOrders(raw);
+    assert.notStrictEqual(out, raw, 'the recogniser did not fire for pre-role-boundary order');
+    const row = out.find(o => o.id === 'o2');
+    assert.ok(row, 'the rewritten row lost its id');
+    assert.strictEqual(row.instruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1'));
+    assert.ok(row.instruction.includes('PLAN FILES ARE THE SOURCE OF TRUTH'));
+    assert.strictEqual(migrateCodingTeamOrders(out), out, 'the migration is not idempotent');
 });
 
 // An operator-edited head order must survive untouched. Neither fragment is

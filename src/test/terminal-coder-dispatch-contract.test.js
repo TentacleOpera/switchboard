@@ -76,7 +76,7 @@ for (const target of [SKILL, CLAUDE_SKILL]) {
             'the plan-quoting exception for naming mechanism is missing or incomplete'
         );
         assert.ok(
-            /[Oo]bserved failure[\s\S]{0,350}(?:invented a resolver|designed a replacement)/i.test(skill),
+            /(?:[Oo]bserved failure|### 2026-08-16: Head invented design)[\s\S]{0,500}(?:invented a resolver|designed a replacement)/i.test(skill),
             'observed failure for invented mechanism is missing'
         );
     });
@@ -98,7 +98,7 @@ for (const target of [SKILL, CLAUDE_SKILL]) {
         // The cost half is pinned too: without it the failure reads as a style slip
         // rather than an unscoped commit on main that the git policy forbids unwinding.
         assert.ok(
-            /[Oo]bserved failure[\s\S]{0,350}sw(?:ept|eeping) seven subtasks[\s\S]{0,200}unscoped commit on/i.test(skill),
+            /(?:[Oo]bserved failure|### 2026-08-16: "First commit" prose)[\s\S]{0,500}sw(?:ept|eeping) seven subtasks[\s\S]{0,200}unscoped commit on/i.test(skill),
             'observed failure for git commit verb is missing (or its unscoped-commit-on-main cost was dropped)'
         );
     });

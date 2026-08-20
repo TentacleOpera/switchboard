@@ -1108,6 +1108,33 @@ export async function activate(context: vscode.ExtensionContext) {
         } catch { /* groups unavailable — return null, sweep notifies user */ }
         return null;
     });
+    // Subtask 3: queue pacing resolver — the sweep resolves pacing per-tick so
+    // a flip between ticks is picked up on the next tick. Delegates to
+    // kanbanProvider.resolveTeamPacing, which reads the `pacing` field from the
+    // registered terminals.groups row. Absent → 'head' (install-base compat).
+    globalPlanWatcher.getEngine().setQueuePacingResolver(async (wsRoot, headTerminal) => {
+        try {
+            return await kanbanProvider!.resolveTeamPacing(wsRoot, headTerminal);
+        } catch { /* groups unavailable — default to head pacing */ }
+        return 'head' as const;
+    });
+    globalPlanWatcher.getEngine().setQueueTeamMembersResolver(async (wsRoot, headTerminal) => {
+        return taskViewerProvider.resolveTeamMembers(wsRoot, headTerminal);
+    });
+    // Subtask 3 step 7: queue escalation recorder — when the watch escalates on
+    // a held card (seat pacing, pacer dead or ignoring nudges), record a failed
+    // attempt so subtask 2's ladder re-stages the card. Delegates to the
+    // LocalApiServer's queue/done handler with outcome: 'failed', which runs
+    // inside subtask 1's critical section. Best-effort — a failure here leaves
+    // the operator notification (already fired) intact.
+    globalPlanWatcher.getEngine().setQueueEscalationRecorder(async (wsRoot, planId, fromSeat) => {
+        try {
+            const apiServer: any = (taskViewerProvider as any)._localApiServer;
+            if (apiServer && typeof (apiServer as any).reportQueueDone === 'function') {
+                await (apiServer as any).reportQueueDone({ workspaceRoot: wsRoot, from: fromSeat, outcome: 'failed', planId });
+            }
+        } catch { /* best-effort — operator already notified */ }
+    });
     // Queue-level stall watch seam (subtask 3): the LocalApiServer's
     // dispatchNextFromQueue arms the watch via this engine reference. Wired
     // after the watcher is created — the engine doesn't exist at

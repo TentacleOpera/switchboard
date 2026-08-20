@@ -73,8 +73,10 @@ function makeServer(board, opts = {}) {
             getWorkspaceId: async () => 'ws1',
             getDominantWorkspaceId: async () => 'ws1',
             getBoard: async () => board,
+            ...(opts.db || {}),
         }),
         resolveTeamMembers: opts.resolveTeamMembers,
+        resolveTeamPacing: opts.resolveTeamPacing,
         armQueueWatch: async () => { /* recorded separately where it matters */ },
     });
     // Stub the dispatch machinery: this contract is about SELECTION and
@@ -129,6 +131,20 @@ async function run() {
     });
 
     // ── Subtask 1: the in-flight predicate (the deadlock regression) ───────
+
+    await check('seat pacing ignores resting coded cards and routes the next queued card', async () => {
+        const board = [
+            card('resting', 'INTERN CODED', { dispatchedTerminal: 'Intern 1', dispatchedAt: null }),
+            card('next', 'DISPATCH', { queuePosition: 1 }),
+        ];
+        const { server, dispatched } = makeServer(board, {
+            resolveTeamMembers: async () => ['Coding', 'Intern 1'],
+            resolveTeamPacing: async () => 'seat',
+        });
+        const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
+        assert.strictEqual(out.status, 200);
+        assert.deepStrictEqual(dispatched, ['next']);
+    });
 
     await check('a just-reviewed card in CODE REVIEWED does NOT make the team in flight', async () => {
         // The regression the plan calls "the one that matters": after a review
@@ -207,6 +223,46 @@ async function run() {
         assert.ok(/No terminal agent/.test(out.payload.error || ''), 'the underlying error text is preserved');
     });
 
+    await check('a failed escalated dispatch retains its stronger-seat override for retry', async () => {
+        const failed = card('failed', 'CODER CODED', {
+            dispatchedAt: '2026-08-20T00:00:00Z',
+            dispatchedTerminal: 'Coder 1',
+            routedTo: 'coder',
+            planFile: '/tmp/failed.md',
+            workspaceId: 'ws1',
+        });
+        const board = [failed, card('next', 'DISPATCH', { queuePosition: 2 })];
+        const { server } = makeServer(board, {
+            resolveTeamMembers: async () => ['Coding', 'Coder 1', 'Lead 1'],
+            resolveTeamPacing: async () => 'seat',
+            db: {
+                clearWorkingState: async () => { failed.dispatchedAt = null; return true; },
+                getPlanByPlanId: async (planId) => board.find(p => p.planId === planId),
+                updateColumnByPlanFile: async () => { failed.kanbanColumn = 'DISPATCH'; return true; },
+                setQueuePositions: async (_wsId, ids) => {
+                    ids.forEach((id, index) => { const row = board.find(p => p.planId === id); if (row) row.queuePosition = index + 1; });
+                    return true;
+                },
+            },
+        });
+        const attemptedColumns = [];
+        server.performKanbanDispatch = async (_workspaceRoot, _planId, targetColumn) => {
+            attemptedColumns.push(targetColumn);
+            return { status: 409, payload: { success: false, error: 'lead unavailable' } };
+        };
+        const failedAttempt = await server.reportQueueDone({ workspaceRoot: WS, from: 'Coder 1', outcome: 'failed', planId: 'failed' });
+        assert.strictEqual(failedAttempt.status, 409);
+        server.performKanbanDispatch = async (_workspaceRoot, planId, targetColumn) => {
+            attemptedColumns.push(targetColumn);
+            const row = board.find(p => p.planId === planId);
+            if (row) row.kanbanColumn = targetColumn;
+            return { status: 200, payload: { success: true, planId } };
+        };
+        const retry = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding', pacing: 'seat' });
+        assert.strictEqual(retry.status, 200);
+        assert.deepStrictEqual(attemptedColumns, ['LEAD CODED', 'LEAD CODED']);
+    });
+
     await check('concurrent pops are serialized — one card, one dispatch', async () => {
         const board = [card('only', 'DISPATCH', { queuePosition: 1 })];
         const { server, dispatched } = makeServer(board);
@@ -267,6 +323,8 @@ async function run() {
             'escalation must be bounded by a one-shot stamp — re-escalating every silence window trains the user to ignore it');
         assert.ok(/nudgeCount >= 1/.test(body),
             'one nudge, then escalate — a head that ignored the first nudge will not answer a second');
+        assert.ok(/_queueTeamMembersResolver/.test(body) && /teamMembers\.has\(p\.dispatchedTerminal\)/.test(body),
+            "a seat-paced watch must select a held card from its own team, not another team's first active card");
     });
 
     await check('a dispatch clears the whole stall state, not just the nudge counter', () => {

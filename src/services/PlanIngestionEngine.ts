@@ -335,6 +335,44 @@ export class PlanIngestionEngine {
         this._queueHeadResolver = fn;
     }
 
+    /**
+     * Queue pacing resolver seam (subtask 3): the queue nudge sweep calls this
+     * to resolve the pacing mode (`'head'` or `'seat'`) for the team a head
+     * terminal leads. Returns `'head'` when the resolver is absent or the team
+     * has no `pacing` field — the install-base compatibility contract (absent
+     * reads as head). Wired in extension.ts to
+     * `kanbanProvider.resolveTeamPacing`. The sweep resolves pacing per-tick
+     * (not stored on the watch) so a pacing flip between ticks is picked up on
+     * the next tick.
+     */
+    private _queuePacingResolver?: (workspaceRoot: string, headTerminal: string | null) => Promise<'head' | 'seat'>;
+    private _queueTeamMembersResolver?: (workspaceRoot: string, headTerminal: string) => Promise<string[] | null>;
+
+    public setQueuePacingResolver(fn: (workspaceRoot: string, headTerminal: string | null) => Promise<'head' | 'seat'>): void {
+        this._queuePacingResolver = fn;
+    }
+
+    public setQueueTeamMembersResolver(fn: (workspaceRoot: string, headTerminal: string) => Promise<string[] | null>): void {
+        this._queueTeamMembersResolver = fn;
+    }
+
+    /**
+     * Queue escalation recorder seam (subtask 3 step 7): when the watch
+     * escalates on a held card (seat pacing, latch set, pacer dead or
+     * ignoring nudges), the sweep calls this to record a failed attempt for
+     * that card so a dead seat escalates up subtask 2's ladder (intern →
+     * coder → lead) rather than pinning the queue behind a card nobody is
+     * working. Subtask 2 owns the failure store and the re-stage logic; this
+     * seam is the bridge. Optional — absent when subtask 2 has not landed,
+     * in which case the escalation still fires (operator notified) but the
+     * card is not re-staged until subtask 2's branch exists.
+     */
+    private _queueEscalationRecorder?: (workspaceRoot: string, planId: string, fromSeat: string) => Promise<void>;
+
+    public setQueueEscalationRecorder(fn: (workspaceRoot: string, planId: string, fromSeat: string) => Promise<void>): void {
+        this._queueEscalationRecorder = fn;
+    }
+
     public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
         this._regenerateFeatureFile = cb;
     }
@@ -1059,6 +1097,10 @@ export class PlanIngestionEngine {
             if (entry.friendlyName) livenessByName.set(entry.friendlyName, { lastDataAt: entry.lastDataAt, status: entry.status });
         }
 
+        const originals = new Map(watches.map(watch => [watch.featureId, {
+            ...watch,
+            stopColumns: watch.stopColumns ? [...watch.stopColumns] : undefined,
+        }]));
         let mutated = false;
         const kept: FeatureWatchRecord[] = [];
         for (const watch of watches) {
@@ -1191,7 +1233,15 @@ export class PlanIngestionEngine {
 
         if (mutated) {
             try {
-                await db.setConfigJson(WATCH_KEY, kept);
+                const keptById = new Map(kept.map(watch => [watch.featureId, watch]));
+                await db.updateConfigJson<FeatureWatchRecord[]>(WATCH_KEY, [], current => current.flatMap(watch => {
+                    const original = originals.get(watch.featureId);
+                    if (!original || original.armedAt !== watch.armedAt || original.headTerminal !== watch.headTerminal) {
+                        return [watch];
+                    }
+                    const replacement = keptById.get(watch.featureId);
+                    return replacement ? [replacement] : [];
+                }));
             } catch (writeErr) {
                 this._host.logger.appendLine(`[GlobalPlanWatcher] feature nudge: failed to persist watch state: ${writeErr}`);
             }
@@ -1297,6 +1347,228 @@ export class PlanIngestionEngine {
                 continue;
             }
 
+            // ── Subtask 3: resolve pacing for this team ──────────────────
+            // Pacing is resolved per-tick (not stored on the watch) so a flip
+            // between ticks is picked up on the next tick. Head pacing runs the
+            // existing gates (3)–(8) unchanged — byte-for-byte the shipped
+            // behaviour, the regression gate for ~4,000 installs. Seat pacing
+            // re-points the four existing gates (head live, nothing in flight,
+            // head not mid-turn, no turn-end this tick) at the resolved pacer
+            // — the seat currently holding a card — rather than the head. No
+            // fifth gate; each existing one has a reason and the sweep is
+            // already the most interlocked code in this area.
+            let pacing: 'head' | 'seat' = 'head';
+            if (this._queuePacingResolver) {
+                try { pacing = await this._queuePacingResolver(folder, watch.headTerminal); }
+                catch (paceErr) {
+                    this._host.logger.appendLine(
+                        `[GlobalPlanWatcher] Queue nudge: pacing resolution failed for ${watch.workspaceRoot}: ${paceErr}`
+                    );
+                }
+            }
+
+            if (pacing === 'seat') {
+                // ── Seat pacing: resolve the pacer from board state ──────
+                // The pacer is whichever seat currently holds a card — a card
+                // with `dispatched_at` set. Cards resting in coding columns
+                // with `dispatched_at` cleared are NOT evidence of work in
+                // progress (they are coded cards that belong there per
+                // switchboard-contracts #1) and must not suppress the
+                // escalation branch. One condition: `dispatched_at` set.
+                let teamMembers: Set<string> | null = null;
+                if (this._queueTeamMembersResolver && watch.headTerminal) {
+                    try {
+                        const resolved = await this._queueTeamMembersResolver(folder, watch.headTerminal);
+                        teamMembers = new Set(resolved || []);
+                    } catch (memberErr) {
+                        this._host.logger.appendLine(`[GlobalPlanWatcher] Queue nudge: team resolution failed for ${watch.workspaceRoot}: ${memberErr}`);
+                        teamMembers = new Set();
+                    }
+                }
+                const heldCard = board.find(p =>
+                    p && p.dispatchedAt
+                    && typeof p.dispatchedTerminal === 'string'
+                    && p.dispatchedTerminal.length > 0
+                    && (!teamMembers || teamMembers.has(p.dispatchedTerminal))
+                );
+
+                if (!heldCard) {
+                    // (3 re-pointed) No pacer — no card has `dispatched_at`
+                    // set and the queue is non-empty. Nothing is working and
+                    // there is no agent to nudge. Skip the agent nudge
+                    // entirely and escalate to the operator on the FIRST
+                    // pass, not the second. Waiting a second pass to tell a
+                    // human that nothing is running wastes an interval for no
+                    // gain — the thing a second nudge tests for (an agent
+                    // that was merely slow) cannot apply when no seat holds
+                    // the latch. Cards resting in coding columns are not
+                    // evidence of work in progress and must not suppress this
+                    // branch.
+                    //
+                    // No gate 5/6/7 check: there is no agent whose turn we'd
+                    // interrupt or whose liveness we'd gate on — the operator
+                    // is the only correct addressee.
+                    if (!watch.escalatedAt) {
+                        const body = `[switchboard:turn-end] Queue stall (seat pacing) — ${queueCards.length} card(s) staged in the dispatch queue, but no seat is working (no card has been dispatched). A seat may have died after staging. The queue cannot advance without a working seat.`;
+                        try {
+                            this._turnEndNotifier({
+                                seatName: '',
+                                planFile: '',
+                                outcome: 'stalled',
+                                workspaceRoot: folder,
+                                body,
+                            });
+                        } catch (cbErr) {
+                            this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge seat-pacing no-pacer notifier failed: ${cbErr}`);
+                        }
+                        this._host.logger.appendLine(
+                            `[GlobalPlanWatcher] Queue nudge (seat pacing): escalating to user for ${watch.workspaceRoot} — no seat holding a card, ${queueCards.length} card(s) staged (first-pass escalation).`
+                        );
+                        watch.escalatedAt = nowMs;
+                        watch.lastNudgedAt = nowMs;
+                        watch.nudgeCount = (watch.nudgeCount ?? 0) + 1;
+                        mutated = true;
+                    }
+                    kept.push(watch);
+                    continue;
+                }
+
+                // Pacer resolved — the seat holding the card.
+                const pacerSeat = heldCard.dispatchedTerminal!;
+
+                // (4 re-pointed) Pacer present in the record but absent or
+                // `exited` → the seat died holding the card. Notify the
+                // operator AND record a failed attempt (step 7) so subtask 2's
+                // ladder re-stages the card to a stronger seat rather than
+                // pinning the queue behind a dead seat. Keep the watch — the
+                // queue is still non-empty and the re-stage may dispatch to a
+                // new pacer.
+                const pacerLive = livenessByName.get(pacerSeat);
+                if (!pacerLive || pacerLive.status === 'exited') {
+                    const body = `[switchboard:turn-end] Queue stall (seat pacing) — seat '${pacerSeat}' holding card '${heldCard.planId}' is ${!pacerLive ? 'absent' : 'exited'}. ${queueCards.length} card(s) remain staged. The card will be re-staged to a stronger seat.`;
+                    try {
+                        this._turnEndNotifier({
+                            seatName: pacerSeat,
+                            planFile: heldCard.planFile || '',
+                            outcome: 'stalled',
+                            workspaceRoot: folder,
+                            body,
+                        });
+                    } catch (cbErr) {
+                        this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge seat-pacing dead-pacer notifier failed: ${cbErr}`);
+                    }
+                    this._host.logger.appendLine(
+                        `[GlobalPlanWatcher] Queue nudge (seat pacing): pacer '${pacerSeat}' is ${!pacerLive ? 'absent' : 'exited'} for ${watch.workspaceRoot} — recording failed attempt for card '${heldCard.planId}' (${queueCards.length} card(s) staged).`
+                    );
+                    // Step 7: feed subtask 2's counter so the dead seat
+                    // escalates up the ladder. Best-effort — absent recorder
+                    // means subtask 2 has not landed; the operator is still
+                    // notified.
+                    if (this._queueEscalationRecorder) {
+                        try { await this._queueEscalationRecorder(folder, heldCard.planId, pacerSeat); }
+                        catch (recErr) { this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge escalation recorder failed: ${recErr}`); }
+                    }
+                    watch.escalatedAt = nowMs;
+                    watch.lastNudgedAt = nowMs;
+                    watch.nudgeCount = (watch.nudgeCount ?? 0) + 1;
+                    mutated = true;
+                    kept.push(watch);
+                    continue;
+                }
+
+                // (6 re-pointed) Pacer notified this tick → keep, stay silent.
+                // The shared `notifiedSeatsThisTick` set prevents a double-wake.
+                if (notifiedSeatsThisTick.has(pacerSeat)) {
+                    kept.push(watch);
+                    continue;
+                }
+
+                // (7 re-pointed) Pacer's own lastDataAt within
+                // turnEndSilenceMs — it is not mid-turn. The seat is actively
+                // working; delivering a prompt injects text into a running
+                // turn.
+                if (pacerLive.lastDataAt <= 0 || nowMs - pacerLive.lastDataAt < turnEndSilenceMs) {
+                    kept.push(watch);
+                    continue;
+                }
+
+                // Pacing floor: at most one nudge per watch per window.
+                if (watch.lastNudgedAt > 0 && nowMs - watch.lastNudgedAt < turnEndSilenceMs) {
+                    kept.push(watch);
+                    continue;
+                }
+
+                // (8 re-pointed) Escalation: one nudge, then escalate. The
+                // pacer may well be alive and simply slow; one nudge, then
+                // escalate to the operator AND record a failed attempt (step
+                // 7) so the card steps up the ladder.
+                if (watch.nudgeCount >= 1) {
+                    if (!watch.escalatedAt) {
+                        const body = `[switchboard:turn-end] Queue stall (seat pacing) — seat '${pacerSeat}' holding card '${heldCard.planId}' has not reported done after ${watch.nudgeCount} nudge(s). ${queueCards.length} card(s) remain staged. The seat may be stuck or gone; the card will be re-staged to a stronger seat.`;
+                        try {
+                            this._turnEndNotifier({
+                                seatName: pacerSeat,
+                                planFile: heldCard.planFile || '',
+                                outcome: 'stalled',
+                                workspaceRoot: folder,
+                                body,
+                            });
+                        } catch (cbErr) {
+                            this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge seat-pacing escalation notifier failed: ${cbErr}`);
+                        }
+                        this._host.logger.appendLine(
+                            `[GlobalPlanWatcher] Queue nudge (seat pacing): escalating to user for ${watch.workspaceRoot} — pacer '${pacerSeat}' ignored ${watch.nudgeCount} nudge(s) (${queueCards.length} card(s) staged).`
+                        );
+                        // Step 7: feed subtask 2's counter.
+                        if (this._queueEscalationRecorder) {
+                            try { await this._queueEscalationRecorder(folder, heldCard.planId, pacerSeat); }
+                            catch (recErr) { this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge escalation recorder failed: ${recErr}`); }
+                        }
+                        watch.escalatedAt = nowMs;
+                        watch.lastNudgedAt = nowMs;
+                        mutated = true;
+                    }
+                    kept.push(watch);
+                    continue;
+                }
+
+                // Nudge the pacer: one nudge with the state (its card, the
+                // staged count) and the instruction to POST /kanban/queue/done
+                // when finished, or with outcome: 'failed' if it cannot.
+                const silentFor = pacerLive.lastDataAt > 0 ? Math.round((nowMs - pacerLive.lastDataAt) / 1000) : 0;
+                const nudgeLines: string[] = [
+                    `[switchboard:turn-end] Queue stall (seat pacing) — you have gone idle holding card '${heldCard.planId}' with ${queueCards.length} card(s) staged in the dispatch queue.`,
+                    `  You have been silent for ${silentFor}s.`,
+                    `  When you finish the card, POST /kanban/queue/done with {"from":"${pacerSeat}"} against the port in .switchboard/api-server-port.txt.`,
+                    `  If you cannot complete it, call the same endpoint with {"from":"${pacerSeat}","outcome":"failed"} and a one-line reason.`,
+                ];
+                const nudgeBody = nudgeLines.join('\n');
+
+                try {
+                    this._turnEndNotifier({
+                        seatName: pacerSeat,
+                        planFile: heldCard.planFile || '',
+                        outcome: 'stalled',
+                        workspaceRoot: folder,
+                        recipientSeat: pacerSeat,
+                        body: nudgeBody,
+                    });
+                } catch (cbErr) {
+                    this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge seat-pacing notifier failed for ${watch.workspaceRoot}: ${cbErr}`);
+                }
+                notifiedSeatsThisTick.add(pacerSeat);
+                this._host.logger.appendLine(
+                    `[GlobalPlanWatcher] Queue nudge (seat pacing) fired for ${watch.workspaceRoot} → pacer '${pacerSeat}' holding '${heldCard.planId}' (${queueCards.length} card(s) staged).`
+                );
+
+                watch.lastNudgedAt = nowMs;
+                watch.nudgeCount = (watch.nudgeCount ?? 0) + 1;
+                mutated = true;
+                kept.push(watch);
+                continue;
+            }
+
+            // ── Head pacing: existing gates (3)–(8) unchanged ────────────
             // (3) No coding head seated at all. `headTerminal` null, or the
             // recorded head is absent from liveness (not exited — absent means
             // the fleet snapshot has no row, which the empty-liveness guard

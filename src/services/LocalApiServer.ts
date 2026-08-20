@@ -2,6 +2,8 @@ import * as http from 'http';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { URL } from 'url';
 import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
@@ -17,7 +19,7 @@ import {
 } from './standingOrders';
 import { plausibleOriginTerminal, describeStandingOrderMigrations, TERMINALS_GROUPS_KEY } from './teamWiring';
 import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
-import { parseComplexityScore } from './complexityScale';
+import { parseComplexityScore, getFallbackRole } from './complexityScale';
 import {
     DEFAULT_KANBAN_COLUMNS,
     DISPLAY_MODE_COLUMNS,
@@ -50,6 +52,41 @@ function _canonColumnRef(s: string): string {
  * goes through `dispatchNextFromQueue` and therefore through this chain.
  */
 let _queueNextChain: Promise<unknown> = Promise.resolve();
+const execFileAsync = promisify(execFile);
+
+/**
+ * Per-seat record of the last pop a seat-paced `queue/done` call produced, so a
+ * retried report (network retry) can be answered with `reason: "duplicate"` and
+ * a `dispatched` value that reflects the prior pop (NOT `null`) — distinguishing
+ * "your report was already processed" from "queue empty" by the body alone. A
+ * seat that reads `dispatched: null` + `reason: "queue empty"` stops; a seat
+ * that reads `reason: "duplicate"` does not. Keyed by the reporting seat's
+ * terminal name. Updated only after a real release → pop; read on the duplicate
+ * (no active card / already-cleared) path. Per-process, best-effort — a host
+ * restart loses it, which is fine: a retry after restart simply re-pops, and
+ * clearWorkingState's `IS NOT NULL` gate makes the second release a no-op.
+ */
+const _lastSeatPop: Map<string, { dispatched: any; ts: number }> = new Map();
+
+/**
+ * Ephemeral per-planId role override carried on the NEXT dispatch only — the
+ * escalation ladder's "carry the override on the dispatch, not in config" rule
+ * (plan step 5). Set by the `outcome: 'failed'` branch when it re-stages a
+ * card, consumed and deleted by `_runQueuePop` when it dispatches that card so
+ * the override applies exactly once and never leaks into a later dispatch of
+ * the same planId. Maps planId → role ('coder' | 'lead'). `routingMapConfig`
+ * and the stored complexity are never mutated — the override is per-dispatch.
+ */
+const _dispatchRoleOverride: Map<string, 'coder' | 'lead'> = new Map();
+
+/** Map a routing role to its coding column. intern→INTERN CODED, coder→CODER
+ *  CODED, lead→LEAD CODED. Used by the escalation override to pass an explicit
+ *  targetColumn to performKanbanDispatch (bypassing complexity auto-routing). */
+function roleToCodingColumn(role: 'intern' | 'coder' | 'lead'): string {
+    if (role === 'intern') return 'INTERN CODED';
+    if (role === 'coder') return 'CODER CODED';
+    return 'LEAD CODED';
+}
 
 /** Coding columns — a team is "in flight" while any of its cards sits in
  *  one of these. Derived from board position, so no plan-file mtime side
@@ -250,6 +287,39 @@ interface LocalApiServerOptions {
      */
     resolveTeamMembers?: (workspaceRoot: string, headTerminal: string) => Promise<string[] | null>;
     /**
+     * Resolve the pacing mode of the team headed by `headTerminal`: `'seat'`
+     * when the team is toggled to seat-paced dispatch (subtask 3 writes the
+     * `pacing` field on the team group), `'head'` otherwise. Reads the SAME
+     * team group `resolveTeamMembers` does, so the pacing decision and the
+     * roster derive from one definition. Absent in headless/test harnesses →
+     * `'head'`, which is byte-for-byte the pre-seat-pacing behaviour (the
+     * regression gate for ~4,000 installs).
+     */
+    resolveTeamPacing?: (workspaceRoot: string, headTerminal: string) => Promise<'head' | 'seat'>;
+    /**
+     * Clear a seat terminal's context (clipboard-paste `/clear`) after it
+     * reports a card done via `POST /kanban/queue/done`, so a finisher does
+     * not keep the prior card's context indefinitely. Reuses the dispatch
+     * clear path and its per-terminal send lock — a hand-rolled
+     * `sendText('/clear')` gets swallowed by CLI slash-command mode, so the
+     * host MUST paste via clipboard. Respects `terminal.clearBeforePrompt`:
+     * when off, no clear is sent and `cleared` is false. A clear failure is
+     * logged by the host and reported via `cleared: false`; the caller does
+     * NOT abort the pop on it. Optional — absent in headless/test harnesses
+     * (reported `cleared: false`, pop still proceeds).
+     */
+    clearTerminalContext?: (workspaceRoot: string, terminalName: string) => Promise<{ cleared: boolean; error?: string }>;
+    /**
+     * Notify the operator of a non-fatal event that needs human attention —
+     * used by the escalation ladder's park case (a card that failed at lead and
+     * has no higher seat to step up to). Receives a human-readable message; the
+     * host surfaces it (VS Code warning message + diagnostics channel) WITHOUT
+     * blocking the queue — the pop proceeds regardless. No confirmation dialog
+     * (CLAUDE.md: never add confirmation dialogs). Optional — absent in
+     * headless/test harnesses (message logged to console only).
+     */
+    notifyOperator?: (workspaceRoot: string, message: string) => void;
+    /**
      * Arm the queue-level stall watch (subtask 3's backstop). Called from
      * `dispatchNextFromQueue` after a successful pop with `onDispatch: true`
      * so the nudge state resets. Optional — absent in headless/test harnesses,
@@ -340,7 +410,7 @@ interface LocalApiServerOptions {
      * Duplicate callbacks (nothing in flight) are silently ignored by the host.
      * Optional — absent in headless/test harnesses.
      */
-    onPhoneAFriendDone?: (target: string, planFile?: string) => void;
+    onPhoneAFriendDone?: (target: string, planFile?: string, result?: 'PASS' | 'FAIL', findings?: string) => void;
     /**
      * Research hand-off — reached by the planner agent's `curl` when its "advise
      * research if unsure" add-on has a research prompt to delegate. The host checks
@@ -1502,32 +1572,61 @@ export class LocalApiServer {
      * This is the contract three sibling subtasks dispatch through; the HTTP
      * route (`POST /kanban/queue/next`) is a thin body-parsing wrapper over it.
      * No caller loops back through `http://127.0.0.1` — the schedule timer, the
-     * `Run queue` button and the handoff all call this method in-process so the
-     * module-level promise chain is the single serialization point.
+     * `Run queue` button, the handoff, and the seat-paced `queue/done` handler
+     * all call this method (or its extracted `_runQueuePop` helper) in-process
+     * so the module-level promise chain is the single serialization point.
      *
-     * In-flight refusal (the one-in-one-out contract): a team is in flight when
-     * any active card belonging to that team is sitting in a coding column
-     * (`LEAD CODED` / `CODER CODED` / `INTERN CODED`). Team membership is
-     * resolved from the card's `dispatched_terminal` through the same path
-     * `resolveTeamRoleTerminal` uses (`resolveTeamMembers`). The flag releases
-     * exactly when the head hands the feature to review — the moment the team
-     * is genuinely free. It is derived from board position, so no plan-file
-     * `mtime` side effect and no staleness sweep can corrupt it. Keying the
-     * predicate on `dispatched_at` instead would refuse the head's own
-     * legitimate call (the just-reviewed card sits in `CODE REVIEWED` with
+     * **Pacing.** `pacing` selects who receives the popped card:
+     * - `'head'` (default, the regression gate for ~4,000 installs): the
+     *   requesting head is the terminal — `targetTerminalOverride: from` — and
+     *   the head delegates subtasks itself. The one-in-one-out in-flight
+     *   refusal (below) applies.
+     * - `'seat'`: complexity routing picks the column AND the routed role's
+     *   seat on this team receives the card directly — `restrictToOriginTeam:
+     *   true` with no override. No head, no review hop. The in-flight refusal
+     *   is SKIPPED on this path: cards move on coding *start* and never on
+     *   finish, so a coded card stays in its coding column and board position
+     *   never releases — the scan would pin the team as busy forever and every
+     *   later pop would 409. The seat-paced path has one trigger (the finishing
+     *   seat) driving a strictly serial sequence on `_queueNextChain`, so there
+     *   is no race for the scan to arbitrate. An external head (non-terminal
+     *   agent) forces the seat branch regardless of pacing: it has no terminal,
+     *   so `targetTerminalOverride: from` would name a terminal that does not
+     *   exist.
+     *
+     * Resolution: the explicit argument → the requesting team's stored `pacing`
+     *   field (subtask 3 writes it; absent reads as `'head'`) → `'head'`.
+     *
+     * In-flight refusal (head pacing only — the one-in-one-out contract): a
+     * team is in flight when any active card belonging to that team is sitting
+     * in a coding column (`LEAD CODED` / `CODER CODED` / `INTERN CODED`). Team
+     * membership is resolved from the card's `dispatched_terminal` through the
+     * same path `resolveTeamRoleTerminal` uses (`resolveTeamMembers`). The flag
+     * releases exactly when the head hands the feature to review — the moment
+     * the team is genuinely free. It is derived from board position, so no
+     * plan-file `mtime` side effect and no staleness sweep can corrupt it.
+     * Keying the predicate on `dispatched_at` instead would refuse the head's
+     * own legitimate call (the just-reviewed card sits in `CODE REVIEWED` with
      * `dispatched_at` set and `dispatched_terminal` naming the reviewer) and
      * deadlock the pipeline after card one.
      *
-     * `targetTerminalOverride: from` short-circuits the team-scoped resolver, so
-     * complexity routing chooses the *column* and the requesting head is the
-     * *terminal* — the lead asked, the lead receives, and it delegates subtasks
-     * itself. Two consequences a coder must not "fix": the card's coding column
-     * may read `INTERN CODED` while the head holds it, and the response carries
-     * no `teamRouting` field.
+     * `targetTerminalOverride: from` (head pacing) short-circuits the
+     * team-scoped resolver, so complexity routing chooses the *column* and the
+     * requesting head is the *terminal* — the lead asked, the lead receives,
+     * and it delegates subtasks itself. Two consequences a coder must not
+     * "fix": the card's coding column may read `INTERN CODED` while the head
+     * holds it, and the response carries no `teamRouting` field.
+     *
+     * The pop's run body lives in `_runQueuePop` so the seat-paced
+     * `queue/done` handler can enqueue release → clear → pop as ONE operation
+     * on the same chain without calling this public method (which would
+     * re-enqueue on `_queueNextChain` and deadlock). There is exactly one pop
+     * implementation; both callers enqueue it.
      */
     public async dispatchNextFromQueue(args: {
         workspaceRoot: string;
         from: string;            // requesting head's terminal name
+        pacing?: 'head' | 'seat'; // explicit override; else team field → 'head'
     }): Promise<{ status: number; payload: any }> {
         const fail = (status: number, error: string, extra?: Record<string, unknown>): { status: number; payload: any } =>
             ({ status, payload: { success: false, error, ...(extra || {}) } });
@@ -1536,43 +1635,94 @@ export class LocalApiServer {
         const from = String(args?.from || '').trim();
         if (!workspaceRoot) { return fail(400, 'Missing required field: workspaceRoot'); }
         if (!from) { return fail(400, 'Missing required field: from (the requesting head\'s terminal name)'); }
+        const pacingOverride = args?.pacing === 'seat' || args?.pacing === 'head' ? args.pacing : undefined;
 
         // Serialize the pop. The chain wraps select → in-flight check → dispatch
         // as one critical section: the second caller re-reads a queue the first
         // has already drained, and its in-flight check reads `dispatched_at`
         // state the first has already written. Releasing the lock before the
         // dispatch reopens the race it exists to close.
-        const run = async (): Promise<{ status: number; payload: any }> => {
-            try {
-                const db = await this._options.getKanbanDatabase?.(workspaceRoot);
-                if (!db) {
-                    return fail(503, 'Kanban database not available (extension callbacks missing)');
+        return new Promise((resolve) => {
+            _queueNextChain = _queueNextChain.then(async () => {
+                try { resolve(await this._runQueuePop(workspaceRoot, from, pacingOverride)); }
+                catch (err) {
+                    console.error('[LocalApiServer] dispatchNextFromQueue chain error:', err);
+                    resolve(fail(500, err instanceof Error ? err.message : 'dispatchNextFromQueue failed'));
                 }
-                const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
-                const board: any[] = await db.getBoard?.(wsId) || [];
+            });
+        });
+    }
 
-                // Resolve the requesting head's team roster through the same path
-                // resolveTeamRoleTerminal uses. When the callback is present but
-                // returns null, `from` names no live team → 400 (the plan's
-                // "unresolvable from" edge case — never fall back to
-                // workspace-wide routing, which would let one team pull work
-                // "as" another). Absent in headless/test harnesses → degrade to
-                // a head-only match (the head itself).
-                let roster: string[] | null = null;
-                const hasRosterResolver = !!this._options.resolveTeamMembers;
-                if (hasRosterResolver) {
-                    try { roster = await this._options.resolveTeamMembers!(workspaceRoot, from); }
-                    catch (err) { console.warn('[LocalApiServer] resolveTeamMembers failed:', err); }
-                }
-                if (hasRosterResolver && (!roster || roster.length === 0)) {
-                    return fail(400, `from '${from}' does not resolve to a live team — queue/next dispatches to the head of a registered coding team, never to workspace-wide routing. Open the TEAMS tab / your saved agent grid so the team re-registers.`);
-                }
-                const teamSet = new Set<string>(roster && roster.length ? roster : [from]);
+    /**
+     * The pop's critical section — select → (in-flight, head pacing only) →
+     * dispatch. Extracted from `dispatchNextFromQueue` so the seat-paced
+     * `queue/done` handler can enqueue release → clear → pop as one chain
+     * operation WITHOUT calling the public method (which re-enqueues on
+     * `_queueNextChain` and deadlocks). Pure async — callers provide
+     * serialization by enqueuing on the chain. `pacingOverride` is the explicit
+     * per-call override; when undefined the team's stored `pacing` field is read
+     * (absent → `'head'`).
+     */
+    private async _runQueuePop(
+        workspaceRoot: string,
+        from: string,
+        pacingOverride: 'head' | 'seat' | undefined
+    ): Promise<{ status: number; payload: any }> {
+        const fail = (status: number, error: string, extra?: Record<string, unknown>): { status: number; payload: any } =>
+            ({ status, payload: { success: false, error, ...(extra || {}) } });
+        try {
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                return fail(503, 'Kanban database not available (extension callbacks missing)');
+            }
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+            const board: any[] = await db.getBoard?.(wsId) || [];
 
-                // ── In-flight refusal ──────────────────────────────────────
-                // A team is in flight when any active card belonging to it sits
-                // in a coding column. `dispatched_terminal` is only ever a real
-                // terminal name; an empty value is a card nobody has picked up.
+            // Resolve the requesting head's team roster through the same path
+            // resolveTeamRoleTerminal uses. When the callback is present but
+            // returns null, `from` names no live team → 400 (the plan's
+            // "unresolvable from" edge case — never fall back to
+            // workspace-wide routing, which would let one team pull work
+            // "as" another). Absent in headless/test harnesses → degrade to
+            // a head-only match (the head itself).
+            let roster: string[] | null = null;
+            const hasRosterResolver = !!this._options.resolveTeamMembers;
+            if (hasRosterResolver) {
+                try { roster = await this._options.resolveTeamMembers!(workspaceRoot, from); }
+                catch (err) { console.warn('[LocalApiServer] resolveTeamMembers failed:', err); }
+            }
+            if (hasRosterResolver && (!roster || roster.length === 0)) {
+                return fail(400, `from '${from}' does not resolve to a live team — queue/next dispatches to the head of a registered coding team, never to workspace-wide routing. Open the TEAMS tab / your saved agent grid so the team re-registers.`);
+            }
+            const teamSet = new Set<string>(roster && roster.length ? roster : [from]);
+
+            // ── Pacing resolution ──────────────────────────────────────
+            // Explicit override → team's stored field → 'head'. Subtask 3
+            // writes the field; absent reads as 'head', which is byte-for-byte
+            // the pre-seat-pacing behaviour (the regression gate).
+            let pacing: 'head' | 'seat' = pacingOverride ?? 'head';
+            if (!pacingOverride && this._options.resolveTeamPacing) {
+                try {
+                    const stored = await this._options.resolveTeamPacing(workspaceRoot, from);
+                    pacing = stored === 'seat' ? 'seat' : 'head';
+                } catch (err) { console.warn('[LocalApiServer] resolveTeamPacing failed:', err); }
+            }
+
+            // ── In-flight refusal (HEAD PACING ONLY) ───────────────────
+            // A team is in flight when any active card belonging to it sits
+            // in a coding column. `dispatched_terminal` is only ever a real
+            // terminal name; an empty value is a card nobody has picked up.
+            //
+            // SKIPPED on the seat-paced path: cards move on coding *start* and
+            // never on finish, so a coded card stays in its coding column and
+            // board position never releases — the scan would pin the team as
+            // busy forever and every later pop would 409. The seat-paced path
+            // has one trigger (the finishing seat) driving a serial sequence
+            // on `_queueNextChain`, so there is no race for the scan to
+            // arbitrate. Duplicate reports are answered by clearWorkingState's
+            // `IS NOT NULL` gate (no-op). Head pacing keeps the scan byte-for-
+            // byte unchanged.
+            if (pacing !== 'seat') {
                 const inFlightCard = board.find((p: any) =>
                     p && CODING_COLUMNS.has(String(p.kanbanColumn || ''))
                     && typeof p.dispatchedTerminal === 'string'
@@ -1588,137 +1738,151 @@ export class LocalApiServer {
                         }
                     });
                 }
-
-                // ── Queue source ───────────────────────────────────────────
-                // DISPATCH is THE queue, ordered by queue_position ASC NULLS
-                // LAST then board order. Subtask exclusion: empty `featureId`
-                // (switchboard-contracts #6) — a subtask nested under a feature
-                // must not leak into the pop.
-                //
-                // There is deliberately NO fallback to PLAN REVIEWED. The
-                // interim fallback existed only while subtask 2's `DISPATCH`
-                // queue was unlanded; with the queue live it is actively
-                // harmful — an empty queue would drain the whole PLAN REVIEWED
-                // lane unattended instead of ending the session, the queue
-                // watch would never reach its "queue empty → drop silently"
-                // gate, and a schedule would dispatch cards the user never
-                // staged. An empty DISPATCH is the session ending normally.
-                const isQueueable = (p: any): boolean =>
-                    !!p
-                    && (!p.dispatchedAt)
-                    && (!p.featureId || p.featureId === '');
-
-                const queuePosition = (p: any): number | null => {
-                    const v = p?.queuePosition ?? p?.queue_position;
-                    if (v === null || v === undefined || v === '') { return null; }
-                    const n = Number(v);
-                    return Number.isFinite(n) ? n : null;
-                };
-
-                const byQueueThenBoard = (a: any, b: any): number => {
-                    const qa = queuePosition(a);
-                    const qb = queuePosition(b);
-                    // NULLs last on both sides → only compare when both present.
-                    if (qa !== null && qb !== null) { return qa - qb; }
-                    if (qa !== null) { return -1; }
-                    if (qb !== null) { return 1; }
-                    return 0; // board order (getBoard returns updated_at DESC) preserved by stable sort
-                };
-
-                const candidates = board
-                    .filter((p: any) => p && p.kanbanColumn === 'DISPATCH' && isQueueable(p))
-                    .sort(byQueueThenBoard);
-
-                if (candidates.length === 0) {
-                    return { status: 200, payload: { success: true, dispatched: null, reason: 'queue empty' } };
-                }
-                const next = candidates[0];
-
-                // ── Dispatch ───────────────────────────────────────────────
-                // Detect whether `from` names an external head (non-terminal agent).
-                // An external head is not a live terminal, so targetTerminalOverride: from
-                // must be skipped to avoid dispatching to a non-existent terminal.
-                // The card is complexity-routed and dispatched to the routed role ON THIS
-                // TEAM, and the card info comes back so the external agent can drive its
-                // workers from there.
-                //
-                // The roster is the authority and it is decisive in BOTH directions:
-                // wireSpawnedTeam writes the head into `members`/`order` for a terminal
-                // head and omits it for an external head, so roster membership answers
-                // the question outright. The live-terminal list is only consulted when
-                // there is no roster resolver at all (headless hosts). Letting it
-                // override a roster that already named `from` would silently demote a
-                // real terminal lead — the VS Code host's list carries PTY names from
-                // the last fleet snapshot, so a freshly spawned or briefly-missing head
-                // would lose `targetTerminalOverride` and hand its own card to a coder,
-                // and a head whose terminal has died would silently reroute instead of
-                // failing the 409 the caller needs to see.
-                let isExternalHead: boolean;
-                if (hasRosterResolver) {
-                    isExternalHead = Array.isArray(roster) && !roster.includes(from);
-                } else {
-                    isExternalHead = false;
-                    if (this._options.getRegisteredTerminals) {
-                        try {
-                            const live = this._options.getRegisteredTerminals();
-                            if (Array.isArray(live) && !live.includes(from)) {
-                                isExternalHead = true;
-                            }
-                        } catch { /* ignore */ }
-                    }
-                }
-
-                // `restrictToOriginTeam` closes the workspace-wide escape hatch for the
-                // external branch only. Without the override, performKanbanDispatch
-                // resolves the routed role on the origin's team and, on a miss, falls
-                // back to workspace-wide routing — which would hand this team's card to
-                // another team's terminal. That leak is worse than a refusal twice over:
-                // the in-flight predicate keys on team membership, so a card held by a
-                // foreign terminal is invisible to it and the one-in-one-out pacing this
-                // endpoint exists to enforce silently stops applying.
-                const dispatchOpts = isExternalHead
-                    ? { originTerminal: from, restrictToOriginTeam: true }
-                    : { originTerminal: from, targetTerminalOverride: from };
-
-                const outcome = await this.performKanbanDispatch(
-                    workspaceRoot, next.planId, undefined,
-                    dispatchOpts
-                );
-
-                // A failed dispatch (no live terminal → 409, card not found →
-                // 404, card dragged out → 502) is passed through unchanged and
-                // the card stays staged with its queue position intact. A pop
-                // must never consume a card it did not start.
-                if (outcome.status < 200 || outcome.status >= 300) {
-                    return outcome;
-                }
-                // Arm the queue-level stall watch (subtask 3). A successful
-                // dispatch resets the nudge state — the lead just did its job,
-                // and a fresh stall window starts from this dispatch. The watch
-                // persists across host restarts and self-heals in the sweep.
-                if (this._options.armQueueWatch) {
-                    try { await this._options.armQueueWatch(workspaceRoot, from, { onDispatch: true }); }
-                    catch (armErr) { console.warn('[LocalApiServer] armQueueWatch failed:', armErr); }
-                }
-                return {
-                    status: 200,
-                    payload: { success: true, dispatched: outcome.payload, from }
-                };
-            } catch (err) {
-                console.error('[LocalApiServer] dispatchNextFromQueue error:', err);
-                return fail(500, err instanceof Error ? err.message : 'dispatchNextFromQueue failed');
             }
-        };
 
-        return new Promise((resolve) => {
-            _queueNextChain = _queueNextChain.then(async () => {
-                try { resolve(await run()); }
-                catch (err) {
-                    console.error('[LocalApiServer] dispatchNextFromQueue chain error:', err);
-                    resolve(fail(500, err instanceof Error ? err.message : 'dispatchNextFromQueue failed'));
+            // ── Queue source ───────────────────────────────────────────
+            // DISPATCH is THE queue, ordered by queue_position ASC NULLS
+            // LAST then board order. Subtask exclusion: empty `featureId`
+            // (switchboard-contracts #6) — a subtask nested under a feature
+            // must not leak into the pop.
+            //
+            // There is deliberately NO fallback to PLAN REVIEWED. The
+            // interim fallback existed only while subtask 2's `DISPATCH`
+            // queue was unlanded; with the queue live it is actively
+            // harmful — an empty queue would drain the whole PLAN REVIEWED
+            // lane unattended instead of ending the session, the queue
+            // watch would never reach its "queue empty → drop silently"
+            // gate, and a schedule would dispatch cards the user never
+            // staged. An empty DISPATCH is the session ending normally.
+            const isQueueable = (p: any): boolean =>
+                !!p
+                && (!p.dispatchedAt)
+                && (!p.featureId || p.featureId === '');
+
+            const queuePosition = (p: any): number | null => {
+                const v = p?.queuePosition ?? p?.queue_position;
+                if (v === null || v === undefined || v === '') { return null; }
+                const n = Number(v);
+                return Number.isFinite(n) ? n : null;
+            };
+
+            const byQueueThenBoard = (a: any, b: any): number => {
+                const qa = queuePosition(a);
+                const qb = queuePosition(b);
+                // NULLs last on both sides → only compare when both present.
+                if (qa !== null && qb !== null) { return qa - qb; }
+                if (qa !== null) { return -1; }
+                if (qb !== null) { return 1; }
+                return 0; // board order (getBoard returns updated_at DESC) preserved by stable sort
+            };
+
+            const candidates = board
+                .filter((p: any) => p && p.kanbanColumn === 'DISPATCH' && isQueueable(p))
+                .sort(byQueueThenBoard);
+
+            if (candidates.length === 0) {
+                return { status: 200, payload: { success: true, dispatched: null, reason: 'queue empty' } };
+            }
+            const next = candidates[0];
+
+            // ── Dispatch ───────────────────────────────────────────────
+            // Detect whether `from` names an external head (non-terminal agent).
+            // An external head is not a live terminal, so targetTerminalOverride: from
+            // must be skipped to avoid dispatching to a non-existent terminal.
+            // The card is complexity-routed and dispatched to the routed role ON THIS
+            // TEAM, and the card info comes back so the external agent can drive its
+            // workers from there.
+            //
+            // The roster is the authority and it is decisive in BOTH directions:
+            // wireSpawnedTeam writes the head into `members`/`order` for a terminal
+            // head and omits it for an external head, so roster membership answers
+            // the question outright. The live-terminal list is only consulted when
+            // there is no roster resolver at all (headless hosts). Letting it
+            // override a roster that already named `from` would silently demote a
+            // real terminal lead — the VS Code host's list carries PTY names from
+            // the last fleet snapshot, so a freshly spawned or briefly-missing head
+            // would lose `targetTerminalOverride` and hand its own card to a coder,
+            // and a head whose terminal has died would silently reroute instead of
+            // failing the 409 the caller needs to see.
+            let isExternalHead: boolean;
+            if (hasRosterResolver) {
+                isExternalHead = Array.isArray(roster) && !roster.includes(from);
+            } else {
+                isExternalHead = false;
+                if (this._options.getRegisteredTerminals) {
+                    try {
+                        const live = this._options.getRegisteredTerminals();
+                        if (Array.isArray(live) && !live.includes(from)) {
+                            isExternalHead = true;
+                        }
+                    } catch { /* ignore */ }
                 }
-            });
-        });
+            }
+
+            // Seat routing: complexity picks the column, the column yields a
+            // role, and resolveTeamRoleTerminal finds that role's seat ON THIS
+            // TEAM — reached by passing `originTerminal: from` with
+            // `restrictToOriginTeam: true` and NO targetTerminalOverride. The
+            // seat branch is taken when pacing is 'seat' OR `from` is an
+            // external head (which has no terminal, so the override would name a
+            // non-existent terminal). Otherwise the head branch is unchanged:
+            // the head asked, the head receives.
+            //
+            // `restrictToOriginTeam` closes the workspace-wide escape hatch for
+            // the seat/external branch only. Without the override,
+            // performKanbanDispatch resolves the routed role on the origin's
+            // team and, on a miss, falls back to workspace-wide routing — which
+            // would hand this team's card to another team's terminal. That leak
+            // is worse than a refusal twice over: the in-flight predicate keys
+            // on team membership, so a card held by a foreign terminal is
+            // invisible to it and the one-in-one-out pacing this endpoint exists
+            // to enforce silently stops applying.
+            const useSeatBranch = pacing === 'seat' || isExternalHead;
+            const dispatchOpts = useSeatBranch
+                ? { originTerminal: from, restrictToOriginTeam: true }
+                : { originTerminal: from, targetTerminalOverride: from };
+
+            // Escalation override (subtask 2): if the failed-branch re-staged
+            // this card with a role override, carry it on THIS dispatch only —
+            // pass the fallback role's coding column as the explicit
+            // targetColumn so performKanbanDispatch bypasses complexity
+            // auto-routing and lands the card in the stronger seat. Consumed
+            // and deleted here so the override applies exactly once and never
+            // leaks into a later dispatch of the same planId. The override is
+            // NOT stored in routingMapConfig or the card's complexity — those
+            // are the operator's global setting and a plan property (plan step 5).
+            const overrideRole = _dispatchRoleOverride.get(next.planId);
+            const rawColumn = overrideRole ? roleToCodingColumn(overrideRole) : undefined;
+
+            const outcome = await this.performKanbanDispatch(
+                workspaceRoot, next.planId, rawColumn,
+                dispatchOpts
+            );
+
+            // A failed dispatch (no live terminal → 409, card not found →
+            // 404, card dragged out → 502) is passed through unchanged and
+            // the card stays staged with its queue position intact. A pop
+            // must never consume a card it did not start.
+            if (outcome.status < 200 || outcome.status >= 300) {
+                return outcome;
+            }
+            if (overrideRole) { _dispatchRoleOverride.delete(next.planId); }
+            // Arm the queue-level stall watch (subtask 3). A successful
+            // dispatch resets the nudge state — the lead just did its job,
+            // and a fresh stall window starts from this dispatch. The watch
+            // persists across host restarts and self-heals in the sweep.
+            if (this._options.armQueueWatch) {
+                try { await this._options.armQueueWatch(workspaceRoot, from, { onDispatch: true }); }
+                catch (armErr) { console.warn('[LocalApiServer] armQueueWatch failed:', armErr); }
+            }
+            return {
+                status: 200,
+                payload: { success: true, dispatched: outcome.payload, from }
+            };
+        } catch (err) {
+            console.error('[LocalApiServer] _runQueuePop error:', err);
+            return fail(500, err instanceof Error ? err.message : 'dispatchNextFromQueue failed');
+        }
     }
 
     /**
@@ -1745,6 +1909,394 @@ export class LocalApiServer {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanQueueNext failed' }));
         }
+    }
+
+    /**
+     * POST /kanban/queue/done — the seat-paced completion signal. A seat that
+     * just finished a card tells the board, which clears that seat's context
+     * and pops the next card. No head, no clock, no review hop.
+     *
+     * Body: `{ workspaceRoot?, from, outcome?, planId? }`.
+     * - `from` — the reporting seat's terminal name.
+     * - `outcome` — `'finished'` (default) or `'failed'`. Accepted and
+     *   forwarded; subtask 2 owns the `failed` branch (re-stage before the
+     *   pop). Degraded behaviour with subtask 2 absent: a `failed` report
+     *   releases the latch and pops the next card — the failed card rests in
+     *   its coding column (not re-staged, not moved). Safe (the card stays
+     *   coded) but not retried until subtask 2 lands.
+     * - `planId` — when given, MUST match the card the seat holds. A seat
+     *   cannot release another seat's card.
+     *
+     * Contract (mirrors `POST /phone-a-friend/done`'s 200-no-op shape):
+     * - No active card for `from` (none with `dispatchedTerminal === from` and
+     *   `dispatched_at` set) → **200 no-op** with `reason: "duplicate"`. Never
+     *   4xx a duplicate. `dispatched` reflects the prior pop (non-null when one
+     *   was recorded) so a retried report is not misread as "queue empty".
+     * - `clearWorkingState` returns false (the plan-file mtime watcher cleared
+     *   first) → also a silent 200 no-op (`reason: "duplicate"`).
+     * - `planId` mismatch → 400 (a seat cannot release another seat's card).
+     * - The card is NOT moved. It is already in its coding column, it got
+     *   coded, it stays there. `CODE REVIEWED` would assert a review that
+     *   never ran and `COMPLETED` an acceptance nobody gave.
+     *
+     * Release → clear → pop is serialized as ONE operation on
+     * `_queueNextChain` (the same chain `dispatchNextFromQueue` uses). The pop
+     * runs through `_runQueuePop` directly — calling the public method would
+     * re-enqueue on the chain and deadlock. Clear ordering when the next card
+     * routes to the SAME seat: done-clear (here) → dispatch-clear (inside the
+     * pop's `performKanbanDispatch`) → prompt. Both clears hit the same
+     * terminal's send lock serially inside this one chain block — do NOT
+     * reorder.
+     *
+     * `reason` disambiguation: `reason: "duplicate"` (a pop already happened,
+     * `dispatched` non-null) is NOT "the run is over"; only `dispatched: null`
+     * + `reason: "queue empty"` means stop.
+     */
+    private async _handleKanbanQueueDone(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const from = String(body?.from || '').trim();
+            if (!workspaceRoot) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            if (!from) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: "Missing required field: from (the reporting seat's terminal name)" }));
+                return;
+            }
+            const rawOutcome = typeof body?.outcome === 'string' ? body.outcome.trim().toLowerCase() : '';
+            const outcome: 'finished' | 'failed' = rawOutcome === 'failed' ? 'failed' : 'finished';
+            const planId = typeof body?.planId === 'string' && body.planId.trim() ? body.planId.trim() : undefined;
+
+            const result = await this._runQueueDone(workspaceRoot, from, outcome, planId);
+            res.writeHead(result.status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result.payload));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanQueueDone error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanQueueDone failed' }));
+        }
+    }
+
+    /**
+     * In-process report of a seat-paced card completion (or failure). The
+     * public counterpart to `_handleKanbanQueueDone`'s HTTP path — same
+     * critical section (`_runQueueDone` on `_queueNextChain`), no HTTP framing.
+     * Used by subtask 3's queue escalation recorder (wired in extension.ts) so
+     * the watch can feed subtask 2's failure ladder without a loopback HTTP
+     * call. Returns `{ status, payload }` like the HTTP handler; callers that
+     * only need the side effect (re-stage) can ignore the result.
+     */
+    public async reportQueueDone(args: {
+        workspaceRoot: string;
+        from: string;
+        outcome?: 'finished' | 'failed';
+        planId?: string;
+    }): Promise<{ status: number; payload: any }> {
+        const workspaceRoot = String(args?.workspaceRoot || '').trim();
+        const from = String(args?.from || '').trim();
+        if (!workspaceRoot || !from) {
+            return { status: 400, payload: { success: false, error: 'Missing workspaceRoot or from' } };
+        }
+        const outcome: 'finished' | 'failed' = args?.outcome === 'failed' ? 'failed' : 'finished';
+        const planId = typeof args?.planId === 'string' && args.planId.trim() ? args.planId.trim() : undefined;
+        return this._runQueueDone(workspaceRoot, from, outcome, planId);
+    }
+
+    /**
+     * The seat-paced release → clear → pop critical section. Enqueued on
+     * `_queueNextChain` so it serializes with `dispatchNextFromQueue`'s pops
+     * (one pop implementation, one chain). Pure async — the caller
+     * (`_handleKanbanQueueDone` provides HTTP framing; this method provides
+     * the chain serialization.
+     */
+    private _runQueueDone(
+        workspaceRoot: string,
+        from: string,
+        outcome: 'finished' | 'failed',
+        planId: string | undefined
+    ): Promise<{ status: number; payload: any }> {
+        const fail = (status: number, error: string, extra?: Record<string, unknown>): { status: number; payload: any } =>
+            ({ status, payload: { success: false, error, ...(extra || {}) } });
+        const dup = (dispatched: any): { status: number; payload: any } => ({
+            status: 200,
+            payload: { success: true, dispatched, reason: 'duplicate', cleared: false, popped: false }
+        });
+
+        return new Promise((resolve) => {
+            _queueNextChain = _queueNextChain.then(async () => {
+                try {
+                    const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+                    if (!db) {
+                        resolve(fail(503, 'Kanban database not available (extension callbacks missing)'));
+                        return;
+                    }
+                    const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+                    const board: any[] = await db.getBoard?.(wsId) || [];
+
+                    // Find the active card this seat holds: dispatchedTerminal
+                    // === from AND dispatched_at set. A seat cannot release
+                    // another seat's card.
+                    const held = board.find((p: any) =>
+                        p && typeof p.dispatchedTerminal === 'string'
+                        && p.dispatchedTerminal === from
+                        && !!p.dispatchedAt
+                    );
+
+                    // No active card → duplicate. A retried report (network
+                    // retry) or the mtime watcher clearing first both land
+                    // here. Reflect the prior pop so the seat does not read
+                    // this as "queue empty".
+                    if (!held) {
+                        const prior = _lastSeatPop.get(`${workspaceRoot}\0${from}`);
+                        resolve(dup(prior ? prior.dispatched : null));
+                        return;
+                    }
+
+                    // planId, when given, must match the card the seat holds.
+                    if (planId && held.planId !== planId) {
+                        resolve(fail(400, `planId mismatch: seat '${from}' holds '${held.planId}', not '${planId}'. A seat cannot release another seat's card.`));
+                        return;
+                    }
+
+                    // Release the latch via the existing off-switch the
+                    // plan-file watcher uses. Returns true only on a real
+                    // non-NULL→NULL transition — the duplicate answer for
+                    // free (a watcher-first clear returns false → no-op).
+                    let transitioned = false;
+                    try {
+                        transitioned = await db.clearWorkingState(held.planFile, held.workspaceId || wsId);
+                    } catch (clrErr) {
+                        console.error('[LocalApiServer] clearWorkingState failed:', clrErr);
+                    }
+                    if (!transitioned) {
+                        // Already cleared (mtime watcher got there first, or a
+                        // duplicate report racing). Silent 200 no-op — no
+                        // clear, no pop, no second dispatch.
+                        const prior = _lastSeatPop.get(`${workspaceRoot}\0${from}`);
+                        resolve(dup(prior ? prior.dispatched : null));
+                        return;
+                    }
+
+                    // ── Clear the finishing seat ───────────────────────────
+                    // /clear is pasted onto the RECEIVING terminal at dispatch;
+                    // the next card usually routes to a different seat, so the
+                    // finisher would otherwise keep its context indefinitely.
+                    // Reuse the clipboard-paste path + per-terminal send lock
+                    // via the host callback — a hand-rolled sendText('/clear')
+                    // gets swallowed by CLI slash-command mode. Respect
+                    // terminal.clearBeforePrompt (off → cleared: false, no
+                    // send). A clear failure is logged and does NOT abort the
+                    // pop. Clear ordering when the next card routes to the
+                    // SAME seat: this done-clear runs first, then the
+                    // dispatch-clear runs inside _runQueuePop's
+                    // performKanbanDispatch, then the prompt — all inside this
+                    // one chain block. Do NOT reorder.
+                    let cleared = false;
+                    let clearError: string | undefined;
+                    if (this._options.clearTerminalContext) {
+                        try {
+                            const clr = await this._options.clearTerminalContext(workspaceRoot, from);
+                            cleared = !!clr?.cleared;
+                            clearError = clr?.error;
+                        } catch (clrErr) {
+                            clearError = clrErr instanceof Error ? clrErr.message : String(clrErr);
+                            console.warn('[LocalApiServer] clearTerminalContext failed:', clrErr);
+                        }
+                    }
+
+                    // ── Escalation ladder (outcome: 'failed', subtask 2) ───
+                    // Runs AFTER the latch release and the seat clear, BEFORE
+                    // the pop — so a re-staged card is the next thing
+                    // dispatched. The ladder needs no new state: getFallbackRole
+                    // encodes intern → coder → lead (terminal at lead), and the
+                    // card already records routedTo. The override is carried on
+                    // the dispatch only (plan step 5) — routingMapConfig and
+                    // the stored complexity are never mutated.
+                    let escalated: 'restaged' | 'parked' | 'none' = 'none';
+                    let parkReason: string | undefined;
+                    if (outcome === 'failed') {
+                        const routedTo = String(held.routedTo || '').toLowerCase();
+                        // Guard against double re-stage: the watch (subtask 3)
+                        // may have already re-staged this card to DISPATCH. A
+                        // late `failed` report from the original seat must
+                        // check the card's CURRENT column, not the pre-release
+                        // `held` read (which still shows the coding column).
+                        // Re-read the card; if it is no longer in a coding
+                        // column, the watch (or an operator) already moved it —
+                        // treat as a no-op (same contract as a duplicate
+                        // report). This closes the read-modify-write gap on
+                        // routedTo (re-staging does not update routedTo;
+                        // dispatch does).
+                        let currentColumn = String(held.kanbanColumn || '');
+                        try {
+                            const fresh: any = await db.getPlanByPlanId?.(held.planId);
+                            if (fresh && typeof fresh.kanbanColumn === 'string') {
+                                currentColumn = fresh.kanbanColumn;
+                            }
+                        } catch { /* fall back to held */ }
+                        const stillCoding = CODING_COLUMNS.has(currentColumn);
+                        if (!stillCoding) {
+                            // Card already moved out of its coding column
+                            // (watch re-staged it, or an operator dragged it).
+                            // No re-stage, no park — fall through to the pop.
+                            escalated = 'none';
+                        } else if (routedTo === 'intern' || routedTo === 'coder') {
+                            // Step up one rung: re-stage the card into DISPATCH
+                            // at the FRONT so it is the next thing dispatched,
+                            // and carry a role override to getFallbackRole so
+                            // the next dispatch lands it in the stronger seat's
+                            // coding column. Re-staging is TWO writes: move the
+                            // card's kanban_column back to DISPATCH (it is
+                            // currently in its coding column), then rewrite the
+                            // queue order with the failed card first.
+                            // setQueuePositions only sets queue_position — it
+                            // does NOT move the column, so without the move the
+                            // card would keep its coding column and never be
+                            // picked by the pop's `kanbanColumn === 'DISPATCH'`
+                            // filter. appendQueuePositions is NOT used — it
+                            // appends to the BACK (MAX+1), which would send the
+                            // failed card behind every other staged card.
+                            const fallbackRole = getFallbackRole(routedTo as 'intern' | 'coder');
+                            try {
+                                // 1. Move the card back to DISPATCH. This is
+                                // legitimate (contracts #1): the card moves
+                                // because it is being dispatched again, not
+                                // because it finished.
+                                const moved = await db.updateColumnByPlanFile(
+                                    held.planFile, held.workspaceId || wsId, 'DISPATCH'
+                                );
+                                if (!moved) {
+                                    console.warn(`[LocalApiServer] updateColumnByPlanFile failed for failed card ${held.planId}; card rests coded`);
+                                    escalated = 'none';
+                                } else {
+                                    // 2. Rewrite the queue order: failed card
+                                    // first, then every other staged card in
+                                    // current position order. Read the live
+                                    // board (held is the pre-release read) so a
+                                    // card staged after this report started is
+                                    // included.
+                                    const liveBoard: any[] = await db.getBoard?.(wsId) || [];
+                                    const staged = liveBoard
+                                        .filter((p: any) => p && p.kanbanColumn === 'DISPATCH'
+                                            && (!p.dispatchedAt)
+                                            && (!p.featureId || p.featureId === '')
+                                            && p.planId !== held.planId)
+                                        .sort((a: any, b: any) => {
+                                            const qa = a?.queuePosition ?? null;
+                                            const qb = b?.queuePosition ?? null;
+                                            if (qa != null && qb != null) return Number(qa) - Number(qb);
+                                            if (qa != null) return -1;
+                                            if (qb != null) return 1;
+                                            return 0;
+                                        })
+                                        .map((p: any) => p.planId);
+                                    const newOrder = [held.planId, ...staged];
+                                    const ok = await db.setQueuePositions(wsId, newOrder);
+                                    if (ok) {
+                                        // Carry the override on the next
+                                        // dispatch only — consumed and deleted
+                                        // in _runQueuePop. Not stored in config.
+                                        _dispatchRoleOverride.set(held.planId, fallbackRole);
+                                        escalated = 'restaged';
+                                    } else {
+                                        // Position write failed — the card is in
+                                        // DISPATCH but at the back. Still
+                                        // dispatchable, just not next. Log and
+                                        // carry the override so it steps up when
+                                        // it does dispatch.
+                                        console.warn(`[LocalApiServer] setQueuePositions failed for failed card ${held.planId}; card staged at back`);
+                                        _dispatchRoleOverride.set(held.planId, fallbackRole);
+                                        escalated = 'restaged';
+                                    }
+                                }
+                            } catch (stageErr) {
+                                console.error('[LocalApiServer] failed-card re-stage error:', stageErr);
+                                escalated = 'none';
+                            }
+                        } else {
+                            // routedTo is 'lead' (or unknown/empty treated as
+                            // lead): PARK. getFallbackRole('lead') is 'lead' —
+                            // re-dispatching to the same seat is the loop this
+                            // rule prevents. Leave the card where it is (coding
+                            // column), latch already released. Move nothing,
+                            // delete nothing. There is no parking column — a
+                            // parked card is a card resting in a coding column
+                            // that nobody finished. Notify the operator with
+                            // the card, seat and reason; pop the next card
+                            // anyway (the queue keeps walking). No confirmation
+                            // dialog (CLAUDE.md).
+                            escalated = 'parked';
+                            parkReason = `Card '${held.planId}' ("${held.topic || held.planFile || ''}") parked: failed at lead by seat '${from}' and has no higher seat to step up to. The card rests in ${held.kanbanColumn}; the queue continues.`;
+                            try {
+                                if (this._options.notifyOperator) {
+                                    this._options.notifyOperator(workspaceRoot, parkReason);
+                                } else {
+                                    console.warn(`[LocalApiServer] PARKED: ${parkReason}`);
+                                }
+                            } catch (notifyErr) {
+                                console.warn('[LocalApiServer] notifyOperator failed:', notifyErr);
+                            }
+                        }
+                    }
+
+                    // ── Pop the next card ──────────────────────────────────
+                    // For 'finished' and 'parked': pop the next staged card
+                    // (the failed/parked card is NOT in the queue — it rests in
+                    // its coding column). For 'restaged': the failed card is at
+                    // the front of DISPATCH, so this pop dispatches IT to the
+                    // stronger seat (the override is consumed in _runQueuePop).
+                    // Either way the queue keeps walking.
+                    const pop = await this._runQueuePop(workspaceRoot, from, undefined);
+
+                    // Cache the pop's dispatched payload so a retried report
+                    // gets reason: "duplicate" with dispatched reflecting the
+                    // prior pop (NOT null) — the disambiguation a seat needs.
+                    const dispatchedSnap = pop?.payload?.dispatched ?? null;
+                    _lastSeatPop.set(`${workspaceRoot}\0${from}`, { dispatched: dispatchedSnap, ts: Date.now() });
+
+                    // Arm the watch on the release too: a release that pops
+                    // nothing because the dispatch FAILED leaves a staged
+                    // queue and an idle team. A successful pop already armed
+                    // (onDispatch) inside _runQueuePop; an empty queue has
+                    // nothing staged to watch (do NOT arm — test #10).
+                    if (pop && (pop.status < 200 || pop.status >= 300) && this._options.armQueueWatch) {
+                        try { await this._options.armQueueWatch(workspaceRoot, from, { onDispatch: false }); }
+                        catch (armErr) { console.warn('[LocalApiServer] armQueueWatch (release) failed:', armErr); }
+                    }
+
+                    // Forward the pop result, annotating with the release
+                    // metadata. Preserve the pop's `reason` ("queue empty" on
+                    // exhaustion) so a seat can tell empty from duplicate.
+                    const payload: any = {
+                        ...pop.payload,
+                        released: held.planId,
+                        cleared,
+                        outcome,
+                        escalated,
+                        ...(clearError ? { clearError } : {}),
+                        ...(parkReason ? { parkReason } : {}),
+                    };
+                    // If the pop succeeded with a dispatch, label the reason
+                    // so the body is self-describing (distinct from
+                    // "duplicate" / "queue empty").
+                    if (pop.status >= 200 && pop.status < 300 && payload.dispatched && !payload.reason) {
+                        payload.reason = 'dispatched';
+                    }
+                    resolve({ status: pop.status, payload });
+                } catch (err) {
+                    console.error('[LocalApiServer] _runQueueDone error:', err);
+                    resolve(fail(500, err instanceof Error ? err.message : 'kanbanQueueDone failed'));
+                }
+            });
+        });
     }
 
     /**
@@ -2895,10 +3447,13 @@ export class LocalApiServer {
                 return;
             }
             const planFile = body?.planFile ? String(body.planFile).trim() : undefined;
+            const rawResult = body?.result ? String(body.result).trim().toUpperCase() : undefined;
+            const result = rawResult === 'PASS' || rawResult === 'FAIL' ? rawResult : undefined;
+            const findings = body?.findings ? String(body.findings).trim().slice(0, 8000) : undefined;
             // The callback handles duplicate callbacks (nothing in flight) and
             // planFile correlation internally. MUST NOT throw — a throw becomes
             // a 500 and breaks the completion signal.
-            onPhoneAFriendDone(target, planFile);
+            onPhoneAFriendDone(target, planFile, result, findings);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true }));
         } catch (err) {
@@ -2914,7 +3469,7 @@ export class LocalApiServer {
      * caller (dispatch pipeline) uses the result to decide whether to proceed to the
      * expensive reviewer or send mechanical findings back to the coder.
      *
-     * Body: { planId?: string, planFile?: string, workspaceRoot: string, skipCompilation?: boolean }
+     * Body: { planId?: string, planFile?: string, workspaceRoot: string, baseBranch?: string, skipCompilation?: boolean }
      *
      * Checks:
      * 1. Compile check — `npm run compile` in the worktree CWD (or workspace root).
@@ -2936,6 +3491,10 @@ export class LocalApiServer {
             const workspaceRoot = String(body?.workspaceRoot || '').trim();
             const planFile = body?.planFile ? String(body.planFile).trim() : undefined;
             const skipCompilation = Boolean(body?.skipCompilation);
+            const rawBaseBranch = body?.baseBranch ? String(body.baseBranch).trim() : undefined;
+            const baseBranch = rawBaseBranch && !rawBaseBranch.startsWith('-') && !rawBaseBranch.includes('..') && !/\s/.test(rawBaseBranch)
+                ? rawBaseBranch
+                : undefined;
 
             if (!workspaceRoot) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -2945,7 +3504,7 @@ export class LocalApiServer {
 
             // Resolve the CWD: workspace root (shared working tree) or worktree path.
             // The plan file path is relative to the workspace root.
-            const cwd = path.isAbsolute(workspaceRoot) ? workspaceRoot : path.resolve(workspaceRoot);
+            const cwd = path.resolve(workspaceRoot);
 
             const checks: Array<{ name: string; passed: boolean; details: string }> = [];
             const findings: Array<{ severity: string; message: string; file?: string }> = [];
@@ -2955,11 +3514,15 @@ export class LocalApiServer {
                 checks.push({ name: 'compile', passed: true, details: 'Skipped — SKIP COMPILATION directive active.' });
             } else {
                 try {
-                    const { execSync } = require('child_process');
-                    execSync('npm run compile', { cwd, timeout: 120000, encoding: 'utf8' });
+                    await execFileAsync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'compile'], {
+                        cwd,
+                        timeout: 120000,
+                        encoding: 'utf8',
+                        maxBuffer: 10 * 1024 * 1024,
+                    });
                     checks.push({ name: 'compile', passed: true, details: 'Compilation succeeded.' });
                 } catch (err: any) {
-                    const stderr = err?.stderr || err?.message || 'Unknown error';
+                    const stderr = String(err?.stderr || err?.stdout || err?.message || 'Unknown error');
                     checks.push({ name: 'compile', passed: false, details: `Compilation failed: ${stderr.slice(0, 500)}` });
                     findings.push({ severity: 'CRITICAL', message: `Compilation failed: ${stderr.slice(0, 300)}` });
                 }
@@ -2967,36 +3530,28 @@ export class LocalApiServer {
 
             // --- Check 2: Diff coverage ---
             try {
-                const { execSync } = require('child_process');
-                // Get the list of files changed — check both uncommitted changes
-                // (git diff --name-only HEAD) and the last commit (git diff --name-only
-                // HEAD~1 HEAD) since the coder may have committed their work.
-                let diffFiles: string[] = [];
+                const diffFiles = new Set<string>();
+                const addGitFiles = async (args: string[]): Promise<void> => {
+                    const { stdout } = await execFileAsync('git', args, { cwd, encoding: 'utf8', timeout: 30000 });
+                    String(stdout).split('\n').map(f => f.trim()).filter(Boolean).forEach(f => diffFiles.add(f));
+                };
                 try {
-                    const diffOutput = execSync('git diff --name-only HEAD', { cwd, encoding: 'utf8', timeout: 30000 });
-                    diffFiles = diffOutput.split('\n').map(f => f.trim()).filter(Boolean);
-                } catch { /* no uncommitted changes or git error */ }
-                // Also check the last commit (coder may have committed everything).
-                if (diffFiles.length === 0) {
-                    try {
-                        const diffOutput = execSync('git diff --name-only HEAD~1 HEAD', { cwd, encoding: 'utf8', timeout: 30000 });
-                        diffFiles = diffOutput.split('\n').map(f => f.trim()).filter(Boolean);
-                    } catch { /* no commits or single-commit repo */ }
-                }
-                // Fallback: unstaged diff only (no HEAD reference needed).
-                if (diffFiles.length === 0) {
-                    try {
-                        const diffOutput = execSync('git diff --name-only', { cwd, encoding: 'utf8', timeout: 30000 });
-                        diffFiles = diffOutput.split('\n').map(f => f.trim()).filter(Boolean);
-                    } catch { /* no unstaged changes */ }
-                }
+                    if (baseBranch) {
+                        await addGitFiles(['diff', '--name-only', `${baseBranch}...HEAD`]);
+                    } else {
+                        await addGitFiles(['diff', '--name-only', 'HEAD~1', 'HEAD']);
+                    }
+                } catch { /* no base ref, no prior commit, or git error */ }
+                try { await addGitFiles(['diff', '--name-only', 'HEAD']); } catch { /* no HEAD or git error */ }
+                try { await addGitFiles(['ls-files', '--others', '--exclude-standard']); } catch { /* no git repo */ }
+                const changedFiles = Array.from(diffFiles);
 
                 // Parse the plan file for mentioned file paths.
                 let planPaths: string[] = [];
                 if (planFile) {
                     try {
                         const planPath = path.isAbsolute(planFile) ? planFile : path.join(cwd, planFile);
-                        const planContent = fsSync.readFileSync(planPath, 'utf8');
+                        const planContent = await fs.readFile(planPath, 'utf8');
                         const pathRegex = /src\/[a-zA-Z0-9/_.-]+\.(ts|js|tsx|jsx|css|html|json)/g;
                         const matches = planContent.match(pathRegex);
                         if (matches) {
@@ -3007,21 +3562,21 @@ export class LocalApiServer {
                     }
                 }
 
-                if (diffFiles.length === 0) {
+                if (changedFiles.length === 0) {
                     checks.push({ name: 'diffCoverage', passed: false, details: 'Diff is empty — no changed files detected.' });
                     findings.push({ severity: 'CRITICAL', message: 'Diff is empty — no code changes detected against the plan scope.' });
                 } else if (planPaths.length === 0) {
                     // No plan paths extracted — can't check coverage, pass by default
-                    checks.push({ name: 'diffCoverage', passed: true, details: `${diffFiles.length} file(s) changed. No plan-relevant paths extracted from plan file — coverage check skipped.` });
+                    checks.push({ name: 'diffCoverage', passed: true, details: `${changedFiles.length} file(s) changed. No plan-relevant paths extracted from plan file — coverage check skipped.` });
                 } else {
-                    const touchedPlanFiles = diffFiles.filter(df =>
+                    const touchedPlanFiles = changedFiles.filter(df =>
                         planPaths.some(pp => df.endsWith(pp) || pp.endsWith(df) || df === pp)
                     );
                     if (touchedPlanFiles.length > 0) {
-                        checks.push({ name: 'diffCoverage', passed: true, details: `${diffFiles.length} file(s) changed, ${touchedPlanFiles.length} match plan scope.` });
+                        checks.push({ name: 'diffCoverage', passed: true, details: `${changedFiles.length} file(s) changed, ${touchedPlanFiles.length} match plan scope.` });
                     } else {
-                        checks.push({ name: 'diffCoverage', passed: false, details: `${diffFiles.length} file(s) changed but none match plan-relevant paths (${planPaths.slice(0, 5).join(', ')}${planPaths.length > 5 ? '...' : ''}).` });
-                        findings.push({ severity: 'MAJOR', message: `Diff does not match plan scope — changed files: ${diffFiles.slice(0, 5).join(', ')}${diffFiles.length > 5 ? '...' : ''}` });
+                        checks.push({ name: 'diffCoverage', passed: false, details: `${changedFiles.length} file(s) changed but none match plan-relevant paths (${planPaths.slice(0, 5).join(', ')}${planPaths.length > 5 ? '...' : ''}).` });
+                        findings.push({ severity: 'MAJOR', message: `Diff does not match plan scope — changed files: ${changedFiles.slice(0, 5).join(', ')}${changedFiles.length > 5 ? '...' : ''}` });
                     }
                 }
             } catch (err: any) {
@@ -4653,6 +5208,8 @@ export class LocalApiServer {
                 await this._handleTeamsCreateExternal(req, res);
             } else if (pathname === '/kanban/queue/next' && req.method === 'POST') {
                 await this._handleKanbanQueueNext(req, res);
+            } else if (pathname === '/kanban/queue/done' && req.method === 'POST') {
+                await this._handleKanbanQueueDone(req, res);
             } else if (pathname === '/kanban/move' && req.method === 'POST') {
                 await this._handleKanbanMove(req, res);
             } else if (pathname === '/kanban/feature' && req.method === 'POST') {

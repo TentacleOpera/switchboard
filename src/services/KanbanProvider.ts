@@ -32,7 +32,7 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, applySeatPacingOrders, mutateTerminalGroups } from './teamWiring';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
 import { createVscodeHostSeams, type HostSeams } from './hostSeams';
@@ -3691,16 +3691,17 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const headTerminal = (rec?.dispatchedAgent || '').trim();
             if (!headTerminal || headTerminal === 'unknown') return;
             const WATCH_KEY = 'kanban.featureWatches';
-            const watches = await db.getConfigJson<FeatureWatchRecord[]>(WATCH_KEY, []);
-            const filtered = watches.filter(w => w.featureId !== featurePlanId);
-            filtered.push({
+            const next: FeatureWatchRecord = {
                 featureId: featurePlanId,
                 headTerminal,
                 armedAt: Date.now(),
                 lastNudgedAt: 0,
                 stopColumns: ['CODE REVIEWED'],
-            });
-            await db.setConfigJson(WATCH_KEY, filtered);
+            };
+            await db.updateConfigJson<FeatureWatchRecord[]>(WATCH_KEY, [], watches => [
+                ...watches.filter(w => w.featureId !== featurePlanId),
+                next,
+            ]);
         } catch (err) {
             console.warn(`[KanbanProvider] Auto-arm feature watch failed for ${featurePlanId}:`, err);
         }
@@ -4890,6 +4891,65 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         });
     }
 
+    /**
+     * Propagate a pacing flip on a team template to the live registered
+     * group(s) spawned from it, and re-run the seat-order install/removal.
+     * Matches live groups by the `templateId` field `wireSpawnedTeam` stamps on
+     * the registered `terminals.groups` row. A live group spawned before
+     * subtask 3 has no `templateId` and is not matched — pacing takes effect on
+     * its next spawn. Best-effort and non-throwing: a missing DB or no match is
+     * not an error.
+     *
+     * The pacing field is written to the registered group as `'seat'` or
+     * removed (absent = head) — never written as `'head'`, so the install-base
+     * compatibility contract (absent reads as head) holds on the registered row
+     * too. The seat-order install/removal runs per live group through
+     * {@link applySeatPacingOrders}.
+     */
+    private async _propagatePacingToLiveGroups(workspaceRoot: string, template: any): Promise<void> {
+        if (!template || typeof template !== 'object' || !template.id) return;
+        const pacing: 'head' | 'seat' = template.pacing === 'seat' ? 'seat' : 'head';
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) return;
+            // Read live groups, find those spawned from this template.
+            let live: any[] = [];
+            try {
+                const raw = await db.getConfigJson<any[]>(TERMINALS_GROUPS_KEY, []) as any[];
+                live = Array.isArray(raw) ? [...raw] : [];
+            } catch { return; }
+            const matches = live.filter(g => g && g.templateId === template.id);
+            if (matches.length === 0) return;
+            // Write pacing onto each matched live group through the serialized
+            // chain, preserving every other key (mutateTerminalGroups spreads
+            // the existing object). Absent = head → delete the field; seat →
+            // write 'seat'.
+            await mutateTerminalGroups({ db }, (current) => {
+                return current.map((g: any) => {
+                    if (!g || g.templateId !== template.id) return g;
+                    const { pacing: _drop, ...rest } = g;
+                    void _drop;
+                    return pacing === 'seat' ? { ...rest, pacing: 'seat' } : rest;
+                });
+            });
+            // Re-run seat-order install/removal for each matched live group.
+            for (const g of matches) {
+                const roster: string[] = Array.isArray(g.order) && g.order.length
+                    ? g.order.filter((n: any) => typeof n === 'string' && n.length > 0)
+                    : (Array.isArray(g.members) ? g.members.filter((n: any) => typeof n === 'string' && n.length > 0) : []);
+                try {
+                    await applySeatPacingOrders({
+                        db, groupId: g.id, headName: g.name, roster, pacing,
+                    });
+                } catch (orderErr) {
+                    console.warn(`[KanbanProvider] applySeatPacingOrders failed for live group ${g.id}: ${orderErr instanceof Error ? orderErr.message : String(orderErr)}`);
+                }
+            }
+        } catch (propErr) {
+            console.warn(`[KanbanProvider] _propagatePacingToLiveGroups failed for template ${template.id}: ${propErr instanceof Error ? propErr.message : String(propErr)}`);
+        }
+    }
+
     private async _deleteAgentGroup(workspaceRoot: string, groupId: string): Promise<void> {
         // Persist the filtered array — even if empty — so a deleted built-in
         // stays deleted (absent = re-seed; present-and-empty = user deleted all).
@@ -5156,6 +5216,48 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * Returns `{ leads, coders }` — alive head terminal names for each role,
      * sorted. Lead first, then coder — the order subtask 2's plan specifies.
      */
+    /**
+     * Cross-reference terminals.agentGroups to fill in headRole for live
+     * groups that were written without it (pre-fix installs). Patches the
+     * groups array in-memory only — never writes back. The agentGroups key
+     * carries headRole in the team definition; the live groups key
+     * (TERMINALS_GROUPS_KEY) did not until the write-path fix landed.
+     */
+    private async _resolveHeadRoleForGroups(workspaceRoot: string, groups: any[]): Promise<any[]> {
+        if (!Array.isArray(groups) || groups.length === 0) return groups;
+        // If every group already has headRole, no cross-reference needed.
+        if (groups.every(g => g && g.headRole)) return groups;
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) return groups;
+            const agentGroups = await db.getConfigJson<any[]>('terminals.agentGroups', []) as any[];
+            if (!Array.isArray(agentGroups) || agentGroups.length === 0) {
+                // No agent groups to cross-reference — default to 'lead' for
+                // team groups (wireSpawnedTeam is only called for teams, and
+                // every coding team's head role is 'lead').
+                return groups.map(g => (g && !g.headRole && g.teamGroup) ? { ...g, headRole: 'lead' } : g);
+            }
+            // Build id → headRole and name → headRole maps.
+            const byId = new Map<string, string>();
+            const byName = new Map<string, string>();
+            for (const ag of agentGroups) {
+                if (ag && ag.headRole) {
+                    if (ag.id) byId.set(String(ag.id), String(ag.headRole));
+                    if (ag.name) byName.set(String(ag.name), String(ag.headRole));
+                }
+            }
+            return groups.map(g => {
+                if (!g || g.headRole || !g.teamGroup) return g;
+                // Match by group id first (deterministic), then by name.
+                const role = (g.id && byId.get(String(g.id))) || (g.name && byName.get(String(g.name))) || 'lead';
+                return { ...g, headRole: role };
+            });
+        } catch {
+            // Best effort — default to 'lead' for team groups.
+            return groups.map(g => (g && !g.headRole && g.teamGroup) ? { ...g, headRole: 'lead' } : g);
+        }
+    }
+
     public async resolveCodingRolesFromGroups(workspaceRoot: string): Promise<{ leads: string[]; coders: string[] }> {
         try {
             const db = this._getKanbanDb(workspaceRoot);
@@ -5179,6 +5281,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     }
                 }
             } catch { /* best effort */ }
+            // Fill in headRole for groups written without it (pre-fix installs).
+            groups = await this._resolveHeadRoleForGroups(workspaceRoot, groups);
             if (!Array.isArray(groups) || groups.length === 0) return { leads: [], coders: [] };
 
             // Build a liveness set from getFleetLiveness() — the same _ptyLiveness
@@ -5219,6 +5323,52 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (leads.length > 0) return leads[0];
         if (coders.length > 0) return coders[0];
         return null;
+    }
+
+    /**
+     * Resolve the queue pacing mode for the team a head terminal leads. Reads
+     * `terminals.groups` (the same path as `resolveCodingRolesFromGroups` /
+     * `resolveTeamMembersForHead`), finds the registered group the head leads
+     * (group `name === headTerminal`), and returns its pacing through
+     * {@link readTeamPacing} — `'head'` when the field is absent or anything
+     * other than `'seat'`. This is the read site the queue nudge sweep
+     * (subtask 3) and `Run queue`'s status text use; the pop (subtask 1) reads
+     * the field from the same registered row.
+     *
+     * Returns `'head'` when the head leads no registered group or the DB is
+     * unavailable — absent is head pacing, the install-base compatibility
+     * contract.
+     */
+    public async resolveTeamPacing(workspaceRoot: string, headTerminal: string | null): Promise<'head' | 'seat'> {
+        if (!headTerminal) return 'head';
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) return 'head';
+            let groups: any[] = [];
+            try {
+                const raw = await db.getConfigJson<any[]>(TERMINALS_GROUPS_KEY, []) as any[];
+                groups = Array.isArray(raw) ? [...raw] : [];
+            } catch { /* key absent → head pacing */ }
+            try {
+                const bare = await db.getConfigJson<any[]>('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+            // The group the head leads: registered group `name` is the head
+            // terminal name (set by wireSpawnedTeam). Match by id first (the
+            // canonical derivation), then by name.
+            const headId = 'team_' + encodeURIComponent(headTerminal).replace(/[^a-zA-Z0-9_]/g, '_');
+            const headGroup = groups.find(g => g && g.id === headId)
+                || groups.find(g => g && g.name === headTerminal);
+            return readTeamPacing(headGroup);
+        } catch { return 'head'; }
     }
 
     /**
@@ -5268,6 +5418,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     }
                 }
             } catch { /* best effort */ }
+            // Fill in headRole for groups written without it (pre-fix installs).
+            groups = await this._resolveHeadRoleForGroups(workspaceRoot, groups);
             if (!Array.isArray(groups) || groups.length === 0) return null;
 
             // Build a liveness set from getFleetLiveness() — same _ptyLiveness
@@ -5441,10 +5593,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             return `- ${m.name}${roleLabel} — ${statusLabel}`;
         });
 
-        // Collect plan IDs from the plans array (features + subtasks).
-        const planIds = plans
-            .map(p => p.planId)
-            .filter((id): id is string => !!id);
+        // Collect subtask entries (ID + file path + title) from the plans array.
+        // Only subtasks — NOT the feature card itself — so the list matches the
+        // feature file's Subtasks section. The lead needs the file path to tell
+        // a coder "Implement the plan at <path>" — a bare planId forces an API
+        // lookup, defeating the point of the enriched prompt.
+        const planEntries = plans
+            .filter(p => p.isSubtask)
+            .map(p => ({ planId: p.planId, absolutePath: p.absolutePath, topic: p.topic }))
+            .filter(e => e.planId);
 
         const block = [
             'You are driving this feature through your team seats. Everything you need is below — do not look anything up.',
@@ -5465,6 +5622,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'FEATURE WATCH: Armed by the system (stopColumns: CODE REVIEWED). You will be nudged if you go idle with un-accepted subtasks. No action needed.',
             '',
             'RULES:',
+            '- Do NOT rewrite or edit plan files. The plan is the source of truth — read it, dispatch based on it, review against it, never modify its content.',
             '- Do NOT query kanban.db directly. The plan IDs are in your prompt; use the API for anything else.',
             '- Do NOT verify work before dispatching. The kanban column is the system\'s record, not a coder\'s claim.',
             '- Clear a terminal only when at rest (completion received AND next work goes elsewhere).',
@@ -5472,8 +5630,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- Full protocol (escalation ladder, unattended mode, resting terminals, failure modes): .agents/skills/terminal-coder-dispatch/SKILL.md',
         ];
 
-        if (planIds.length > 0) {
-            block.push('', 'PLAN IDs:', ...planIds.map(id => `- ${id}`));
+        if (planEntries.length > 0) {
+            block.push('', 'SUBTASKS:', ...planEntries.map(e => {
+                const rel = e.absolutePath ? path.relative(workspaceRoot, e.absolutePath) : e.absolutePath;
+                const title = e.topic ? ` (${e.topic})` : '';
+                return `- ${e.planId} → ${rel}${title}`;
+            }));
         }
 
         return block.join('\n');
@@ -5745,8 +5907,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             gitBranchStrategy: promptsConfig.gitBranchStrategyByRole?.[role] ?? 'notSpecified',
             gitCommitStrategy: promptsConfig.gitCommitStrategyByRole?.[role] ?? 'notSpecified',
             gitPushStrategy: promptsConfig.gitPushStrategyByRole?.[role] ?? 'notSpecified',
-            // Phone-a-Friend — only meaningful on coder/lead/intern; other roles map to false.
-            phoneAFriendEnabled: promptsConfig.phoneAFriendByRole?.[role] ?? false,
+            // Phone-a-Friend now runs as the sequential pre-review gate; legacy
+            // in-flight prompts can still call POST /phone-a-friend, but new coder
+            // prompts must not double-trigger the retired post-batch side channel.
+            phoneAFriendEnabled: false,
             // §Phone-a-Friend — plumb the LocalApiServer port at build time (Option A) so
             // worktree CWDs don't read the port file (which lives only in the main workspace
             // root's .switchboard/). 0 when the server isn't running → directive omitted.
@@ -11101,7 +11265,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         return { success: false, error: 'kanban database is not ready' };
                     }
                     const WATCH_KEY = 'kanban.featureWatches';
-                    const watches = await db.getConfigJson<FeatureWatchRecord[]>(WATCH_KEY, []);
                     const next: FeatureWatchRecord = {
                         featureId,
                         headTerminal,
@@ -11112,11 +11275,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // Arming twice for the same feature REPLACES the watch rather
                     // than stacking — a head that re-arms after a restart must not
                     // accumulate duplicate nudges for the same feature.
-                    const filtered = watches.filter(w => w.featureId !== featureId);
-                    filtered.push(next);
-                    await db.setConfigJson(WATCH_KEY, filtered);
+                    const updated = await db.updateConfigJson<FeatureWatchRecord[]>(WATCH_KEY, [], watches => [
+                        ...watches.filter(w => w.featureId !== featureId),
+                        next,
+                    ]);
                     this._scheduleBoardRefresh(workspaceRoot);
-                    return { success: true, watch: next, watches: filtered };
+                    return { success: true, watch: next, watches: updated };
                 } catch (err) {
                     return { success: false, error: `watchFeature failed: ${err}` };
                 }
@@ -11140,15 +11304,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         return { success: false, error: 'kanban database is not ready' };
                     }
                     const WATCH_KEY = 'kanban.featureWatches';
-                    const watches = await db.getConfigJson<FeatureWatchRecord[]>(WATCH_KEY, []);
-                    const before = watches.length;
-                    const filtered = watches.filter(w => w.featureId !== featureId);
-                    const removed = filtered.length < before;
+                    let removed = false;
+                    const updated = await db.updateConfigJson<FeatureWatchRecord[]>(WATCH_KEY, [], watches => {
+                        const filtered = watches.filter(w => w.featureId !== featureId);
+                        removed = filtered.length < watches.length;
+                        return filtered;
+                    });
                     if (removed) {
-                        await db.setConfigJson(WATCH_KEY, filtered);
                         this._scheduleBoardRefresh(workspaceRoot);
                     }
-                    return { success: true, removed, watches: filtered };
+                    return { success: true, removed, watches: updated };
                 } catch (err) {
                     return { success: false, error: `unwatchFeature failed: ${err}` };
                 }
@@ -11890,6 +12055,15 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     this.postMessage({ type: 'showStatusMessage', message: 'No coding head is live. Seat a coding team (TEAMS tab or Setup) before pressing Run.', isError: true });
                     return { success: false, error: 'No coding head is live — seat a coding team first' };
                 }
+                // Subtask 3: resolve the team's pacing mode so the status
+                // message names which mode ran. `from` is still required and
+                // still means "the terminal whose team this is" — in seat
+                // pacing it stops meaning "the terminal that receives the
+                // card", but the pop still needs it to resolve the team roster
+                // and the in-flight predicate. An operator who cannot tell
+                // from the UI which mode ran will diagnose the wrong thing the
+                // first time a card lands somewhere unexpected.
+                const pacing = await this.resolveTeamPacing(workspaceRoot, headTerminal);
                 try {
                     const outcome = await apiServer.dispatchNextFromQueue({ workspaceRoot, from: headTerminal });
                     // dispatchNextFromQueue returns { status, payload } — NOT
@@ -11906,8 +12080,28 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             return { success: true, dispatched: null, reason: payload.reason || 'queue empty' };
                         }
                         const topic = payload.dispatched?.topic || payload.dispatched?.planId || 'plan';
-                        this.postMessage({ type: 'showStatusMessage', message: `Dispatched '${topic}' from the queue to '${headTerminal}'.`, isError: false });
-                        return { success: true, dispatched: payload.dispatched, from: headTerminal };
+                        // Subtask 3: name the mode and, in seat pacing, the
+                        // seat the first card actually went to. Subtask 1's
+                        // pop returns the routed terminal in
+                        // `teamRouting.to` / `dispatchedTerminal`; fall back
+                        // to `from` (head) when absent (head pacing or a
+                        // degraded pop). In seat pacing with a head-only team,
+                        // every card routes to that one seat by degradation —
+                        // say so rather than letting it look like routing is
+                        // broken.
+                        if (pacing === 'seat') {
+                            const routedSeat = payload.dispatched?.teamRouting?.to
+                                || payload.dispatched?.dispatchedTerminal
+                                || headTerminal;
+                            const isDegraded = routedSeat === headTerminal;
+                            const modeNote = isDegraded
+                                ? ` (seat pacing, degraded — head-only team, every card routes to the head seat)`
+                                : ` (seat pacing — routed by complexity to seat '${routedSeat}')`;
+                            this.postMessage({ type: 'showStatusMessage', message: `Dispatched '${topic}' from the queue to '${routedSeat}'${modeNote}.`, isError: false });
+                        } else {
+                            this.postMessage({ type: 'showStatusMessage', message: `Dispatched '${topic}' from the queue to '${headTerminal}' (head pacing).`, isError: false });
+                        }
+                        return { success: true, dispatched: payload.dispatched, from: headTerminal, pacing };
                     }
                     if (status === 409) {
                         this.postMessage({ type: 'showStatusMessage', message: payload.error || 'Team already in flight — hand the current card to review before asking for the next.', isError: true });
@@ -12693,6 +12887,15 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 try {
                     await this._saveAgentGroup(workspaceRoot, msg.group);
+                    // Subtask 3: a pacing flip on the template propagates to the
+                    // live registered group(s) spawned from it (matched by the
+                    // `templateId` wireSpawnedTeam stamps on the registered row)
+                    // and re-runs the seat-order install/removal in the same
+                    // pass — a stale order reaching a live agent is a known
+                    // failure mode. Best-effort: a missing live group (team not
+                    // spawned, or spawned before subtask 3 stamped templateId)
+                    // is not an error; pacing takes effect on the next spawn.
+                    await this._propagatePacingToLiveGroups(workspaceRoot, msg.group);
                     this.postMessage({ type: 'saveAgentGroupResult', success: true });
                     return { success: true };
                 } catch (e: any) {

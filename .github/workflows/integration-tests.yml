@@ -231,6 +231,9 @@ jobs:
       - name: Terminal groups key unification (roster survives the panel's whole-array save)
         run: npm run test:contract:terminal-groups-key
 
+      - name: Terminal groups head role contract (live groups resolve coding heads)
+        run: npm run test:contract:terminal-groups-headrole
+
       - name: Link presets mirror (linkPresets.ts ≡ LINK_PRESETS in terminals.js)
         run: npm run test:contract:link-presets-mirror
 
@@ -959,6 +962,15 @@ jobs:
       # by no script and no CI step — so the new tests could never have run.
       - name: Feature Drive-mode prompt reframe contract
         run: npm run test:contract:feature-drive-prompt
+
+      - name: Agent prompt builder focused suite
+        run: xvfb-run -a npm test -- --grep "agentPromptBuilder"
+
+      - name: Kanban provider focused suite
+        run: xvfb-run -a npm test -- --grep "KanbanProvider"
+
+      - name: Drive-mode prompt overhaul contract
+        run: npm run test:contract:drive-mode-prompt-overhaul
 
       - name: Run integration suite
         run: npm run test:integration:all

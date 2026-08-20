@@ -53,6 +53,8 @@ function srcFiles(dir = 'src') {
 }
 
 const PERSONA = '.agents/skills/switchboard-orchestrator/SKILL.md';
+const EXTERNAL_RUNSHEET = '.agents/skills/switchboard-orchestrator-external/SKILL.md';
+const INTERNAL_RUNSHEET = '.agents/skills/switchboard-orchestrator-internal/SKILL.md';
 const ORCHESTRATION = '.agents/skills/switchboard-orchestration/SKILL.md';
 const LAUNCHER = '.agents/workflows/switchboard.md';
 const GROUPING = '.agents/skills/group-into-features/SKILL.md';
@@ -77,6 +79,8 @@ async function run() {
 
     // ─── 1. Persona: the tick, and the two sections it does not own ──────────
     const persona = read(PERSONA);
+    const externalRunsheet = read(EXTERNAL_RUNSHEET);
+    const internalRunsheet = read(INTERNAL_RUNSHEET);
 
     await check('persona keeps the two sections owned by the pre-flight subtask', () => {
         assert.ok(persona.includes('\n## Pre-flight\n'), 'persona lost ## Pre-flight');
@@ -191,30 +195,76 @@ async function run() {
     });
 
     await check('self-wake names a real interval source and owns the clearing it no longer receives', () => {
-        assert.ok(/\n## Self-Wake\n/.test(persona), 'persona has no ## Self-Wake section — the agent has no way to wake itself');
+        assert.ok(/\n## Self-Wake\n/.test(externalRunsheet), 'external runsheet has no ## Self-Wake section — the agent has no way to wake itself');
         // The interval lives in VS Code workspaceState under the `autoban.state` key.
         // It is not a file and no endpoint returns it; naming a path sends the agent
         // to a `cat` that always fails.
         assert.ok(
-            /There is no\s*`?\.switchboard\/autoban\.state`? file/.test(persona),
-            'persona does not say .switchboard/autoban.state is not a file — the agent cats a path that never existed and stalls looking for its interval'
+            /There is no\s*`?\.switchboard\/autoban\.state`? file/.test(externalRunsheet),
+            'external runsheet does not say .switchboard/autoban.state is not a file — the agent cats a path that never existed and stalls looking for its interval'
         );
         // Strip the disclaimer above before forbidding the path, so the sentence that
         // denies the file does not read as an instruction to open it.
         assert.ok(
             !/\.switchboard\/autoban\.state/.test(
-                persona.replace(/There is no\s*`?\.switchboard\/autoban\.state`? file/g, '')
+                externalRunsheet.replace(/There is no\s*`?\.switchboard\/autoban\.state`? file/g, '')
             ),
-            'persona points the agent at .switchboard/autoban.state — no such file exists; the wake interval is not readable from disk'
+            'external runsheet points the agent at .switchboard/autoban.state — no such file exists; the wake interval is not readable from disk'
         );
         assert.ok(
-            /there is no deliverer to do it for you/i.test(persona),
-            'persona still claims every wake clears the terminal — a self-wake `echo WAKE` clears nothing, so the agent must be told it owns the clearing'
+            /there is no deliverer to do it for you/i.test(externalRunsheet),
+            'external runsheet still claims every wake clears the terminal — a self-wake `echo WAKE` clears nothing, so the agent must be told it owns the clearing'
         );
         assert.ok(
-            /you are the deliverer/i.test(persona),
+            /you are the deliverer/i.test(externalRunsheet),
             'the drop-not-queue rule is still attributed only to the host — under self-wake the sleep loop fires mid-pass and nobody drops it'
         );
+    });
+
+    await check('shared logic has no wake mentions — the split is complete', () => {
+        assert.ok(
+            !/## Self-Wake/.test(persona),
+            'shared logic still contains ## Self-Wake — the split is incomplete'
+        );
+        assert.ok(
+            !/self-wake/i.test(persona),
+            'shared logic still mentions self-wake — wake is a runtime concern that belongs in the runsheets'
+        );
+    });
+
+    await check('internal runsheet states the host-wake contract and does NOT mention self-wake', () => {
+        assert.ok(
+            /host wakes you/i.test(internalRunsheet),
+            'internal runsheet does not state the host-wake contract — a PTY-resident agent would not know it is woken by the host'
+        );
+        assert.ok(
+            /ptySendPrompt/.test(internalRunsheet),
+            'internal runsheet does not name ptySendPrompt as the delivery mechanism'
+        );
+        assert.ok(
+            !/## Self-Wake/.test(internalRunsheet),
+            'internal runsheet contains ## Self-Wake — a host-woken agent must not be told to self-wake'
+        );
+        assert.ok(
+            !/self-wake/i.test(internalRunsheet),
+            'internal runsheet mentions self-wake — a host-woken agent must not be told to self-wake'
+        );
+    });
+
+    await check('the handoff decision enumerates all three shared session models', () => {
+        const section = persona.slice(persona.indexOf('## Handoff, or arm?'), persona.indexOf('Two session states:'));
+        assert.ok(/Three session models:/.test(section), 'the heading must agree with the three model bullets');
+        for (const model of ['Seat-routed queue', 'Handoff (default for one team)', 'Arm (multi-team exception)']) {
+            assert.ok(section.includes(`**${model}`), `handoff decision lost the ${model} model`);
+        }
+    });
+
+    await check('kickoff fails closed when the runtime runsheet is missing', () => {
+        const provider = read('src/services/TaskViewerProvider.ts');
+        const start = provider.indexOf('public async buildOrchestratorKickoffPrompt(');
+        const body = provider.slice(start, provider.indexOf('\n    /**', start + 10));
+        assert.ok(/access\(runsheetPath\)/.test(body), 'kickoff does not require the selected runtime runsheet');
+        assert.ok(!/runsheet missing[^\n]*fall back to shared logic/i.test(body), 'kickoff silently drops the wake contract when a runsheet is missing');
     });
 
     await check('the handoff bullet describes what the queue watch actually does', () => {

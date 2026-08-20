@@ -19,8 +19,11 @@ They compose conceptually: the reviewer sees pre-checked work (tiered review), t
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Reviewer Sends Diagnosis-Only for Judgment Calls](../plans/reviewer-diagnosis-only-for-judgment-calls.md) — **PLAN REVIEWED**
-- [ ] [Self-Fix Threshold for Surgical Sets Under ~100 Lines](../plans/self-fix-threshold-for-surgical-sets.md) — **PLAN REVIEWED**
-- [ ] [Tiered Review: Mechanical Gate + Phone-a-Friend Pre-Review Before Expensive Reviewer](../plans/tiered-review-mechanical-gate-and-phone-a-friend-pre-review.md) — **PLAN REVIEWED**
+- [ ] [Reviewer Fix Delegation: Self-Fix Threshold + Diagnosis-Only for Judgment Calls](../plans/self-fix-threshold-for-surgical-sets.md) — **CODE REVIEWED**
+- [ ] [Tiered Review: Mechanical Gate + Phone-a-Friend Pre-Review Before Expensive Reviewer](../plans/tiered-review-mechanical-gate-and-phone-a-friend-pre-review.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+Reviewed the combined delivery and fixed material issues across `src/services/agentPromptBuilder.ts`, `LocalApiServer.ts`, `TaskViewerProvider.ts`, `KanbanProvider.ts`, `teamWiring.ts`, `src/webview/kanban.html`, `protocol-catalog.json`, and the two contract tests. The fixes make the self-fix instruction consistent through the full prompt/standing-order path, run the mechanical gate asynchronously in the routed worktree, make Phone-a-Friend a verdict-bearing sequential gate, prevent mode races and post-batch double triggers, and migrate untouched shipped Review-team prompts. Validation passed: `npm run compile`, `npm run compile-tests`, `npm run test:contract:team-scoped-routing` (62/62), `npm run test:contract:standing-orders-marker` (55/55), `npm run catalog:check`, and `npm run lint` (0 errors; existing warnings remain). CI invokes compile and both contract scripts in `.github/workflows/integration-tests.yml`; remaining risk is limited to the intentionally unbounded wait when a live Phone-a-Friend never sends its completion signal, which emits the existing stall notice.
 

@@ -156,6 +156,37 @@ function testCustomAgentPath() {
     console.log('  PASS: custom-agent path');
 }
 
+function testDriveModeAddonSuppression() {
+    console.log('Testing Drive-mode addon suppression...');
+    const addons = {
+        skipCompilation: true,
+        skipTests: true,
+        suppressWalkthroughEnabled: true,
+        accurateCodingEnabled: true
+    };
+    const forbidden = ['SKIP COMPILATION:', 'SKIP TESTS:', 'SUPPRESS WALKTHROUGH:', 'Accuracy Mode'];
+    const driveCoder = buildKanbanBatchPrompt('coder', makeFeaturePlans(), { ...driveOpts, ...addons });
+    for (const phrase of forbidden) {
+        assert.ok(!driveCoder.includes(phrase), `Coder Drive prompt must NOT contain "${phrase}"`);
+    }
+    const nonDriveCoder = buildKanbanBatchPrompt('coder', makeFeaturePlans(), { ...baseOpts, ...addons });
+    for (const phrase of forbidden) {
+        assert.ok(nonDriveCoder.includes(phrase), `Coder non-Drive prompt must retain "${phrase}"`);
+    }
+    const driveLead = buildKanbanBatchPrompt('lead', makeFeaturePlans(), { ...driveOpts, ...addons });
+    for (const phrase of forbidden.slice(0, 3)) {
+        assert.ok(!driveLead.includes(phrase), `Lead Drive prompt must NOT contain "${phrase}"`);
+    }
+    const nonDriveLead = buildKanbanBatchPrompt('lead', makeFeaturePlans(), { ...baseOpts, ...addons });
+    for (const phrase of forbidden.slice(0, 3)) {
+        assert.ok(nonDriveLead.includes(phrase), `Lead non-Drive prompt must retain "${phrase}"`);
+    }
+    const reviewerBase = buildKanbanBatchPrompt('reviewer', makeFeaturePlans(), addons);
+    const reviewerWithDriveFlag = buildKanbanBatchPrompt('reviewer', makeFeaturePlans(), { ...addons, driveMode: true });
+    assert.strictEqual(reviewerWithDriveFlag, reviewerBase, 'Reviewer prompt must ignore an unpaired Drive flag');
+    console.log('  PASS: Drive-mode addon suppression');
+}
+
 function testNonFeatureDispatchUnaffected() {
     console.log('Testing non-feature dispatch is unaffected...');
     // driveMode is only ever set alongside featureMode, but the flag must no-op rather
@@ -175,6 +206,7 @@ try {
     testPlannerUnaffectedByDrive();
     testDriveOffUnchanged();
     testCustomAgentPath();
+    testDriveModeAddonSuppression();
     testNonFeatureDispatchUnaffected();
     console.log('\nFeature Drive-mode prompt reframe contract PASSED!');
 } catch (err) {

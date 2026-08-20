@@ -126,6 +126,114 @@ function layoutForTeamSize(memberCount: number): string {
     return '3x3';
 }
 
+/**
+ * Read a team group's pacing mode. Tri-state: absent OR `'head'` → `'head'`;
+ * only a literal `'seat'` reads as `'seat'`. This is the compatibility contract
+ * for ~4,000 installs — a stale writer defaulting a boolean to `false` could
+ * silently flip the whole install base to seat pacing, which is why the field
+ * is tri-state and absent means head. One read site, used by the pop
+ * (subtask 1), the watch (subtask 3), and `Run queue`'s status text.
+ */
+export function readTeamPacing(group: any): 'head' | 'seat' {
+    return group && group.pacing === 'seat' ? 'seat' : 'head';
+}
+
+/**
+ * The standing-order body installed on every seat of a seat-paced team so each
+ * seat reports done itself — there is no head to report to. Mirrored at `team`
+ * and `team-head` scope (head seat included) by `applySeatPacingOrders`. The
+ * body is the contract subtask 2's plan specifies (step 1); subtask 3 owns the
+ * install/removal trigger, subtask 2 owns the `outcome: 'failed'` ladder branch
+ * inside the `queue/done` critical section.
+ *
+ * References `POST /kanban/queue/done` (subtask 1's endpoint). Installing this
+ * order before subtask 1 lands leaves seats calling a 404 — an operator who
+ * toggles seat pacing before the feature is ready gets a degraded run, not a
+ * broken one: the watch (subtask 3) catches a seat that never reports.
+ */
+export const SEAT_QUEUE_DONE_ORDER_BODY =
+    'When you finish the card you were dispatched, POST /kanban/queue/done with '
+    + '{"from":"<your seat name>"} against the port in .switchboard/api-server-port.txt. '
+    + 'Do not wait to be asked; there is no head to report to. '
+    + 'If you cannot complete it, call the same endpoint with {"from":"<your seat name>",'
+    + '"outcome":"failed"} and a one-line reason. Do not attempt work above your tier and '
+    + 'do not report success you cannot evidence. '
+    + 'A response of {"dispatched":null,"reason":"queue empty"} means the run is over — '
+    + 'say so and stop. Do not call POST /kanban/queue/next, and do not move cards.';
+
+/**
+ * Deterministic id prefix for the seat-paced queue/done orders, so they can be
+ * found and removed without scanning instruction text. One order per scope
+ * (`team`, `team-head`) per team — the prefix + teamId + scope is unique.
+ */
+const SEAT_QUEUE_ORDER_ID_PREFIX = 'seat-queue-done:';
+
+/**
+ * Install or remove the seat-paced `queue/done` standing orders for a team.
+ * Seat pacing installs the {@link SEAT_QUEUE_DONE_ORDER_BODY} at BOTH `team`
+ * (members, head excluded by `selectOrders`) and `team-head` (head seat) scope
+ * so every seat — head seat included — is told to report done itself. Head
+ * pacing removes any previously-installed seat orders for this team in the same
+ * mutation, so a stale order never reaches a live agent (the known failure mode
+ * `a-stale-standing-order-can-still-reach-a-live-agent.md` exists to prevent).
+ *
+ * Idempotent: install skips an order that already exists; remove is a no-op when
+ * none are present. Serialized through `mutateStandingOrders`' own chain.
+ *
+ * `roster` is the team's full seat list (head + members) — used only to set the
+ * `parent` field so `selectOrders`' head-exclusion resolves correctly. The head
+ * name is `headName`; members are the non-head seats.
+ */
+export async function applySeatPacingOrders(opts: {
+    db: any;
+    groupId: string;
+    headName: string;
+    roster: string[];
+    pacing: 'head' | 'seat';
+}): Promise<void> {
+    const { db, groupId, headName, roster, pacing } = opts;
+    if (!db || !groupId) return;
+    const members = roster.filter(n => typeof n === 'string' && n.length > 0 && n !== headName);
+    await mutateStandingOrders(db, async (orders) => {
+        const next = orders.filter((o: StandingOrder) =>
+            !(typeof o.id === 'string' && o.id.startsWith(SEAT_QUEUE_ORDER_ID_PREFIX + groupId + ':'))
+        );
+        if (pacing !== 'seat') {
+            // Head pacing: seat orders removed above. Nothing to install.
+            return next;
+        }
+        // Seat pacing: install team + team-head orders. The team order's
+        // `parent` is the head name so selectOrders excludes the head from the
+        // member delivery (same convention as the team-prompt order). The
+        // team-head order's `parent` is also the head name so it delivers to
+        // the head seat. Both are keyed on (scope, teamId) for idempotency.
+        const teamId = `${SEAT_QUEUE_ORDER_ID_PREFIX}${groupId}:team`;
+        const headId = `${SEAT_QUEUE_ORDER_ID_PREFIX}${groupId}:team-head`;
+        const hasTeam = next.some(o => o.id === teamId);
+        const hasHead = next.some(o => o.id === headId);
+        if (!hasTeam) {
+            next.push(makeStandingOrder(
+                headName, '', SEAT_QUEUE_DONE_ORDER_BODY, 'team', groupId,
+            ));
+            // makeStandingOrder mints a random id; overwrite with the
+            // deterministic one so a re-run removes rather than duplicates.
+            next[next.length - 1] = { ...next[next.length - 1], id: teamId };
+        }
+        if (!hasHead) {
+            next.push(makeStandingOrder(
+                headName, '', SEAT_QUEUE_DONE_ORDER_BODY, 'team-head', groupId,
+            ));
+            next[next.length - 1] = { ...next[next.length - 1], id: headId };
+        }
+        // `members` is unused for delivery (selectOrders resolves membership
+        // from the registered group), but referenced here so the parameter is
+        // not dropped — a future editor who needs per-member scoping has the
+        // roster to hand without re-deriving it.
+        void members;
+        return next;
+    });
+}
+
 /** Config key the terminals webview owns for `terminals.groups`. */
 export const TERMINALS_GROUPS_KEY = 'switchboard.prompts.terminals.groups';
 
@@ -379,7 +487,19 @@ export const OLD_CODING_HEAD_PROMPT =
  * (the four substring assertions in the marker-contract test pin the
  * load-bearing literals).
  */
-export const NEW_CODING_HEAD_PROMPT =
+/**
+ * The PRE-role-boundary Coding team headPrompt — the text that the second
+ * migration (CURRENT_BUGGY_CODING_HEAD_PROMPT → NEW_CODING_HEAD_PROMPT) wrote
+ * to disk. This is what is on every install that already migrated to the
+ * feature-level prompt. The third migration recogniser matches against this
+ * exact value and replaces it with the corrected text (role-boundary guardrails:
+ * conditional CODE REVIEWED advance + plan-immutability directive).
+ *
+ * NEVER edit this constant. It is a frozen snapshot of a string already written
+ * to ~4000 installs' disks. New prompt wording goes in NEW_CODING_HEAD_PROMPT
+ * only.
+ */
+export const PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT =
     'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
     + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
     + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
@@ -410,7 +530,46 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
     + 'empty and stop.';
 
-export const NEW_REVIEW_TEAM_HEAD_PROMPT =
+export const NEW_CODING_HEAD_PROMPT =
+    'You lead this team. Your coders work the subtasks of one feature. '
+    + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
+    + 'Read the plan, dispatch based on it, review against it — never modify its content. '
+    + 'Each subtask carries '
+    + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
+    + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
+    + 'ptyListTerminals rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID — role alone '
+    + 'is not a membership test, and a standalone seat of the same role is not yours to drive. Take the '
+    + 'subtask\'s recommendedRole as the routing decision; do not invent complexity tiers. Before sending any '
+    + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
+    + 'review on the same subtask twice, do not send that subtask to it a third time — escalate '
+    + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
+    + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
+    + 'a lead, or your team has no seat above it, stop and report to the human instead of '
+    + 'dispatching again (or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+    + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
+    + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
+    + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
+    + 'cleared seat before rotation. Do not send anything to the reviewer, and do not write review '
+    + 'instructions — that is not your job. When every subtask of the feature is finished, read the '
+    + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
+    + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
+    + 'pwd> (that read returns one record per subtask, each with its kanbanColumn). '
+    + 'Check your team roster (the YOUR TEAM block in your prompt or ptyListTerminals) for a seat '
+    + 'with role "reviewer". If your team has a reviewer seat, make one call: '
+    + 'POST /kanban/dispatch with '
+    + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}","workspaceRoot":'
+    + '"<your current working directory — run pwd>"} — that one call moves the card and dispatches '
+    + 'the reviewer with the reviewer\'s own prompt. Do NOT use /kanban/move: it moves the card and '
+    + 'dispatches nobody. Only advance the feature your team worked; leave other cards alone. Do '
+    + 'not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
+    + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
+    + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
+    + 'empty and stop. '
+    + 'If your team has NO reviewer seat, do NOT move the card to CODE REVIEWED — that is not your role. '
+    + 'Post a finished report to .switchboard/orchestrator/reports/ naming the feature and its planId, '
+    + 'and stop. The card stays where it is.';
+
+export const OLD_REVIEW_TEAM_HEAD_PROMPT =
     'You are the reviewer on a review team. When work lands in your terminal, review it '
     + '(Stage 1: adversarial findings, Stage 2: balanced synthesis). Do NOT fix code yourself — send fix '
     + 'instructions to your coder at {coder} via POST /terminals/verb/ptySendPrompt with '
@@ -421,6 +580,17 @@ export const NEW_REVIEW_TEAM_HEAD_PROMPT =
     + 'round of fix instructions. Loop until satisfied. If after 5 rounds the same critical issues persist, '
     + 'report to the originating lead that a new plan is needed. When review passes, report to the '
     + 'originating lead that the feature passed review, then update the plan file.';
+
+export const NEW_REVIEW_TEAM_HEAD_PROMPT =
+    'You are the reviewer on a review team. When work lands in your terminal, review it '
+    + '(Stage 1: adversarial findings, Stage 2: balanced synthesis). Apply a fully diagnosed fix set under '
+    + 'approximately 100 lines directly. Delegate larger, broad, or parallelisable sets to your coder at {coder} '
+    + 'via POST /terminals/verb/ptySendPrompt. For mechanical findings, specify the exact fix. For judgment '
+    + 'calls, send the diagnosis and reasoning and let the coder choose the fix. Tell the coder to run verification '
+    + 'checks and include results. After the coder reports back, re-review ONLY the coder\'s git diff. If issues '
+    + 'remain, send another round. If after 5 rounds the same critical issues persist, report to the originating '
+    + 'lead that a new plan is needed. When review passes, report to the originating lead that the feature passed '
+    + 'review, then update the plan file.';
 
 /**
  * The CURRENT (buggy) Coding team headPrompt — the text that the first migration
@@ -553,6 +723,29 @@ export function migrateAgentGroups(groups: any[]): any[] | null {
                 `[teamWiring] Migration: corrected buggy Coding team headPrompt `
                 + `'${g.id || g.name}' — API endpoint + workspaceRoot + rotation rule.`
             );
+        }
+
+        // Step 1d: convert an install that already migrated to the feature-level
+        // headPrompt but before the role-boundary guardrails (conditional CODE REVIEWED
+        // advance + plan-immutability directive). Exact-value match on
+        // PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT; an operator-edited group does not match
+        // and is left alone.
+        if (isUntouchedPreRoleBoundaryCodingTeam(g)) {
+            g = {
+                ...g,
+                headPrompt: NEW_CODING_HEAD_PROMPT,
+            };
+            changed = true;
+            console.log(
+                `[teamWiring] Migration: converted pre-role-boundary Coding team `
+                + `'${g.id || g.name}' — headPrompt → role-boundary guardrails.`
+            );
+        }
+
+        if (g.headRole === 'reviewer' && g.headPrompt === OLD_REVIEW_TEAM_HEAD_PROMPT) {
+            g = { ...g, headPrompt: NEW_REVIEW_TEAM_HEAD_PROMPT };
+            changed = true;
+            console.log(`[teamWiring] Migration: updated untouched Review team '${g.id || g.name}' with self-fix routing.`);
         }
 
         // Step 2: convert member shape — add scope/relationship defaults.
@@ -793,6 +986,22 @@ function isUntouchedCurrentCodingTeam(group: any): boolean {
     if (!group || group.headRole !== 'lead') { return false; }
     return typeof group.headPrompt === 'string'
         && group.headPrompt === CURRENT_BUGGY_CODING_HEAD_PROMPT;
+}
+
+/**
+ * Recognise an install that already migrated to the feature-level
+ * NEW_CODING_HEAD_PROMPT (the text before the role-boundary guardrails).
+ *
+ * Exact-value match on `headPrompt === PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT`.
+ * An operator who edited the prompt does not match and is left alone.
+ *
+ * NEVER edit PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT. It is a frozen snapshot.
+ * New prompt wording goes in NEW_CODING_HEAD_PROMPT only.
+ */
+function isUntouchedPreRoleBoundaryCodingTeam(group: any): boolean {
+    if (!group || group.headRole !== 'lead') { return false; }
+    return typeof group.headPrompt === 'string'
+        && group.headPrompt === PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT;
 }
 
 /**
@@ -1065,6 +1274,14 @@ export interface WireSpawnedTeamOptions {
      */
     externalHead?: boolean;
     /**
+     * The head's role ('lead', 'planner', 'reviewer', etc.). Persisted into the
+     * live group object so readers like resolveCodingRolesFromGroups can filter
+     * on it without cross-referencing terminals.agentGroups. Defaults to 'lead'
+     * — wireSpawnedTeam is only called for team groups, and every coding team's
+     * head role is 'lead'.
+     */
+    headRole?: string;
+    /**
      * External-headed teams only: fired once the group registration has landed,
      * with the roster that was actually persisted. The caller regenerates
      * `.switchboard/teams/<teamId>/head-prompt.md` from it. Passed as a callback
@@ -1073,6 +1290,27 @@ export interface WireSpawnedTeamOptions {
      * from here would close an import cycle.
      */
     regenerateHeadPrompt?: (info: { groupId: string; memberNames: string[] }) => Promise<void> | void;
+    /**
+     * Queue pacing for this team — `'head'` (default) or `'seat'`. Persisted
+     * onto the registered `terminals.groups` row so the pop (subtask 1), the
+     * watch (subtask 3), and `Run queue`'s status text read it through
+     * {@link readTeamPacing}. Absent behaves identically to `'head'` — the
+     * compatibility contract for the whole install base. When `'seat'`,
+     * {@link applySeatPacingOrders} installs the seat `queue/done` orders at
+     * spawn; when `'head'` (or absent) any prior seat orders are removed in the
+     * same mutation. Owned by subtask 3; the caller copies it from the team
+     * template (`terminals.agentGroups`).
+     */
+    pacing?: 'head' | 'seat';
+    /**
+     * The team template id (`terminals.agentGroups` row id) this live group was
+     * spawned from. Persisted onto the registered `terminals.groups` row so a
+     * pacing flip on the template can find and update the live group(s) without
+     * a fragile name match. Absent for teams spawned outside the template path
+     * (the pty-verb path) — those carry no template and cannot be toggled from
+     * the TEAMS tab. Owned by subtask 3.
+     */
+    templateId?: string;
 }
 
 export interface WireSpawnedTeamResult {
@@ -1284,15 +1522,26 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     // seat at all". Without it the terminals panel crowns members[0] — which for an
     // external-headed team is the first CODER, since the head is excluded above.
     const externalHead = opts.externalHead === true;
+    // Pacing: copy from the template (opts.pacing) onto the registered group.
+    // Absent → omit the key entirely so the row stays byte-identical to a
+    // pre-subtask-3 install (absent reads as 'head' through readTeamPacing).
+    // Only a literal 'seat' is written; 'head' is the default and is expressed
+    // by absence, never by an explicit field, so a stale writer cannot flip the
+    // install base by defaulting a boolean.
+    const pacingField = opts.pacing === 'seat' ? { pacing: 'seat' as const } : {};
+    const templateIdField = opts.templateId ? { templateId: opts.templateId } : {};
     const group = {
         id: groupId,
         name: headName,
+        headRole: opts.headRole || 'lead',
         source: 'manual' as const,
         teamGroup: true,
         layout,
         members: groupMembers,
         order: groupMembers,
         externalHead,
+        ...pacingField,
+        ...templateIdField,
     };
 
     try {
@@ -1305,11 +1554,14 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                 return [...current, group];
             }
             const existing = current[idx];
+            const { pacing: _existingPacing, ...existingWithoutPacing } = (existing && typeof existing === 'object') ? existing : {};
+            void _existingPacing;
             const merged = (existing && typeof existing === 'object')
                 ? {
-                    ...existing,
+                    ...existingWithoutPacing,
                     id: groupId,
                     name: headName,
+                    headRole: opts.headRole || 'lead',
                     source: 'manual' as const,
                     teamGroup: true,
                     layout: (typeof existing.layout === 'string' && TERMINALS_LAYOUT_MODES.has(existing.layout))
@@ -1318,6 +1570,8 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                     members: groupMembers,
                     order: groupMembers,
                     externalHead,
+                    ...pacingField,
+                    ...templateIdField,
                 }
                 : group;
             const next = [...current];
@@ -1327,6 +1581,21 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     } catch (err: any) {
         // A failed group write must not undo a successful order install.
         return { ok: false, error: `Group registration failed: ${err?.message || err}` };
+    }
+
+    // ── Seat-paced queue/done orders (subtask 3) ───────────────────────
+    // Install when pacing is 'seat', remove when 'head'/absent — in the same
+    // wiring pass so a re-spawn never leaves a stale order reaching a live
+    // agent. Runs AFTER the group write so the roster the orders' `parent`
+    // (head name) resolves against is the persisted one. A failure here leaves
+    // a missing/extra order, not a broken team, so it must not fail the wiring.
+    try {
+        await applySeatPacingOrders({
+            db, groupId, headName, roster: groupMembers,
+            pacing: readTeamPacing({ pacing: opts.pacing }),
+        });
+    } catch (orderErr: any) {
+        console.warn(`[teamWiring] applySeatPacingOrders failed for team ${groupId}: ${orderErr?.message || orderErr}`);
     }
 
     // Head-prompt regeneration (external heads only). Runs AFTER the group write
@@ -1463,6 +1732,15 @@ export const OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review you
 export const BUGGY_HEADPROMPT_FRAGMENT = 'give that coder the next subtask';
 
 /**
+ * A substitution-independent fragment unique to the PRE-role-boundary
+ * `NEW_CODING_HEAD_PROMPT` — the text before conditional review dispatch and
+ * plan-immutability guardrails.
+ *
+ * Two copies only: this one and the `terminals.js` mirror.
+ */
+export const PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT = 'then make one call: ';
+
+/**
  * Migrate stale Coding-team standing orders on read — the read-site
  * counterpart to the `migrateAgentGroups` Coding-team step (§1b).
  *
@@ -1518,17 +1796,17 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
         }
 
         // Stale team-head row carrying EITHER the old per-subtask headPrompt
-        // (OLD_HEADPROMPT_FRAGMENT) or the first-generation feature-level one
-        // that shipped with the four API/rotation defects
-        // (BUGGY_HEADPROMPT_FRAGMENT). Both are stale for the same reason and
-        // both rewrite to the same corrected text.
+        // (OLD_HEADPROMPT_FRAGMENT), the first-generation feature-level one
+        // (BUGGY_HEADPROMPT_FRAGMENT), or the pre-role-boundary one
+        // (PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT).
         // {head} was already substituted at install time, so match on a
         // substitution-independent fragment by indexOf. On match, rewrite
         // the instruction to the new feature-level text with {head}
         // substituted by the order's parent (the head name).
         if (o.scope === 'team-head' && typeof o.instruction === 'string') {
             if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1
-                || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1) {
+                || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1
+                || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1) {
                 const newInstruction = NEW_CODING_HEAD_PROMPT
                     .replace(/\{head\}/g, o.parent || '');
                 rewritten.push({ ...o, instruction: newInstruction });
@@ -1856,4 +2134,61 @@ export async function resolveTeamMembersForHead(opts: {
         if (roster.length) { return roster; }
     }
     return null;
+}
+
+/**
+ * Resolve the `pacing` field of the team headed by `originName`: `'seat'` when
+ * the team is toggled to seat-paced dispatch, `'head'` otherwise. Reads the
+ * SAME team group `resolveTeamMembersForHead` resolves (preferred: the group
+ * the origin HEADS; otherwise the first group containing the origin), so the
+ * pacing decision and the roster derive from one definition. Subtask 3 writes
+ * the `pacing` field on the group; absent / non-`'seat'` reads as `'head'`,
+ * which is byte-for-byte the pre-seat-pacing behaviour (the regression gate for
+ * ~4,000 installs). Returns `'head'` when the head names no live team or the
+ * field is absent — never null — so callers can use it as a defaulting oracle.
+ */
+export async function resolveTeamPacingForHead(opts: {
+    db?: any;
+    settings?: TerminalGroupsSettingsAccessor;
+    originName: string;
+}): Promise<'head' | 'seat'> {
+    const { db, settings, originName } = opts;
+    if ((!db && !settings) || !originName) { return 'head'; }
+
+    let groups: any[] = [];
+    try {
+        if (settings) {
+            const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
+            groups = Array.isArray(raw) ? [...raw] : [];
+        } else if (db) {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? [...raw] : [];
+        }
+        if (db) {
+            try {
+                const bare = await db.getConfigJson('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+        }
+    } catch { return 'head'; }
+    if (!Array.isArray(groups) || groups.length === 0) { return 'head'; }
+
+    // Preferred: the group the origin HEADS (same id derivation as
+    // resolveTeamMembersForHead / resolveTeamScopedRoleTerminal).
+    const headId = 'team_' + encodeURIComponent(originName).replace(/[^a-zA-Z0-9_]/g, '_');
+    let group: any = groups.find(g => g && g.id === headId);
+    // Otherwise: first group (in stored order) that contains the origin.
+    if (!group) {
+        group = groups.find(g => g && Array.isArray(g.members) && g.members.includes(originName));
+    }
+    if (!group) { return 'head'; }
+    return group.pacing === 'seat' ? 'seat' : 'head';
 }

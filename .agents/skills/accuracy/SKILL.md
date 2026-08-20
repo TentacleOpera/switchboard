@@ -1,4 +1,6 @@
-# Accuracy — Solo High-Accuracy Mode
+# Accuracy — Solo High-Accuracy Coding Mode
+
+> **Scope**: This skill is for CODING/IMPLEMENTATION agents only. It is NOT for review agents. If you are reviewing someone else's work, use the `review` skill instead.
 
 > This workflow trades tokens for correctness. It's designed for contexts where usage is free or low-cost, so the strategy is: **invest heavily in context-gathering and planning, verify at every gate, and red-team before finishing — to minimize rework rather than to save prompts.**
 

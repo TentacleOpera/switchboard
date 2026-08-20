@@ -25,7 +25,6 @@ The visibility plan must land first — it creates the UFO button, the state rel
 - [ ] [Switchboard Operator Start from Shell Rail](../plans/operator-start-from-shell-rail.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
-
 ## Review Findings
 
 Both subtasks reviewed and PASSED after three fix rounds. Four CRITICAL and four MAJOR defects were found and fixed across `src/webview/shell.js`, `src/webview/shell.html`, `src/webview/terminals.js`, `src/standalone/bootstrap.ts`, `src/services/LocalApiServer.ts`, `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`, and two test files. The two that mattered most: the UFO icon never rendered on cold load (its only creator fired on a relayed message, and the assumed resync carrier was dropped by wsHub surface filtering), and two rapid dimmed-clicks would have booted two competing orchestrator terminals because the seat guard could not fire — the server never seats, the agent adopts later. Validation: `npm run compile` exit 0 / 0 errors, `test:contract:shell-terminal-strip` 46 passed / 0 failed, `test:contract:orchestrator-tick` 38 checks pass. Remaining risks, both accepted and documented in the subtask plans: the relay stays fail-closed on the terminals panel being mounted (no node-pty ⇒ icon renders dimmed but never lights), and shell readiness before persona-prompt delivery is a fixed 1500ms delay rather than a pty readiness signal, matching the extension host.

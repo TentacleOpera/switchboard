@@ -182,6 +182,7 @@ export interface PromptBuilderOptions {
      *  and optionally a phone-a-friend sanity review. The reviewer prompt notes this so it
      *  can skip mechanical checks and focus on deep analysis. */
     reviewerPreCheckPassed?: boolean;
+    reviewerPhoneAFriendPassed?: boolean;
     /** When true, reviewer appends a brief summary to the plan file instead of reproducing full sections. */
     reviewerCompactPlanUpdateEnabled?: boolean;
     /** When true (default), the reviewer prompt forbids creating separate .md review artifact files. */
@@ -778,8 +779,9 @@ export const PHONE_A_FRIEND_DIRECTIVE = (port: number, originRole: string, origi
  * the plan being reviewed — the host correlates it against queue.inFlight to
  * reject spurious callbacks from a different dispatch that clobbered the terminal.
  */
-export const PHONE_A_FRIEND_DONE_DIRECTIVE = (port: number, targetKey: string, planFile: string) => {
-  return `\n\nCOMPLETION SIGNAL: When you have finished reviewing and fixing this plan, you MUST call exactly ONCE:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend/done -H "Content-Type: application/json" -d '{"target":"${targetKey}","planFile":"${planFile}"}'\nThis is a required step — it tells the host you are done so the next plan can be sent. Send exactly one request.`;
+export const PHONE_A_FRIEND_DONE_DIRECTIVE = (port: number, targetKey: string, planFile: string, mode?: 'pre-review' | 'post-batch') => {
+  const verdictFields = mode === 'pre-review' ? ',"result":"<PASS_OR_FAIL>","findings":"<JSON_ESCAPED_FINDINGS>"' : '';
+  return `\n\nCOMPLETION SIGNAL: When you have finished reviewing and fixing this plan, you MUST call exactly ONCE:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend/done -H "Content-Type: application/json" -d '{"target":"${targetKey}","planFile":"${planFile}"${verdictFields}}'\nThis is a required step — it tells the host you are done so the next plan can be sent. Send exactly one request.${mode === 'pre-review' ? ' Replace PASS_OR_FAIL with your verdict and JSON_ESCAPED_FINDINGS with a concise JSON-escaped explanation.' : ''}`;
 };
 
 /**
@@ -1822,7 +1824,7 @@ UNATTENDED IMPROVER CONTRACT:
     }
 
     if (role === 'reviewer') {
-        const { reviewerDelegationMode, reviewerCoderTerminal, reviewerOriginLead, reviewerPreCheckPassed } = options ?? {};
+        const { reviewerDelegationMode, reviewerCoderTerminal, reviewerOriginLead, reviewerPreCheckPassed, reviewerPhoneAFriendPassed } = options ?? {};
         const isDelegationActive = Boolean(reviewerDelegationMode && reviewerCoderTerminal && reviewerOriginLead);
         const fixStep = isDelegationActive
             ? `For valid CRITICAL/MAJOR findings: if your diagnosed fix set totals under approximately 100 lines of change, apply the fixes directly yourself. If the set is larger, broad, or parallelisable, send fix instructions to your coder at ${reviewerCoderTerminal} via POST /terminals/verb/ptySendPrompt with {"name":"${reviewerCoderTerminal}","data":"<fix instructions>","clearBeforePrompt":false} against the port in .switchboard/api-server-port.txt. For each delegated finding: name the file and the issue. For mechanical fixes (compile errors, type issues, missing imports), specify the exact fix — the compiler is a shared oracle. For judgment calls (design decisions, which artifact is wrong, test policy), describe the problem and your reasoning — let the coder choose the fix. You will re-review their diff regardless. Tell the coder to run verification checks (typecheck/tests as applicable) and include results in their report. If the fix set grows beyond ~100 lines during implementation, switch to delegating the remaining fixes to your coder.`
@@ -1855,19 +1857,19 @@ UNATTENDED IMPROVER CONTRACT:
 
         const reviewerBaseInstructions = `For each plan:\n`
             + steps.map((s, i) => `${i + 1}. ${s}`).join('\n')
-            + `\n\nCRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced synthesis, ${isDelegationActive ? 'the fix instructions to your coder' : 'the code fixes'}, and the plan update all in one continuous response.`
-            + (reviewerPreCheckPassed ? `\n\nThis plan has passed a mechanical pre-check (compile + diff coverage) and a phone-a-friend sanity review. Focus your review on deep analysis: call paths, architectural concerns, judgment calls. Do not re-verify compilation.` : '');
+            + `\n\nCRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced synthesis, ${isDelegationActive ? 'the direct fixes or fix instructions to your coder, as applicable' : 'the code fixes'}, and the plan update all in one continuous response.`
+            + (reviewerPreCheckPassed ? `\n\nThis plan has passed a mechanical pre-check (compile + diff coverage)${reviewerPhoneAFriendPassed ? ' and a phone-a-friend sanity review' : ''}. Focus your review on deep analysis: call paths, architectural concerns, judgment calls. Do not re-verify compilation.` : '');
 
         const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
         // §7 — Merged reviewer framing: intro + short directive in one block.
-        // Delegation mode: the reviewer assesses inline then delegates fixes to
-        // its coder rather than fixing inline. The shared prefix
+        // Delegation mode: the reviewer assesses inline, self-fixes a small diagnosed set,
+        // or delegates broader fixes to its coder. The shared prefix
         // 'assess the actual code changes against the plan requirements' stays
         // in both branches (pinned by the reviewer-prompt regression gate); the
         // non-delegation tail 'fix valid material issues, then verify.' is
         // byte-identical to the pre-delegation text (pinned by the render test
         // in team-scoped-role-routing.test.js).
-        const reviewerExecutionBlock = `${buildReviewerExecutionIntro(plans.length)} Do not start any auxiliary workflow — assess the actual code changes against the plan requirements inline,${isDelegationActive ? ' then delegate the fixes to your coder.' : ' fix valid material issues, then verify.'}`;
+        const reviewerExecutionBlock = `${buildReviewerExecutionIntro(plans.length)} Do not start any auxiliary workflow — assess the actual code changes against the plan requirements inline,${isDelegationActive ? ' then apply valid small fixes directly or delegate broader fixes to your coder.' : ' fix valid material issues, then verify.'}`;
         const advancedReviewerBlock = advancedReviewerEnabled ? ADVANCED_REVIEWER_DIRECTIVE : '';
         // §3/§4 — Gate batch rules on actual batches; suppress in feature mode.
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)

@@ -377,7 +377,7 @@ the strict **authority order**:
 3. **The plan file** — last in authority, because it is agent-authored, but strictly binding on implementation details until amended.
 
 Your own live reasoning is not on this ladder. A head that treats its own live thoughts as top of the
-stack produces unreviewed drift that bypasses every gate. Three mandatory rules govern prompt contents:
+stack produces unreviewed drift that bypasses every gate. Four mandatory rules govern prompt contents:
 
 1. **Every finding cites a plan clause.** Quote the section or line the diff violates. A defect you
 cannot cite is not a finding: it is recorded as a question report (`.switchboard/orchestrator/reports/`), never dispatched to a seat as work.
@@ -395,6 +395,11 @@ A team commits **once**, as its head, and the reviewer reviews that commit. Code
 Plan prose that uses "commit" as sequencing — "as subtask 4's first commit" — is ordering language and must
 be translated before entering a prompt: "do this first, as a separate step, before any deletion."
 *(See Appendix: 2026-08-16 "first commit" prose swept seven subtasks into one unscoped commit)*
+
+4. **Plan files are immutable to the head.** The plan is the source of truth. The head reads
+it, dispatches based on it, and reviews against it. The head never rewrites, edits, or
+restructures plan content. The only write to a plan file is the completion-report append by
+a dispatched coder — never a rewrite of the plan's content sections by the head.
 
 ---
 
