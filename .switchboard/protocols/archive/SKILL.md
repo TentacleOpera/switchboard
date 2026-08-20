@@ -13,10 +13,12 @@ Query and manage the DuckDB archive of historical plans and conversations.
 ### 1. DuckDB CLI (replaces `query_plan_archive`)
 **Use when**: User wants to search/query archived plans with specific criteria
 
-**Usage** (see `.agents/skills/query_archive/SKILL.md` for full reference):
+**Usage**:
 ```bash
 duckdb .switchboard/archive.duckdb "<SQL_QUERY>"
 ```
+
+**Note:** Run from the workspace root directory, or provide the full path to `archive.duckdb`.
 
 **Example queries**:
 ```bash
@@ -53,6 +55,25 @@ duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE topic ILIKE '%auth
   - `tags`: Array of tags
 
 **Note**: File must be in system temp directory. File is deleted after successful export.
+
+## Output Formats
+
+**JSON:**
+```bash
+duckdb .switchboard/archive.duckdb -json "SELECT * FROM plans LIMIT 5"
+```
+
+**CSV:**
+```bash
+duckdb .switchboard/archive.duckdb -csv "SELECT * FROM plans LIMIT 5"
+```
+
+## Schema Reference
+
+The DuckDB archive `plans` table mirrors the schema of the live `kanban.db` `plans` table, containing columns such as `plan_id`, `topic`, `complexity`, `kanban_column`, etc.
+
+> [!NOTE]
+> The archive table may not yet contain the new `workspace_name` or `project_id` columns if they have not been propagated to the archive database. When querying the archive, verify their existence before filtering on them.
 
 ## Archive Configuration
 
@@ -112,5 +133,5 @@ duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE topic ILIKE '%auth
 ## Related Files
 - Schema: `src/services/archiveSchema.sql`
 - Service: `src/services/ArchiveManager.ts`
-- Tools: `src/mcp-server/register-tools.js` (archive MCP tools removed; use `.agents/skills/query_archive/` instead)
+- Tools: `src/mcp-server/register-tools.js` (archive MCP tools removed; use the DuckDB CLI queries above instead)
 - Config: `.vscode/settings.json` → `switchboard.archive.dbPath`

@@ -5263,7 +5263,7 @@
     }
 
     // Research Tab: Prompt Generation Functions
-    // The canonical research-prompt template now lives in .agents/skills/advise_research/SKILL.md.
+    // The canonical research-prompt template now lives in .switchboard/protocols/advise_research/SKILL.md.
     // This webview function embeds the same structure independently (it cannot read the extension-side
     // skill file at runtime). Keep the field list below in sync with the skill file.
     function generateResearchPrompt() {

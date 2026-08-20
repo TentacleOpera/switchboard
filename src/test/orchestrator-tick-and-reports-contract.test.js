@@ -16,7 +16,7 @@
  *    file, so only a grep can see it.
  *
  * 2. **The `Miscellaneous` sweep.** Deleted from the persona AND from
- *    `group-into-features` (`## Unattended mode`), which is the file that
+ *    `manage-features` (Group section `## Unattended mode`), which is the file that
  *    actually performed it. Deleting it in one place leaves the tick refusing to
  *    ask for a sweep while the skill it calls performs one anyway.
  *
@@ -52,12 +52,12 @@ function srcFiles(dir = 'src') {
     return out;
 }
 
-const PERSONA = '.agents/skills/switchboard-orchestrator/SKILL.md';
-const EXTERNAL_RUNSHEET = '.agents/skills/switchboard-orchestrator-external/SKILL.md';
-const INTERNAL_RUNSHEET = '.agents/skills/switchboard-orchestrator-internal/SKILL.md';
-const ORCHESTRATION = '.agents/skills/switchboard-orchestration/SKILL.md';
+const PERSONA = '.switchboard/protocols/switchboard-orchestrator/SKILL.md';
+const EXTERNAL_RUNSHEET = '.switchboard/protocols/switchboard-orchestrator-external/SKILL.md';
+const INTERNAL_RUNSHEET = '.switchboard/protocols/switchboard-orchestrator-internal/SKILL.md';
+const ORCHESTRATION = '.switchboard/protocols/switchboard-orchestration/SKILL.md';
 const LAUNCHER = '.agents/workflows/switchboard.md';
-const GROUPING = '.agents/skills/group-into-features/SKILL.md';
+const GROUPING = '.agents/skills/manage-features/SKILL.md';
 
 let failures = 0;
 // MUST await fn(). Half the checks below are async (they exercise the real
@@ -309,10 +309,10 @@ async function run() {
         assert.strictEqual(offenders.length, 0, `Miscellaneous sweep instruction survives at: ${offenders.join(', ')}`);
     });
 
-    await check('group-into-features leaves standalone plans standalone in unattended mode', () => {
+    await check('manage-features (Group) leaves standalone plans standalone in unattended mode', () => {
         const grouping = read(GROUPING);
         const unattended = grouping.slice(grouping.indexOf('## Unattended mode'));
-        assert.ok(unattended.length > 0, 'group-into-features has no ## Unattended mode section');
+        assert.ok(unattended.length > 0, 'manage-features has no ## Unattended mode section');
         assert.ok(
             /Standalone plans are left standalone/.test(unattended),
             'unattended mode does not state that standalone plans stay standalone'

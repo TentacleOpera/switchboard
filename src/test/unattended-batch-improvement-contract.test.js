@@ -49,7 +49,7 @@ async function main() {
 
     // ─── Subtask 2: the unattended improver contract ──────────────────────────
 
-    const improverSkill = read('.agents/skills/improve-plan/SKILL.md');
+    const improverSkill = read('.switchboard/protocols/improve-plan/SKILL.md');
     const plannerPlans = [{ topic: 'Fix the thing', absolutePath: '/repo/.switchboard/plans/fix-the-thing.md' }];
 
     await test('unattended planner prompt carries all four directives and exactly one plan path', () => {
@@ -118,7 +118,7 @@ async function main() {
     });
 
     await test('switchboard-contracts carries the never-ask-in-chat behavioural rule', () => {
-        const contracts = read('.agents/skills/switchboard-contracts/SKILL.md');
+        const contracts = read('.switchboard/protocols/switchboard-contracts/SKILL.md');
         assert.ok(/Outstanding Questions/.test(contracts), 'the behaviour contract does not mention `## Outstanding Questions`');
         assert.ok(/never asks in chat|Never ask/i.test(contracts), 'the never-ask-in-chat rule is missing from the behaviour contract');
     });

@@ -2,7 +2,7 @@
 
 > **Scope.** This is a *behavior* reference, not an *invocation* reference. It answers
 > "how does Switchboard behave?" — never "how do I call endpoint X?" For invocation
-> (endpoints, verbs, payload fields), use the **`switchboard-orchestration`** skill and
+> (endpoints, verbs, payload fields), read **`.switchboard/protocols/switchboard-orchestration/SKILL.md`** and
 > `GET /catalog`. Consult this skill when you are unsure *why* something happens or
 > *what* a system convention is. Every fact below cites its source-of-truth file so
 > staleness is checkable; the contracts are slow-moving (conventions), not mechanics.
@@ -69,7 +69,7 @@ time a managing agent needed them.
    the extension is the sole `kanban.db` writer.** You never write to `kanban.db`
    directly — you call the LocalApiServer endpoints. The board is the source of truth; the
    UI is one view of it. Source: `src/services/LocalApiServer.ts` + the
-   `switchboard-orchestration` skill.
+   `.switchboard/protocols/switchboard-orchestration/SKILL.md`.
 
 8. **Project pins are resolve-only on import; the workspace name is never a project.** A
    workspace is a workspace; a project is a user-created board filter. They are not
@@ -108,7 +108,7 @@ time a managing agent needed them.
     violation, not "done". The same run is scoped to exactly one plan file — concurrent
     improvers share one `.switchboard/plans/` directory, so writing a sibling's file
     destroys that worker's output. Source:
-    `agentPromptBuilder.ts` (the `unattended` planner branch) + `.agents/skills/improve-plan/SKILL.md`
+    `agentPromptBuilder.ts` (the `unattended` planner branch) + `.switchboard/protocols/improve-plan/SKILL.md`
     (`## Unattended runs`).
 
 ## When to consult this skill
@@ -122,5 +122,5 @@ time a managing agent needed them.
 
 ## When NOT to consult this skill
 
-- To find an endpoint or verb payload → use `switchboard-orchestration` + `GET /catalog`.
+- To find an endpoint or verb payload → read `.switchboard/protocols/switchboard-orchestration/SKILL.md` + `GET /catalog`.
 - To learn the human-facing UI → read the user manual.

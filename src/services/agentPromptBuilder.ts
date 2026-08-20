@@ -197,7 +197,7 @@ export interface PromptBuilderOptions {
      */
     reviewCommits?: string[];
 
-    /** Path to the workflow file for the planner role. Defaults to .agents/skills/improve-plan/SKILL.md */
+    /** Path to the workflow file for the planner role. Defaults to .switchboard/protocols/improve-plan/SKILL.md */
     plannerWorkflowPath?: string;
 
     /** Path/link to the project constitution. */
@@ -380,7 +380,7 @@ export const UNASSIGNED_PROJECT_SENTINEL = '__unassigned__';
  *
  * Returns the line INCLUDING its trailing newline, or `''` when no line should
  * be emitted. The four cases map onto the skill's table
- * (`.agents/skills/dispatch-analysis/SKILL.md`, step 1):
+ * (`.switchboard/protocols/dispatch-analysis/SKILL.md`, step 1):
  *
  *  - `undefined` → `''`. The scope was never threaded (e.g. the single-plan
  *    planner dispatch at TaskViewerProvider's `dispatch-analysis` allowlist,
@@ -450,7 +450,7 @@ function buildExecutionIntro(verb: string, plans: BatchPromptPlan[], featureMode
     return `Please ${verb} the ${plans.length} plans below.`;
 }
 
-export const ACCURATE_CODING_DIRECTIVE = `Accuracy Mode: Before coding, read and follow the workflow at .agents/skills/accuracy/SKILL.md step-by-step while implementing this task.`;
+export const ACCURATE_CODING_DIRECTIVE = `Accuracy Mode: Before coding, read and follow the workflow at .switchboard/protocols/accuracy/SKILL.md step-by-step while implementing this task.`;
 
 function withCoderAccuracyInstruction(basePayload: string, enabled: boolean): string {
     if (!enabled) {
@@ -827,7 +827,7 @@ export const FOCUS_DIRECTIVE = `FOCUS: Each plan file path below is the single s
 // The user is on their phone, not the terminal, so questions must go to the linked issue
 // as a comment (posted host-side through the LocalApiServer bridge via linear_api/clickup_api),
 // not to terminal input.
-export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote control — the user is NOT at the terminal. If you need to ask the user anything or report a blocker, post it as a comment on the linked issue using the linear_api skill (or clickup_api). Do NOT wait on terminal input. Continue with any work you can do without the answer.`;
+export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote control — the user is NOT at the terminal. If you need to ask the user anything or report a blocker, post it as a comment on the linked issue using .switchboard/protocols/linear-api/SKILL.md (or .switchboard/protocols/clickup-api/SKILL.md). Do NOT wait on terminal input. Continue with any work you can do without the answer.`;
 
 /** §8 — Shared batch execution rules constant, used by both buildKanbanBatchPrompt and buildCustomAgentPrompt. */
 export const BATCH_EXECUTION_RULES = `CRITICAL INSTRUCTIONS:
@@ -954,7 +954,7 @@ export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
 export const SPLIT_PLAN_DIRECTIVE = `SPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent." Read the full original file before writing either output. Create both files in the same directory as the original.`;
 export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do not run any project compilation step as part of the verification plan. This directive overrides the plan file's Verification Plan for this run — the checks remain written down, they are simply not executed now.`;
 export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do not run automated tests as part of the verification plan. This directive overrides the plan file's Verification Plan for this run — the checks remain written down, they are simply not executed now.`;
-// The full research-prompt template now lives in .agents/skills/advise_research/SKILL.md (the
+// The full research-prompt template now lives in .switchboard/protocols/advise_research/SKILL.md (the
 // canonical source). The generateResearchPrompt() function in src/webview/planning.js is a separate
 // UI-driven code path (Research tab) and remains independent — it embeds the same structure for the
 // webview and cannot read the extension-side skill file at runtime. Both share the template structure
@@ -965,7 +965,7 @@ export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do not run automated tests as p
 // instructions — it goes straight to the chat-paste fallback. This eliminates the P0 "phantom
 // hand-off" bug by construction (the planner can't attempt a POST it was never told about) and
 // saves ~400 tokens on every planner run in workspaces without a researcher.
-const ADVISE_RESEARCH_DIRECTIVE_BASE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, read the skill file .agents/skills/advise_research/SKILL.md and follow it. In the plan file, add a brief "## Uncertain Assumptions" section that lists ONLY those uncertainties and notes that the user was advised to run web research to confirm them before implementation — do NOT put the research prompt itself in the plan. Then build the ready-to-run research prompt.`;
+const ADVISE_RESEARCH_DIRECTIVE_BASE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, read the skill file .switchboard/protocols/advise_research/SKILL.md and follow it. In the plan file, add a brief "## Uncertain Assumptions" section that lists ONLY those uncertainties and notes that the user was advised to run web research to confirm them before implementation — do NOT put the research prompt itself in the plan. Then build the ready-to-run research prompt.`;
 const ADVISE_RESEARCH_DIRECTIVE_HANDOFF = `
 
 RESEARCHER HAND-OFF (try this before showing the prompt to the user): A Researcher agent is configured for this workspace — attempt to hand the research prompt directly to it via the Switchboard HTTP server. Read the port from .switchboard/api-server-port.txt (relative to the workspace root); if the file is missing, skip the POST and fall back to the chat-summary prompt. Otherwise POST to http://127.0.0.1:<port>/research/dispatch with JSON body {"workspaceRoot":"<absolute workspace root>","prompt":"<the full research prompt>"}. Build the JSON safely (write the prompt to a temp file and pipe it through \`jq -Rs\` or \`python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'\` — never hand-escape newlines); if neither tool is available the POST will fail and you fall back to chat-paste. The server signals the outcome with the HTTP status code AND the \`dispatched\` field — there is NO \`success\` field, so do NOT key on one. If a Researcher agent is registered AND live it forwards the prompt to that agent, tells it to save its findings to the configured research-docs folder, and responds with HTTP 200 and body {"dispatched":true,"researcher":"...","savePath":"..."}. If a researcher is configured but not live it responds with HTTP 200 and {"dispatched":false,"reason":"..."}. Only announce a hand-off if the HTTP status is 200 AND the JSON body contains "dispatched": true — tell the user you handed the research to the Researcher agent and that it will attempt to save its findings to savePath, and do NOT paste the full research prompt into your summary. If the HTTP status is not 200, OR the body does not contain "dispatched": true, OR the port file is missing, OR the request fails — fall back: supply the ready-to-run research prompt at the very end of your chat summary so the user can trigger web research themselves. If you are confident about everything, state that no research is needed and omit the section, the hand-off, and the prompt.`;
@@ -1357,32 +1357,32 @@ export function resolveFeatureOrchestrationDirective(
 }
 
 export const COMPLEXITY_SCORING_DIRECTIVE =
-    `COMPLEXITY SCORING: Before proceeding, invoke the complexity_scoring skill ` +
-    `(skill: "complexity_scoring") to add a ## Complexity Audit section with ` +
+    `COMPLEXITY SCORING: Before proceeding, read and follow ` +
+    `.switchboard/protocols/complexity-scoring/SKILL.md to add a ## Complexity Audit section with ` +
     `### Routine and ### Complex / Risky subsections. ` +
     `Classify each implementation step by complexity before splitting.`;
 
 export const TICKET_UPDATE_DIRECTIVE =
     `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
     `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-    `Analyze the plan, then use the clickup_api or linear_api skill to add an "AI Analysis" comment to the ticket. ` +
+    `Analyze the plan, then read .switchboard/protocols/clickup-api/SKILL.md or .switchboard/protocols/linear-api/SKILL.md and use it to add an "AI Analysis" comment to the ticket. ` +
     `Do not modify the ticket description. Only add a comment. ` +
     `If no ticket number is found, skip the ticket update and notify the user.`;
 
 export const TICKET_REFINE_DIRECTIVE =
     `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
     `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-    `Analyze the plan, then use the clickup_api or linear_api skill to refine the ticket description. ` +
+    `Analyze the plan, then read .switchboard/protocols/clickup-api/SKILL.md or .switchboard/protocols/linear-api/SKILL.md and use it to refine the ticket description. ` +
     `Update the description to reflect the plan's current state, implementation details, and any changes from the original request. ` +
     `If no ticket number is found, skip the ticket update and notify the user.`;
 
 export const TICKET_RESEARCH_REFINE_DIRECTIVE =
-    `RESEARCH MODE: Before updating the ticket, use the web_research skill to gather additional context. ` +
+    `RESEARCH MODE: Before updating the ticket, read and follow .switchboard/protocols/web-research/SKILL.md to gather additional context. ` +
     `Research the technical approach, dependencies, best practices, and any relevant recent developments. ` +
-    `If the web_research skill is unavailable, proceed with codebase-only analysis and note the gap.\n\n` +
+    `If the web-research protocol is unavailable, proceed with codebase-only analysis and note the gap.\n\n` +
     `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
     `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-    `After completing research, use the clickup_api or linear_api skill to refine the ticket description. ` +
+    `After completing research, read .switchboard/protocols/clickup-api/SKILL.md or .switchboard/protocols/linear-api/SKILL.md and use it to refine the ticket description. ` +
     `Update the description to reflect the plan's current state, implementation details, research findings, and any changes from the original request. ` +
     `If no ticket number is found, skip the ticket update and notify the user.`;
 
@@ -1399,7 +1399,7 @@ export const AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE = `PAIR PROGRAMMING OPTIMISAT
 
 export const DEEP_RESEARCH_DIRECTIVE =
     `DEEP RESEARCH MODE: You are authorized to perform comprehensive deep research ` +
-    `on the provided plan using the deep_planning skill protocol with depth set to "deep" (50-100 sources). ` +
+    `on the provided plan using the deep planning protocol at .switchboard/protocols/deep-planning/SKILL.md with depth set to "deep" (50-100 sources). ` +
     `\n\nSKIP PHASE 0 (Planning Proposal): Research depth is pre-configured. Proceed directly to Phase 1.` +
     `\n\nEXECUTE FULL DEEP PLANNING PROTOCOL:\n` +
     `PHASE 1: Codebase Exploration — run parallel searches (find_by_name, grep, list_dir); read key implementation, config, test, and doc files.\n` +
@@ -1449,16 +1449,16 @@ Process:
    When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. Do NOT write one mega-plan covering all deliverables/phases — each plan must be independently codeable. If the user explicitly asks for a single plan, respect that and write one.
 4. **Plan:** Draft the implementation plan(s). If you split, write each plan file now, in this step.
 5. **Gate:** Present the plan(s) to the user. If you wrote 3+ plans, group them into a feature — the gate depends on who initiated grouping:
-   - **User already asked for grouping or a feature** (e.g. "split these into plans and create a feature", "group these into a feature"): the original ask IS the confirmation. Invoke the \`create-feature-from-plans\` skill now — do NOT ask a second time.
-   - **You are proposing grouping the user did not request:** offer it: "I've split this into [N] plans covering [topic] — want me to create a feature to group them?" Only create the feature if the user confirms. When the user says yes, invoke the \`create-feature-from-plans\` skill.
-   The \`create-feature-from-plans\` skill handles the mechanics (plan ID resolution, \`create-feature.js\` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the \`create-feature\` remote path automatically.`;
+   - **User already asked for grouping or a feature** (e.g. "split these into plans and create a feature", "group these into a feature"): the original ask IS the confirmation. Invoke the \`manage-features\` skill and follow the Create from Plans section now — do NOT ask a second time.
+   - **You are proposing grouping the user did not request:** offer it: "I've split this into [N] plans covering [topic] — want me to create a feature to group them?" Only create the feature if the user confirms. When the user says yes, invoke the \`manage-features\` skill and follow the Create from Plans section.
+   The \`manage-features\` skill (Create from Plans section) handles the mechanics (plan ID resolution, \`create-feature.js\` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the Create (remote) section automatically.`;
 
 export function PROJECT_LINE_DIRECTIVE(project: string): string {
     return `PROJECT PIN: The user had the project "${project}" active when they copied this prompt. Write this line into each plan file's metadata section (alongside **Complexity:** and **Tags:**):\n**Project:** ${project}\nThis pins the plan to that project at creation, regardless of what project is active when the file is imported. Omit the line only if no project name is given above. (Authoring only — this sets a NEW plan's project; to move an existing plan to another project, use the Switchboard board or API, not this line.)`;
 }
 
-const DEFAULT_PLANNER_WORKFLOW = '.agents/skills/improve-plan/SKILL.md';
-const DEFAULT_FEATURE_PLANNER_WORKFLOW = '.agents/skills/improve-feature/SKILL.md';
+const DEFAULT_PLANNER_WORKFLOW = '.switchboard/protocols/improve-plan/SKILL.md';
+const DEFAULT_FEATURE_PLANNER_WORKFLOW = '.switchboard/protocols/improve-feature/SKILL.md';
 
 /** Map of retired workflow paths (the four files the four-front-doors refactor
  *  relocated from `.agents/workflows/` to `.agents/skills/<name>/SKILL.md`) to
@@ -1469,8 +1469,14 @@ const DEFAULT_FEATURE_PLANNER_WORKFLOW = '.agents/skills/improve-feature/SKILL.m
 export const RETIRED_WORKFLOW_PATH_MAP: Record<string, string> = {
     '.agents/workflows/improve-plan.md': DEFAULT_PLANNER_WORKFLOW,
     '.agents/workflows/improve-feature.md': DEFAULT_FEATURE_PLANNER_WORKFLOW,
-    '.agents/workflows/accuracy.md': '.agents/skills/accuracy/SKILL.md',
-    '.agents/workflows/switchboard-orchestrator.md': '.agents/skills/switchboard-orchestrator/SKILL.md',
+    '.agents/workflows/accuracy.md': '.switchboard/protocols/accuracy/SKILL.md',
+    '.agents/workflows/switchboard-orchestrator.md': '.switchboard/protocols/switchboard-orchestrator/SKILL.md',
+    // Persisted .agents/skills/ paths from the v1 migration → normalized to the
+    // protocol move at runtime so users who already migrated don't get dead refs.
+    '.agents/skills/improve-plan/SKILL.md': '.switchboard/protocols/improve-plan/SKILL.md',
+    '.agents/skills/improve-feature/SKILL.md': '.switchboard/protocols/improve-feature/SKILL.md',
+    '.agents/skills/accuracy/SKILL.md': '.switchboard/protocols/accuracy/SKILL.md',
+    '.agents/skills/switchboard-orchestrator/SKILL.md': '.switchboard/protocols/switchboard-orchestrator/SKILL.md',
 };
 
 /** Rewrite a retired relocated workflow path to its new skills path. Any other
@@ -2274,8 +2280,8 @@ Resolve the provider ticket ID from the plan metadata: the "**ClickUp Task ID:**
 (Notion). Use that ID — not the legacy "**Ticket:**" field. If none is present, skip posting
 and notify the user.
 
-Post the verdict as a comment using the clickup_api skill (ClickUp), the linear_api skill
-(Linear), or the notion_api skill (Notion). These post through the Switchboard local API
+Post the verdict as a comment using .switchboard/protocols/clickup-api/SKILL.md (ClickUp), .switchboard/protocols/linear-api/SKILL.md
+(Linear), or .switchboard/protocols/notion-api/SKILL.md (Notion). These post through the Switchboard local API
 bridge — never call the provider API directly and never touch tokens. NEVER overwrite the
 ticket description — comment only.
 
@@ -2532,7 +2538,7 @@ export function buildCustomAgentPrompt(
             : '\n\nWORKSPACE TYPE: single-repo. Do NOT include a **Repo:** line.';
     }
     if (addons?.includeInlineChallenge) prompt += `\n\n${INLINE_CHALLENGE_DIRECTIVE}`;
-    if (addons?.accurateCodingEnabled) prompt += `\n\nAccuracy Mode: Before coding, read and follow .agents/skills/accuracy/SKILL.md step-by-step.`;
+    if (addons?.accurateCodingEnabled) prompt += `\n\nAccuracy Mode: Before coding, read and follow .switchboard/protocols/accuracy/SKILL.md step-by-step.`;
     if (addons?.pairProgrammingEnabled) prompt += `\n\nPAIR PROGRAMMING NOTE: Focus only on Complex / Risky (Band B) implementation steps. A separate Coder agent is handling Routine (Band A) tasks.`;
     if (addons?.aggressivePairProgramming) prompt += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
     if (addons?.advancedReviewerEnabled) prompt += '\n\n' + ADVANCED_REVIEWER_DIRECTIVE;

@@ -74,7 +74,7 @@ import { listIconPalette, validateTeamIcon, type IconPaletteEntry } from './icon
  */
 const ULTRACODE_FEATURE_PREFIX = 'This is a feature with multiple subtasks. Activate your ultracode workflow.';
 const GOAL_FEATURE_PREFIX = '/goal';
-const DRIVE_FEATURE_PREFIX = 'This feature is to be driven through a coder terminal. Read and follow .agents/skills/terminal-coder-dispatch/SKILL.md.';
+const DRIVE_FEATURE_PREFIX = 'This feature is to be driven through a coder terminal. Read and follow .switchboard/protocols/terminal-coder-dispatch/SKILL.md.';
 
 /**
  * Schedules a fire-and-forget write of the kanban state section to the plan file.
@@ -1286,6 +1286,13 @@ export class KanbanProvider implements vscode.Disposable {
             const _codingRoles1 = await this.resolveCodingRolesFromGroups(root);
             const coderTerminalCount = _codingRoles1.coders.length;
             const codingHeadLive = _codingRoles1.leads.length > 0 || _codingRoles1.coders.length > 0;
+            // anyCodingTerminalLive: true when any coding terminal is live
+            // (team head OR standalone coder). Reads from the in-memory
+            // _terminalAgentInfo cache via getAliveCodingTerminalNames(), NOT
+            // getAliveRoleTerminalNames (deprecated state.json). Enables the
+            // Run-queue button in workspaces with no team — only standalone
+            // coders.
+            const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
 
             // Every entry carries its surface so wsHub can filter the connect-time
             // resync per connection (see SURFACES / PANEL_SURFACES). Tag AS BUILT, not
@@ -1313,7 +1320,7 @@ export class KanbanProvider implements vscode.Disposable {
                     projectContextEnabled,
                 },
                 { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, showingDispatch: this._showingDispatch, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, routingConfig, featureWorktrees, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, showingDispatch: this._showingDispatch, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
@@ -2289,14 +2296,18 @@ export class KanbanProvider implements vscode.Disposable {
             const _codingRoles2 = await this.resolveCodingRolesFromGroups(resolvedWorkspaceRoot);
             const coderTerminalCount = _codingRoles2.coders.length;
             const codingHeadLive = _codingRoles2.leads.length > 0 || _codingRoles2.coders.length > 0;
+            const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
             // coderTerminalCount is part of the snapshot, not just the payload. The Dispatch
             // view header renders it, and adding a coder terminal changes NO card — so a
             // cards-only hash would skip the push and freeze the header at its stale value
             // while the stepper appears to do nothing. codingHeadLive is included for the
             // same reason: a lead coming online when coder count is 0 changes NO card and
             // leaves coderTerminalCount at 0, but must flip the Run-queue button enabled.
+            // anyCodingTerminalLive is included for the same reason: a standalone coder
+            // coming online changes NO card and leaves coderTerminalCount at 0, but must
+            // flip the Run-queue button enabled.
             const snapshotHash = crypto.createHash('sha256')
-                .update(JSON.stringify({ cards, featureWorktrees, coderTerminalCount, codingHeadLive }))
+                .update(JSON.stringify({ cards, featureWorktrees, coderTerminalCount, codingHeadLive, anyCodingTerminalLive }))
                 .digest('hex');
             const snapshotUnchanged = snapshotKey === this._lastBoardSnapshotKey
                 && snapshotHash === this._lastBoardSnapshotHash;
@@ -2312,6 +2323,7 @@ export class KanbanProvider implements vscode.Disposable {
                     dispatchAnalyzeAvailable: true,
                     coderTerminalCount,
                     codingHeadLive,
+                    anyCodingTerminalLive,
                     routingConfig: this._routingMapForScope(scope),
                     featureWorktrees
                 }));
@@ -4006,6 +4018,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const _codingRoles3 = await this.resolveCodingRolesFromGroups(resolvedWorkspaceRoot);
             const coderTerminalCount = _codingRoles3.coders.length;
             const codingHeadLive = _codingRoles3.leads.length > 0 || _codingRoles3.coders.length > 0;
+            const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -4015,6 +4028,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 dispatchAnalyzeAvailable: true,
                 coderTerminalCount,
                 codingHeadLive,
+                anyCodingTerminalLive,
                 routingConfig: this._routingMapForScope(scope),
                 featureWorktrees
             }));
@@ -4209,6 +4223,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const _codingRoles4 = await this.resolveCodingRolesFromGroups(resolvedWorkspaceRoot);
             const coderTerminalCount = _codingRoles4.coders.length;
             const codingHeadLive = _codingRoles4.leads.length > 0 || _codingRoles4.coders.length > 0;
+            const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -4218,6 +4233,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 dispatchAnalyzeAvailable: true,
                 coderTerminalCount,
                 codingHeadLive,
+                anyCodingTerminalLive,
                 routingConfig: this._routingMapForScope(scope)
             }));
             this.postMessage((scope: string | null | undefined) => ({
@@ -5628,7 +5644,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- Do NOT verify work before dispatching. The kanban column is the system\'s record, not a coder\'s claim.',
             '- Clear a terminal only when at rest (completion received AND next work goes elsewhere).',
             '- One subtask per terminal at a time. Use a second terminal for concurrency.',
-            '- Full protocol (escalation ladder, unattended mode, resting terminals, failure modes): .agents/skills/terminal-coder-dispatch/SKILL.md',
+            '- Full protocol (escalation ladder, unattended mode, resting terminals, failure modes): .switchboard/protocols/terminal-coder-dispatch/SKILL.md',
         ];
 
         if (planEntries.length > 0) {
@@ -5874,7 +5890,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const apiPort = this._taskViewerProvider?.getLocalApiServerPort() ?? 0;
             const scopeLine = buildAnalysisScopeLine(overrides?.analysisScope);
             const dispatchPrompt =
-                `Read and follow .agents/skills/dispatch-analysis/SKILL.md now.\n` +
+                `Read and follow .switchboard/protocols/dispatch-analysis/SKILL.md now.\n` +
                 `This is a read-only analysis pass — do not modify any plan file.\n` +
                 `WORKSPACE_ROOT=${workspaceRoot}\n` +
                 `API_PORT=${apiPort}\n` +
@@ -6191,7 +6207,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePathEnabled ?? false,
             },
             workflowFilePathByRole: {
-                planner: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/skills/improve-plan/SKILL.md')),
+                planner: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.switchboard/protocols/improve-plan/SKILL.md')),
                 lead: leadConfig?.addons?.workflowFilePath || '',
                 coder: coderConfig?.addons?.workflowFilePath || '',
                 reviewer: reviewerConfig?.addons?.workflowFilePath || '',
@@ -6227,7 +6243,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             constitutionEnabled: plannerConfig?.addons?.constitution ?? config.get<boolean>('planner.constitutionEnabled', false),
             designSystemDocEnabled: plannerConfig?.addons?.designSystemDoc ?? config.get<boolean>('planner.designSystemDocEnabled', false),
             designSystemDocLink: config.get<string>('planner.designSystemDocLink', ''),
-            plannerWorkflowPath: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/skills/improve-plan/SKILL.md')),
+            plannerWorkflowPath: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.switchboard/protocols/improve-plan/SKILL.md')),
             skipCompilationByRole: {
                 planner: plannerConfig?.addons?.skipCompilation ?? false,
                 lead: leadConfig?.addons?.skipCompilation ?? true,
@@ -6458,7 +6474,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             plannerFeatureWorkflowPath: normalizeRetiredWorkflowPath(
                 (plannerConfig?.addons?.featureWorkflowFilePathEnabled && plannerConfig?.addons?.featureWorkflowFilePath)
                     ? plannerConfig.addons.featureWorkflowFilePath
-                    : '.agents/skills/improve-feature/SKILL.md'
+                    : '.switchboard/protocols/improve-feature/SKILL.md'
             ),
         };
     }
@@ -6572,7 +6588,7 @@ Target column: \`${resolvedNextColumn}\`
 This step is what moves the plans forward in the Switchboard pipeline.
 `;
             } else {
-                schedulingBlock = `\n\n---\n\nYou are running on a scheduled Antigravity timer to process plans in the **${column}** column.\n\nEach time you run:\n1. Use skill: "query_switchboard_kanban" to get all plans currently in the **${column}** column\n2. If no plans exist in the column:\n   a. Call manage_task with action: 'list' to find this schedule's TaskId\n   b. Call manage_task with action: 'kill' and that TaskId to cancel all future runs\n   c. Stop.\n3. Identify the oldest plan by creation timestamp\n4. Process that plan as a **${role}** using your standard workflow\n5. When complete, move the plan to the next column in the pipeline\n\nAgent configuration: **${role}**\nTarget column: **${column}**`;
+                schedulingBlock = `\n\n---\n\nYou are running on a scheduled Antigravity timer to process plans in the **${column}** column.\n\nEach time you run:\n1. Use skill: "query-kanban" to get all plans currently in the **${column}** column\n2. If no plans exist in the column:\n   a. Call manage_task with action: 'list' to find this schedule's TaskId\n   b. Call manage_task with action: 'kill' and that TaskId to cancel all future runs\n   c. Stop.\n3. Identify the oldest plan by creation timestamp\n4. Process that plan as a **${role}** using your standard workflow\n5. When complete, move the plan to the next column in the pipeline\n\nAgent configuration: **${role}**\nTarget column: **${column}**`;
 
                 oldestPlan = columnPlans[columnPlans.length - 1]; // oldest by updated_at (ORDER BY updated_at DESC)
                 resolvedNextColumn = await this._getNextColumnId(column, workspaceRoot);
@@ -12058,10 +12074,19 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 // getAliveRoleTerminalNames — that resolves through
                 // _readTerminalRegistryState which reads the deprecated
                 // state.json.
-                const headTerminal = await this.resolveCodingHeadFromGroups(workspaceRoot) || '';
+                let headTerminal = await this.resolveCodingHeadFromGroups(workspaceRoot) || '';
                 if (!headTerminal) {
-                    this.postMessage({ type: 'showStatusMessage', message: 'No coding head is live. Seat a coding team (TEAMS tab or Setup) before pressing Run.', isError: true });
-                    return { success: false, error: 'No coding head is live — seat a coding team first' };
+                    // Fallback: find any live coding terminal from the in-memory cache
+                    // (NOT getAliveRoleTerminalNames — that reads the deprecated state.json).
+                    // PTY fleet terminals are included via getFleetLiveness().
+                    const codingTerminals = this._taskViewerProvider?.getAliveCodingTerminalNames() ?? [];
+                    if (codingTerminals.length > 0) {
+                        headTerminal = codingTerminals[0];
+                    }
+                }
+                if (!headTerminal) {
+                    this.postMessage({ type: 'showStatusMessage', message: 'No coding terminal is live. Open a coder terminal (AGENT SETUP tab or your saved agent grid) before pressing Run.', isError: true });
+                    return { success: false, error: 'No coding terminal is live — open a coder terminal first' };
                 }
                 // Subtask 3: resolve the team's pacing mode so the status
                 // message names which mode ran. `from` is still required and
@@ -15268,7 +15293,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         projectFilter: string | null = null,
         candidateCards: KanbanCard[] = []
     ): string {
-        const skillPath = `${workspaceRoot}/.agents/skills/group-into-features/SKILL.md`;
+        const skillPath = `${workspaceRoot}/.agents/skills/manage-features/SKILL.md`;
         const activeProject = projectFilter ?? '(unassigned)';
 
         const candidateList = candidateCards.length > 0

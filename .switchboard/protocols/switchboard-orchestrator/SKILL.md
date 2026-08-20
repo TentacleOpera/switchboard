@@ -371,7 +371,7 @@ Three signals, all of which you can read or ask for directly:
    wake; claim what you act on by writing
    `reports/claimed/<filename>.claim`. The full contract — frontmatter fields,
    the claim-marker format, the staleness window — is in the
-   `switchboard-orchestration` skill's *Reports channel* section.
+   `.switchboard/protocols/switchboard-orchestration/SKILL.md` *Reports channel* section.
 3. **Ask the lead.** Message it for a status update via `ptySendPrompt` when the
    files are ambiguous. The reply arrives as a report file when the lead is not
    talking to a pty.

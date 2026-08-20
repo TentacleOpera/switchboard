@@ -327,7 +327,7 @@ export class NotionBackupService {
             if (result.success && result.pageId) {
                 await kanbanDb.updateNotionPageIdByPlanFile(plan.planFile, workspaceId, result.pageId);
                 // Surface the id to the local triager/reply agent (mirror Linear's
-                // `**Linear Issue ID:**`) so it can post replies via the notion_api skill.
+                // `**Linear Issue ID:**`) so it can post replies via the notion-api protocol.
                 await this._writeNotionPageIdMetadata(plan.planFile, result.pageId);
                 planIdToPageId.set(plan.planId, result.pageId);
                 backedUp++;
@@ -388,7 +388,7 @@ export class NotionBackupService {
 
     /**
      * Insert/replace a `> **Notion Page ID:** <id>` metadata line in the plan file so the
-     * local triager/reply agent can resolve the id for the notion_api bridge skill.
+     * local triager/reply agent can resolve the id for the notion-api bridge protocol.
      * Idempotent: replaces an existing line rather than appending a duplicate.
      */
     private async _writeNotionPageIdMetadata(planFileAbs: string, pageId: string): Promise<void> {

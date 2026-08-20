@@ -11,8 +11,8 @@
 //   5. .agents/workflows/switchboard-remote.md
 //   6. AGENTS.md                         (always-on protocol file)
 //   7. CLAUDE.md                         (always-on protocol file, managed block)
-//   8. .agents/skills/deep-planning/SKILL.md   (authoring skill — Phase 0 body)
-//   9. .agents/skills/improve-plan/SKILL.md    (authoring skill — ## Steps body)
+//   8. .switchboard/protocols/deep-planning/SKILL.md   (authoring skill — Phase 0 body)
+//   9. .switchboard/protocols/improve-plan/SKILL.md    (authoring skill — ## Steps body)
 //
 // Also guards the memo step-4/step-5 split-timing invariant: splitting must
 // happen in step 4 (before any plan file is written), never in step 5 (which
@@ -35,8 +35,8 @@ function run() {
     const remoteWorkflowPath = path.join(root, '.agents', 'workflows', 'switchboard-remote.md');
     const agentsMdPath = path.join(root, 'AGENTS.md');
     const claudeMdPath = path.join(root, 'CLAUDE.md');
-    const deepPlanningSkillPath = path.join(root, '.agents', 'skills', 'deep-planning', 'SKILL.md');
-    const improvePlanSkillPath = path.join(root, '.agents', 'skills', 'improve-plan', 'SKILL.md');
+    const deepPlanningSkillPath = path.join(root, '.switchboard', 'protocols', 'deep-planning', 'SKILL.md');
+    const improvePlanSkillPath = path.join(root, '.switchboard', 'protocols', 'improve-plan', 'SKILL.md');
 
     const promptBuilderSource = fs.readFileSync(promptBuilderPath, 'utf8');
     const taskViewerSource = fs.readFileSync(taskViewerPath, 'utf8');

@@ -1411,13 +1411,13 @@ Your job is to help the user write and refine the following governance documents
    - [unresolved decision or risk]
 
 2. **Constitution** (coding standards) — located at \`CONSTITUTION.md\`
-   Follow instructions in \`.agents/skills/constitution-builder/SKILL.md\`.
+   Follow instructions in \`.switchboard/protocols/constitution-builder/SKILL.md\`.
 
 3. **System Files** — \`CLAUDE.md\` and \`AGENTS.md\`
    These are agent governance files. Help the user write rules that agents should follow when working in this repo.
 
 4. **Tuning Insights** — \`.switchboard/insights/*.md\`
-   Follow instructions in \`.agents/skills/tuning/SKILL.md\`.
+   Follow instructions in \`.switchboard/protocols/tuning/SKILL.md\`.
 
 ## Workflow
 
@@ -4511,7 +4511,7 @@ Please format the updated output document strictly as follows:
                 if (!allRoots.includes(wsRoot)) {
                     break;
                 }
-                const promptText = `Follow instructions in .agents/skills/constitution-builder/SKILL.md to build or improve CONSTITUTION.md in this project.`;
+                const promptText = `Follow instructions in .switchboard/protocols/constitution-builder/SKILL.md to build or improve CONSTITUTION.md in this project.`;
                 // Try dispatching via the planner role (gets rotation for free).
                 // Fall back to ad-hoc terminal creation if no planner agent is registered.
                 if (this._taskViewerProvider) {
@@ -4534,7 +4534,7 @@ Please format the updated output document strictly as follows:
                 if (!allRoots.includes(wsRoot)) {
                     break;
                 }
-                const promptText = `Follow instructions in .agents/skills/constitution-builder/SKILL.md to improve and update the existing CONSTITUTION.md in this project.`;
+                const promptText = `Follow instructions in .switchboard/protocols/constitution-builder/SKILL.md to improve and update the existing CONSTITUTION.md in this project.`;
                 if (this._taskViewerProvider) {
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole(
                         'planner', promptText, wsRoot
@@ -4959,8 +4959,8 @@ Please format the updated output document strictly as follows:
                     // the right skill silently.
                     const hasSubtasks = (typeof subtaskCount === 'number' ? subtaskCount : 0) > 0;
                     const skillRelPath = hasSubtasks
-                        ? path.join('.agents', 'skills', 'improve-feature', 'SKILL.md')
-                        : path.join('.agents', 'skills', 'refine_feature.md');
+                        ? path.join('.switchboard', 'protocols', 'improve-feature', 'SKILL.md')
+                        : path.join('.switchboard', 'protocols', 'refine_feature.md');
                     const skillRelPathLegacy = hasSubtasks
                         ? path.join('.agent', 'skills', 'improve-feature', 'SKILL.md')
                         : path.join('.agent', 'skills', 'refine_feature.md');
@@ -5274,7 +5274,7 @@ Please format the updated output document strictly as follows:
                 } else {
                     planFilesList = planFiles.join('\n');
                 }
-                const extractPrompt = `Run the tuning skill in extract mode for workspace: ${effectiveWsRoot}\n\nScan the following plan files for adversarial review sections ("Stage 1 — Grumpy Adversarial Findings" and "Stage 2 — Balanced Synthesis"):\n${planFilesList}\n\nFor each plan, extract the review findings. Then cluster recurring problem patterns across plans using these criteria:\n  - Same problem category (e.g., missing error handling, race conditions, prompt-design flaws, unvalidated assumptions)\n  - Same severity level (recurring vs critical vs minor)\n  - Same governance target (CONSTITUTION.md vs AGENTS.md vs CLAUDE.md)\nFor each distinct pattern, create an insight .md file in ${effectiveWsRoot}/.switchboard/insights/ using the insight template. If an existing insight covers the same pattern (same category AND similar description), append new evidence to it instead of creating a duplicate. When appending, update the Source Plans list and add new evidence entries.`;
+                const extractPrompt = `Read and follow .switchboard/protocols/tuning/SKILL.md in extract mode for workspace: ${effectiveWsRoot}\n\nScan the following plan files for adversarial review sections ("Stage 1 — Grumpy Adversarial Findings" and "Stage 2 — Balanced Synthesis"):\n${planFilesList}\n\nFor each plan, extract the review findings. Then cluster recurring problem patterns across plans using these criteria:\n  - Same problem category (e.g., missing error handling, race conditions, prompt-design flaws, unvalidated assumptions)\n  - Same severity level (recurring vs critical vs minor)\n  - Same governance target (CONSTITUTION.md vs AGENTS.md vs CLAUDE.md)\nFor each distinct pattern, create an insight .md file in ${effectiveWsRoot}/.switchboard/insights/ using the insight template. If an existing insight covers the same pattern (same category AND similar description), append new evidence to it instead of creating a duplicate. When appending, update the Source Plans list and add new evidence entries.`;
                 await this._seams().clipboard.writeText(extractPrompt);
                 this._seams().ui.showTemporaryNotification('Tuning extract prompt copied to clipboard. Paste it into your agent chat.');
                 this.postMessageToProjectWebview({ type: 'tuningExtractComplete', planCount: planFiles.length });
@@ -5283,7 +5283,7 @@ Please format the updated output document strictly as follows:
             case 'runTuningGovernance': {
                 const wsRoot = String(msg.workspaceRoot || '');
                 const effectiveWsRoot = wsRoot || (allRoots.length > 0 ? allRoots[0] : '');
-                const governancePrompt = `Run the tuning skill in governance mode for workspace: ${effectiveWsRoot}\n\nRead all insight files in ${effectiveWsRoot}/.switchboard/insights/ with status 'open'. Review the insights and propose specific edits to governance files (CONSTITUTION.md, AGENTS.md, CLAUDE.md) to address the recurring patterns. Present proposed changes as diffs.`;
+                const governancePrompt = `Read and follow .switchboard/protocols/tuning/SKILL.md in governance mode for workspace: ${effectiveWsRoot}\n\nRead all insight files in ${effectiveWsRoot}/.switchboard/insights/ with status 'open'. Review the insights and propose specific edits to governance files (CONSTITUTION.md, AGENTS.md, CLAUDE.md) to address the recurring patterns. Present proposed changes as diffs.`;
                 await this._seams().clipboard.writeText(governancePrompt);
                 this._seams().ui.showTemporaryNotification('Tuning governance prompt copied to clipboard. Paste it into your agent chat.');
                 this.postMessageToProjectWebview({ type: 'tuningGovernanceComplete' });

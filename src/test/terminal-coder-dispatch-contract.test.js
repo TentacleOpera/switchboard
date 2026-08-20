@@ -18,7 +18,7 @@ const path = require('path');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const read = (rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 
-const SKILL = '.agents/skills/terminal-coder-dispatch/SKILL.md';
+const SKILL = '.switchboard/protocols/terminal-coder-dispatch/SKILL.md';
 const CLAUDE_SKILL = '.claude/skills/terminal-coder-dispatch/SKILL.md';
 
 let failures = 0;

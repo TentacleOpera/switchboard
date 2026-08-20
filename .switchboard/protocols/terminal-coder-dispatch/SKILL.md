@@ -7,7 +7,7 @@ Continuity is carried by your own conversation context, which persists across th
 by construction. There is no loop to hold, no join to poll, no batch to manage.
 
 > **You arrived here from a one-line directive** (e.g. the `Drive` feature-workflow toggle
-> prepended "read and follow `.agents/skills/terminal-coder-dispatch/SKILL.md`"). This skill
+> prepended "read and follow `.switchboard/protocols/terminal-coder-dispatch/SKILL.md`"). This skill
 > is the complete contract. Read it once, then drive.
 
 ---
@@ -651,8 +651,8 @@ are modified.
 
 - **Short parallel fan-out** (90 s per join, 30 min per batch) → use `/delegates/dispatch` +
   `/delegates/await` (see the `delegates` skill). That is a different job.
-- **Unattended, deterministic column sweeps** with no agent watching → use the
-  `switchboard-orchestration` skill. This skill is driving by a reasoning agent — attended, or
+- **Unattended, deterministic column sweeps** with no agent watching → read
+  `.switchboard/protocols/switchboard-orchestration/SKILL.md`. This skill is driving by a reasoning agent — attended, or
   unattended under §5.6 — not a deterministic sweep.
 
 ---

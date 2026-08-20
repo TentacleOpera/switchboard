@@ -177,7 +177,7 @@ function buildDispatchAnalysisPrompt(records: any[], root: string, apiPort: numb
     // Same shared resolver the extension host's arm uses — the `PROJECT=` line
     // cannot fork between the two prompt builders because there is only one.
     const scopeLine = buildAnalysisScopeLine(scope);
-    return `Read and follow .agents/skills/dispatch-analysis/SKILL.md now.\n` +
+    return `Read and follow .switchboard/protocols/dispatch-analysis/SKILL.md now.\n` +
         `This is a read-only analysis pass — do not modify any plan file.\n` +
         `WORKSPACE_ROOT=${root}\n` +
         `API_PORT=${apiPort}\n` +

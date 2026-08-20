@@ -3462,14 +3462,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               <div id="plannerWorkflowFilePathGroup">
                 <div class="input-group">
                   <label for="workflowFilePath">Workflow File Path:</label>
-                  <input type="text" id="workflowFilePath" value=".agents/skills/improve-plan/SKILL.md" />
+                  <input type="text" id="workflowFilePath" value=".switchboard/protocols/improve-plan/SKILL.md" />
                   <button id="validateWorkflowPath" class="secondary-btn">Validate</button>
                 </div>
                 <div id="prompts-tab-workflow-path-status" style="font-size:11px; margin-top:4px;"></div>
                 
                 <div class="example-paths">
                   <strong>Example paths:</strong>
-                  <code>.agents/skills/improve-plan/SKILL.md</code> (Switchboard Native)
+                  <code>.switchboard/protocols/improve-plan/SKILL.md</code> (Switchboard Native)
                   <code>.claude/get-shit-done/agents/gsd-planner.md</code> (GSD)
                   <code>.claude/superpowers/skills/writing-plans.md</code> (Superpowers)
                 </div>
@@ -3566,12 +3566,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                       <div id="plannerFeatureWorkflowFilePathGroup" style="display:none; margin-top: 4px;">
                         <div class="input-group" style="display:flex; gap:6px; align-items:center;">
                           <label for="plannerFeatureWorkflowFilePath" style="font-size:11px;">Path:</label>
-                          <input type="text" id="plannerFeatureWorkflowFilePath" value=".agents/skills/improve-feature/SKILL.md" style="flex:1; padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-input-border, #ccc); background:var(--vscode-input-background, #fff); color:var(--vscode-input-foreground, #000); font-size:11px;" />
+                          <input type="text" id="plannerFeatureWorkflowFilePath" value=".switchboard/protocols/improve-feature/SKILL.md" style="flex:1; padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-input-border, #ccc); background:var(--vscode-input-background, #fff); color:var(--vscode-input-foreground, #000); font-size:11px;" />
                           <button id="validateFeatureWorkflowPath" class="secondary-btn" style="padding:2px 6px; font-size:11px;">Validate</button>
                         </div>
                         <div id="prompts-tab-feature-workflow-path-status" style="font-size:10px; margin-top:4px; color: var(--vscode-descriptionForeground);"></div>
                         <div class="example-paths" style="font-size:10px; opacity:0.8; margin-top:4px;">
-                          <strong>Default:</strong> <code>.agents/skills/improve-feature/SKILL.md</code>
+                          <strong>Default:</strong> <code>.switchboard/protocols/improve-feature/SKILL.md</code>
                         </div>
                       </div>
                     </div>
@@ -3959,7 +3959,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             if (currentRole === 'planner') {
                 const config = roleConfigs.planner;
-                document.getElementById('workflowFilePath').value = config.workflowFilePath || '.agents/skills/improve-plan/SKILL.md';
+                document.getElementById('workflowFilePath').value = config.workflowFilePath || '.switchboard/protocols/improve-plan/SKILL.md';
                 const plannerWorkflowEnabled = config.addons?.workflowFilePathEnabled !== false;
                 document.getElementById('plannerWorkflowEnabled').checked = plannerWorkflowEnabled;
                 document.getElementById('plannerWorkflowFilePathGroup').style.display = plannerWorkflowEnabled ? 'block' : 'none';
@@ -3987,7 +3987,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
 
                 // Load feature workflow path and feature subagent settings for planner
-                document.getElementById('plannerFeatureWorkflowFilePath').value = config.addons?.featureWorkflowFilePath || '.agents/skills/improve-feature/SKILL.md';
+                document.getElementById('plannerFeatureWorkflowFilePath').value = config.addons?.featureWorkflowFilePath || '.switchboard/protocols/improve-feature/SKILL.md';
                 const plannerFeatureWorkflowEnabled = config.addons?.featureWorkflowFilePathEnabled === true;
                 document.getElementById('plannerFeatureWorkflowEnabled').checked = plannerFeatureWorkflowEnabled;
                 document.getElementById('plannerFeatureWorkflowFilePathGroup').style.display = plannerFeatureWorkflowEnabled ? 'block' : 'none';
@@ -4176,7 +4176,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const textInput = document.createElement('input');
                     textInput.type = 'text';
                     textInput.id = `addon_${addon.id}_path`;
-                    textInput.placeholder = 'e.g. .agents/skills/accuracy/SKILL.md';
+                    textInput.placeholder = 'e.g. .switchboard/protocols/accuracy/SKILL.md';
                     textInput.style.display = isEnabled ? 'block' : 'none';
                     textInput.style.marginTop = '4px';
                     textInput.style.width = '100%';
@@ -4952,6 +4952,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return v ? resolveArt(v) : null;
         }
 
+        function agentArtSrc(role) {
+            const slug = String(role || '').trim().toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '');
+            const name = slug ? `agent-${slug}.png` : '';
+            const entry = name && Array.isArray(_iconPaletteCache)
+                ? _iconPaletteCache.find(icon => icon && icon.name === name)
+                : null;
+            return entry ? `${entry.src}?v=${entry.mtime}` : null;
+        }
+
         /**
          * Build a portrait element for a team/group: an `<img>` when the group
          * has a resolved icon, else the inline SVG `<use>` role portrait. Used
@@ -4981,12 +4992,26 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 img.addEventListener('error', () => {
                     // Swap in the role portrait SVG so a 404 (deleted PNG,
                     // bad pack ref) degrades gracefully — no broken glyph.
-                    const fallback = teamsTabPortraitSvgEl(group.headRole, size);
+                    const fallback = teamsTabRolePortraitEl(group.headRole, size);
                     img.replaceWith(fallback);
                 });
                 return img;
             }
-            return teamsTabPortraitSvgEl(group.headRole, size);
+            return teamsTabRolePortraitEl(group.headRole, size);
+        }
+
+        function teamsTabRolePortraitEl(role, size) {
+            const src = agentArtSrc(role);
+            if (!src) { return teamsTabPortraitSvgEl(role, size); }
+            const img = document.createElement('img');
+            img.src = src;
+            img.alt = `${role || 'agent'} portrait`;
+            img.width = size;
+            img.height = size;
+            img.className = 'teams-card-portrait pixel-art';
+            img.style.flex = 'none';
+            img.addEventListener('error', () => img.replaceWith(teamsTabPortraitSvgEl(role, size)));
+            return img;
         }
 
         /** Inline-SVG role portrait — the fallback arm of teamsTabPortraitEl. */
@@ -5015,6 +5040,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
          * flow panel below the row.
          */
         function teamsTabRenderGallery() {
+            if (_iconPaletteCache === null && !_iconPaletteRequested) {
+                _iconPaletteRequested = true;
+                postKanbanMessage({ type: 'getIconPalette' });
+            }
             const container = document.getElementById('teams-gallery');
             if (!container) return;
             container.innerHTML = '';
@@ -5145,67 +5174,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     postKanbanMessage({ type: 'saveAgentGroup', group: { ...g } });
                 });
                 card.appendChild(autoDiv);
-
-                // ── Seat pacing toggle (subtask 3) ──────────────────────
-                // One control on the team row, next to the seats it affects,
-                // because pacing is a property of a team. Labelled for what it
-                // does — "Seats pace the queue (no head)" — with the
-                // consequence shown inline. Flipping it writes the `pacing`
-                // field on the template and triggers order install/removal in
-                // the same mutation (the host's saveAgentGroup handler
-                // propagates to live groups). NO confirmation dialog: no
-                // confirm() in the webview (a silent no-op in VS Code that
-                // would make the toggle do literally nothing) AND no
-                // vscode.window.showWarningMessage in the host (a loud gate
-                // that breaks the one-click contract). The toggle flips
-                // immediately. Tri-state on the stored field: absent = head
-                // (the default for ~4,000 installs), 'seat' = seat pacing.
-                // Un-checking removes the key rather than writing 'head' so
-                // the stored shape stays byte-identical for installs that
-                // never touch the toggle — a stale writer defaulting a boolean
-                // to false could silently flip the install base.
-                const pacingDiv = document.createElement('div');
-                pacingDiv.className = 'teams-card-autostart';
-                pacingDiv.addEventListener('click', (e) => e.stopPropagation());
-                const pacingCb = document.createElement('input');
-                pacingCb.type = 'checkbox';
-                pacingCb.className = 'teams-card-autostart-cb';
-                pacingCb.checked = group.pacing === 'seat';
-                const pacingLabel = document.createElement('span');
-                pacingLabel.className = 'teams-card-autostart-label';
-                pacingLabel.textContent = 'SEATS PACE THE QUEUE (NO HEAD)';
-                pacingDiv.appendChild(pacingCb);
-                pacingDiv.appendChild(pacingLabel);
-                // Consequence line — shown always so an operator turning this
-                // on knows what mode they are in and what to expect.
-                const pacingNote = document.createElement('div');
-                pacingNote.className = 'teams-card-note';
-                pacingNote.style.marginTop = '2px';
-                if (group.pacing === 'seat') {
-                    pacingNote.textContent = 'Cards route by complexity straight to the seat; each seat advances the queue when it finishes.';
-                } else {
-                    pacingNote.textContent = 'Head paces the queue: cards go to the head, which delegates and advances on review pass.';
-                }
-                pacingDiv.appendChild(pacingNote);
-                pacingCb.addEventListener('change', () => {
-                    const g = agentsTabAgentGroups.find(x => x.id === group.id);
-                    if (!g) return;
-                    if (pacingCb.checked) {
-                        g.pacing = 'seat';
-                    } else {
-                        // Un-checking removes the key rather than writing
-                        // 'head' — absence is the default and keeps the stored
-                        // shape byte-identical for installs that never touch
-                        // the toggle.
-                        delete g.pacing;
-                    }
-                    // Immediate flip — no confirm(), no showWarningMessage.
-                    // The host's saveAgentGroup handler propagates pacing to
-                    // live registered groups and re-runs seat-order
-                    // install/removal in the same pass.
-                    postKanbanMessage({ type: 'saveAgentGroup', group: { ...g } });
-                });
-                card.appendChild(pacingDiv);
             }
 
             card.addEventListener('click', () => {
@@ -5333,14 +5301,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // members'. `<image>` is the SVG embed of `<img>`; `.pixel-art`
                 // is not applicable inside SVG (image-rendering is set inline).
                 const headIconSrc = node.isHead ? teamIconSrc(group) : null;
-                if (headIconSrc) {
+                const roleIconSrc = agentArtSrc(node.role);
+                const nodeIconSrc = headIconSrc || roleIconSrc;
+                if (nodeIconSrc) {
                     const imageEl = document.createElementNS('http://www.w3.org/2000/svg', 'image');
-                    imageEl.setAttribute('href', headIconSrc);
+                    imageEl.setAttribute('href', nodeIconSrc);
                     imageEl.setAttribute('width', String(CELL));
                     imageEl.setAttribute('height', String(CELL));
                     imageEl.setAttribute('preserveAspectRatio', 'xMidYMid');
                     imageEl.style.imageRendering = 'pixelated';
+                    let triedRoleIcon = !headIconSrc;
                     imageEl.addEventListener('error', () => {
+                        if (!triedRoleIcon && roleIconSrc) {
+                            triedRoleIcon = true;
+                            imageEl.setAttribute('href', roleIconSrc);
+                            return;
+                        }
                         const useFallback = document.createElementNS('http://www.w3.org/2000/svg', 'use');
                         useFallback.setAttribute('href', '#' + teamsTabPortraitId(node.role));
                         useFallback.setAttribute('width', String(CELL));
@@ -5686,6 +5662,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         const ICON_FILE_MAX_RAW_BYTES = 48 * 1024;
         /** Cached palette so a second grid open doesn't re-fetch. */
         let _iconPaletteCache = null;
+        let _iconPaletteRequested = false;
 
         /** Read the current icon value from the hidden input. */
         function teamsTabIconValue() {
@@ -7726,7 +7703,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         ? `<span id="dispatch-view-info" class="dispatch-view-info" style="font-size:11px; margin-right:auto; color:var(--vscode-descriptionForeground);">0 plans · 0 coder terminals</span>
                            <button class="column-icon-btn" id="btn-add-coder-terminal" data-action="addCoderTerminal" data-column="${escapeAttr(def.id)}" data-tooltip="${(dispatchAnalyzeAvailable && terminalCreateAvailable) ? 'Add a coder terminal' : 'Creating terminals requires a terminal host (unavailable here)'}"${(dispatchAnalyzeAvailable && terminalCreateAvailable) ? '' : ' disabled'} style="font-size:12px; width:22px;">+</button>
                            <button class="column-icon-btn" id="btn-send-dispatch-set" data-action="sendDispatchSetToCoders" data-column="${escapeAttr(def.id)}" data-tooltip="Fan out: send all staged plans to complexity-routed coders in parallel" style="width:auto; padding:0 8px; font-size:10px;"${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable) ? ' disabled' : ''}>Send all to coders</button>
-                           <button class="column-icon-btn" id="btn-run-queue" data-action="runQueue" data-column="${escapeAttr(def.id)}" data-tooltip="${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable) ? 'Run the queue in order — stage plans and seat a coder first' : (!lastCodingHeadLive ? 'Run the queue — no coding head is live; seat a coder team first' : 'Run the queue: dispatch the first staged plan, the lead pulls the rest in order')}" style="width:auto; padding:0 8px; font-size:10px;"${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable || !lastCodingHeadLive) ? ' disabled' : ''}>Run queue</button>`
+                           <button class="column-icon-btn" id="btn-run-queue" data-action="runQueue" data-column="${escapeAttr(def.id)}" data-tooltip="${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable) ? 'Run the queue in order — stage plans and seat a coder first' : (!(lastCodingHeadLive || lastAnyCodingTerminalLive) ? 'Run the queue — no coding terminal is live; open a coder terminal first' : 'Run the queue: dispatch the first staged plan to a coding terminal, completion pulls the rest in order')}" style="width:auto; padding:0 8px; font-size:10px;"${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable || !(lastCodingHeadLive || lastAnyCodingTerminalLive)) ? ' disabled' : ''}>Run queue</button>`
                         : '';
                     buttonArea = `<div class="column-button-area" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
                         ${pipelineButtons}
@@ -8480,7 +8457,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // tracks the same thing the runQueue backend resolver does (lead
             // preferred, coder fallback), so a live lead with zero coder-role
             // terminals still enables the button.
-            if (runBtn) runBtn.disabled = !(n > 0 && dispatchAnalyzeAvailable && lastCodingHeadLive);
+            // kanban-queue-dispatch-without-team: also enable when
+            // lastAnyCodingTerminalLive is true (a standalone coder with no
+            // team). The backend fallback resolves `from` via
+            // getAliveCodingTerminalNames() and dispatches via workspace-wide
+            // routing.
+            if (runBtn) runBtn.disabled = !(n > 0 && dispatchAnalyzeAvailable && (lastCodingHeadLive || lastAnyCodingTerminalLive));
         }
 
         function renderBoard(cards, justFinishedIds = new Set()) {
@@ -9280,6 +9262,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // Defaults false so the button starts disabled until the first push
         // confirms a head is live.
         let lastCodingHeadLive = false;
+        // anyCodingTerminalLive: a live coding terminal (team head OR
+        // standalone coder), pushed alongside codingHeadLive in updateBoard.
+        // The Run-queue button enables on this OR codingHeadLive, so it
+        // tracks standalone coders with no team — the
+        // kanban-queue-dispatch-without-team fallback. Defaults false so the
+        // button starts disabled until the first push confirms a terminal.
+        let lastAnyCodingTerminalLive = false;
         // Whether the host can actually CREATE a coder terminal. Distinct from
         // dispatchAnalyzeAvailable (pty readiness): standalone can have a live PTY fleet
         // while terminal creation is unavailable, in which case the arm returns success
@@ -10027,6 +10016,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (typeof msg.codingHeadLive !== 'undefined') {
                         codingHeadLiveChanged = !!msg.codingHeadLive !== lastCodingHeadLive;
                         lastCodingHeadLive = !!msg.codingHeadLive;
+                    }
+                    if (typeof msg.anyCodingTerminalLive !== 'undefined') {
+                        const anyChanged = !!msg.anyCodingTerminalLive !== lastAnyCodingTerminalLive;
+                        lastAnyCodingTerminalLive = !!msg.anyCodingTerminalLive;
+                        // Edge-trigger updateDispatchViewInfo when the
+                        // any-coding-terminal flag flips so the Run-queue
+                        // button enables the moment a standalone coder comes
+                        // online even when coder count is 0 and no team head
+                        // is live.
+                        if (anyChanged) codingHeadLiveChanged = true;
                     }
                     if (typeof msg.terminalCreateAvailable !== 'undefined') {
                         terminalCreateAvailable = msg.terminalCreateAvailable === true;
@@ -10787,6 +10786,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   // every open. teamsTabWaitForIconPalette resolves its promise
                   // from this cache; a direct grid open also reads it.
                   _iconPaletteCache = Array.isArray(msg.icons) ? msg.icons : [];
+                  _iconPaletteRequested = true;
+                  teamsTabRenderGallery();
                   break;
                 }
                 case 'saveAgentGroupResult': {

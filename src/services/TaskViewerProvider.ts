@@ -46,7 +46,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // read in this file goes through `loadEffectiveStandingOrders`, which composes
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 
 import * as cp from 'child_process';
@@ -865,10 +865,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // rather than throwing. `lastDataAt` absent ⇒ 0 ("no evidence")
                 // rather than NaN.
                 const livenessSource: any[] = Array.isArray(result.liveness) ? result.liveness : result.terminals;
+                const rolesByName = new Map<string, string>(result.terminals
+                    .filter((t: any) => t?.friendlyName && t?.role)
+                    .map((t: any): [string, string] => [String(t.friendlyName), String(t.role)]));
                 this._ptyLiveness = livenessSource.map((t: any) => ({
                     friendlyName: String(t.friendlyName ?? ''),
                     lastDataAt: Number(t.lastDataAt ?? 0) || 0,
                     status: String(t.status ?? 'active'),
+                    role: String(t.role ?? rolesByName.get(String(t.friendlyName ?? '')) ?? ''),
                 }));
             }
             if (verb === 'ptySendPrompt' && result && typeof result === 'object') {
@@ -1147,7 +1151,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * HTTP call. A stale entry biases toward "still live" (delays a clear),
      * which is the safe direction.
      */
-    private _ptyLiveness: Array<{ friendlyName: string; lastDataAt: number; status: string }> = [];
+    private _ptyLiveness: Array<{ friendlyName: string; lastDataAt: number; status: string; role?: string }> = [];
 
     /**
      * Synchronous reader for the cached fleet liveness snapshot. Returns the
@@ -1156,7 +1160,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * which case the sweep degrades to today's blind timeout (the compatibility
      * contract for fleet-less hosts).
      */
-    public getFleetLiveness(): Array<{ friendlyName: string; lastDataAt: number; status: string }> {
+    public getFleetLiveness(): Array<{ friendlyName: string; lastDataAt: number; status: string; role?: string }> {
         return this._ptyLiveness;
     }
 
@@ -1902,6 +1906,50 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return result;
     }
 
+    /**
+     * Returns the names of all alive coding terminals (lead or coder role),
+     * leads first then coders, sorted. Reads from the in-memory
+     * `_terminalAgentInfo` cache (populated at terminal creation time,
+     * workspace-agnostic) cross-referenced with `vscode.window.terminals` for
+     * VS Code terminals and `getFleetLiveness()` for PTY fleet terminals.
+     *
+     * This is the fallback resolver for queue dispatch without a team: when
+     * `resolveCodingHeadFromGroups` finds no team head, this method finds any
+     * live coding terminal so the Run-queue button and `dispatchNextFromQueue`
+     * can proceed without a registered team. It does NOT read from the
+     * deprecated `.switchboard/state.json` (unlike `getAliveRoleTerminalNames`,
+     * which is invisible to PTY fleet terminals).
+     *
+     * Stale `_terminalAgentInfo` entries (terminal closed, not yet pruned) are
+     * pruned during iteration — same pattern as `getActualTerminalAgentNames`.
+     */
+    public getAliveCodingTerminalNames(): string[] {
+        const allTerminals = vscode.window.terminals;
+        const terminalNames = new Set(
+            allTerminals.filter(t => t.exitStatus === undefined).map(t => t.name)
+        );
+        const fleetLiveness = this.getFleetLiveness();
+        const leads = new Set<string>();
+        const coders = new Set<string>();
+        for (const entry of fleetLiveness) {
+            if (!entry || entry.status === 'exited' || !entry.friendlyName) continue;
+            terminalNames.add(entry.friendlyName);
+            const role = String(entry.role || '').toLowerCase();
+            if (role === 'lead') leads.add(entry.friendlyName);
+            else if (role === 'coder') coders.add(entry.friendlyName);
+        }
+        for (const [name, info] of this._terminalAgentInfo.entries()) {
+            if (!terminalNames.has(name)) {
+                this._terminalAgentInfo.delete(name);
+                continue;
+            }
+            const role = String(info.role || '').toLowerCase();
+            if (role === 'lead') leads.add(name);
+            else if (role === 'coder') coders.add(name);
+        }
+        return [...leads].sort().concat([...coders].sort());
+    }
+
     public getSetting<T>(key: string, defaultValue: T): T {
         return this._context.globalState.get<T>(key, defaultValue);
     }
@@ -2488,7 +2536,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     /** 2026-07-12 four-front-doors refactor: rewrite persisted plannerWorkflowPath
      *  values that still point at the old default (`.agents/workflows/improve-plan.md`)
-     *  to the new skills path (`.agents/skills/improve-plan/SKILL.md`). Only exact
+     *  to the new skills path (`.switchboard/protocols/improve-plan/SKILL.md`). Only exact
      *  old-default matches are rewritten — user-custom paths are preserved untouched.
      *  Gated per-DB by `switchboard.migrations.plannerWorkflowPathWorkflowsToSkills.v1`.
      *  Runs after the `.agent→.agents` normalization so the two rewrites compose
@@ -2497,7 +2545,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const ROLE_KEY = 'switchboard.prompts.roleConfig_planner';
         const MARKER_KEY = 'switchboard.migrations.plannerWorkflowPathWorkflowsToSkills.v1';
         const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
-        const NEW_DEFAULT = '.agents/skills/improve-plan/SKILL.md';
+        const NEW_DEFAULT = '.switchboard/protocols/improve-plan/SKILL.md';
 
         const roots: string[] = [];
         const activeRoot = this._resolveWorkspaceRoot() ?? undefined;
@@ -2559,7 +2607,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      *  but the profile tiers were never ported, so on a dev/UAT machine where the
      *  stale value lives in globalState (the tier the Prompts tab reads and
      *  re-saves) the dead path survived. This rewrites an exact-match
-     *  `.agents/workflows/improve-plan.md` → `.agents/skills/improve-plan/SKILL.md`
+     *  `.agents/workflows/improve-plan.md` → `.switchboard/protocols/improve-plan/SKILL.md`
      *  in both profile tiers, preserving any other/custom value untouched. Gated
      *  by `switchboard.plannerWorkflowPathWorkflowsToSkills.profile.v1` (a distinct
      *  globalState marker — never reuse the DB or `.agent→.agents` markers). The
@@ -2570,7 +2618,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      *  skills path); see the constructor wiring. */
     private async _migratePlannerWorkflowPathProfileTiersWorkflowsToSkills(): Promise<void> {
         const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
-        const NEW_DEFAULT = '.agents/skills/improve-plan/SKILL.md';
+        const NEW_DEFAULT = '.switchboard/protocols/improve-plan/SKILL.md';
         const PROFILE_MARKER = 'switchboard.plannerWorkflowPathWorkflowsToSkills.profile.v1';
 
         // Already-migrated this profile — no re-entry.
@@ -6328,7 +6376,7 @@ Each plan file must include:
 - Create ${issues.length} plan file(s) total — one per issue (more if any issue is split per the splitting rule above)
 - Write each plan to: ${plansDir}/feature_plan_<YYYYMMDDHHMMSS>_<slug>.md
 - Do NOT skip the investigation step — read the relevant code before writing each plan
-- After writing all plan files, review the titles you just created and look for 2 or more that share a common feature area or root cause. For each such cluster, create a feature grouping them — the gate depends on who initiated grouping: if a memo issue already asked for grouping or a feature, treat that as confirmation and create it now without a second confirm; otherwise (you are proposing grouping the user did not request), offer: "These [N] plans cover related work — want me to create a feature to group them together?" and only create the feature if the user confirms. Do NOT hand-write the feature file. If the VS Code extension is running (check ${workspaceRoot}/.switchboard/api-server-port.txt), run: node "${workspaceRoot}/.agents/skills/kanban_operations/create-feature.js" "<featureName>" '<planIdsJson>' "${workspaceRoot}" "<description>" — this does DB upsert + subtask linking atomically. If the extension is not reachable, invoke the create-feature skill (direct file write to .switchboard/features/). Use planId UUIDs from the kanban DB or kanban-board.md, NOT filenames.`;
+- After writing all plan files, review the titles you just created and look for 2 or more that share a common feature area or root cause. For each such cluster, create a feature grouping them — the gate depends on who initiated grouping: if a memo issue already asked for grouping or a feature, treat that as confirmation and create it now without a second confirm; otherwise (you are proposing grouping the user did not request), offer: "These [N] plans cover related work — want me to create a feature to group them together?" and only create the feature if the user confirms. Do NOT hand-write the feature file. If the VS Code extension is running (check ${workspaceRoot}/.switchboard/api-server-port.txt), run: node "${workspaceRoot}/.agents/skills/kanban_operations/create-feature.js" "<featureName>" '<planIdsJson>' "${workspaceRoot}" "<description>" — this does DB upsert + subtask linking atomically. If the extension is not reachable, invoke the manage-features skill and follow the Create section (direct file write to .switchboard/features/). Use planId UUIDs from the kanban DB or kanban-board.md, NOT filenames.`;
 
         if (projectName) {
             prompt += '\n\n' + PROJECT_LINE_DIRECTIVE(projectName);
@@ -10993,11 +11041,11 @@ Each plan file must include:
         initiatorProject?: string | null,
         deliveryMode?: 'host' | 'self'
     ): Promise<{ mode: 'interview' | 'resume' | 'stale-session' | 'no-persona'; prompt: string }> {
-        const sharedLogicPath = path.join(root, '.agents', 'skills', 'switchboard-orchestrator', 'SKILL.md');
+        const sharedLogicPath = path.join(root, '.switchboard', 'protocols', 'switchboard-orchestrator', 'SKILL.md');
         const runsheetName = deliveryMode === 'self'
             ? 'switchboard-orchestrator-external'
             : 'switchboard-orchestrator-internal';
-        const runsheetPath = path.join(root, '.agents', 'skills', runsheetName, 'SKILL.md');
+        const runsheetPath = path.join(root, '.switchboard', 'protocols', runsheetName, 'SKILL.md');
         let projectFilter = '';
         try {
             projectFilter = (await this._kanbanProvider?.resolveAuthoringProject(root, initiatorProject)) || '';
@@ -11211,7 +11259,7 @@ Each plan file must include:
             this._refreshTerminalStatuses();
         }
 
-        // Inject the kickoff prompt. The persona workflow (.agents/skills/switchboard-orchestrator/SKILL.md)
+        // Inject the kickoff prompt. The persona workflow (.switchboard/protocols/switchboard-orchestrator/SKILL.md)
         // encodes the full pre-flight + Kickoff Protocol; this prompt points the agent at it and injects
         // the runtime context (UNATTENDED flag, workspace root, active project filter). The dispatch
         // path uses sendRobustText (clipboard-paste for long payloads).
@@ -21153,7 +21201,7 @@ What would you like to find?`;
             return basePayload;
         }
 
-        const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agents/skills/accuracy/SKILL.md step-by-step while implementing this task.`;
+        const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .switchboard/protocols/accuracy/SKILL.md step-by-step while implementing this task.`;
         return `${basePayload}${accuracyInstruction}`;
     }
 
@@ -27357,10 +27405,10 @@ What would you like to find?`;
     /**
      * Start the survivor-jobs timer (fetch-plans, reconcile). Tied to workspace
      * activation, NOT to a queue session — a cloud VM pushes plans whether or
-     * not a queue is running. The cadence reads
-     * `singleColumnConfig.intervalMinutes` (default 10m) so it tracks the
-     * schedule's configured interval, but the timer fires with the schedule OFF
-     * and is never touched by `_stopAutobanEngine`. Idempotent — a second call
+     * not a queue is running. The timer checks once per minute and each job's
+     * `intervalMinutes` and `lastRunAt` determine whether that job is due. It
+     * fires with the schedule OFF and is never touched by `_stopAutobanEngine`.
+     * Idempotent — a second call
      * clears the existing timer first so activation/deactivation cycles do not
      * stack. The tick is a no-op (not an error) when no remote branches exist
      * or no survivor jobs are enabled.
@@ -27369,12 +27417,11 @@ What would you like to find?`;
         if (this._survivorJobsTimer) {
             clearInterval(this._survivorJobsTimer);
         }
-        const intervalMinutes = Math.max(this._singleColumnAutobanState.intervalMinutes || 10, 1);
         this._survivorJobsTimer = setInterval(() => {
             void this._tickSurvivorSchedulerJobs().catch(e =>
                 console.error('[Autoban] Survivor scheduler jobs tick failed:', e)
             );
-        }, intervalMinutes * 60 * 1000);
+        }, 60 * 1000);
     }
 
     private _stopSurvivorJobsTimer(): void {
@@ -27392,8 +27439,11 @@ What would you like to find?`;
     private async _tickSurvivorSchedulerJobs(): Promise<void> {
         const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
         const survivorSources = new Set(['fetch-plans', 'reconcile', 'team-automation']);
+        const now = Date.now();
         for (const job of sched.jobs) {
             if (!job.enabled || !survivorSources.has(job.source)) continue;
+            const intervalMs = Math.max(Number(job.intervalMinutes) || 1, 1) * 60 * 1000;
+            if (job.lastRunAt && now - job.lastRunAt < intervalMs) continue;
             if (this._schedulerInFlight.get(job.id)) continue;
             void this.runSchedulerJob(job).catch(e =>
                 console.error(`[Autoban] Survivor scheduler job '${job.source}' tick failed:`, e)
@@ -27535,27 +27585,21 @@ What would you like to find?`;
         // 3. Resolve target terminal
         let targetName: string | undefined = undefined;
         if (teamTarget.role) {
-            const wantedRole = teamTarget.role;
-            const origin = teamHeadName(group) || (Array.isArray(group.members) ? group.members[0] : 'lead');
-            targetName = (await resolveTeamScopedRoleTerminal({
-                db,
-                originName: origin,
-                role: wantedRole,
-                liveTerminals: live,
-                normalizeRole: (r) => this._normalizeAgentKey(r || '')
-            })) ?? undefined;
+            const wantedRole = this._normalizeAgentKey(teamTarget.role);
+            const groupRoster: string[] = Array.isArray(group.order) && group.order.length
+                ? group.order
+                : (Array.isArray(group.members) ? group.members : []);
+            targetName = live.find(t =>
+                groupRoster.includes(t.name) && this._normalizeAgentKey(t.role) === wantedRole
+            )?.name;
 
             if (!targetName) {
-                // Determine whether role is missing from roster vs terminal dead
-                const normalizedWanted = this._normalizeAgentKey(wantedRole);
-                const groupRoster: string[] = Array.isArray(group.order) && group.order.length
-                    ? group.order
-                    : (Array.isArray(group.members) ? group.members : []);
-                const rosterHasRole = live.some(t => groupRoster.includes(t.name) && this._normalizeAgentKey(t.role) === normalizedWanted);
-                if (!rosterHasRole) {
-                    return { success: false, outcome: 'no such role in roster' };
-                }
-                return { success: false, outcome: 'lead not live' };
+                const definition = await resolveDefinitionForGroup(db, group);
+                const roleExists = this._normalizeAgentKey(definition?.headRole) === wantedRole
+                    || (Array.isArray(definition?.members) && definition.members.some((member: any) =>
+                        this._normalizeAgentKey(member?.role) === wantedRole
+                    ));
+                return { success: false, outcome: roleExists ? 'target role not live' : 'no such role in roster' };
             }
         } else {
             // Default to head
