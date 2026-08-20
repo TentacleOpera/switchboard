@@ -1396,6 +1396,16 @@
         .teams-card-portrait {
             flex-shrink: 0;
         }
+        /* Pixel-art <img> treatment — one class, defined per webview document
+           (separate documents share no sheet). Integer display sizes plus
+           `pixelated` keep raster art hard-edged; without this a 32x32 PNG
+           scaled to 28px shimmers. Applied to art <img> elements by the
+           icon-picker / surface-render code; harmless on elements that do
+           not use it. */
+        .pixel-art {
+            image-rendering: pixelated;
+            -ms-interpolation-mode: nearest-neighbor;
+        }
         .teams-card-name {
             font-size: 12px;
             font-weight: 600;
@@ -4860,8 +4870,52 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return 'portrait-agent';
         }
 
-        /** Cell size for portrait <use> — fixed so better art cannot shift layout. */
-        const TEAMS_TAB_CELL = 28;
+        /**
+         * Low-level art resolver — the ONE place a stored `icon` value becomes
+         * a URL. teamIconSrc(group) (added by the icon-picker plan) is a thin
+         * wrapper over this: `const v = group?.icon; return v ? resolveArt(v) : null;`.
+         *
+         * Accepted forms, discriminated by prefix (no separate iconKind field):
+         *   art:<name>  → /static/icons/<name>.png   (the long-term form; the
+         *                 file is <name>.png under icons/. Regenerating art
+         *                 overwrites the same filename, so saved refs survive.)
+         *   pack:<file> → /static/icons/<url-encoded file>  (stand-in pack only;
+         *                 those filenames contain spaces, so encode here, not
+         *                 at storage time. Disappears with the stand-ins.)
+         *   data:...    → passthrough (custom inline icon).
+         *
+         * `mtime` is OPTIONAL. The picker passes the file mtime returned by
+         * GET /terminals/icon-palette to bust the 1-hour static cache
+         * (LocalApiServer serves art as `public, max-age=3600`) after a
+         * regenerate. Non-picker render paths (shell strip, cockpit header,
+         * sidebar rows) omit it and accept stale cache within that window —
+         * they do not call the listing endpoint, so they have no mtime to pass.
+         *
+         * Empty/absent/malformed → null. Never throws.
+         */
+        function resolveArt(value, mtime) {
+            const v = String(value || '').trim();
+            if (!v) { return null; }
+            if (v.startsWith('data:')) { return v; }
+            if (v.startsWith('art:')) {
+                const name = v.slice('art:'.length).trim();
+                if (!name) { return null; }
+                const base = '/static/icons/' + encodeURIComponent(name) + '.png';
+                return mtime ? base + '?v=' + mtime : base;
+            }
+            if (v.startsWith('pack:')) {
+                const file = v.slice('pack:'.length).trim();
+                if (!file) { return null; }
+                const base = '/static/icons/' + encodeURIComponent(file);
+                return mtime ? base + '?v=' + mtime : base;
+            }
+            return null;
+        }
+
+        /** Cell size for portrait <use> — fixed so better art cannot shift layout.
+         *  32 (not 28): the art grid is 32x32, and a 24-unit viewBox at 28px is
+         *  a 1.1667x fractional scale that blurs raster pixel art. 32 is 1x. */
+        const TEAMS_TAB_CELL = 32;
 
         /**
          * Render the card row from a merged list: adopted teams first, then

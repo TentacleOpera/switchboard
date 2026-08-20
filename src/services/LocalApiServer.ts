@@ -3654,6 +3654,127 @@ export class LocalApiServer {
     }
 
     /**
+     * GET /terminals/icon-palette — list available art in the `icons/` static
+     * route root(s). Returns `{ success: true, icons: [{ name, src, mtime, kind,
+     * sizeWarning? }] }`. `kind` is derived from the filename prefix: `agent-`
+     * → 'agent', `team-` → 'team', otherwise 'other' (the stand-in sci-fi pack
+     * and the brand/nav SVGs). The picker groups by `kind` so the stand-in pack
+     * can be dropped from the palette as one group once real art lands.
+     *
+     * `mtime` (unix seconds) is what the picker appends as `?v=<mtime>` to bust
+     * the 1-hour static cache after a regenerate. Non-picker render paths do
+     * not call this endpoint and accept stale cache within that window — that
+     * asymmetry is intentional and documented in the pixel-art plan.
+     *
+     * Size guard: an `agent-*` / `team-*` PNG that is not 32x32 gets a
+     * `sizeWarning` string. Committing an unresized generator output is the
+     * likeliest mistake and it presents as a rendering bug (shimmer) rather
+     * than a bad file, so it is flagged here for the picker to surface. PNG
+     * dimensions are read from the IHDR chunk directly — no image dependency.
+     *
+     * Security: only the configured `icons` static root(s) are read; entries
+     * are never resolved outside them, mirroring the traversal guard in
+     * `_handleServeStatic`. No caller-supplied path is interpolated.
+     */
+    private async _handleIconPalette(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        if (!this._options.serveStatic) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Static serving not configured' }));
+            return;
+        }
+        const roots = this._options.serveStatic.staticRoutes['icons'];
+        if (!roots || roots.length === 0) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, icons: [] }));
+            return;
+        }
+
+        const imageExts = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.avif']);
+        try {
+            const seen = new Set<string>();
+            const icons: Array<{ name: string; src: string; mtime: number; kind: string; sizeWarning?: string }> = [];
+            for (const root of roots) {
+                let entries: string[];
+                try {
+                    entries = await fs.readdir(root);
+                } catch {
+                    continue;
+                }
+                for (const name of entries) {
+                    if (seen.has(name)) { continue; }
+                    seen.add(name);
+                    const full = path.join(root, name);
+                    let st: fsSync.Stats;
+                    try {
+                        st = await fs.stat(full);
+                    } catch {
+                        continue;
+                    }
+                    if (!st.isFile()) { continue; }
+                    const ext = path.extname(name).toLowerCase();
+                    if (!imageExts.has(ext)) { continue; }
+                    const kind = name.startsWith('agent-') ? 'agent'
+                        : name.startsWith('team-') ? 'team'
+                        : 'other';
+                    const entry: { name: string; src: string; mtime: number; kind: string; sizeWarning?: string } = {
+                        name,
+                        src: '/static/icons/' + encodeURIComponent(name),
+                        mtime: Math.floor(st.mtimeMs / 1000),
+                        kind,
+                    };
+                    // Size guard: agent-*/team-* PNGs must be 32x32. SVGs and
+                    // the stand-in 'other' pack are not checked — only the
+                    // convention-bound prefixes carry the size contract.
+                    if ((kind === 'agent' || kind === 'team') && ext === '.png') {
+                        const dims = LocalApiServer._readPngDimensions(full);
+                        if (dims && (dims.width !== 32 || dims.height !== 32)) {
+                            entry.sizeWarning = `expected 32x32, got ${dims.width}x${dims.height}`;
+                        }
+                    }
+                    icons.push(entry);
+                }
+            }
+            icons.sort((a, b) => a.name.localeCompare(b.name));
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, icons }));
+        } catch (err) {
+            console.warn('[LocalApiServer] icon-palette failed:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'icon-palette failed' }));
+        }
+    }
+
+    /**
+     * Read a PNG's pixel dimensions from its IHDR chunk (bytes 16–23, big-endian
+     * uint32 width then height). Returns null for a non-PNG or truncated file.
+     * No image library dependency — the size guard only needs width/height.
+     */
+    private static _readPngDimensions(file: string): { width: number; height: number } | null {
+        let fd: number | undefined;
+        try {
+            fd = fsSync.openSync(file, 'r');
+            const buf = Buffer.alloc(24);
+            const n = fsSync.readSync(fd, buf, 0, 24, 0);
+            if (n < 24) { return null; }
+            // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+            if (buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4e || buf[3] !== 0x47) { return null; }
+            // IHDR chunk type at bytes 12–15; width at 16–19, height at 20–23.
+            if (buf[12] !== 0x49 || buf[13] !== 0x48 || buf[14] !== 0x44 || buf[15] !== 0x52) { return null; }
+            return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+        } catch {
+            return null;
+        } finally {
+            if (fd !== undefined) {
+                try { fsSync.closeSync(fd); } catch { /* ignore */ }
+            }
+        }
+    }
+
+    /**
      * POST /terminals/standing-orders — add or delete a standing order.
      * Body: `{ action: 'add'|'delete', parent, child, instruction?, scope?, teamId? }`.
      * For `global`/`team` scope, `parent`/`child` are not required; `team` requires `teamId`.
@@ -5228,6 +5349,8 @@ export class LocalApiServer {
                 await this._handleKanbanReconcileFeatures(req, res);
             } else if (pathname === '/terminals/standing-orders' && req.method === 'GET') {
                 await this._handleStandingOrdersList(req, res);
+            } else if (pathname === '/terminals/icon-palette' && req.method === 'GET') {
+                await this._handleIconPalette(req, res);
             } else if (pathname === '/terminals/standing-orders' && req.method === 'POST') {
                 await this._handleStandingOrdersWrite(req, res);
             } else if (pathname === '/terminals/relay' && req.method === 'POST') {

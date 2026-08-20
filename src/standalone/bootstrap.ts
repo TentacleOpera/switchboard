@@ -53,7 +53,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // The pure migrators are deliberately NOT imported here — see the note at the
 // matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
 // only server-side reader of `terminals.standingOrders` in either host.
-import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
+import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -1545,6 +1545,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (ok) {
                         try {
                             await rewriteStandingOrdersForRename(db, payload.name, payload.alias);
+                            await rewriteTeamGroupHeadForRename(db, payload.name, payload.alias);
                         } catch (err) {
                             console.warn('[bootstrap] Standing-orders rename rewrite failed:', err);
                         }

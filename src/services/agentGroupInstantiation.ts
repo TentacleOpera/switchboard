@@ -133,7 +133,7 @@ export async function instantiateAgentGroupCore(
     // installed exactly once on this path, not twice.
     //
     // Terminals are already created — do not roll back. Surface the error.
-    const wired = await wireSpawnedTeam({ db, settings: opts.settings, headName, children: workers, members: Array.isArray(group?.members) ? group.members : undefined, prompt: group?.prompt, headPrompt: group?.headPrompt, headRole: group?.headRole, pacing: group?.pacing === 'seat' ? 'seat' : 'head', templateId: group?.id });
+    const wired = await wireSpawnedTeam({ db, settings: opts.settings, headName, children: workers, members: Array.isArray(group?.members) ? group.members : undefined, prompt: group?.prompt, headPrompt: group?.headPrompt, headRole: group?.headRole, pacing: group?.pacing === 'seat' ? 'seat' : 'head', templateId: group?.id, definitionId: group?.id });
     if (!wired.ok) {
         return {
             success: true,
@@ -404,6 +404,7 @@ export async function instantiateExternalHeadedTeam(
         externalHead: true,
         pacing: group?.pacing === 'seat' ? 'seat' : 'head',
         templateId: group?.id,
+        definitionId: group?.id,
         regenerateHeadPrompt: async ({ groupId, memberNames }) => {
             try {
                 const written = await writeHeadPromptFile(root, groupId, {

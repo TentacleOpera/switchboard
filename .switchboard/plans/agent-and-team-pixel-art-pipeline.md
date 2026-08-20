@@ -141,3 +141,9 @@ Resolve a role: `agent-<role>.png` if present, else the inline `<symbol>`, else 
 10. Manual: drop in a deliberately unresized 512×512 file — the picker flags it rather than silently rendering shimmer.
 11. Manual: delete a referenced PNG — every surface falls back, no broken images, no console spew.
 12. Manual: one piece on Retina at 32 and 64, on both themes.
+
+---
+
+## Completion Report — Foundation subtask
+
+Implemented the team-icon foundation (resolveArt low-level resolver, GET /terminals/icon-palette endpoint, .pixel-art CSS class, TEAMS_TAB_CELL 28→32, and the PNG size guard). `resolveArt(value, mtime)` is the single place a stored `icon` value becomes a URL, handling `art:`/`pack:`/`data:` with optional mtime cache-busting; the icon-picker plan's `teamIconSrc(group)` will wrap it as `const v = group?.icon; return v ? resolveArt(v) : null;`. The endpoint reads the configured `icons` static root(s), returns `[{ name, src, mtime, kind, sizeWarning? }]` with prefix-classified `kind`, and flags any non-32×32 `agent-*`/`team-*` PNG via a dependency-free IHDR parse. `.pixel-art` was added to the kanban.html, shell.html, and terminals.html stylesheets (separate documents, no shared sheet); it is defined but not yet applied to elements — the picker/surface-render code applies it to art `<img>`s. Files changed: `src/webview/kanban.html`, `src/webview/shell.html`, `src/webview/terminals.html`, `src/services/LocalApiServer.ts`. No issues encountered; compile/tests skipped per standing orders. Out of scope (left for the picker plan): the `teamIconSrc` wrapper, the picker UI, rendering `<img>` at the five surfaces, the per-agent `teamsTabPortraitId` replacement, and the dev-mode computed-box assertion.

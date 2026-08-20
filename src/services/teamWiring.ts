@@ -1104,6 +1104,95 @@ export async function resolveTeamById(db: any, teamId: string): Promise<any | nu
 }
 
 /**
+ * Whether a `terminals.groups` row is a spawned team (as opposed to a
+ * hand-saved selection). A spawned team carries `teamKind: 'spawned'`; a
+ * legacy row written by an older build lacks the field but is still a team
+ * when `teamGroup === true` AND its id is `team_`-prefixed (the flag
+ * `migrateTeamGroupFlags` stamps on every `team_`-prefixed row). A
+ * hand-saved selection has neither `teamKind` nor a `team_` id.
+ *
+ * Every consumer that branches on "is this a real team?" MUST call this
+ * rather than testing `teamGroup` alone — this helper is the single seam
+ * the rest of the feature builds on.
+ */
+export function isSpawnedTeamGroup(g: any): boolean {
+    if (!g || typeof g !== 'object') { return false; }
+    if (g.teamKind === 'spawned') { return true; }
+    // Legacy compat: a team_-prefixed row written before teamKind existed.
+    return g.teamGroup === true
+        && typeof g.id === 'string'
+        && g.id.startsWith('team_');
+}
+
+/**
+ * The declared head terminal name for a spawned team group. Reads the
+ * `head` field (stamped at spawn by `wireSpawnedTeam`), NEVER infers from
+ * `order[0]` — the two diverge when an operator reorders, and a consumer
+ * that infers will disagree with one that reads `head`. Returns
+ * `undefined` for a group that has no declared head (a hand-saved
+ * selection or a legacy row written before this change). Callers must
+ * handle `undefined` by falling back to `order[0]` or `name` as
+ * appropriate — but that fallback is the caller's choice, not this
+ * helper's.
+ */
+export function teamHeadName(g: any): string | undefined {
+    if (!g || typeof g !== 'object') { return undefined; }
+    return typeof g.head === 'string' && g.head.length > 0 ? g.head : undefined;
+}
+
+/**
+ * Resolve the team **definition** (`terminals.agentGroups` row) that
+ * produced a live `terminals.groups` row. Resolution order:
+ *
+ * 1. `g.definitionId` → `resolveTeamById` (the exact path, for groups
+ *    written by this build onward). Falls through to step 2 if the
+ *    definition was deleted while the team runs.
+ * 2. Fallback for pre-existing groups with no `definitionId`: match the
+ *    group's `headRole` against `headRole` across
+ *    `terminals.agentGroups`, accepting ONLY a unique match. Uses the
+ *    same migration converter as `findTeamForHeadRole` and the same
+ *    `!g.unassigned` filter, but demands uniqueness — an ambiguous
+ *    role match returns `null` rather than guessing.
+ * 3. Otherwise `null`. Every consumer must render a sane default when
+ *    this returns `null`.
+ *
+ * No backfill migration, no rewrite of existing rows. The fallback covers
+ * already-running teams for the life of their session; the next spawn
+ * writes the precise link.
+ *
+ * Temporal edge case: a definition whose `headRole` was edited after
+ * spawn no longer matches the live terminal's role. Acceptable —
+ * resolves on next spawn.
+ */
+export async function resolveDefinitionForGroup(db: any, g: any): Promise<any | null> {
+    if (!db || !g || typeof g !== 'object') { return null; }
+    // 1. Exact path: the definition id stamped at spawn.
+    if (typeof g.definitionId === 'string' && g.definitionId.length > 0) {
+        const def = await resolveTeamById(db, g.definitionId);
+        if (def) { return def; }
+        // Fall through to role-match if the definition was deleted.
+    }
+    // 2. Role-match fallback for legacy groups (no definitionId, or a
+    //    deleted definition). Same migration + filter as
+    //    findTeamForHeadRole, but demands a UNIQUE match — the plan's
+    //    edge case: two definitions sharing a head role is ambiguous.
+    const headRole = typeof g.headRole === 'string' && g.headRole.length > 0
+        ? g.headRole : undefined;
+    if (!headRole) { return null; }
+    try {
+        const groups = await db.getConfigJson(AGENT_GROUPS_CONFIG_KEY, []) as any[];
+        if (!Array.isArray(groups)) { return null; }
+        const converted = migrateAgentGroups(groups) ?? groups;
+        const matches = converted.filter((def: any) =>
+            def && def.headRole === headRole && !def.unassigned);
+        return matches.length === 1 ? matches[0] : null;
+    } catch (err) {
+        console.warn(`[teamWiring] resolveDefinitionForGroup role-match failed:`, err);
+        return null;
+    }
+}
+
+/**
  * True when a group is byte-for-byte the shipped starter (`SEEDED_AGENT_GROUP`)
  * — id, name, headRole, an empty members array, and no extra keys. Exact-value,
  * never heuristic: an operator-authored member-less team differs by at least one
@@ -1311,6 +1400,21 @@ export interface WireSpawnedTeamOptions {
      * the TEAMS tab. Owned by subtask 3.
      */
     templateId?: string;
+    /**
+     * The team **definition** id (`terminals.agentGroups` row id) this live
+     * group was spawned from — the precise link back to the template that
+     * produced the team. Distinct from `templateId` (which subtask 3 owns
+     * for pacing flips): `definitionId` is the identity link every
+     * team-scoped consumer reads through `resolveDefinitionForGroup`.
+     *
+     * Absent for teams spawned outside the definition path (the pty-verb
+     * path, or a manual spawn with no `group`). When absent,
+     * `resolveDefinitionForGroup` falls back to a role-match. Persisted
+     * onto the registered `terminals.groups` row so any surface can
+     * resolve a running terminal to its team and read that team's
+     * properties (icon, name, head, roster) without re-deriving the link.
+     */
+    definitionId?: string;
 }
 
 export interface WireSpawnedTeamResult {
@@ -1530,18 +1634,28 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     // install base by defaulting a boolean.
     const pacingField = opts.pacing === 'seat' ? { pacing: 'seat' as const } : {};
     const templateIdField = opts.templateId ? { templateId: opts.templateId } : {};
+    // Identity link: definitionId (when known), head (declared, not inferred
+    // from order[0]), teamKind (positive marker that this manual group is a
+    // real spawned team). definitionId is conditional (absent for pty-verb
+    // spawns with no definition); head and teamKind are always written — they
+    // are known at every spawn and are the fields every consumer reads through
+    // isSpawnedTeamGroup / teamHeadName / resolveDefinitionForGroup.
+    const definitionIdField = opts.definitionId ? { definitionId: opts.definitionId } : {};
     const group = {
         id: groupId,
         name: headName,
         headRole: opts.headRole || 'lead',
         source: 'manual' as const,
         teamGroup: true,
+        teamKind: 'spawned' as const,
+        head: headName,
         layout,
         members: groupMembers,
         order: groupMembers,
         externalHead,
         ...pacingField,
         ...templateIdField,
+        ...definitionIdField,
     };
 
     try {
@@ -1564,6 +1678,8 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                     headRole: opts.headRole || 'lead',
                     source: 'manual' as const,
                     teamGroup: true,
+                    teamKind: 'spawned' as const,
+                    head: headName,
                     layout: (typeof existing.layout === 'string' && TERMINALS_LAYOUT_MODES.has(existing.layout))
                         ? existing.layout
                         : layout,
@@ -1572,6 +1688,7 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                     externalHead,
                     ...pacingField,
                     ...templateIdField,
+                    ...definitionIdField,
                 }
                 : group;
             const next = [...current];
@@ -2191,4 +2308,40 @@ export async function resolveTeamPacingForHead(opts: {
     }
     if (!group) { return 'head'; }
     return group.pacing === 'seat' ? 'seat' : 'head';
+}
+
+/**
+ * Rewrite the `head` field on any `terminals.groups` row whose `head`
+ * matches `oldName` — the group-record half of a terminal rename. Called
+ * alongside `rewriteStandingOrdersForRename` (standingOrders.ts) so a
+ * renamed head terminal's group record stays consistent with its standing
+ * orders. The group `id` stays as-minted — it is an identity, not a
+ * display name, and re-keying it would orphan every team-scoped standing
+ * order (keyed `(scope, teamId)`).
+ *
+ * Uses `mutateTerminalGroups` (the serialized read-modify-write chain) so
+ * a concurrent spawn cannot drop this rewrite. Preserves every unknown
+ * key via the `...g` spread in the transform — only `head` is touched.
+ */
+export async function rewriteTeamGroupHeadForRename(
+    db: any,
+    oldName: string,
+    newName: string
+): Promise<void> {
+    if (!db || !oldName || !newName || oldName === newName) { return; }
+    try {
+        await mutateTerminalGroups({ db }, (current) => {
+            let changed = false;
+            const next = current.map((g: any) => {
+                if (g && typeof g === 'object' && g.head === oldName) {
+                    changed = true;
+                    return { ...g, head: newName };
+                }
+                return g;
+            });
+            return changed ? next : current;
+        });
+    } catch (err: any) {
+        console.warn(`[teamWiring] rewriteTeamGroupHeadForRename failed:`, err?.message || err);
+    }
 }

@@ -46,7 +46,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // read in this file goes through `loadEffectiveStandingOrders`, which composes
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 
 import * as cp from 'child_process';
@@ -3027,6 +3027,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         const ordersDb = await this._getKanbanDb(this._apiServerWorkspaceRoot || root || effectiveRoot);
                         if (ordersDb) {
                             await rewriteStandingOrdersForRename(ordersDb, payload.name, payload.alias);
+                            await rewriteTeamGroupHeadForRename(ordersDb, payload.name, payload.alias);
                         }
                     })().catch((err: any) => console.warn('[TaskViewerProvider] Standing-orders rename rewrite failed:', err));
                 }

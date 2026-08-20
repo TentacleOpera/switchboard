@@ -2024,6 +2024,14 @@
             color: var(--text-secondary);
             font-size: 14px;
         }
+        /* Pixel-art <img> treatment — one class per webview document (these
+           documents share no sheet). Integer display sizes plus `pixelated`
+           keep raster art hard-edged; applied to art <img> elements by the
+           surface-render code. Harmless on elements that do not use it. */
+        .pixel-art {
+            image-rendering: pixelated;
+            -ms-interpolation-mode: nearest-neighbor;
+        }
     </style>
 </head>
 <body>
