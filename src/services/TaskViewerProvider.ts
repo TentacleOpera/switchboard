@@ -27582,6 +27582,14 @@ What would you like to find?`;
             return { success: false, outcome: 'empty prompt', target: targetName };
         }
 
+        // TypeScript narrowing: the if/else above both assign targetName,
+        // but the compiler cannot track the early-return guards across
+        // branches. Assert non-null here — both branches either return
+        // early or assign a string.
+        if (!targetName) {
+            return { success: false, outcome: 'no target resolved' };
+        }
+
         // 6. Deliver via fleet dispatch path
         const delivered = await this._dispatchExecuteMessage(
             workspaceRoot,
