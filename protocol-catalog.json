@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "generatedAt": "2026-08-20T03:46:45.875Z",
+  "generatedAt": "2026-08-20T03:55:52.739Z",
   "summary": {
     "totalArms": 626,
     "totalVerbs": 538,
-    "totalPushSites": 645,
+    "totalPushSites": 648,
     "totalRequestSites": 620,
     "providerArmCounts": {
       "Kanban": 161,
@@ -7378,6 +7378,13 @@
       ],
       "siteCount": 1
     },
+    "clearTeamBadges": {
+      "payloadKeys": [
+        "type",
+        "memberNames"
+      ],
+      "siteCount": 1
+    },
     "clearTerminalBadge": {
       "payloadKeys": [
         "type",
@@ -9348,7 +9355,7 @@
         "type",
         "name"
       ],
-      "siteCount": 1
+      "siteCount": 2
     },
     "performAgentDirCleanup": {
       "payloadKeys": [
@@ -9430,7 +9437,7 @@
         "type",
         "name"
       ],
-      "siteCount": 1
+      "siteCount": 2
     },
     "popoutTerminal": {
       "payloadKeys": [
@@ -10737,7 +10744,8 @@
     "terminalFleetState": {
       "payloadKeys": [
         "type",
-        "terminals"
+        "terminals",
+        "teams"
       ],
       "siteCount": 1
     },
@@ -18922,7 +18930,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 604,
+      "line": 614,
       "receiver": "frame.contentWindow?",
       "payloadKeys": [
         "type",
@@ -18933,7 +18941,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 612,
+      "line": 622,
       "receiver": "win",
       "payloadKeys": [
         "type",
@@ -18941,10 +18949,32 @@
       ]
     },
     {
+      "verb": "clearTeamBadges",
+      "direction": "push",
+      "file": "src/webview/shell.js",
+      "line": 839,
+      "receiver": "termFrame.contentWindow",
+      "payloadKeys": [
+        "type",
+        "memberNames"
+      ]
+    },
+    {
+      "verb": "peekTerminal",
+      "direction": "push",
+      "file": "src/webview/shell.js",
+      "line": 865,
+      "receiver": "termFrame.contentWindow",
+      "payloadKeys": [
+        "type",
+        "name"
+      ]
+    },
+    {
       "verb": "clearTerminalBadge",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 841,
+      "line": 1012,
       "receiver": "termFrame.contentWindow",
       "payloadKeys": [
         "type",
@@ -18955,7 +18985,7 @@
       "verb": "peekTerminal",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 857,
+      "line": 1028,
       "receiver": "termFrame.contentWindow",
       "payloadKeys": [
         "type",
@@ -18966,7 +18996,7 @@
       "verb": "requestFleetState",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 882,
+      "line": 1103,
       "receiver": "termFrame.contentWindow",
       "payloadKeys": [
         "type"
@@ -18976,7 +19006,18 @@
       "verb": "popoutBlocked",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 1020,
+      "line": 1241,
+      "receiver": "termFrame.contentWindow",
+      "payloadKeys": [
+        "type",
+        "name"
+      ]
+    },
+    {
+      "verb": "popoutBlocked",
+      "direction": "push",
+      "file": "src/webview/shell.js",
+      "line": 1264,
       "receiver": "termFrame.contentWindow",
       "payloadKeys": [
         "type",
@@ -18987,18 +19028,19 @@
       "verb": "terminalFleetState",
       "direction": "push",
       "file": "src/webview/terminals.js",
-      "line": 1440,
+      "line": 1511,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",
-        "terminals"
+        "terminals",
+        "teams"
       ]
     },
     {
       "verb": "orchestratorState",
       "direction": "push",
       "file": "src/webview/terminals.js",
-      "line": 1454,
+      "line": 1683,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",
@@ -19011,7 +19053,7 @@
       "verb": "popoutTerminal",
       "direction": "push",
       "file": "src/webview/terminals.js",
-      "line": 4936,
+      "line": 5214,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",

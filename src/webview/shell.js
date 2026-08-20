@@ -592,6 +592,16 @@
     const pulsedDoneStamps = new Map();
     const DONE_PULSE_MS = 2200; // MUST equal the animation duration in shell.html
 
+    // Rail mode: 'teams' (default) renders one button per team; 'terminals'
+    // renders the legacy one-button-per-terminal rail. Persisted in
+    // localStorage so it survives a shell reload. A shell that has never
+    // set it defaults to 'teams' — the new primary mode.
+    let railMode = 'teams';
+    try {
+        const saved = localStorage.getItem('sb-rail-mode');
+        if (saved === 'teams' || saved === 'terminals') { railMode = saved; }
+    } catch { /* localStorage unavailable (private mode) — use default */ }
+
     function applyThemeToAll(themeName) {
         const isClaudify = themeName === 'claudify';
         if (isClaudify) {
@@ -661,7 +671,7 @@
         if (first !== container) { first.style.marginTop = 'auto'; }
     }
 
-    function renderTerminalSection(terminals) {
+    function renderTerminalSection(terminals, teams) {
         // A fleet-state push rebuilds every terminal button (innerHTML = ''
         // below). If the hovered button is removed mid-hover, no mouseout ever
         // fires and the overlay strands beside empty space — hide it first.
@@ -722,9 +732,10 @@
         // by renderOrchestratorIcon) is a first child of this container and
         // MUST survive the rebuild — a plain innerHTML='' would wipe it every
         // 5s poll and leave the rail dark until the next autoban state push.
-        // The orchestrator button carries no .strip-term-btn class, so removing
-        // those children is equivalent to the old wipe minus the orchestrator.
-        for (const child of Array.from(container.querySelectorAll(':scope > .strip-term-btn'))) {
+        // The orchestrator button carries no .strip-term-btn / .strip-team-btn
+        // class, so removing those children is equivalent to the old wipe minus
+        // the orchestrator.
+        for (const child of Array.from(container.querySelectorAll(':scope > .strip-term-btn, :scope > .strip-team-btn'))) {
             child.remove();
         }
         if (!Array.isArray(terminals) || terminals.length === 0) {
@@ -732,147 +743,357 @@
             return;
         }
 
-        const seenNames = new Set();
-        for (const t of terminals) {
-            seenNames.add(t.name);
+        // Ensure the rail mode toggle exists (created once, survives rebuilds
+        // like #strip-orchestrator because it carries no .strip-term-btn class).
+        ensureRailModeToggle(container);
 
-            // -1 = no ring. 0 = start now. >0 = resume this far in.
-            let pulseElapsed = -1;
-            if (t.light === 'done') {
-                const prev = pulsedDoneStamps.get(t.name);
-                if (!prev || prev.stamp !== t.doneStamp) {
-                    pulsedDoneStamps.set(t.name, { stamp: t.doneStamp, startedAt: performance.now() });
-                    pulseElapsed = 0;
-                } else {
-                    // STRICTLY less than. A delay whose magnitude reaches the duration
-                    // puts the animation straight into its post-active phase, and with
-                    // fill-mode `both` the element paints the 100% keyframe for one
-                    // frame — a green flash on an expired completion. This comparison
-                    // is the guard against that, not a rounding nicety.
-                    const elapsed = performance.now() - prev.startedAt;
-                    if (elapsed < DONE_PULSE_MS) { pulseElapsed = elapsed; }
+        const seenKeys = new Set();
+
+        if (railMode === 'teams' && Array.isArray(teams) && teams.length > 0) {
+            // ── Teams mode ──────────────────────────────────────────────
+            // One button per team (in stable order from the panel), then one
+            // button per ungrouped terminal. A terminal claimed by a team
+            // does NOT also render as ungrouped — first-by-stable-order wins.
+            const claimedNames = new Set();
+            for (const team of teams) {
+                for (const name of (team.memberNames || [])) {
+                    claimedNames.add(name);
                 }
-            } else {
-                // Not done any more (acknowledged, or exited): forget it, so a LATER
-                // completion of the same terminal pulses again from the top.
-                pulsedDoneStamps.delete(t.name);
             }
 
-            const btn = document.createElement('button');
-            // The done ring is a one-shot ANIMATION, not a state class: it plays for
-            // DONE_PULSE_MS from the push that carried a new completion stamp, and is
-            // simply absent on every push after that window closes. A terminal that
-            // completed a minute ago wears no ring — the sidebar DONE chip and the
-            // pane badge in the Terminals panel remain the durable record of an
-            // unacknowledged completion.
-            btn.className = 'strip-icon strip-term-btn strip-term-' + t.light
-                + (pulseElapsed >= 0 ? ' is-pulsing' : '');
-            btn.type = 'button';
-            if (pulseElapsed > 0) {
-                // Resume, do not restart — the previous element was destroyed mid-pulse.
-                // FLOOR, never round: the guard above admits pulseElapsed strictly below
-                // DONE_PULSE_MS, but rounding 2199.6 up to 2200 hands the animation a
-                // delay whose magnitude EQUALS the duration — straight into the
-                // post-active phase, where fill-mode `both` paints the 100% keyframe for
-                // one frame. That is the green flash on an expired completion the strict
-                // comparison exists to prevent; rounding would reintroduce it.
-                btn.style.animationDelay = '-' + Math.floor(pulseElapsed) + 'ms';
-            }
+            for (const team of teams) {
+                const key = 'team:' + team.groupId;
+                seenKeys.add(key);
 
-            const roleChar = (t.role || 'T').charAt(0).toUpperCase();
-            let wtBase = 'Workspace Root';
-            if (t.worktreePath) {
-                const parts = t.worktreePath.replace(/\\/g, '/').split('/').filter(Boolean);
-                wtBase = parts.length > 0 ? parts[parts.length - 1] : t.worktreePath;
-            }
+                // Pulse ledger keyed on groupId — same machinery, same guards.
+                let pulseElapsed = -1;
+                if (team.light === 'done') {
+                    const prev = pulsedDoneStamps.get(key);
+                    if (!prev || prev.stamp !== team.doneStamp) {
+                        pulsedDoneStamps.set(key, { stamp: team.doneStamp, startedAt: performance.now() });
+                        pulseElapsed = 0;
+                    } else {
+                        const elapsed = performance.now() - prev.startedAt;
+                        if (elapsed < DONE_PULSE_MS) { pulseElapsed = elapsed; }
+                    }
+                } else {
+                    pulsedDoneStamps.delete(key);
+                }
 
-            const labelText = `${t.name} · ${t.role || 'Terminal'} · ${wtBase} [${t.light}]`;
-            btn.setAttribute('aria-label', labelText);
-            // Tooltip mirrors the accessible name (light state included) plus the
-            // full worktree path on a second line — what the removed native
-            // btn.title used to show, minus the double-tooltip asymmetry.
-            btn.dataset.tooltip = t.worktreePath ? `${labelText}\n${t.worktreePath}` : labelText;
+                const btn = document.createElement('button');
+                btn.className = 'strip-icon strip-team-btn strip-term-' + team.light
+                    + (pulseElapsed >= 0 ? ' is-pulsing' : '');
+                btn.type = 'button';
+                if (pulseElapsed > 0) {
+                    btn.style.animationDelay = '-' + Math.floor(pulseElapsed) + 'ms';
+                }
 
-            // Coloured brand icon replaces the old role-letter glyph + status dot. The
-            // URI is resolved panel-side (terminals.js postFleetStateToShell) from the
-            // same brandIconForCliLabel/brandIconUri helpers the Terminals sidebar uses,
-            // so the two surfaces show the same icon for the same terminal. An <img> (not
-            // the strip's CSS-mask/currentColor path) is deliberate: these are multi-hue
-            // brand marks whose baked-in fill IS the identity. Fall back to the role
-            // letter only if the relay sent no URI (defensive — the relay always sends at
-            // least the default icon unless the dataset attrs are missing entirely).
-            if (t.iconUri) {
-                const icon = document.createElement('img');
-                icon.className = 'strip-term-icon';
-                icon.src = t.iconUri;
-                // alt='' is correct: the button's aria-label already carries name, role,
-                // worktree and light state. A brand name here would double-announce.
-                icon.alt = '';
-                btn.appendChild(icon);
-            } else {
-                const glyph = document.createElement('span');
-                glyph.textContent = roleChar;
-                btn.appendChild(glyph);
-            }
+                const memberCount = (team.memberNames || []).length;
+                const labelText = `${team.name} · ${memberCount} agent${memberCount === 1 ? '' : 's'} · ${team.head || 'no head'} leads [${team.light}]`;
+                btn.setAttribute('aria-label', labelText);
+                // Tooltip mirrors the aria-label plus the roster on subsequent
+                // lines — the strip's custom tooltip handles multi-line + flip.
+                const roster = (team.memberNames || []).join('\n');
+                btn.dataset.tooltip = roster ? `${labelText}\n${roster}` : labelText;
 
-            btn.addEventListener('click', () => {
-                const slug = t.name.replace(/[^A-Za-z0-9_-]/g, '_');
-                const popoutName = `sb-term-${slug}`;
-
-                // If a solo pop-out for this terminal is already open, focus it — the
-                // open window is the stronger signal of intent than a peek.
-                let existing = null;
-                for (const win of Array.from(popoutWindows)) {
-                    if (win.closed) {
-                        popoutWindows.delete(win);
-                    } else if (win.name === popoutName) {
-                        existing = win;
+                // Three-deep icon fallback: team icon → head's brand mark →
+                // head's role letter. The rail is the primary navigation
+                // surface and must never render an empty button.
+                if (team.iconUri) {
+                    const icon = document.createElement('img');
+                    icon.className = 'strip-term-icon strip-team-icon pixel-art';
+                    icon.src = team.iconUri;
+                    icon.alt = '';
+                    btn.appendChild(icon);
+                } else {
+                    const headTerm = terminals.find(t => t.name === team.head);
+                    const roleChar = (team.headRole || (headTerm && headTerm.role) || 'T').charAt(0).toUpperCase();
+                    if (headTerm && headTerm.iconUri) {
+                        const icon = document.createElement('img');
+                        icon.className = 'strip-term-icon strip-team-icon';
+                        icon.src = headTerm.iconUri;
+                        icon.alt = '';
+                        btn.appendChild(icon);
+                    } else {
+                        const glyph = document.createElement('span');
+                        glyph.textContent = roleChar;
+                        btn.appendChild(glyph);
                     }
                 }
 
-                const termFrame = frames.get('terminals');
-                if (existing) {
-                    // Clicking a lit entry IS the acknowledgement. This branch never
-                    // reaches the panel's peek arm, so without an explicit clear the
-                    // DONE light burns forever — the exact regression the old
-                    // clearTerminalBadge relay existed to prevent.
-                    if (termFrame && termFrame.contentWindow) {
+                // Member-count badge — small number in the corner, same
+                // visual weight as the done ring.
+                const badge = document.createElement('span');
+                badge.className = 'strip-team-count';
+                badge.textContent = String(memberCount);
+                btn.appendChild(badge);
+
+                btn.addEventListener('click', () => {
+                    const termFrame = frames.get('terminals');
+                    // Clicking a team with an unacknowledged completion IS the
+                    // acknowledgement — relay clearTeamBadges carrying
+                    // memberNames so the panel clears every member's badge.
+                    // Otherwise the aggregate light burns forever.
+                    if (team.light === 'done' && termFrame && termFrame.contentWindow) {
                         try {
                             termFrame.contentWindow.postMessage({
-                                type: 'clearTerminalBadge',
-                                name: t.name
+                                type: 'clearTeamBadges',
+                                memberNames: team.memberNames || []
                             }, location.origin);
                         } catch { /* ignore */ }
                     }
-                    try { existing.focus(); } catch { /* ignore */ }
-                    return;
-                }
-
-                // Otherwise peek it in the cockpit. Switch the panel FIRST — the strip
-                // is visible while other panels are active, so a peek alone would
-                // change a panel the user cannot see. The peek arm clears the badge.
-                selectPanel('terminals');
-                if (termFrame && termFrame.contentWindow) {
+                    // Open the team cockpit. Do NOT dedup by window name — the
+                    // cockpit plan allows two windows on the same team. Use a
+                    // unique name per open action so window.open always creates
+                    // a new window rather than reusing a closed-but-not-GC'd one.
+                    const slug = String(team.groupId || '').replace(/[^A-Za-z0-9_-]/g, '_');
+                    const popoutName = `sb-team-${slug}-${Date.now()}`;
+                    const popoutUrl = `/terminals?team=${encodeURIComponent(team.groupId)}`;
+                    const features = 'width=900,height=700';
+                    let popout = null;
                     try {
-                        termFrame.contentWindow.postMessage({
-                            type: 'peekTerminal',
-                            name: t.name
-                        }, location.origin);
+                        popout = window.open(popoutUrl, popoutName, features);
                     } catch { /* ignore */ }
-                }
-            });
+                    if (popout && !popout.closed) {
+                        popoutWindows.add(popout);
+                    } else {
+                        // Pop-out blocked — peek the head terminal in-panel as a
+                        // fallback so the click is not a dead action.
+                        selectPanel('terminals');
+                        if (termFrame && termFrame.contentWindow && team.head) {
+                            try {
+                                termFrame.contentWindow.postMessage({
+                                    type: 'peekTerminal',
+                                    name: team.head
+                                }, location.origin);
+                            } catch { /* ignore */ }
+                        }
+                    }
+                });
 
-            container.appendChild(btn);
+                container.appendChild(btn);
+            }
+
+            // Ungrouped terminals — same rendering as terminals mode, minus
+            // any terminal claimed by a team.
+            for (const t of terminals) {
+                if (claimedNames.has(t.name)) { continue; }
+                seenKeys.add('term:' + t.name);
+                container.appendChild(buildTerminalButton(t, seenKeys));
+            }
+        } else {
+            // ── Terminals mode (legacy) ─────────────────────────────────
+            for (const t of terminals) {
+                seenKeys.add('term:' + t.name);
+                container.appendChild(buildTerminalButton(t, seenKeys));
+            }
         }
 
-        for (const name of Array.from(pulsedDoneStamps.keys())) {
-            if (!seenNames.has(name)) { pulsedDoneStamps.delete(name); }
+        // Prune pulse ledger entries that no longer have a button.
+        for (const key of Array.from(pulsedDoneStamps.keys())) {
+            if (!seenKeys.has(key)) { pulsedDoneStamps.delete(key); }
         }
         // The selective button removal above preserves #strip-orchestrator, but a
         // future edit to this rebuild could still drop it. Ensure it exists at the
         // end of every fleet rebuild so the rail control never vanishes without a
         // state message (CRITICAL 1 regression guard).
         ensureOrchestratorIcon();
+    }
+
+    /**
+     * Build a single per-terminal button. Extracted from renderTerminalSection
+     * so both teams mode (ungrouped terminals) and terminals mode (all
+     * terminals) share the exact same rendering + click behaviour. The pulse
+     * ledger is keyed on 'term:<name>' so it never collides with 'team:<id>'.
+     */
+    function buildTerminalButton(t, seenKeys) {
+        let pulseElapsed = -1;
+        const key = 'term:' + t.name;
+        if (t.light === 'done') {
+            const prev = pulsedDoneStamps.get(key);
+            if (!prev || prev.stamp !== t.doneStamp) {
+                pulsedDoneStamps.set(key, { stamp: t.doneStamp, startedAt: performance.now() });
+                pulseElapsed = 0;
+            } else {
+                // STRICTLY less than. A delay whose magnitude reaches the duration
+                // puts the animation straight into its post-active phase, and with
+                // fill-mode `both` the element paints the 100% keyframe for one
+                // frame — a green flash on an expired completion. This comparison
+                // is the guard against that, not a rounding nicety.
+                const elapsed = performance.now() - prev.startedAt;
+                if (elapsed < DONE_PULSE_MS) { pulseElapsed = elapsed; }
+            }
+        } else {
+            // Not done any more (acknowledged, or exited): forget it, so a LATER
+            // completion of the same terminal pulses again from the top.
+            pulsedDoneStamps.delete(key);
+        }
+
+        const btn = document.createElement('button');
+        // The done ring is a one-shot ANIMATION, not a state class: it plays for
+        // DONE_PULSE_MS from the push that carried a new completion stamp, and is
+        // simply absent on every push after that window closes. A terminal that
+        // completed a minute ago wears no ring — the sidebar DONE chip and the
+        // pane badge in the Terminals panel remain the durable record of an
+        // unacknowledged completion.
+        btn.className = 'strip-icon strip-term-btn strip-term-' + t.light
+            + (pulseElapsed >= 0 ? ' is-pulsing' : '');
+        btn.type = 'button';
+        if (pulseElapsed > 0) {
+            // Resume, do not restart — the previous element was destroyed mid-pulse.
+            // FLOOR, never round: the guard above admits pulseElapsed strictly below
+            // DONE_PULSE_MS, but rounding 2199.6 up to 2200 hands the animation a
+            // delay whose magnitude EQUALS the duration — straight into the
+            // post-active phase, where fill-mode `both` paints the 100% keyframe for
+            // one frame. That is the green flash on an expired completion the strict
+            // comparison exists to prevent; rounding would reintroduce it.
+            btn.style.animationDelay = '-' + Math.floor(pulseElapsed) + 'ms';
+        }
+
+        const roleChar = (t.role || 'T').charAt(0).toUpperCase();
+        let wtBase = 'Workspace Root';
+        if (t.worktreePath) {
+            const parts = t.worktreePath.replace(/\\/g, '/').split('/').filter(Boolean);
+            wtBase = parts.length > 0 ? parts[parts.length - 1] : t.worktreePath;
+        }
+
+        const labelText = `${t.name} · ${t.role || 'Terminal'} · ${wtBase} [${t.light}]`;
+        btn.setAttribute('aria-label', labelText);
+        // Tooltip mirrors the accessible name (light state included) plus the
+        // full worktree path on a second line — what the removed native
+        // btn.title used to show, minus the double-tooltip asymmetry.
+        btn.dataset.tooltip = t.worktreePath ? `${labelText}\n${t.worktreePath}` : labelText;
+
+        // Coloured brand icon replaces the old role-letter glyph + status dot. The
+        // URI is resolved panel-side (terminals.js postFleetStateToShell) from the
+        // same brandIconForCliLabel/brandIconUri helpers the Terminals sidebar uses,
+        // so the two surfaces show the same icon for the same terminal. An <img> (not
+        // the strip's CSS-mask/currentColor path) is deliberate: these are multi-hue
+        // brand marks whose baked-in fill IS the identity. Fall back to the role
+        // letter only if the relay sent no URI (defensive — the relay always sends at
+        // least the default icon unless the dataset attrs are missing entirely).
+        if (t.iconUri) {
+            const icon = document.createElement('img');
+            icon.className = 'strip-term-icon';
+            icon.src = t.iconUri;
+            // alt='' is correct: the button's aria-label already carries name, role,
+            // worktree and light state. A brand name here would double-announce.
+            icon.alt = '';
+            btn.appendChild(icon);
+        } else {
+            const glyph = document.createElement('span');
+            glyph.textContent = roleChar;
+            btn.appendChild(glyph);
+        }
+
+        btn.addEventListener('click', () => {
+            const slug = t.name.replace(/[^A-Za-z0-9_-]/g, '_');
+            const popoutName = `sb-term-${slug}`;
+
+            // If a solo pop-out for this terminal is already open, focus it — the
+            // open window is the stronger signal of intent than a peek.
+            let existing = null;
+            for (const win of Array.from(popoutWindows)) {
+                if (win.closed) {
+                    popoutWindows.delete(win);
+                } else if (win.name === popoutName) {
+                    existing = win;
+                }
+            }
+
+            const termFrame = frames.get('terminals');
+            if (existing) {
+                // Clicking a lit entry IS the acknowledgement. This branch never
+                // reaches the panel's peek arm, so without an explicit clear the
+                // DONE light burns forever — the exact regression the old
+                // clearTerminalBadge relay existed to prevent.
+                if (termFrame && termFrame.contentWindow) {
+                    try {
+                        termFrame.contentWindow.postMessage({
+                            type: 'clearTerminalBadge',
+                            name: t.name
+                        }, location.origin);
+                    } catch { /* ignore */ }
+                }
+                try { existing.focus(); } catch { /* ignore */ }
+                return;
+            }
+
+            // Otherwise peek it in the cockpit. Switch the panel FIRST — the strip
+            // is visible while other panels are active, so a peek alone would
+            // change a panel the user cannot see. The peek arm clears the badge.
+            selectPanel('terminals');
+            if (termFrame && termFrame.contentWindow) {
+                try {
+                    termFrame.contentWindow.postMessage({
+                        type: 'peekTerminal',
+                        name: t.name
+                    }, location.origin);
+                } catch { /* ignore */ }
+            }
+        });
+
+        return btn;
+    }
+
+    /**
+     * Ensure the rail mode toggle exists in the container. Created once,
+     * survives fleet rebuilds (no .strip-term-btn / .strip-team-btn class).
+     * Toggles between 'teams' (default) and 'terminals' (legacy), persisted
+     * in localStorage. No confirmation dialog — the toggle is immediate.
+     */
+    function ensureRailModeToggle(container) {
+        if (container.querySelector('#strip-rail-mode')) { return; }
+        const btn = document.createElement('button');
+        btn.id = 'strip-rail-mode';
+        btn.type = 'button';
+        btn.className = 'strip-icon strip-rail-mode-btn';
+        btn.dataset.tooltip = railMode === 'teams' ? 'Rail: Teams (click for Terminals)' : 'Rail: Terminals (click for Teams)';
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            railMode = railMode === 'teams' ? 'terminals' : 'teams';
+            try { localStorage.setItem('sb-rail-mode', railMode); } catch { /* ignore */ }
+            btn.dataset.tooltip = railMode === 'teams' ? 'Rail: Teams (click for Terminals)' : 'Rail: Terminals (click for Teams)';
+            updateRailModeIcon(btn);
+            // Re-request fleet state so the rail re-renders in the new mode
+            // immediately, without waiting for the next 5s poll.
+            requestFleetState();
+        });
+        updateRailModeIcon(btn);
+        // Insert after the orchestrator icon (first child) so it sits at the
+        // top of the fleet container, above the team/terminal buttons.
+        const orch = container.querySelector('#strip-orchestrator');
+        if (orch && orch.nextSibling) {
+            container.insertBefore(btn, orch.nextSibling);
+        } else if (orch) {
+            container.appendChild(btn);
+        } else {
+            container.insertBefore(btn, container.firstChild);
+        }
+    }
+
+    /** Update the rail mode toggle's icon to reflect the current mode. */
+    function updateRailModeIcon(btn) {
+        btn.innerHTML = '';
+        if (railMode === 'teams') {
+            // Teams mode: a small group glyph (two overlapping circles).
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', '16');
+            svg.setAttribute('height', '16');
+            svg.setAttribute('viewBox', '0 0 16 16');
+            svg.setAttribute('aria-hidden', 'true');
+            svg.innerHTML = '<circle cx="6" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="10" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/>';
+            btn.appendChild(svg);
+        } else {
+            // Terminals mode: a single terminal glyph.
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', '16');
+            svg.setAttribute('height', '16');
+            svg.setAttribute('viewBox', '0 0 16 16');
+            svg.setAttribute('aria-hidden', 'true');
+            svg.innerHTML = '<rect x="3" y="4" width="10" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="5" y1="7" x2="9" y2="7" stroke="currentColor" stroke-width="1.5"/>';
+            btn.appendChild(svg);
+        }
     }
 
     function requestFleetState() {
@@ -994,7 +1215,7 @@
             applyThemeToAll(data.theme);
         } else if (data.type === 'terminalFleetState' && Array.isArray(data.terminals)) {
             if (event.origin !== location.origin) { return; }
-            renderTerminalSection(data.terminals);
+            renderTerminalSection(data.terminals, Array.isArray(data.teams) ? data.teams : []);
         } else if (data.type === 'orchestratorState') {
             // Relayed from terminals.js (autobanStateSync / updateAutobanConfig
             // over the WS broadcast rail). Origin-guarded: the relay targets
@@ -1018,6 +1239,29 @@
                 if (termFrame && termFrame.contentWindow) {
                     try {
                         termFrame.contentWindow.postMessage({ type: 'popoutBlocked', name: data.name }, location.origin);
+                    } catch { /* ignore */ }
+                }
+            }
+        } else if (data.type === 'popoutTeam' && typeof data.groupId === 'string') {
+            // Team cockpit pop-out. Do NOT dedup by window name — the cockpit
+            // plan allows two windows on the same team, so use a unique name
+            // per open action. Origin-guarded like popoutTerminal.
+            if (event.origin !== location.origin) { return; }
+            const slug = data.groupId.replace(/[^A-Za-z0-9_-]/g, '_');
+            const popoutName = `sb-team-${slug}-${Date.now()}`;
+            const popoutUrl = `/terminals?team=${encodeURIComponent(data.groupId)}`;
+            const features = 'width=900,height=700';
+            let popout = null;
+            try {
+                popout = window.open(popoutUrl, popoutName, features);
+            } catch { /* ignore */ }
+            if (popout && !popout.closed) {
+                popoutWindows.add(popout);
+            } else {
+                const termFrame = frames.get('terminals');
+                if (termFrame && termFrame.contentWindow) {
+                    try {
+                        termFrame.contentWindow.postMessage({ type: 'popoutBlocked', name: data.groupId }, location.origin);
                     } catch { /* ignore */ }
                 }
             }

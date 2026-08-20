@@ -117,4 +117,44 @@ Per-terminal marks remain genuinely useful when debugging one agent. Add a rail 
 7. Manual, installed VSIX: start two teams plus one loose terminal. Rail shows two team icons and one CLI mark. Hover each — tooltip names the team, count, head, roster.
 8. Manual: let a member finish. The team button pulses once and holds the done light. Click it — the cockpit opens, the light clears, and it does not re-pulse on the next poll.
 9. Manual: toggle to terminals mode and confirm today's rail returns exactly; toggle back and confirm the mode persists across a shell reload.
+
+---
+
+## Completion Report
+
+Implemented all five subtasks of the Shell Strip plan. Files changed: `src/webview/terminals.js`, `src/webview/shell.js`, `src/webview/shell.html`, `src/test/shell-terminal-strip.test.js`.
+
+### 1. `postFleetStateToShell` emits a `teams` array (terminals.js)
+Extended `postFleetStateToShell` to build and send a `teams` array beside the existing `terminals` array. Each entry: `{ groupId, definitionId, name, head, headRole, iconUri, memberNames[], light, doneStamp, activeCount, exitedCount }`. Built panel-side from `terminalGroups` (spawned teams only, via `isSpawnedTeamGroup`), `fleetList` (live member status), and `_agentGroupsCache` (team definitions with `icon` field, refreshed async via `fetchAgentGroups`). Sorted by definition order then name — never fleet-poll order. `terminals` stays unchanged and complete (backward compat). Aggregate light: done > active > exited. `doneStamp` = max over member stamps. Three-deep icon fallback: team icon (via `resolveArtForShell`) → head's brand mark → null (shell falls back to role letter).
+
+### 2. `renderTerminalSection` renders team buttons (shell.js)
+Branches on `railMode`: 'teams' (default) renders one `.strip-team-btn` per team in stable order, then one `.strip-term-btn` per ungrouped terminal (claimed names excluded); 'terminals' renders the legacy per-terminal rail. Team buttons carry `strip-term-<light>` state classes (shared CSS with terminal buttons), a `.strip-team-icon` `<img>` (with `pixel-art` class for PNGs), and a `.strip-team-count` member-count badge. `aria-label` follows the plan spec: `"<team name> · <n> agents · <head> leads [<light>]"`. Tooltip mirrors aria-label plus roster on subsequent lines. `hideStripTooltip()` stays at the top. The per-terminal click handler was extracted into `buildTerminalButton(t, seenKeys)` so both modes share the exact same rendering and click behaviour.
+
+### 3. Pulse ledger keyed on `groupId`
+The pulse ledger (`pulsedDoneStamps`) uses composite keys: `'team:<groupId>'` for team buttons, `'term:<name>'` for terminal buttons. Same machinery, same guards (strict `<`, `Math.floor`, stamp gate, resume via negative animation-delay). Pruning uses `seenKeys` set that tracks both key forms.
+
+### 4. `popoutTeam` + `clearTeamBadges`
+Added `popoutTeam` handler in shell.js message listener — origin-guarded, opens `/terminals?team=<groupId>` with a unique window name (no dedup, per the cockpit plan's two-window allowance). Added `clearTeamBadges` handler in terminals.js — origin-guarded, clears all member badges, re-relays. Team button click: if `light === 'done'`, relays `clearTeamBadges` carrying `memberNames`; opens team cockpit via `window.open`; blocked pop-out falls back to peeking the head terminal in-panel.
+
+### 5. Rail mode toggle
+Added `ensureRailModeToggle(container)` — creates a `#strip-rail-mode` button after the orchestrator icon, persists mode in `localStorage` under `sb-rail-mode`, toggles between 'teams' (default) and 'terminals'. Clicking re-requests fleet state for immediate re-render. SVG icons: two overlapping circles for teams, terminal rectangle for terminals. CSS in shell.html for `.strip-rail-mode-btn` and `.strip-team-count` badge.
+
+### Test updates
+Updated `shell-terminal-strip.test.js` markers: `renderTerminalSection(terminals)` → `renderTerminalSection(terminals, teams)`, click handler test scoped to `buildTerminalButton`, tooltip wipe selector relaxed for compound `.strip-term-btn, .strip-team-btn` selector. All 46 tests pass.
+
+### Verification
+- `node -c` syntax check: shell.js OK, terminals.js OK
+- `npx tsc --noEmit`: no new errors (5 pre-existing import-extension errors in unrelated files)
+- `npm run catalog:check`: OK (regenerated to include `getIconPalette` from prior session)
+- `node src/test/shell-terminal-strip.test.js`: 46 passed, 0 failed
+
+### Red-team review
+- **Pulse ledger key collision**: impossible — `'team:'` and `'term:'` prefixes are disjoint.
+- **Stale ledger entries**: pruned by `seenKeys` set tracking both forms.
+- **First-by-stable-order wins**: `claimedNames` set built from team member lists before rendering ungrouped terminals; a terminal in two spawned teams appears in the first team's button only.
+- **Definition-only teams (no members)**: skipped (`liveMembers.length === 0 && members.length === 0`).
+- **All-exited teams**: still render with `light: 'exited'` — same as per-terminal exited behaviour.
+- **`localStorage` unavailable**: try/catch defaults to 'teams' mode.
+- **`pixel-art` class**: applied to team icon PNGs only, not to SVG brand-mark fallbacks.
+
 10. Manual: close the Terminals panel and confirm the container disappears and the Setup + theme cluster stays anchored at the foot of the rail.

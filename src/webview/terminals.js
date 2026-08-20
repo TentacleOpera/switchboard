@@ -188,10 +188,17 @@
     let soloTerminalName = null;
     let peekTerminalName = null;
     let hasFetchedList = false;
+    /** Team-scoped mode: when set, the sidebar and grid show only this team's
+     *  members. Parsed from `?team=<groupId>`. Solo wins over team if both are
+     *  present (solo is the narrower scope). */
+    let teamScopeId = null;
     try {
         const urlParams = new URLSearchParams(location.search);
         if (urlParams.has('solo')) {
             soloTerminalName = urlParams.get('solo');
+        }
+        if (urlParams.has('team') && !soloTerminalName) {
+            teamScopeId = urlParams.get('team');
         }
     } catch { /* ignore */ }
 
@@ -762,6 +769,16 @@
             effectiveLayout = '1';
             paneAssignments = [soloTerminalName];
             initialAssignmentDone = true;
+        } else if (teamScopeId) {
+            // Team-scoped mode: the sidebar and grid show only this team's
+            // members. Unlike solo, the sidebar stays visible and the layout
+            // picker remains — the operator chooses a grid among members.
+            // The activeGroupId is set to the team's group id so seating
+            // passes (seatActiveGroupPage) already work without modification.
+            document.body.classList.add('is-team-scoped');
+            // The title is set from the group record once it resolves in
+            // loadLayoutSettings; set a placeholder so the tab is not blank.
+            document.title = 'Team';
         }
 
         // Mark standalone (top-level window, not inside the shell iframe) so CSS
@@ -1143,6 +1160,24 @@
                     postFleetStateToShell();
                 }
                 terminalReplayGaps.delete(message.name);
+            } else if (message.type === 'clearTeamBadges' && Array.isArray(message.memberNames)) {
+                // Acknowledge every member's completion badge at once — the
+                // team button's click IS the acknowledgement for the whole
+                // team, same as clearTerminalBadge is for a single terminal.
+                // Without this the aggregate 'done' light burns forever.
+                if (event.origin !== location.origin) { return; }
+                let changed = false;
+                for (const name of message.memberNames) {
+                    if (typeof name === 'string' && terminalBadges.has(name)) {
+                        terminalBadges.delete(name);
+                        changed = true;
+                    }
+                }
+                if (changed) {
+                    renderSidebarList();
+                    renderPaneGrid();
+                    postFleetStateToShell();
+                }
             } else if (message.type === 'peekTerminal' && typeof message.name === 'string') {
                 if (event.origin !== location.origin) { return; }
                 if (peekTerminalName === message.name) {
@@ -1369,6 +1404,22 @@
             // first fetch would leave the window blank instead of "Connecting…".
             checkSoloNotFound();
             fetchTerminalList();
+        } else if (teamScopeId) {
+            // Team mode: load namespaced layout settings + agent names, then
+            // paint the transient "Connecting…" state before the first fetch.
+            // The group record (for the title and header) resolves from
+            // loadLayoutSettings' read of terminals.groups.
+            Promise.all([loadLayoutSettings(), fetchAgentNames()]).then(() => {
+                const group = getScopedTeamGroup();
+                if (group) {
+                    document.title = group.shortName || group.name || 'Team';
+                    // Lock to the team's group so seatActiveGroupPage works.
+                    activeGroupId = group.id;
+                }
+                syncLayoutPickerUI();
+                checkTeamNotFound();
+                fetchTerminalList();
+            });
         } else {
             // Labels before the first paint, so rows do not visibly gain their CLI
             // name a beat after appearing.
@@ -1437,10 +1488,188 @@
                 iconUri
             };
         });
+
+        // Build a `teams` array beside `terminals` so the shell rail can render
+        // one button per team (wearing the team's icon) instead of one per
+        // terminal. Only spawned team groups (team_ prefix + teamGroup flag OR
+        // teamKind: 'spawned') become team buttons — derived role/worktree
+        // groups and hand-saved selections do not. The shell decides what to
+        // draw; a shell that has not been updated must keep working against a
+        // new panel, and vice versa, so `terminals` stays unchanged + complete.
+        //
+        // Sort by definition order (the order the operator authored teams in
+        // the TEAMS tab), then name — never fleet-poll order, which would make
+        // icons jump between polls. The shell cannot sort by definition order
+        // it does not have, so this MUST be panel-side.
+        //
+        // Aggregate light per team: 'done' if ANY member has an unacknowledged
+        // completion badge, else 'active' if any member is active, else
+        // 'exited'. doneStamp = max over member stamps — a second member
+        // finishing raises the stamp and re-pulses exactly once.
+        const teams = buildTeamsForShell();
+
         window.parent.postMessage({
             type: 'terminalFleetState',
-            terminals
+            terminals,
+            teams
         }, location.origin);
+    }
+
+    /**
+     * Resolve a stored icon value to a URL, mirroring `resolveArt` in
+     * kanban.html. Three accepted forms:
+     *   art:<name>  → /static/icons/<name>.png
+     *   pack:<file> → /static/icons/<url-encoded file>
+     *   data:...    → the data URI itself
+     * Empty/absent → null. Never throws.
+     */
+    function resolveArtForShell(value) {
+        const v = String(value || '').trim();
+        if (!v) { return null; }
+        if (v.startsWith('data:')) { return v; }
+        if (v.startsWith('art:')) {
+            const name = v.slice('art:'.length).trim();
+            if (!name) { return null; }
+            return '/static/icons/' + encodeURIComponent(name) + '.png';
+        }
+        if (v.startsWith('pack:')) {
+            const file = v.slice('pack:'.length).trim();
+            if (!file) { return null; }
+            return '/static/icons/' + encodeURIComponent(file);
+        }
+        return null;
+    }
+
+    /** Whether a terminals.groups row is a spawned team (not a hand-saved
+     *  selection). Mirrors isSpawnedTeamGroup in teamWiring.ts: teamKind
+     *  'spawned' OR legacy team_-prefixed + teamGroup flag. */
+    function isSpawnedTeamGroup(g) {
+        if (!g || typeof g !== 'object') { return false; }
+        if (g.teamKind === 'spawned') { return true; }
+        return g.teamGroup === true
+            && typeof g.id === 'string'
+            && g.id.startsWith('team_');
+    }
+
+    /** Cached agent group definitions (team templates with icon, headRole,
+     *  members). Refreshed async by refreshAgentGroupsForShell — the first
+     *  fleet push may carry no team icons, but the cache converges by the
+     *  next poll (5s). Without this the rail would block on every push. */
+    let _agentGroupsCache = [];
+    let _agentGroupsFetchInFlight = false;
+
+    /** Refresh the cached agent group definitions in the background. Called
+     *  from postFleetStateToShell so the cache stays current without blocking
+     *  the relay. The definitions carry the `icon` field the team icon picker
+     *  wrote — the shell rail's team buttons read it through resolveArtForShell. */
+    function refreshAgentGroupsForShell() {
+        if (_agentGroupsFetchInFlight) { return; }
+        _agentGroupsFetchInFlight = true;
+        fetchAgentGroups().then(groups => {
+            _agentGroupsCache = Array.isArray(groups) ? groups : [];
+        }).catch(() => { /* keep stale cache */ }).finally(() => {
+            _agentGroupsFetchInFlight = false;
+        });
+    }
+
+    /** Build the `teams` array for the shell rail. One entry per spawned team
+     *  group, sorted by definition order then name. Each entry aggregates the
+     *  light and doneStamp of its live members. */
+    function buildTeamsForShell() {
+        // Kick off a background refresh of the definition cache so the next
+        // push carries current icons. Non-blocking — the current push uses
+        // whatever the cache holds right now.
+        refreshAgentGroupsForShell();
+
+        const fleetByFriendly = new Map(fleetList.map(t => [t.friendlyName, t]));
+        const defMap = new Map((_agentGroupsCache || []).map(g => [g.id, g]));
+
+        // Collect spawned team groups with their live members.
+        const teamEntries = [];
+        for (const g of terminalGroups) {
+            if (!isSpawnedTeamGroup(g)) { continue; }
+            const members = Array.isArray(g.members) ? g.members : [];
+            const liveMembers = members.filter(name => fleetByFriendly.has(name));
+            // A team with no live members still shows (all-exited) so the
+            // operator can see and close the team — same as a per-terminal
+            // exited button. But a team whose members were never spawned
+            // (definition-only) should not appear at all.
+            if (liveMembers.length === 0 && members.length === 0) { continue; }
+
+            // Resolve the definition (for icon + headRole) via definitionId
+            // if present, else by matching the group's head role.
+            const def = (g.definitionId && defMap.has(g.definitionId))
+                ? defMap.get(g.definitionId)
+                : null;
+            const iconValue = def && def.icon ? def.icon : null;
+            const iconUri = iconValue ? resolveArtForShell(iconValue) : null;
+            const headName = (typeof g.head === 'string' && g.head) ? g.head
+                : (members.length > 0 ? members[0] : '');
+            const headRole = def && def.headRole ? def.headRole
+                : (fleetByFriendly.has(headName) ? (fleetByFriendly.get(headName).role || '') : '');
+
+            // Aggregate light: done > active > exited.
+            let light = 'exited';
+            let doneStamp = 0;
+            let activeCount = 0;
+            let exitedCount = 0;
+            for (const name of liveMembers) {
+                const t = fleetByFriendly.get(name);
+                if (!t) { continue; }
+                if (t.status === 'exited') {
+                    exitedCount++;
+                } else if (terminalBadges.has(name)) {
+                    // done wins over active and exited — a team is "done" when
+                    // it has something to report, regardless of other members.
+                    light = 'done';
+                    const stamp = terminalBadges.get(name).stamp;
+                    if (stamp > doneStamp) { doneStamp = stamp; }
+                } else {
+                    activeCount++;
+                }
+            }
+            if (light !== 'done') {
+                if (activeCount > 0) { light = 'active'; }
+                // else stays 'exited'
+            }
+
+            // Fallback icon: no team icon → head's brand mark → null (shell
+            // falls back to role letter). The three-deep fallback is in the
+            // shell's renderTerminalSection; here we send the resolved URI
+            // or null and let the shell decide.
+            let resolvedIconUri = iconUri;
+            if (!resolvedIconUri && fleetByFriendly.has(headName)) {
+                const headAgentLabel = agentLabelForRole(fleetByFriendly.get(headName).role);
+                const headIconKey = brandIconForCliLabel(headAgentLabel) || 'default';
+                resolvedIconUri = brandIconUri(headIconKey) || brandIconUri('default');
+            }
+
+            teamEntries.push({
+                groupId: g.id,
+                definitionId: g.definitionId || (def ? def.id : ''),
+                name: g.name || g.id,
+                head: headName,
+                headRole,
+                iconUri: resolvedIconUri || '',
+                memberNames: liveMembers,
+                light,
+                doneStamp,
+                activeCount,
+                exitedCount,
+            });
+        }
+
+        // Sort by definition order (index in _agentGroupsCache), then name.
+        // The shell cannot sort by definition order it does not have.
+        const defOrder = new Map((_agentGroupsCache || []).map((g, i) => [g.id, i]));
+        teamEntries.sort((a, b) => {
+            const ai = defOrder.has(a.definitionId) ? defOrder.get(a.definitionId) : 9999;
+            const bi = defOrder.has(b.definitionId) ? defOrder.get(b.definitionId) : 9999;
+            if (ai !== bi) { return ai - bi; }
+            return String(a.name).localeCompare(String(b.name));
+        });
+
+        return teamEntries;
     }
 
     /* Relay orchestrator seat/armed state to the shell rail so its UFO icon can
@@ -1548,12 +1777,40 @@
         return true;
     }
 
+    /** Keys whose stored value is per-window layout state, not fleet-wide
+     *  truth. In team-scoped mode these are namespaced under
+     *  `terminals.team.<groupId>.<key>` so a team window's layout does not
+     *  overwrite the main cockpit's. Fleet-wide keys (groups, groupPrefs,
+     *  standingOrders, agentGroups) are deliberately NOT listed here. */
+    const TEAM_NAMESPACED_KEYS = new Set([
+        'terminals.layoutMode',
+        'terminals.paneAssignments',
+        'terminals.pinnedPanes',
+        'terminals.paneModes',
+        'terminals.collapsedGroups',
+        'terminals.kanbanPaneColumn',
+        'terminals.kanbanPaneWorkspace',
+        'terminals.kanbanPaneProject',
+        'terminals.activeGroupId'
+    ]);
+
+    /** Map a setting key to its effective storage key. In team-scoped mode,
+     *  layout-family keys are prefixed with `terminals.team.<groupId>.` so
+     *  each team window persists its layout independently. Fleet-wide keys
+     *  pass through unchanged. Outside team mode, all keys pass through. */
+    function mapSettingKey(key) {
+        if (!teamScopeId) { return key; }
+        if (!TEAM_NAMESPACED_KEYS.has(key)) { return key; }
+        return `terminals.team.${teamScopeId}.${key.replace(/^terminals\./, '')}`;
+    }
+
     async function loadSetting(key, defaultVal) {
+        const storageKey = mapSettingKey(key);
         try {
             const res = await fetch('/kanban/verb/getSetting', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key })
+                body: JSON.stringify({ key: storageKey })
             });
             if (res.ok) {
                 const data = await res.json();
@@ -1567,8 +1824,9 @@
 
     async function saveSetting(key, value, baseIds) {
         if (soloTerminalName) { return; }
+        const storageKey = mapSettingKey(key);
         try {
-            const body = { key, value };
+            const body = { key: storageKey, value };
             const effectiveBaseIds = baseIds !== undefined ? baseIds : (key === 'terminals.groups' ? lastReadGroupIds : undefined);
             if (Array.isArray(effectiveBaseIds)) {
                 body.baseIds = effectiveBaseIds;
@@ -1601,6 +1859,26 @@
                 }
             }
         } catch { /* ignore */ }
+    }
+
+    /** Clean up namespaced layout keys for a deleted team group. Called from
+     *  `deleteGroup` when a manual group is removed. Without this, the
+     *  `terminals.team.<groupId>.*` keys accumulate as storage orphans. No
+     *  delete verb exists, so each key is overwritten with null — the host
+     *  treats a null value as unset for these layout-family keys. */
+    function deleteNamespacedTeamKeys(groupId) {
+        if (!groupId) { return; }
+        for (const baseKey of TEAM_NAMESPACED_KEYS) {
+            const shortKey = baseKey.replace(/^terminals\./, '');
+            const namespacedKey = `terminals.team.${groupId}.${shortKey}`;
+            try {
+                fetch('/kanban/verb/saveSetting', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: namespacedKey, value: null })
+                });
+            } catch { /* ignore — best-effort cleanup */ }
+        }
     }
 
     async function loadLayoutSettings() {
@@ -1836,6 +2114,7 @@
                     await fetchStandingOrders();
                     postFleetStateToShell();
                     checkSoloNotFound();
+                    checkTeamNotFound();
                     return;
                 }
             }
@@ -1850,6 +2129,7 @@
         // a transient fetch failure — the next successful poll will correct it.
         postFleetStateToShell();
         checkSoloNotFound();
+        checkTeamNotFound();
     }
 
     function checkSoloNotFound() {
@@ -1882,6 +2162,36 @@
             const entry = terminalsMap.get(soloTerminalName);
             if (entry) { refreshTerminalScrollbar(entry); }
         });
+    }
+
+    /** Team-scoped not-found / connecting state, modelled on checkSoloNotFound.
+     *  Three states: "Connecting…" before the first fetch resolves, "Team not
+     *  found" when the group record is absent (stale bookmark, deleted team),
+     *  and the normal state (group exists, grid visible). Reuses #solo-status
+     *  so no new DOM element is needed. */
+    function checkTeamNotFound() {
+        if (!teamScopeId) return;
+        const statusEl = document.getElementById('solo-status');
+        if (!statusEl || !paneGridEl) return;
+
+        if (!hasFetchedList) {
+            statusEl.style.display = 'flex';
+            statusEl.textContent = 'Connecting…';
+            paneGridEl.style.display = 'none';
+            return;
+        }
+
+        const group = getScopedTeamGroup();
+        if (!group) {
+            statusEl.style.display = 'flex';
+            statusEl.innerHTML = `Team "${teamScopeId}" is no longer registered. ` +
+                `<a href="/terminals" style="color: var(--accent-teal, #4ec9b0);">Open full cockpit</a>`;
+            paneGridEl.style.display = 'none';
+            return;
+        }
+
+        statusEl.style.display = 'none';
+        paneGridEl.style.display = 'grid';
     }
 
     /** Single-level undo of the last assignment mutation. Cleared when the terminal it
@@ -3121,7 +3431,7 @@
      * nulling `pickerState` for `group:*` keys.
      */
     function renderGroupTabStrip() {
-        if (!groupTabStripEl || soloTerminalName) { return false; }
+        if (!groupTabStripEl || soloTerminalName || teamScopeId) { return false; }
         groupTabStripEl.innerHTML = '';
 
         const tabRow = document.createElement('div');
@@ -3591,7 +3901,23 @@
             paneGridEl.style.display = 'grid';
         }
 
-        if (selectedTerminalNames.size > 0) {
+        // Team-scoped empty state: the fleet is loaded but the team has no
+        // live members. Show a team-specific message rather than the generic
+        // "no terminals" panel state. checkTeamNotFound handles the
+        // group-deleted case separately.
+        if (teamScopeId && hasFetchedList) {
+            const scoped = scopedFleet();
+            if (scoped.length === 0 && getScopedTeamGroup()) {
+                emptyStateEl.style.display = 'flex';
+                emptyStateEl.textContent = 'All team members have exited. Use + to spawn new ones.';
+                paneGridEl.style.display = 'none';
+            } else {
+                // Restore the default empty-state text in case it was changed.
+                emptyStateEl.textContent = 'No terminal selected. Use the + beside a workspace in the sidebar to spawn one.';
+            }
+        }
+
+        if (selectedTerminalNames.size > 0 && !teamScopeId) {
             const selRow = document.createElement('div');
             selRow.className = 'group-tier-header';
             const selTitle = document.createElement('span');
@@ -3652,8 +3978,13 @@
         // Render the group tab strip (above the pane grid, outside listEl).
         // The strip's picker uses a `group:*` key; the guard at the bottom
         // of this function prevents the garbage-collect from nulling it.
-        if (!soloTerminalName) {
+        // In team-scoped mode the strip is hidden (renderGroupTabStrip early-
+        // returns) and the team header takes its place.
+        if (!soloTerminalName && !teamScopeId) {
             if (renderGroupTabStrip()) { pickerRendered = true; }
+        }
+        if (teamScopeId) {
+            if (renderTeamHeader()) { pickerRendered = true; }
         }
 
         let parents = Array.isArray(parentsList) ? [...parentsList] : [];
@@ -3684,7 +4015,11 @@
 
         const allParentFolders = new Set(parentGroups.map(p => p.fullPath).filter(Boolean));
 
-        for (const item of fleetList) {
+        // In team-scoped mode, only iterate the team's members (scopedFleet).
+        // The full fleetList is still in memory for sanitize, standing orders,
+        // and dispatch-in-flight cleanup — this is the render boundary.
+        const renderFleet = scopedFleet();
+        for (const item of renderFleet) {
             let targetGroup = parentGroups.find(p => p.fullPath && p.fullPath === item.parentRoot);
             if (!targetGroup) {
                 // Fold an unattributed terminal into the sole group ONLY when that group is
@@ -3720,10 +4055,22 @@
         ];
 
         // Sort each bucket by role before rendering. Workspace/worktree hierarchy stays.
+        // In team-scoped mode, sort by the group's `order` array — the operator
+        // authored that order and a scoped view is where it should be honoured.
+        const teamOrder = teamScopeId ? scopedMemberNamesOrdered() : null;
+        const teamOrderMap = teamOrder ? new Map(teamOrder.map((n, i) => [n, i])) : null;
+        const teamComparator = (a, b) => {
+            if (teamOrderMap) {
+                const ai = teamOrderMap.has(a.friendlyName) ? teamOrderMap.get(a.friendlyName) : Number.MAX_SAFE_INTEGER;
+                const bi = teamOrderMap.has(b.friendlyName) ? teamOrderMap.get(b.friendlyName) : Number.MAX_SAFE_INTEGER;
+                if (ai !== bi) { return ai - bi; }
+            }
+            return compareTerminals(a, b);
+        };
         for (const group of activeGroupsToRender) {
-            group.direct.sort(compareTerminals);
+            group.direct.sort(teamComparator);
             for (const wtGroup of group.worktreesMap.values()) {
-                wtGroup.items.sort(compareTerminals);
+                wtGroup.items.sort(teamComparator);
             }
         }
 
@@ -9161,6 +9508,65 @@
 
     function liveNameSet() {
         return new Set(fleetList.filter(t => t.status === 'active').map(t => t.friendlyName));
+    }
+
+    // ── Team-scoped mode helpers ──────────────────────────────────────────
+
+    /** Client-side mirror of `isSpawnedTeamGroup` from `teamWiring.ts`.
+     *  A manual group with a `team_`-prefixed id is a spawned team; the
+     *  `teamGroup` flag is stamped on load for legacy rows that predate it. */
+    function isSpawnedTeamGroup(g) {
+        if (!g || typeof g.id !== 'string') { return false; }
+        if (g.teamKind === 'spawned') { return true; }
+        return g.id.startsWith('team_') && g.source === 'manual';
+    }
+
+    /** Client-side mirror of `teamHeadName` from `teamWiring.ts`.
+     *  Reads the explicit `head` field on the group record, falling back to
+     *  `members[0]` only for legacy rows that predate the `head` stamp. Never
+     *  infers from `order[0]` — order is the operator's arrangement, not
+     *  identity. */
+    function teamHeadName(g) {
+        if (!g) { return null; }
+        if (typeof g.head === 'string' && g.head) { return g.head; }
+        if (Array.isArray(g.members) && g.members.length > 0) { return g.members[0]; }
+        return null;
+    }
+
+    /** Resolve the team-scoped group record from `terminalGroups` by id.
+     *  Returns null if the group does not exist or is not a spawned team. */
+    function getScopedTeamGroup() {
+        if (!teamScopeId) { return null; }
+        return terminalGroups.find(g => g && g.id === teamScopeId) || null;
+    }
+
+    /** The render-boundary filter. Returns `fleetList` filtered to the scoped
+     *  team's live members when `teamScopeId` is set, and `fleetList` unchanged
+     *  otherwise. Called only from render paths — NEVER from fetch, standing-
+     *  orders, or sanitize paths that need the whole fleet.
+     *
+     *  Re-reads the group record each call so a re-spawn that upserts
+     *  `members` is picked up on the next poll without a stale cache. Tolerates
+     *  a member name that is no longer live (the filter intersects with the
+     *  live set). */
+    function scopedFleet() {
+        if (!teamScopeId) { return fleetList; }
+        const group = getScopedTeamGroup();
+        if (!group || !Array.isArray(group.members)) { return []; }
+        const memberSet = new Set(group.members);
+        return fleetList.filter(t => memberSet.has(t.friendlyName));
+    }
+
+    /** The set of live member names for the scoped team, in the group's
+     *  `order` sequence. Used by the sidebar renderer to honour the operator's
+     *  authored order rather than `compareTerminals`. Falls back to `members`
+     *  if `order` is absent. */
+    function scopedMemberNamesOrdered() {
+        const group = getScopedTeamGroup();
+        if (!group) { return []; }
+        const live = new Set(fleetList.filter(t => t.status !== 'exited').map(t => t.friendlyName));
+        const seq = Array.isArray(group.order) ? group.order : (Array.isArray(group.members) ? group.members : []);
+        return seq.filter(n => live.has(n));
     }
 
     /** Client-side mirror of `applyStandingOrders` from `src/services/standingOrders.ts`. */

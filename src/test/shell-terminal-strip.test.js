@@ -193,7 +193,12 @@ test('assignToFocusedPane re-relays on BOTH of its badge-clear paths', () => {
 });
 
 test('the strip click peeks in-cockpit and acknowledges the badge on every branch', () => {
-    const handler = block(shellJs, "btn.addEventListener('click', () => {", 'container.appendChild(btn);');
+    // The per-terminal click handler lives in buildTerminalButton (extracted
+    // from renderTerminalSection so teams mode and terminals mode share it).
+    // Scope the block to that function so the team button's window.open does
+    // not false-trigger the "no single-terminal window" assertion.
+    const fn = block(shellJs, 'function buildTerminalButton(t, seenKeys) {', 'function ensureRailModeToggle(');
+    const handler = block(fn, "btn.addEventListener('click', () => {", 'return btn;');
     // Peek replaced the pop-out: instant AND non-destructive, which is the third
     // option the old acknowledge-only comment was working around the absence of.
     assert.ok(!handler.includes('window.open('), 'the strip click must no longer open a single-terminal window');
@@ -327,7 +332,7 @@ test('the panel accepts badge messages only from its own origin', () => {
 // ------------------------------------------------------------------ strip rendering
 
 test('the terminal section is gated on the terminals panel actually being mounted', () => {
-    const fn = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     assert.ok(
         fn.includes("if (!frames.has('terminals')) {"),
         'the section must be gated on frames.has(terminals) — the same map the enabled===false skip populates'
@@ -345,7 +350,7 @@ test('the bottom anchor MOVES to the section rather than being duplicated', () =
     const toggle = block(shellJs, 'function buildThemeToggle() {', 'const popoutWindows');
     assert.ok(toggle.includes("btn.style.marginTop = 'auto'"), 'the toggle keeps the inline anchor as its default');
 
-    const fn = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     assert.ok(
         fn.includes("themeBtn.style.marginTop = 'auto'"),
         'the gated-off branch must restore the inline anchor to the toggle'
@@ -375,7 +380,7 @@ test('the section is created eagerly in renderManifest, after the panel loop', (
 });
 
 test('the light state is in the accessible name, not only the dot', () => {
-    const fn = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     assert.ok(
         /labelText = `[^`]*\$\{t\.light\}/.test(fn),
         "the button's aria-label must spell out the light state — the dot is decorative markup"
@@ -425,7 +430,7 @@ test('terminal state is encoded without a separate dot — exited fades, done ri
 });
 
 test('the strip renders a coloured brand-icon img from the relayed iconUri', () => {
-    const fn = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     assert.ok(
         /createElement\('img'\)[\s\S]*strip-term-icon[\s\S]*icon\.src = t\.iconUri/.test(fn),
         'the strip must render an <img class="strip-term-icon"> whose src is the relayed t.iconUri'
@@ -465,7 +470,7 @@ test('every strip button builder sets a non-empty data-tooltip', () => {
     );
     const toggle = block(shellJs, 'function buildThemeToggle() {', 'const popoutWindows');
     assert.ok(toggle.includes("btn.dataset.tooltip = 'Toggle Theme'"), 'the theme toggle must carry a tooltip');
-    const section = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const section = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     assert.ok(
         /btn\.dataset\.tooltip = t\.worktreePath \? `[^`]*labelText[^`]*\\n[^`]*` : labelText/.test(section),
         'terminal buttons must tooltip the aria text (light state included) plus the full worktreePath on a second line'
@@ -510,7 +515,7 @@ test('the overlay hides on rail scroll, click, and terminal-section rebuild', ()
         'scroll hide must listen in the capture phase — scroll does not bubble'
     );
     assert.ok(shellJs.includes("document.addEventListener('click', hideStripTooltip)"), 'click must hide the tooltip');
-    const section = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const section = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     const hideAt = section.indexOf('hideStripTooltip();');
     // The rebuild no longer wipes via `container.innerHTML = ''` — that would
     // destroy #strip-orchestrator (a first child of the container) every 5s
@@ -518,7 +523,9 @@ test('the overlay hides on rail scroll, click, and terminal-section rebuild', ()
     // `:scope > .strip-term-btn` loop. The load-bearing ordering guarantee this
     // test exists to protect is unchanged: hideStripTooltip() must still occur
     // BEFORE the button removal, or a mid-hover fleet update strands the overlay.
-    const wipeAt = section.indexOf("querySelectorAll(':scope > .strip-term-btn')");
+    // The selector now includes .strip-team-btn (team buttons share the container)
+    // but the ordering guarantee is unchanged.
+    const wipeAt = section.indexOf("querySelectorAll(':scope > .strip-term-btn");
     assert.ok(hideAt !== -1 && wipeAt !== -1 && hideAt < wipeAt,
         'the section must hide the tooltip BEFORE removing the fleet buttons, or a mid-hover fleet update strands it');
 });
@@ -544,7 +551,7 @@ test('the bottom anchor is reconciled onto the FIRST cluster member, not just th
     // child stays packed with the top group. So appending Setup ahead of
     // #strip-terminals / the toggle leaves it under the workspace panels with the
     // gap BELOW it — the exact defect this cluster exists to avoid.
-    const fn = block(shellJs, 'function applyBottomAnchor() {', 'function renderTerminalSection(terminals) {');
+    const fn = block(shellJs, 'function applyBottomAnchor() {', 'function renderTerminalSection(terminals, teams) {');
     assert.ok(
         fn.includes(".strip-placement-bottom'"),
         'the reconciler must consider placement icons as cluster members'
@@ -559,7 +566,7 @@ test('the bottom anchor is reconciled onto the FIRST cluster member, not just th
     );
     // Both composition changes must reconcile: Terminals present (container created)
     // and Terminals absent (container removed, toggle takes the inline default).
-    const section = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const section = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     assert.strictEqual(
         (section.match(/applyBottomAnchor\(\)/g) || []).length, 2,
         'both branches of renderTerminalSection must reconcile the anchor'
@@ -625,7 +632,7 @@ test('handleAgentCompleted writes a strictly increasing stamp inside the badge s
 });
 
 test('renderTerminalSection pulses once per stamp and resumes across rebuilds', () => {
-    const fn = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     // The stamp gate: a new stamp arms the pulse; a repeated stamp does not re-arm.
     assert.ok(
         /prev\.stamp !== t\.doneStamp/.test(fn),
@@ -655,7 +662,7 @@ test('renderTerminalSection pulses once per stamp and resumes across rebuilds', 
 });
 
 test('both early-return branches of renderTerminalSection clear the pulse ledger', () => {
-    const fn = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     const clears = (fn.match(/pulsedDoneStamps\.clear\(\)/g) || []).length;
     assert.ok(clears >= 2,
         'both early-return branches (no terminals frame, empty fleet) must clear the ledger, or it retains entries for a fleet that went to zero');
@@ -804,7 +811,7 @@ test('the orchestrator icon is ensured to exist independently of an orchestrator
     assert.ok(/renderTerminalSection\(\[\]\);[\s\S]*?ensureOrchestratorIcon\(\)/.test(manifest),
         'renderManifest must call ensureOrchestratorIcon() after the initial renderTerminalSection([])');
     // Both branches of renderTerminalSection must call ensureOrchestratorIcon().
-    const section = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const section = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     const ensures = (section.match(/ensureOrchestratorIcon\(\)/g) || []).length;
     assert.strictEqual(ensures, 2,
         'renderTerminalSection must call ensureOrchestratorIcon() in BOTH branches (early-return and normal exit) — the early-return removes the container and takes the icon with it');
