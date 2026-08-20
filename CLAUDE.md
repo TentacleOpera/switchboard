@@ -51,7 +51,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 | `/switchboard-remote` | **`switchboard-remote.md`** | Remote Switchboard control — drive plans via Linear or Notion when the local machine is off. |
 | `/switchboard-memo`, "start memo capture" | **`switchboard-memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/switchboard-memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
 
-These four are the ONLY user-typeable workflow commands. Internal, extension-dispatched workflows are no longer slash commands: `improve-plan`, `improve-feature`, `accuracy`, and `switchboard-orchestrator` live as stripped skills under `.agents/skills/<name>/SKILL.md`, read by the extension by path (the orchestrator persona is system-launched from the AUTOMATION tab's Start orchestrator; never invoke it ad hoc).
+These four are the ONLY user-typeable workflow commands. Internal, extension-dispatched workflows are no longer slash commands: `improve-plan`, `improve-feature`, `accuracy`, and `switchboard-orchestrator` live as protocols under `.switchboard/protocols/<name>/SKILL.md`, read by the extension by path (the orchestrator persona is system-launched from the AUTOMATION tab's Start orchestrator; never invoke it ad hoc).
 
 
 ### ⚠️ MANDATORY PRE-FLIGHT CHECK
@@ -61,7 +61,7 @@ Before EVERY response, you MUST:
 1. **Scan** the user's message for explicit workflow commands from the table above (prefer `/workflow` forms).
 2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow or uses a recognized natural-language trigger listed in the table above (e.g. "start memo capture").
 3. **If a command match is found**: Read the workflow file with `view_file .agents/workflows/[WORKFLOW].md` and execute it step-by-step. Do NOT improvise an alternative approach.
-4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `query-switchboard-kanban` skill (read `.switchboard/workspace-id` for ID and DB path, then query with sqlite3) to instantly identify the target plans.
+4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `query-kanban` skill (read `.switchboard/workspace-id` for ID and DB path, then query with sqlite3) to instantly identify the target plans.
 5. **If no match is found**: Respond normally.
 
 ### Execution Rules
@@ -90,7 +90,7 @@ Sending to non-existent recipients is always rejected (even when auto-routed).
 User ──► Switchboard Console (/switchboard) or cloud plan-brake (switchboard-cloud.md)
               │  Plans captured in .switchboard/plans/
               │
-              ├──► improve-plan skill (.agents/skills/improve-plan/SKILL.md, extension-dispatched)
+              ├──► improve-plan protocol (.switchboard/protocols/improve-plan/SKILL.md, extension-dispatched)
               │                    Deep planning with optional dependency checks and adversarial review
               └──► Kanban Board    Plans moved through workflow stages (Created → Coded → Reviewed → Done)
 
@@ -98,7 +98,7 @@ All file writes to .switchboard/ MUST use IsArtifact: false.
 Plans are executed via Kanban board workflow, not delegation.
 ```
 
-Kanban column transitions are handled automatically by the system/host. Execution agents must NEVER attempt to update kanban columns directly via SQL or any other method during normal workflow execution. The `query-switchboard-kanban` skill is for QUERYING kanban state only (e.g., identifying plans in specific columns). To manually move a card when explicitly requested by the user, use the `kanban_operations` skill. The **orchestrator persona** is the sanctioned exception — it moves cards via `move-card.js`/`POST /kanban/move` (the API path a human's click takes), never via SQL.
+Kanban column transitions are handled automatically by the system/host. Execution agents must NEVER attempt to update kanban columns directly via SQL or any other method during normal workflow execution. The `query-kanban` skill is for QUERYING kanban state only (e.g., identifying plans in specific columns). To manually move a card when explicitly requested by the user, use the `kanban_operations` skill. The **orchestrator persona** is the sanctioned exception — it moves cards via `move-card.js`/`POST /kanban/move` (the API path a human's click takes), never via SQL.
 
 ### 📚 Available Skills
 
@@ -106,50 +106,16 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 
 | Skill | When to Use |
 |-------|-------------|
-| `archive` | User asks to "search archives", "query archives", "find old plans", "export conversation" |
-| `clickup-api` | Direct ClickUp API access via LocalApiServer proxy (replaces call_clickup_api) |
-| `clickup-attach` | Attach files to ClickUp tasks via LocalApiServer (replaces clickup_attach) |
-| `clickup-create-subpage` | Create doc pages in ClickUp via LocalApiServer (replaces clickup_create_subpage) |
-| `clickup-create-task` | Create ClickUp tasks with optional subtasks via LocalApiServer (replaces clickup_create_task) |
-| `clickup-fetch` | Fetch ClickUp tasks/lists with name resolution (replaces clickup_fetch) |
-| `clickup-modify-task` | Update ClickUp task properties via LocalApiServer (replaces clickup_modify_task) |
-| `clickup-move-task` | Move a ClickUp task to a different list via LocalApiServer |
-| `linear-move-issue` | Move a Linear issue to a different project via LocalApiServer |
-| `generate-diagram` | Generate architectural diagrams via LocalApiServer (replaces generate_architectural_diagram) |
-| `get-tickets` | Fetch tickets from the local Switchboard API proxy (ClickUp/Linear) for the current workspace. |
-| `review` | User asks to review code changes, a PR, or specific files |
-| `query-switchboard-kanban` | Query kanban state via direct SQL access to kanban.db (read-only) |
-| `kanban_operations` | Move kanban cards via move-card.js — MANUAL FALLBACK ONLY, use only when user explicitly requests a card move |
-| `query_archive` | Query the DuckDB archive directly using duckdb CLI |
-| `query-kanban-plans` | Query the Kanban database for plans by workspace name, project, and features. |
-| `complexity-scoring` | Assess and assign numeric complexity scores (1-10) to plans and tasks |
-| `linear-api` | Direct Linear API access via LocalApiServer proxy (replaces call_linear_api) |
-| `notion-api` | Post a reply back to a Notion-driven Remote Control card via the `/comment` bridge (provider `notion`) |
-| `web-research` | User asks to "research X", "investigate Y", or needs authoritative sources |
-| `deep-planning` | User requests complex code changes requiring architecture understanding |
-| `advise_research` | When planning, flag uncertain assumptions and supply a ready-to-run web-research prompt to confirm them. |
-| `constitution-builder` | Build or refine a project constitution (coding standards and conventions) for the workspace. |
-| `tuning` | Tune Switchboard agent behavior and workflow settings. |
-| `switchboard-memo` | User invokes `/switchboard-memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
-| `switchboard` | User types `/switchboard` — the launcher: start the board if nothing is running, then start the orchestration agent into its pre-flight. The primary front door. |
-| `improve-feature` | Internal, extension-dispatched (`.agents/skills/improve-feature/SKILL.md`) — improves every subtask of a feature, then restructures the set: merge/delete/rewrite/split. Authorised to cut; git is the undo. Has a high/low complexity-tier mode. |
-| `rearrange-feature` | Restructure a feature's subtasks — split one subtask into several, move scope between subtasks, merge, or reorder — WITHOUT rewriting their content. Structure-only counterpart to `improve-feature` (which re-authors content) and `switchboard-split` (1→2 on complexity only). Rewrites subtask files in place to keep planIds stable; wires new subtasks via `POST /kanban/plans` + `assign-to-feature.js`. |
-| `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |
-| `refine_feature` | User clicks "Refine" on a selected feature in the Features tab to copy a prompt that fleshes out the feature description and proposes a subtask breakdown (backend-consumed skill — not invocable via `skill: "refine_feature"`) |
-| `group-into-features` | User asks to "group plans into a feature", "organise loose plans into features", or "suggest feature groupings" — scans pre-coding columns, clusters by capability, proposes all groupings for one approval, then creates features via create-feature.js (model-invocable; also sourced by the Suggest Features board button) |
-| `create-feature` | Create a Switchboard feature from a remote session by writing the feature file directly to `.switchboard/features/` — use when the VS Code extension is not running and `create-feature.js` is unreachable |
-| `create-feature-from-plans` | Create a Switchboard feature from a known set of plans when the extension is running — runs create-feature.js |
-| `improve-remote-plan` | Improve a plan stored in Linear via the LocalApiServer GraphQL proxy — reads, deepens, writes back, and advances status without touching git. Use in remote sessions. |
-| `worktree-cleanup` | Mark a worktree merged and clean it up (kind-aware) via LocalApiServer. |
-| `switchboard-orchestrator` | Launched by the Orchestration automation mode (Start orchestrator button / autoban wake). Do NOT invoke ad hoc — side-effecting unattended batch manager (grouping, dispatch, merge-back). For deliberate resume/debug, read `.agents/skills/switchboard-orchestrator/SKILL.md` by path. |
-| `switchboard-orchestration` | Fleet coding/review agents working inside orchestration worktrees — discover the API port, read board/features/plans/worktrees, message team leads and report back via `ptySendPrompt`, and read the session log via HTTP endpoints. |
-| `switchboard-contracts` | Agent-facing *behavior* contracts — consult when unsure how the system behaves (cards move on coding start, completion = plan-file mtime advance, plan files are write-once-at-the-end, subtask column exclusion). Never for invocation — use `switchboard-orchestration` + `GET /catalog` for that. |
-| `terminal-coder-dispatch` | Long-running coder driving, attended or unattended — dispatch a subtask to a named terminal, get called back on completion, review the diff, resend a fix to the same terminal once, then escalate one rung along intern → coder → lead when that seat fails the same subtask twice. Directive-triggered (the `Drive` feature-workflow toggle), not user-typed. |
-| `external-team-lead` | A non-terminal agent (Antigravity / Cursor / Zed / IDE chat) heading a team of terminal workers — dispatch over HTTP, read worker reports from `.switchboard/teams/<teamId>/reports/`, verify with git, pull the next card with `POST /kanban/queue/next`. Paired with `POST /teams/create-external`. |
+| `manage-features` | Create, group, and rearrange Switchboard features — Create (remote file write), Create from Plans (create-feature.js), Group (scan/cluster/propose), Rearrange (split/move/merge subtasks without rewriting content). Merged from create-feature, create-feature-from-plans, group-into-features, rearrange-feature. |
+| `query-kanban` | Query kanban DB via SQL (read-only). Includes schema reference, column label mapping, and ready-made query templates. Merged from query-switchboard-kanban + query-kanban-plans. |
+| `kanban_operations` | Move cards via move-card.js, create features via create-feature.js — MANUAL FALLBACK ONLY, use only when user explicitly requests a card move |
+| `worktree-cleanup` | Clean up worktrees after merge via LocalApiServer |
 
-**Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
+**Protocols** (not discoverable — delivered by path reference): improve-plan, improve-feature, accuracy, terminal-coder-dispatch, dispatch-analysis, advise_research, switchboard-orchestrator(-external/-internal), switchboard-orchestration, switchboard-contracts, complexity-scoring, deep-planning, web-research, tuning, constitution-builder, external-team-lead, improve-remote-plan, design-system-builder, refine_feature, archive, clickup-api, clickup-fetch, clickup-create-task, clickup-modify-task, clickup-attach, clickup-create-subpage, clickup-move-task, linear-api, linear-move-issue, notion-api, get-tickets, generate-diagram. These live at `.switchboard/protocols/<name>/SKILL.md` and are read by path when a directive tells you to.
 
-**Skill Files Location**: `.agents/skills/` (distributed with plugin)
+**Usage**: Invoke discoverable skills with `skill: "<name>"`. Protocols are read by path (e.g. `read .switchboard/protocols/improve-plan/SKILL.md`).
+
+**Skill Files Location**: `.agents/skills/` (discoverable skills) and `.switchboard/protocols/` (path-delivered protocols).
 
 ### 📌 Memo Capture Mode — Priority Rule
 
@@ -158,14 +124,14 @@ See `.agents/workflows/switchboard-memo.md` for the full protocol.
 
 ### 📝 Plan Authoring & Problem Analysis Protocol
 
-When creating or improving any implementation plan (including via the extension-dispatched `improve-plan` skill):
+When creating or improving any implementation plan (including via the extension-dispatched `improve-plan` protocol at `.switchboard/protocols/improve-plan/SKILL.md`):
 - You MUST explicitly document the core problems, background context, and root cause analysis.
 - This details should be placed directly inside or immediately below the `## Goal` section to ensure the plan remains self-contained without violating workflow section requirements.
 - The `improve-plan` required section schema must never be used as a reason to drop the problem analysis.
 - **Plan Sizing — split before drafting.** Before writing any plan file, assess whether the work is one plan or multiple. Auto-split into separate plan files when EITHER signal is present:
   - **3+ distinct deliverables:** the work produces 3+ independent outputs (e.g. 3+ pages, 3+ components that don't share a root cause, 3+ API endpoints in different domains, 3+ unrelated bug fixes).
   - **2+ independently-shippable phases:** the work has sequential stages where each could be shipped on its own (e.g. "migrate framework" then "build new pages" then "set up deploy pipeline").
-  When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. Do NOT write one mega-plan covering all deliverables/phases — each plan must be independently codeable. If the user explicitly asks for a single plan, respect that and write one. If you wrote 3+ plans, group them into a feature via the `create-feature-from-plans` skill — if the user already asked for grouping or a feature, treat the original ask as confirmation and create it without a second confirm; if you are proposing grouping the user did not request, offer it and wait for confirmation.
+  When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. Do NOT write one mega-plan covering all deliverables/phases — each plan must be independently codeable. If the user explicitly asks for a single plan, respect that and write one. If you wrote 3+ plans, group them into a feature via the `manage-features` skill (Create from Plans section) — if the user already asked for grouping or a feature, treat the original ask as confirmation and create it without a second confirm; if you are proposing grouping the user did not request, offer it and wait for confirmation.
 
 ### 📂 Workspace Detection for Plan Creation
 

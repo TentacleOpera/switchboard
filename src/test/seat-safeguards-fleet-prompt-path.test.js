@@ -62,7 +62,7 @@ const KANBAN_PROVIDER_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'services', 'KanbanProvider.ts'), 'utf8'
 );
 const SKILL_SRC = fs.readFileSync(
-    path.join(__dirname, '..', '..', '.agents', 'skills', 'terminal-coder-dispatch', 'SKILL.md'), 'utf8'
+    path.join(__dirname, '..', '..', '.switchboard', 'protocols', 'terminal-coder-dispatch', 'SKILL.md'), 'utf8'
 );
 const CLAUDE_SKILL_SRC = fs.readFileSync(
     path.join(__dirname, '..', '..', '.claude', 'skills', 'terminal-coder-dispatch', 'SKILL.md'), 'utf8'

@@ -161,14 +161,14 @@ export function generateSparkContext(workspaceRoot: string, extensionVersion: st
         {
             name: 'improve-plan',
             relPaths: [
-                path.join('.agents', 'skills', 'improve-plan', 'SKILL.md'),
+                path.join('.switchboard', 'protocols', 'improve-plan', 'SKILL.md'),
                 path.join('.agent', 'skills', 'improve-plan', 'SKILL.md')
             ]
         },
         {
             name: 'improve-feature',
             relPaths: [
-                path.join('.agents', 'skills', 'improve-feature', 'SKILL.md'),
+                path.join('.switchboard', 'protocols', 'improve-feature', 'SKILL.md'),
                 path.join('.agent', 'skills', 'improve-feature', 'SKILL.md')
             ]
         },
