@@ -2142,6 +2142,36 @@
             text-decoration: underline;
             cursor: pointer;
         }
+        /* Team-scoped mode: hide general-purpose sidebar buttons that are
+           irrelevant to a single team's view. The team-relevant controls
+           (#btn-team-orders, #btn-team-automations) are shown/hidden by
+           renderSidebarList based on teamScopeId — they stay visible. */
+        body.is-team-scoped #btn-open-all,
+        body.is-team-scoped #btn-fill-grid,
+        body.is-team-scoped #fill-grid-form,
+        body.is-team-scoped #btn-start-team,
+        body.is-team-scoped #start-team-form,
+        body.is-team-scoped #btn-clear-all,
+        body.is-team-scoped #btn-save-group,
+        body.is-team-scoped #btn-link-up {
+            display: none !important;
+        }
+        /* Back button in the team header — returns to the full fleet view. */
+        .team-header-back {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 2px 8px;
+            border-radius: 3px;
+            white-space: nowrap;
+        }
+        .team-header-back:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.08);
+        }
         /* Team header — rendered into #group-tab-strip by renderTeamHeader().
            Reuses the strip's positioning so no new layout area is needed. */
         .team-header {
@@ -2430,7 +2460,19 @@
             <button type="button" id="btn-team-orders" class="secondary-btn w-full"
                     title="View and edit standing orders for this team" hidden>STANDING ORDERS</button>
             <button type="button" id="btn-team-automations" class="secondary-btn w-full"
-                    title="View and configure scheduled automations for this team" hidden>AUTOMATIONS</button>
+                    title="View and configure scheduled automations for this team" hidden>SCHEDULED AUTOMATIONS</button>
+            <button type="button" id="btn-team-clear" class="secondary-btn w-full"
+                    title="/clear every member" hidden>CLEAR ALL CONTEXTS</button>
+            <button type="button" id="btn-team-clear-members" class="secondary-btn w-full"
+                    title="/clear every member except the head" hidden>CLEAR MEMBERS (KEEP HEAD)</button>
+            <button type="button" id="btn-team-close" class="secondary-btn w-full"
+                    title="End every member process immediately" hidden>STOP ALL TERMINALS</button>
+            <button type="button" id="btn-team-restart" class="secondary-btn w-full"
+                    title="Re-spawn exited members from the definition" hidden>RESTART EXITED MEMBERS</button>
+            <button type="button" id="btn-team-ack" class="secondary-btn w-full"
+                    title="Acknowledge all member completion lights" hidden>ACKNOWLEDGE COMPLETIONS</button>
+            <button type="button" id="btn-team-add" class="secondary-btn is-teal w-full"
+                    title="New terminal in this team" hidden>ADD TERMINAL</button>
         </div>
         <div id="terminals-list" class="terminals-list"></div>
     </div>

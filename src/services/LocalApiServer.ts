@@ -17,7 +17,7 @@ import {
     mutateStandingOrders,
     makeStandingOrder,
 } from './standingOrders';
-import { plausibleOriginTerminal, describeStandingOrderMigrations, TERMINALS_GROUPS_KEY } from './teamWiring';
+import { plausibleOriginTerminal, describeStandingOrderMigrations, TERMINALS_GROUPS_KEY, applyTeamQueueOrders, teamHeadName, installGlobalQueueDoneOrder } from './teamWiring';
 import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
 import { parseComplexityScore, getFallbackRole } from './complexityScale';
 import {
@@ -34,7 +34,7 @@ import { PLANNING_VERBS, SETUP_VERBS, TASKVIEWER_VERBS } from '../generated/verb
 import { validateVerbPayload } from './verbSchemas';
 import { isLoopbackHostHeader, isLoopbackOrigin } from '../utils/loopbackHostname';
 import { listIconPalette } from './iconPalette';
-import { isSafeId as isSafeQueueId, listQueue, enqueueItem, claimItem, deleteItem, reorderQueue, releaseClaim, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
+import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQueue, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
 
 /** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
  *  'lead_coded' / 'Lead Coded' all → 'LEAD CODED'. */
@@ -55,6 +55,21 @@ function _canonColumnRef(s: string): string {
  */
 let _queueNextChain: Promise<unknown> = Promise.resolve();
 const execFileAsync = promisify(execFile);
+
+/**
+ * Per-team promise chain serialising the file-based team queue's
+ * `queue/done` completion reports (the completion-driven dispatch model — see
+ * `team-queue-completion-driven-dispatch.md`). Two coders on the same team
+ * finishing simultaneously both POST `queue/done`; this chain processes them
+ * sequentially so the first completion dispatches the next queue item and the
+ * second finds the queue after that pop (or empty). Mirrors `_queueNextChain`
+ * (the kanban DISPATCH column's chain) but is deliberately SEPARATE — the
+ * file-based team queue and the kanban DISPATCH column are independent queue
+ * surfaces with independent endpoints, and serialising them together would
+ * make a team-queue completion block a kanban pop (and vice versa) for no
+ * reason.
+ */
+const _teamQueueDoneChains = new Map<string, Promise<unknown>>();
 
 /**
  * Per-seat record of the last pop a seat-paced `queue/done` call produced, so a
@@ -1682,20 +1697,46 @@ export class LocalApiServer {
 
             // Resolve the requesting head's team roster through the same path
             // resolveTeamRoleTerminal uses. When the callback is present but
-            // returns null, `from` names no live team → 400 (the plan's
-            // "unresolvable from" edge case — never fall back to
-            // workspace-wide routing, which would let one team pull work
-            // "as" another). Absent in headless/test harnesses → degrade to
+            // returns null, `from` names no live team. The original contract
+            // was a hard 400 ("never fall back to workspace-wide routing,
+            // which would let one team pull work 'as' another"). The
+            // kanban-queue-dispatch-without-team plan adds a fallback: when
+            // `from` is a verified live terminal not on any team, use
+            // workspace-wide routing instead of refusing. The 400 still fires
+            // when `from` is not a live terminal at all (an arbitrary string
+            // passed to the HTTP endpoint must not trigger workspace-wide
+            // routing). Absent in headless/test harnesses → degrade to
             // a head-only match (the head itself).
             let roster: string[] | null = null;
+            let rosterFromResolver = false;
             const hasRosterResolver = !!this._options.resolveTeamMembers;
             if (hasRosterResolver) {
-                try { roster = await this._options.resolveTeamMembers!(workspaceRoot, from); }
+                try {
+                    roster = await this._options.resolveTeamMembers!(workspaceRoot, from);
+                    rosterFromResolver = !!(roster && roster.length > 0);
+                }
                 catch (err) { console.warn('[LocalApiServer] resolveTeamMembers failed:', err); }
             }
-            if (hasRosterResolver && (!roster || roster.length === 0)) {
-                return fail(400, `from '${from}' does not resolve to a live team — queue/next dispatches to the head of a registered coding team, never to workspace-wide routing. Open the TEAMS tab / your saved agent grid so the team re-registers.`);
+            if (hasRosterResolver && !rosterFromResolver) {
+                // No team — verify `from` is a live terminal before falling
+                // back to workspace-wide routing. An arbitrary string must
+                // not pull work (the cross-team leak the 400 existed to
+                // prevent). A live terminal not on any team is the
+                // standalone-coder case this fallback exists to serve.
+                const liveTerminals = this._options.getRegisteredTerminals?.() ?? [];
+                if (!liveTerminals.includes(from)) {
+                    return fail(400, `from '${from}' is not a live terminal. Open your agent terminal(s) so they re-register.`);
+                }
+                roster = [from];
             }
+            // isTeamDispatch: true when the roster came from the resolver
+            // (a real team, even a single-head team) OR when there is no
+            // resolver at all (headless/test harness — degrade to head-only
+            // match, the pre-fallback behaviour). False ONLY when the resolver
+            // is present and returned null/empty — the non-team fallback path
+            // (workspace-wide routing, skip in-flight check, install global
+            // queue/done order).
+            const isTeamDispatch = rosterFromResolver || !hasRosterResolver;
             const teamSet = new Set<string>(roster && roster.length ? roster : [from]);
 
             // ── Pacing resolution ──────────────────────────────────────
@@ -1724,7 +1765,7 @@ export class LocalApiServer {
             // arbitrate. Duplicate reports are answered by clearWorkingState's
             // `IS NOT NULL` gate (no-op). Head pacing keeps the scan byte-for-
             // byte unchanged.
-            if (pacing !== 'seat') {
+            if (pacing !== 'seat' && isTeamDispatch) {
                 const inFlightCard = board.find((p: any) =>
                     p && CODING_COLUMNS.has(String(p.kanbanColumn || ''))
                     && typeof p.dispatchedTerminal === 'string'
@@ -1842,7 +1883,9 @@ export class LocalApiServer {
             const useSeatBranch = pacing === 'seat' || isExternalHead;
             const dispatchOpts = useSeatBranch
                 ? { originTerminal: from, restrictToOriginTeam: true }
-                : { originTerminal: from, targetTerminalOverride: from };
+                : isTeamDispatch
+                    ? { originTerminal: from, targetTerminalOverride: from }
+                    : { originTerminal: from }; // non-team: workspace-wide routing
 
             // Escalation override (subtask 2): if the failed-branch re-staged
             // this card with a role override, carry it on THIS dispatch only —
@@ -1855,6 +1898,21 @@ export class LocalApiServer {
             // are the operator's global setting and a plan property (plan step 5).
             const overrideRole = _dispatchRoleOverride.get(next.planId);
             const rawColumn = overrideRole ? roleToCodingColumn(overrideRole) : undefined;
+
+            // Non-team dispatch: install the global queue/done standing order
+            // so the standalone agent knows to POST queue/done when it
+            // finishes. Idempotent — a no-op when the order already exists.
+            // Team agents already have a team-scoped order; the global order
+            // is redundant (not conflicting) for them.
+            if (!isTeamDispatch) {
+                try {
+                    const ordersDb = this._options.getFleetOrdersDatabase
+                        ? await this._resolveFleetOrdersDb()
+                        : db;
+                    await installGlobalQueueDoneOrder(ordersDb);
+                }
+                catch (ordErr) { console.warn('[LocalApiServer] installGlobalQueueDoneOrder failed:', ordErr); }
+            }
 
             const outcome = await this.performKanbanDispatch(
                 workspaceRoot, next.planId, rawColumn,
@@ -3716,7 +3774,8 @@ export class LocalApiServer {
      *   GET   /terminals/teams/<groupId>/queue           — list items
      *   POST  /terminals/teams/<groupId>/queue           — enqueue { kind, body, planId?, target?, priority? }
      *   POST  /terminals/teams/<groupId>/queue/reorder    — set order { order: [id, ...] }
-     *   POST  /terminals/teams/<groupId>/queue/<id>/claim — claim an item
+     *   POST  /terminals/teams/<groupId>/queue/done       — completion-driven dispatch { from, planId? }
+     *   POST  /terminals/teams/<groupId>/queue/mode       — auto/manual toggle { mode: "auto"|"manual" }
      *   DELETE /terminals/teams/<groupId>/queue/<id>      — delete an item
      *
      * Security: `groupId` and item `id` are validated against path traversal
@@ -3724,15 +3783,33 @@ export class LocalApiServer {
      * rejects `../`, absolute paths, URL-encoded traversal, and any character
      * outside [a-zA-Z0-9._-].
      */
+    private async _resolveRegisteredTeamGroup(workspaceRoot: string, groupId: string): Promise<any | null> {
+        const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+        if (!db) { return null; }
+        const groups: any[] = [];
+        for (const key of [TERMINALS_GROUPS_KEY, 'terminals.groups']) {
+            try {
+                const raw = await db.getConfigJson(key, []);
+                if (!Array.isArray(raw)) { continue; }
+                for (const group of raw) {
+                    if (group && typeof group.id === 'string' && !groups.some(existing => existing.id === group.id)) {
+                        groups.push(group);
+                    }
+                }
+            } catch { /* best effort */ }
+        }
+        return groups.find(group => group.id === groupId) || null;
+    }
+
     private async _handleTeamQueueRoute(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);
             return;
         }
 
-        // Parse: /terminals/teams/<groupId>/queue[/<itemId>[/claim]]
+        // Parse: /terminals/teams/<groupId>/queue[/<itemId>[/action]]
         const parts = pathname.slice('/terminals/teams/'.length).split('/');
-        // parts[0] = groupId, parts[1] = 'queue', parts[2] = itemId or 'reorder', parts[3] = 'claim'
+        // parts[0] = groupId, parts[1] = 'queue', parts[2] = itemId | 'reorder' | 'done' | 'mode', parts[3] = action
         const groupId = parts[0] ? decodeURIComponent(parts[0]) : '';
         const resource = parts[1] || '';
 
@@ -3760,6 +3837,12 @@ export class LocalApiServer {
         }
 
         const workspaceRoot = this._options.workspaceRoot || '';
+        const group = await this._resolveRegisteredTeamGroup(workspaceRoot, groupId);
+        if (!group) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: `No registered team found for groupId '${groupId}'` }));
+            return;
+        }
 
         // GET /terminals/teams/<groupId>/queue — list
         if (req.method === 'GET' && !itemId) {
@@ -3839,21 +3922,19 @@ export class LocalApiServer {
             return;
         }
 
-        // POST /terminals/teams/<groupId>/queue/<id>/claim — claim
-        if (req.method === 'POST' && itemId && itemId !== 'reorder' && action === 'claim') {
-            try {
-                let agentId = 'team-queue-pump';
-                try {
-                    const body = await this._parseJsonBody(req);
-                    if (body?.agent) { agentId = String(body.agent); }
-                } catch { /* body optional for claim */ }
-                const result = await claimItem(workspaceRoot, groupId, itemId, agentId);
-                res.writeHead(result.success ? 200 : 409, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(result));
-            } catch (err) {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'claim failed' }));
-            }
+        // POST /terminals/teams/<groupId>/queue/done — completion-driven dispatch.
+        // A coder reports it finished its dispatched task; the system relays the
+        // report to the lead, clears the finishing terminal, and dispatches the
+        // next queued item to the lead. See `team-queue-completion-driven-dispatch.md`.
+        if (req.method === 'POST' && itemId === 'done' && !action) {
+            await this._handleTeamQueueDone(groupId, group, req, res);
+            return;
+        }
+
+        // POST /terminals/teams/<groupId>/queue/mode — auto/manual toggle.
+        // Auto installs the completion-driven standing order; manual removes it.
+        if (req.method === 'POST' && itemId === 'mode' && !action) {
+            await this._handleTeamQueueMode(groupId, group, req, res);
             return;
         }
 
@@ -3872,6 +3953,255 @@ export class LocalApiServer {
 
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: 'Not found' }));
+    }
+
+    /**
+     * POST /terminals/teams/<groupId>/queue/done — the file-based team queue's
+     * completion-driven dispatch signal. A coder that just finished its
+     * dispatched task POSTs `{from, planId?}`; the system relays the completion
+     * report to the lead, clears the finishing terminal, and dispatches the
+     * next queued item to the lead (the lead delegates to members).
+     *
+     * Mirrors the kanban DISPATCH column's `_runQueueDone` (release → clear →
+     * pop) but operates on the file-based queue (`.switchboard/teams/<groupId>/
+     * queue/`) instead of the kanban DB, and dispatches to the team head
+     * (resolved from the URL's registered group) instead of seat-routing a
+     * card. The completion report is the trigger — explicit, not inferred — so there is
+     * no idle-poll, no mtime guess, no claim race.
+     *
+     * Relay-then-act ordering: the completion report is sent to the lead BEFORE
+     * the clear-and-dispatch steps, so the lead always sees the report even if
+     * the dispatch step fails. The relay also makes the completion report
+     * interceptable by other consumers (orchestrator, future mobile
+     * monitoring). If the POST itself fails, the standing order tells the
+     * coder to fall back to reporting to the head directly via ptySendPrompt.
+     *
+     * Serialized on `_teamQueueDoneChains` so two coders finishing simultaneously
+     * are processed sequentially — the first dispatches the next item, the
+     * second finds the queue after that pop (or empty). No double-dispatch.
+     *
+     * `from` is validated against the registered group identified by the URL
+     * before any terminal is cleared, and the dispatch head is read from that
+     * same group, so one team's member cannot consume another team's queue.
+     */
+    private _handleTeamQueueDone(
+        groupId: string,
+        group: any,
+        req: http.IncomingMessage,
+        res: http.ServerResponse
+    ): Promise<void> {
+        const workspaceRoot = this._options.workspaceRoot || '';
+        const fail = (status: number, payload: Record<string, unknown>) => {
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(payload));
+        };
+
+        return new Promise<void>((resolve) => {
+            const prior = _teamQueueDoneChains.get(groupId) || Promise.resolve();
+            const current = prior.then(async () => {
+                try {
+                    if (!await this._checkAuth(req, true)) {
+                        this._sendUnauthorized(res);
+                        resolve();
+                        return;
+                    }
+                    const body = await this._parseJsonBody(req);
+                    const from = typeof body?.from === 'string' ? body.from.trim() : '';
+                    if (!from) {
+                        fail(400, { success: false, error: "Missing required field: from (the reporting terminal's name)" });
+                        resolve();
+                        return;
+                    }
+                    const planId = typeof body?.planId === 'string' && body.planId.trim() ? body.planId.trim() : undefined;
+
+                    const roster: string[] = Array.isArray(group.order) && group.order.length
+                        ? group.order.filter((name: unknown): name is string => typeof name === 'string')
+                        : (Array.isArray(group.members)
+                            ? group.members.filter((name: unknown): name is string => typeof name === 'string')
+                            : []);
+                    if (!roster.includes(from)) {
+                        fail(400, { success: false, error: `from '${from}' is not a member of team '${groupId}'` });
+                        resolve();
+                        return;
+                    }
+
+                    const headName = teamHeadName(group);
+                    if (!headName) {
+                        fail(400, { success: false, error: `Team '${groupId}' has no head terminal` });
+                        resolve();
+                        return;
+                    }
+
+                    // ── Relay the completion report to the lead ────────────
+                    // BEFORE the clear-and-dispatch steps, so the lead always
+                    // sees the report even if the dispatch step fails. A
+                    // machine-origin relay: clearBeforePrompt false (never reset
+                    // the lead's context), standingOrders false (a relay is not
+                    // a task dispatch — appending the lead's standing-orders
+                    // block is pure inflation on the relay path).
+                    const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
+                        + (planId ? ` (plan ${planId})` : '')
+                        + `. The system is clearing ${from} and dispatching the next queued item to you.`;
+                    if (this._options.terminalVerb) {
+                        try {
+                            await this._options.terminalVerb('ptySendPrompt', {
+                                name: headName,
+                                data: relayMsg,
+                                clearBeforePrompt: false,
+                                standingOrders: false,
+                            }, workspaceRoot);
+                        } catch (relayErr) {
+                            console.warn('[LocalApiServer] queue/done relay to lead failed:', relayErr);
+                        }
+                    }
+
+                    // ── Clear the finishing terminal ───────────────────────
+                    // Best-effort: a clear failure is logged and does NOT abort
+                    // the dispatch (same contract as the kanban _runQueueDone).
+                    let cleared = false;
+                    if (this._options.clearTerminalContext) {
+                        try {
+                            const clr = await this._options.clearTerminalContext(workspaceRoot, from);
+                            cleared = !!clr?.cleared;
+                        } catch (clrErr) {
+                            console.warn('[LocalApiServer] clearTerminalContext failed:', clrErr);
+                        }
+                    }
+
+                    // ── Read the file-based queue and dispatch the next item ─
+                    const listResult = await listQueue(workspaceRoot, groupId);
+                    const items = (listResult.success && Array.isArray(listResult.items)) ? listResult.items : [];
+                    if (items.length === 0) {
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: true, dispatched: null, reason: 'queue empty', cleared }));
+                        resolve();
+                        return;
+                    }
+
+                    // Take the first pending item (listQueue sorts by priority
+                    // desc then enqueued_ts asc — the head of the array is next).
+                    const next = items[0];
+                    const promptText = next.body || (next.kind === 'plan' ? `Work on plan: ${next.planId || ''}` : '');
+                    let dispatched = false;
+                    if (promptText && this._options.terminalVerb) {
+                        try {
+                            const delivered = await this._options.terminalVerb('ptySendPrompt', {
+                                name: headName,
+                                data: promptText,
+                                clearBeforePrompt: false,
+                            }, workspaceRoot);
+                            dispatched = !!(delivered && delivered.success !== false);
+                        } catch (dispatchErr) {
+                            console.warn('[LocalApiServer] queue/done dispatch to lead failed:', dispatchErr);
+                        }
+                    }
+
+                    if (!dispatched) {
+                        // Dispatch failed — leave the item queued for retry. The
+                        // lead has already seen the completion relay and can act
+                        // manually. Do NOT delete the item.
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: true, dispatched: null, reason: 'dispatch failed — item remains queued', cleared }));
+                        resolve();
+                        return;
+                    }
+
+                    // On successful dispatch, delete the item from the queue.
+                    // Surface a delete failure explicitly with the successful dispatch
+                    // details so the caller knows the item may otherwise be dispatched twice.
+                    const deletion = await deleteItem(workspaceRoot, groupId, next.id);
+                    if (!deletion.success) {
+                        console.warn('[LocalApiServer] queue/done deleteItem failed after dispatch:', deletion.error);
+                        fail(500, {
+                            success: false,
+                            error: `Prompt was dispatched but queue item could not be removed: ${deletion.error || 'unknown error'}`,
+                            dispatched: { planId: next.planId || null, terminal: headName },
+                            cleared,
+                        });
+                        resolve();
+                        return;
+                    }
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: true,
+                        dispatched: { planId: next.planId || null, terminal: headName },
+                        cleared,
+                    }));
+                    resolve();
+                } catch (err) {
+                    console.error('[LocalApiServer] _handleTeamQueueDone error:', err);
+                    fail(500, { success: false, error: err instanceof Error ? err.message : 'queue/done failed' });
+                    resolve();
+                }
+            });
+            _teamQueueDoneChains.set(groupId, current.catch(() => {}));
+        });
+    }
+
+    /**
+     * POST /terminals/teams/<groupId>/queue/mode — the auto/manual toggle for
+     * the file-based team queue. Auto mode installs the completion-driven
+     * standing order ({@link applyTeamQueueOrders} with `enabled: true`) so
+     * every seat POSTs `queue/done` on task finish; manual mode removes it so
+     * the coder's next completion reports to the head as usual and queued items
+     * wait for the "Send Next Now" button.
+     *
+     * The head name and roster are resolved server-side from the registered
+     * team group (`terminals.groups`) by id, so the standing order's `parent`
+     * field is never client-supplied. The toggle's state is derived from
+     * whether the standing order is installed (the webview queries
+     * `GET /terminals/standing-orders` on team-scoped init), not from a
+     * persisted UI hint that can drift.
+     */
+    private async _handleTeamQueueMode(
+        groupId: string,
+        group: any,
+        req: http.IncomingMessage,
+        res: http.ServerResponse
+    ): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const mode = typeof body?.mode === 'string' ? body.mode.trim().toLowerCase() : '';
+            if (mode !== 'auto' && mode !== 'manual') {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: "mode must be 'auto' or 'manual'" }));
+                return;
+            }
+            const workspaceRoot = this._options.workspaceRoot || '';
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Kanban database not available (extension callbacks missing)' }));
+                return;
+            }
+            const headName = teamHeadName(group);
+            if (!headName) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `No registered team found for groupId '${groupId}'` }));
+                return;
+            }
+            const roster: string[] = Array.isArray(group.order) && group.order.length
+                ? group.order
+                : (Array.isArray(group.members) ? group.members : []);
+
+            await applyTeamQueueOrders({
+                db,
+                groupId,
+                headName,
+                roster,
+                enabled: mode === 'auto',
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, mode }));
+        } catch (err) {
+            console.error('[LocalApiServer] _handleTeamQueueMode error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'queue/mode failed' }));
+        }
     }
 
     /**

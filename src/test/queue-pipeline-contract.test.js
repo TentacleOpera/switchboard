@@ -23,6 +23,7 @@ const path = require('path');
 require(path.join(process.cwd(), 'src', 'test', 'bootstrap', 'sandboxStateHome.js'));
 
 const { LocalApiServer } = require(path.join(process.cwd(), 'out', 'services', 'LocalApiServer.js'));
+const { applyStandingOrders } = require(path.join(process.cwd(), 'out', 'services', 'standingOrders.js'));
 
 let failures = 0;
 async function check(name, fn) {
@@ -60,6 +61,8 @@ function card(planId, kanbanColumn, extra = {}) {
  */
 function makeServer(board, opts = {}) {
     const dispatched = [];
+    const dispatchOptions = [];
+    const config = new Map();
     const server = new LocalApiServer({
         clickupMetadataPath: '',
         linearMetadataPath: '',
@@ -73,19 +76,24 @@ function makeServer(board, opts = {}) {
             getWorkspaceId: async () => 'ws1',
             getDominantWorkspaceId: async () => 'ws1',
             getBoard: async () => board,
+            getConfigJson: async (key, fallback) => config.has(key) ? config.get(key) : fallback,
+            setConfigJson: async (key, value) => { config.set(key, value); },
             ...(opts.db || {}),
         }),
         resolveTeamMembers: opts.resolveTeamMembers,
         resolveTeamPacing: opts.resolveTeamPacing,
+        getRegisteredTerminals: opts.getRegisteredTerminals,
+        getFleetOrdersDatabase: opts.getFleetOrdersDatabase,
         armQueueWatch: async () => { /* recorded separately where it matters */ },
     });
     // Stub the dispatch machinery: this contract is about SELECTION and
     // REFUSAL, not about what performKanbanDispatch does with the card.
-    server.performKanbanDispatch = async (workspaceRoot, planId) => {
+    server.performKanbanDispatch = async (workspaceRoot, planId, targetColumn, options) => {
         dispatched.push(planId);
+        dispatchOptions.push({ targetColumn, options });
         return { status: 200, payload: { success: true, planId, moved: true, dispatched: true } };
     };
-    return { server, dispatched };
+    return { server, dispatched, dispatchOptions };
 }
 
 async function run() {
@@ -206,12 +214,102 @@ async function run() {
         assert.deepStrictEqual(dispatched, ['next']);
     });
 
-    await check("an unresolvable `from` is a 400, never workspace-wide routing", async () => {
+    await check("a `from` that is not a live terminal is a 400", async () => {
         const board = [card('next', 'DISPATCH', { queuePosition: 1 })];
-        const { server, dispatched } = makeServer(board, { resolveTeamMembers: async () => null });
+        const { server, dispatched } = makeServer(board, {
+            resolveTeamMembers: async () => null,
+            getRegisteredTerminals: () => ['OtherTerminal'],
+        });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Ghost' });
-        assert.strictEqual(out.status, 400, 'a `from` that names no live team must not pull work as another team');
+        assert.strictEqual(out.status, 400, 'a `from` that is not a live terminal must not dispatch');
         assert.deepStrictEqual(dispatched, []);
+    });
+
+    await check("a live `from` not on any team dispatches via workspace-wide routing", async () => {
+        const board = [card('next', 'DISPATCH', { queuePosition: 1 })];
+        const { server, dispatched, dispatchOptions } = makeServer(board, {
+            resolveTeamMembers: async () => null,
+            getRegisteredTerminals: () => ['StandaloneCoder'],
+        });
+        const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'StandaloneCoder' });
+        assert.strictEqual(out.status, 200, 'a live terminal not on a team should dispatch via workspace-wide routing');
+        assert.deepStrictEqual(dispatched, ['next']);
+        assert.deepStrictEqual(dispatchOptions[0].options, { originTerminal: 'StandaloneCoder' },
+            'non-team dispatch must not force the requesting terminal or restrict routing to a team');
+    });
+
+    await check('non-team dispatch skips the team in-flight refusal', async () => {
+        const board = [
+            card('wip', 'CODER CODED', { dispatchedTerminal: 'StandaloneCoder' }),
+            card('next', 'DISPATCH', { queuePosition: 1 }),
+        ];
+        const { server, dispatched } = makeServer(board, {
+            resolveTeamMembers: async () => null,
+            getRegisteredTerminals: () => ['StandaloneCoder'],
+        });
+        const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'StandaloneCoder' });
+        assert.strictEqual(out.status, 200);
+        assert.deepStrictEqual(dispatched, ['next']);
+    });
+
+    await check('a single-head team keeps head-scoped routing', async () => {
+        const board = [card('next', 'DISPATCH', { queuePosition: 1 })];
+        const { server, dispatchOptions } = makeServer(board, {
+            resolveTeamMembers: async () => ['Coding'],
+        });
+        const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
+        assert.strictEqual(out.status, 200);
+        assert.deepStrictEqual(dispatchOptions[0].options, {
+            originTerminal: 'Coding',
+            targetTerminalOverride: 'Coding',
+        });
+    });
+
+    await check('non-team completion clears its held card and pops the next card', async () => {
+        const held = card('held', 'CODER CODED', {
+            dispatchedAt: '2026-08-20T00:00:00Z',
+            dispatchedTerminal: 'StandaloneCoder',
+            planFile: '/tmp/held.md',
+            workspaceId: 'ws1',
+        });
+        const board = [held, card('next', 'DISPATCH', { queuePosition: 1 })];
+        const { server, dispatched } = makeServer(board, {
+            resolveTeamMembers: async () => null,
+            getRegisteredTerminals: () => ['StandaloneCoder'],
+            db: {
+                clearWorkingState: async () => { held.dispatchedAt = null; return true; },
+            },
+        });
+        const out = await server.reportQueueDone({ workspaceRoot: WS, from: 'StandaloneCoder', planId: 'held' });
+        assert.strictEqual(out.status, 200);
+        assert.strictEqual(out.payload.released, 'held');
+        assert.deepStrictEqual(dispatched, ['next']);
+    });
+
+    await check('the global completion order is installed in the fleet orders database and stays idempotent', async () => {
+        const board = [card('next', 'DISPATCH', { queuePosition: 1 })];
+        let fleetOrders = [];
+        let boardOrderWrites = 0;
+        const fleetDb = {
+            getConfigJson: async () => fleetOrders,
+            setConfigJson: async (_key, value) => { fleetOrders = value; },
+        };
+        const { server } = makeServer(board, {
+            resolveTeamMembers: async () => null,
+            getRegisteredTerminals: () => ['StandaloneCoder'],
+            getFleetOrdersDatabase: async () => fleetDb,
+            db: {
+                getConfigJson: async () => [],
+                setConfigJson: async () => { boardOrderWrites++; },
+            },
+        });
+        await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'StandaloneCoder' });
+        await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'StandaloneCoder' });
+        assert.strictEqual(boardOrderWrites, 0, 'standing orders must not drift into the selected workspace DB');
+        assert.strictEqual(fleetOrders.filter(o => o.id === 'global-queue-done:global').length, 1);
+        assert.strictEqual(fleetOrders[0].scope, 'global');
+        const rendered = applyStandingOrders('task', 'Unrelated Planner', fleetOrders, new Set(), []);
+        assert.ok(rendered.includes('POST /kanban/queue/done'), 'global completion order must render for every terminal');
     });
 
     await check('a failed dispatch is passed through and consumes nothing', async () => {
@@ -309,6 +407,27 @@ async function run() {
         }
     });
 
+    await check('standalone queue UI and resolver stay wired to live coding terminals', () => {
+        const fs = require('fs');
+        const provider = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
+        const resolverStart = provider.indexOf('public getAliveCodingTerminalNames(): string[]');
+        const resolver = provider.slice(resolverStart, provider.indexOf('\n    public ', resolverStart + 10));
+        assert.ok(/entry\.role/.test(resolver), 'PTY roles must be read from fleet liveness rather than requiring a VS Code-only cache row');
+        assert.ok(/_terminalAgentInfo\.delete\(name\)/.test(resolver), 'stale cache rows must be pruned');
+        assert.ok(/\[\.\.\.leads\]\.sort\(\)\.concat\(\[\.\.\.coders\]\.sort\(\)\)/.test(resolver),
+            'live coding terminals must remain deterministic with leads before coders');
+        assert.ok(/role === 'lead'/.test(resolver) && /role === 'coder'/.test(resolver));
+
+        const kanbanProvider = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
+        const runStart = kanbanProvider.indexOf("case 'runQueue':");
+        const runQueue = kanbanProvider.slice(runStart, kanbanProvider.indexOf("case '", runStart + 20));
+        assert.ok(/getAliveCodingTerminalNames\(\)/.test(runQueue));
+        assert.ok(/No coding terminal is live/.test(runQueue));
+
+        const webview = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'kanban.html'), 'utf8');
+        assert.ok(/lastCodingHeadLive \|\| lastAnyCodingTerminalLive/.test(webview));
+    });
+
     // ── Subtask 3: the queue watch ────────────────────────────────────────
 
     await check('the queue watch counts DISPATCH only, and escalates exactly once', () => {
@@ -386,6 +505,50 @@ async function run() {
             "the pop's 409 replaces every suppression guard — no lane map, no mutual disabling");
         assert.ok(/resolveCodingHeadFromGroups/.test(body),
             'the schedule must resolve its head the same way Run queue, staging and the watch do — the state.json registry cannot see a pty-fleet team');
+    });
+
+    await check('the file-based team queue binds every operation and completion report to the URL group', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        const routeStart = src.indexOf('private async _handleTeamQueueRoute(');
+        const doneStart = src.indexOf('private _handleTeamQueueDone(');
+        assert.ok(routeStart > 0 && doneStart > routeStart);
+        const route = src.slice(routeStart, doneStart);
+        assert.ok(/_resolveRegisteredTeamGroup\(workspaceRoot, groupId\)/.test(route));
+        assert.ok(route.indexOf('_resolveRegisteredTeamGroup(workspaceRoot, groupId)') < route.indexOf('listQueue(workspaceRoot, groupId)'),
+            'the registered-group lookup must happen before the first queue filesystem operation');
+        assert.ok(/_handleTeamQueueDone\(groupId, group, req, res\)/.test(route));
+        const done = src.slice(doneStart, src.indexOf('\n    /**', doneStart + 10));
+        assert.ok(/roster\.includes\(from\)/.test(done));
+        assert.ok(/teamHeadName\(group\)/.test(done));
+        assert.ok(/_teamQueueDoneChains\.get\(groupId\)/.test(done), 'completion chains must be per team');
+    });
+
+    await check('the completion-driven queue has no orphaned claim mechanism and manual send deletes only after delivery', () => {
+        const fs = require('fs');
+        const service = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'TeamQueueService.ts'), 'utf8');
+        for (const removed of ['claimItem', 'releaseClaim', 'readClaim', 'CLAIM_STALENESS_HOURS', 'QueueClaimResult', 'claimedBy', 'claimedTs']) {
+            assert.ok(!service.includes(removed), `${removed} must stay deleted from TeamQueueService`);
+        }
+        const webview = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'terminals.js'), 'utf8');
+        const sendStart = webview.indexOf('async function sendNextQueueItem()');
+        const send = webview.slice(sendStart, webview.indexOf('\n    /**', sendStart + 10));
+        assert.ok(!send.includes('/claim'));
+        assert.ok(send.indexOf("fetch('/terminals/verb/ptySendPrompt'") < send.indexOf("method: 'DELETE'"),
+            'manual queue delivery must dispatch before deleting the item');
+        assert.ok(/dispatchData\?\.success !== false/.test(send), 'HTTP 200 with success:false is not a successful dispatch');
+    });
+
+    await check('auto mode is standing-order state, not an optimistic UI flag', () => {
+        const fs = require('fs');
+        const webview = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'terminals.js'), 'utf8');
+        const modeStart = webview.indexOf('async function setQueueMode(mode)');
+        const mode = webview.slice(modeStart, webview.indexOf('\n    /**', modeStart + 10));
+        assert.ok(/await loadQueueModeFromOrders\(\)/.test(mode));
+        assert.ok(/!res\.ok \|\| !data\?\.success/.test(mode), 'a failed mode write must be surfaced and re-read');
+        const wiring = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'teamWiring.ts'), 'utf8');
+        assert.ok(/export async function applyTeamQueueOrders/.test(wiring));
+        assert.ok(/team-queue-done:/.test(wiring));
     });
 
     console.log('');

@@ -28,6 +28,7 @@ const path = require('path');
 const assert = require('assert');
 
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
 const shellJs = fs.readFileSync(path.join(__dirname, '../webview/shell.js'), 'utf8');
 const shellHtml = fs.readFileSync(path.join(__dirname, '../webview/shell.html'), 'utf8');
 
@@ -197,7 +198,7 @@ test('the strip click peeks in-cockpit and acknowledges the badge on every branc
     // from renderTerminalSection so teams mode and terminals mode share it).
     // Scope the block to that function so the team button's window.open does
     // not false-trigger the "no single-terminal window" assertion.
-    const fn = block(shellJs, 'function buildTerminalButton(t, seenKeys) {', 'function ensureRailModeToggle(');
+    const fn = block(shellJs, 'function buildTerminalButton(t, seenKeys) {', 'function requestFleetState(');
     const handler = block(fn, "btn.addEventListener('click', () => {", 'return btn;');
     // Peek replaced the pop-out: instant AND non-destructive, which is the third
     // option the old acknowledge-only comment was working around the absence of.
@@ -815,6 +816,215 @@ test('the orchestrator icon is ensured to exist independently of an orchestrator
     const ensures = (section.match(/ensureOrchestratorIcon\(\)/g) || []).length;
     assert.strictEqual(ensures, 2,
         'renderTerminalSection must call ensureOrchestratorIcon() in BOTH branches (early-return and normal exit) — the early-return removes the container and takes the icon with it');
+});
+
+// ---------------------------------------------- UAT: shell strip team icons
+
+test('the rail mode toggle is fully removed', () => {
+    assert.ok(!/ensureRailModeToggle/.test(shellJs), 'ensureRailModeToggle must not survive in shell.js');
+    assert.ok(!/updateRailModeIcon/.test(shellJs), 'updateRailModeIcon must not survive in shell.js');
+    assert.ok(!/railMode/.test(shellJs), 'the railMode variable must not survive in shell.js');
+    assert.ok(!/sb-rail-mode/.test(shellJs), 'the sb-rail-mode localStorage key must not survive in shell.js');
+    assert.ok(!/strip-rail-mode/.test(shellHtml), 'the .strip-rail-mode-btn CSS must not survive in shell.html');
+});
+
+test('the member-count badge is fully removed', () => {
+    assert.ok(!/strip-team-count/.test(shellJs), 'the .strip-team-count badge must not survive in shell.js');
+    assert.ok(!/strip-team-count/.test(shellHtml), 'the .strip-team-count CSS must not survive in shell.html');
+});
+
+test('the team button tooltip is just the team name', () => {
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
+    // The team button must set aria-label and data-tooltip to team.name only —
+    // no member count, no roster, no light state in the tooltip.
+    assert.ok(
+        /btn\.setAttribute\('aria-label', team\.name\)/.test(fn),
+        'the team button aria-label must be just team.name'
+    );
+    assert.ok(
+        /btn\.dataset\.tooltip = team\.name/.test(fn),
+        'the team button data-tooltip must be just team.name'
+    );
+    // The verbose labelText and roster constructions must be gone — the
+    // memberCount variable was only used for the badge and the verbose label.
+    assert.ok(!/memberCount/.test(fn), 'the memberCount variable must not survive — it was only used for the badge and verbose tooltip');
+    assert.ok(!/roster/.test(fn), 'the roster tooltip construction must not survive');
+});
+
+test('the team icon fallback skips the head brand mark', () => {
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
+    // When team.iconUri is empty, the shell must go straight to the role letter
+    // glyph — the headTerm.iconUri arm (brand mark) must be gone.
+    const iconBlock = block(fn, 'if (team.iconUri) {', 'Queue-depth badge');
+    assert.ok(
+        !/headTerm\.iconUri/.test(iconBlock),
+        'the head brand-mark fallback arm must not survive — a team with no icon shows the role letter'
+    );
+    assert.ok(
+        /glyph\.textContent = roleChar/.test(iconBlock),
+        'the role letter glyph must be the fallback when there is no team icon'
+    );
+});
+
+test('buildTeamsForShell does not fall back to the head brand mark', () => {
+    const fn = block(terminalsJs, 'function buildTeamsForShell() {', 'function relayOrchestratorStateToShell');
+    // The brand-mark fallback block must be gone — the relay sends iconUri or
+    // empty string, and the shell handles the empty case with the role letter.
+    assert.ok(
+        !/brandIconForCliLabel\(headAgentLabel\)/.test(fn),
+        'buildTeamsForShell must not resolve the head brand mark as a team icon fallback'
+    );
+    assert.ok(
+        /iconUri: iconUri \|\| ''/.test(fn),
+        "buildTeamsForShell must send iconUri: iconUri || '' — the team icon or empty string, never the brand mark"
+    );
+});
+
+test('the team button click posts switchToTeam, not window.open', () => {
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
+    // Scope to the team button click handler — the btn.addEventListener inside
+    // the team loop, before the ungrouped-terminals loop.
+    const teamHandler = block(fn, "btn.addEventListener('click', () => {", 'container.appendChild(btn);');
+    assert.ok(
+        teamHandler.includes("type: 'switchToTeam'"),
+        'the team button click must post a switchToTeam message to the terminals panel'
+    );
+    assert.ok(
+        !teamHandler.includes('window.open('),
+        'the team button click must NOT open a pop-out window — in-place navigation only'
+    );
+    assert.ok(
+        teamHandler.includes("selectPanel('terminals')"),
+        'the team button click must switch to the terminals panel before posting switchToTeam'
+    );
+    // The clearTeamBadges relay must survive — clicking a done team still
+    // acknowledges the completion.
+    assert.ok(
+        teamHandler.includes("type: 'clearTeamBadges'"),
+        'the clearTeamBadges relay must survive the click handler rewrite'
+    );
+});
+
+test('the popoutTeam message handler is removed from the shell', () => {
+    assert.ok(
+        !/data\.type === 'popoutTeam'/.test(shellJs),
+        "the popoutTeam message handler must not survive — the team click no longer sends popoutTeam"
+    );
+});
+
+test('ungrouped terminals render as .strip-term-btn via buildTerminalButton', () => {
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
+    // The ungrouped-terminal loop must call buildTerminalButton (which stamps
+    // .strip-term-btn), not create a .strip-team-btn. A terminal not claimed
+    // by any team is a per-terminal button, not a team button.
+    assert.ok(
+        /for \(const t of terminals\) \{[\s\S]*claimedNames\.has\(t\.name\)[\s\S]*buildTerminalButton\(t, seenKeys\)/.test(fn),
+        'ungrouped terminals must be rendered via buildTerminalButton, not as team buttons'
+    );
+    // The legacy terminals-mode else branch must be gone — teams mode is the
+    // only mode.
+    assert.ok(
+        !/Terminals mode \(legacy\)/.test(fn),
+        'the legacy terminals-mode else branch must not survive — teams mode is the only mode'
+    );
+});
+
+test('terminals.js has a switchToTeam message handler with an origin guard', () => {
+    const arm = block(terminalsJs, "message.type === 'switchToTeam'", '} else if');
+    assert.ok(
+        arm.includes('if (event.origin !== location.origin) { return; }'),
+        'the switchToTeam arm must check event.origin — same guard as every other shell-driven arm'
+    );
+    assert.ok(
+        /enterTeamScope\(message\.groupId\)/.test(arm),
+        'the switchToTeam arm must call enterTeamScope with the groupId'
+    );
+});
+
+test('enterTeamScope sets teamScopeId before calling switchToGroup', () => {
+    const fn = block(terminalsJs, 'function enterTeamScope(groupId) {', 'function exitTeamScope(');
+    // The guard at switchToGroup (teamScopeId && id !== teamScopeId) means
+    // teamScopeId MUST be set before switchToGroup is called, or the guard
+    // rejects the switch.
+    const scopeAt = fn.indexOf('teamScopeId = groupId');
+    const switchAt = fn.indexOf('switchToGroup(groupId)');
+    assert.ok(scopeAt !== -1, 'enterTeamScope must set teamScopeId');
+    assert.ok(switchAt !== -1, 'enterTeamScope must call switchToGroup');
+    assert.ok(scopeAt < switchAt, 'teamScopeId must be set BEFORE switchToGroup — the guard rejects otherwise');
+    assert.ok(
+        fn.includes("document.body.classList.add('is-team-scoped')"),
+        'enterTeamScope must add the is-team-scoped body class'
+    );
+    assert.ok(
+        /isSpawnedTeamGroup\(group\)/.test(fn),
+        'enterTeamScope must verify the group is a spawned team before entering scope'
+    );
+});
+
+test('exitTeamScope clears all team-scoped state and re-renders the fleet', () => {
+    const fn = block(terminalsJs, 'function exitTeamScope() {', 'function scopedFleet(');
+    assert.ok(
+        /teamScopeId = null/.test(fn),
+        'exitTeamScope must clear teamScopeId'
+    );
+    assert.ok(
+        fn.includes("document.body.classList.remove('is-team-scoped')"),
+        'exitTeamScope must remove the is-team-scoped body class'
+    );
+    assert.ok(
+        /activeGroupId = null/.test(fn),
+        'exitTeamScope must clear the group lock'
+    );
+    assert.ok(
+        /setLayoutMode\(layoutForFleetCount/.test(fn),
+        'exitTeamScope must reset the layout to a fleet-count-appropriate mode'
+    );
+    assert.ok(
+        fn.includes('renderSidebarList()') && fn.includes('renderPaneGrid()'),
+        'exitTeamScope must re-render the sidebar and pane grid'
+    );
+});
+
+test('renderTeamHeader has a back button that calls exitTeamScope', () => {
+    const fn = block(terminalsJs, 'function renderTeamHeader() {', 'function fetchTeamQueue');
+    assert.ok(
+        /team-header-back/.test(fn),
+        'renderTeamHeader must create a button with the team-header-back class'
+    );
+    assert.ok(
+        /exitTeamScope\(\)/.test(fn),
+        'the back button must call exitTeamScope on click'
+    );
+    // The back button must be appended BEFORE the icon area so it sits at the
+    // left edge of the team header.
+    const backAt = fn.indexOf("header.appendChild(backBtn)");
+    const iconAt = fn.indexOf("header.appendChild(iconArea)");
+    assert.ok(backAt !== -1 && iconAt !== -1, 'both the back button and icon area must be appended');
+    assert.ok(backAt < iconAt, 'the back button must be appended before the icon area');
+});
+
+test('team-scoped CSS hides general-purpose sidebar buttons', () => {
+    for (const id of ['#btn-open-all', '#btn-fill-grid', '#fill-grid-form', '#btn-start-team', '#start-team-form', '#btn-clear-all', '#btn-save-group', '#btn-link-up']) {
+        assert.ok(
+            new RegExp(`body\\.is-team-scoped\\s+${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(terminalsHtml),
+            `team-scoped CSS must hide ${id}`
+        );
+    }
+    // The team-relevant controls must NOT be hidden by the CSS — they are
+    // shown/hidden by renderSidebarList based on teamScopeId.
+    assert.ok(
+        !/body\.is-team-scoped\s+#btn-team-orders/.test(terminalsHtml),
+        'team-scoped CSS must NOT hide #btn-team-orders — it is team-relevant'
+    );
+    assert.ok(
+        !/body\.is-team-scoped\s+#btn-team-automations/.test(terminalsHtml),
+        'team-scoped CSS must NOT hide #btn-team-automations — it is team-relevant'
+    );
+});
+
+test('the team-header-back CSS exists in terminals.html', () => {
+    assert.ok(/\.team-header-back\s*\{/.test(terminalsHtml), '.team-header-back CSS must exist');
+    assert.ok(/\.team-header-back:hover\s*\{/.test(terminalsHtml), '.team-header-back:hover CSS must exist');
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);

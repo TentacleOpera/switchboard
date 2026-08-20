@@ -2698,7 +2698,7 @@ export class KanbanDatabase {
 
     public async clearFeatureIdForFeature(featurePlanId: string): Promise<boolean> {
         return this._persistedUpdate(
-            "UPDATE plans SET feature_id = '', updated_at = ?",
+            "UPDATE plans SET feature_id = '', updated_at = ? WHERE feature_id = ?",
             [new Date().toISOString(), featurePlanId]
         );
     }

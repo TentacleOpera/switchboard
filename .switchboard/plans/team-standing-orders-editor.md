@@ -106,3 +106,7 @@ Editing a standing order changes what is appended to **future** prompts only; ag
 
 ## Completion Report
 Implemented team standing orders API extensions and cockpit editor UI. In `src/services/LocalApiServer.ts`, added `team-head` scope support with required `teamId` validation, added `action: 'update'` branch validating instructions and preserving all metadata in-place, and expanded unknown scope error text to name all four valid scopes. In `src/webview/terminals.html` and `src/webview/terminals.js`, created the team standing orders editor modal with editable team and head orders, read-only inherited orders list, resolved prompt preview via `applyStandingOrdersClient`, immediate deletion, empty string delete routing, and idle-checked prompt resend to live members. Files changed: `src/services/LocalApiServer.ts`, `src/webview/terminals.html`, `src/webview/terminals.js`. No issues encountered.
+
+## Review Findings
+
+Reviewed add/update/delete serialization, metadata preservation, effective-order reads, preview composition, and resend behavior; no standing-orders-specific code fix was required. The standing-orders marker contract passed 56/56 and is invoked by `.github/workflows/integration-tests.yml`; compile, lint, and browser syntax checks passed. Update remains in-place through `mutateStandingOrders`, preserving the `(scope, teamId)` respawn key. Remaining risk is that busy-state detection is strongest for sends initiated by this webview and needs installed-VSIX exercise against externally busy terminals.

@@ -11699,7 +11699,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const nfs = require('fs') as typeof import('fs');
                     let skillContent = '';
                     try {
-                        skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agents', 'skills', 'improve-plan', 'SKILL.md'), 'utf8');
+                        skillContent = nfs.readFileSync(path.join(workspaceRoot, '.switchboard', 'protocols', 'improve-plan', 'SKILL.md'), 'utf8');
                     } catch {
                         try {
                             skillContent = nfs.readFileSync(path.join(workspaceRoot, '.claude', 'skills', 'improve-plan', 'SKILL.md'), 'utf8');

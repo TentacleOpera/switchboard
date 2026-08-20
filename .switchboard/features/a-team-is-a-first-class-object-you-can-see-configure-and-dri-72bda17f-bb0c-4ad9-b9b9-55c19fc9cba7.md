@@ -22,15 +22,15 @@ This feature makes the team the unit the UI is built around. It starts with an i
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Scheduled Automation Targeted at a Team Lead](../plans/scheduled-automation-targeted-at-a-team-lead.md) — **LEAD CODED**
-- [ ] [Team Action Bar: Bulk Lifecycle and Roster Order](../plans/team-action-bar-bulk-lifecycle-and-roster-order.md) — **LEAD CODED**
-- [ ] [Shell Strip: Team Icons in Place of Per-Terminal CLI Icons](../plans/shell-strip-team-icons-instead-of-per-terminal-cli-icons.md) — **LEAD CODED**
-- [ ] [Team Icons: Choose or Customise an Icon per Team in the TEAMS Tab](../plans/team-icon-picker-in-teams-tab.md) — **LEAD CODED**
-- [ ] [Link a Live Team Back to Its Definition (Team Identity Foundation)](../plans/team-identity-link-live-team-to-its-definition.md) — **LEAD CODED**
-- [ ] [Team Work Queue: Queue Work to a Team Instead of Dispatching One Prompt at a Time](../plans/team-work-queue.md) — **LEAD CODED**
-- [ ] [Team Standing Orders: Make the Team and Team-Head Scopes Editable](../plans/team-standing-orders-editor.md) — **LEAD CODED**
-- [ ] [Team Cockpit: A `?team=<id>` Scoped Terminals View](../plans/team-cockpit-scoped-terminals-view.md) — **LEAD CODED**
-- [ ] [Agent & Team Pixel Art: Drop PNGs in `icons/`, Render Them Everywhere](../plans/agent-and-team-pixel-art-pipeline.md) — **LEAD CODED**
+- [ ] [Scheduled Automation Targeted at a Team Lead](../plans/scheduled-automation-targeted-at-a-team-lead.md) — **CODE REVIEWED**
+- [ ] [Team Action Bar: Bulk Lifecycle and Roster Order](../plans/team-action-bar-bulk-lifecycle-and-roster-order.md) — **CODE REVIEWED**
+- [ ] [Shell Strip: Team Icons in Place of Per-Terminal CLI Icons](../plans/shell-strip-team-icons-instead-of-per-terminal-cli-icons.md) — **CODE REVIEWED**
+- [ ] [Team Icons: Choose or Customise an Icon per Team in the TEAMS Tab](../plans/team-icon-picker-in-teams-tab.md) — **CODE REVIEWED**
+- [ ] [Link a Live Team Back to Its Definition (Team Identity Foundation)](../plans/team-identity-link-live-team-to-its-definition.md) — **CODE REVIEWED**
+- [ ] [Team Work Queue: Queue Work to a Team Instead of Dispatching One Prompt at a Time](../plans/team-work-queue.md) — **CODE REVIEWED**
+- [ ] [Team Standing Orders: Make the Team and Team-Head Scopes Editable](../plans/team-standing-orders-editor.md) — **CODE REVIEWED**
+- [ ] [Team Cockpit: A `?team=<id>` Scoped Terminals View](../plans/team-cockpit-scoped-terminals-view.md) — **CODE REVIEWED**
+- [ ] [Agent & Team Pixel Art: Drop PNGs in `icons/`, Render Them Everywhere](../plans/agent-and-team-pixel-art-pipeline.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -41,4 +41,14 @@ This feature makes the team the unit the UI is built around. It starts with an i
 - **The work queue depends only on identity**, not on the cockpit, and can proceed alongside the icon and cockpit work.
 
 Rough order: identity → (icon picker ‖ pixel art) → cockpit ‖ work queue → shell strip → action bar ‖ standing orders ‖ scheduled automation.
+
+## Reviewer Note: Work Queue Pump Replaced
+
+The **Team Work Queue** subtask (`team-work-queue.md`) specified an auto-dispatch "pump" — a polling loop that checks for idle terminals, claims items, and dispatches them. The pump was overengineered and did not match the original intent. The coder built the queue storage, API, and UI but correctly did NOT build the pump (the completion report states: "The auto-dispatch pump itself is not yet implemented — the UI toggle and queue infrastructure are in place; the pump is future work").
+
+A separate plan, `team-queue-completion-driven-dispatch.md` (not linked to this feature), replaces the pump model with completion-driven dispatch: the coder's explicit completion report drives queue advance, not polling. That plan also deletes the pump-oriented claim/staleness infrastructure that landed with this subtask. Reviewers should treat the pump as superseded — the completion-driven model is the intended design, not the pump.
+
+## Review Findings
+
+Reviewed the feature as one delivery unit and changed `src/services/LocalApiServer.ts`, `TaskViewerProvider.ts`, `TeamQueueService.ts`, `iconPalette.ts`, `teamWiring.ts`, `src/webview/kanban.html`, `src/webview/terminals.js`, and `src/test/queue-pipeline-contract.test.js`. Fixed cross-team queue consumption, per-job scheduler cadence, roster reorder corruption, definition-based missing-member restart, queue-mode drift, scoped automation target display, queue deletion error handling, stricter icon validation, and agent-art fallback loading. `compile-tests`, `compile`, `catalog:check`, lint, and all selected contract tests passed; compile/lint retained only existing warnings. Remaining risk is installed-VSIX interaction coverage for busy-terminal detection and full five-surface pixel-art presentation.
 

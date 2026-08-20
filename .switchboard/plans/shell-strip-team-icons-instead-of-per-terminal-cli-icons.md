@@ -157,3 +157,7 @@ Updated `shell-terminal-strip.test.js` markers: `renderTerminalSection(terminals
 - **All-exited teams**: still render with `light: 'exited'` — same as per-terminal exited behaviour.
 - **`localStorage` unavailable**: try/catch defaults to 'teams' mode.
 - **`pixel-art` class**: applied to team icon PNGs only, not to SVG brand-mark fallbacks.
+
+## Review Findings
+
+Reviewed the shell aggregation, click, badge-clear, pulse, fallback, and mode-toggle paths; no additional shell code fix was required. `test:contract:shell-terminal-strip` passed 46/46 and is invoked by `.github/workflows/integration-tests.yml`; compile, lint, and JS syntax checks also passed. The existing terminal-mode payload remains backward compatible and team buttons remain keyed by `groupId`. Remaining risk is visual overflow and pop-out behavior, which still require installed-VSIX manual coverage.

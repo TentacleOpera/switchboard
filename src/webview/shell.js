@@ -592,16 +592,6 @@
     const pulsedDoneStamps = new Map();
     const DONE_PULSE_MS = 2200; // MUST equal the animation duration in shell.html
 
-    // Rail mode: 'teams' (default) renders one button per team; 'terminals'
-    // renders the legacy one-button-per-terminal rail. Persisted in
-    // localStorage so it survives a shell reload. A shell that has never
-    // set it defaults to 'teams' — the new primary mode.
-    let railMode = 'teams';
-    try {
-        const saved = localStorage.getItem('sb-rail-mode');
-        if (saved === 'teams' || saved === 'terminals') { railMode = saved; }
-    } catch { /* localStorage unavailable (private mode) — use default */ }
-
     function applyThemeToAll(themeName) {
         const isClaudify = themeName === 'claudify';
         if (isClaudify) {
@@ -743,161 +733,116 @@
             return;
         }
 
-        // Ensure the rail mode toggle exists (created once, survives rebuilds
-        // like #strip-orchestrator because it carries no .strip-term-btn class).
-        ensureRailModeToggle(container);
-
         const seenKeys = new Set();
 
-        if (railMode === 'teams' && Array.isArray(teams) && teams.length > 0) {
-            // ── Teams mode ──────────────────────────────────────────────
-            // One button per team (in stable order from the panel), then one
-            // button per ungrouped terminal. A terminal claimed by a team
-            // does NOT also render as ungrouped — first-by-stable-order wins.
-            const claimedNames = new Set();
-            for (const team of teams) {
-                for (const name of (team.memberNames || [])) {
-                    claimedNames.add(name);
+        // ── Teams mode (the only mode) ───────────────────────────────
+        // One button per team (in stable order from the panel), then one
+        // button per ungrouped terminal. A terminal claimed by a team
+        // does NOT also render as ungrouped — first-by-stable-order wins.
+        const teamsArr = Array.isArray(teams) ? teams : [];
+        const claimedNames = new Set();
+        for (const team of teamsArr) {
+            for (const name of (team.memberNames || [])) {
+                claimedNames.add(name);
+            }
+        }
+
+        for (const team of teamsArr) {
+            const key = 'team:' + team.groupId;
+            seenKeys.add(key);
+
+            // Pulse ledger keyed on groupId — same machinery, same guards.
+            let pulseElapsed = -1;
+            if (team.light === 'done') {
+                const prev = pulsedDoneStamps.get(key);
+                if (!prev || prev.stamp !== team.doneStamp) {
+                    pulsedDoneStamps.set(key, { stamp: team.doneStamp, startedAt: performance.now() });
+                    pulseElapsed = 0;
+                } else {
+                    const elapsed = performance.now() - prev.startedAt;
+                    if (elapsed < DONE_PULSE_MS) { pulseElapsed = elapsed; }
                 }
+            } else {
+                pulsedDoneStamps.delete(key);
             }
 
-            for (const team of teams) {
-                const key = 'team:' + team.groupId;
-                seenKeys.add(key);
+            const btn = document.createElement('button');
+            btn.className = 'strip-icon strip-team-btn strip-term-' + team.light
+                + (pulseElapsed >= 0 ? ' is-pulsing' : '');
+            btn.type = 'button';
+            if (pulseElapsed > 0) {
+                btn.style.animationDelay = '-' + Math.floor(pulseElapsed) + 'ms';
+            }
 
-                // Pulse ledger keyed on groupId — same machinery, same guards.
-                let pulseElapsed = -1;
-                if (team.light === 'done') {
-                    const prev = pulsedDoneStamps.get(key);
-                    if (!prev || prev.stamp !== team.doneStamp) {
-                        pulsedDoneStamps.set(key, { stamp: team.doneStamp, startedAt: performance.now() });
-                        pulseElapsed = 0;
-                    } else {
-                        const elapsed = performance.now() - prev.startedAt;
-                        if (elapsed < DONE_PULSE_MS) { pulseElapsed = elapsed; }
-                    }
-                } else {
-                    pulsedDoneStamps.delete(key);
-                }
+            btn.setAttribute('aria-label', team.name);
+            btn.dataset.tooltip = team.name;
 
-                const btn = document.createElement('button');
-                btn.className = 'strip-icon strip-team-btn strip-term-' + team.light
-                    + (pulseElapsed >= 0 ? ' is-pulsing' : '');
-                btn.type = 'button';
-                if (pulseElapsed > 0) {
-                    btn.style.animationDelay = '-' + Math.floor(pulseElapsed) + 'ms';
-                }
+            // Two-deep icon fallback: team icon → head's role letter. The
+            // rail is the primary navigation surface and must never render
+            // an empty button. The head's CLI brand mark is NOT a valid
+            // fallback for a team button — it communicates the wrong identity.
+            if (team.iconUri) {
+                const icon = document.createElement('img');
+                icon.className = 'strip-term-icon strip-team-icon pixel-art';
+                icon.src = team.iconUri;
+                icon.alt = '';
+                btn.appendChild(icon);
+            } else {
+                const headTerm = terminals.find(t => t.name === team.head);
+                const roleChar = (team.headRole || (headTerm && headTerm.role) || 'T').charAt(0).toUpperCase();
+                const glyph = document.createElement('span');
+                glyph.textContent = roleChar;
+                btn.appendChild(glyph);
+            }
 
-                const memberCount = (team.memberNames || []).length;
-                const labelText = `${team.name} · ${memberCount} agent${memberCount === 1 ? '' : 's'} · ${team.head || 'no head'} leads [${team.light}]`;
-                btn.setAttribute('aria-label', labelText);
-                // Tooltip mirrors the aria-label plus the roster on subsequent
-                // lines — the strip's custom tooltip handles multi-line + flip.
-                const roster = (team.memberNames || []).join('\n');
-                btn.dataset.tooltip = roster ? `${labelText}\n${roster}` : labelText;
+            // Queue-depth badge — shows pending work count on the rail
+            // icon so depth is visible without opening the cockpit.
+            // Only shown when there are queued items.
+            const qDepth = team.queueDepth || 0;
+            if (qDepth > 0) {
+                const qBadge = document.createElement('span');
+                qBadge.className = 'strip-team-queue-depth';
+                qBadge.textContent = String(qDepth);
+                btn.appendChild(qBadge);
+            }
 
-                // Three-deep icon fallback: team icon → head's brand mark →
-                // head's role letter. The rail is the primary navigation
-                // surface and must never render an empty button.
-                if (team.iconUri) {
-                    const icon = document.createElement('img');
-                    icon.className = 'strip-term-icon strip-team-icon pixel-art';
-                    icon.src = team.iconUri;
-                    icon.alt = '';
-                    btn.appendChild(icon);
-                } else {
-                    const headTerm = terminals.find(t => t.name === team.head);
-                    const roleChar = (team.headRole || (headTerm && headTerm.role) || 'T').charAt(0).toUpperCase();
-                    if (headTerm && headTerm.iconUri) {
-                        const icon = document.createElement('img');
-                        icon.className = 'strip-term-icon strip-team-icon';
-                        icon.src = headTerm.iconUri;
-                        icon.alt = '';
-                        btn.appendChild(icon);
-                    } else {
-                        const glyph = document.createElement('span');
-                        glyph.textContent = roleChar;
-                        btn.appendChild(glyph);
-                    }
-                }
-
-                // Member-count badge — small number in the corner, same
-                // visual weight as the done ring.
-                const badge = document.createElement('span');
-                badge.className = 'strip-team-count';
-                badge.textContent = String(memberCount);
-                btn.appendChild(badge);
-
-                // Queue-depth badge — shows pending work count on the rail
-                // icon so depth is visible without opening the cockpit.
-                // Only shown when there are queued items.
-                const qDepth = team.queueDepth || 0;
-                if (qDepth > 0) {
-                    const qBadge = document.createElement('span');
-                    qBadge.className = 'strip-team-queue-depth';
-                    qBadge.textContent = String(qDepth);
-                    btn.appendChild(qBadge);
-                }
-
-                btn.addEventListener('click', () => {
-                    const termFrame = frames.get('terminals');
-                    // Clicking a team with an unacknowledged completion IS the
-                    // acknowledgement — relay clearTeamBadges carrying
-                    // memberNames so the panel clears every member's badge.
-                    // Otherwise the aggregate light burns forever.
-                    if (team.light === 'done' && termFrame && termFrame.contentWindow) {
-                        try {
-                            termFrame.contentWindow.postMessage({
-                                type: 'clearTeamBadges',
-                                memberNames: team.memberNames || []
-                            }, location.origin);
-                        } catch { /* ignore */ }
-                    }
-                    // Open the team cockpit. Do NOT dedup by window name — the
-                    // cockpit plan allows two windows on the same team. Use a
-                    // unique name per open action so window.open always creates
-                    // a new window rather than reusing a closed-but-not-GC'd one.
-                    const slug = String(team.groupId || '').replace(/[^A-Za-z0-9_-]/g, '_');
-                    const popoutName = `sb-team-${slug}-${Date.now()}`;
-                    const popoutUrl = `/terminals?team=${encodeURIComponent(team.groupId)}`;
-                    const features = 'width=900,height=700';
-                    let popout = null;
+            btn.addEventListener('click', () => {
+                const termFrame = frames.get('terminals');
+                // Clicking a team with an unacknowledged completion IS the
+                // acknowledgement — relay clearTeamBadges carrying
+                // memberNames so the panel clears every member's badge.
+                // Otherwise the aggregate light burns forever.
+                if (team.light === 'done' && termFrame && termFrame.contentWindow) {
                     try {
-                        popout = window.open(popoutUrl, popoutName, features);
+                        termFrame.contentWindow.postMessage({
+                            type: 'clearTeamBadges',
+                            memberNames: team.memberNames || []
+                        }, location.origin);
                     } catch { /* ignore */ }
-                    if (popout && !popout.closed) {
-                        popoutWindows.add(popout);
-                    } else {
-                        // Pop-out blocked — peek the head terminal in-panel as a
-                        // fallback so the click is not a dead action.
-                        selectPanel('terminals');
-                        if (termFrame && termFrame.contentWindow && team.head) {
-                            try {
-                                termFrame.contentWindow.postMessage({
-                                    type: 'peekTerminal',
-                                    name: team.head
-                                }, location.origin);
-                            } catch { /* ignore */ }
-                        }
-                    }
-                });
+                }
+                // Switch the main terminals panel to team-scoped mode in-place.
+                // No pop-out window — the team view replaces the fleet view
+                // inside the existing panel, with a back button to return.
+                selectPanel('terminals');
+                if (termFrame && termFrame.contentWindow) {
+                    try {
+                        termFrame.contentWindow.postMessage({
+                            type: 'switchToTeam',
+                            groupId: team.groupId
+                        }, location.origin);
+                    } catch { /* ignore */ }
+                }
+            });
 
-                container.appendChild(btn);
-            }
+            container.appendChild(btn);
+        }
 
-            // Ungrouped terminals — same rendering as terminals mode, minus
-            // any terminal claimed by a team.
-            for (const t of terminals) {
-                if (claimedNames.has(t.name)) { continue; }
-                seenKeys.add('term:' + t.name);
-                container.appendChild(buildTerminalButton(t, seenKeys));
-            }
-        } else {
-            // ── Terminals mode (legacy) ─────────────────────────────────
-            for (const t of terminals) {
-                seenKeys.add('term:' + t.name);
-                container.appendChild(buildTerminalButton(t, seenKeys));
-            }
+        // Ungrouped terminals — one per-terminal button for any terminal
+        // not claimed by a team.
+        for (const t of terminals) {
+            if (claimedNames.has(t.name)) { continue; }
+            seenKeys.add('term:' + t.name);
+            container.appendChild(buildTerminalButton(t, seenKeys));
         }
 
         // Prune pulse ledger entries that no longer have a button.
@@ -1047,66 +992,6 @@
         return btn;
     }
 
-    /**
-     * Ensure the rail mode toggle exists in the container. Created once,
-     * survives fleet rebuilds (no .strip-term-btn / .strip-team-btn class).
-     * Toggles between 'teams' (default) and 'terminals' (legacy), persisted
-     * in localStorage. No confirmation dialog — the toggle is immediate.
-     */
-    function ensureRailModeToggle(container) {
-        if (container.querySelector('#strip-rail-mode')) { return; }
-        const btn = document.createElement('button');
-        btn.id = 'strip-rail-mode';
-        btn.type = 'button';
-        btn.className = 'strip-icon strip-rail-mode-btn';
-        btn.dataset.tooltip = railMode === 'teams' ? 'Rail: Teams (click for Terminals)' : 'Rail: Terminals (click for Teams)';
-        btn.addEventListener('click', (e) => {
-            e.preventDefault();
-            railMode = railMode === 'teams' ? 'terminals' : 'teams';
-            try { localStorage.setItem('sb-rail-mode', railMode); } catch { /* ignore */ }
-            btn.dataset.tooltip = railMode === 'teams' ? 'Rail: Teams (click for Terminals)' : 'Rail: Terminals (click for Teams)';
-            updateRailModeIcon(btn);
-            // Re-request fleet state so the rail re-renders in the new mode
-            // immediately, without waiting for the next 5s poll.
-            requestFleetState();
-        });
-        updateRailModeIcon(btn);
-        // Insert after the orchestrator icon (first child) so it sits at the
-        // top of the fleet container, above the team/terminal buttons.
-        const orch = container.querySelector('#strip-orchestrator');
-        if (orch && orch.nextSibling) {
-            container.insertBefore(btn, orch.nextSibling);
-        } else if (orch) {
-            container.appendChild(btn);
-        } else {
-            container.insertBefore(btn, container.firstChild);
-        }
-    }
-
-    /** Update the rail mode toggle's icon to reflect the current mode. */
-    function updateRailModeIcon(btn) {
-        btn.innerHTML = '';
-        if (railMode === 'teams') {
-            // Teams mode: a small group glyph (two overlapping circles).
-            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            svg.setAttribute('width', '16');
-            svg.setAttribute('height', '16');
-            svg.setAttribute('viewBox', '0 0 16 16');
-            svg.setAttribute('aria-hidden', 'true');
-            svg.innerHTML = '<circle cx="6" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="10" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/>';
-            btn.appendChild(svg);
-        } else {
-            // Terminals mode: a single terminal glyph.
-            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            svg.setAttribute('width', '16');
-            svg.setAttribute('height', '16');
-            svg.setAttribute('viewBox', '0 0 16 16');
-            svg.setAttribute('aria-hidden', 'true');
-            svg.innerHTML = '<rect x="3" y="4" width="10" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="5" y1="7" x2="9" y2="7" stroke="currentColor" stroke-width="1.5"/>';
-            btn.appendChild(svg);
-        }
-    }
-
     function requestFleetState() {
         const termFrame = frames.get('terminals');
         if (termFrame && termFrame.contentWindow) {
@@ -1250,29 +1135,6 @@
                 if (termFrame && termFrame.contentWindow) {
                     try {
                         termFrame.contentWindow.postMessage({ type: 'popoutBlocked', name: data.name }, location.origin);
-                    } catch { /* ignore */ }
-                }
-            }
-        } else if (data.type === 'popoutTeam' && typeof data.groupId === 'string') {
-            // Team cockpit pop-out. Do NOT dedup by window name — the cockpit
-            // plan allows two windows on the same team, so use a unique name
-            // per open action. Origin-guarded like popoutTerminal.
-            if (event.origin !== location.origin) { return; }
-            const slug = data.groupId.replace(/[^A-Za-z0-9_-]/g, '_');
-            const popoutName = `sb-team-${slug}-${Date.now()}`;
-            const popoutUrl = `/terminals?team=${encodeURIComponent(data.groupId)}`;
-            const features = 'width=900,height=700';
-            let popout = null;
-            try {
-                popout = window.open(popoutUrl, popoutName, features);
-            } catch { /* ignore */ }
-            if (popout && !popout.closed) {
-                popoutWindows.add(popout);
-            } else {
-                const termFrame = frames.get('terminals');
-                if (termFrame && termFrame.contentWindow) {
-                    try {
-                        termFrame.contentWindow.postMessage({ type: 'popoutBlocked', name: data.groupId }, location.origin);
                     } catch { /* ignore */ }
                 }
             }

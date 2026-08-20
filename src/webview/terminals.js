@@ -1178,6 +1178,13 @@
                     renderPaneGrid();
                     postFleetStateToShell();
                 }
+            } else if (message.type === 'switchToTeam' && typeof message.groupId === 'string') {
+                // In-place team navigation: the shell rail's team button click
+                // posts this to switch the main panel into team-scoped mode
+                // without opening a pop-out window. Origin-guarded like every
+                // other shell-driven arm.
+                if (event.origin !== location.origin) { return; }
+                enterTeamScope(message.groupId);
             } else if (message.type === 'peekTerminal' && typeof message.name === 'string') {
                 if (event.origin !== location.origin) { return; }
                 if (peekTerminalName === message.name) {
@@ -1409,7 +1416,7 @@
             // paint the transient "Connecting…" state before the first fetch.
             // The group record (for the title and header) resolves from
             // loadLayoutSettings' read of terminals.groups.
-            Promise.all([loadLayoutSettings(), fetchAgentNames(), loadQueueMode()]).then(() => {
+            Promise.all([loadLayoutSettings(), fetchAgentNames(), loadQueueModeFromOrders()]).then(() => {
                 const group = getScopedTeamGroup();
                 if (group) {
                     document.title = group.shortName || group.name || 'Team';
@@ -1665,24 +1672,17 @@
                 // else stays 'exited'
             }
 
-            // Fallback icon: no team icon → head's brand mark → null (shell
-            // falls back to role letter). The three-deep fallback is in the
-            // shell's renderTerminalSection; here we send the resolved URI
-            // or null and let the shell decide.
-            let resolvedIconUri = iconUri;
-            if (!resolvedIconUri && fleetByFriendly.has(headName)) {
-                const headAgentLabel = agentLabelForRole(fleetByFriendly.get(headName).role);
-                const headIconKey = brandIconForCliLabel(headAgentLabel) || 'default';
-                resolvedIconUri = brandIconUri(headIconKey) || brandIconUri('default');
-            }
-
+            // Send the team icon URI or empty string. The shell falls back
+            // to the head's role letter when there is no team icon — the
+            // head's CLI brand mark is NOT a valid fallback for a team
+            // button (it communicates the wrong identity).
             teamEntries.push({
                 groupId: g.id,
                 definitionId: g.definitionId || (def ? def.id : ''),
                 name: g.name || g.id,
                 head: headName,
                 headRole,
-                iconUri: resolvedIconUri || '',
+                iconUri: iconUri || '',
                 memberNames: liveMembers,
                 light,
                 doneStamp,
@@ -3537,6 +3537,16 @@
         const header = document.createElement('div');
         header.className = 'team-header' + (isTeam ? '' : ' is-generic-group');
 
+        // Back button — returns to the full fleet view. First element so it
+        // sits at the left edge of the team header.
+        const backBtn = document.createElement('button');
+        backBtn.type = 'button';
+        backBtn.className = 'team-header-back';
+        backBtn.textContent = '← ALL TERMINALS';
+        backBtn.title = 'Return to the full fleet view';
+        backBtn.addEventListener('click', () => exitTeamScope());
+        header.appendChild(backBtn);
+
         const iconArea = document.createElement('div');
         iconArea.className = 'team-header-icon';
         if (isTeam) {
@@ -3567,90 +3577,6 @@
         countEl.textContent = `${members.length} (${active}a/${exited}x)`;
         nameArea.appendChild(countEl);
         header.appendChild(nameArea);
-
-        // `+` button — opens the role picker under a `team:<id>` key so it
-        // survives the listEl.innerHTML wipe on every fleet poll. The key
-        // is key-agnostic for the GC at the bottom of renderSidebarList.
-        const addBtn = document.createElement('button');
-        addBtn.type = 'button';
-        addBtn.className = 'team-header-add';
-        addBtn.textContent = '+';
-        addBtn.title = 'New terminal in this team';
-        const addKey = 'team:' + teamScopeId;
-        addBtn.addEventListener('click', () => {
-            // Spawn into the team's workspace context. The team's members
-            // determine the target spec; use the head's parentRoot if
-            // available, falling back to undefined (workspace root).
-            const headName = teamHeadName(group);
-            const headTerm = headName ? fleetList.find(t => t.friendlyName === headName) : null;
-            const targetSpec = headTerm && headTerm.parentRoot
-                ? { parentRoot: headTerm.parentRoot }
-                : undefined;
-            onNewTerminalClicked(targetSpec, addKey);
-        });
-        header.appendChild(addBtn);
-
-        const ordersBtn = document.createElement('button');
-        ordersBtn.type = 'button';
-        ordersBtn.className = 'team-header-orders';
-        ordersBtn.textContent = 'ORDERS';
-        ordersBtn.title = 'Team standing orders';
-        ordersBtn.addEventListener('click', () => {
-            openTeamOrdersModal();
-        });
-        header.appendChild(ordersBtn);
-
-        const autosBtn = document.createElement('button');
-        autosBtn.type = 'button';
-        autosBtn.className = 'team-header-orders';
-        autosBtn.textContent = 'AUTOS';
-        autosBtn.title = 'Team scheduled automations';
-        autosBtn.addEventListener('click', () => {
-            openTeamAutomationsModal();
-        });
-        header.appendChild(autosBtn);
-
-        // ─── Team Action Bar ───────────────────────────────────────────
-        // Five bulk verbs, no confirm gates (per CLAUDE.md). Destructive
-        // actions (CLOSE TEAM) get a red-tinted class; non-destructive
-        // actions reuse the orders button style. RESTART MISSING is
-        // disabled when the definition no longer exists.
-        const actionBar = document.createElement('div');
-        actionBar.className = 'team-action-bar';
-
-        const mkActionBtn = (label, title, onClick, opts) => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'team-action-btn' + (opts && opts.destructive ? ' is-destructive' : '');
-            btn.textContent = label;
-            btn.title = title;
-            if (opts && opts.disabled) {
-                btn.disabled = true;
-                btn.title = opts.disabledReason || title;
-            }
-            if (!opts || !opts.disabled) {
-                btn.addEventListener('click', onClick);
-            }
-            return btn;
-        };
-
-        actionBar.appendChild(mkActionBtn('CLEAR TEAM', '/clear every member', () => clearTeam()));
-        actionBar.appendChild(mkActionBtn('CLEAR MEMBERS', '/clear every member except the head', () => clearTeamMembers()));
-        actionBar.appendChild(mkActionBtn('CLOSE TEAM', 'End every member process immediately', () => closeTeam(), { destructive: true }));
-
-        // RESTART MISSING: disable when the definition no longer exists.
-        // The definition is resolved at click time, but we can check the
-        // cache here for the disabled state.
-        const hasDefinition = isSpawnedTeamGroup(group) && group.definitionId;
-        actionBar.appendChild(mkActionBtn(
-            'RESTART MISSING',
-            'Re-spawn exited members from the definition',
-            () => restartMissingMembers(),
-            hasDefinition ? {} : { disabled: true, disabledReason: 'Team definition not found — cannot restart missing members' }
-        ));
-
-        actionBar.appendChild(mkActionBtn('CLEAR BADGES', 'Acknowledge all member completion lights', () => clearTeamBadges()));
-        header.appendChild(actionBar);
 
         groupTabStripEl.appendChild(header);
 
@@ -3724,21 +3650,14 @@
         manualBtn.className = 'team-queue-mode-btn' + (_queueMode === 'manual' ? ' active' : '');
         manualBtn.textContent = 'Manual';
         manualBtn.addEventListener('click', () => {
-            _queueMode = 'manual';
-            saveQueueMode();
-            renderSidebarList();
+            setQueueMode('manual');
         });
         const autoBtn = document.createElement('button');
         autoBtn.className = 'team-queue-mode-btn' + (_queueMode === 'auto' ? ' active' : '');
         autoBtn.textContent = 'Auto';
-        autoBtn.title = 'Auto mode dispatches kind:plan items only. Prompts and cards require manual send.';
+        autoBtn.title = 'Auto mode: when a coder finishes a task, the system clears the terminal and dispatches the next queued item automatically. Manual mode: you click Send Next Now for each item.';
         autoBtn.addEventListener('click', () => {
-            // Auto mode restricted to kind:plan items — completion detection
-            // requires plan-file mtime advance. Non-plan items have no
-            // reliable completion signal.
-            _queueMode = 'auto';
-            saveQueueMode();
-            renderSidebarList();
+            setQueueMode('auto');
         });
         modeToggle.appendChild(manualBtn);
         modeToggle.appendChild(autoBtn);
@@ -3780,11 +3699,6 @@
                 itemTitle.textContent = displayTitle;
                 itemTitle.title = item.body || '';
                 row.appendChild(itemTitle);
-
-                const state = document.createElement('span');
-                state.className = `team-queue-item-state state-${item.state}`;
-                state.textContent = item.state;
-                row.appendChild(state);
 
                 const delBtn = document.createElement('button');
                 delBtn.className = 'team-queue-item-delete';
@@ -3835,6 +3749,7 @@
             sendBtn.textContent = 'Send Next Now';
             sendBtn.disabled = _queueItems.length === 0;
             sendBtn.addEventListener('click', () => {
+                sendBtn.disabled = true;
                 sendNextQueueItem();
             });
             actions.appendChild(sendBtn);
@@ -3872,27 +3787,17 @@
         renderSidebarList();
     }
 
-    /** Send the next queue item to the team head. Claims the item via
-     *  the API, then dispatches the prompt via ptySendPrompt. Manual
-     *  mode only — auto mode is handled by the pump (future work). */
+    /** Send the next queue item to the team head. Dispatches the prompt via
+     *  ptySendPrompt, then deletes the item from the file-based queue on a
+     *  successful dispatch. If ptySendPrompt fails, the item stays queued for
+     *  retry. Manual mode only — auto mode is completion-driven (the coder
+     *  POSTs queue/done on task finish and the system handler dispatches the
+     *  next item). */
     async function sendNextQueueItem() {
         if (!teamScopeId || _queueItems.length === 0) { return; }
-        const next = _queueItems.find(i => i.state === 'pending');
+        const next = _queueItems[0];
         if (!next) { return; }
         try {
-            // Claim the item.
-            const claimRes = await fetch(`/terminals/teams/${encodeURIComponent(teamScopeId)}/queue/${encodeURIComponent(next.id)}/claim`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ agent: 'manual-send' }),
-                credentials: 'same-origin'
-            });
-            if (!claimRes.ok) {
-                // Already claimed or error — re-fetch and re-render.
-                await fetchTeamQueue();
-                renderSidebarList();
-                return;
-            }
             // Dispatch the prompt to the team head.
             const group = getScopedTeamGroup();
             const headName = group ? teamHeadName(group) : null;
@@ -3902,53 +3807,77 @@
                 return;
             }
             // Build the prompt from the item body.
-            const promptText = next.body || (next.kind === 'plan' ? `Work on plan: ${next.planId}` : '');
+            const promptText = next.body || (next.kind === 'plan' ? `Work on plan: ${next.planId || ''}` : '');
+            let dispatched = false;
             if (promptText) {
-                await fetch('/terminals/verb/ptySendPrompt', {
+                const dispatchRes = await fetch('/terminals/verb/ptySendPrompt', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: headName, data: promptText, clearBeforePrompt: false }),
                     credentials: 'same-origin'
                 });
+                const dispatchData = await dispatchRes.json().catch(() => null);
+                dispatched = dispatchRes.ok && dispatchData?.success !== false;
+            }
+            // On successful dispatch, delete the item from the file-based queue.
+            // If ptySendPrompt failed, do NOT delete — the item stays queued for
+            // retry (the next "Send Next Now" click re-attempts it).
+            if (dispatched) {
+                const deleteRes = await fetch(`/terminals/teams/${encodeURIComponent(teamScopeId)}/queue/${encodeURIComponent(next.id)}`, {
+                    method: 'DELETE',
+                    credentials: 'same-origin'
+                });
+                const deleteData = await deleteRes.json().catch(() => null);
+                if (!deleteRes.ok || !deleteData?.success) {
+                    showPaneToast(deleteData?.error || 'Prompt sent, but the queue item could not be removed');
+                }
             }
         } catch { /* ignore */ }
         await fetchTeamQueue();
         renderSidebarList();
     }
 
-    /** Persist the queue mode (manual/auto) in namespaced settings. */
-    async function saveQueueMode() {
+    /** Install (auto) or remove (manual) the completion-driven standing order
+     *  via the queue/mode endpoint, then re-render so the toggle reflects the
+     *  actual order state. The mode is no longer a persisted UI hint — it is a
+     *  standing-order install/remove action, derived from the order state on
+     *  team-scoped init (loadQueueModeFromOrders). */
+    async function setQueueMode(mode) {
         if (!teamScopeId) { return; }
         try {
-            await fetch('/kanban/verb/saveSetting', {
+            const res = await fetch(`/terminals/teams/${encodeURIComponent(teamScopeId)}/queue/mode`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    key: `terminals.team.${teamScopeId}.queueMode`,
-                    value: _queueMode
-                }),
+                body: JSON.stringify({ mode }),
                 credentials: 'same-origin'
             });
-        } catch { /* ignore */ }
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data?.success) {
+                showPaneToast(data?.error || `Could not switch queue to ${mode} mode`);
+            }
+        } catch (err) {
+            showPaneToast(`Could not switch queue mode: ${err.message || String(err)}`);
+        }
+        await loadQueueModeFromOrders();
+        renderSidebarList();
     }
 
-    /** Load the persisted queue mode. Called during team-scoped init. */
-    async function loadQueueMode() {
+    /** Derive the queue mode from the actual standing-order state (whether the
+     *  completion-driven `team-queue-done:<groupId>:` order is installed),
+     *  queried from the standing-orders API. Called during team-scoped init so
+     *  the toggle reflects the real order state rather than a persisted hint
+     *  that can drift. The id prefix is the stable contract
+     *  `TEAM_QUEUE_ORDER_ID_PREFIX` in teamWiring.ts (`team-queue-done:`). */
+    async function loadQueueModeFromOrders() {
         if (!teamScopeId) { return; }
         try {
-            const res = await fetch('/kanban/verb/getSetting', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: `terminals.team.${teamScopeId}.queueMode` }),
-                credentials: 'same-origin'
-            });
-            if (res.ok) {
-                const data = await res.json();
-                if (data && (data.value === 'manual' || data.value === 'auto')) {
-                    _queueMode = data.value;
-                }
-            }
-        } catch { /* ignore — default to manual */ }
+            const res = await fetch('/terminals/standing-orders', { credentials: 'same-origin' });
+            if (!res.ok) { return; }
+            const data = await res.json();
+            const orders = (data && Array.isArray(data.orders)) ? data.orders : [];
+            const prefix = `team-queue-done:${teamScopeId}:`;
+            _queueMode = orders.some(o => o && typeof o.id === 'string' && o.id.startsWith(prefix)) ? 'auto' : 'manual';
+        } catch { /* default to manual */ }
     }
 
     /** Enqueue an item to the scoped team's queue. Called from drag-drop
@@ -4440,6 +4369,31 @@
         if (btnTeamOrders) { btnTeamOrders.hidden = !teamScopeId; }
         const btnTeamAutos = document.getElementById('btn-team-automations');
         if (btnTeamAutos) { btnTeamAutos.hidden = !teamScopeId; }
+        const btnTeamClear = document.getElementById('btn-team-clear');
+        if (btnTeamClear) { btnTeamClear.hidden = !teamScopeId; }
+        const btnTeamClearMembers = document.getElementById('btn-team-clear-members');
+        if (btnTeamClearMembers) { btnTeamClearMembers.hidden = !teamScopeId; }
+        const btnTeamClose = document.getElementById('btn-team-close');
+        if (btnTeamClose) { btnTeamClose.hidden = !teamScopeId; }
+        const btnTeamAck = document.getElementById('btn-team-ack');
+        if (btnTeamAck) { btnTeamAck.hidden = !teamScopeId; }
+        const btnTeamAdd = document.getElementById('btn-team-add');
+        if (btnTeamAdd) { btnTeamAdd.hidden = !teamScopeId; }
+        // RESTART EXITED MEMBERS: dynamic disabled state — re-evaluated on
+        // every renderSidebarList call (5s poll) so a deleted definition
+        // disables the button within one poll cycle.
+        const btnTeamRestart = document.getElementById('btn-team-restart');
+        if (btnTeamRestart) {
+            btnTeamRestart.hidden = !teamScopeId;
+            if (teamScopeId) {
+                const group = getScopedTeamGroup();
+                const hasDefinition = group && isSpawnedTeamGroup(group) && group.definitionId;
+                btnTeamRestart.disabled = !hasDefinition;
+                btnTeamRestart.title = hasDefinition
+                    ? 'Re-spawn exited members from the definition'
+                    : 'Team definition not found — cannot restart missing members';
+            }
+        }
         let pickerRendered = false;
         listEl.innerHTML = '';
         // The empty state and the pane grid are in the MAIN area; the workspace groups
@@ -8787,13 +8741,28 @@
             return;
         }
 
-        const deadMembers = snap.members.filter(n => {
-            if (n === headName) { return false; }
-            const t = fleetList.find(ft => ft.friendlyName === n);
-            return !t || t.status === 'exited';
-        });
-        if (deadMembers.length === 0) {
-            showPaneToast('All members are live');
+        const liveMembers = snap.members
+            .filter(n => n !== headName)
+            .map(n => fleetList.find(t => t.friendlyName === n))
+            .filter(t => t && t.status !== 'exited');
+        const liveCounts = new Map();
+        for (const terminal of liveMembers) {
+            const role = normalizeAgentRoleKey(terminal.role);
+            liveCounts.set(role, (liveCounts.get(role) || 0) + 1);
+        }
+        const restartSpecs = [];
+        for (const member of Array.isArray(def.members) ? def.members : []) {
+            const role = String(member?.role || '').trim();
+            if (!role) { continue; }
+            const key = normalizeAgentRoleKey(role);
+            const desired = Math.max(Number(member?.count) || 1, 1);
+            const present = liveCounts.get(key) || 0;
+            const missing = Math.max(desired - present, 0);
+            liveCounts.set(key, present + missing);
+            for (let i = 0; i < missing; i++) { restartSpecs.push({ role }); }
+        }
+        if (restartSpecs.length === 0) {
+            showPaneToast('All members in the current definition are live');
             return;
         }
 
@@ -8801,10 +8770,8 @@
             ? { parentRoot: headTerm.parentRoot }
             : undefined;
 
-        const results = await teamFanOut(deadMembers, async (oldName) => {
-            const oldTerm = fleetList.find(t => t.friendlyName === oldName);
-            const role = oldTerm ? oldTerm.role : 'coder';
-            const payload = { role };
+        const results = await teamFanOut(restartSpecs.map((spec, index) => ({ ...spec, index })), async (spec) => {
+            const payload = { role: spec.role };
             if (targetSpec && targetSpec.parentRoot) {
                 payload.parentRoot = targetSpec.parentRoot;
             }
@@ -8818,39 +8785,29 @@
             return data.terminal?.friendlyName;
         });
 
-        const newNameMap = new Map();
-        for (const r of results) {
-            if (r.ok && r.returnValue) {
-                newNameMap.set(r.name, r.returnValue);
-            }
-        }
+        const newNames = results.filter(r => r.ok && r.returnValue).map(r => r.returnValue);
 
-        if (newNameMap.size > 0) {
+        if (newNames.length > 0) {
             const group = getScopedTeamGroup();
             if (group) {
-                if (Array.isArray(group.members)) {
-                    group.members = group.members.map(n => newNameMap.get(n) || n);
-                    for (const [, newName] of newNameMap) {
-                        if (!group.members.includes(newName)) {
-                            group.members.push(newName);
-                        }
-                    }
-                }
-                if (Array.isArray(group.order)) {
-                    group.order = group.order.map(n => newNameMap.get(n) || n);
-                    for (const [, newName] of newNameMap) {
-                        if (!group.order.includes(newName)) {
-                            group.order.push(newName);
-                        }
-                    }
-                }
+                const retained = snap.members.filter(name => {
+                    if (name === headName) { return true; }
+                    const terminal = fleetList.find(t => t.friendlyName === name);
+                    return terminal && terminal.status !== 'exited';
+                });
+                group.members = [...new Set([...retained, ...newNames])];
+                const retainedSet = new Set(group.members);
+                group.order = [
+                    ...(Array.isArray(group.order) ? group.order.filter(name => retainedSet.has(name)) : []),
+                    ...newNames.filter(name => !Array.isArray(group.order) || !group.order.includes(name))
+                ];
                 saveLayoutSettings();
             }
         }
 
         await fetchTerminalList();
-        const ok = newNameMap.size;
-        const total = deadMembers.length;
+        const ok = newNames.length;
+        const total = restartSpecs.length;
         if (ok === total) {
             showPaneToast(`Restarted ${ok} missing member${ok === 1 ? '' : 's'}`);
         } else {
@@ -8896,13 +8853,17 @@
             renderSidebarList();
             return;
         }
-        group.order = [...newOrder];
-        if (Array.isArray(group.members)) {
-            const ordered = newOrder.filter(n => group.members.includes(n));
-            const rest = group.members.filter(n => !newOrder.includes(n));
-            group.members = [...ordered, ...rest];
+        const storedGroups = await loadSetting('terminals.groups', []);
+        const storedGroup = Array.isArray(storedGroups) ? storedGroups.find(g => g && g.id === group.id) : null;
+        if (!storedGroup || JSON.stringify(storedGroup.order) !== JSON.stringify(oldOrder)) {
+            showPaneToast('Roster changed — reordering cancelled');
+            await reloadTerminalGroups();
+            renderSidebarList();
+            return;
         }
-        saveLayoutSettings();
+        group.order = [...newOrder];
+        storedGroup.order = [...newOrder];
+        await saveSetting('terminals.groups', storedGroups, storedGroups.map(g => g && g.id).filter(Boolean));
         if (activeGroupId === group.id) {
             switchToGroup(group.id, { keepPage: true });
         }
@@ -10445,6 +10406,38 @@
         return terminalGroups.find(g => g && g.id === teamScopeId) || null;
     }
 
+    /** Enter team-scoped mode in-place (no page reload, no pop-out window).
+     *  Called by the switchToTeam message handler when the shell rail's team
+     *  button is clicked. Sets teamScopeId BEFORE calling switchToGroup so the
+     *  guard at switchToGroup (teamScopeId && id !== teamScopeId) passes —
+     *  mirrors the init() path at lines 772–782 which sets teamScopeId first. */
+    function enterTeamScope(groupId) {
+        const group = getAllGroups().find(g => g.id === groupId);
+        if (!group || !isSpawnedTeamGroup(group)) { return; }
+        dismissPeek();
+        teamScopeId = groupId;
+        document.body.classList.add('is-team-scoped');
+        document.title = group.shortName || group.name || 'Team';
+        switchToGroup(groupId);  // seats the team's members into panes
+        renderSidebarList();
+        renderPaneGrid();
+    }
+
+    /** Exit team-scoped mode and return to the full fleet view. Called by the
+     *  back button in renderTeamHeader. Clears teamScopeId, removes the body
+     *  class, resets the group lock and layout, and re-renders the full fleet. */
+    function exitTeamScope() {
+        teamScopeId = null;
+        document.body.classList.remove('is-team-scoped');
+        document.title = 'Terminals';
+        activeGroupId = null;
+        activeGroupPage = 0;
+        setLayoutMode(layoutForFleetCount(fleetList.length));
+        seatActiveGroupPage();
+        renderSidebarList();
+        renderPaneGrid();
+    }
+
     /** The render-boundary filter. Returns `fleetList` filtered to the scoped
      *  team's live members when `teamScopeId` is set, and `fleetList` unchanged
      *  otherwise. Called only from render paths — NEVER from fetch, standing-
@@ -11495,6 +11488,35 @@
         }, true);
     })();
 
+    // ── Team action bar buttons (relocated from the team header into the
+    //    sidebar). Static HTML buttons, wired once at init; shown/hidden by
+    //    renderSidebarList based on teamScopeId. The ADD TERMINAL handler
+    //    reads team state at click time (getScopedTeamGroup) since it can no
+    //    longer capture the group from the render closure. ──────────────
+    (function wireTeamActionBar() {
+        const btnTeamClear = document.getElementById('btn-team-clear');
+        if (btnTeamClear) btnTeamClear.addEventListener('click', () => clearTeam());
+        const btnTeamClearMembers = document.getElementById('btn-team-clear-members');
+        if (btnTeamClearMembers) btnTeamClearMembers.addEventListener('click', () => clearTeamMembers());
+        const btnTeamClose = document.getElementById('btn-team-close');
+        if (btnTeamClose) btnTeamClose.addEventListener('click', () => closeTeam());
+        const btnTeamRestart = document.getElementById('btn-team-restart');
+        if (btnTeamRestart) btnTeamRestart.addEventListener('click', () => restartMissingMembers());
+        const btnTeamAck = document.getElementById('btn-team-ack');
+        if (btnTeamAck) btnTeamAck.addEventListener('click', () => clearTeamBadges());
+        const btnTeamAdd = document.getElementById('btn-team-add');
+        if (btnTeamAdd) btnTeamAdd.addEventListener('click', () => {
+            const group = getScopedTeamGroup();
+            if (!group) { return; }
+            const headName = teamHeadName(group);
+            const headTerm = headName ? fleetList.find(t => t.friendlyName === headName) : null;
+            const targetSpec = headTerm && headTerm.parentRoot
+                ? { parentRoot: headTerm.parentRoot }
+                : undefined;
+            onNewTerminalClicked(targetSpec, 'team:' + teamScopeId);
+        });
+    })();
+
     let currentTeamAutosTeamId = null;
     let cachedSchedulerConfig = null;
 
@@ -11685,9 +11707,12 @@
                 targetRow.style.color = 'var(--text-secondary)';
 
                 const targetRole = job.teamTarget?.role;
+                const teamRoster = group
+                    ? (Array.isArray(group.order) && group.order.length ? group.order : (Array.isArray(group.members) ? group.members : []))
+                    : [];
                 let targetDisplay = '';
                 if (targetRole) {
-                    const match = fleetList.find(t => t.friendlyName && t.status === 'active' && normalizeAgentRoleKey(t.role) === normalizeAgentRoleKey(targetRole));
+                    const match = fleetList.find(t => teamRoster.includes(t.friendlyName) && t.status === 'active' && normalizeAgentRoleKey(t.role) === normalizeAgentRoleKey(targetRole));
                     if (match) {
                         targetDisplay = `Target: Role '${targetRole}' → ${match.friendlyName} (live)`;
                     } else {

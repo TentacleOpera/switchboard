@@ -7,7 +7,6 @@ import * as path from 'path';
  *
  * Storage layout:
  *   .switchboard/teams/<groupId>/queue/           — pending items
- *   .switchboard/teams/<groupId>/queue/claimed/   — claim sidecars
  *
  * Each item is a markdown file with YAML-like frontmatter:
  *   ---
@@ -20,9 +19,10 @@ import * as path from 'path';
  *   ---
  *   <body — the prompt text or plan reference>
  *
- * Claim sidecars live in `claimed/<filename>.claim` and carry
- * `claimed_ts` + `agent`. A claim older than the staleness window (24h
- * default) is reclaimable.
+ * Dispatch is completion-driven (see `team-queue-completion-driven-dispatch.md`):
+ * a coder POSTs `queue/done` on task finish and the system handler dequeues
+ * the next item. There is no claim/staleness mechanism — the completion
+ * report is the single serialization point.
  *
  * Security: groupId and item filenames are validated against path
  * traversal BEFORE any filesystem call. The traversal guard rejects
@@ -35,9 +35,6 @@ import * as path from 'path';
  *  a file transfer. Reject at enqueue rather than truncating at dispatch. */
 export const MAX_QUEUE_ITEM_BODY = 256 * 1024;
 
-/** Claim staleness in hours. A claim older than this is reclaimable. */
-export const CLAIM_STALENESS_HOURS = 24;
-
 /** A single queue item as returned by listQueue. */
 export interface QueueItem {
     id: string;          // filename without extension
@@ -49,9 +46,6 @@ export interface QueueItem {
     priority: number;
     enqueuedTs: string;  // ISO
     body: string;
-    state: 'pending' | 'claimed';
-    claimedBy?: string;
-    claimedTs?: string;
 }
 
 export interface QueueListResult {
@@ -61,12 +55,6 @@ export interface QueueListResult {
 }
 
 export interface QueueEnqueueResult {
-    success: boolean;
-    item?: QueueItem;
-    error?: string;
-}
-
-export interface QueueClaimResult {
     success: boolean;
     item?: QueueItem;
     error?: string;
@@ -98,10 +86,9 @@ export function isSafeId(id: string): boolean {
 }
 
 /**
- * Lazily creates `.switchboard/teams/<groupId>/queue/` with a `claimed/`
- * subdirectory. Returns the queue directory path, or `null` when
- * `.switchboard/` is absent — same lazy guard as
- * `bootstrapInstructionsDirectory`.
+ * Lazily creates `.switchboard/teams/<groupId>/queue/`. Returns the queue
+ * directory path, or `null` when `.switchboard/` is absent — same lazy guard
+ * as `bootstrapInstructionsDirectory`.
  *
  * `groupId` MUST be validated by `isSafeId` BEFORE calling this function.
  */
@@ -111,8 +98,7 @@ export async function bootstrapTeamQueue(workspaceRoot: string, groupId: string)
         return null;
     }
     const queueDir = path.join(sbDir, 'teams', groupId, 'queue');
-    const claimedDir = path.join(queueDir, 'claimed');
-    await fs.promises.mkdir(claimedDir, { recursive: true });
+    await fs.promises.mkdir(queueDir, { recursive: true });
     return queueDir;
 }
 
@@ -121,7 +107,7 @@ export async function bootstrapTeamQueue(workspaceRoot: string, groupId: string)
  * Defensive against malformed frontmatter — a missing or unparseable
  * field degrades to a default, never throws.
  */
-function parseQueueItem(filename: string, content: string, claimed: boolean, claimData?: { agent?: string; ts?: string }): QueueItem {
+function parseQueueItem(filename: string, content: string): QueueItem {
     const id = filename.replace(/\.md$/, '');
     const lines = content.split('\n');
     const fm: Record<string, string> = {};
@@ -151,29 +137,7 @@ function parseQueueItem(filename: string, content: string, claimed: boolean, cla
         priority: fm.priority ? parseInt(fm.priority, 10) || 0 : 0,
         enqueuedTs: fm.enqueued_ts || fm.created || new Date().toISOString(),
         body,
-        state: claimed ? 'claimed' : 'pending',
-        claimedBy: claimData?.agent,
-        claimedTs: claimData?.ts,
     };
-}
-
-/** Read a claim sidecar if it exists and is fresh. Returns claim data or null. */
-async function readClaim(claimedDir: string, filename: string): Promise<{ agent: string; ts: string } | null> {
-    const claimPath = path.join(claimedDir, `${filename}.claim`);
-    try {
-        const content = await fs.promises.readFile(claimPath, 'utf8');
-        const tsMatch = content.match(/claimed_ts:\s*([^\n]+)/);
-        const agentMatch = content.match(/agent:\s*([^\n]+)/);
-        const ts = tsMatch ? tsMatch[1].trim() : '';
-        const agent = agentMatch ? agentMatch[1].trim() : 'unknown';
-        if (ts) {
-            const ageMs = Date.now() - new Date(ts).getTime();
-            if (ageMs < CLAIM_STALENESS_HOURS * 3600 * 1000) {
-                return { agent, ts };
-            }
-        }
-    } catch { /* no claim or parse failure -> unclaimed */ }
-    return null;
 }
 
 /**
@@ -188,7 +152,6 @@ export async function listQueue(workspaceRoot: string, groupId: string): Promise
         if (!queueDir) {
             return { success: true, items: [] };
         }
-        const claimedDir = path.join(queueDir, 'claimed');
         const entries = await fs.promises.readdir(queueDir);
         const mdFiles = entries.filter(f => f.endsWith('.md'));
 
@@ -202,8 +165,7 @@ export async function listQueue(workspaceRoot: string, groupId: string): Promise
             const filePath = path.join(queueDir, filename);
             try {
                 const content = await fs.promises.readFile(filePath, 'utf8');
-                const claimData = await readClaim(claimedDir, filename);
-                items.push(parseQueueItem(filename, content, !!claimData, claimData || undefined));
+                items.push(parseQueueItem(filename, content));
             } catch { /* skip unreadable */ }
         }
 
@@ -274,7 +236,7 @@ export async function enqueueItem(
                 await fs.promises.writeFile(filePath, content, { encoding: 'utf8', flag: 'wx' });
                 // Read back to return the parsed item.
                 const readContent = await fs.promises.readFile(filePath, 'utf8');
-                const item = parseQueueItem(filename, readContent, false);
+                const item = parseQueueItem(filename, readContent);
                 return { success: true, item };
             } catch (err: any) {
                 if (err?.code === 'EEXIST') { continue; }
@@ -288,61 +250,7 @@ export async function enqueueItem(
 }
 
 /**
- * Claim an item atomically. Uses `{ flag: 'wx' }` (exclusive-create) for
- * the claim sidecar so two concurrent claims yield exactly one winner.
- *
- * `groupId` and `itemId` MUST be validated by `isSafeId` BEFORE calling.
- */
-export async function claimItem(
-    workspaceRoot: string,
-    groupId: string,
-    itemId: string,
-    agentId = 'team-queue-pump'
-): Promise<QueueClaimResult> {
-    try {
-        const queueDir = await bootstrapTeamQueue(workspaceRoot, groupId);
-        if (!queueDir) {
-            return { success: false, error: '.switchboard directory does not exist' };
-        }
-        const claimedDir = path.join(queueDir, 'claimed');
-        // Find the file matching the itemId (id is filename without .md).
-        const entries = await fs.promises.readdir(queueDir);
-        const filename = entries.find(f => f === `${itemId}.md`);
-        if (!filename) {
-            return { success: false, error: `Queue item '${itemId}' not found` };
-        }
-
-        // Check for an existing fresh claim.
-        const existingClaim = await readClaim(claimedDir, filename);
-        if (existingClaim) {
-            return { success: false, error: `Item '${itemId}' is already claimed by ${existingClaim.agent}` };
-        }
-
-        // Atomic exclusive-create claim sidecar.
-        const claimPath = path.join(claimedDir, `${filename}.claim`);
-        const claimContent = `claimed_ts: ${new Date().toISOString()}\nagent: ${agentId}\n`;
-        try {
-            await fs.promises.writeFile(claimPath, claimContent, { encoding: 'utf8', flag: 'wx' });
-        } catch (err: any) {
-            if (err?.code === 'EEXIST') {
-                // Another caller claimed it between our check and our write.
-                return { success: false, error: `Item '${itemId}' was claimed by another caller` };
-            }
-            throw err;
-        }
-
-        // Read back the item to return it.
-        const content = await fs.promises.readFile(path.join(queueDir, filename), 'utf8');
-        const item = parseQueueItem(filename, content, true, { agent: agentId, ts: new Date().toISOString() });
-        return { success: true, item };
-    } catch (err) {
-        return { success: false, error: err instanceof Error ? err.message : String(err) };
-    }
-}
-
-/**
- * Delete a queue item and its claim sidecar (if any). Immediate, no
- * confirmation — the CLAUDE.md rule.
+ * Delete a queue item. Immediate, no confirmation — the CLAUDE.md rule.
  *
  * `groupId` and `itemId` MUST be validated by `isSafeId` BEFORE calling.
  */
@@ -362,9 +270,13 @@ export async function deleteItem(
             return { success: false, error: `Queue item '${itemId}' not found` };
         }
         const filePath = path.join(queueDir, filename);
-        const claimPath = path.join(queueDir, 'claimed', `${filename}.claim`);
-        try { await fs.promises.unlink(filePath); } catch { /* already gone */ }
-        try { await fs.promises.unlink(claimPath); } catch { /* no claim */ }
+        try {
+            await fs.promises.unlink(filePath);
+        } catch (err: any) {
+            if (err?.code !== 'ENOENT') {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        }
         return { success: true };
     } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -434,30 +346,6 @@ export async function reorderQueue(
             } catch { /* skip on error */ }
         }
 
-        return { success: true };
-    } catch (err) {
-        return { success: false, error: err instanceof Error ? err.message : String(err) };
-    }
-}
-
-/**
- * Release a claim (mark item as pending again). Deletes the claim
- * sidecar so the item returns to the pending pool.
- *
- * `groupId` and `itemId` MUST be validated by `isSafeId` BEFORE calling.
- */
-export async function releaseClaim(
-    workspaceRoot: string,
-    groupId: string,
-    itemId: string
-): Promise<{ success: boolean; error?: string }> {
-    try {
-        const queueDir = await bootstrapTeamQueue(workspaceRoot, groupId);
-        if (!queueDir) {
-            return { success: false, error: '.switchboard directory does not exist' };
-        }
-        const claimPath = path.join(queueDir, 'claimed', `${itemId}.md.claim`);
-        try { await fs.promises.unlink(claimPath); } catch { /* no claim */ }
         return { success: true };
     } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };

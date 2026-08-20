@@ -410,22 +410,8 @@
                 animation-name: strip-term-done-pulse-reduced;
             }
         }
-        /* Member-count badge — small number in the bottom-right corner. */
-        .strip-team-count {
-            position: absolute;
-            bottom: 1px;
-            right: 2px;
-            font-size: 9px;
-            font-weight: 700;
-            line-height: 1;
-            color: var(--text-secondary, #888);
-            background: var(--panel-bg, #1a1a2e);
-            border-radius: 3px;
-            padding: 1px 3px;
-            pointer-events: none;
-        }
-        /* Queue-depth badge — top-right corner, accent-violet to distinguish
-           from the member-count badge (bottom-right). Shows pending work. */
+        /* Queue-depth badge — top-right corner, accent-violet. Shows pending
+           work on the team rail icon. */
         .strip-team-queue-depth {
             position: absolute;
             top: 1px;
@@ -438,14 +424,6 @@
             border-radius: 3px;
             padding: 1px 3px;
             pointer-events: none;
-        }
-        /* Rail mode toggle — sits at the top of the fleet container, after the
-           orchestrator icon. Same sizing as other strip icons. */
-        .strip-rail-mode-btn {
-            color: var(--text-secondary, #888);
-        }
-        .strip-rail-mode-btn:hover {
-            color: var(--text-primary, #ccc);
         }
 
         /* Browser-only shell: dark native palette + a 6px strip scrollbar to

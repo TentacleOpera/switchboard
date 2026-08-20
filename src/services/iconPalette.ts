@@ -148,17 +148,20 @@ export function validateTeamIcon(icon: unknown): string | null {
     if (v === '') { return null; }
     if (v.startsWith('art:')) {
         const name = v.slice('art:'.length).trim();
-        if (!name) { return 'art: icon missing a name'; }
+        if (!/^[a-zA-Z0-9_-]+$/.test(name)) { return 'art: icon name must be a plain slug'; }
         return null;
     }
     if (v.startsWith('pack:')) {
         const file = v.slice('pack:'.length).trim();
-        if (!file) { return 'pack: icon missing a filename'; }
+        if (!file || path.basename(file) !== file || file.includes('..')) { return 'pack: icon filename must be a plain filename'; }
         return null;
     }
     if (v.startsWith('data:')) {
-        if (v.length > ICON_DATA_URI_MAX_BYTES) {
-            return `data: icon too large (${Math.round(v.length / 1024)} KB, max ${Math.round(ICON_DATA_URI_MAX_BYTES / 1024)} KB)`;
+        if (!/^data:image\/(?:png|svg\+xml|webp);base64,/i.test(v)) {
+            return 'data: icon must be a base64 PNG, SVG, or WebP image';
+        }
+        if (Buffer.byteLength(v, 'utf8') > ICON_DATA_URI_MAX_BYTES) {
+            return `data: icon too large (${Math.round(Buffer.byteLength(v, 'utf8') / 1024)} KB, max ${Math.round(ICON_DATA_URI_MAX_BYTES / 1024)} KB)`;
         }
         return null;
     }
