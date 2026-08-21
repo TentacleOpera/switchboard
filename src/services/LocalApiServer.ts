@@ -35,6 +35,7 @@ import { validateVerbPayload } from './verbSchemas';
 import { isLoopbackHostHeader, isLoopbackOrigin } from '../utils/loopbackHostname';
 import { listIconPalette } from './iconPalette';
 import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQueue, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
+import { composeCompletedTurnEndBody } from './PlanIngestionEngine';
 
 /** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
  *  'lead_coded' / 'Lead Coded' all → 'LEAD CODED'. */
@@ -357,6 +358,22 @@ interface LocalApiServerOptions {
      * (reported `cleared: false`, pop still proceeds).
      */
     clearTerminalContext?: (workspaceRoot: string, terminalName: string) => Promise<{ cleared: boolean; error?: string }>;
+    /**
+     * Fired when a seat's working state is cleared (non-NULL→NULL transition) via
+     * queue/done. Mirrors PlanIngestionEngine._onWorkingStateCleared →
+     * broadcastAgentCompleted. The record is the pre-clear read (still has
+     * dispatchedAt, dispatchedTerminal, etc.) so the broadcast can include them.
+     * Optional — absent in headless/test harnesses (no broadcast, pop still
+     * proceeds).
+     */
+    onWorkingStateCleared?: (record: any, workspaceRoot: string) => void;
+    /**
+     * Fired when a seat's turn ends via queue/done. Mirrors
+     * PlanIngestionEngine._turnEndNotifier → notifyTurnEnd + handleAutobanTurnEnd.
+     * The host resolves the recipient and delivers the notification. Optional —
+     * absent in headless/test harnesses (no notification, pop still proceeds).
+     */
+    onTurnEndNotify?: (info: { seatName: string; planFile: string; outcome: 'completed'; workspaceRoot: string; body?: string }) => void;
     /**
      * Notify the operator of a non-fatal event that needs human attention —
      * used by the escalation ladder's park case (a card that failed at lead and
@@ -2220,6 +2237,34 @@ export class LocalApiServer {
                         const prior = _lastSeatPop.get(`${workspaceRoot}\0${from}`);
                         resolve(dup(prior ? prior.dispatched : null));
                         return;
+                    }
+
+                    // ── Fire completion callbacks (parity with the file-watcher
+                    // path). Both hang off the SAME `transitioned` gate the
+                    // watcher uses — the boolean is the single-fire contract, so
+                    // a watcher-first clear returns false above and never reaches
+                    // here. Each callback is independently optional, so an unset
+                    // notifier leaves the broadcast intact and vice versa. The
+                    // record is the pre-clear `held` read (still has
+                    // dispatchedAt, dispatchedTerminal, etc.).
+                    if (this._options.onWorkingStateCleared) {
+                        try { this._options.onWorkingStateCleared(held, workspaceRoot); } catch (e) {
+                            console.warn('[LocalApiServer] onWorkingStateCleared callback failed:', e);
+                        }
+                    }
+                    if (this._options.onTurnEndNotify) {
+                        try {
+                            const body = composeCompletedTurnEndBody(held, from, held.planFile, Date.now());
+                            this._options.onTurnEndNotify({
+                                seatName: from,
+                                planFile: held.planFile,
+                                outcome: 'completed',
+                                workspaceRoot,
+                                body,
+                            });
+                        } catch (e) {
+                            console.warn('[LocalApiServer] onTurnEndNotify callback failed:', e);
+                        }
                     }
 
                     // ── Clear the finishing seat ───────────────────────────

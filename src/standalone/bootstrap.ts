@@ -2180,7 +2180,13 @@ Each plan file must include:
     // delivers via `deliverPrompt` with clearBeforePrompt: false and standing
     // orders enabled (the recipient acts on this notification and needs its
     // durable orders fresh in context).
-    ingestionEngine.setTurnEndNotifier((info) => {
+    // Turn-end delivery closure, extracted into a named function so BOTH the
+    // engine's setTurnEndNotifier AND the LocalApiServer's onTurnEndNotify
+    // callback (the API-based queue/done path) share ONE delivery path — no
+    // duplicated recipient resolution or deliverPrompt logic. Captures
+    // deliverPrompt, taskViewerProvider, ptyFleetService, writeOrchestratorReport,
+    // log, opts — all in scope here.
+    const handleTurnEndNotify = (info: any) => {
         void (async () => {
             const seatName = info.seatName;
             const planFile = info.planFile;
@@ -2274,7 +2280,8 @@ Each plan file must include:
         // turn-end notification. handleAutobanTurnEnd guards on
         // enabled/paused/single-column internally, so a no-op for other modes.
         taskViewerProvider.handleAutobanTurnEnd(info);
-    });
+    };
+    ingestionEngine.setTurnEndNotifier(handleTurnEndNotify);
 
     // Agent-group instantiation, standalone edition. The TaskViewer arm guards on
     // `_ptyHostPort`, which only exists in the extension host (its fleet lives in a
@@ -2393,6 +2400,18 @@ Each plan file must include:
         allRoots: [workspaceRoot],
         getKanbanDatabase: async () => db,
         kanbanVerb,
+        // Completion-callback parity with the file-watcher path. The API-based
+        // queue/done path fires these so a seat reporting done via POST reaches
+        // the same broadcast + lead notification + autoban dispatch as a
+        // plan-file mtime advance. Reuses broadcastAgentCompletedForRecord
+        // (defined above) and handleTurnEndNotify (extracted above) — ONE
+        // delivery path shared with the engine's setTurnEndNotifier.
+        onWorkingStateCleared: (record: any, _wsRoot: string) => {
+            broadcastAgentCompletedForRecord(record);
+        },
+        onTurnEndNotify: (info: any) => {
+            handleTurnEndNotify(info);
+        },
         // Team-scoped reviewer routing for POST /kanban/dispatch. The helper is
         // pure over (db, liveTerminals) so the standalone host needs no
         // TaskViewerProvider — it supplies the pty fleet directly. Note this still

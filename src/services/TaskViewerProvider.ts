@@ -3485,6 +3485,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             resolveTeamMembers: async (wsRoot, headTerminal) => this.resolveTeamMembers(wsRoot, headTerminal),
             resolveTeamPacing: async (wsRoot, headTerminal) => this.resolveTeamPacing(wsRoot, headTerminal),
             clearTerminalContext: async (wsRoot, terminalName) => this.clearTerminalContext(wsRoot, terminalName),
+            // Completion-callback parity with the file-watcher path (extension.ts
+            // wires the same seams on the engine via setOnWorkingStateCleared /
+            // setTurnEndNotifier). The API-based queue/done path fires these so a
+            // seat reporting done via POST reaches the same broadcast + lead
+            // notification + autoban dispatch as a plan-file mtime advance.
+            onWorkingStateCleared: (record, wsRoot) => {
+                this.broadcastAgentCompleted(record, wsRoot);
+            },
+            onTurnEndNotify: (info) => {
+                this.notifyTurnEnd(info);
+                this.handleAutobanTurnEnd(info);
+            },
             notifyOperator: (wsRoot, message) => this.notifyOperator(wsRoot, message),
             createExternalTeam: async (wsRoot, template, headName, featureId) =>
                 this.instantiateExternalTeam(wsRoot || effectiveRoot, template, headName, featureId),
