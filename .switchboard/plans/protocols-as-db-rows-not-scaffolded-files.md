@@ -2,7 +2,9 @@
 
 ## Goal
 
-Move 30 of the 32 protocol definitions (~396K of 424K) into the store and shrink `.agents/protocols/` to two files. Protocols are UI-triggered instructions the extension delivers; nothing discovers them by scanning the filesystem, so their storage form is a delivery choice rather than a constraint.
+Move 29 of the 32 protocol definitions into the store, delete one outright, and shrink `.agents/protocols/` to two files. Protocols are UI-triggered instructions the extension delivers; nothing discovers them by scanning the filesystem, so their storage form is a delivery choice rather than a constraint.
+
+One is deleted rather than migrated: **`improve-remote-plan` (8K)**. It cannot be executed in any configuration — see below.
 
 Two stay committed: `improve-plan` (16K) and `improve-feature` (12K). `CLAUDE.md:127` and `:130` treat `improve-plan`'s required-section schema as authoritative for all plan authoring, so an agent following `CLAUDE.md` with no connection to the user's machine — a cloud session working from a clone — must be able to read it unaided.
 
@@ -35,6 +37,29 @@ So the constraint that normally forces control-plane content onto disk — agent
 
 **And the shipping blocker dissolves.** The reviewer's constraint is about shipping a *scaffolded workspace directory*. Seed data compiled into the extension bundle has no `.vscodeignore` interaction and no dependence on the `.agents/` crawl-copy. The blocker exists only if protocols are files in the workspace.
 
+### `improve-remote-plan` is deleted, not migrated
+
+It is unexecutable, and the contradiction is between the protocol and the workflow that points at it.
+
+`.agents/workflows/switchboard-remote.md:25` instructs: *"To improve a plan: use `/improve-remote-plan` (not `/improve-plan`)."* But section 7 of that same workflow states the operating premise flatly:
+
+> "You have **no repo access** — no GitHub, no git, no file system."
+
+And `improve-remote-plan`'s own Prerequisites require exactly those things:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.agents/skills/_lib/sb_api_call.sh"
+```
+
+plus a reachable LocalApiServer. Its "When to Use" compounds this by naming a scenario — "a remote session with no local machine running" — that its own Prerequisites forbid. **There is no configuration in which the pointing workflow and the pointed-at protocol are both satisfiable.**
+
+The replacement already exists in the same workflow. Sections 8 onward instruct the agent to author the plan directly into the Notion page body or Linear issue body via MCP, then set the column — which is the flow that actually works, because it needs only MCP. So line 25 is not merely broken, it is redundant with the document's own instructions.
+
+Two further reasons not to keep it:
+
+- **Its only distinctive capability is already covered.** Routing through `sb_api_call POST /api/linear` means the extension injects the Linear token host-side, so an agent writes to Linear without holding a credential. That is `linear-api`, which is already a protocol and already clipboard-delivered. `improve-remote-plan` adds nothing to it.
+- **It has a latent two-writer hazard.** Its Read Phase never checks whether the plan already exists locally. If it does, editing the Linear description races `LinearSyncService`, whose `pullIntervalMinutes` defaults to 60 — so whichever direction syncs next wins, silently.
+
 ### Root Cause
 
 Protocols were modelled as skills because they were authored as skills and lived beside them. Every subsequent decision — which directory, which seeding path, which ignore rule — inherited that framing. The delivery mechanism (extension reads, extension injects) had already diverged from the storage form (a discoverable-looking skill directory) long before the move.
@@ -45,6 +70,7 @@ Protocols were modelled as skills because they were authored as skills and lived
 - Moving `.agents/workflows/` (the four user-typeable slash commands) or `.agents/skills/_lib/`. Both stay committed: workflows are the bootstrap entry surface, and `_lib/sb_api_call.sh` is sourced from the repo by `improve-remote-plan`.
 - Changing protocol *content*.
 - Re-litigating the token-cost goal; it is already achieved and must stay achieved.
+- Broadening what remote mode can do. Removing `improve-remote-plan` narrows it to create-author-and-status via MCP, which is what the workflow's own sections 8+ already describe. If that narrowing is unwanted, the answer is an MCP-only improvement path, not reviving a protocol that needs the repo.
 - Removing `RETIRED_WORKFLOW_PATH_MAP` — it stays as the read-time guard for persisted stale paths.
 
 ## Metadata
@@ -138,7 +164,9 @@ Note `improve-plan` and `improve-feature` appear in two tiers: clipboard-offered
 4b. **`src/test/vsix-packaging-contract.test.js` updated.** It currently asserts `.agents/protocols/` exists, is non-empty, and fully packages — the exact inverse of this plan's goal invariant. Its packaging machinery (a faithful reproduction of vsce's `collectFiles` filter) stays and remains valuable; the protocol-specific assertion is replaced by one covering whatever seeds the `control_plane` rows.
 5. **`RETIRED_WORKFLOW_PATH_MAP` extended** with `.agents/protocols/*` keys; `normalizeRetiredWorkflowPath` maps a stale path to a protocol *name*.
 6. **Materialisation cache** at `~/.switchboard/cache/protocols/<content-hash>/SKILL.md`, atomic write, idle pruning.
-7. **`.agents/protocols/` deleted** from the repo and from the seeding crawl; `protocol-catalog.json` regenerated or retired; `.switchboard-bundled.json` protocol entries dropped in favour of the version column.
+7. **`improve-remote-plan` deleted**, not migrated to a row. Its `.agents/protocols/improve-remote-plan/` directory goes, along with every reference.
+8. **`.agents/workflows/switchboard-remote.md:25` rewritten** to point at the workflow's own sections 8+ (author into the page/issue body via MCP, then set the column) instead of the deleted protocol. **This is a workflow file — propose the wording and obtain explicit approval before editing it.**
+9. **`.agents/protocols/` deleted** from the repo and from the seeding crawl; `protocol-catalog.json` regenerated or retired; `.switchboard-bundled.json` protocol entries dropped in favour of the version column.
 
 ### Migration
 
@@ -156,6 +184,8 @@ Import from all three historical locations, hash-compare, preserve mismatches as
 
 ### Automated Tests
 - **Ships and resolves on a clean install:** unpack a built VSIX into a fresh workspace with no `.agents/` at all; assert every one of the 32 protocols resolves. This is the check that was missing when the earlier version passed grep, compile, lint and manual review while being dead on every user install.
+- **`improve-remote-plan` is gone:** assert the directory does not exist, no `control_plane` row is seeded for it, and no reference survives in `src/`, `.agents/`, `CLAUDE.md` or `AGENTS.md`.
+- **`switchboard-remote.md` self-consistency:** assert the workflow names no protocol or path that its own section 7 premise ("no repo access — no git, no file system") makes unreachable. This is the general form of the bug, so it catches the next one.
 - **API tier:** `GET /protocol/<name>` returns the body for every row-class protocol, rejects an unknown name, and rejects a name containing traversal characters. Assert `improve-remote-plan` is fetchable this way, since its own Prerequisites guarantee the channel.
 - **Cloud tier (the correction this plan needed):** in a bare clone with no extension, no store, no cache and no network path to any machine, assert an agent can read `improve-plan/SKILL.md` and `improve-feature/SKILL.md` by the paths `CLAUDE.md` names. This is the scenario an earlier revision of this plan would have broken.
 - **No protocol path on the clipboard:** click "Copy prompt" for every row of `AGENT_API_CAPABILITIES` in both providers; assert no clipboard payload contains a filesystem path, and that each contains the protocol body inline. This is the assertion that keeps a pasted prompt working on a machine that is not the user's.
