@@ -1,4 +1,4 @@
-# Close the review hole that let a correct fix silently invert a plan's goal
+# Make the reviewer assess the goal, not just the steps
 
 ## Goal
 
@@ -16,14 +16,20 @@ The fix relocated them to `.agents/protocols/`, rewrote ~45 references across 31
 
 Nothing in the process was dishonest. The commit message states plainly what it did and why. The gap is that **no gate compared the outcome to the plan's purpose**, and no human was asked to approve a change of destination.
 
-**Failure 1 — verification asserts the mechanism, not the intent.** `improve-plan`'s required section schema (`.agents/protocols/improve-plan/SKILL.md`, section 9) specifies:
+**Failure 1 — the reviewer assesses the change against the plan's *steps*, not its *goal*.** This is the real gap, and it is not about section schemas.
 
-```
-9. **## Verification Plan**
-   - ### Automated Tests
-```
+`agentPromptBuilder.ts:1842` composes the reviewer prompt around:
 
-That is the entire specification. It asks for tests of the change. A plan whose purpose is *"X must no longer be in Y"* therefore gets tests asserting *"X is now at Z"* — which pass just as happily when Z turns out to be inside Y. There is no required negative assertion, so the one test that would have caught this (`assert .agents/ contains no protocols`) was never written, because nothing asked for it.
+> "assess the actual code changes against the **plan requirements** inline, fix valid material issues, then verify."
+
+"Plan requirements" resolves in practice to the listed implementation steps. A reviewer that satisfies every step has, by that instruction, done its job — even when the result inverts what the plan was for. That is exactly what happened: the protocols were relocated (step satisfied, shipping restored) while the goal (get them out of the scaffold) was reversed, and nothing in the reviewer's instruction asked the second question.
+
+Note what this framing gets right that an earlier revision of this plan got wrong. That revision proposed adding a required `### Goal Invariants` section to `improve-plan`'s schema. Two things are wrong with that:
+
+- **It only protects plans authored Switchboard's way.** `workflowFilePath` is a user-editable extension point with GSD and Superpowers as documented peers. A user on GSD never runs `improve-plan`, so a schema requirement there never reaches them.
+- **It imposes structure where structure is not needed.** Checking whether Metadata and Verification Plan sections are load-bearing shows they are not: nothing parses `## Verification Plan` — every reference is a prompt *asking* an agent to write one (`TaskViewerProvider.ts:6555`, `SparkContextExporter.ts:201`, `externalAgentPrompts.ts:70`), with zero readers. Complexity is advisory input to a prompt, not a dispatch switch: `routingMapConfig` (`:1762`) injects thresholds so the *agent* recommends a tier, nothing in code branches on the value, the DB defaults it to `'Unknown'`, and `KanbanDatabase.ts:2903` carries a guard so `'Unknown'` never overwrites a real value. The only mechanical dependency on sections is plan *detection* (`TaskViewerProvider.ts:18363`), which needs any two headings from a deliberately wide alternation — a GSD plan with `## Goal` and `## Recommendation` passes.
+
+So the fix belongs at the review step, where the question is already methodology-neutral: a reviewer reads whatever plan it is handed and can be asked "does this change satisfy the plan's stated goal, or only its steps?" without caring how the plan was authored.
 
 **Failure 2 — local gates verified the dev tree, not the artifact. Already fixed, by the same reviewer, and better than this plan originally proposed.** The gap was real at the time: grep, compile, lint and manual inspection all passed because the files existed in the dev repo. But `33d4f3d` also produced `src/test/vsix-packaging-contract.test.js`, which reproduces vsce's `collectFiles` filter exactly — including the trap that a negation in `.vscodeignore` overrides every ignore pattern regardless of line order — and asserts against that filter rather than by reading the file. It pins the incident directly:
 
@@ -75,6 +81,7 @@ This is out of scope to change here, and flagged because it is the same class as
 
 ### Non-goals
 
+- Imposing Switchboard's section schema on plans authored by another methodology. `workflowFilePath` is a supported extension point; GSD and Superpowers plans are expected to look different, and nothing in the system requires them not to.
 - Reducing reviewer authority to fix real blockers. The finding in `33d4f3d` was excellent and must remain possible to make.
 - Adding a confirmation dialog anywhere. Per project rule, no confirm gates — escalation here means a plan-file state and a board signal, not a modal.
 - Rewriting the protocol migration itself (separate plan).
@@ -101,14 +108,15 @@ Yes — one decision.
 
 ### Routine
 
-- Adding a required `### Goal Invariants` subsection to `improve-plan`'s section-9 schema, with a stated rule that at least one invariant must be a negative assertion when the goal is a removal or relocation.
-- Adding the same requirement to `improve-feature`.
+- Adding the goal clause to `reviewerBaseInstructions`, without reflowing the two pinned strings around it.
+- Offering (not requiring) `### Goal Invariants` in `improve-plan` / `improve-feature`.
 - Adding must-not-exist assertions to the existing `src/test/vsix-packaging-contract.test.js`, and checking which gate runs it.
 - Documenting the escalation rule in `CONSTITUTION.md` under the existing "Performance & Testing Standards" section.
 
 ### Complex / Risky
 
 - **Scoping the gate is the highest-risk part of this plan.** The natural implementation — "reject a plan with no Goal Invariants" — is wrong, and wrong in a way that only shows up for users on GSD or Superpowers, i.e. not for anyone testing it. The check needs the authoring methodology as an input, which means either a marker the Switchboard planner writes, or keying off the configured `workflowFilePath` at dispatch time. Neither is free, and getting it wrong ships methodology lock-in as a side effect of a verification improvement.
+- **A prompt clause the reviewer treats as boilerplate is worse than nothing.** The reviewer prompt is already long, and a vague addition ("also consider the goal") will be skimmed. It needs to demand a stated verdict — for a removal or relocation goal, the reviewer must say where the thing now is and whether it is gone from where the goal said it should not be. A verdict is checkable in the review output; a consideration is not.
 - **A schema addition that authors treat as boilerplate is worse than nothing.** `improve-plan` already warns that an empty-but-present `## Outstanding Questions` heading is "a schema violation, not 'done'" — the same failure mode applies here, and harder, because a vacuous invariant ("assert the feature works") looks like compliance. The schema must require invariants to be *executable assertions naming concrete paths, symbols or counts*, and the plan-review pass must reject prose.
 - **Deciding when a negative assertion is required.** "The goal is a removal or relocation" needs a test an author can apply without interpretation. Proposal: if the Goal contains any of *move, relocate, remove, delete, retire, stop, out of, no longer*, a negative invariant is mandatory. Crude, and it will produce false positives — which is the right direction for a gate whose failure mode is silence.
 - **Where the existing packaging test runs is the open question, not whether it works.** It reproduces the filter faithfully and needs no rebuild of a VSIX, so it is cheap — but a check nobody runs is the problem this plan exists to fix, reproduced. Confirm its gate.
@@ -148,8 +156,10 @@ Yes — one decision.
 
 ## Proposed Changes
 
-1. **`improve-plan` section 9 gains `### Goal Invariants`** — at least one executable assertion, mandatory negative assertion when the Goal contains removal or relocation language, prose rejected.
-2. **Same addition to `improve-feature`.**
+1. **Extend the reviewer instruction** in `agentPromptBuilder.ts` (`role === 'reviewer'`, `reviewerBaseInstructions` at `:1874`) with the goal question: assess the change against the plan's stated goal as well as its steps, and when the goal is a removal or relocation, state explicitly whether the thing is actually gone. Methodology-neutral by construction — it reads the goal as written, in any plan shape.
+
+   **Implementation constraint:** the surrounding strings are pinned by two tests. The shared prefix "assess the actual code changes against the plan requirements" is pinned by the reviewer-prompt regression gate, and the non-delegation tail "fix valid material issues, then verify." is byte-identical to pre-delegation text pinned by the render test in `team-scoped-role-routing.test.js`. Add a clause; do not reflow the pinned text.
+2. **Optionally** offer `### Goal Invariants` in `improve-plan` / `improve-feature` as a *recommended* section, not a required one. It genuinely helps for Switchboard-authored plans, and a plan that states its own invariant gives the reviewer something concrete to check. But it must not be a gate: the gate is at review, where it reaches every methodology.
 3. **Extend `src/test/vsix-packaging-contract.test.js`** rather than building a new checker — it already reproduces vsce's filter faithfully. Add must-*not*-exist assertions alongside its existing must-exist ones, so a goal invariant of the form "X no longer ships" is expressible in the same place. Confirm it runs in a gate that cannot be skipped.
 4. **`CONSTITUTION.md`** gains the escalation rule under "Performance & Testing Standards": a reviewer may change implementation freely; changing a destination or goal named in the plan's Goal or Goal Invariants returns the card to the author with the finding recorded.
 5. **A `### Review Deviations` section** appended to a plan when a reviewer changes anything goal-level — inert prose, author-facing, never a directive.
@@ -163,7 +173,9 @@ Forward-only. Plans already in flight keep their current schema; the requirement
 
 ### Automated Tests
 
-- **Schema enforcement:** a plan whose Goal says "move X out of Y" and which has no negative invariant must be rejected by the plan-review pass. A plan with a vacuous invariant ("assert it works") must also be rejected.
+- **Reviewer goal verdict:** compose a reviewer prompt for a plan whose Goal says "move X out of Y" and assert the emitted prompt requires a stated verdict on whether X is gone from Y. Assert this holds identically for a plan with Switchboard's sections and for a GSD-shaped plan with neither `## Metadata` nor `## Verification Plan`.
+- **Pinned strings intact:** the reviewer-prompt regression gate and `team-scoped-role-routing.test.js` both still pass, confirming the clause was added rather than the surrounding text reflowed.
+- **Methodology neutrality:** point `workflowFilePath` at a GSD path and a Superpowers path; assert the reviewer instruction is unchanged and carries the goal clause in both cases.
 - **Regression against the goal inversion (the gap that remains):** with protocols at `.agents/protocols/`, assert a goal invariant of the form "no protocol body ships as a scaffolded file" fails. The packaging half of this is already covered by `vsix-packaging-contract.test.js`; this is the half nothing checks.
 - **Paired invariant enforcement:** a plan offering only a must-not-exist assertion, with no matching "resolvable there" assertion, must be rejected.
 - **Must-not-exist expressible:** add a must-not-exist entry to `vsix-packaging-contract.test.js` and assert it fails when the path ships.
@@ -174,7 +186,8 @@ Forward-only. Plans already in flight keep their current schema; the requirement
 
 ### Goal Invariants
 
-- `improve-plan/SKILL.md` and `improve-feature/SKILL.md` both contain a required `### Goal Invariants` subsection under section 9.
+- `reviewerBaseInstructions` contains the goal clause, and the two pinned strings are byte-identical to their current values.
+- No change requires a section that a GSD- or Superpowers-authored plan would lack.
 - `src/test/vsix-packaging-contract.test.js` supports must-not-exist assertions, still contains no hardcoded copy of any `.vscodeignore` pattern, and runs in a named gate.
 - `CONSTITUTION.md` contains the reviewer-escalation rule.
 - No file changed by this plan introduces a `confirm(`, `window.confirm(` or modal `showWarningMessage` call.
@@ -183,5 +196,5 @@ Forward-only. Plans already in flight keep their current schema; the requirement
 
 - **[user]** Should `COMPLEXITY_SCORING_DIRECTIVE` stop prescribing `## Complexity Audit` / `### Routine` / `### Complex / Risky` and instead request a complexity classification in whatever shape the active methodology uses? Proceeding on the assumption that the current behaviour is acceptable because the add-on is opt-out, but it does impose Switchboard's headings on third-party plans by default.
 - **[user]** Which gate currently runs `vsix-packaging-contract.test.js`, and can it be skipped? Proceeding on the assumption it needs an explicit release-gate wiring plus a nightly, so a breakage surfaces within a day rather than at release.
-- **[user]** Should the keyword trigger for mandatory negative assertions be automatic or author-declared? Proceeding with automatic, accepting false positives, on the grounds that the failure mode being fixed is silence.
+- **[user]** Should the goal clause fire on every review, or only when the plan's Goal contains removal or relocation language? Proceeding with every review, since a stated goal verdict is cheap and the failure mode being fixed is silence.
 - Do any existing plans on the board have goals that the new schema would retro-invalidate? The forward-only rule covers it, but the count is worth knowing before the protocol update ships.
