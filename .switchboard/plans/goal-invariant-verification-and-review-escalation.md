@@ -65,6 +65,14 @@ So this plan adds `### Goal Invariants` to **`improve-plan`'s and `improve-featu
 
 **The distinction is load-bearing.** A check that rejects any plan lacking `### Goal Invariants` would reject every GSD- and Superpowers-authored plan, which is precisely the forcing the product has decided against. Any enforcement must key off *"was this authored by Switchboard's planner"*, never *"is this a plan on the board"*. The storage layer already models this correctly — `parsePlanMetadata` returns empty values rather than erroring when the Switchboard sections are absent, so a third-party plan imports cleanly with `Unknown` complexity and no tags. The gate must be at least as tolerant as the importer already is.
 
+### A second place the same assumption is embedded
+
+`COMPLEXITY_SCORING_DIRECTIVE` (`agentPromptBuilder.ts:1359`) instructs a dispatched agent to "add a `## Complexity Audit` section with `### Routine` and `### Complex / Risky` subsections" — Switchboard's heading names. It is gated on `addons.complexityScoringSkill`, which **defaults to enabled** (`"When false (explicitly), omits the complexity-scoring step"`).
+
+So a user who points `workflowFilePath` at GSD or Superpowers and leaves that add-on alone gets Switchboard's section structure grafted onto a plan authored under a different methodology. The capability — classify steps by complexity before splitting — is methodology-neutral; the prescribed headings are not.
+
+This is out of scope to change here, and flagged because it is the same class as the gate risk above: a Switchboard-schema assumption riding inside something presented as a generic capability toggle. The narrow fix, if wanted, is to have the directive request a complexity classification without dictating heading names, leaving the shape to whatever methodology authored the plan. Recorded as an Outstanding Question rather than a change, because it is a product call.
+
 ### Non-goals
 
 - Reducing reviewer authority to fix real blockers. The finding in `33d4f3d` was excellent and must remain possible to make.
@@ -173,6 +181,7 @@ Forward-only. Plans already in flight keep their current schema; the requirement
 
 ## Outstanding Questions
 
+- **[user]** Should `COMPLEXITY_SCORING_DIRECTIVE` stop prescribing `## Complexity Audit` / `### Routine` / `### Complex / Risky` and instead request a complexity classification in whatever shape the active methodology uses? Proceeding on the assumption that the current behaviour is acceptable because the add-on is opt-out, but it does impose Switchboard's headings on third-party plans by default.
 - **[user]** Which gate currently runs `vsix-packaging-contract.test.js`, and can it be skipped? Proceeding on the assumption it needs an explicit release-gate wiring plus a nightly, so a breakage surfaces within a day rather than at release.
 - **[user]** Should the keyword trigger for mandatory negative assertions be automatic or author-declared? Proceeding with automatic, accepting false positives, on the grounds that the failure mode being fixed is silence.
 - Do any existing plans on the board have goals that the new schema would retro-invalidate? The forward-only rule covers it, but the count is worth knowing before the protocol update ships.
