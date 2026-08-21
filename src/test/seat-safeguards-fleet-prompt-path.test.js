@@ -526,6 +526,13 @@ test('notifyTurnEnd passes seatBlock: false (machine-origin notice, no task to c
         fnBody.includes('seatBlock: false'),
         'notifyTurnEnd must pass seatBlock: false — a machine notice has no task to constrain'
     );
+    // Standing orders are now ON: the explicit `standingOrders: false` opt-out
+    // is gone, so `applySO` (payload?.standingOrders !== false) defaults to true.
+    // The recipient acts on this notification and needs its durable orders fresh.
+    assert.ok(
+        !fnBody.includes('standingOrders: false'),
+        'notifyTurnEnd must NOT pass standingOrders: false — the recipient acts on this notification and needs its standing orders'
+    );
 });
 
 // ── 9. promptComposed threaded through dispatch funnel ───────────────────
@@ -770,7 +777,7 @@ test('standalone ptySendPrompt case strips seatBlock from caller payloads', () =
 
 // ── 13. Standalone turn-end opts out of seat block ───────────────────────
 
-test('standalone turn-end passes applySeatBlock = false', () => {
+test('standalone turn-end passes applyOrders = true, applySeatBlock = false', () => {
     // The turn-end send calls deliverPrompt with 5th arg false.
     const turnEndIdx = BOOTSTRAP_SRC.indexOf('turn-end delivery to');
     assert.ok(turnEndIdx >= 0, 'turn-end send not found');
@@ -778,8 +785,8 @@ test('standalone turn-end passes applySeatBlock = false', () => {
     const sendEnd = BOOTSTRAP_SRC.indexOf(');', sendIdx);
     const sendCall = BOOTSTRAP_SRC.slice(sendIdx, sendEnd + 2);
     assert.ok(
-        /false,\s*false\)/.test(sendCall),
-        'standalone turn-end must pass both applyOrders=false and applySeatBlock=false to deliverPrompt'
+        /true,\s*false\)/.test(sendCall),
+        'standalone turn-end must pass applyOrders=true and applySeatBlock=false to deliverPrompt'
     );
 });
 

@@ -243,7 +243,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
      * `applyOrders` (4th) controls the standing-orders block — same precedent as
      * the extension's `standingOrders` field. `applySeatBlock` (5th) controls the
      * seat-scoped directive block — host-only, like the extension's `seatBlock`
-     * field. Both default true; machine-origin notices (turn-end) pass both false.
+     * field. Both default true; machine-origin notices (turn-end) pass standing
+     * orders ON and the seat block OFF — the recipient acts on the notice, so its
+     * durable orders belong in it, but a notice carries no task to constrain.
      * `dispatch` (6th) controls the dispatch protocol directives bundle when present.
      *
      * Ordering (constraint 1): apply dispatch protocol directives →
@@ -2161,7 +2163,8 @@ Each plan file must include:
     // `completed` and `stalled`; this host resolves the
     // recipient (parentInstanceId → live terminal, orchestrator fallback) and
     // delivers via `deliverPrompt` with clearBeforePrompt: false and standing
-    // orders suppressed (machine-origin notification, not a dispatched task).
+    // orders enabled (the recipient acts on this notification and needs its
+    // durable orders fresh in context).
     ingestionEngine.setTurnEndNotifier((info) => {
         void (async () => {
             const seatName = info.seatName;
@@ -2231,10 +2234,10 @@ Each plan file must include:
             }
             try {
                 // clearBeforePrompt: false — never wipe the recipient's conversation.
-                // standingOrders (4th arg) false — machine-origin, not a dispatched task.
+                // standingOrders (4th arg) true — the recipient acts on this notification.
                 // applySeatBlock (5th arg) false — a machine notice has no task to
                 // constrain; the seat block is noise here.
-                await deliverPrompt(handle, message, { clearBeforePrompt: false }, false, false);
+                await deliverPrompt(handle, message, { clearBeforePrompt: false }, true, false);
             } catch (err) {
                 log(opts, `turn-end delivery to '${recipientName}' failed: ${err}`);
             }

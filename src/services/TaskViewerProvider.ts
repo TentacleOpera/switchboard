@@ -1632,12 +1632,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * is the path that actually carries `agentInstanceId` and `parentInstanceId`.
      *
      * Delivery is the existing `ptySendPrompt` path with `clearBeforePrompt:
-     * false` (never a raw write, never true) and `standingOrders: false` (this
-     * is a machine-origin notification, not a dispatched task — appending the
-     * recipient's own standing orders would tell an orchestrator to report to
-     * ITS head). If the resolved recipient is the seat itself (a malformed
-     * parent chain), skip. Derived entirely from the pty stream — no hooks, no
-     * tokens, no agent-side obligation.
+     * false` (never a raw write, never true). Standing orders are ON (the
+     * field is omitted, so `applySO` defaults to true): the recipient acts on
+     * this notification, and the orders are its durable operating instructions,
+     * not task-specific. After multiple review rounds the startup delivery's
+     * orders block may have scrolled out of context — the turn-end notification
+     * re-delivers them fresh. If the resolved recipient is the seat itself (a
+     * malformed parent chain), skip. Derived entirely from the pty stream — no
+     * hooks, no tokens, no agent-side obligation.
      */
     public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string }): void {
         void (async () => {
@@ -1762,7 +1764,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     name: recipientName,
                     data: message,
                     clearBeforePrompt: false,
-                    standingOrders: false,
                     // Host-only opt-out: a machine notice has no task to
                     // constrain, so the seat block is noise. Stripped at the
                     // HTTP boundary; an HTTP caller cannot set this.
