@@ -337,6 +337,21 @@ async function run() {
             'the resolvable id must be reported as linked');
     });
 
+    await test('the LocalApiServer createFeature seam declares linked/skipped', async () => {
+        // /kanban/feature forwards the provider's object verbatim, so the fields reach
+        // HTTP callers today regardless of this type. Pinned anyway: a narrowed seam type
+        // is how a field silently stops being forwarded once someone maps the response
+        // field-by-field, and that regression is invisible to every runtime test here.
+        const src = fs.readFileSync(path.join(repoRoot, 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        const i = src.indexOf('    createFeature?: (');
+        assert.ok(i > 0, 'the createFeature option must exist');
+        const decl = src.slice(i, src.indexOf('>;', i) + 2);
+        assert.ok(/\bskipped\?: string\[\]/.test(decl),
+            'createFeature must declare `skipped` — unresolved planIds are otherwise unreportable to HTTP callers');
+        assert.ok(/\blinked\?: string\[\]/.test(decl),
+            'createFeature must declare `linked`');
+    });
+
     await test('a fully-resolvable request reports an empty skipped list', async () => {
         const r = await kp.createFeatureFromPlanIds(tmpRoot, 'All Good',
             ['33330000-0000-4000-8000-000000000003']);

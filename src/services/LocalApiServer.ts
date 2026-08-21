@@ -57,6 +57,15 @@ let _queueNextChain: Promise<unknown> = Promise.resolve();
 const execFileAsync = promisify(execFile);
 
 /**
+ * Capture cap for the git commands behind `GET /worktree/:id/diff`.
+ *
+ * Distinct from the 512KB response truncation: this is how much git output the
+ * child-process buffer will hold at all. Exceeding it rejects the exec, so the
+ * handler converts that into the same truncation notice rather than a 500.
+ */
+const MAX_GIT_CAPTURE_BYTES = 10 * 1024 * 1024;
+
+/**
  * Per-team promise chain serialising the file-based team queue's
  * `queue/done` completion reports (the completion-driven dispatch model — see
  * `team-queue-completion-driven-dispatch.md`). Two coders on the same team
@@ -157,7 +166,29 @@ interface LocalApiServerOptions {
         name: string,
         planIds: string[],
         description?: string
-    ) => Promise<{ success: boolean; featurePlanId?: string; featureSessionId?: string; error?: string }>;
+    ) => Promise<{
+        success: boolean;
+        featurePlanId?: string;
+        featureSessionId?: string;
+        /** planIds that resolved to a plan row and were linked as subtasks. */
+        linked?: string[];
+        /**
+         * planIds that resolved to NO plan row and were skipped.
+         *
+         * A non-empty value on a `success: true` response means the caller got fewer
+         * subtasks than it asked for — possibly none, leaving a blank feature card on the
+         * board. Callers must check this rather than read 200 as "all linked": the
+         * response used to carry no trace of a skip at all, and the provider's only other
+         * signal is a console.warn into the extension host's dev-tools console, which no
+         * HTTP or CLI caller can read.
+         *
+         * Declared here and not merely returned by the provider because `/kanban/feature`
+         * forwards this object verbatim — a narrowed seam type is how a field silently
+         * stops being forwarded when someone later maps the response field-by-field.
+         */
+        skipped?: string[];
+        error?: string;
+    }>;
     /**
      * Batch-assign existing plans to an existing feature through the running extension.
      * Used by the kanban_operations assign-to-feature.js script. Plans already on another
@@ -4936,40 +4967,45 @@ export class LocalApiServer {
                 throw err;
             }
 
-            const countRes = await execFileAsync('git', ['rev-list', '--count', `${baseBranch}..HEAD`], {
-                cwd: wtPath,
-                encoding: 'utf8',
-                timeout: 30000,
-            });
-            const commitCount = parseInt(countRes.stdout.trim(), 10) || 0;
+            // A bad range (base branch deleted, or a worktree with no commits yet)
+            // makes git exit non-zero. Surface that as a 400 naming the range rather
+            // than a 500 carrying a raw git stderr blob — the caller is a remote lead
+            // deciding whether to trust a worker, and "unknown revision" is actionable
+            // where "Command failed" is not.
+            const gitRange = `${baseBranch}..HEAD`;
+            const runGit = async (gitArgs: string[]): Promise<string> => {
+                try {
+                    const r = await execFileAsync('git', gitArgs, {
+                        cwd: wtPath,
+                        encoding: 'utf8',
+                        timeout: 30000,
+                        maxBuffer: MAX_GIT_CAPTURE_BYTES,
+                    });
+                    return r.stdout;
+                } catch (e: any) {
+                    // execFile rejects with ERR_CHILD_PROCESS_STDIO_MAXBUFFER once the
+                    // capture cap is hit. The plan's contract for an oversized diff is a
+                    // truncation notice, not a crash — so report the cap rather than 500.
+                    if (e && (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || /maxBuffer/i.test(String(e.message || '')))) {
+                        return `[truncated: output exceeds the ${Math.round(MAX_GIT_CAPTURE_BYTES / (1024 * 1024))}MB capture limit — use ?stat=true for a summary]`;
+                    }
+                    const err: any = new Error(`git ${gitArgs[0]} failed for range ${gitRange}: ${String(e?.stderr || e?.message || e).trim()}`);
+                    err.statusCode = 400;
+                    throw err;
+                }
+            };
 
-            const logRes = await execFileAsync('git', ['log', '--oneline', `${baseBranch}..HEAD`], {
-                cwd: wtPath,
-                encoding: 'utf8',
-                timeout: 30000,
-            });
-            const log = logRes.stdout;
+            const commitCount = parseInt((await runGit(['rev-list', '--count', gitRange])).trim(), 10) || 0;
+            const log = await runGit(['log', '--oneline', gitRange]);
 
             if (isStat) {
-                const statRes = await execFileAsync('git', ['diff', '--stat', `${baseBranch}..HEAD`], {
-                    cwd: wtPath,
-                    encoding: 'utf8',
-                    timeout: 30000,
-                    maxBuffer: 10 * 1024 * 1024,
-                });
-                let stat = statRes.stdout;
+                let stat = await runGit(['diff', '--stat', gitRange]);
                 if (stat.length > 512 * 1024) {
                     stat = stat.slice(0, 512 * 1024) + '\n\n[truncated: diff exceeds 512KB limit]';
                 }
                 return { commitCount, log, stat };
             } else {
-                const diffRes = await execFileAsync('git', ['diff', `${baseBranch}..HEAD`], {
-                    cwd: wtPath,
-                    encoding: 'utf8',
-                    timeout: 30000,
-                    maxBuffer: 10 * 1024 * 1024,
-                });
-                let diff = diffRes.stdout;
+                let diff = await runGit(['diff', gitRange]);
                 if (diff.length > 512 * 1024) {
                     diff = diff.slice(0, 512 * 1024) + '\n\n[truncated: diff exceeds 512KB limit]';
                 }
