@@ -1917,6 +1917,31 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /**
+     * One-shot standing-orders delivery after a terminal clear. Called from
+     * clearTerminalContext at both cleared:true return points (PTY fleet and
+     * VS Code terminal). Resolves the terminal's role from _terminalAgentInfo
+     * (the role does not change on clear) and delegates to the shared
+     * _deliverStandingOrdersOnEstablish method. Fire-and-forget: the clear
+     * returns immediately and the orders delivery runs in the background,
+     * serialized against any concurrent dispatch by the per-terminal
+     * withTerminalSendLock. A terminal with no applicable orders is a no-op
+     * (renderStandaloneOrdersBlock returns null inside the shared method).
+     */
+    private _deliverStandingOrdersAfterClear(terminalName: string): void {
+        const normalized = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+        let role = '';
+        for (const [name, info] of this._terminalAgentInfo.entries()) {
+            if (name === terminalName || this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized) {
+                role = info?.role || '';
+                break;
+            }
+        }
+        this._deliverStandingOrdersOnEstablish(terminalName, role).catch((err) => {
+            console.warn(`[TaskViewerProvider] Standing-orders post-clear delivery failed for '${terminalName}':`, err);
+        });
+    }
+
     private static CLI_BRAND_NAMES: Record<string, string> = {
         agy: 'Antigravity CLI',
         antigravity: 'Antigravity CLI',
@@ -10328,7 +10353,10 @@ Each plan file must include:
                             // Empty payload — this is a pure /clear, no prompt.
                             addonsComposed: true
                         });
-                        if (clearRes?.success) { return { cleared: true }; }
+                        if (clearRes?.success) {
+                            this._deliverStandingOrdersAfterClear(target.friendlyName);
+                            return { cleared: true };
+                        }
                         return { cleared: false, error: clearRes?.error || 'ptySendPrompt clear reported failure' };
                     }
                 }
@@ -10371,6 +10399,7 @@ Each plan file must include:
                 terminal!.sendText('', true);
                 await new Promise(r => setTimeout(r, clearDelay));
             });
+            this._deliverStandingOrdersAfterClear(terminal.name || terminalName);
             return { cleared: true };
         } catch (err) {
             console.error(`[TaskViewerProvider] clearTerminalContext clipboard paste failed for '${terminalName}':`, err);
