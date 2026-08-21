@@ -2223,6 +2223,17 @@ Each plan file must include:
                     const parent = active.find(t => t.agentInstanceId === seatRow.parentInstanceId);
                     if (parent) { recipientName = parent.friendlyName; }
                 }
+                // Fallback: an adopted seat is the orchestrator even though no
+                // terminal is named 'Orchestrator' and no fleet row carries role
+                // 'orchestrator'. Same order as the extension-host twin
+                // (TaskViewerProvider.notifyTurnEnd): after the parent walk, so a
+                // seat's own head still wins, and before the role scan. Without
+                // this arm a standalone orchestrator that adopted in place via
+                // POST /orchestration/adopt never receives a live turn-end notice.
+                if (!recipientName) {
+                    const adoptedName = (taskViewerProvider as any)?._autobanState?.orchestratorSeat?.terminalName;
+                    if (adoptedName) { recipientName = adoptedName; }
+                }
                 // Fallback: a live orchestrator terminal (role === 'orchestrator').
                 if (!recipientName) {
                     const orch = active.find(t => (t.role || '') === 'orchestrator');
@@ -2448,6 +2459,21 @@ Each plan file must include:
         // switch); without it the endpoint returns 503 in standalone mode.
         orchestrationStop: async () => {
             await taskViewerProvider.stopOrchestratorFromKanban(workspaceRoot);
+        },
+        // POST /orchestration/adopt — the caller IS the orchestrator. Wired here
+        // because BOTH standalone entry points already promise this door exists:
+        // the /switchboard launcher's step 2 calls it, and orchestrationStart
+        // below documents that the agent it seats "adopts the seat itself via
+        // POST /orchestration/adopt". Unwired, the endpoint answers 503 and both
+        // promises are false — no seat is ever recorded in standalone, which also
+        // makes orchestrationStart's own seat guard below unreachable.
+        // adoptOrchestratorSeat needs no VS Code API: _resolveWorkspaceRoot,
+        // _hasFleet/_ptyHostVerb (headless-aware), the file-backed workspaceState
+        // memento, and buildOrchestratorKickoffPrompt all work in this host.
+        orchestrationAdopt: async (workspaceRootArg?: string, terminalName?: string) => {
+            return await taskViewerProvider.adoptOrchestratorSeat(
+                workspaceRootArg || workspaceRoot, terminalName, undefined
+            );
         },
         // POST /orchestration/start — the shell rail's dimmed UFO click. Two
         // paths, decided by whether a lead/coder agent is configured:

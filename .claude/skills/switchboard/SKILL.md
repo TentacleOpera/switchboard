@@ -102,19 +102,24 @@ run the pre-flight here, in this conversation.
 PORT=$(tr -d '[:space:]' < "$PWD/.switchboard/api-server-port.txt")
 BASE="http://127.0.0.1:$PORT"
 
-# SWITCHBOARD_TERMINAL is set for Switchboard-managed fleet seats. Unset elsewhere —
-# send it empty rather than guessing a name.
-curl -s -X POST "$BASE/orchestration/adopt" -H "Content-Type: application/json" \
+# Both vars come from the seat env. SWITCHBOARD_TERMINAL is set for Switchboard-managed
+# fleet seats only — send it empty rather than guessing. SWITCHBOARD_API_TOKEN is set
+# whenever the board minted a token (always in standalone); without the header adopt
+# 401s there. An empty value is safe: no token configured means loopback trust.
+curl -s -X POST "$BASE/orchestration/adopt" \
+  -H "Authorization: Bearer ${SWITCHBOARD_API_TOKEN:-}" \
+  -H "Content-Type: application/json" \
   -d "{\"terminalName\": \"${SWITCHBOARD_TERMINAL:-}\"}"
 ```
 
-The response carries `prompt` — the pre-flight instruction. **Follow it in this
-session**: read `.agents/skills/switchboard-orchestrator/SKILL.md`, run the pre-flight,
+The response carries `prompt` — the pre-flight instruction, with the orchestrator
+protocol (`.agents/protocols/switchboard-orchestrator/SKILL.md`) already embedded, so
+there is nothing to go and read. **Follow it in this session**: run the pre-flight,
 report what you find, propose a goal, and wait for the user to answer *here*.
 
 `POST /orchestration/adopt` **does not arm** and seats no terminal. On the user's
 confirmation, write `.switchboard/orchestrator/session.md` and call
-`POST /orchestration/confirm` — that is the only call that arms.
+`POST /orchestration/confirm` with the same headers — the only call that arms.
 
 If the response carries a `note`, relay it in one line: it means live turn-end notices
 will arrive in `.switchboard/orchestrator/reports/` rather than as prompts in this

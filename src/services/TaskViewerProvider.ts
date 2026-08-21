@@ -11586,8 +11586,15 @@ Each plan file must include:
         if (requested) {
             // Do not trust the name blindly — a seat nothing can reach is worse than
             // an unnamed one, because the turn-end path would address it and drop.
+            // _hasFleet(), not _ptyHostPort: the latter is set only when the
+            // EXTENSION host spawns the out-of-process pty child. In standalone the
+            // fleet is in-process behind _headlessRuntime, so a raw _ptyHostPort gate
+            // skips verification entirely there and every adopt records an UNNAMED
+            // seat — no live turn-end delivery, and the external self-wake runsheet
+            // handed to an agent the host does wake. _ptyHostVerb already routes to
+            // whichever fleet is present.
             let live = false;
-            if (this._ptyHostPort) {
+            if (this._hasFleet()) {
                 try {
                     const res = await this._ptyHostVerb('ptyListTerminals', {});
                     live = Array.isArray(res?.terminals) && res.terminals
@@ -11757,10 +11764,20 @@ Each plan file must include:
 
         // 5. Clear the orchestrator switch — the lead owns the pipeline now.
         // The schedule switch is independent and stays untouched.
+        //
+        // The SEAT goes with it. Handoff ends the orchestrator session: it closes
+        // the `Orchestrator` terminal above, and the persona's handoff sequence
+        // tells an adopted session to exit itself. A surviving seat record then
+        // names a terminal nobody is in, and because notifyTurnEnd checks the seat
+        // BEFORE the role-scan fallback, that dead name outranks a real
+        // orchestrator-role terminal for every later turn-end — the notice is
+        // logged as 'not active — skipping' instead of being delivered. Stop
+        // already clears it; handoff is the other end-of-session door.
         this._orchestrationSessionState = 'handed-off';
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
-            orchestratorArmed: false
+            orchestratorArmed: false,
+            orchestratorSeat: undefined
         });
         await this._persistAutobanState();
 

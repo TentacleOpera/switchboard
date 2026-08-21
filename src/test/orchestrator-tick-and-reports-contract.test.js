@@ -722,6 +722,162 @@ async function run() {
         );
     });
 
+    // ─── 10. The adopted seat: one writer, three readers, both hosts ─────────
+    // `orchestratorSeat` and adoptOrchestratorSeat shipped with NO automated
+    // coverage of any kind — the plan's only seat verification was a manual node
+    // REPL round-trip and a manual click-through. Every read site below is a
+    // silent-failure path: a dropped normaliser entry surfaces a half-record, a
+    // missing turn-end arm drops every notice to an adopted orchestrator, and an
+    // unwired host answers 503 to the launcher's only call.
+    await check('normalizeAutobanConfigState coerces the orchestrator seat shape', () => {
+        const { normalizeAutobanConfigState } = require(path.join(ROOT, 'out', 'services', 'autobanState.js'));
+        const kept = normalizeAutobanConfigState({
+            orchestratorSeat: { terminalName: '  Claude 1  ', adoptedAt: '2026-08-17T00:00:00Z' }
+        }).orchestratorSeat;
+        assert.deepStrictEqual(
+            kept, { terminalName: 'Claude 1', adoptedAt: '2026-08-17T00:00:00Z' },
+            'a well-formed seat must survive the normaliser with terminalName trimmed'
+        );
+        assert.strictEqual(
+            normalizeAutobanConfigState({}).orchestratorSeat, undefined,
+            'absent seat must normalise to undefined — the shipped default is pre-adopt behaviour'
+        );
+        assert.strictEqual(
+            normalizeAutobanConfigState({ orchestratorSeat: { terminalName: 'x' } }).orchestratorSeat, undefined,
+            'a seat with no adoptedAt is a half-record and must normalise away, not reach the read sites'
+        );
+        assert.strictEqual(
+            normalizeAutobanConfigState({ orchestratorSeat: 'nope' }).orchestratorSeat, undefined,
+            'a non-object seat must normalise away'
+        );
+        const unnamed = normalizeAutobanConfigState({
+            orchestratorSeat: { terminalName: '   ', adoptedAt: '2026-08-17T00:00:00Z' }
+        }).orchestratorSeat;
+        assert.ok(unnamed && unnamed.adoptedAt && unnamed.terminalName === undefined,
+            'a whitespace-only terminalName is the unnamed-adopt case: keep the seat, drop the name');
+    });
+
+    await check('POST /orchestration/adopt is wired in BOTH hosts, not just the extension', () => {
+        // The extension-only wiring is the shape this feature shipped in: the
+        // standalone bootstrap reads _autobanState.orchestratorSeat in its
+        // orchestrationStart seat guard and its docblock promises the seated agent
+        // "adopts the seat itself via POST /orchestration/adopt". With the callback
+        // unwired that endpoint answers 503, the read is unreachable, and the
+        // /switchboard launcher's only call fails in standalone.
+        const provider = read('src/services/TaskViewerProvider.ts');
+        assert.ok(
+            /orchestrationAdopt:\s*async/.test(provider),
+            'TaskViewerProvider does not wire the orchestrationAdopt LocalApiServer callback'
+        );
+        const bootstrap = read('src/standalone/bootstrap.ts');
+        assert.ok(
+            /orchestrationAdopt:\s*async/.test(bootstrap),
+            'src/standalone/bootstrap.ts does not wire orchestrationAdopt — POST /orchestration/adopt answers 503 in standalone while both its own entry points promise the door exists'
+        );
+        assert.ok(
+            /adoptOrchestratorSeat\(/.test(bootstrap),
+            'the standalone orchestrationAdopt arm must call taskViewerProvider.adoptOrchestratorSeat'
+        );
+    });
+
+    await check('adopt verifies the terminal against the fleet that this host actually has', () => {
+        // _ptyHostPort is set ONLY when the extension host spawns the out-of-process
+        // pty child. In standalone the fleet lives in-process behind
+        // _headlessRuntime, so gating verification on _ptyHostPort skips it entirely
+        // there: every adopt records an UNNAMED seat, live turn-end delivery is lost,
+        // and the agent is handed the external self-wake runsheet by a host that
+        // does wake it.
+        const provider = read('src/services/TaskViewerProvider.ts');
+        const start = provider.indexOf('public async adoptOrchestratorSeat(');
+        assert.ok(start !== -1, 'adoptOrchestratorSeat must exist');
+        const body = provider.slice(start, provider.indexOf('\n    }\n', start));
+        assert.ok(
+            /if \(this\._hasFleet\(\)\)/.test(body),
+            'adoptOrchestratorSeat must gate its liveness probe on _hasFleet() — _ptyHostPort is extension-only and silently skips verification in standalone'
+        );
+        assert.ok(
+            !/if \(this\._ptyHostPort\)/.test(body),
+            'adoptOrchestratorSeat still gates on the extension-only _ptyHostPort'
+        );
+        assert.ok(
+            /ptyListTerminals/.test(body) && /status === 'active'/.test(body),
+            'adopt must confirm the requested name is an ACTIVE fleet terminal before recording it — a seat nothing can reach is worse than an unnamed one'
+        );
+        assert.ok(
+            /liveDelivery/.test(body) && /reports\//.test(body),
+            'adopt must report liveDelivery and name the reports inbox in its note — an unreachable seat that reports success is the hollow-success failure'
+        );
+    });
+
+    await check('both turn-end twins consult the adopted seat, after the parent walk and before the role scan', () => {
+        // The seat exists precisely because no terminal is named 'Orchestrator' and
+        // no fleet row carries role 'orchestrator'. Order matters twice: a seat's own
+        // head must still win the parent walk, and the seat must beat the role scan.
+        const hosts = [
+            ['src/services/TaskViewerProvider.ts', 'notifyTurnEnd'],
+            ['src/standalone/bootstrap.ts', 'the standalone turn-end notifier'],
+        ];
+        for (const [file, label] of hosts) {
+            const src = read(file);
+            const seatIdx = src.indexOf('orchestratorSeat?.terminalName');
+            assert.ok(seatIdx !== -1, `${label} (${file}) never reads orchestratorSeat?.terminalName — an adopted orchestrator gets no live turn-end notice`);
+            const parentIdx = src.indexOf('parentInstanceId');
+            const roleIdx = src.search(/=== 'orchestrator'\)|\) === 'orchestrator'/);
+            assert.ok(parentIdx !== -1 && roleIdx !== -1, `${label} lost its parent walk or role scan`);
+            assert.ok(parentIdx < seatIdx, `${label} checks the adopted seat BEFORE the parent walk — a seat's own head must win`);
+            assert.ok(seatIdx < roleIdx, `${label} checks the adopted seat AFTER the role scan — the seat is the more specific signal`);
+        }
+    });
+
+    await check('the seat has one writer per lifecycle event: adopt sets it, stop clears it, start consults it', () => {
+        const provider = read('src/services/TaskViewerProvider.ts');
+        const stopStart = provider.indexOf('public async stopOrchestratorFromKanban');
+        const stopBody = provider.slice(stopStart, provider.indexOf('\n    }\n', stopStart));
+        assert.ok(
+            /orchestratorSeat: undefined/.test(stopBody),
+            'Stop does not clear orchestratorSeat — the next Start would deliver into a seat nobody holds'
+        );
+        // Handoff is the OTHER end-of-session door: it closes the Orchestrator
+        // terminal and tells an adopted session to exit. A surviving seat then
+        // shadows the role-scan fallback in notifyTurnEnd with a dead name.
+        const handoffStart = provider.indexOf('public async handoffOrchestrationSession(');
+        assert.ok(handoffStart !== -1, 'the handoff entry point must exist');
+        const handoffBody = provider.slice(handoffStart, provider.indexOf('\n    }\n', handoffStart));
+        assert.ok(
+            /orchestratorSeat: undefined/.test(handoffBody),
+            'handoff does not clear orchestratorSeat — the dead seat name outranks the role scan on every later turn-end'
+        );
+        const startIdx = provider.indexOf('public async startOrchestratorFromKanban');
+        const startBody = provider.slice(startIdx, provider.indexOf('\n    }\n\n', startIdx));
+        const consultIdx = startBody.indexOf('this._autobanState.orchestratorSeat');
+        const createIdx = startBody.indexOf('vscode.window.createTerminal(');
+        assert.ok(consultIdx !== -1, 'startOrchestratorFromKanban does not consult the adopted seat — the AUTOMATION button spawns the duplicate terminal this feature exists to remove');
+        assert.ok(
+            createIdx === -1 || consultIdx < createIdx,
+            'startOrchestratorFromKanban consults the adopted seat AFTER createTerminal — the duplicate is already spawned by then'
+        );
+    });
+
+    await check('the launcher does not point the agent at a path that does not exist', () => {
+        // The prompt the adopt response carries already embeds the combined
+        // runsheet + shared logic, so a stale `read ...` path is pure misdirection:
+        // the agent hits ENOENT on its first instruction. `.agents/skills/` is the
+        // retired vintage — RETIRED_WORKFLOW_PATH_MAP normalizes persisted SETTING
+        // values, never markdown prose, so nothing rescues this at runtime.
+        for (const rel of [LAUNCHER, '.claude/skills/switchboard/SKILL.md']) {
+            const body = read(rel);
+            // Scoped to `.agents/` — the launcher legitimately names
+            // `.switchboard/orchestrator/session.md`, a file the agent WRITES.
+            for (const m of body.match(/`\.agents\/[^`]*\.md`/g) || []) {
+                const p = m.slice(1, -1);
+                assert.ok(
+                    fs.existsSync(path.join(ROOT, p)),
+                    `${rel} references '${p}', which does not exist — the agent's first instruction is a dead read`
+                );
+            }
+        }
+    });
+
     console.log('');
     if (failures > 0) {
         console.error(`${failures} contract(s) failed.`);

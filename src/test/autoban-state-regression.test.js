@@ -711,16 +711,30 @@ async function run() {
     const survivorTickStart = providerSource.indexOf('private async _tickSurvivorSchedulerJobs()');
     assert.ok(survivorTickStart !== -1, '_tickSurvivorSchedulerJobs must exist — called from the survivor timer');
     const survivorTickBody = providerSource.slice(survivorTickStart, providerSource.indexOf('\n    }\n', survivorTickStart));
+    // The tick no longer builds the prompts inline — 4f2e1fc2 moved the build into
+    // runSchedulerJob so scheduled team-automation shares the in-flight guard. Follow
+    // the delegation instead of pinning the old shape: the tick must reach
+    // runSchedulerJob, and runSchedulerJob must build BOTH survivors. Pinning only
+    // "the tick mentions runSchedulerJob" would pass on a runSchedulerJob that lost
+    // one of the two builders, which is the regression this gate exists to catch.
     assert.ok(
-        survivorTickBody.includes('buildFetchPlansPrompt(') && survivorTickBody.includes('buildReconcilePrompt('),
-        'the survivor tick must build BOTH surviving prompts — a reconcile job with no promptOverride otherwise sends nothing'
+        survivorTickBody.includes('runSchedulerJob('),
+        'the survivor tick must reach runSchedulerJob — otherwise no survivor job ever runs'
     );
-    // The checkbox is the start button now, so the tick owns terminal creation.
+    const runJobStart = providerSource.indexOf('public async runSchedulerJob(');
+    assert.ok(runJobStart !== -1, 'runSchedulerJob must exist — the survivor tick delegates the prompt build to it');
+    const runJobBody = providerSource.slice(runJobStart, providerSource.indexOf('\n    }\n', runJobStart));
+    assert.ok(
+        runJobBody.includes('buildFetchPlansPrompt(') && runJobBody.includes('buildReconcilePrompt('),
+        'runSchedulerJob must build BOTH surviving prompts — a reconcile job with no promptOverride otherwise sends nothing'
+    );
+    // The checkbox is the start button now, so the run path owns terminal creation.
     // Resolve-only means the survivors never fire: launchSchedulerTerminal was
     // the only thing that ever created a `Scheduler: …` terminal, and it is gone.
+    // Same delegation as the prompt build above — runSchedulerJob absorbed both.
     assert.ok(
-        survivorTickBody.includes('_ensureSurvivorTerminal('),
-        'the survivor tick must ensure its terminal exists — nothing else creates one now that launchSchedulerTerminal is deleted'
+        runJobBody.includes('_ensureSurvivorTerminal('),
+        'the survivor run path must ensure its terminal exists — nothing else creates one now that launchSchedulerTerminal is deleted'
     );
     const ensureStart = providerSource.indexOf('private async _ensureSurvivorTerminal(');
     assert.ok(ensureStart !== -1, '_ensureSurvivorTerminal must exist');
@@ -732,7 +746,11 @@ async function run() {
     // The in-flight guard must be claimed BEFORE the first await, or a second tick
     // enters while the terminal is still booting and spawns a duplicate.
     assert.ok(
-        survivorTickBody.indexOf('_schedulerInFlight.set(job.id, true)') < survivorTickBody.indexOf('_ensureSurvivorTerminal('),
+        runJobBody.includes('_schedulerInFlight.set('),
+        'runSchedulerJob must claim the in-flight guard — without it two ticks both enter'
+    );
+    assert.ok(
+        runJobBody.indexOf('_schedulerInFlight.set(') < runJobBody.indexOf('_ensureSurvivorTerminal('),
         'the in-flight guard must be claimed before the terminal is ensured — ensuring awaits for seconds'
     );
 
