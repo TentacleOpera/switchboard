@@ -2106,13 +2106,10 @@
             font-size: 14px;
         }
         /* Team-scoped mode: the sidebar stays visible (unlike solo), but the
-           group tab strip is hidden — its purpose is switching between groups
-           and this window is locked to one. The layout toolbar stays so the
+           group tab strip is now visible — it shows "← All" + team tabs for
+           direct team-to-team switching. The layout toolbar stays so the
            operator can choose a grid for the team. The solo-status element is
            reused for the team not-found / connecting states. */
-        body.is-team-scoped .group-tab-strip > .group-tab-row {
-            display: none !important;
-        }
         body.is-team-scoped .solo-status-container {
             display: flex;
             align-items: center;
@@ -2139,30 +2136,21 @@
         body.is-team-scoped #btn-link-up {
             display: none !important;
         }
-        /* Back button in the team header — returns to the full fleet view. */
-        .team-header-back {
-            background: none;
-            border: none;
-            color: var(--text-secondary);
-            font-size: 11px;
-            font-weight: 600;
-            cursor: pointer;
-            padding: 2px 8px;
-            border-radius: 3px;
-            white-space: nowrap;
-        }
-        .team-header-back:hover {
-            color: var(--text-primary);
-            background: rgba(255, 255, 255, 0.08);
-        }
+        /* The team header's back button is gone — exiting team scope is the
+           "← All" tab that renderGroupTabStrip puts at the head of the tab
+           row, styled by .group-tab like every other tab. Its .team-header-back
+           rules were deleted with it rather than left as dead selectors. */
         /* Team header — rendered into #group-tab-strip by renderTeamHeader().
-           Reuses the strip's positioning so no new layout area is needed. */
+           Reuses the strip's positioning so no new layout area is needed.
+           Renders as a second row below the tab row (border-top separates
+           the navigation tabs from the team context bar). */
         .team-header {
             display: flex;
             align-items: center;
             gap: 8px;
             padding: 4px 8px;
             min-height: 32px;
+            border-top: 1px solid var(--border-color);
         }
         .team-header-icon {
             display: flex;

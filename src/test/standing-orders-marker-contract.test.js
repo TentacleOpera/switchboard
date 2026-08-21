@@ -1443,7 +1443,7 @@ test('TERMINALS_LAYOUT_MODES is byte-identical to LAYOUT_MODES in terminals.js',
  * closure state. The panel is one big IIFE, so the function is lifted whole and
  * re-hosted with the four collaborators it closes over.
  */
-function makeReloadHarness(initialGroups, backendGroups) {
+function makeReloadHarness(initialGroups, backendGroups, scopedTeamId) {
     const start = TERMINALS_JS_SRC.indexOf('    async function reloadTerminalGroups()');
     assert.ok(start !== -1, 'terminals.js: reloadTerminalGroups not found');
     const end = TERMINALS_JS_SRC.indexOf('    async function fetchTerminalList()', start);
@@ -1458,6 +1458,7 @@ function makeReloadHarness(initialGroups, backendGroups) {
         const renderGroupTabStrip = deps.renderGroupTabStrip;
         let terminalGroups = deps.terminalGroups;
         let lastReadGroupIds = [];
+        let teamScopeId = deps.teamScopeId;
         ${src}
         return {
             reloadTerminalGroups,
@@ -1471,6 +1472,7 @@ function makeReloadHarness(initialGroups, backendGroups) {
         renderSidebarList: () => { calls.sidebar++; },
         renderGroupTabStrip: () => { calls.tabStrip++; },
         terminalGroups: initialGroups,
+        teamScopeId: scopedTeamId || null,
     });
     return { ...api, calls };
 }
@@ -1505,6 +1507,26 @@ test('reloadTerminalGroups: an id already in memory has members and order refres
     assert.strictEqual(h.groups()[0].pinnedByOperator, true, 'unknown local fields must survive');
     assert.strictEqual(h.calls.sidebar, 1, 'a members-only change must redraw the sidebar');
     assert.strictEqual(h.calls.tabStrip, 1, 'a members-only change must redraw the tab strip');
+});
+
+test('reloadTerminalGroups: in team scope the redraw skips the strip so the team header survives', () => {
+    // The strip and the team header share #group-tab-strip: renderSidebarList
+    // renders the strip, then renderTeamHeader APPENDS the context bar into the
+    // same element. A bare renderGroupTabStrip() after that re-wipes the
+    // element and takes the header — plus any live `team:*` role picker mounted
+    // beside it — with it, on every terminalsGroupsChanged push (team spawn,
+    // team restart, cross-panel group edit). Fleet mode keeps the redraw.
+    const local = [localRow()];
+    const fresh = [{
+        id: ROSTER_ID, name: HEAD_NAME, source: 'manual', layout: '2x2',
+        members: [HEAD_NAME, 'lead-1-coder-1', 'lead-1-intern'],
+        order: [HEAD_NAME, 'lead-1-coder-1', 'lead-1-intern'],
+    }];
+    const h = makeReloadHarness(local, fresh, ROSTER_ID);
+    return h.reloadTerminalGroups().then(() => {
+        assert.strictEqual(h.calls.sidebar, 1, 'the sidebar redraw still runs in team scope — it rebuilds the strip AND the header');
+        assert.strictEqual(h.calls.tabStrip, 0, 'the bare strip redraw must be skipped in team scope');
+    });
 });
 
 test('reloadTerminalGroups: an unchanged read triggers no redraw', async () => {

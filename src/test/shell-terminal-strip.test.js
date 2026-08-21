@@ -985,22 +985,34 @@ test('exitTeamScope clears all team-scoped state and re-renders the fleet', () =
     );
 });
 
-test('renderTeamHeader has a back button that calls exitTeamScope', () => {
+test('the team header is a context bar — the exit affordance lives in the tab strip', () => {
+    // The header used to own the "← ALL TERMINALS" button because the tab strip
+    // was hidden in team-scoped mode. The strip is visible now and carries a
+    // "← All" tab, so a second exit control in the header would be two
+    // affordances for one verb, sitting one row apart.
     const fn = block(terminalsJs, 'function renderTeamHeader() {', 'function fetchTeamQueue');
     assert.ok(
-        /team-header-back/.test(fn),
-        'renderTeamHeader must create a button with the team-header-back class'
+        !/team-header-back/.test(fn),
+        'renderTeamHeader must NOT create a back button — the "← All" tab in the strip exits team scope'
     );
     assert.ok(
-        /exitTeamScope\(\)/.test(fn),
-        'the back button must call exitTeamScope on click'
+        !/exitTeamScope/.test(fn),
+        'renderTeamHeader must not call exitTeamScope — that is the tab strip\'s job now'
     );
-    // The back button must be appended BEFORE the icon area so it sits at the
-    // left edge of the team header.
-    const backAt = fn.indexOf("header.appendChild(backBtn)");
-    const iconAt = fn.indexOf("header.appendChild(iconArea)");
-    assert.ok(backAt !== -1 && iconAt !== -1, 'both the back button and icon area must be appended');
-    assert.ok(backAt < iconAt, 'the back button must be appended before the icon area');
+    // It is still a header: icon area, name, live counts.
+    assert.ok(fn.includes('header.appendChild(iconArea)'), 'the header must still render its icon area');
+    assert.ok(fn.includes('team-header-count'), 'the header must still render the member counts');
+
+    // The exit control is in the strip, and it is the FIRST thing in the row.
+    const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    assert.ok(
+        /exitTeamScope\(\)/.test(strip),
+        'renderGroupTabStrip must wire the "← All" tab to exitTeamScope'
+    );
+    const allAt = strip.indexOf("'← All'");
+    const rowAppendAt = strip.indexOf('tabRow.appendChild(allTab)');
+    assert.ok(allAt !== -1, 'the strip must label the exit tab "← All"');
+    assert.ok(rowAppendAt !== -1 && allAt < rowAppendAt, 'the "← All" tab must be appended to the tab row');
 });
 
 test('team-scoped CSS hides general-purpose sidebar buttons', () => {
@@ -1022,9 +1034,15 @@ test('team-scoped CSS hides general-purpose sidebar buttons', () => {
     );
 });
 
-test('the team-header-back CSS exists in terminals.html', () => {
-    assert.ok(/\.team-header-back\s*\{/.test(terminalsHtml), '.team-header-back CSS must exist');
-    assert.ok(/\.team-header-back:hover\s*\{/.test(terminalsHtml), '.team-header-back:hover CSS must exist');
+test('the team-header-back CSS died with the button it styled', () => {
+    // Orphaned selectors are the residue this repo keeps tripping over: the
+    // rule stays green in every gate while nothing on screen wears it.
+    assert.ok(!/\.team-header-back\s*\{/.test(terminalsHtml), '.team-header-back CSS must be deleted — no element carries the class');
+    assert.ok(!/\.team-header-back:hover\s*\{/.test(terminalsHtml), '.team-header-back:hover CSS must be deleted');
+    // The header itself still needs its own row treatment below the tab row.
+    const header = block(terminalsHtml, '.team-header {', '.team-header-icon {');
+    assert.ok(/border-top:\s*1px solid var\(--border-color\)/.test(header),
+        '.team-header must carry a border-top — it is now a second row under the tab row');
 });
 
 // ------------------------------- UAT: the team action bar lives in the sidebar
@@ -1131,6 +1149,216 @@ test('entering and leaving team scope re-reads the settings for that scope', () 
     assert.ok(
         !/seatActiveGroupPage\(\)/.test(exitCode),
         'exitTeamScope must not call seatActiveGroupPage — activeGroupId is null by then, so it early-returns and never reseats'
+    );
+});
+
+// ------------------------- UAT: team tab unification (one strip, both modes)
+
+test('the tab strip no longer early-returns in team-scoped mode', () => {
+    const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    const guard = strip.split('\n')[1];
+    assert.ok(
+        /if \(!groupTabStripEl \|\| soloTerminalName\) \{ return false; \}/.test(guard),
+        'the guard must be groupTabStripEl + soloTerminalName only'
+    );
+    assert.ok(
+        !/teamScopeId/.test(guard),
+        'teamScopeId must NOT be in the early-return guard — the strip renders in team-scoped mode too'
+    );
+    assert.ok(
+        /const inTeamScope = !!teamScopeId;/.test(strip),
+        'the strip must branch internally on an inTeamScope flag'
+    );
+});
+
+test('in team-scoped mode the strip renders "← All" plus team tabs only', () => {
+    const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    const teamBranch = block(strip, 'if (inTeamScope) {', '} else {');
+    assert.ok(
+        /getAllGroups\(\)\.filter\(g => isSpawnedTeamGroup\(g\)\)/.test(teamBranch),
+        'the team-scoped branch must show spawned team groups only — regular groups belong to the fleet view'
+    );
+    assert.ok(
+        !/group-tab-delete/.test(teamBranch),
+        'team tabs carry no delete button — teams are managed from the team view'
+    );
+    assert.ok(
+        !/group-tab-add/.test(teamBranch),
+        'team-scoped mode has no "+" tab — it has its own Add Terminal sidebar button'
+    );
+    // No "+" means addBtn stays null, so every later reference has to tolerate it.
+    assert.ok(
+        /const addBtnWidth = addBtn \? addBtn\.offsetWidth : 0;/.test(strip),
+        'the overflow measurement must tolerate a null addBtn'
+    );
+    assert.ok(
+        /if \(addBtn\) \{\s*tabRow\.insertBefore\(overflowContainer, addBtn\);/.test(strip),
+        'the » container must be appended rather than inserted before a null addBtn'
+    );
+});
+
+test('a team tab enters team scope — and is never inert because it holds the group lock', () => {
+    const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    const handlers = strip.split("tab.addEventListener('click', () => {");
+    assert.strictEqual(handlers.length, 3, 'the strip must wire exactly two tab click handlers (team-scoped + fleet)');
+
+    // Team-scoped branch: re-entering the SAME scope is the only no-op.
+    const teamHandler = handlers[1];
+    assert.ok(/if \(teamScopeId === g\.id\) \{ return; \}/.test(teamHandler),
+        'the team-scoped tab must no-op only on the already-scoped team');
+    assert.ok(/enterTeamScope\(g\.id\)/.test(teamHandler),
+        'the team-scoped tab must switch scope with enterTeamScope');
+
+    // Fleet branch: the isSpawnedTeamGroup test must come BEFORE the
+    // activeGroupId lock guard. startTeam (switchToTeamGroup) and the load-time
+    // lock restore both leave a team group as activeGroupId WITHOUT entering
+    // scope; behind the lock guard that tab is dead on click forever.
+    const fleetHandler = handlers[2];
+    const teamAt = fleetHandler.indexOf('isSpawnedTeamGroup(g)');
+    const lockAt = fleetHandler.indexOf('activeGroupId === g.id');
+    assert.ok(teamAt !== -1, 'the fleet tab handler must test isSpawnedTeamGroup');
+    assert.ok(lockAt !== -1, 'the fleet tab handler must keep the activeGroupId guard for regular groups');
+    assert.ok(teamAt < lockAt,
+        'the team branch must precede the activeGroupId guard — a team group holding the lock must still be enterable');
+    assert.ok(/enterTeamScope\(g\.id\)/.test(fleetHandler),
+        'a team tab in the fleet strip must call enterTeamScope');
+    assert.ok(/switchToGroup\(g\.id\)/.test(fleetHandler),
+        'a regular group tab must still call switchToGroup');
+});
+
+test('the » overflow menu enters team scope for team entries and hides fleet-only items', () => {
+    const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    const menuHandler = block(strip, "menuItem.addEventListener('click', () => {", 'menu.appendChild(menuItem)');
+    const teamAt = menuHandler.indexOf('isSpawnedTeamGroup(g)');
+    const activeAt = menuHandler.indexOf('activeId !== g.id');
+    assert.ok(teamAt !== -1, 'the overflow item must test isSpawnedTeamGroup — otherwise switchToGroup reproduces the bug through the » menu');
+    assert.ok(/enterTeamScope\(g\.id\)/.test(menuHandler), 'an overflowed team entry must call enterTeamScope');
+    assert.ok(activeAt !== -1 && teamAt < activeAt,
+        'the team branch must precede the active-id guard, exactly as the in-strip tab does');
+
+    // Fleet-only menu items must sit behind the !inTeamScope guard.
+    const guardAt = strip.indexOf('if (!inTeamScope) {');
+    const roleToggleAt = strip.indexOf('const roleToggle = document.createElement');
+    const restoreAt = strip.indexOf('group-tab-overflow-restore');
+    assert.ok(guardAt !== -1, 'the fleet-only overflow items must sit behind an if (!inTeamScope) guard');
+    assert.ok(roleToggleAt > guardAt, 'the role-grouping toggle is fleet-only');
+    assert.ok(restoreAt > guardAt, 'the hidden-groups restore is fleet-only');
+
+    // With nothing overflowed and no fleet items, team-scoped mode builds no » at all.
+    assert.ok(
+        /if \(inTeamScope && overflowing\.length === 0\)/.test(strip),
+        'team-scoped mode must skip the » entirely when no tab overflowed'
+    );
+    // And the strip's own `group:*` picker is fleet-only — there is no "+" to open it.
+    assert.ok(
+        /if \(!inTeamScope && pickerState && pickerState\.key/.test(strip),
+        "the group:* picker mount must be fleet-only — team pickers use team:* keys"
+    );
+});
+
+test('renderTeamHeader appends below the tab row instead of wiping it', () => {
+    const fn = block(terminalsJs, 'function renderTeamHeader() {', 'function fetchTeamQueue');
+    assert.ok(
+        !/groupTabStripEl\.innerHTML = ''/.test(fn),
+        "renderTeamHeader must NOT clear groupTabStripEl — that wipes the tab row renderGroupTabStrip just built"
+    );
+    assert.ok(
+        /groupTabStripEl\.appendChild\(header\)/.test(fn),
+        'the header must be appended to the strip element'
+    );
+});
+
+test('reloadTerminalGroups guards its bare strip redraw out of team scope', () => {
+    // renderSidebarList renders the strip AND (in team scope) appends the team
+    // header into the same element. An unguarded renderGroupTabStrip() here
+    // re-wipes groupTabStripEl and takes the header — plus any live team:*
+    // role picker mounted beside it — with it, on every terminalsGroupsChanged
+    // push (team spawn, team restart, cross-panel group edit). The behavioural
+    // twin of this lives in standing-orders-marker-contract's reload harness.
+    const fn = block(terminalsJs, 'async function reloadTerminalGroups() {', 'async function fetchTerminalList()');
+    assert.ok(/renderSidebarList\(\)/.test(fn), 'reloadTerminalGroups must still re-render the sidebar');
+    assert.ok(
+        /if \(!teamScopeId\) \{ renderGroupTabStrip\(\); \}/.test(fn),
+        'the bare strip redraw must be guarded on !teamScopeId'
+    );
+});
+
+test('renderSidebarList renders BOTH the strip and the team header in team scope', () => {
+    const fn = block(terminalsJs, 'function renderSidebarList() {', 'function syncLayoutPickerUI()');
+    assert.ok(
+        !/!soloTerminalName && !teamScopeId/.test(fn),
+        'the strip call must no longer be gated on !teamScopeId'
+    );
+    const stripAt = fn.indexOf('if (renderGroupTabStrip())');
+    const headerAt = fn.indexOf('if (renderTeamHeader())');
+    assert.ok(stripAt !== -1 && headerAt !== -1, 'both renderers must be called');
+    assert.ok(stripAt < headerAt,
+        'the strip must render BEFORE the header — the header appends into the element the strip clears'
+    );
+});
+
+test('a direct team-to-team switch saves the namespaced layout keys and only those', () => {
+    const enter = block(terminalsJs, 'async function enterTeamScope(groupId) {', 'async function exitTeamScope()');
+    const saveAt = enter.indexOf('saveTeamScopedLayoutSettings()');
+    const scopeAt = enter.indexOf('teamScopeId = groupId');
+    assert.ok(saveAt !== -1, 'enterTeamScope must persist the outgoing scope layout on a direct switch');
+    assert.ok(saveAt < scopeAt,
+        'the save must precede the teamScopeId change — mapSettingKey resolves the namespace synchronously off the CURRENT scope'
+    );
+    assert.ok(
+        /if \(teamScopeId && teamScopeId !== groupId\) \{/.test(enter),
+        'the save must be guarded to direct switches only — first entry from the fleet has nothing team-scoped to save'
+    );
+    // Comments stripped: the body explains in prose that switchToGroup ends in
+    // saveLayoutSettings(), and the assertion is about executable statements.
+    const enterCode = enter.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+    assert.ok(
+        !/\bsaveLayoutSettings\(\)/.test(enterCode),
+        'enterTeamScope must not call the full saveLayoutSettings — it writes the fleet-wide groups array'
+    );
+
+    // The scoped save must cover every namespaced key and neither of the two
+    // fleet-wide ones: `terminals.groups` raced the loadLayoutSettings() read
+    // two statements later, which is the race exitTeamScope snapshots
+    // terminalGroups to survive.
+    const keysBlock = block(terminalsJs, 'const TEAM_NAMESPACED_KEYS = new Set([', ']);');
+    const keys = keysBlock.match(/'terminals\.[a-zA-Z]+'/g) || [];
+    assert.ok(keys.length >= 9, 'TEAM_NAMESPACED_KEYS must still hold the layout family');
+    const scopedSave = block(terminalsJs, 'function saveTeamScopedLayoutSettings() {', 'async function reloadTerminalGroups()');
+    for (const key of keys) {
+        assert.ok(scopedSave.includes(key), `saveTeamScopedLayoutSettings must save ${key}`);
+    }
+    assert.ok(!scopedSave.includes("'terminals.groups'"), 'the scoped save must NOT write the fleet-wide groups array');
+    assert.ok(!scopedSave.includes("'terminals.groupPrefs'"), 'the scoped save must NOT write the fleet-wide groupPrefs');
+});
+
+test('a direct team-to-team switch clears the outgoing queue before the scope changes', () => {
+    const enter = block(terminalsJs, 'async function enterTeamScope(groupId) {', 'async function exitTeamScope()');
+    const itemsAt = enter.indexOf('_queueItems = []');
+    const modeAt = enter.indexOf("_queueMode = 'manual'");
+    const scopeAt = enter.indexOf('teamScopeId = groupId');
+    assert.ok(itemsAt !== -1 && modeAt !== -1, 'enterTeamScope must reset the queue cache and mode');
+    assert.ok(itemsAt < scopeAt && modeAt < scopeAt,
+        'the reset must precede the scope change, or the outgoing team\'s items paint for a frame under the new team'
+    );
+    // The mode is then DERIVED, never left at the reset default.
+    assert.ok(
+        enter.indexOf('await loadQueueModeFromOrders()') > modeAt,
+        'the Manual/Auto mode must be re-derived after the reset'
+    );
+});
+
+test('the CSS that hid the tab row in team-scoped mode is gone', () => {
+    assert.ok(
+        !/body\.is-team-scoped\s+\.group-tab-strip\s*>\s*\.group-tab-row/.test(terminalsHtml),
+        'the tab row must not be hidden in team-scoped mode — it carries "← All" and the sibling team tabs'
+    );
+    // The rest of the team-scoped CSS is untouched: the fleet-only sidebar
+    // buttons stay hidden (asserted above) and the strip itself is only
+    // suppressed in SOLO mode.
+    assert.ok(
+        /body\.is-solo \.group-tab-strip \{/.test(terminalsHtml),
+        'solo mode must still hide the whole strip'
     );
 });
 

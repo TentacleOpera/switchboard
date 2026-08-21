@@ -2036,6 +2036,26 @@
         saveSetting('terminals.groupPrefs', groupPrefs);
     }
 
+    /** Save ONLY the team-namespaced layout keys (TEAM_NAMESPACED_KEYS).
+     *  Used on a direct team-to-team switch. saveLayoutSettings() would also
+     *  write the two FLEET-WIDE keys — `terminals.groups` and
+     *  `terminals.groupPrefs` — and that whole-array groups POST races the
+     *  `loadLayoutSettings()` read two statements later, the same race
+     *  exitTeamScope snapshots terminalGroups to survive. The groups roster
+     *  does not change when the scope does, so there is nothing to save there.
+     */
+    function saveTeamScopedLayoutSettings() {
+        saveSetting('terminals.layoutMode', currentLayout);
+        saveSetting('terminals.paneAssignments', paneAssignments);
+        saveSetting('terminals.pinnedPanes', pinnedPanes);
+        saveSetting('terminals.collapsedGroups', Array.from(collapsedGroups));
+        saveSetting('terminals.paneModes', paneModes);
+        saveSetting('terminals.kanbanPaneColumn', kanbanPaneColumn);
+        saveSetting('terminals.kanbanPaneWorkspace', kanbanPaneWorkspace);
+        saveSetting('terminals.kanbanPaneProject', kanbanPaneProject);
+        saveSetting('terminals.activeGroupId', activeGroupId);
+    }
+
     /**
      * Re-read `terminals.groups` from the DB and merge by id into the in-memory
      * `terminalGroups`. Called on the `terminalsGroupsChanged` push from
@@ -2094,7 +2114,16 @@
             lastReadGroupIds = validated.map(g => g.id);
             if (changed) {
                 renderSidebarList();
-                renderGroupTabStrip();
+                // Fleet mode only. renderSidebarList() renders the strip
+                // itself; this explicit redraw is the one that refreshes the
+                // tabs' live member counts when the backend rewrites a roster.
+                // In team-scoped mode it is destructive: renderTeamHeader()
+                // has already APPENDED the team context bar into
+                // groupTabStripEl, and a bare renderGroupTabStrip() re-wipes
+                // that element — taking the header, and any live `team:*` role
+                // picker mounted beside it, with it on every team spawn or
+                // restart push.
+                if (!teamScopeId) { renderGroupTabStrip(); }
             }
         } catch { /* ignore — the next fleet poll will pick it up */ }
     }
@@ -3528,7 +3557,9 @@
      */
     function renderTeamHeader() {
         if (!teamScopeId || !groupTabStripEl) { return false; }
-        groupTabStripEl.innerHTML = '';
+        // Do NOT clear groupTabStripEl.innerHTML — renderGroupTabStrip has
+        // already rendered the tab row (← All + team tabs) into it. The
+        // team header appends BELOW the tab row as a context bar.
 
         const group = getScopedTeamGroup();
         if (!group) { return false; }
@@ -3537,15 +3568,9 @@
         const header = document.createElement('div');
         header.className = 'team-header' + (isTeam ? '' : ' is-generic-group');
 
-        // Back button — returns to the full fleet view. First element so it
-        // sits at the left edge of the team header.
-        const backBtn = document.createElement('button');
-        backBtn.type = 'button';
-        backBtn.className = 'team-header-back';
-        backBtn.textContent = '← ALL TERMINALS';
-        backBtn.title = 'Return to the full fleet view';
-        backBtn.addEventListener('click', () => exitTeamScope());
-        header.appendChild(backBtn);
+        // No back button here — the "← All" tab in the tab strip (rendered by
+        // renderGroupTabStrip) handles exiting team scope. The team header is
+        // now a context bar (icon + name + count), not a navigation bar.
 
         const iconArea = document.createElement('div');
         iconArea.className = 'team-header-icon';
@@ -3918,16 +3943,64 @@
      * nulling `pickerState` for `group:*` keys.
      */
     function renderGroupTabStrip() {
-        if (!groupTabStripEl || soloTerminalName || teamScopeId) { return false; }
+        if (!groupTabStripEl || soloTerminalName) { return false; }
         groupTabStripEl.innerHTML = '';
 
         const tabRow = document.createElement('div');
         tabRow.className = 'group-tab-row';
 
+        const inTeamScope = !!teamScopeId;
+        let allTab;
+        let addBtn = null;
+        const groupTabEls = [];
+
+        if (inTeamScope) {
+            // "← All" back button — exits team scope, returns to fleet view.
+            allTab = document.createElement('button');
+            allTab.type = 'button';
+            allTab.className = 'group-tab';
+            allTab.title = 'Return to the full fleet view';
+            const allTabName = document.createElement('span');
+            allTabName.textContent = '← All';
+            allTab.appendChild(allTabName);
+            allTab.addEventListener('click', () => exitTeamScope());
+            tabRow.appendChild(allTab);
+
+            // Team group tabs only — non-team groups belong to the fleet view.
+            const teamGroups = getAllGroups().filter(g => isSpawnedTeamGroup(g));
+            for (const g of teamGroups) {
+                const isActive = g.id === teamScopeId;
+                const tab = document.createElement('div');
+                tab.className = 'group-tab' + (isActive ? ' active' : '');
+                tab.title = g.name;
+                tab.dataset.groupId = g.id;
+
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = g.name;
+                tab.appendChild(nameSpan);
+
+                const members = getGroupMembers(g);
+                const countSpan = document.createElement('span');
+                countSpan.className = 'group-tab-count';
+                countSpan.textContent = String(members.length);
+                tab.appendChild(countSpan);
+
+                // No delete button in team-scoped mode — teams are managed
+                // through the team view, not the tab strip.
+                tab.addEventListener('click', () => {
+                    if (teamScopeId === g.id) { return; }
+                    enterTeamScope(g.id);
+                });
+
+                groupTabEls.push({ el: tab, group: g });
+                tabRow.appendChild(tab);
+            }
+            // No "+" button — team-scoped mode has its own "Add Terminal" sidebar button.
+        } else {
         // "Unassigned" tab — active when no group is locked. Clicking it drops the lock.
         // Clicking the already-active tab resets composition to unassigned terminals.
         const unassignedCount = getUnassignedTerminalNames().length;
-        const allTab = document.createElement('button');
+        allTab = document.createElement('button');
         allTab.type = 'button';
         allTab.className = 'group-tab' + (activeGroupId ? '' : ' active');
         allTab.title = activeGroupId
@@ -3950,7 +4023,6 @@
 
         // Group tabs — one per group from getAllGroups() in sortGroups order.
         const groups = getAllGroups();
-        const groupTabEls = [];
         for (const g of groups) {
             const isActive = g.id === activeGroupId;
             const tab = document.createElement('div');
@@ -3990,6 +4062,17 @@
             // tab sitting to the left — it must not inherit the old row's
             // toggle-to-clear behaviour.
             tab.addEventListener('click', () => {
+                // A team tab enters team scope even when its group is ALREADY
+                // the locked one. startTeam (via switchToTeamGroup) and the
+                // load-time lock restore both leave a team group sitting as
+                // activeGroupId without entering scope; behind the
+                // inert-active-tab guard that state was impossible to escape
+                // from the strip — click the team you just started, nothing
+                // happens. Only re-entering the SAME scope is a no-op.
+                if (isSpawnedTeamGroup(g)) {
+                    if (teamScopeId !== g.id) { enterTeamScope(g.id); }
+                    return;
+                }
                 if (activeGroupId === g.id) { return; }
                 switchToGroup(g.id);
             });
@@ -4001,7 +4084,7 @@
         // "+" button — opens the role picker scoped to the active group's
         // context. Uses a `group:<id>` key so pickerState keeps it alive
         // across fleet polls (the pickerRendered guard below covers it).
-        const addBtn = document.createElement('button');
+        addBtn = document.createElement('button');
         addBtn.type = 'button';
         addBtn.className = 'group-tab-add';
         addBtn.textContent = '+';
@@ -4011,6 +4094,7 @@
             onNewTerminalClicked(undefined, addKey);
         });
         tabRow.appendChild(addBtn);
+        } // end else (fleet-view tab strip)
 
         // Attach BEFORE measuring. offsetWidth/clientWidth are 0 on a detached
         // node, so measuring here while tabRow was still unparented made
@@ -4031,12 +4115,12 @@
         // measurement gate and the build gate are therefore unconditional;
         // overflowReserved (36px) is already subtracted unconditionally below,
         // so the » costs no layout that was not already budgeted.
-        const hasHiddenGroups = Array.isArray(groupPrefs.hidden) && groupPrefs.hidden.length > 0;
+        const hasHiddenGroups = !inTeamScope && Array.isArray(groupPrefs.hidden) && groupPrefs.hidden.length > 0;
         {
             // Reading offsetWidth forces a synchronous layout, so the
             // measurements are accurate before we remove anything.
             const stripWidth = tabRow.clientWidth;
-            const addBtnWidth = addBtn.offsetWidth;
+            const addBtnWidth = addBtn ? addBtn.offsetWidth : 0;
             const overflowReserved = 36;
             const availableWidth = stripWidth - addBtnWidth - overflowReserved;
 
@@ -4057,6 +4141,15 @@
                 }
             }
 
+            // In fleet mode the » menu is always built (it carries the
+            // role-grouping toggle and hidden-groups restore even when no
+            // tabs overflow). In team-scoped mode the menu carries only
+            // team tabs — skip it entirely when nothing overflowed.
+            if (inTeamScope && overflowing.length === 0) {
+                // No overflow items and no fleet-specific menu items — nothing
+                // to put in the » menu. The tab strip is complete as-is.
+            } else {
+
             const overflowContainer = document.createElement('div');
             overflowContainer.className = 'group-tab-overflow';
 
@@ -4071,10 +4164,11 @@
             menu.className = 'group-tab-overflow-menu';
             menu.style.display = 'none';
 
+            const activeId = inTeamScope ? teamScopeId : activeGroupId;
             for (const item of overflowing) {
                 const g = item.group;
                 const menuItem = document.createElement('div');
-                menuItem.className = 'group-tab-overflow-item' + (g.id === activeGroupId ? ' active' : '');
+                menuItem.className = 'group-tab-overflow-item' + (g.id === activeId ? ' active' : '');
                 const nameSpan = document.createElement('span');
                 nameSpan.textContent = g.name;
                 const countSpan = document.createElement('span');
@@ -4083,7 +4177,14 @@
                 menuItem.appendChild(nameSpan);
                 menuItem.appendChild(countSpan);
                 menuItem.addEventListener('click', () => {
-                    if (activeGroupId !== g.id) { switchToGroup(g.id); }
+                    // Same rule as the in-strip tab: a team entry enters scope
+                    // unless it is already the scoped team, so a team group
+                    // holding the group lock cannot strand the entry.
+                    if (isSpawnedTeamGroup(g)) {
+                        if (teamScopeId !== g.id) { enterTeamScope(g.id); }
+                    } else if (activeId !== g.id) {
+                        switchToGroup(g.id);
+                    }
                     menu.style.display = 'none';
                 });
                 menu.appendChild(menuItem);
@@ -4095,6 +4196,9 @@
                 menu.appendChild(divider);
             }
 
+            // Role-grouping toggle and hidden-groups restore — fleet-only.
+            // In team-scoped mode the » menu carries only team tabs.
+            if (!inTeamScope) {
             // Role-grouping toggle — opt-in consent for derived role groups.
             // Lives in the » menu so it is reachable even when role grouping is
             // off (zero tabs). No confirm gate per CLAUDE.md.
@@ -4129,6 +4233,7 @@
                 });
                 menu.appendChild(restoreItem);
             }
+            } // end if (!inTeamScope) — fleet-only overflow items
 
             overflowBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -4144,7 +4249,12 @@
             });
 
             overflowContainer.appendChild(menu);
-            tabRow.insertBefore(overflowContainer, addBtn);
+            if (addBtn) {
+                tabRow.insertBefore(overflowContainer, addBtn);
+            } else {
+                tabRow.appendChild(overflowContainer);
+            }
+            } // end else (overflow container built)
         }
 
         // Picker for `group:*` key — mounted in the strip, outside listEl,
@@ -4157,8 +4267,11 @@
         // garbage-collect at the bottom of renderSidebarList nulls the
         // stale pickerState. `__all__` always resolves (it is the no-group
         // sentinel, not a real group id).
+        // In team-scoped mode there is no "+" button, so no `group:*` picker
+        // is active — skip this block entirely (team pickers use `team:*` keys
+        // and are mounted by renderTeamHeader).
         let pickerRendered = false;
-        if (pickerState && pickerState.key && String(pickerState.key).startsWith('group:')) {
+        if (!inTeamScope && pickerState && pickerState.key && String(pickerState.key).startsWith('group:')) {
             const pickerGroupId = String(pickerState.key).slice('group:'.length);
             const groupStillExists = pickerGroupId === '__all__'
                 || getAllGroups().some(g => g.id === pickerGroupId);
@@ -4494,9 +4607,10 @@
         // Render the group tab strip (above the pane grid, outside listEl).
         // The strip's picker uses a `group:*` key; the guard at the bottom
         // of this function prevents the garbage-collect from nulling it.
-        // In team-scoped mode the strip is hidden (renderGroupTabStrip early-
-        // returns) and the team header takes its place.
-        if (!soloTerminalName && !teamScopeId) {
+        // In team-scoped mode the strip renders "← All" + team tabs for
+        // direct team-to-team switching, and renderTeamHeader appends the
+        // team context bar below the tab row.
+        if (!soloTerminalName) {
             if (renderGroupTabStrip()) { pickerRendered = true; }
         }
         if (teamScopeId) {
@@ -10420,6 +10534,23 @@
         const group = getAllGroups().find(g => g.id === groupId);
         if (!group || !isSpawnedTeamGroup(group)) { return; }
         dismissPeek();
+        // Save the current scope's layout before switching — prevents unsaved
+        // pane/pin/mode changes from being lost on direct team-to-team switch.
+        // mapSettingKey reads teamScopeId synchronously (saveSetting computes
+        // the storage key before its first await), so this lands under the
+        // CURRENT team's namespace even though teamScopeId changes below. Only
+        // fires on a direct switch (teamScopeId already set to another team),
+        // and only for the namespaced keys — see
+        // saveTeamScopedLayoutSettings for why the fleet-wide groups array
+        // must not be written here.
+        if (teamScopeId && teamScopeId !== groupId) {
+            saveTeamScopedLayoutSettings();
+        }
+        // Clear the old team's work queue so its items don't flash for one
+        // frame before the new team's fetchTeamQueue resolves. exitTeamScope
+        // does the same cleanup on the way out.
+        _queueItems = [];
+        _queueMode = 'manual';
         teamScopeId = groupId;
         document.body.classList.add('is-team-scoped');
         document.title = group.shortName || group.name || 'Team';
