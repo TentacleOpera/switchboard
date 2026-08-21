@@ -146,3 +146,114 @@ The unit templates must carry the two non-obvious requirements as comments: **No
 ## Completion Report
 
 Implemented all six proposed changes: `start --detach` (re-spawn with `SWITCHBOARD_DETACHED=1` env, poll `findRunningInstance` for honest success), `stop` (resolve via `/health`, SIGTERM with 5s grace, SIGKILL escalation with identity re-verification), `status` (exit 0/1, `--json` via `routeLogsToStderr`+`emitJson`), `logs [-f]` (polling tail with rotation awareness), PID file in `bootstrap.ts` (advisory, unlinked in `stop()` and sync cleanup), and autostart unit templates (launchd plist, systemd user service, Windows Task Scheduler XML). File logging via `setupFileLogging` wraps all stdout-bound console channels (log/info/debug) plus warn/error, with 10 MiB rotation to `server.log.1` using `appendFileSync` (no long-lived fd to lose). Files changed: `src/standalone/cli.ts`, `src/standalone/bootstrap.ts`, `src/services/ControlPlaneMigrationService.ts` (`.switchboard/logs/` gitignore exclusion + merge-logic fix for `.`-prefixed lines), and four new files in `docs/autostart/`. No issues encountered — the durable-session-token subtask's `resolvedToken` and default port 7777 were already in place and compatible.
+
+## Defects Found Before Review — must be fixed as part of code review
+
+Two defects in the delivered code, found by inspection while the card sat at CODER
+CODED. Both are wrong lines in work already written, not new scope. The Completion
+Report above records "No issues encountered"; treat that as superseded.
+
+### 1. SIGHUP tears down the whole fleet — closing a terminal kills every agent
+
+`src/standalone/bootstrap.ts:2722` registers SIGHUP alongside the two intentional
+stop signals:
+
+```js
+process.once('SIGINT',  signalCleanup);
+process.once('SIGTERM', signalCleanup);
+process.once('SIGHUP',  signalCleanup);   // ← defect
+```
+
+`signalCleanup` calls `instance.stop()`, which runs `ptyFleetService.disposeAll()`,
+disposes the ingestion engine and every provider, stops the server, unlinks the port
+and PID files, then `process.exit(0)`.
+
+SIGHUP is what the OS delivers when the **controlling terminal goes away**. In
+foreground mode — which is every launch that does not pass `--detach`, i.e. every
+launch any user has ever performed, since the flag is uncommitted — closing the
+terminal window, dropping an SSH connection, or a terminal app restarting on OS
+update therefore kills all 8–16 in-flight agent terminals and exits **0**, as though
+the operator had asked for it. `--detach` avoids this only incidentally: a detached
+child has no controlling terminal left to lose.
+
+The three signals do not carry the same intent. SIGINT is "the user pressed Ctrl-C."
+SIGTERM is "`switchboard stop`, or the service manager, asked you to stop." SIGHUP is
+"your terminal went away" — a request to stop *printing*, not to stop *running*.
+Ignoring it is the conventional behaviour for anything long-lived, and is precisely
+what `nohup` means.
+
+**Fix, in two parts — the second is not optional:**
+
+1. Register an explicit SIGHUP listener that logs a line and does nothing else.
+   **Do not simply delete the registration.** SIGHUP's default disposition is
+   terminate, and Node only overrides it while a listener exists, so removing the
+   line converts a graceful teardown into an immediate hard exit with no cleanup at
+   all — strictly worse.
+2. Make `setupFileLogging` swallow write errors on the **terminal mirror** only,
+   keeping the file sink live. Once the pty is gone those writes EPIPE, so a process
+   that survives SIGHUP without this dies on its next log line instead — externally
+   indistinguishable from the bug it was meant to fix.
+
+**Why the Verification Plan above did not catch it:** step 1 closes the terminal but
+only in detached mode, where SIGHUP cannot fire; step 6 exercises foreground mode but
+only with Ctrl-C. No step covers foreground plus terminal close — the one combination
+that loses work.
+
+### 2. `--detach` is passed to all three service managers, which breaks supervision
+
+`cli.ts:934-952` implements `--detach` by re-spawning itself with `detached: true`,
+`stdio: 'ignore'` and `unref()`, polling `/health` until the child answers, printing
+the URL, then exiting 0. That is correct for a human at a shell prompt. It is wrong
+for a supervisor, whose entire job is the backgrounding being done for it — and all
+three templates in `docs/autostart/` pass the flag.
+
+- **systemd** (`switchboard.systemd.service`): `Type=forking` with no `PIDFile=`.
+  systemd cannot identify the real daemon, so the `Restart=on-failure` line never
+  fires when the server crashes — the process it tracked (the parent) already exited
+  0. The cgroup still makes `systemctl --user stop` work, so the unit half-works,
+  which is the worst outcome: a crashed board at 3am with `systemctl --user status`
+  reporting healthy.
+  **Fix:** `Type=simple` and drop `--detach`. journald then captures output for free,
+  and `stop` delivers SIGTERM to the real process — which is what the 5s grace period
+  covering the debounced `kanban.db` persist was built for. Minimal alternative:
+  add `PIDFile=` pointing at `.switchboard/api-server.pid`, which
+  `bootstrap.ts:2638` does write.
+
+- **launchd** (`switchboard.launchd.plist`): worse. `KeepAlive` →
+  `SuccessfulExit: false` means "restart only on a non-zero exit," and the parent
+  exits 0, so KeepAlive is inert and no crash ever restarts the board. macOS has no
+  cgroups, so launchd has additionally lost the daemon: `launchctl unload` will not
+  stop it. The comment at lines 75-76 claims launchd captures stdout/stderr as a
+  fallback — it captures the *parent's* two lines and then nothing forever.
+  **Fix:** drop `--detach` and let launchd own the foreground process; the existing
+  `StandardOutPath`/`StandardErrorPath` then do what that comment already claims.
+
+- **Windows Task Scheduler** (`switchboard-windows.xml`): same shape.
+  `<RestartOnFailure>` with `ExecutionTimeLimit PT0S` never observes the daemon die,
+  because the task completes the moment the parent exits.
+  **Fix:** drop `--detach`.
+
+The rule to encode in `docs/autostart/README.md`: **`--detach` is for an interactive
+shell; every service manager wants the foreground process.** The flag stays as a
+convenience for "give me my prompt back," not as a requirement.
+
+**Why Verification Plan step 10 did not catch it:** it installs the systemd unit and
+reboots, confirming the board comes up and a terminal spawns. It does, so the step
+passes. It never kills the server to test that `Restart=on-failure` actually restarts
+it, which is the half that is broken.
+
+### Verification steps to add
+
+12. **Foreground survives terminal loss.** Plain `npx switchboard` with at least one
+    agent terminal streaming; close the terminal window (and separately, drop an SSH
+    session). Confirm the server still answers `/health`, the agent terminal is still
+    alive, and `server.log` keeps receiving lines after the pty is gone.
+13. **Ctrl-C still tears down.** Same setup, press Ctrl-C, confirm the full graceful
+    shutdown still runs. Regression fence for the SIGHUP change.
+14. **Crash-restart actually restarts.** With the systemd unit installed, `kill -9`
+    the server and confirm systemd brings it back. Repeat on macOS with launchd. This
+    is the assertion step 10 is missing.
+
+## Review Findings
+
+Both defects the plan itself flagged as must-fix were still present and are now fixed: SIGHUP was registered as a stop signal (`bootstrap.ts`), so closing a terminal or dropping SSH tore down the whole PTY fleet and exited 0 — replaced with an explicit no-op listener (not a deletion, since SIGHUP's default disposition is terminate), and `setupFileLogging`'s terminal mirror now swallows EPIPE with stream `error` handlers so the survivor does not die on its next log line. All three autostart templates passed `--detach`, which none of the three supervisors can track: systemd is now `Type=simple`, launchd and Task Scheduler run the server in the foreground, and `docs/autostart/README.md` states the rule plus the missing crash-restart verification step. Two further MAJOR defects were found and fixed in `cli.ts`: the new default port 7777 made the EADDRINUSE catch-and-retry reachable, and it double-boots the whole stack (the abandoned first instance's fs watchers and DB handle stay live) — replaced with a pre-boot `isPortFree` probe; and `token show`'s success path fell through into the server-launch path, printing the board URL then "Another Switchboard instance is already running" and exiting 1. Files changed: `src/standalone/bootstrap.ts`, `src/standalone/cli.ts`, `docs/autostart/{README.md,switchboard.systemd.service,switchboard.launchd.plist,switchboard-windows.xml}`. Verified: `compile-tests` clean, `npm run compile` 0 errors, eslint 0 errors, 12 contract tests green, and the built CLI's `--help`/`status`/`status --json` smoke-tested against a live instance; remaining risk is that no automated test covers any lifecycle verb — steps 1-14 are all manual.
