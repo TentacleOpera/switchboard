@@ -2,7 +2,7 @@
 
 ## Goal
 
-Reduce the ~3,537 tokens Switchboard writes into every user's `CLAUDE.md` and `AGENTS.md` to roughly 1,600, by moving action-specific reference material into the protocols and workflows that already load at the moment it is needed, and by cutting guidance that guards against a recoverable mistake.
+Reduce the ~3,537 tokens Switchboard writes into every user's `CLAUDE.md` and `AGENTS.md` to roughly 1,400, by moving action-specific reference material into the protocols and workflows that already load at the moment it is needed, and by cutting guidance that guards against a recoverable mistake.
 
 ### Problem Analysis
 
@@ -12,7 +12,7 @@ Broken down by section (measured on `AGENTS.md`, the actual injected source):
 
 | Section | Chars | Needed resident? |
 | :--- | ---: | :--- |
-| 📌 Plan Project Pinning | 2,785 | **No** — see below |
+| 📌 Plan Project Pinning | 2,785 | **No** — deleted outright by the sticky-project plan |
 | 📚 Available Skills | 1,919 | Partly — see host-duplication note |
 | 📝 Plan Authoring & Problem Analysis Protocol | 1,748 | No — only while authoring a plan |
 | Workflow Registry | 1,279 | **Yes** — routing |
@@ -28,7 +28,7 @@ Broken down by section (measured on `AGENTS.md`, the actual injected source):
 
 Four sections are action-reference: plan authoring, workspace detection, memo-capture priority, and project pinning. Each has a natural home. Plan authoring and workspace detection belong in `improve-plan` (already read by the planner) and in the cloud and remote workflows (already read on entry). Memo-capture priority belongs in `switchboard-memo.md`, which is by definition open when capture mode is active.
 
-**Project pinning is the largest section in the file and guards a recoverable error.** 2,785 chars — a fifth of the entire payload — exist to prevent a plan landing in the wrong project. That is fixed by reassigning the card on the board. And the system already has a hard backstop: the importer is resolve-only, so an unknown pin, a pin equal to a workspace name, or a literal `<...>` placeholder leaves the plan unassigned rather than minting a project. The prose is belt-and-braces on top of a guard that already works, paid for on every turn forever.
+**Project pinning is the largest section in the file, and the responsibility it documents should not be the agent's at all.** 2,785 chars — a fifth of the entire payload — instruct an agent on how to transcribe board state into a plan file, where the extension already read that state at prompt-generation time and reads the same config key again as the importer's fallback (`_resolveProjectForInsert` precedence #2, `KanbanDatabase.ts:2242`). A board-level sticky-project toggle removes the transport step and the rules that guard it; see `replace-agent-project-pinning-with-a-sticky-ui-setting.md`. Nothing needs relocating, because nothing needs saying.
 
 **A duplication worth confirming: the Available Skills table may already be provided by the host.** Claude Code discovers `.claude/skills/*/SKILL.md` and injects each skill's name and description itself — an agent in this repo receives `manage-features` and `query-kanban` in its skill list without reading `AGENTS.md` at all. If Antigravity does not self-discover, the table is load-bearing there and redundant here. Because both hosts receive the same body, each currently carries the other's requirements.
 
@@ -52,7 +52,7 @@ The protocol block grew by accretion, and every addition was individually justif
 
 Yes — two decisions.
 
-1. **How far to cut project pinning.** Options: (a) delete outright and rely on the importer backstop plus board reassignment; (b) reduce to one line — "if your prompt carries a PROJECT PIN directive, write `**Project:** <name>`; otherwise omit the line" (~150 chars). Recommendation: **(b)**. It keeps the one instruction an agent cannot infer — that a directive may be present and should be honoured — at 5% of the current size. (a) risks agents inventing pins, which the backstop catches but which produces confusing unassigned plans.
+1. ~~How far to cut project pinning.~~ **Resolved: the whole section goes.** `replace-agent-project-pinning-with-a-sticky-ui-setting.md` removes the PROJECT PIN directive entirely in favour of a board-level sticky-project toggle, so there is no directive left for a residual line to reference. All 2,785 chars are deleted rather than reduced. This plan should land after or alongside that one.
 2. **Whether the Available Skills table can go.** It appears redundant for Claude Code, which self-discovers. Needs confirming against Antigravity before removing, and if it is needed there, that is the strongest argument for the per-host split recorded as a follow-up.
 
 ## Complexity Audit
@@ -91,6 +91,7 @@ Yes — two decisions.
 
 ## Dependencies
 
+- **Requires** `replace-agent-project-pinning-with-a-sticky-ui-setting.md` for the largest single reduction (2,785 chars). That plan can ship independently; this one's size gate assumes it has.
 - **Interacts with** the protocols-as-rows plan: the tracker-synced context document is one of the destinations for relocated plan-authoring rules, and that plan is what establishes the sync as a delivery tier.
 - **Independent of** the storage programme otherwise. Can ship on its own.
 
@@ -106,7 +107,7 @@ Yes — two decisions.
 
 ## Proposed Changes
 
-1. **`AGENTS.md`: Plan Project Pinning cut to one line** — honour a PROJECT PIN directive when present, otherwise omit the line. Full rules move to `improve-plan/SKILL.md` and the tracker-synced context.
+1. **`AGENTS.md`: Plan Project Pinning deleted in full** — owned by `replace-agent-project-pinning-with-a-sticky-ui-setting.md`, which removes the directive the section exists to explain. Nothing relocates; the responsibility leaves the agent entirely.
 2. **Memo Capture priority rule → `.agents/workflows/switchboard-memo.md`**, replaced by one line in the registry noting that capture mode overrides default behaviour while active.
 3. **Plan Authoring & Problem Analysis + Workspace Detection → `improve-plan/SKILL.md`**, plus every other plan-authoring entry point enumerated first (`switchboard-cloud.md`, the remote flow's tracker context, memo processing).
 4. **Switchboard Global Architecture diagram removed** from the injected block; `ARCHITECTURE.md` retains it.
@@ -121,7 +122,7 @@ None. The block is regenerated from `AGENTS.md` on sync; shorter output replaces
 
 ### Goal Invariants
 
-- The managed block emitted by `buildManagedInner` is **under 7,000 chars** (currently 14,148), and the `CLAUDE.md` variant under 7,700 including the preamble.
+- The managed block emitted by `buildManagedInner` is **under 6,000 chars** (currently 14,148), and the `CLAUDE.md` variant under 6,700 including the preamble.
 - Every rule removed from the resident block is present in at least one file that is loaded before the action it governs, for **every** enumerated entry point — not just one.
 - No pointer in the resident block names a path unreachable from a context where that rule applies.
 
