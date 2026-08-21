@@ -334,6 +334,16 @@ jobs:
       - name: Feature-file subtask link contract (parser, link-only, guards, offline fallback)
         run: npm run test:contract:feature-file-subtask-link
 
+      # Was wired to NOTHING — not CI, not package.json — and sat red for two months
+      # after an auto-commit before code review (760c49c5) swapped the plan-registry
+      # persistence writer. Nobody saw it, because nothing ran it. Wired now: it pins
+      # that registry state reaches the DB, that status transitions are written
+      # EXPLICITLY (neither persistence writer can carry one), that the plans watcher
+      # glob stays recursive so one-level repo folders refresh, and that brain_/ingested_
+      # runtime mirrors never enter the plan list.
+      - name: Plan registry reconciliation (persistence, explicit status writes, recursive watcher)
+        run: npm run test:regression:plan-registry
+
       - name: Verb engine kanban contract (seams, db path, return contract)
         run: npm run test:contract:verb-engine-kanban
 

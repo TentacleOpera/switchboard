@@ -24,16 +24,50 @@ function run() {
         'Expected the DB snapshot refresh path to invoke local plan reconciliation before filtering visible sheets.'
     );
 
+    // Pins the INVARIANT (registry state reaches the DB), not the writer's name.
+    //
+    // This assertion used to require the literal `await db.upsertPlans(records);`. An
+    // auto-commit before code review (760c49c5, 2026-06-22, for an unrelated epic task)
+    // swapped both sites to `insertFileDerivedPlan(record)`. Persistence still happens,
+    // so the invariant held — but the assertion failed on the method name, and because
+    // this file was wired to NEITHER ci NOR package.json, it sat red for two months and
+    // nobody saw it. Pinning a call name turns a refactor into a false alarm and trains
+    // people to ignore the gate; pinning the invariant catches persistence being removed.
+    const savePlanRegistry = providerSource.slice(
+        providerSource.indexOf('private async _savePlanRegistry(workspaceRoot: string): Promise<void> {')
+    ).split('\n    private ')[0];
+    assert.ok(savePlanRegistry.length > 0,
+        'Expected TaskViewerProvider._savePlanRegistry to exist.');
     assert.match(
-        providerSource,
-        /private async _savePlanRegistry\(workspaceRoot: string\): Promise<void> \{[\s\S]*await db\.upsertPlans\(records\);/,
+        savePlanRegistry,
+        /await db\.(?:upsertPlans|insertFileDerivedPlan)\(/,
         'Expected TaskViewerProvider to persist plan registry state through the Kanban DB.'
     );
 
+    // The compensating writer, pinned because it is what makes the above SAFE.
+    //
+    // Neither persistence writer can set status on an existing row: upsertPlans updates
+    // it only on the deleted→active revival case, and insertFileDerivedPlan hardcodes
+    // 'active'/'CREATED' on insert and omits both columns from its ON CONFLICT entirely.
+    // So a registry save CANNOT carry a status transition, and archiving/completing a
+    // plan depends on _updatePlanRegistryStatus writing it explicitly. If that explicit
+    // write is ever dropped in favour of "the save will persist it", statuses silently
+    // stop moving — with the board looking correct until a reload.
     assert.match(
         providerSource,
-        /new vscode\.RelativePattern\(workspaceRoot, '\.switchboard\/plans\/\*\*\/\*\.md'\)/,
-        'Expected _setupPlanWatcher to watch plans recursively so one-level repo folders participate in refreshes.'
+        /private async _updatePlanRegistryStatus\([\s\S]*?await db\.archivePlan\([\s\S]*?await db\.updateStatus\(/,
+        'Expected _updatePlanRegistryStatus to write status EXPLICITLY (archivePlan/updateStatus) — the persistence writers cannot carry a status transition.'
+    );
+
+    // The load-bearing part is the RECURSIVE glob, not the name of the local holding the
+    // root. This used to require the first argument to be spelled `workspaceRoot`; the
+    // watcher now loops `for (const folder of safeFolders)` and passes `folder`, which is
+    // the same root by another name — a false alarm that masked every assertion after it
+    // in this file (assertions run in sequence and the first throw stops the rest).
+    assert.match(
+        providerSource,
+        /new vscode\.RelativePattern\([A-Za-z_$][\w$]*, '\.switchboard\/plans\/\*\*\/\*\.md'\)/,
+        'Expected _setupPlanWatcher to watch plans recursively (**/*.md) so one-level repo folders participate in refreshes.'
     );
     assert.match(
         providerSource,

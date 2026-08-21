@@ -845,6 +845,7 @@
     "test:integration:linear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/integrations/run-integration-tests.js linear",
     "test:regression:plan-sync": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/plan-creation-integration-sync-regression.test.js",
     "test:regression:native-project-api": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/native-project-api-commands-regression.test.js",
+    "test:regression:plan-registry": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/plan-registry-reconciliation.test.js",
     "test:contract:reviewer-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-reviewer-prompt-regression.test.js",
     "test:contract:reviewer-prompt-behaviour": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/services/__tests__/agentPromptBuilder.test.js",
     "test:contract:pty-host-gating": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-host-gating-contract.test.js",
