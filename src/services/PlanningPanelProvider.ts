@@ -1007,6 +1007,24 @@ export class PlanningPanelProvider {
         return !!this._panel && this._panel.viewColumn !== undefined;
     }
 
+    /**
+     * Is there a surface that can receive a watcher-driven push?
+     *
+     * In VS Code that means an open panel. In the standalone/browser host there is
+     * NEVER a panel — `_broadcaster` is the headless hub and every push leaves over
+     * its WS fan-out — so a bare `!this._panel` gate is permanently true there and
+     * silently disables the watcher it guards. These two helpers are what the
+     * watcher callbacks must gate on.
+     */
+    private _hasAnySurface(): boolean {
+        return !!this._panel || !!this._projectPanel || this._broadcaster?.isHeadless() === true;
+    }
+
+    /** As `_hasAnySurface`, for pushes routed to the PROJECT surface specifically. */
+    private _hasProjectSurface(): boolean {
+        return !!this._projectPanel || this._broadcaster?.isHeadless() === true;
+    }
+
     public postMessageToWebview(message: any): void {
         if (this._broadcaster) {
             this._broadcaster.push(message, 'planning');
@@ -1225,13 +1243,16 @@ export class PlanningPanelProvider {
 
             const triggerRefresh = (filePath: string) => {
                 if (!filePath.endsWith('.md')) { return; }
-                if (!this._panel && !this._projectPanel) { return; }
+                if (!this._hasAnySurface()) { return; }
                 if (this._kanbanPlansWatchDebounce) {
                     clearTimeout(this._kanbanPlansWatchDebounce);
                 }
                 this._kanbanPlansWatchDebounce = setTimeout(() => {
                     this._kanbanPlansWatchDebounce = undefined;
-                    if (this._panel) {
+                    // Headless has no panels, but BOTH surfaces exist as WS scopes,
+                    // so it must dispatch to both arms rather than neither.
+                    const headless = this._broadcaster?.isHeadless() === true;
+                    if (this._panel || headless) {
                         this._handleMessage({
                             type: 'fetchKanbanPlans',
                             requestId: Date.now()
@@ -1239,7 +1260,7 @@ export class PlanningPanelProvider {
                             console.error('[PlanningPanel] Error auto-refreshing kanban plans:', err);
                         });
                     }
-                    if (this._projectPanel) {
+                    if (this._projectPanel || headless) {
                         this._handleMessage({
                             type: 'fetchKanbanPlans',
                             requestId: Date.now()
@@ -1275,13 +1296,13 @@ export class PlanningPanelProvider {
             const featuresDir = path.join(root, '.switchboard', 'features');
             const triggerRefresh = (filePath: string) => {
                 if (!filePath.endsWith('.md')) { return; }
-                if (!this._projectPanel) { return; }
+                if (!this._hasProjectSurface()) { return; }
                 if (this._featureDocsWatchDebounce) {
                     clearTimeout(this._featureDocsWatchDebounce);
                 }
                 this._featureDocsWatchDebounce = setTimeout(() => {
                     this._featureDocsWatchDebounce = undefined;
-                    if (!this._projectPanel) { return; }
+                    if (!this._hasProjectSurface()) { return; }
                     // Feature files are imported into the kanban DB by GlobalPlanWatcherService;
                     // refresh the DB-backed plans so the Features list (DB-only) reflects the
                     // change. Longer debounce gives the import time to land before we re-read.
@@ -1474,7 +1495,7 @@ Start by checking which documents exist, then present the menu.`;
 
                 const refresh = (filePath: string) => {
                     if (path.resolve(filePath) !== resolved) { return; }
-                    if (!this._projectPanel) { return; }
+                    if (!this._hasProjectSurface()) { return; }
                     // Notify the webview immediately so the correct file-type preview
                     // refreshes. A shared debounce would drop the message for all but
                     // the last-firing watcher (e.g. a git checkout changing both
@@ -1490,7 +1511,7 @@ Start by checking which documents exist, then present the menu.`;
                     if (this._constitutionWatchDebounce) { clearTimeout(this._constitutionWatchDebounce); }
                     this._constitutionWatchDebounce = setTimeout(() => {
                         this._constitutionWatchDebounce = undefined;
-                        if (!this._projectPanel) { return; }
+                        if (!this._hasProjectSurface()) { return; }
                         this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true)
                             .catch(err => console.error('[PlanningPanel] Error auto-refreshing constitution files:', err));
                     }, 400);
@@ -1521,13 +1542,13 @@ Start by checking which documents exist, then present the menu.`;
             try {
                 const triggerRefresh = (filePath: string) => {
                     if (!filePath.endsWith('.md')) { return; }
-                    if (!this._projectPanel) { return; }
+                    if (!this._hasProjectSurface()) { return; }
                     if (this._insightsWatchDebounce) {
                         clearTimeout(this._insightsWatchDebounce);
                     }
                     this._insightsWatchDebounce = setTimeout(() => {
                         this._insightsWatchDebounce = undefined;
-                        if (!this._projectPanel) { return; }
+                        if (!this._hasProjectSurface()) { return; }
                         this._handleMessage({
                             type: 'loadInsights',
                             workspaceRoot: ''

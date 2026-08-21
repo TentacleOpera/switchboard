@@ -177,6 +177,80 @@ function testTicketsAutoRefreshOnFileChange() {
         !/headlessSeams\.watcher\s*=\s*\{/.test(bootstrapTs),
         'bootstrap must NOT override headlessSeams.watcher — the shim is now real, so the override is redundant and its presence would mask a shim regression'
     );
+
+    // ── Standalone shim: "real fs.watch" is not enough — the MATCHER must be right ──
+    // The first cut of this shim passed the two assertions above while silently
+    // dropping the most important watched path in the product. Three invariants,
+    // each of which was a live bug:
+    //
+    //  1. `**/` must match ZERO or more path segments (VS Code semantics). A naive
+    //     `**` -> `.*` expansion demands an intervening directory, so
+    //     `.switchboard/plans/**/*.md` missed the FLAT `.switchboard/plans/foo.md`
+    //     that every plan file actually is.
+    //  2. The regex must be anchored. Unanchored + unescaped `.` made `HEAD` match
+    //     `ORIG_HEAD` and `constitution.md` match `my-constitution.md`.
+    //  3. `base` may arrive as a Uri or WorkspaceFolder, not only a string
+    //     (TaskViewerProvider passes `vscode.Uri.file(...)`). Handing that object to
+    //     fs.watch throws and the watcher degrades to the no-op this replaced.
+    assert.match(
+        vscodeShimTs,
+        /export function globToRegExp[\s\S]*?\(\?:\[\^\/\]\+\/\)\*/,
+        "the shim's glob matcher must expand `**/` to a ZERO-or-more segment group — otherwise `.switchboard/plans/**/*.md` never matches a flat plan file"
+    );
+    assert.match(
+        vscodeShimTs,
+        /export function globToRegExp[\s\S]*?new RegExp\('\^' \+ re \+ '\$'\)/,
+        "the shim's glob matcher must anchor at both ends — an unanchored pattern makes `HEAD` match `ORIG_HEAD` and fires the wrong file's watcher"
+    );
+    assert.match(
+        vscodeShimTs,
+        /function resolveBasePath\(base: any\)[\s\S]*?typeof base\.fsPath === 'string'/,
+        'the shim must normalise a RelativePattern base that is a Uri/WorkspaceFolder to a path string — fs.watch throws on the object and the watcher silently no-ops'
+    );
+    const shimWatcherIdx = vscodeShimTs.indexOf('export function createFileSystemWatcher');
+    assert.notStrictEqual(shimWatcherIdx, -1, 'vscodeShim must export createFileSystemWatcher');
+    const shimWatcherBody = vscodeShimTs.slice(shimWatcherIdx, vscodeShimTs.indexOf('export function findFiles', shimWatcherIdx));
+    assert.match(
+        shimWatcherBody,
+        /resolveBasePath\(\(pattern as any\)\.base\)/,
+        'createFileSystemWatcher must run the RelativePattern base through resolveBasePath, not assume a string'
+    );
+    assert.ok(
+        !/recursive:\s*true/.test(shimWatcherBody),
+        'recursion must be conditional on the glob spanning directories — a bare filename (watchFile) recursing over its parent walks all of .switchboard/ to observe one file'
+    );
+    assert.match(
+        shimWatcherBody,
+        /eventType === 'rename' && !seen\.has\(fullPath\)/,
+        "create and change must be discriminated by a seen-set: fs.watch reports 'rename' for a plain write on macOS, so existence alone reports every save as a create and starves consumers that key on 'change'"
+    );
+
+    // ── Standalone: an ARMED watcher must not be gated on a VS Code panel handle ──
+    // PlanningPanelProvider's kanban-plans / feature-docs / constitution / insights
+    // watchers guarded their refresh on `this._panel` / `this._projectPanel`. Those
+    // are assigned ONLY in open()/openProject(), which the standalone host never
+    // calls — so arming the watchers there bought exactly nothing. The surface
+    // helpers admit the headless broadcaster as a delivery target.
+    const planningTs = fs.readFileSync(path.join(__dirname, '../services/PlanningPanelProvider.ts'), 'utf8');
+    assert.match(
+        planningTs,
+        /private _hasProjectSurface\(\): boolean \{[\s\S]*?_broadcaster\?\.isHeadless\(\) === true/,
+        'PlanningPanelProvider must expose a surface check that counts the headless broadcaster — a bare `!this._panel` gate is permanently true in standalone'
+    );
+    for (const marker of ['_kanbanPlansWatchDebounce', '_featureDocsWatchDebounce', '_insightsWatchDebounce', '_constitutionWatchDebounce']) {
+        const idx = planningTs.indexOf(marker + ') {');
+        assert.notStrictEqual(idx, -1, `PlanningPanelProvider must still debounce via ${marker}`);
+        const window = planningTs.slice(Math.max(0, idx - 1500), idx);
+        assert.ok(
+            /_hasAnySurface\(\)|_hasProjectSurface\(\)/.test(window),
+            `the watcher guarded by ${marker} must gate on a surface helper, not on a raw panel handle — otherwise it is armed and dead in the standalone host`
+        );
+    }
+    assert.match(
+        planningTs,
+        /private async _handleFetchRoots[\s\S]*?this\._setupKanbanPlansWatcher\(\);/,
+        'the Planning watchers must be armed from _handleFetchRoots — the only initialization path the standalone host runs'
+    );
     // Layer 2 of the two-layer completion contract (PRD #7): without the API server the
     // provider has no port, _buildLocalAssetUrl returns undefined, and every ticket image
     // in the browser cockpit renders as a broken icon.

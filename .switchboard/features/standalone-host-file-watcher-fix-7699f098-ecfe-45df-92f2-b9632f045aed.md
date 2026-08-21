@@ -20,12 +20,16 @@ Fix all 13 broken file watchers in the standalone/browser host. Plan 1 fixes the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix no-op vscodeShim.createFileSystemWatcher — Root Cause of All Standalone Watcher Failures](../plans/feature_plan_20260819153323_fix-vscodeShim-createFileSystemWatcher-noop.md) — **CODER CODED**
-- [ ] [Arm Planning Panel Watchers in Standalone Host](../plans/feature_plan_20260819153324_arm-planning-panel-watchers-in-standalone.md) — **CODER CODED**
-- [ ] [Arm Design Panel Watchers in Standalone Host](../plans/feature_plan_20260819153325_arm-design-panel-watchers-in-standalone.md) — **CODER CODED**
+- [ ] [Fix no-op vscodeShim.createFileSystemWatcher — Root Cause of All Standalone Watcher Failures](../plans/feature_plan_20260819153323_fix-vscodeShim-createFileSystemWatcher-noop.md) — **CODE REVIEWED**
+- [ ] [Arm Planning Panel Watchers in Standalone Host](../plans/feature_plan_20260819153324_arm-planning-panel-watchers-in-standalone.md) — **CODE REVIEWED**
+- [ ] [Arm Design Panel Watchers in Standalone Host](../plans/feature_plan_20260819153325_arm-design-panel-watchers-in-standalone.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Completion Summary
 
 All three subtasks implemented and reviewed. Plan 1 replaced the no-op `vscodeShim.createFileSystemWatcher` with a real `fs.watch`-backed implementation, added the missing `RelativePattern` class and `fs` import, removed the redundant bootstrap `watchFolder` override, and updated the test assertions (`vscodeShim.ts`, `bootstrap.ts`, `tickets-auto-refresh-on-file-change.test.js`). Plan 2 armed all 8 Planning panel watchers from `_handleFetchRoots` and made `_setupDocsFolderWatcher` idempotent (`PlanningPanelProvider.ts`). Plan 3 armed the 4 primary Design panel watchers from the `ready` verb handler (`DesignPanelProvider.ts`). No issues encountered; compilation and tests skipped per run directives.
 
+
+## Review Findings
+
+All three subtasks reviewed in place against commit `6582f85a`; two of the three needed fixes, applied across `src/standalone/vscodeShim.ts`, `src/services/PlanningPanelProvider.ts`, `src/services/broadcastHub.ts` and `src/test/tickets-auto-refresh-on-file-change.test.js`. Plan 1's shim was real but its glob matcher was wrong three ways — `**/` demanded an intervening directory (so `.switchboard/plans/**/*.md` never matched a flat plan file), the regex was unanchored and unescaped (`HEAD` matched `ORIG_HEAD`), and a `RelativePattern` base arriving as a `Uri` made `fs.watch` throw and silently restored the no-op; also fixed: recursion is now scoped to directory-spanning globs, create-vs-change is discriminated by a seen-set, and Windows separators are normalised. Plan 2's arming block was correct but 4 of its 8 watchers were dead on arrival — kanban-plans, feature-docs, constitution and insights all gate their refresh on `this._panel`/`this._projectPanel`, assigned only in the `open()` paths standalone never calls — now routed through new `_hasAnySurface()`/`_hasProjectSurface()` helpers backed by `BroadcastHub.isHeadless()`. Plan 3 was correct as written and needed no code change. Verification: `tsc --noEmit` clean apart from 5 pre-existing TS2835 errors in untouched files, eslint 0 errors, `test:contract:tickets-auto-refresh` passes with 11 new ratchet assertions (all confirmed red against the pre-fix source), a transpiled runtime harness confirmed 14 matcher cases plus end-to-end create/change/delete on real directories, and the full 119-step CI gate set produced identical failure sets with and without these edits (19 failures in the real tree, all pre-existing at HEAD, none touching these files); remaining risk is that brace-expansion globs (`**/*.md{,.*}`) are still unsupported by the shim and stay a standalone no-op behind their native `fs.watch` fallback.

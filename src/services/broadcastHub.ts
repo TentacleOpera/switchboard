@@ -76,6 +76,17 @@ export class BroadcastHub {
         }
     }
 
+    /**
+     * True when this hub was built for the headless (standalone / browser) host —
+     * there is no VS Code webview and never will be, so WS fan-out is the ONLY
+     * delivery path. Watcher-driven refreshes must gate on this rather than on a
+     * panel handle: `!this._panel` is permanently true in standalone, which turns
+     * every panel-gated watcher into a silent no-op.
+     */
+    isHeadless(): boolean {
+        return this._target.headless === true;
+    }
+
     /** Update the API server target (called when the LocalApiServer starts). */
     setApiServer(apiServer: LocalApiServer | null | undefined): void {
         this._target.apiServer = apiServer ?? undefined;

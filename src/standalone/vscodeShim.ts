@@ -104,10 +104,50 @@ export class Uri {
 export class RelativePattern {
     readonly base: string;
     readonly pattern: string;
-    constructor(base: string, pattern: string) {
-        this.base = base;
+    constructor(base: string | Uri | WorkspaceFolder | { fsPath: string }, pattern: string) {
+        // Real VS Code accepts a string, a Uri, or a WorkspaceFolder as `base` and
+        // exposes it as a STRING path — and callers use every one of those forms
+        // (TaskViewerProvider passes `vscode.Uri.file(...)` for the brain and
+        // configured-plan watchers). Normalising here keeps `base` a real path for
+        // every reader; leaving a Uri through makes fs.watch throw and the watcher
+        // degrade to a silent no-op.
+        this.base = resolveBasePath(base) ?? String(base);
         this.pattern = pattern;
     }
+}
+
+/**
+ * Coerce a RelativePattern `base` (string | Uri | WorkspaceFolder) to a filesystem
+ * path. Returns undefined when the shape is unrecognised so callers can bail loudly
+ * instead of handing `fs.watch` an object.
+ */
+function resolveBasePath(base: any): string | undefined {
+    if (typeof base === 'string') { return base; }
+    if (base && typeof base.fsPath === 'string') { return base.fsPath; }          // Uri
+    if (base && base.uri && typeof base.uri.fsPath === 'string') { return base.uri.fsPath; } // WorkspaceFolder
+    return undefined;
+}
+
+/**
+ * Glob → anchored RegExp for the subset of glob syntax the standalone host uses:
+ * `**` (any depth), `**\/` (ZERO or more path segments — the semantics VS Code
+ * gives it, so `plans/**\/*.md` must match the flat `plans/foo.md` too), `*`
+ * (within one segment) and `?`. Everything else is escaped: an unescaped `.`
+ * matched any character, so `HEAD` matched `ORIG_HEAD` and `constitution.md`
+ * matched `my-constitution.md`. The result is anchored at both ends.
+ */
+export function globToRegExp(glob: string): RegExp {
+    if (glob === '**/*' || glob === '**') { return /.*/; }
+    let re = '';
+    for (let i = 0; i < glob.length; i++) {
+        if (glob.startsWith('**/', i)) { re += '(?:[^/]+/)*'; i += 2; continue; }
+        if (glob.startsWith('**', i)) { re += '.*'; i += 1; continue; }
+        const c = glob[i];
+        if (c === '*') { re += '[^/]*'; continue; }
+        if (c === '?') { re += '[^/]'; continue; }
+        re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+    return new RegExp('^' + re + '$');
 }
 
 // ─── WorkspaceFolder ────────────────────────────────────────────────────────
@@ -234,12 +274,21 @@ export namespace workspace {
         const noop = (): any => ({ dispose() {} });
 
         // Resolve folder + glob from a RelativePattern ({ base, pattern }) or a
-        // bare glob string. VscodeHostFileWatcher always passes RelativePattern.
+        // bare glob string. VscodeHostFileWatcher always passes RelativePattern,
+        // but `base` may be a Uri or WorkspaceFolder rather than a path string
+        // (TaskViewerProvider's brain / configured-plan watchers pass a Uri), so
+        // normalise it — handing fs.watch an object throws and the watcher would
+        // degrade to the very silent no-op this implementation replaced.
         let folderPath: string;
         let globPattern: string;
         if (pattern && typeof pattern === 'object' && 'base' in pattern) {
-            folderPath = pattern.base;
-            globPattern = pattern.pattern || '**/*';
+            const resolved = resolveBasePath((pattern as any).base);
+            if (!resolved) {
+                console.warn('[vscodeShim watcher] unrecognised RelativePattern base — watcher disabled:', (pattern as any).base);
+                return { onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose() {} };
+            }
+            folderPath = resolved;
+            globPattern = (pattern as any).pattern || '**/*';
         } else if (typeof pattern === 'string') {
             folderPath = process.cwd();
             globPattern = pattern;
@@ -251,47 +300,62 @@ export namespace workspace {
         const changeHandlers: ((uri: Uri) => void)[] = [];
         const deleteHandlers: ((uri: Uri) => void)[] = [];
 
-        // Simple glob → regex matcher. Handles **/*, **/*.md, bare filenames.
-        // No full glob library needed — the standalone host only uses these shapes.
-        const globToRegex = (glob: string): RegExp => {
-            if (glob === '**/*') return /.*/;
-            const re = glob
-                .replace(/\*\*/g, '<<GLOBSTAR>>')
-                .replace(/\*/g, '[^/]*')
-                .replace(/<<GLOBSTAR>>/g, '.*')
-                .replace(/\?/g, '.');
-            return new RegExp(re + '$');
-        };
-        const matcher = globToRegex(globPattern);
+        // Anchored glob matcher (see globToRegExp). Only the shapes the standalone
+        // host actually uses are supported — no full glob library needed.
+        const matcher = globToRegExp(globPattern);
+
+        // fs.watch reports 'rename' for create AND delete — and macOS's recursive
+        // (FSEvents) backend reports 'rename' for a plain write to an EXISTING file
+        // too. Existence alone therefore cannot separate create from change, and
+        // reporting every write as a create silently starved the one consumer that
+        // keys on 'change' (PlanningPanelProvider's planning-HTML save listener).
+        // Seed the known set from the watched folder's own entries — SHALLOW on
+        // purpose. That is exact for the flat `watchFile` shape (the only consumer
+        // that discriminates), and best-effort for a recursive `**/*` watch, whose
+        // consumers all treat create and change identically. A full recursive walk
+        // at arm time would scan arbitrary user doc trees on every re-arm to buy
+        // nothing.
+        const seen = new Set<string>();
+        try {
+            for (const name of fs.readdirSync(folderPath)) { seen.add(path.resolve(folderPath, name)); }
+        } catch { /* folder unreadable — fall back to first-event-is-create */ }
 
         const emit = (eventType: string, filename: string | Buffer | null) => {
             if (!filename) return;
             const fullPath = path.resolve(folderPath, filename.toString());
-            const relativePath = path.relative(folderPath, fullPath);
+            // Globs are always '/'-separated; path.relative yields '\\' on Windows.
+            const relativePath = path.relative(folderPath, fullPath).split(path.sep).join('/');
             if (!matcher.test(relativePath) && !matcher.test(path.basename(fullPath))) return;
 
             const uri = { fsPath: fullPath } as Uri;
-            // fs.watch fires 'rename' for both create and delete; existence at
-            // delivery time distinguishes them (same approach as
-            // createStandaloneFolderWatcher in hostServices.ts).
             if (!fs.existsSync(fullPath)) {
+                seen.delete(fullPath);
                 deleteHandlers.forEach(h => h(uri));
-            } else if (eventType === 'rename') {
+            } else if (eventType === 'rename' && !seen.has(fullPath)) {
+                seen.add(fullPath);
                 createHandlers.forEach(h => h(uri));
             } else {
+                seen.add(fullPath);
                 changeHandlers.forEach(h => h(uri));
             }
         };
 
+        // Only recurse when the glob actually spans directories. `watchFile` arrives
+        // as a bare filename against its parent folder — recursing there would walk
+        // the whole subtree (all of `.switchboard/` to observe one `memo.md`) and
+        // funnel every unrelated event through the matcher for nothing.
+        const recursive = globPattern.includes('**') || globPattern.includes('/');
+
         let watcher: fs.FSWatcher;
         try {
-            watcher = fs.watch(folderPath, { persistent: false, recursive: true }, emit);
+            watcher = fs.watch(folderPath, { persistent: false, recursive }, emit);
         } catch {
-            // recursive fs.watch is macOS/Windows only; fall back to flat watch
-            // (covers the flat ticket folders this seam is used for).
+            // recursive fs.watch needs macOS/Windows or Node >= 20 on Linux; fall
+            // back to a flat watch (covers the flat plan/ticket folders).
             try {
                 watcher = fs.watch(folderPath, { persistent: false }, emit);
-            } catch {
+            } catch (e) {
+                console.warn(`[vscodeShim watcher] cannot watch ${folderPath}:`, e);
                 return { onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose() {} };
             }
         }
