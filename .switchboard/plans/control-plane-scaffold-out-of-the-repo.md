@@ -12,18 +12,33 @@ Measured on this workspace:
 | :--- | :--- | :--- | :--- | :--- |
 | `.switchboard/plans/` | 43M | 1,984 | yes (gitignore-whitelisted) | user artifacts — stay |
 | `.switchboard/features/` | 2.2M | 270 | yes (whitelisted) | user artifacts — stay |
-| `.switchboard/sessions/` | 960K | 76 | yes (whitelisted) | runtime, mixed |
+| `.switchboard/sessions/` | 960K | 76 | yes (whitelisted) | **completed-migration residue** — every file ends `.migrated` |
 | `.agents/` | 744K | ~51 | **yes — not in `.gitignore`** | shipped control plane |
 | `.claude/skills/` | 152K | 8 | **yes — not in `.gitignore`** | mirror of the same content |
 
 The 46M is plans, and plans are project content that belongs in git. **The scaffolding problem is the other ~900K:** `.agents/{protocols,skills,workflows,personas,rules,scripts}` plus the `.claude/` mirror plus the root `AGENTS.md` / `CLAUDE.md` / `CONSTITUTION.md` blocks. Neither `.agents` nor `.claude` appears in `.gitignore`, so all of it is committed — and it is byte-identical in every workspace, because it is extension-shipped content, not user content. Duplicated across two directory trees, mirrored again into managed blocks in root markdown files, and re-copied on every scaffold.
+
+**Almost nothing else is committed, because a managed `.gitignore` block already handles it.** `WorkspaceExcludeService.TARGETED_RULES` writes a managed block into the workspace `.gitignore`, and `normalizeStrategy()` defaults to `targetedGitignore` when unset, so every workspace gets it. The block is `.switchboard/*` plus seven `!` whitelist lines, so `docs/`, `tickets/`, `planning-cache/`, `orchestrator/`, `teams/`, `instructions/`, `logs/` and the `*.db` globs are all already ignored. **The entire git-side problem is four of those seven whitelist lines:**
+
+| Whitelist line | Verdict |
+| :--- | :--- |
+| `!.switchboard/plans/`, `!features/`, `!reviews/` | correct — user artifacts |
+| `!.switchboard/sessions/` | **wrong.** All 76 files end in `.migrated` — residue from a completed migration, 960K of it, committed because this line still exists |
+| `!.switchboard/README.md` | **wrong** — extension-shipped doc |
+| `!.switchboard/SWITCHBOARD_PROTOCOL.md` | **wrong** — extension-shipped doc |
+| `!.switchboard/CLIENT_CONFIG.md` | **wrong** — extension-shipped doc |
+
+So the committed-scaffold fix is largely *deleting four lines from `TARGETED_RULES`* and moving the three docs into the projection. That is also the mechanism for ignoring `.agents/` and `.claude/`: append to `TARGETED_RULES`, do not hand-edit `.gitignore`. `_upsertManagedBlock` already performs the managed-block upsert, and it is the same mechanism `ClaudeCodeMirrorService` uses for the `CLAUDE.md` block.
 
 **Two categories are sitting in the same directories and they need opposite treatment.** Control-plane *definitions* are the same everywhere, regenerable from the extension, and carry zero data-loss risk if deleted. User *artifacts* are project content, deliberately whitelisted, and irreplaceable. Today both are committed, so the second's legitimacy protects the first from scrutiny.
 
 **Beyond the scaffold, the same directory carries three more things that should not be in a repo.** Enumerated from every `.switchboard/` path referenced in `src/`:
 
 - **Machine-local JSON config, seven files, next to a database that already has `config` and `project_config` tables:** `config.json` (8 references), `settings.json` (4), `integration-config.json` (2), `kanban-state.json` (2), `kanban-state-backup.json` (2), `workspace_identity.json`, `.agent_version.json`.
-- **Pure regenerable cache:** `planning-cache/{sourceId}/{docId}.md` and `planning-cache/clickup/documentIdMap.json` (5), `logs/` (2), `local-folder-cache.md` (2).
+- **Five JSON sidecars duplicating the `imported_docs` table:** `planning-cache/{sourceId}/documentIdMap.json` (duplicates `remote_doc_id` ↔ `slug_prefix`), `documentTitles.json` (`doc_name`), `cache-metadata.json` (`last_synced_at`), plus `clickup-tasks.json` and `linear-tasks.json` at the cache root. `ImportRegistryEntry.remoteContentHash` also duplicates `imported_docs.content_hash` — the same hash in a JSON file and a column.
+- **Genuine cache that earns its place:** `planning-cache/{sourceId}/{docId}.md`. This is *not* a duplicate of `.switchboard/docs/`; the two differ by keying. `docs/<slugPrefix>*.md` is the working copy the user edits; `planning-cache/{sourceId}/{docId}.md` is the last-synced remote copy keyed by remote doc id — the base version for conflict detection. The hash tells you *that* remote changed; the cached body is what lets you show *what* changed or do a three-way merge. Written at `PlanningPanelCacheService.ts:131`, read back at `:268`, so it is live. Same pattern as git's index. These move to the global cache directory; they do not get deleted.
+- **Pure regenerable cache:** `logs/` (2), `local-folder-cache.md` (2).
+- **Not a problem, contrary to first impressions:** there is no ticket cache. `TicketsPanelProvider` has zero references to `PlanningPanelCacheService` or `planning-cache`; `tickets/<provider>/*.md` is the only copy of a ticket. The task/issue cache in `PlanningPanelCacheService` is in-memory only — a `Map` with LRU eviction at 100 entries and a 5-minute TTL. And `.switchboard/docs/` is already gitignored, so relocating it is a working-tree tidiness matter, not a repository one.
 - **Dead instrumentation:** `feature-clobber-diagnostic.txt` (2) — the temporary diagnostic for the `is_feature` investigation, removed by that plan.
 
 **And there is a filesystem message queue.** `instructions/standing`, `instructions/inbox`, and `instructions/claimed/<name>.claim` (19 references) implement work claiming through atomic file creation. It works, but `board_move_requests` and `job_runs` already exist as tables and are the right home for a queue in a product that ships a database.
@@ -55,7 +70,7 @@ The global-database and backup plans both rest on the DB being a derived index o
 
 ## Metadata
 
-**Complexity:** 6
+**Complexity:** 7
 **Tags:** infrastructure, refactor, devops, database, reliability
 
 ## User Review Required
@@ -69,8 +84,10 @@ Yes — two decisions:
 
 ### Routine
 
-- Adding `.agents/` and the mirrored `.claude/` subtrees to `.gitignore`, and `git rm --cached` for the currently-tracked copies.
-- Moving `planning-cache/`, `logs/`, and `local-folder-cache.md` to `~/.switchboard/cache/<workspace-id>/`.
+- Appending `.agents/` and the mirrored `.claude/` subtrees to `WorkspaceExcludeService.TARGETED_RULES`, and deleting the four wrong whitelist lines (`!sessions/`, `!README.md`, `!SWITCHBOARD_PROTOCOL.md`, `!CLIENT_CONFIG.md`) from the same list. Then `git rm --cached` the currently-tracked copies. Do not hand-edit `.gitignore` — the managed block owns it.
+- Deleting `.switchboard/sessions/` once the whitelist line is gone: all 76 files end in `.migrated`, so this is completed-migration residue, not data.
+- Moving the `planning-cache/{sourceId}/{docId}.md` bodies, `logs/`, and `local-folder-cache.md` to `~/.switchboard/cache/<workspace-id>/`.
+- Folding the five JSON sidecars into `imported_docs`, which already has every column they carry.
 - Deleting `feature-clobber-diagnostic.txt` generation (coordinate with the `is_feature` plan).
 - A `control_plane` registry table: name, kind (protocol/skill/workflow/persona/rule), version, content hash, body, and a nullable per-workspace override.
 
@@ -92,6 +109,7 @@ Yes — two decisions:
 - The projection is executable-adjacent: `.agents/scripts/` contains shell scripts agents invoke. Regenerating them from the store means the store's contents become a code-execution path. Bodies must come only from the extension bundle or a user-authored override, never from anything network-fetched, and the projected tree should not be writable by anything but the sidecar.
 
 **Side effects**
+- **The `none` exclude strategy is an existing exposure worth deciding on.** `WorkspaceExcludeService` supports `targetedGitignore` (default), `localExclude`, `custom` and `none`. Under `none` the managed block is *removed*, so `kanban.db`, `docs/`, `tickets/`, `planning-cache/` and the caches all become committable. Anyone who selected it is exposed today, independently of this plan. Either drop `none` as an option or warn on selection; do not silently leave it.
 - `git rm --cached` on `.agents/` shows up as a large deletion in the next commit for every user who tracks it. That needs saying in a release note, or it reads as data loss.
 - `MultiRepoScaffoldingService` and `ControlPlaneMigrationService` both write parts of this tree; both become projection consumers rather than authors.
 - `ClaudeCodeMirrorService` (`generateClaudeMirror`, `buildManagedInner`, `CLAUDE_BLOCK_START`/`END`) already owns managed-block generation into root markdown. It is the natural home for the projection writer — extend it rather than adding a parallel mechanism.
@@ -123,11 +141,13 @@ Yes — two decisions:
 
 1. **`control_plane` registry table** — name, kind, version, content hash, body, nullable per-workspace override. Seeded from the extension bundle at activation.
 2. **Projection writer**, extending `ClaudeCodeMirrorService`: renders the registry into `.agents/` and `.claude/` as an atomic temp-tree-plus-rename, before the workspace is announced ready. Skips any file whose on-disk hash does not match the last-written value, and reports it as locally modified.
-3. **`.gitignore`**: add `.agents/` and the mirrored `.claude/` subtrees; `git rm --cached` the tracked copies, with a release note.
+3. **`WorkspaceExcludeService.TARGETED_RULES`**: append `.agents/` and the mirrored `.claude/` subtrees; delete the four wrong whitelist lines; `git rm --cached` the tracked copies, with a release note. The three shipped `.switchboard/*.md` docs move into the projection alongside `.agents/`.
 4. **Seven JSON files** migrated to `config` / `project_config` behind a `stateConfigBridge`-style facade, per-key decisions on workspace-scoped vs machine-global, archived as `*.migrated.bak`.
-5. **Caches relocated** to `~/.switchboard/cache/<workspace-id>/`: `planning-cache/`, `logs/`, `local-folder-cache.md`.
-6. **`MultiRepoScaffoldingService` / `ControlPlaneMigrationService`** become projection consumers rather than tree authors.
-7. **Version stamp** on the registry so an older extension refuses a newer projection rather than misreading it.
+5. **Caches relocated** to `~/.switchboard/cache/<workspace-id>/`: the `planning-cache/{sourceId}/{docId}.md` sync-base bodies (kept — they are the conflict-detection base, not a duplicate), `logs/`, `local-folder-cache.md`.
+6. **Five JSON sidecars folded into `imported_docs`**: `documentIdMap.json`, `documentTitles.json`, `cache-metadata.json`, `clickup-tasks.json`, `linear-tasks.json`. Drop `ImportRegistryEntry.remoteContentHash` in favour of the existing `content_hash` column so the hash has one home.
+7. **`.switchboard/sessions/` deleted** after its whitelist line is removed — completed-migration residue.
+8. **`MultiRepoScaffoldingService` / `ControlPlaneMigrationService`** become projection consumers rather than tree authors.
+9. **Version stamp** on the registry so an older extension refuses a newer projection rather than misreading it.
 
 ### Migration
 
@@ -141,7 +161,10 @@ Import before delete, archive as `*.migrated.bak`, never unlink a file that may 
 - **Override preservation:** hand-edit a projected protocol, regenerate; assert the edit survives, the file is reported as locally modified, and a `<name>.local.bak` exists when the shipped version also changed.
 - **Override staleness:** confirm a locally-modified file whose shipped version has changed is surfaced in the UI rather than silently kept.
 - **JSON migration:** for each of the seven files, seed with known values including an unknown legacy key; migrate; assert every value readable through the new path, the unknown key preserved, and a `*.migrated.bak` present.
-- **Cache relocation:** assert `planning-cache` reads resolve to the global location and the workspace copy is moved, not deleted.
+- **Cache relocation:** assert the `{docId}.md` sync-base bodies resolve from the global location, the workspace copy is moved not deleted, and conflict detection still works — edit a doc locally, change it remotely, assert the three-way comparison against the cached base is unchanged.
+- **JSON sidecar migration:** for each of the five, seed known values, migrate, assert every value readable from `imported_docs` and the sidecar archived as `*.migrated.bak`.
+- **Whitelist:** assert `git check-ignore` reports `sessions/`, `README.md`, `SWITCHBOARD_PROTOCOL.md` and `CLIENT_CONFIG.md` as ignored after the change, and that `plans/`, `features/`, `reviews/` are still tracked.
+- **`none` strategy:** assert the chosen handling (removal or warning) and that no path silently commits `kanban.db`.
 - **`api-server-port.txt` untouched:** explicit regression test that it remains a real file at its current path and that the CLI scripts still find it.
 - **Downgrade:** point an older extension at a newer registry; assert refusal with a clear message.
 - **Uninstall:** assert the projected tree is identifiable as orphaned (a marker file) so cleanup is possible.
@@ -150,5 +173,4 @@ Import before delete, archive as `*.migrated.bak`, never unlink a file that may 
 
 - Does any user actually customise `.agents/` content today? If yes, override preservation is the headline feature; if no, it is insurance and the plan gets simpler.
 - Do `workspace_identity.json` and `.switchboard/workspace-id` both need to exist, or is one legacy?
-- Is `sessions/` (960K, 76 files) user artifact or runtime state? It is gitignore-whitelisted like plans, which suggests artifact, but the name suggests runtime. This determines whether it stays committed.
 - Should `.agents/scripts/` be projected at all, or invoked from the extension bundle directly? Projecting executables widens the code-execution surface for no obvious gain.
