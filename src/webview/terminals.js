@@ -10883,13 +10883,21 @@
         // Recognises the role-boundary headPrompt before the durable commit
         // instruction was appended. The fragment is present in both old and new
         // text, so the rewriter uses a NEGATIVE check: match if the fragment is
-        // present AND COMMIT_INSTRUCTION_MARKER is absent. After rewriting, the
+        // present AND COMMIT_INSTRUCTION_MARKER is absent. After appending, the
         // marker is present, so the row does not re-match.
         var PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT = 'PLAN FILES ARE THE SOURCE OF TRUTH';
         // Mirror of COMMIT_INSTRUCTION_MARKER in teamWiring.ts. Substring unique
         // to TEAM_HEAD_COMMIT_INSTRUCTION — the negative-check gate for the
         // pre-commit-instruction recogniser.
         var COMMIT_INSTRUCTION_MARKER = 'create a single commit with a descriptive message';
+        // Mirror of TEAM_HEAD_COMMIT_INSTRUCTION in teamWiring.ts. Appended to a
+        // pre-commit-instruction team-head row rather than replacing it — see the
+        // host comment: that change is additive, and the fragment above sits in
+        // the CURRENT shipped prompt, so a replace would discard an operator's
+        // own wording.
+        var TEAM_HEAD_COMMIT_INSTRUCTION = ' When the work is complete, stage the files you changed by explicit path '
+            + '— never `git add -A` or `git add .`. Then create a single commit with a '
+            + 'descriptive message.';
 
         for (var i = 0; i < orders.length; i++) {
             var o = orders[i];
@@ -10910,14 +10918,13 @@
             // Stale team-head row carrying the old per-subtask headPrompt.
             // Match by indexOf on a substitution-independent fragment — never
             // a constructed RegExp (the head name may contain regex
-            // metacharacters). Rewrite to the new feature-level text with
-            // {head} substituted by the order's parent (the head name).
+            // metacharacters). The three fragments below identify SUPERSEDED
+            // text, so rewrite to the new feature-level text with {head}
+            // substituted by the order's parent (the head name).
             if (o.scope === 'team-head' && typeof o.instruction === 'string') {
                 if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1
                     || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1
-                    || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1
-                    || (o.instruction.indexOf(PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT) !== -1
-                        && o.instruction.indexOf(COMMIT_INSTRUCTION_MARKER) === -1)) {
+                    || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1) {
                     var newInstruction = NEW_CODING_HEAD_PROMPT_CLIENT
                         .replace(/\{head\}/g, o.parent || '');
                     var copy = {};
@@ -10928,6 +10935,23 @@
                     }
                     copy.instruction = newInstruction;
                     rewritten.push(copy);
+                    drop[o.id] = true;
+                    touched = true;
+                    continue;
+                }
+                // Pre-commit-instruction row: APPEND the missing clause instead
+                // of replacing, so an operator-edited row keeps its wording.
+                // Mirrors the host branch in migrateCodingTeamOrders.
+                if (o.instruction.indexOf(PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT) !== -1
+                    && o.instruction.indexOf(COMMIT_INSTRUCTION_MARKER) === -1) {
+                    var appended = {};
+                    for (var ak in o) {
+                        if (Object.prototype.hasOwnProperty.call(o, ak)) {
+                            appended[ak] = o[ak];
+                        }
+                    }
+                    appended.instruction = o.instruction + TEAM_HEAD_COMMIT_INSTRUCTION;
+                    rewritten.push(appended);
                     drop[o.id] = true;
                     touched = true;
                     continue;

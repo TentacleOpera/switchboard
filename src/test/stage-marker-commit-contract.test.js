@@ -53,6 +53,9 @@ const {
     PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT,
     PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT,
     COMMIT_INSTRUCTION_MARKER,
+    TEAM_HEAD_COMMIT_INSTRUCTION,
+    NEW_REVIEW_TEAM_HEAD_PROMPT,
+    PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT,
     PRE_REWRITE_CALLBACK_INSTRUCTION,
     STANDING_ORDERS_PREMIGRATION_BAK_KEY
 } = require('../../out/services/teamWiring');
@@ -476,9 +479,13 @@ test('a head name containing regex metacharacters does not break the rewrite', (
     assert.strictEqual(out[0].instruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, head));
 });
 
-test('all three host read sites use loadEffectiveStandingOrders and client mirror composes converters', () => {
+test('every host read site uses loadEffectiveStandingOrders and client mirror composes converters', () => {
     const sites = [
-        ['services/TaskViewerProvider.ts', 2],
+        // Three in TaskViewerProvider (prompt composition, delivery, and the
+        // turn-end/standing-orders read) plus one in the standalone bootstrap.
+        // Exact counts, not an allowlist: a NEW raw read added inside an
+        // already-permitted file is exactly the drift this catches.
+        ['services/TaskViewerProvider.ts', 3],
         ['standalone/bootstrap.ts', 1]
     ];
     for (const [file, count] of sites) {
@@ -709,6 +716,63 @@ test('a persisted team-head order carrying the pre-commit-instruction headPrompt
     // Idempotent: the marker is now present, so the negative check fails and
     // the row does not re-match.
     assert.strictEqual(migrateCodingTeamOrders(out), out, 'the migration is not idempotent — the negative check failed');
+});
+
+// The pre-commit-instruction recogniser APPENDS rather than replaces, and that
+// is only byte-safe while the new prompts are exactly the frozen snapshot plus
+// TEAM_HEAD_COMMIT_INSTRUCTION. Edit either NEW_* body without re-freezing its
+// snapshot and an appended row stops equalling the shipped text — silently, in
+// every already-spawned team's delivered prompt. Pin the relation itself.
+test('both NEW_* head prompts are exactly their frozen snapshot plus TEAM_HEAD_COMMIT_INSTRUCTION', () => {
+    assert.strictEqual(
+        PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT + TEAM_HEAD_COMMIT_INSTRUCTION,
+        NEW_CODING_HEAD_PROMPT,
+        'NEW_CODING_HEAD_PROMPT is no longer append-only over its snapshot — the '
+        + 'appending recogniser in migrateCodingTeamOrders would produce text that '
+        + 'is not the shipped prompt');
+    assert.strictEqual(
+        PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT + TEAM_HEAD_COMMIT_INSTRUCTION,
+        NEW_REVIEW_TEAM_HEAD_PROMPT,
+        'NEW_REVIEW_TEAM_HEAD_PROMPT is no longer append-only over its snapshot');
+    assert.ok(TEAM_HEAD_COMMIT_INSTRUCTION.includes(COMMIT_INSTRUCTION_MARKER),
+        'the marker must be a substring of the appended clause, or the negative '
+        + 'idempotence check never sees it and every read re-appends');
+});
+
+// The clobber this guards: the fragment sits in the CURRENT shipped prompt, so a
+// fragment-only REPLACE matched an operator-edited row too — and
+// loadEffectiveStandingOrders persists the transform, so the operator's wording
+// was destroyed on disk (backupOnce may already have been spent by an earlier
+// generation). Appending upgrades the row without touching what they wrote.
+test('an operator-edited pre-commit-instruction head order keeps its wording and gains the clause', () => {
+    const houseRule = ' HOUSE RULE: never touch src/legacy/ without asking me first.';
+    const edited = PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1') + houseRule;
+    const raw = [{ id: 'op1', parent: 'lead-1', child: '', scope: 'team-head', teamId: 't1', instruction: edited }];
+    const out = migrateCodingTeamOrders(raw);
+    const row = out.find(o => o.id === 'op1');
+    assert.ok(row, 'the operator row lost its id');
+    assert.ok(row.instruction.includes(houseRule),
+        'the operator\'s own wording was discarded — the recogniser replaced instead of appending');
+    assert.ok(row.instruction.includes(COMMIT_INSTRUCTION_MARKER),
+        'the edited row must still gain the durable commit instruction');
+    assert.strictEqual(row.instruction, edited + TEAM_HEAD_COMMIT_INSTRUCTION,
+        'the append must be the only change to an operator-edited row');
+    // Idempotent: the marker is now present, so a second pass leaves it alone.
+    assert.strictEqual(migrateCodingTeamOrders(out), out,
+        'the operator row re-matched — the negative check failed and the clause doubles every read');
+});
+
+test('the client mirror APPENDS the commit clause instead of replacing the row', () => {
+    const clientClause = readConcat(TERMINALS_JS_SRC, 'var TEAM_HEAD_COMMIT_INSTRUCTION =');
+    assert.strictEqual(clientClause, TEAM_HEAD_COMMIT_INSTRUCTION,
+        'terminals.js TEAM_HEAD_COMMIT_INSTRUCTION drifted — the webview would render a '
+        + 'different clause than the host delivers');
+    assert.ok(TERMINALS_JS_SRC.includes('o.instruction + TEAM_HEAD_COMMIT_INSTRUCTION'),
+        'the client mirror must append, not replace: a replace here renders the shipped '
+        + 'prompt over an operator-edited row and diverges from the host transform');
+    // The three superseded fragments still replace; only the additive one appends.
+    assert.ok(!/PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT\) !== -1\s*\n\s*&& o\.instruction\.indexOf\(COMMIT_INSTRUCTION_MARKER\) === -1\)\)/.test(TERMINALS_JS_SRC),
+        'the pre-commit fragment must not sit inside the replace condition');
 });
 
 test('migrateAgentGroups converts an untouched pre-commit-instruction Coding team', () => {

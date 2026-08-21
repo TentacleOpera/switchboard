@@ -653,17 +653,6 @@ export const OLD_CODING_HEAD_PROMPT =
     + 'subtasks this team worked; leave other cards alone. Do not wait to be asked.';
 
 /**
- * The POST-rewrite Coding team `headPrompt` — feature-level, single-action.
- * The lead never writes a review prompt and never hands work to the reviewer
- * directly; it makes one `/kanban/dispatch` call on the FEATURE's planId when
- * every subtask is finished. `{head}` is substituted by `wireSpawnedTeam`
- * (`:719`) and by the order converter with the live head name.
- *
- * Byte-identical to the shipped `headPrompt` in `kanban.html`'s Coding entry
- * (the four substring assertions in the marker-contract test pin the
- * load-bearing literals).
- */
-/**
  * Durable commit instruction appended to every team-head standing order.
  * This is NOT the per-dispatch GIT POLICY block (branch/push/safety clauses
  * are composed per-dispatch by buildGitPolicyBlock). This is the durable
@@ -780,6 +769,17 @@ export const PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT =
     + 'Post a finished report to .switchboard/orchestrator/reports/ naming the feature and its planId, '
     + 'and stop. The card stays where it is.';
 
+/**
+ * The POST-rewrite Coding team `headPrompt` — feature-level, single-action.
+ * The lead never writes a review prompt and never hands work to the reviewer
+ * directly; it makes one `/kanban/dispatch` call on the FEATURE's planId when
+ * every subtask is finished. `{head}` is substituted by `wireSpawnedTeam`
+ * (`:719`) and by the order converter with the live head name.
+ *
+ * Byte-identical to the shipped `headPrompt` in `kanban.html`'s Coding entry
+ * (the four substring assertions in the marker-contract test pin the
+ * load-bearing literals).
+ */
 export const NEW_CODING_HEAD_PROMPT =
     'You lead this team. Your coders work the subtasks of one feature. '
     + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
@@ -2194,12 +2194,16 @@ export const BUGGY_HEADPROMPT_FRAGMENT = 'give that coder the next subtask';
 export const PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT = 'then make one call: ';
 
 /**
- * Substitution-independent fragment unique to the pre-commit-instruction
- * Coding team headPrompt (the current NEW_CODING_HEAD_PROMPT before this
- * change). Also present in the new NEW_CODING_HEAD_PROMPT (it is a prefix),
- * so the rewriter uses a NEGATIVE check: match if the fragment is present
- * AND COMMIT_INSTRUCTION_MARKER is absent. After rewriting, the marker is
- * present, so the row does not re-match.
+ * Substitution-independent fragment present in the pre-commit-instruction
+ * Coding team headPrompt. Unlike the three fragments above it is NOT unique to
+ * superseded text: the change was append-only, so the old text is a prefix of
+ * the new one and the fragment sits in the CURRENT shipped prompt — and in any
+ * operator edit that kept the sentence. That is why its recogniser APPENDS
+ * `TEAM_HEAD_COMMIT_INSTRUCTION` instead of replacing the instruction, and
+ * gates on `COMMIT_INSTRUCTION_MARKER` being absent for idempotence. Replacing
+ * would discard an operator's wording, and `loadEffectiveStandingOrders`
+ * PERSISTS what the transform returns — so that loss would be on disk, not
+ * just in the delivered prompt.
  *
  * Two copies only: this one and the terminals.js mirror.
  * stage-marker-commit-contract.test.js gates both halves.
@@ -2263,29 +2267,49 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
 
         // Stale team-head row carrying EITHER the old per-subtask headPrompt
         // (OLD_HEADPROMPT_FRAGMENT), the first-generation feature-level one
-        // (BUGGY_HEADPROMPT_FRAGMENT), the pre-role-boundary one
-        // (PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT), or the pre-commit-instruction
-        // one (PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT + negative check on
-        // COMMIT_INSTRUCTION_MARKER).
+        // (BUGGY_HEADPROMPT_FRAGMENT), or the pre-role-boundary one
+        // (PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) — all three superseded, so
+        // the whole instruction is replaced. The pre-commit-instruction row
+        // (PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT + negative check on
+        // COMMIT_INSTRUCTION_MARKER) is handled separately below: that change
+        // is additive, so it APPENDS.
         // {head} was already substituted at install time, so match on a
-        // substitution-independent fragment by indexOf. On match, rewrite
-        // the instruction to the new feature-level text with {head}
-        // substituted by the order's parent (the head name).
+        // substitution-independent fragment by indexOf. On a supersession
+        // match, rewrite the instruction to the new feature-level text with
+        // {head} substituted by the order's parent (the head name).
         if (o.scope === 'team-head' && typeof o.instruction === 'string') {
             if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1
                 || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1
-                || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1
-                // New: pre-commit-instruction rows. The fragment is present in
-                // both old and new text, so gate on the COMMIT_INSTRUCTION_MARKER
-                // being ABSENT — a rewritten row carries the marker and does not
-                // re-match. This is the only recogniser that uses a negative check;
-                // it is required because the change is additive (old text + appended
-                // instruction), so no fragment can be unique to the old text.
-                || (o.instruction.indexOf(PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT) !== -1
-                    && o.instruction.indexOf(COMMIT_INSTRUCTION_MARKER) === -1)) {
+                || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1) {
                 const newInstruction = NEW_CODING_HEAD_PROMPT
                     .replace(/\{head\}/g, o.parent || '');
                 rewritten.push({ ...o, instruction: newInstruction });
+                drop.add(o.id);
+                touched = true;
+                continue;
+            }
+            // Pre-commit-instruction rows. The fragment is present in both the
+            // old and the new text, so gate on COMMIT_INSTRUCTION_MARKER being
+            // ABSENT — a migrated row carries the marker and does not re-match.
+            // This is the only recogniser that uses a negative check; it is
+            // required because the change is additive, so no fragment can be
+            // unique to the old text.
+            //
+            // APPEND, do not replace. The three fragments above identify
+            // SUPERSEDED text (content was changed or removed), so replacing the
+            // whole instruction is the migration. This one identifies text that
+            // is merely INCOMPLETE — the new text is the old text plus this
+            // clause — and the fragment sits in the CURRENT shipped prompt, so a
+            // row an operator edited in the Teams tab (`team-head-order-text`)
+            // still matches. Replacing would silently discard their wording; the
+            // docblock's "operator-edited rows are left untouched" promise and
+            // every `migrateAgentGroups` recogniser say the operator's text wins.
+            // Appending upgrades the untouched row to a byte-identical
+            // NEW_CODING_HEAD_PROMPT (it is exactly the frozen snapshot plus this
+            // constant) and leaves an edited row otherwise intact.
+            if (o.instruction.indexOf(PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT) !== -1
+                && o.instruction.indexOf(COMMIT_INSTRUCTION_MARKER) === -1) {
+                rewritten.push({ ...o, instruction: o.instruction + TEAM_HEAD_COMMIT_INSTRUCTION });
                 drop.add(o.id);
                 touched = true;
                 continue;
