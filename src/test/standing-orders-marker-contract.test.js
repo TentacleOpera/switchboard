@@ -611,17 +611,35 @@ test('both files carry a team-head scope branch with matching selection logic an
             `${label}: no team-head branch gates on o.teamId + o.parent === targetName + group membership `
             + `(found ${branches.length} team-head branch(es), none of them the selection branch)`);
     }
-    // scopeRank must list all four scopes with team-head and team at the same rank.
-    assert.ok(
-        /scopeRank.*'team-head'.*:\s*1.*team.*:\s*1/.test(STANDING_ORDERS_SRC) ||
-        /scopeRank.*'team-head'.*:\s*1[\s\S]*team.*:\s*1/.test(STANDING_ORDERS_SRC),
-        'standingOrders.ts scopeRank must list team-head and team at the same rank (1)'
-    );
-    assert.ok(
-        /scopeRank.*'team-head'.*:\s*1.*team.*:\s*1/.test(TERMINALS_JS_SRC) ||
-        /scopeRank.*'team-head'.*:\s*1[\s\S]*team.*:\s*1/.test(TERMINALS_JS_SRC),
-        'terminals.js scopeRank must list team-head and team at the same rank (1)'
-    );
+    // scopeRank must list every scope, in both files, with the same ORDER and the
+    // same team/team-head tie. The literal rank numbers are deliberately NOT
+    // pinned: adding `role` at 1 pushed team-head/team from 1 to 2, and the next
+    // inserted scope will renumber again. Pinning the digits makes a correct
+    // insertion fail this gate (it did, for `role`) while pinning the ordering
+    // catches the drift that actually matters — a mirror that renders the block in
+    // a different order than the host, or loses a scope entirely.
+    const parseScopeRank = (raw, label) => {
+        const m = stripComments(raw).match(/scopeRank[^=]*=\s*\{([^}]*)\}/);
+        assert.ok(m, `${label}: no scopeRank literal found`);
+        const ranks = {};
+        for (const part of m[1].split(',')) {
+            const kv = part.match(/'?([a-zA-Z-]+)'?\s*:\s*(\d+)/);
+            if (kv) { ranks[kv[1]] = Number(kv[2]); }
+        }
+        return ranks;
+    };
+    for (const [raw, label] of [[STANDING_ORDERS_SRC, 'standingOrders.ts'], [TERMINALS_JS_SRC, 'terminals.js']]) {
+        const r = parseScopeRank(raw, label);
+        for (const scope of ['global', 'role', 'team-head', 'team', 'pair']) {
+            assert.strictEqual(typeof r[scope], 'number',
+                `${label} scopeRank must list '${scope}' (found: ${JSON.stringify(r)})`);
+        }
+        assert.strictEqual(r['team-head'], r.team,
+            `${label} scopeRank must give team-head and team the SAME rank`);
+        assert.ok(r.global < r.role, `${label} scopeRank must rank global before role`);
+        assert.ok(r.role < r.team, `${label} scopeRank must rank role before team/team-head`);
+        assert.ok(r.team < r.pair, `${label} scopeRank must rank team/team-head before pair`);
+    }
 });
 
 test('neither file declares the retired cap constants (MAX_BLOCK_CHARS / MAX_INSTRUCTION_CHARS / MAX_ORDERS)', () => {
@@ -733,7 +751,7 @@ new Function('exports', 'module', 'require', tsc.transpileModule(STANDING_ORDERS
     compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
 }).outputText)(resolverModule.exports, resolverModule, require);
 
-const { applyStandingOrders, validateInstruction, STANDING_ORDERS_MARKER } = resolverModule.exports;
+const { applyStandingOrders, renderStandaloneOrdersBlock, validateInstruction, STANDING_ORDERS_MARKER } = resolverModule.exports;
 
 const order = (parent, child, instruction) => ({ id: `${parent}->${child}`, parent, child, instruction, createdAt: 0 });
 const globalOrder = (instruction) => ({ id: 'global-' + instruction.slice(0, 8), parent: '', instruction, createdAt: 0, scope: 'global' });
@@ -742,6 +760,78 @@ const LIVE = new Set(['child-1', 'child-2']);
 const GROUPS = [
     { id: 'team_Lead', name: 'Lead', members: ['Lead', 'member-1', 'member-2'] },
 ];
+
+// ── role scope + standalone block ────────────────────────────────────────────
+// Covers the three plans' Verification Plans: role selection (match / mismatch /
+// no map), scope ordering against team, and the standalone block used by the
+// establish + clear one-shot delivery.
+
+const roleOrder = (role, instruction) => ({ id: 'role-' + role, parent: '', instruction, createdAt: 0, scope: 'role', role });
+const ROLE_MAP = new Map([['planner-1', 'planner'], ['coder-1', 'coder']]);
+
+test('selectOrders: a role order reaches terminals whose role matches and no others', () => {
+    const hit = applyStandingOrders('task', 'planner-1', [roleOrder('planner', 'PLANNER_RULE')], LIVE, [], ROLE_MAP);
+    assert.ok(hit.includes('PLANNER_RULE'), 'matching role must receive the order');
+    const miss = applyStandingOrders('task', 'coder-1', [roleOrder('planner', 'PLANNER_RULE')], LIVE, [], ROLE_MAP);
+    assert.strictEqual(miss, 'task', 'a different role must not receive the order');
+    const unknown = applyStandingOrders('task', 'stranger', [roleOrder('planner', 'PLANNER_RULE')], LIVE, [], ROLE_MAP);
+    assert.strictEqual(unknown, 'task', 'a terminal absent from the roleMap must not receive the order');
+});
+
+test('selectOrders: role orders are skipped when no roleMap is supplied (headless degradation)', () => {
+    assert.strictEqual(
+        applyStandingOrders('task', 'planner-1', [roleOrder('planner', 'PLANNER_RULE')], LIVE),
+        'task',
+        'no roleMap must skip role-scoped orders rather than deliver them to everyone'
+    );
+});
+
+test('selectOrders: a role order with no role field is dropped, not broadcast', () => {
+    const malformed = { id: 'role-malformed', parent: '', instruction: 'BAD', createdAt: 0, scope: 'role' };
+    assert.strictEqual(
+        applyStandingOrders('task', 'planner-1', [malformed], LIVE, [], ROLE_MAP),
+        'task'
+    );
+});
+
+test('scopeRank: a role order renders before a team order in the same block', () => {
+    const groups = [{ id: 'team_X', name: 'X', members: ['coder-1'] }];
+    const out = applyStandingOrders(
+        'task', 'coder-1',
+        [teamOrder('team_X', 'TEAM_RULE'), roleOrder('coder', 'ROLE_RULE')],
+        LIVE, groups, ROLE_MAP
+    );
+    assert.ok(out.includes('ROLE_RULE') && out.includes('TEAM_RULE'), 'both orders must render');
+    assert.ok(out.indexOf('ROLE_RULE') < out.indexOf('TEAM_RULE'), 'role must render before team');
+});
+
+test('renderOrder: a role order renders as a plain rule with no "Regarding" framing', () => {
+    const out = applyStandingOrders('task', 'planner-1', [roleOrder('planner', 'PLANNER_RULE')], LIVE, [], ROLE_MAP);
+    assert.ok(out.includes('- PLANNER_RULE'), 'role order must render as a plain rule');
+    assert.ok(!out.includes('Regarding terminal'), 'role order must not borrow the pair framing');
+});
+
+test('renderStandaloneOrdersBlock: returns the marker-bearing block when orders apply, null when none do', () => {
+    const block = renderStandaloneOrdersBlock([roleOrder('planner', 'PLANNER_RULE')], 'planner-1', LIVE, [], ROLE_MAP);
+    assert.ok(typeof block === 'string', 'applicable orders must yield a string');
+    assert.ok(block.includes(STANDING_ORDERS_MARKER), 'the block must carry the marker');
+    assert.ok(block.includes('- PLANNER_RULE'), 'the block must carry the rule');
+    assert.strictEqual(
+        renderStandaloneOrdersBlock([roleOrder('planner', 'x')], 'coder-1', LIVE, [], ROLE_MAP),
+        null,
+        'no applicable orders must yield null so the caller sends no prompt'
+    );
+    assert.strictEqual(renderStandaloneOrdersBlock([], 'planner-1', LIVE, [], ROLE_MAP), null);
+});
+
+test('renderStandaloneOrdersBlock: the block it returns is what applyStandingOrders appends', () => {
+    const orders = [globalOrder('BE_SAFE'), roleOrder('planner', 'PLANNER_RULE')];
+    const block = renderStandaloneOrdersBlock(orders, 'planner-1', LIVE, [], ROLE_MAP);
+    const applied = applyStandingOrders('task', 'planner-1', orders, LIVE, [], ROLE_MAP);
+    assert.strictEqual(applied, 'task' + block,
+        'the one-shot block and the dispatch suffix must be the same bytes — otherwise the '
+        + 'strip-and-re-append dedup across the two deliveries stops matching');
+});
 
 test('applyStandingOrders: empty prompt is returned unchanged', () => {
     assert.strictEqual(applyStandingOrders('', 'p', [order('p', 'child-1', 'x')], LIVE), '');

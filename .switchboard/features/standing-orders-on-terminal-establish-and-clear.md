@@ -23,8 +23,16 @@ Rough order: role scope → (establish delivery ‖ clear delivery).
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standing Orders: Add a `role` Scope](../plans/standing-orders-role-scope.md) — **PLAN REVIEWED**
-- [ ] [Deliver Standing Orders on Terminal Establish](../plans/standing-orders-deliver-on-establish.md) — **PLAN REVIEWED**
-- [ ] [Deliver Standing Orders After Terminal Clear](../plans/standing-orders-deliver-after-clear.md) — **PLAN REVIEWED**
+- [ ] [Standing Orders: Add a `role` Scope](../plans/standing-orders-role-scope.md) — **CODE REVIEWED**
+- [ ] [Deliver Standing Orders on Terminal Establish](../plans/standing-orders-deliver-on-establish.md) — **CODE REVIEWED**
+- [ ] [Deliver Standing Orders After Terminal Clear](../plans/standing-orders-deliver-after-clear.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
+## Completion Summary
+
+All three subtasks implemented and committed. Role scope added `'role'` to `StandingOrderScope`, a `role?` field to `StandingOrder`, `roleMap` parameter to `selectOrders`/`applyStandingOrders`/`renderStandaloneOrdersBlock`, and updated `scopeRank` (role at rank 1). Establish delivery added `_deliverStandingOrdersOnEstablish` in `TaskViewerProvider.ts`, centralized the hook in `setTerminalAgentInfo`, routed worktree/orchestrator spawn sites through it (registration sweep excluded), and skips the orchestrator role. Clear delivery added `_deliverStandingOrdersAfterClear` helper wired into both `cleared:true` return points in `clearTerminalContext`. Files changed: `src/services/standingOrders.ts`, `src/services/TaskViewerProvider.ts`, `src/services/LocalApiServer.ts`, `src/standalone/bootstrap.ts`. No issues encountered.
+
+
+## Review Findings
+
+All three subtasks reviewed together; the feature's core mechanism was sound but the delivery call was wrong in a way no gate could see. Three CRITICALs fixed: (1) the one-shot ran with `clearBeforePrompt` defaulting **on**, so every establish/clear delivery pasted `/clear` before its own payload — on the clear path that races the clear-then-dispatch chain in `LocalApiServer.ts:2210/:4108` and could wipe a task prompt a seat had just been given; (2) `addonsComposed: true` suppresses only the seat block, so both `_ptyHostVerb` and `sendRobustText` re-ran `applyStandingOrders` over the already-rendered block — stripping it and re-appending one recomputed under a different name keyspace (and with no `roleMap` on the VS Code path), which drops the role rules and can yield an empty payload; (3) the `scopeRank` renumber left `test:contract:standing-orders-marker` red in CI and the `terminals.js` mirror unsynced. Also fixed: dual-keyspace `roleMap` (establish passes the IDE-suffixed key, clear passes the unsuffixed `friendlyName`), a 1500ms CLI-boot grace on establish, and the orchestrator skip narrowed to establish only. Files changed: `src/services/TaskViewerProvider.ts`, `src/webview/terminals.js`, `src/test/standing-orders-marker-contract.test.js`; validation: typecheck + `npm run compile` clean, `standing-orders-marker` 63/0 (was 55/1) with 7 new role-scope tests, 11 adjacent contract gates unchanged — `push-routing:check` and `seat-safeguards` are red on `main` independently of this feature (`KanbanProvider.ts`, and audit counts already 11-vs-7 before these commits).

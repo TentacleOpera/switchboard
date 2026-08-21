@@ -10819,6 +10819,13 @@
         var mine = effectiveOrders.filter(function (o) {
             var scope = o.scope || 'pair';
             if (scope === 'global') { return true; }
+            // `role` scope is host-resolved: matching it needs the terminal-to-role
+            // registry (_terminalAgentInfo / the PTY fleet roster), which this panel
+            // mirror cannot see. Skip explicitly instead of letting a role order fall
+            // through to the pair default below, where a stray `parent` would deliver
+            // it to the wrong terminal. Host side: the `role` branch in selectOrders
+            // (standingOrders.ts). Graceful degradation, not parity.
+            if (scope === 'role') { return false; }
             if (scope === 'team') {
                 if (!o.teamId) { return false; }
                 var group = terminalGroups.find(function (g) { return g && g.id === o.teamId; });
@@ -10842,7 +10849,7 @@
 
         // Render safeguard-bearing scopes (global, team) before pair. Mirrors
         // the host's scope-rank sort. Stable sort preserves creation order.
-        var scopeRank = { global: 0, 'team-head': 1, team: 1, pair: 2 };
+        var scopeRank = { global: 0, role: 1, 'team-head': 2, team: 2, pair: 3 };
         var sorted = mine.slice().sort(function (a, b) {
             return scopeRank[(a.scope || 'pair')] - scopeRank[(b.scope || 'pair')];
         });

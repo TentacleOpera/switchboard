@@ -401,6 +401,19 @@ function resolvePtyClearDelay(cfg: vscode.WorkspaceConfiguration): number {
 // │   Surviving scheduler jobs .................... lines 26334–26593
 // └──────────────────────────────────────────────────────────────────────────
 
+/**
+ * Per-send overrides for the direct terminal push path. Both fields default to
+ * the configured/derived behaviour when omitted; they exist for callers whose
+ * payload IS the message rather than a dispatched task — today, the
+ * standing-orders one-shot. `clearBeforePrompt: false` keeps a delivery from
+ * resetting the terminal it is talking to; `standingOrders: false` keeps an
+ * already-rendered orders block from being recomposed by the delivery layer.
+ */
+type DirectPushDelivery = {
+    clearBeforePrompt?: boolean;
+    standingOrders?: false;
+};
+
 export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private async _handleMessage(message: any): Promise<any> {
@@ -1840,7 +1853,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // the first dispatch. The registration sweep (20882/20950) calls
         // _terminalAgentInfo.set directly and is therefore excluded by
         // structure — only fresh-spawn sites route through this method.
-        this._deliverStandingOrdersOnEstablish(suffixedName, role).catch((err) => {
+        this._deliverStandingOrdersOnEstablish(suffixedName, role, {
+            skipOrchestrator: true,
+            // The caller sends the CLI's boot command immediately before this, so the
+            // agent is still starting. Same 1500ms grace the orchestrator kickoff uses
+            // for a freshly-created terminal — without it the one-shot is typed into a
+            // shell prompt or a boot screen and lost.
+            readyDelayMs: TaskViewerProvider.ESTABLISH_ORDERS_READY_DELAY_MS,
+        }).catch((err) => {
             console.error(`[TaskViewerProvider] Standing-orders establish delivery failed for '${suffixedName}':`, err);
         });
     }
@@ -1854,11 +1874,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * when no orders apply (renderStandaloneOrdersBlock returns null → no
      * prompt sent, no noise).
      */
-    private async _deliverStandingOrdersOnEstablish(terminalName: string, role: string): Promise<void> {
-        // Orchestrator skip — the kickoff dispatch (immediately after spawn)
-        // carries the orders block via applyStandingOrders. A one-shot here
-        // would be a redundant second block in the same spawn sequence.
-        if (role === 'orchestrator') { return; }
+    private async _deliverStandingOrdersOnEstablish(
+        terminalName: string,
+        role: string,
+        opts?: { skipOrchestrator?: boolean; readyDelayMs?: number }
+    ): Promise<void> {
+        // Orchestrator skip — on ESTABLISH only. The orchestrator's spawn is
+        // immediately followed by the kickoff dispatch, which carries the orders
+        // block via applyStandingOrders; a one-shot there is a redundant second
+        // block in the same spawn sequence. After a CLEAR there is no such
+        // follow-up, so the caller passes skipOrchestrator: false and the
+        // orchestrator gets its orders back like any other seat.
+        if (opts?.skipOrchestrator && role === 'orchestrator') { return; }
 
         const workspaceRoot = this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '';
         if (!workspaceRoot) { return; }
@@ -1897,21 +1924,50 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             } catch { /* empty groups is safe */ }
 
             // Build roleMap from _terminalAgentInfo — the terminal-to-role
-            // registry. This is the same pattern the dispatch path uses.
+            // registry. Index each entry under BOTH its registry key (IDE-suffixed,
+            // e.g. "Coder 1-Visual Studio Code") and its stripped base name: the two
+            // callers arrive in different keyspaces. Establish passes the suffixed
+            // key it just wrote; clear passes the PTY friendlyName / terminal.name,
+            // which carries no suffix. selectOrders looks the target up exactly, so a
+            // single-keyspace map silently resolves no role at all on one of the two
+            // paths — the failure is invisible (orders just don't include the role
+            // rules) and would not fail any gate.
             const roleMap = new Map<string, string>();
             for (const [name, info] of this._terminalAgentInfo.entries()) {
-                if (name && info?.role) { roleMap.set(name, info.role); }
+                if (!name || !info?.role) { continue; }
+                roleMap.set(name, info.role);
+                const base = this._stripIdeSuffix(name);
+                if (base && base !== name) { roleMap.set(base, info.role); }
             }
 
             const block = renderStandaloneOrdersBlock(orders, terminalName, live, groups || [], roleMap);
             if (block === null) { return; }
+
+            // A freshly-spawned terminal is still booting its CLI. The delay is the
+            // caller's call (establish waits, clear does not — clearTerminalContext
+            // already waited out its own clear delay).
+            const readyDelayMs = opts?.readyDelayMs ?? 0;
+            if (readyDelayMs > 0) { await new Promise(r => setTimeout(r, readyDelayMs)); }
 
             // Send via _dispatchExecuteMessage so the per-terminal
             // withTerminalSendLock and PTY fleet resolution are reused.
             // promptComposed=true → addonsComposed=true (the block is the payload,
             // not a suffix on a dispatch; the delivery layer must not append a
             // seat directive block).
-            await this._dispatchExecuteMessage(workspaceRoot, terminalName, block, {}, 'sidebar', true);
+            //
+            // clearBeforePrompt: false is load-bearing, not tidiness. The default is
+            // ON, so without the override this delivery pastes /clear before its own
+            // payload: on establish it resets a terminal that just booted, and after a
+            // clear it re-clears — and because the send is fire-and-forget it races the
+            // dispatch the clear-then-dispatch chain issues next, so a late one-shot
+            // would wipe the task prompt that seat was just given.
+            // standingOrders: false stops the delivery layer recomposing a block we
+            // already rendered (which would drop the role-scoped rules on the VS Code
+            // path, whose resolver carries no roleMap).
+            await this._dispatchExecuteMessage(
+                workspaceRoot, terminalName, block, {}, 'sidebar', true,
+                { clearBeforePrompt: false, standingOrders: false }
+            );
         } catch (err) {
             console.error(`[TaskViewerProvider] Standing-orders establish delivery failed for '${terminalName}':`, err);
         }
@@ -1929,18 +1985,24 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * (renderStandaloneOrdersBlock returns null inside the shared method).
      */
     private _deliverStandingOrdersAfterClear(terminalName: string): void {
-        const normalized = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
-        let role = '';
-        for (const [name, info] of this._terminalAgentInfo.entries()) {
-            if (name === terminalName || this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized) {
-                role = info?.role || '';
-                break;
-            }
-        }
-        this._deliverStandingOrdersOnEstablish(terminalName, role).catch((err) => {
-            console.warn(`[TaskViewerProvider] Standing-orders post-clear delivery failed for '${terminalName}':`, err);
-        });
+        // No role argument and no orchestrator skip: role is only consulted for the
+        // establish-time orchestrator skip, and that skip exists because the kickoff
+        // dispatch follows a spawn. Nothing follows a clear — for either
+        // clearTerminalContext caller the next dispatch usually goes to a DIFFERENT
+        // seat — so this one-shot is the cleared terminal's only orders delivery.
+        // No ready delay either: clearTerminalContext has already waited out its own
+        // clear delay, so the CLI is up.
+        this._deliverStandingOrdersOnEstablish(terminalName, '', { skipOrchestrator: false })
+            .catch((err) => {
+                console.warn(`[TaskViewerProvider] Standing-orders post-clear delivery failed for '${terminalName}':`, err);
+            });
     }
+
+    /**
+     * Grace period between a terminal's CLI boot command and the standing-orders
+     * one-shot. Matches the orchestrator kickoff's freshly-created-terminal delay.
+     */
+    private static readonly ESTABLISH_ORDERS_READY_DELAY_MS = 1500;
 
     private static CLI_BRAND_NAMES: Record<string, string> = {
         agy: 'Antigravity CLI',
@@ -21368,7 +21430,8 @@ Each plan file must include:
         payload: string,
         metadata: Record<string, any>,
         sender: string = 'sidebar',
-        promptComposed: boolean = false
+        promptComposed: boolean = false,
+        delivery?: DirectPushDelivery
     ): Promise<boolean> {
         // F-04 SECURITY: Validate agent name before using as path segment
         if (!this._isValidAgentName(targetAgent)) {
@@ -21384,7 +21447,7 @@ Each plan file must include:
             recipient: targetAgent,
             action: 'execute',
             metadata
-        }, promptComposed);
+        }, promptComposed, delivery);
         if (pushed) return true;
 
         this._seams().ui.showWarningMessage(
@@ -21441,7 +21504,8 @@ Each plan file must include:
         payload: string,
         messageId: string,
         meta: { sender: string; recipient: string; action: string; metadata: Record<string, any> },
-        promptComposed: boolean = false
+        promptComposed: boolean = false,
+        delivery?: DirectPushDelivery
     ): Promise<boolean> {
         // The PTY fleet is checked FIRST. Checking it first (rather than as a
         // not-found fallback) matters — a PTY and a VS Code terminal can normalize
@@ -21471,13 +21535,22 @@ Each plan file must include:
                         // has to live on the child's side of the boundary anyway: it is
                         // per-process state, and two dispatches racing from here would
                         // otherwise splice into each other's chunked pastes.
-                        const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
+                        // `delivery.clearBeforePrompt` is an explicit per-send override, not a
+                        // preference: a caller whose payload IS the message (the standing-orders
+                        // one-shot) must never reset the terminal it is talking to. Absent an
+                        // override the configured default still wins.
+                        const clearBeforePrompt = delivery?.clearBeforePrompt
+                            ?? vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
                         const clearDelay = resolvePtyClearDelay(vscode.workspace.getConfiguration('switchboard'));
                         const writeRes = await this._ptyHostVerb('ptySendPrompt', {
                             name: target.friendlyName,
                             data: payload,
                             clearBeforePrompt,
                             clearBeforePromptDelayMs: clearDelay,
+                            // A payload that already IS a rendered standing-orders block must not
+                            // be run back through applyStandingOrders on the host — that strips
+                            // the block and re-appends one recomputed from the host's own view.
+                            ...(delivery?.standingOrders === false ? { standingOrders: false } : {}),
                             // Host-only marker: when true, the prompt was already
                             // composed by agentPromptBuilder and the delivery layer
                             // must NOT append the seat directive block (would
@@ -21562,7 +21635,8 @@ Each plan file must include:
             // operates on its own vscode.Terminal. The clipboard pastes are serialized by
             // _clipboardLock (terminalUtils.ts), which is intentional and prevents
             // clipboard corruption — do NOT remove that lock.
-            const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
+            const clearBeforePrompt = delivery?.clearBeforePrompt
+                ?? vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
             const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
             const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
 
@@ -21583,7 +21657,16 @@ Each plan file must include:
             }
 
             // Deliver via robust paced send
-            await sendRobustText(terminal, payload, paced, undefined, { standingOrders: await this._resolveStandingOrdersForVsCode() });
+            // Same reason as the PTY branch above: an already-rendered block must not be
+            // recomposed here. _resolveStandingOrdersForVsCode carries no roleMap, so a
+            // re-application would strip the one-shot's role-scoped rules and re-append a
+            // role-less block — and, when role orders were the only ones that applied, an
+            // empty payload.
+            await sendRobustText(terminal, payload, paced, undefined, {
+                standingOrders: delivery?.standingOrders === false
+                    ? false
+                    : await this._resolveStandingOrdersForVsCode()
+            });
 
             return true;
         });
