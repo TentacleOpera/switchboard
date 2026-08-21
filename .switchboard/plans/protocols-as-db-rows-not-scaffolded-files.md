@@ -92,7 +92,7 @@ Protocols were modelled as skills because they were authored as skills and lived
 
 ### Non-goals
 
-- Moving `.agents/skills/` — the four genuinely discoverable skills stay files, because hosts glob for them.
+- Moving `.agents/skills/` — the four discoverable skills stay files, because hosts glob for them: `manage-features` (`invocation: 'default'`), `query-kanban` (`no-user`), `kanban-operations` and `worktree-cleanup` (both `no-model`). **Verified: none of the four contains a single reference to a protocol path**, so this plan cannot break them.
 - Moving `.agents/workflows/` (the four user-typeable slash commands) or `.agents/skills/_lib/`. Both stay committed: workflows are the bootstrap entry surface, and `_lib/sb_api_call.sh` is sourced from the repo by `improve-remote-plan`.
 - Changing protocol *content*.
 - Re-litigating the token-cost goal; it is already achieved and must stay achieved.
@@ -141,6 +141,7 @@ Note `improve-plan` and `improve-feature` appear in two tiers: clipboard-offered
 
 ### Complex / Risky
 
+- **A working precedent for the tiered resolver already exists.** The `manage-features` skill picks its delivery path by reachability: check for `.switchboard/api-server-port.txt`, health-check it, use `create-feature.js` through the LocalApiServer if it responds, fall back to a direct file write if not. That is the same decision `resolveProtocol` has to make, already implemented and in use — model it on that rather than inventing a second detection scheme, and share the health-check if practical.
 - **140 reference sites across 26 files** — including four webview files (`tickets.js`, `planning.js`, `sharedDefaults.js`, `kanban.html`) and twelve test files. An earlier revision of this plan counted 60 across 9 by searching only `--include=*.ts`, which missed every clipboard-prompt site and every test. Every `path.join('.agents', 'protocols', …)` becomes a resolver call. The single content-injection site is trivial; the ~18 directive sites each need their prompt string rebuilt, because the emitted text changes shape (a path that is now absolute, or an inlined body). `DEFAULT_PLANNER_WORKFLOW` and `DEFAULT_FEATURE_PLANNER_WORKFLOW` in `agentPromptBuilder.ts` are persisted-config defaults, so changing them interacts with `RETIRED_WORKFLOW_PATH_MAP`.
 - **Persisted user config points at file paths.** A user may have a customised planner workflow path stored in config. That path must keep resolving — extend `RETIRED_WORKFLOW_PATH_MAP` with `.agents/protocols/*` keys the same way the review fix added `.switchboard/protocols/*` keys, and make `normalizeRetiredWorkflowPath` map a stale path to a protocol *name* rather than another path.
 - **Local overrides must survive.** A user who edited `.agents/protocols/improve-plan/SKILL.md` has customised behaviour. On migration, any file whose hash does not match the bundled version must be imported as an override row, never discarded. This is the difference between a migration and data loss.
