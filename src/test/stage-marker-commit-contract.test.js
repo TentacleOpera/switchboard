@@ -36,7 +36,8 @@ const os = require('os');
 const {
     buildGitPolicyBlock,
     buildKanbanBatchPrompt,
-    STAGE_BY_ROLE
+    STAGE_BY_ROLE,
+    GIT_SAFETY_DIRECTIVE
 } = require('../../out/services/agentPromptBuilder');
 const {
     migrateAgentGroups,
@@ -60,7 +61,12 @@ const {
     PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT,
     PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT,
     PRE_REWRITE_CALLBACK_INSTRUCTION,
-    STANDING_ORDERS_PREMIGRATION_BAK_KEY
+    STANDING_ORDERS_PREMIGRATION_BAK_KEY,
+    TEAM_CODER_QUEUE_DONE_INSTRUCTION,
+    PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT,
+    QUEUE_DONE_MARKER,
+    AGENT_GROUP_CALLBACK_INSTRUCTION,
+    SEAT_QUEUE_DONE_ORDER_BODY
 } = require('../../out/services/teamWiring');
 const { resolvePreset } = require('../../out/services/linkPresets');
 const { STANDING_ORDERS_CONFIG_KEY } = require('../../out/services/standingOrders');
@@ -1068,7 +1074,137 @@ test('describeStandingOrderMigrations is empty once the persist has run', () => 
         'no recogniser fires post-persist — permanently absent markers are the correct end state');
 });
 
-// ── 8. REVIEW UNIT: the reviewer is told what to review ───────────────
+// ── 8. Team-coder queue/done instruction: two-copy rule and migration ──
+//
+// Head-paced team coders need an explicit POST /kanban/queue/done signal to
+// replace the unreliable mtime-based file-watcher detection. Seat-paced and
+// standalone coders already carry the instruction; this adds the team-coder
+// equivalent and migrates existing team-scoped orders that predate it.
+
+test('PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT exists in exactly two files and is byte-identical', () => {
+    const hostWiringSrc = SRC('services', 'teamWiring.ts');
+    const hostMatch = hostWiringSrc.match(/const PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(hostMatch, 'PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT not found in teamWiring.ts');
+    const hostFragment = hostMatch[1];
+
+    const clientMatch = TERMINALS_JS_SRC.match(/var PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(clientMatch, 'PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT not found in terminals.js');
+    const clientFragment = clientMatch[1];
+
+    assert.strictEqual(clientFragment, hostFragment,
+        'PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT drifted between teamWiring.ts and terminals.js');
+
+    // The fragment text ('is your head agent') appears in the callback
+    // instruction constants in linkPresets.ts and kanban.html too, so the
+    // two-copy rule applies to the DECLARATION sites, not every substring
+    // occurrence. Verify the declarations exist in exactly two files.
+    const hostDecl = /const PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT\s*=/.test(hostWiringSrc);
+    const clientDecl = /var PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT\s*=/.test(TERMINALS_JS_SRC);
+    assert.ok(hostDecl && clientDecl,
+        'PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT must be declared in both teamWiring.ts and terminals.js');
+});
+
+test('QUEUE_DONE_MARKER exists in exactly two files and is byte-identical', () => {
+    const hostWiringSrc = SRC('services', 'teamWiring.ts');
+    const hostMatch = hostWiringSrc.match(/const QUEUE_DONE_MARKER\s*=\s*'([^']+)'/);
+    assert.ok(hostMatch, 'QUEUE_DONE_MARKER not found in teamWiring.ts');
+    const hostMarker = hostMatch[1];
+
+    const clientMatch = TERMINALS_JS_SRC.match(/var QUEUE_DONE_MARKER\s*=\s*'([^']+)'/);
+    assert.ok(clientMatch, 'QUEUE_DONE_MARKER not found in terminals.js');
+    const clientMarker = clientMatch[1];
+
+    assert.strictEqual(clientMarker, hostMarker,
+        'QUEUE_DONE_MARKER drifted between teamWiring.ts and terminals.js');
+
+    // The marker text appears in the prompt constants too (it is a substring
+    // of SEAT_QUEUE_DONE_ORDER_BODY and GLOBAL_QUEUE_DONE_ORDER_BODY), so the
+    // two-copy rule applies to the DECLARATION sites, not every substring
+    // occurrence. Verify the declarations exist in exactly two files.
+    const hostDecl = /const QUEUE_DONE_MARKER\s*=/.test(hostWiringSrc);
+    const clientDecl = /var QUEUE_DONE_MARKER\s*=/.test(TERMINALS_JS_SRC);
+    assert.ok(hostDecl && clientDecl,
+        'QUEUE_DONE_MARKER must be declared in both teamWiring.ts and terminals.js');
+});
+
+test('TEAM_CODER_QUEUE_DONE_INSTRUCTION is byte-identical across host and webview mirror', () => {
+    const clientInstruction = readConcat(TERMINALS_JS_SRC, 'var TEAM_CODER_QUEUE_DONE_INSTRUCTION =');
+    assert.strictEqual(clientInstruction, TEAM_CODER_QUEUE_DONE_INSTRUCTION,
+        'terminals.js TEAM_CODER_QUEUE_DONE_INSTRUCTION drifted — the webview would render a '
+        + 'different queue/done instruction than the host delivers');
+});
+
+test('TEAM_CODER_QUEUE_DONE_INSTRUCTION contains the QUEUE_DONE_MARKER but NOT the PRE_QUEUE_DONE fragment', () => {
+    assert.ok(TEAM_CODER_QUEUE_DONE_INSTRUCTION.includes(QUEUE_DONE_MARKER),
+        'the instruction must contain the marker — a rewritten row carries it for idempotency');
+    assert.ok(!TEAM_CODER_QUEUE_DONE_INSTRUCTION.includes(PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT),
+        'the instruction must not contain the pre-queue-done fragment — it is not a callback prompt');
+});
+
+test('migrateCodingTeamOrders appends TEAM_CODER_QUEUE_DONE_INSTRUCTION to a pre-queue-done team order', () => {
+    // A team-scoped order carrying the callback instruction (contains
+    // 'is your head agent') but NOT the queue/done marker — the shape every
+    // head-paced team coder had before this subtask.
+    const callbackText = AGENT_GROUP_CALLBACK_INSTRUCTION.replace(/\{child\}/g, 'lead-1')
+        + '\n' + GIT_SAFETY_DIRECTIVE;
+    const raw = [order({
+        id: 't1', parent: 'lead-1', child: '', scope: 'team', teamId: 'team-1',
+        instruction: callbackText
+    })];
+    const out = migrateCodingTeamOrders(raw);
+    assert.notStrictEqual(out, raw, 'the recogniser did not fire for a pre-queue-done team order');
+    const row = out.find(o => o.id === 't1');
+    assert.ok(row, 'the rewritten row lost its id');
+    assert.strictEqual(row.instruction, callbackText + '\n' + TEAM_CODER_QUEUE_DONE_INSTRUCTION,
+        'the append must be the only change — instruction + newline + TEAM_CODER_QUEUE_DONE_INSTRUCTION');
+    assert.ok(row.instruction.includes(QUEUE_DONE_MARKER),
+        'the rewritten row must carry the marker for idempotency');
+    // Idempotent: second pass finds the marker, does not re-match.
+    assert.strictEqual(migrateCodingTeamOrders(out), out,
+        'the migration is not idempotent — it would re-append forever');
+});
+
+test('migrateCodingTeamOrders does NOT match a seat-paced team order (no callback fragment)', () => {
+    // SEAT_QUEUE_DONE_ORDER_BODY is installed at 'team' scope but does NOT
+    // contain 'is your head agent', so the recogniser must skip it.
+    const raw = [order({
+        id: 's1', parent: 'lead-1', child: '', scope: 'team', teamId: 'team-1',
+        instruction: SEAT_QUEUE_DONE_ORDER_BODY
+    })];
+    assert.strictEqual(migrateCodingTeamOrders(raw), raw,
+        'a seat-paced team order must not be matched — it already carries the queue/done instruction');
+});
+
+test('migrateCodingTeamOrders does NOT match a team order that already has the marker', () => {
+    const callbackText = AGENT_GROUP_CALLBACK_INSTRUCTION.replace(/\{child\}/g, 'lead-1')
+        + '\n' + GIT_SAFETY_DIRECTIVE
+        + '\n' + TEAM_CODER_QUEUE_DONE_INSTRUCTION;
+    const raw = [order({
+        id: 't2', parent: 'lead-1', child: '', scope: 'team', teamId: 'team-1',
+        instruction: callbackText
+    })];
+    assert.strictEqual(migrateCodingTeamOrders(raw), raw,
+        'a team order that already carries the marker must not be re-matched');
+});
+
+test('an operator-edited pre-queue-done team order keeps its wording on append', () => {
+    const houseRule = ' HOUSE RULE: always run prettier before posting done.';
+    const callbackText = AGENT_GROUP_CALLBACK_INSTRUCTION.replace(/\{child\}/g, 'lead-1')
+        + '\n' + GIT_SAFETY_DIRECTIVE + houseRule;
+    const raw = [order({
+        id: 'op2', parent: 'lead-1', child: '', scope: 'team', teamId: 'team-1',
+        instruction: callbackText
+    })];
+    const out = migrateCodingTeamOrders(raw);
+    const row = out.find(o => o.id === 'op2');
+    assert.ok(row, 'the operator row lost its id');
+    assert.ok(row.instruction.includes(houseRule),
+        'the operator\'s own wording was discarded — the recogniser replaced instead of appending');
+    assert.strictEqual(row.instruction, callbackText + '\n' + TEAM_CODER_QUEUE_DONE_INSTRUCTION,
+        'the append must be the only change to an operator-edited row');
+});
+
+// ── 9. REVIEW UNIT: the reviewer is told what to review ───────────────
 // The reviewer prompt used to hand over plan FILE PATHS and nothing else —
 // it inferred the change set from a shared dirty tree that might hold several
 // seats' in-flight work. The fix resolves the coded commit carrying each plan

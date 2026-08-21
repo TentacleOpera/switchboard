@@ -162,6 +162,29 @@ export const SEAT_QUEUE_DONE_ORDER_BODY =
     + 'say so and stop. Do not call POST /kanban/queue/next, and do not move cards.';
 
 /**
+ * The queue/done instruction appended to the team-scoped standing order for
+ * head-paced team coders. Tells the coder to POST /kanban/queue/done when it
+ * has finished ALL work on the dispatched plan — not after individual parts.
+ * This is the explicit completion signal that replaces the unreliable mtime-
+ * based file-watcher detection. The endpoint clears the card's activity light
+ * and fires the turn-end notification to the lead.
+ *
+ * Mirrors SEAT_QUEUE_DONE_ORDER_BODY but uses <your terminal name> (the coder
+ * knows its own terminal name) and adds the "ALL parts" qualifier to prevent
+ * premature posts on multi-part plans.
+ *
+ * **Two copies only: this one and the `terminals.js` mirror** (which cannot
+ * import). `stage-marker-commit-contract.test.js` gates both halves.
+ */
+export const TEAM_CODER_QUEUE_DONE_INSTRUCTION =
+    'When you have finished ALL parts of the dispatched plan, POST /kanban/queue/done with '
+    + '{"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. '
+    + 'This signals completion — the system clears your activity light and notifies your lead. '
+    + 'Do NOT post after finishing individual parts — only when ALL work is complete. '
+    + 'If you cannot complete it, call the same endpoint with {"from":"<your terminal name>",'
+    + '"outcome":"failed"} and a one-line reason.';
+
+/**
  * The standing-order body installed at `global` scope so a standalone agent
  * (not on any team) reports done itself — there is no team head to report to
  * and no team-scoped order to carry the instruction. Mirrors
@@ -1980,7 +2003,7 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
 
     const teamPromptInstruction = prompt
         ? prompt.replace(/\{child\}/g, headName).replace(/\{teamId\}/g, groupId)
-        : `${callbackTemplate.replace(/\{child\}/g, headName)}\n${GIT_SAFETY_DIRECTIVE}`;
+        : `${callbackTemplate.replace(/\{child\}/g, headName)}\n${GIT_SAFETY_DIRECTIVE}\n${TEAM_CODER_QUEUE_DONE_INSTRUCTION}`;
 
     // ── Resolve pair-scoped relationships per child ───────────────────
     // Walk the member definitions and children together — children are in the
@@ -2397,6 +2420,30 @@ export const PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT = 'PLAN FILES ARE THE SO
 export const PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT = 'Only advance the feature your team worked';
 
 /**
+ * Substring present in team-scoped member prompts that use the callback
+ * instruction (AGENT_GROUP_CALLBACK_INSTRUCTION or EXTERNAL_HEAD_CALLBACK_INSTRUCTION).
+ * Both contain 'is your head agent'. NOT present in SEAT_QUEUE_DONE_ORDER_BODY
+ * or GLOBAL_QUEUE_DONE_ORDER_BODY (seat-paced / standalone orders that already
+ * carry the queue/done instruction). Used by the team-order rewriter's
+ * negative check: a team-scoped order that contains this fragment but NOT
+ * the QUEUE_DONE_MARKER is pre-queue-done-instruction and must be rewritten.
+ *
+ * Two copies only: this one and the terminals.js mirror.
+ * stage-marker-commit-contract.test.js gates both halves.
+ */
+export const PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT = 'is your head agent';
+
+/**
+ * Substring unique to TEAM_CODER_QUEUE_DONE_INSTRUCTION. Used by the
+ * team-order rewriter's negative check for idempotency: a rewritten order
+ * contains this marker, so it does not re-match.
+ *
+ * Two copies only: this one and the terminals.js mirror.
+ * stage-marker-commit-contract.test.js gates both halves.
+ */
+export const QUEUE_DONE_MARKER = 'POST /kanban/queue/done with';
+
+/**
  * Migrate stale Coding-team standing orders on read — the read-site
  * counterpart to the `migrateAgentGroups` Coding-team step (§1b).
  *
@@ -2445,6 +2492,29 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
             // raw value into the same `childName || …` fallback).
             const expected = resolvePreset('reviewer', o.parent, o.child || '');
             if (expected && o.instruction === expected) {
+                drop.add(o.id);
+                touched = true;
+                continue;
+            }
+        }
+
+        // Pre-queue-done-instruction team-scoped order: a team-scoped member
+        // prompt that carries the callback instruction (contains
+        // PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT) but NOT the QUEUE_DONE_MARKER.
+        // APPEND TEAM_CODER_QUEUE_DONE_INSTRUCTION — the change is additive, so
+        // the fragment sits in the current shipped prompt and an operator-edited
+        // row that kept the callback sentence still matches. Appending upgrades
+        // the row without discarding operator wording, exactly like the
+        // pre-commit-instruction headPrompt recogniser below. A rewritten row
+        // carries the marker, so it does not re-match (idempotent).
+        //
+        // Runs AFTER migrateTeamPairOrders (the composition is
+        // migrateCodingTeamOrders(migrateTeamPairOrders(raw))), so newly-created
+        // team-scoped orders from the pair migration are caught here too.
+        if (o.scope === 'team' && typeof o.instruction === 'string') {
+            if (o.instruction.indexOf(PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT) !== -1
+                && o.instruction.indexOf(QUEUE_DONE_MARKER) === -1) {
+                rewritten.push({ ...o, instruction: o.instruction + '\n' + TEAM_CODER_QUEUE_DONE_INSTRUCTION });
                 drop.add(o.id);
                 touched = true;
                 continue;

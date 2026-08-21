@@ -10943,6 +10943,32 @@
         var TEAM_HEAD_COMMIT_INSTRUCTION = ' When the work is complete, stage the files you changed by explicit path '
             + '— never `git add -A` or `git add .`. Then create a single commit with a '
             + 'descriptive message.';
+        // Mirror of PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT in teamWiring.ts.
+        // Substring present in team-scoped member prompts that use the callback
+        // instruction (AGENT_GROUP_CALLBACK_INSTRUCTION or
+        // EXTERNAL_HEAD_CALLBACK_INSTRUCTION). Both contain 'is your head agent'.
+        // NOT present in SEAT_QUEUE_DONE_ORDER_BODY or GLOBAL_QUEUE_DONE_ORDER_BODY.
+        // Used by the team-order rewriter's negative check: a team-scoped order
+        // that contains this fragment but NOT the QUEUE_DONE_MARKER is
+        // pre-queue-done-instruction and must be rewritten.
+        var PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT = 'is your head agent';
+        // Mirror of QUEUE_DONE_MARKER in teamWiring.ts. Substring unique to
+        // TEAM_CODER_QUEUE_DONE_INSTRUCTION — the negative-check gate for
+        // idempotency: a rewritten order contains this marker, so it does not
+        // re-match.
+        var QUEUE_DONE_MARKER = 'POST /kanban/queue/done with';
+        // Mirror of TEAM_CODER_QUEUE_DONE_INSTRUCTION in teamWiring.ts. Appended
+        // to a pre-queue-done-instruction team-scoped order rather than replacing
+        // it — see the host comment: the change is additive, and the fragment
+        // above sits in the CURRENT shipped prompt, so a replace would discard an
+        // operator's own wording.
+        var TEAM_CODER_QUEUE_DONE_INSTRUCTION =
+            'When you have finished ALL parts of the dispatched plan, POST /kanban/queue/done with '
+            + '{"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. '
+            + 'This signals completion — the system clears your activity light and notifies your lead. '
+            + 'Do NOT post after finishing individual parts — only when ALL work is complete. '
+            + 'If you cannot complete it, call the same endpoint with {"from":"<your terminal name>",'
+            + '"outcome":"failed"} and a one-line reason.';
 
         for (var i = 0; i < orders.length; i++) {
             var o = orders[i];
@@ -10954,6 +10980,33 @@
             if (scope === 'pair') {
                 var expected = resolvePreset('reviewer', o.parent, o.child);
                 if (expected && o.instruction === expected) {
+                    drop[o.id] = true;
+                    touched = true;
+                    continue;
+                }
+            }
+
+            // Pre-queue-done-instruction team-scoped order: a team-scoped
+            // member prompt that carries the callback instruction (contains
+            // PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT) but NOT the QUEUE_DONE_MARKER.
+            // APPEND TEAM_CODER_QUEUE_DONE_INSTRUCTION — the change is additive,
+            // so the fragment sits in the current shipped prompt and an
+            // operator-edited row that kept the callback sentence still matches.
+            // Appending upgrades the row without discarding operator wording,
+            // exactly like the pre-commit-instruction headPrompt recogniser
+            // below. A rewritten row carries the marker, so it does not re-match
+            // (idempotent). Mirrors the host branch in migrateCodingTeamOrders.
+            if (o.scope === 'team' && typeof o.instruction === 'string') {
+                if (o.instruction.indexOf(PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT) !== -1
+                    && o.instruction.indexOf(QUEUE_DONE_MARKER) === -1) {
+                    var qdCopy = {};
+                    for (var qdk in o) {
+                        if (Object.prototype.hasOwnProperty.call(o, qdk)) {
+                            qdCopy[qdk] = o[qdk];
+                        }
+                    }
+                    qdCopy.instruction = o.instruction + '\n' + TEAM_CODER_QUEUE_DONE_INSTRUCTION;
+                    rewritten.push(qdCopy);
                     drop[o.id] = true;
                     touched = true;
                     continue;
