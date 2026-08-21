@@ -18,20 +18,26 @@ plans, running passes — belongs to the **board** (open it in a browser) and th
 ## Step 1 — ensure a board is running
 
 A port file is not liveness. `.switchboard/api-server-port.txt` survives a crashed
-extension, and **every workspace's port file holds the same port**, so its presence
-proves nothing about *this* workspace. Read the port, call `GET /health`, and treat
-**only a 200** as "a board is running".
+extension, and **every workspace's port file holds the same port** — so treat
+**only a 200** from `GET /health` as "a board is running". But it cuts both ways: a
+sandboxed shell with loopback blocked also gets a non-200 from a board that *is* up,
+and spawning a second server there overwrites the port file and hijacks the live
+session. A port file is therefore grounds to **not launch**; only its absence
+licenses a launch.
 
 ```bash
 ROOT="$PWD"
 PORT_FILE="$ROOT/.switchboard/api-server-port.txt"
 
+PORT=""
+HEALTH="000"
 if [ -f "$PORT_FILE" ]; then
   PORT=$(tr -d '[:space:]' < "$PORT_FILE")
+  # Non-numeric == corruption, not a board: fall through to the launch path.
+  case "$PORT" in ''|*[!0-9]*) PORT="" ;; esac
+fi
+if [ -n "$PORT" ]; then
   HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/health" 2>/dev/null)
-else
-  HEALTH="000"
-  PORT=""
 fi
 
 if [ "$HEALTH" = "200" ]; then
@@ -67,12 +73,16 @@ else
     fi
   done
   if [ "$HEALTH" != "200" ]; then
-    echo "Switchboard did not come up within 10s. Check npx output above."
+    if [ -f "$PORT_FILE" ]; then
+      echo "Port file written but health unconfirmable here (loopback likely blocked). Continue to Step 2."
+    else
+      echo "Switchboard did not come up within 10s. Check npx output above."
+    fi
   fi
 fi
 ```
 
-- **No file** → launch (no board was ever started, or was cleaned up on shutdown).
+- **No file, or a corrupt (non-numeric) one** → launch (no board was ever started).
 - **Non-200 with port file** → fail safe: do not launch (sandbox may block loopback curl, or port file is stale). Use existing port and warn user.
 - **200** → use the existing board. A running VS Code extension already serves it;
   a second instance must not be started.
@@ -85,7 +95,9 @@ fi
 run the pre-flight here, in this conversation.
 
 ```bash
-PORT=$(cat "$ROOT/.switchboard/api-server-port.txt")
+# Re-derive the path. Each block may run in a fresh shell, so $ROOT from Step 1 is
+# not guaranteed to survive — an empty $ROOT silently builds an unusable BASE.
+PORT=$(tr -d '[:space:]' < "$PWD/.switchboard/api-server-port.txt")
 BASE="http://127.0.0.1:$PORT"
 
 # SWITCHBOARD_TERMINAL is set for Switchboard-managed fleet seats. Unset elsewhere —
