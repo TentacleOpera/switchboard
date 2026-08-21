@@ -10779,18 +10779,20 @@
         + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
         + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
         + 'pwd> (that read returns one record per subtask, each with its kanbanColumn). '
+        + 'Never move a card backwards to an earlier pipeline stage — only the orchestrator may do that. '
+        + 'Never move a card to a new column yourself: your only card action is the POST '
+        + '/kanban/dispatch call below, and only when your team has a reviewer seat. '
         + 'Check your team roster (the YOUR TEAM block in your prompt or ptyListTerminals) for a seat '
         + 'with role "reviewer". If your team has a reviewer seat, make one call: '
         + 'POST /kanban/dispatch with '
         + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}","workspaceRoot":'
-        + '"<your current working directory — run pwd>"} — that one call moves the card and dispatches '
-        + 'the reviewer with the reviewer\'s own prompt. Do NOT use /kanban/move: it moves the card and '
-        + 'dispatches nobody. Only advance the feature your team worked; leave other cards alone. Do '
-        + 'not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
+        + '"<your current working directory — run pwd>"} — that one call triggers review by dispatching '
+        + 'the reviewer with the reviewer\'s own prompt. Do NOT use /kanban/move. '
+        + 'Do not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
         + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
         + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
         + 'empty and stop. '
-        + 'If your team has NO reviewer seat, do NOT move the card to CODE REVIEWED — that is not your role. '
+        + 'If your team has NO reviewer seat, do NOT move the card — that is not your role. '
         + 'Post a finished report to .switchboard/orchestrator/reports/ naming the feature and its planId, '
         + 'and stop. The card stays where it is.'
         + ' When the work is complete, stage the files you changed by explicit path '
@@ -10922,6 +10924,13 @@
         // present AND COMMIT_INSTRUCTION_MARKER is absent. After appending, the
         // marker is present, so the row does not re-match.
         var PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT = 'PLAN FILES ARE THE SOURCE OF TRUTH';
+        // Mirror of PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT in teamWiring.ts.
+        // Recognises the commit-instruction headPrompt before the card-movement
+        // restructuring. The fragment is REMOVED from the new text, so this is
+        // a traditional positive match. GATED ON MARKER PRESENT (same as host):
+        // pre-commit-instruction rows also contain this fragment but lack the
+        // marker — without the gate they would be replaced instead of appended.
+        var PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT = 'Only advance the feature your team worked';
         // Mirror of COMMIT_INSTRUCTION_MARKER in teamWiring.ts. Substring unique
         // to TEAM_HEAD_COMMIT_INSTRUCTION — the negative-check gate for the
         // pre-commit-instruction recogniser.
@@ -10960,7 +10969,9 @@
             if (o.scope === 'team-head' && typeof o.instruction === 'string') {
                 if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1
                     || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1
-                    || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1) {
+                    || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1
+                    || (o.instruction.indexOf(PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT) !== -1
+                        && o.instruction.indexOf(COMMIT_INSTRUCTION_MARKER) !== -1)) {
                     var newInstruction = NEW_CODING_HEAD_PROMPT_CLIENT
                         .replace(/\{head\}/g, o.parent || '');
                     var copy = {};

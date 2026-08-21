@@ -52,10 +52,13 @@ const {
     BUGGY_HEADPROMPT_FRAGMENT,
     PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT,
     PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT,
+    PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT,
+    PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT,
     COMMIT_INSTRUCTION_MARKER,
     TEAM_HEAD_COMMIT_INSTRUCTION,
     NEW_REVIEW_TEAM_HEAD_PROMPT,
     PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT,
+    PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT,
     PRE_REWRITE_CALLBACK_INSTRUCTION,
     STANDING_ORDERS_PREMIGRATION_BAK_KEY
 } = require('../../out/services/teamWiring');
@@ -396,11 +399,29 @@ test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal', () => {
     for (const lit of ['/kanban/dispatch', 'CODE REVIEWED', '"from":"{head}"', 'Do NOT use /kanban/move',
         'GET /kanban/plans?featureId=', 'FEATURE planId', 'intern → coder → lead', 'seat fails review on the same subtask twice',
         'stop and report to the human instead of dispatching again', 'PLAN FILES ARE THE SOURCE OF TRUTH',
-        'If your team has NO reviewer seat']) {
+        'If your team has NO reviewer seat', 'Never move a card backwards',
+        'Never move a card to a new column yourself', 'triggers review by dispatching',
+        // The prohibition MUST name its one exception. The dispatch payload
+        // carries `targetColumn`, so an unqualified "never move a card to a new
+        // column" reads as "do not make that call" and the lead stops handing
+        // features to review at all — the same literal-reading failure the
+        // card-movement-rule migration exists to fix.
+        'your only card action is the POST /kanban/dispatch call below']) {
         assert.ok(NEW_CODING_HEAD_PROMPT.includes(lit), `missing load-bearing literal: ${lit}`);
     }
     assert.ok(!NEW_CODING_HEAD_PROMPT.includes('satisfied with it, hand it to review yourself'),
         'the new text must not contain the fragment the order converter matches on, or it re-converts forever');
+    assert.ok(!NEW_CODING_HEAD_PROMPT.includes('Only advance the feature your team worked'),
+        'the new text must not contain the fragment the card-movement-rule rewriter matches on');
+    // Plan verification items 4-5, automated: the whole point of the migration
+    // is that "advance" and "moves the card" taught the lead card movement was
+    // its job. A future wording pass must not reintroduce either.
+    assert.ok(!/advanc/i.test(NEW_CODING_HEAD_PROMPT),
+        'the new text must not contain any form of "advance" — the word the lead misread as "move the card"');
+    assert.ok(!NEW_CODING_HEAD_PROMPT.includes('moves the card'),
+        '/kanban/dispatch must be described as triggering review, never as moving the card');
+    assert.ok(!/advanc/i.test(NEW_REVIEW_TEAM_HEAD_PROMPT) && !NEW_REVIEW_TEAM_HEAD_PROMPT.includes('moves the card'),
+        'the Review headPrompt must carry no card-movement language either');
 });
 
 const oldCodingGroup = () => ({
@@ -607,6 +628,41 @@ test('PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT exists in exactly two files and is b
         'the corrected text must not contain the fragment — a rewritten row would re-match forever');
 });
 
+// The card-movement-rule recogniser key. Same two-copy rule: the webview
+// cannot import, so teamWiring.ts and terminals.js each carry the literal.
+// The fragment is REMOVED from the new text (traditional positive match),
+// but GATED on COMMIT_INSTRUCTION_MARKER being present — without the gate,
+// pre-commit-instruction rows (which also contain the fragment but lack the
+// marker) would be replaced instead of appended.
+test('PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT exists in exactly two files and is byte-identical', () => {
+    const hostWiringSrc = SRC('services', 'teamWiring.ts');
+    const hostMatch = hostWiringSrc.match(/const PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(hostMatch, 'PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT not found in teamWiring.ts');
+    const hostFragment = hostMatch[1];
+
+    const clientMatch = TERMINALS_JS_SRC.match(/var PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(clientMatch, 'PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT not found in terminals.js');
+    const clientFragment = clientMatch[1];
+
+    assert.strictEqual(clientFragment, hostFragment,
+        'PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT drifted between teamWiring.ts and terminals.js');
+
+    const carriers = walkSrc()
+        .filter(({ body }) => body.includes(hostFragment))
+        .map(({ rel }) => rel)
+        .sort();
+    assert.deepStrictEqual(carriers,
+        [path.normalize('services/teamWiring.ts'), path.normalize('webview/terminals.js')].sort(),
+        'the card-movement-rule fragment must live in exactly two files — the exported '
+        + 'host const and the terminals.js mirror. '
+        + `Found: ${carriers.join(', ')}`);
+
+    assert.ok(PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT.includes(PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT),
+        'the fragment must appear in the frozen snapshot it is meant to recognise');
+    assert.ok(!NEW_CODING_HEAD_PROMPT.includes(PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT),
+        'the new text must not contain the fragment — a rewritten row would re-match forever');
+});
+
 // The group headPrompt and the persisted team-head standing order are two
 // different stores. migrateAgentGroups fixes the first; wireSpawnedTeam skips
 // the head order when one already exists (`if (!headExists)`), so only this
@@ -703,37 +759,55 @@ test('NEW_CODING_HEAD_PROMPT includes the marker (commit instruction was appende
         'NEW_CODING_HEAD_PROMPT must still include the fragment (it is a prefix of the new text)');
 });
 
-test('a persisted team-head order carrying the pre-commit-instruction headPrompt is rewritten and idempotent', () => {
+test('a persisted team-head order carrying the pre-commit-instruction headPrompt is rewritten via two-pass migration', () => {
     const installed = PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1');
     const raw = [{ id: 'o3', parent: 'lead-1', child: '', scope: 'team-head', teamId: 't1', instruction: installed }];
+    // Pass 1: APPEND (pre-commit-instruction row has no marker → append path fires).
+    // The append produces PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT (the OLD
+    // NEW_CODING_HEAD_PROMPT), NOT the new text — the body edit broke the
+    // append-only invariant.
     const out = migrateCodingTeamOrders(raw);
     assert.notStrictEqual(out, raw, 'the recogniser did not fire for pre-commit-instruction order');
     const row = out.find(o => o.id === 'o3');
     assert.ok(row, 'the rewritten row lost its id');
-    assert.strictEqual(row.instruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1'));
+    assert.strictEqual(row.instruction, PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1'),
+        'pass 1 must produce the intermediate text (frozen snapshot + commit instruction), not the new text');
     assert.ok(row.instruction.includes(COMMIT_INSTRUCTION_MARKER),
-        'the rewritten instruction must carry the commit marker');
-    // Idempotent: the marker is now present, so the negative check fails and
-    // the row does not re-match.
-    assert.strictEqual(migrateCodingTeamOrders(out), out, 'the migration is not idempotent — the negative check failed');
+        'the appended instruction must carry the commit marker');
+    // Pass 2: REPLACE (appended row now has marker + "Only advance..." → replace block fires).
+    const out2 = migrateCodingTeamOrders(out);
+    const row2 = out2.find(o => o.id === 'o3');
+    assert.ok(row2, 'the rewritten row lost its id on pass 2');
+    assert.strictEqual(row2.instruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1'),
+        'pass 2 must produce the new text with restructured card-movement language');
+    assert.ok(!row2.instruction.includes('Only advance the feature your team worked'),
+        'the fragment must be absent after the replace pass');
+    // Pass 3 (idempotency): no recogniser matches (fragment absent, marker present).
+    assert.strictEqual(migrateCodingTeamOrders(out2), out2, 'the migration is not idempotent after pass 2');
 });
 
-// The pre-commit-instruction recogniser APPENDS rather than replaces, and that
-// is only byte-safe while the new prompts are exactly the frozen snapshot plus
-// TEAM_HEAD_COMMIT_INSTRUCTION. Edit either NEW_* body without re-freezing its
-// snapshot and an appended row stops equalling the shipped text — silently, in
-// every already-spawned team's delivered prompt. Pin the relation itself.
-test('both NEW_* head prompts are exactly their frozen snapshot plus TEAM_HEAD_COMMIT_INSTRUCTION', () => {
+// The pre-commit-instruction recogniser APPENDS rather than replaces. The
+// append-only invariant (frozen snapshot + TEAM_HEAD_COMMIT_INSTRUCTION ===
+// NEW_*) held for the commit-instruction migration because that change was
+// additive. The card-movement-rule migration is a body edit (supersession),
+// so the invariant NO LONGER HOLDS: NEW_CODING_HEAD_PROMPT is restructured
+// (not just appended to), and NEW_REVIEW_TEAM_HEAD_PROMPT has rules
+// prepended. The append path now produces intermediate text
+// (PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT) that is replaced on the next
+// pass — two-pass migration. Pin the snapshot integrity instead: the frozen
+// snapshot IS the old append relation, which pins the snapshot without
+// constraining the new text.
+test('the frozen snapshots are exactly their pre-commit-instruction snapshot plus TEAM_HEAD_COMMIT_INSTRUCTION', () => {
     assert.strictEqual(
         PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT + TEAM_HEAD_COMMIT_INSTRUCTION,
-        NEW_CODING_HEAD_PROMPT,
-        'NEW_CODING_HEAD_PROMPT is no longer append-only over its snapshot — the '
-        + 'appending recogniser in migrateCodingTeamOrders would produce text that '
-        + 'is not the shipped prompt');
+        PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT,
+        'PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT is not the pre-commit-instruction '
+        + 'snapshot plus the commit instruction — the frozen snapshot is corrupt');
     assert.strictEqual(
         PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT + TEAM_HEAD_COMMIT_INSTRUCTION,
-        NEW_REVIEW_TEAM_HEAD_PROMPT,
-        'NEW_REVIEW_TEAM_HEAD_PROMPT is no longer append-only over its snapshot');
+        PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT,
+        'PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT is not the pre-commit-instruction '
+        + 'snapshot plus the commit instruction — the frozen snapshot is corrupt');
     assert.ok(TEAM_HEAD_COMMIT_INSTRUCTION.includes(COMMIT_INSTRUCTION_MARKER),
         'the marker must be a substring of the appended clause, or the negative '
         + 'idempotence check never sees it and every read re-appends');
@@ -744,10 +818,11 @@ test('both NEW_* head prompts are exactly their frozen snapshot plus TEAM_HEAD_C
 // loadEffectiveStandingOrders persists the transform, so the operator's wording
 // was destroyed on disk (backupOnce may already have been spent by an earlier
 // generation). Appending upgrades the row without touching what they wrote.
-test('an operator-edited pre-commit-instruction head order keeps its wording and gains the clause', () => {
+test('an operator-edited pre-commit-instruction head order keeps its wording on pass 1, replaced on pass 2', () => {
     const houseRule = ' HOUSE RULE: never touch src/legacy/ without asking me first.';
     const edited = PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1') + houseRule;
     const raw = [{ id: 'op1', parent: 'lead-1', child: '', scope: 'team-head', teamId: 't1', instruction: edited }];
+    // Pass 1: APPEND preserves the operator's wording (no marker → append path).
     const out = migrateCodingTeamOrders(raw);
     const row = out.find(o => o.id === 'op1');
     assert.ok(row, 'the operator row lost its id');
@@ -757,9 +832,21 @@ test('an operator-edited pre-commit-instruction head order keeps its wording and
         'the edited row must still gain the durable commit instruction');
     assert.strictEqual(row.instruction, edited + TEAM_HEAD_COMMIT_INSTRUCTION,
         'the append must be the only change to an operator-edited row');
-    // Idempotent: the marker is now present, so a second pass leaves it alone.
-    assert.strictEqual(migrateCodingTeamOrders(out), out,
-        'the operator row re-matched — the negative check failed and the clause doubles every read');
+    // Pass 2: REPLACE — the appended row now has the marker AND "Only advance..."
+    // → the replace block fires and replaces with the new text. The operator's
+    // wording is lost. This is consistent with all prior supersessions: operator
+    // edits that retain a removed fragment are replaced. The card-movement-rule
+    // migration is a supersession (text removed), not an addition.
+    const out2 = migrateCodingTeamOrders(out);
+    const row2 = out2.find(o => o.id === 'op1');
+    assert.ok(row2, 'the operator row lost its id on pass 2');
+    assert.strictEqual(row2.instruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1'),
+        'pass 2 must replace with the new text');
+    assert.ok(!row2.instruction.includes(houseRule),
+        'the operator\'s wording is lost on pass 2 — consistent with all prior supersessions');
+    // Pass 3 (idempotency): no recogniser matches (fragment absent, marker present).
+    assert.strictEqual(migrateCodingTeamOrders(out2), out2,
+        'the operator row re-matched after pass 2 — the migration is not idempotent');
 });
 
 test('the client mirror APPENDS the commit clause instead of replacing the row', () => {
@@ -790,6 +877,59 @@ test('migrateAgentGroups converts an untouched pre-commit-instruction Coding tea
     assert.strictEqual(out[0].headPrompt, NEW_CODING_HEAD_PROMPT,
         'the pre-commit-instruction group must be rewritten to the new text');
     // Idempotent: second pass returns null.
+    assert.strictEqual(migrateAgentGroups(out), null, 'a converted group must not be re-flagged as changed');
+});
+
+test('a persisted team-head order carrying the pre-card-movement-rule headPrompt is rewritten to the corrected text', () => {
+    const installed = PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1');
+    const raw = [{ id: 'o4', parent: 'lead-1', child: '', scope: 'team-head', teamId: 't1', instruction: installed }];
+    const out = migrateCodingTeamOrders(raw);
+    assert.notStrictEqual(out, raw, 'the recogniser did not fire for pre-card-movement-rule order');
+    const row = out.find(o => o.id === 'o4');
+    assert.ok(row, 'the rewritten row lost its id');
+    assert.strictEqual(row.instruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1'),
+        'the rewritten instruction is not the corrected text with {head} substituted');
+    assert.ok(!row.instruction.includes('Only advance the feature your team worked'),
+        'the fragment must be absent after the replace');
+    assert.ok(row.instruction.includes('Never move a card backwards'),
+        'the new text must contain the card-movement rule');
+    // Idempotent: the fragment is absent, so the row does not re-match.
+    assert.strictEqual(migrateCodingTeamOrders(out), out, 'the migration is not idempotent');
+});
+
+test('migrateAgentGroups converts an untouched pre-card-movement-rule Coding team', () => {
+    const group = {
+        id: 'g-pcmr',
+        name: 'Coding',
+        headRole: 'lead',
+        headPrompt: PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT,
+        members: [
+            { role: 'coder', count: 3, scope: 'per-team', relationship: 'reports-to-head' }
+        ]
+    };
+    const out = migrateAgentGroups([group]);
+    assert.ok(out, 'converter returned null on a group that needed converting');
+    assert.strictEqual(out[0].headPrompt, NEW_CODING_HEAD_PROMPT,
+        'the pre-card-movement-rule group must be rewritten to the new text');
+    assert.strictEqual(migrateAgentGroups(out), null, 'a converted group must not be re-flagged as changed');
+});
+
+test('migrateAgentGroups converts an untouched pre-card-movement-rule Review team', () => {
+    const group = {
+        id: 'g-pcmr-r',
+        name: 'Review',
+        headRole: 'reviewer',
+        headPrompt: PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT,
+        members: [
+            { role: 'coder', count: 1, scope: 'per-team', relationship: 'reports-to-head' }
+        ]
+    };
+    const out = migrateAgentGroups([group]);
+    assert.ok(out, 'converter returned null on a group that needed converting');
+    assert.strictEqual(out[0].headPrompt, NEW_REVIEW_TEAM_HEAD_PROMPT,
+        'the pre-card-movement-rule Review group must be rewritten to the new text');
+    assert.ok(out[0].headPrompt.includes('Never move a card backwards'),
+        'the new Review headPrompt must contain the card-movement rule');
     assert.strictEqual(migrateAgentGroups(out), null, 'a converted group must not be re-flagged as changed');
 });
 

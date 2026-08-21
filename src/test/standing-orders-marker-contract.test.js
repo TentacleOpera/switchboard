@@ -419,6 +419,8 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     assert.ok(reviewHeadPrompt.includes('approximately 100 lines directly'), 'Review headPrompt must carry the self-fix threshold');
     assert.ok(reviewHeadPrompt.includes('let the coder choose the fix'), 'Review headPrompt must preserve judgment-call autonomy');
     assert.ok(reviewHeadPrompt.includes('POST /terminals/verb/ptySendPrompt'), 'Review headPrompt must reference ptySendPrompt');
+    assert.ok(reviewHeadPrompt.includes('Never move a card backwards'),
+        'Review headPrompt must carry the card-movement rule — the reviewer must not move cards backwards');
 
     // ── queue/next standing order ────────────────────────────────────
     // The Coding headPrompt must tell the lead to pull the next card via

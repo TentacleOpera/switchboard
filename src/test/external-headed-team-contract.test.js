@@ -19,6 +19,8 @@
  */
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 
 const {
     wireSpawnedTeam,
@@ -390,6 +392,25 @@ function makeMockDb(initialState = {}) {
             });
             assert.notStrictEqual(hit, headName, `role '${role}' must never resolve to the external head`);
         }
+    });
+
+    // 8. The generated head-prompt.md is a team-head standing order like any
+    // other, so it carries the same card-movement rules as the terminal Coding
+    // head. It used to say "Advancing & Review" and "advance cards" — the exact
+    // wording that taught leads to move cards backwards through the pipeline.
+    // Source-level: the file is a template literal, so pin the generator.
+    await test('8. writeHeadPromptFile carries the card-movement rules and no "advance" language', async () => {
+        const src = fs.readFileSync(
+            path.join(__dirname, '..', 'services', 'agentGroupInstantiation.ts'), 'utf8');
+        const start = src.indexOf('export async function writeHeadPromptFile');
+        assert.ok(start !== -1, 'writeHeadPromptFile not found in agentGroupInstantiation.ts');
+        const body = src.slice(start, src.indexOf('writeFile(filePath', start));
+        assert.ok(body.includes('Never move a card backwards to an earlier pipeline stage'),
+            'the external head prompt must prohibit backwards movement');
+        assert.ok(body.includes('your only card action is the POST /kanban/dispatch'),
+            'the external head prompt must name /kanban/dispatch as the one permitted card action');
+        assert.ok(!/advance cards|Advancing/.test(body),
+            'the external head prompt must not tell the head to "advance" cards');
     });
 
     console.log(`\nExternal-Headed Team contract tests: ${passed} passed, ${failed} failed`);

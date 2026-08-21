@@ -274,7 +274,9 @@ If you are remote (reaching Switchboard through a tunnel):
 
 Do not rely on worker self-reports alone; inspect the actual git commits.
 
-## 7. Advancing & Review
+## 7. Triggering Review
+Never move a card backwards to an earlier pipeline stage — only the orchestrator may do that. Never move a card to a new column yourself: your only card action is the POST /kanban/dispatch call below, and only when your team has a reviewer seat.
+
 When all subtasks of the feature are complete and verified:
 \`\`\`json
 POST /kanban/dispatch
@@ -303,7 +305,7 @@ On each wake (or when notified by a background watcher):
 1. Read this file (\`.switchboard/teams/${teamId}/head-prompt.md\`) to re-orient.
 2. Read incoming reports in \`.switchboard/teams/${teamId}/reports/\` (or \`GET /teams/${teamId}/reports\` if remote).
 3. Process each report, verify with git (or \`GET /worktree/<worktreeId>/diff\` if remote), and move processed reports to \`.switchboard/teams/${teamId}/reports/claimed/\` (or \`POST /teams/${teamId}/reports/claim\` if remote).
-4. Dispatch new subtasks to available workers or advance cards.
+4. Dispatch new subtasks to available workers.
 5. If the feature is complete and reviewed, pull the next feature via \`POST /kanban/queue/next\`.
 `;
 
