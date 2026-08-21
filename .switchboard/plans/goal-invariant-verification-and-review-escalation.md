@@ -16,22 +16,24 @@ The fix relocated them to `.agents/protocols/`, rewrote ~45 references across 31
 
 Nothing in the process was dishonest. The commit message states plainly what it did and why. The gap is that **no gate compared the outcome to the plan's purpose**, and no human was asked to approve a change of destination.
 
-**Failure 1 — the reviewer assesses the change against the plan's *steps*, not its *goal*.** This is the real gap, and it is not about section schemas.
+**Failure 1 — the intent check exists as a role, but the intent in question was outside its baseline, and it never ran.**
 
-`agentPromptBuilder.ts:1842` composes the reviewer prompt around:
+Switchboard already has the mechanism. The **acceptance tester** role (`agentPromptBuilder.ts:1948`) is the Product Acceptance / Intent Reviewer, and its base instruction names this exact failure mode:
 
-> "assess the actual code changes against the **plan requirements** inline, fix valid material issues, then verify."
+> - "The reviewer already checked code-vs-plan; you check code-vs-intent."
+> - "Treat the PRD as the primary intent baseline, the constitution as inviolate invariants, and the plan as the implementation record (**not the yardstick**)."
+> - "judge whether the change delivers the product intent and the spirit of the plan… not whether it matches the plan line-by-line"
+> - "**Flag both directions: requirements/intent not met, and code that satisfies the plan's letter but misses the product's intent.**"
 
-"Plan requirements" resolves in practice to the listed implementation steps. A reviewer that satisfies every step has, by that instruction, done its job — even when the result inverts what the plan was for. That is exactly what happened: the protocols were relocated (step satisfied, shipping restored) while the goal (get them out of the scaffold) was reversed, and nothing in the reviewer's instruction asked the second question.
+That last line is the protocol incident verbatim: the change satisfied the plan's letter (moved, ~45 references rewritten) and missed its intent (out of the scaffold). So no new directive is needed. Two things stopped it working.
 
-Note what this framing gets right that an earlier revision of this plan got wrong. That revision proposed adding a required `### Goal Invariants` section to `improve-plan`'s schema. Two things are wrong with that:
+**(a) It never ran.** `ACCEPTANCE TESTED` is a built-in column (`agentConfig.ts:158`, order 350, after `CODE REVIEWED` at 300) but carries `autobanEnabled: false`, so nothing advances a card into it. The protocol work was recorded at `CODE REVIEWED` and stopped; every subtask of that feature still reads `**CODE REVIEWED**`. A role that requires a manual move is a role that is skipped under time pressure, which is precisely when goal inversion happens.
 
-- **It only protects plans authored Switchboard's way.** `workflowFilePath` is a user-editable extension point with GSD and Superpowers as documented peers. A user on GSD never runs `improve-plan`, so a schema requirement there never reaches them.
-- **It imposes structure where structure is not needed.** Checking whether Metadata and Verification Plan sections are load-bearing shows they are not: nothing parses `## Verification Plan` — every reference is a prompt *asking* an agent to write one (`TaskViewerProvider.ts:6555`, `SparkContextExporter.ts:201`, `externalAgentPrompts.ts:70`), with zero readers. Complexity is advisory input to a prompt, not a dispatch switch: `routingMapConfig` (`:1762`) injects thresholds so the *agent* recommends a tier, nothing in code branches on the value, the DB defaults it to `'Unknown'`, and `KanbanDatabase.ts:2903` carries a guard so `'Unknown'` never overwrites a real value. The only mechanical dependency on sections is plan *detection* (`TaskViewerProvider.ts:18363`), which needs any two headings from a deliberately wide alternation — a GSD plan with `## Goal` and `## Recommendation` passes.
+**(b) Even if it had run, it had no baseline.** The tester's yardstick is the PRD, with the plan explicitly demoted to "implementation record (not the yardstick)". The protocols move was internal refactoring — "remove 424K of scaffold from every user repo" is not a product requirement and has no PRD entry. The intent existed **only in the plan's `## Goal`**, the one artefact the tester is instructed not to measure against.
 
-So the fix belongs at the review step, where the question is already methodology-neutral: a reviewer reads whatever plan it is handed and can be asked "does this change satisfy the plan's stated goal, or only its steps?" without caring how the plan was authored.
+So this is a two-line gap, not a new subsystem: internal work has no PRD, and the role that checks intent is told to ignore the only place that intent is written down.
 
-**And it must respect the prompt architecture.** `src/test/minimal-prompt.test.js` pins a deliberate principle: the default prompt is a single "Read <workflowPath> and follow it step-by-step" line, and every elaboration is an opt-in add-on. The 40 exported prompt constants in `agentPromptBuilder.ts` are a library of optional blocks, not one prompt — so the reviewer prompt is short by default and only as long as the add-ons a user enabled. The goal verdict therefore ships as a default-on add-on, not as base text.
+Note this is also the third time in this analysis that the answer was "the mechanism exists, fix or use it" rather than "build something" — the packaged-artifact checker already existed, the minimal-prompt architecture already existed, and now the intent reviewer already exists. That pattern is itself worth acting on: check what consumes a thing before proposing a mechanism for it.
 
 **Failure 2 — local gates verified the dev tree, not the artifact. Already fixed, by the same reviewer, and better than this plan originally proposed.** The gap was real at the time: grep, compile, lint and manual inspection all passed because the files existed in the dev repo. But `33d4f3d` also produced `src/test/vsix-packaging-contract.test.js`, which reproduces vsce's `collectFiles` filter exactly — including the trap that a negation in `.vscodeignore` overrides every ignore pattern regardless of line order — and asserts against that filter rather than by reading the file. It pins the incident directly:
 
@@ -110,7 +112,7 @@ Yes — one decision.
 
 ### Routine
 
-- Adding `GOAL_VERDICT_DIRECTIVE` and its reviewer add-on flag, defaulting to enabled, attached as a separate block without reflowing the two pinned strings.
+- Adding the no-PRD clause to `testerBase` (`agentPromptBuilder.ts:1955`).
 - Offering (not requiring) `### Goal Invariants` in `improve-plan` / `improve-feature`.
 - Adding must-not-exist assertions to the existing `src/test/vsix-packaging-contract.test.js`, and checking which gate runs it.
 - Documenting the escalation rule in `CONSTITUTION.md` under the existing "Performance & Testing Standards" section.
@@ -118,7 +120,8 @@ Yes — one decision.
 ### Complex / Risky
 
 - **Scoping the gate is the highest-risk part of this plan.** The natural implementation — "reject a plan with no Goal Invariants" — is wrong, and wrong in a way that only shows up for users on GSD or Superpowers, i.e. not for anyone testing it. The check needs the authoring methodology as an input, which means either a marker the Switchboard planner writes, or keying off the configured `workflowFilePath` at dispatch time. Neither is free, and getting it wrong ships methodology lock-in as a side effect of a verification improvement.
-- **A default-on add-on does not fix the systemic case, and that is a real limitation rather than an oversight.** A reviewer with the flag disabled can still invert a goal silently. Default-on is the compromise between that and violating the minimal-prompt principle; whether stating a goal verdict is properly part of *review* rather than an opt-in extra is a product decision, recorded in Outstanding Questions.
+- **Editing `testerBase` is editing a shipped prompt, and prompt text here is pinned by tests.** The reviewer block has two byte-pinned strings; check whether `testerBase` has equivalents before touching it, and add a clause rather than reflowing.
+- **The clause has to distinguish Goal from steps without reopening line-by-line review.** The current text demotes the whole plan to "implementation record (not the yardstick)" for a good reason — the tester is meant to permit implementation deviations that still satisfy intent. A clause that promotes the Goal must not accidentally promote the steps, or the tester becomes a second code-vs-plan reviewer and its distinct value is lost.
 - **A prompt clause the reviewer treats as boilerplate is worse than nothing.** The reviewer prompt is already long, and a vague addition ("also consider the goal") will be skimmed. It needs to demand a stated verdict — for a removal or relocation goal, the reviewer must say where the thing now is and whether it is gone from where the goal said it should not be. A verdict is checkable in the review output; a consideration is not.
 - **A schema addition that authors treat as boilerplate is worse than nothing.** `improve-plan` already warns that an empty-but-present `## Outstanding Questions` heading is "a schema violation, not 'done'" — the same failure mode applies here, and harder, because a vacuous invariant ("assert the feature works") looks like compliance. The schema must require invariants to be *executable assertions naming concrete paths, symbols or counts*, and the plan-review pass must reject prose.
 - **Deciding when a negative assertion is required.** "The goal is a removal or relocation" needs a test an author can apply without interpretation. Proposal: if the Goal contains any of *move, relocate, remove, delete, retire, stop, out of, no longer*, a negative invariant is mandatory. Crude, and it will produce false positives — which is the right direction for a gate whose failure mode is silence.
@@ -159,16 +162,12 @@ Yes — one decision.
 
 ## Proposed Changes
 
-1. **A `GOAL_VERDICT_DIRECTIVE` add-on, defaulting to enabled**, on the reviewer role — the same shape as `complexityScoringSkill` (`agentConfig.ts:36`, documented as "When false (explicitly), omits the complexity-scoring step"). Roughly:
+1. **Add the plan's `## Goal` to the tester's baseline when there is no PRD coverage.** One clause in `testerBase` (`agentPromptBuilder.ts:1955`): when the work has no PRD entry — internal refactors, tooling, migrations — treat the plan's stated Goal as the intent baseline, while keeping the existing rule that the plan's *steps* are an implementation record rather than a yardstick. The distinction the current text misses is between a plan's Goal (intent, a valid baseline) and its steps (record, not a yardstick); it currently demotes both.
 
-   > GOAL VERDICT: State whether the plan's stated goal is achieved by this change, separately from whether its steps were completed. If the goal is a removal or relocation, name where the thing now is and whether it is gone from where the goal said it should not be. If you changed the destination or approach the plan specified, say so explicitly and flag it for the author.
+   No new directive, no new add-on. The role, the column, and the "flag both directions" instruction all already exist.
 
-   One clause in, one line of review output back. Methodology-neutral by construction: it reads the goal as written, in any plan shape.
-
-   **It must be an add-on, not base text.** `src/test/minimal-prompt.test.js` asserts the default prompt is one line and contains no hardcoded extras — explicitly naming `Complexity Audit`, `Metadata section`, `Scoring guide` and `GIT POLICY` as things that must be absent unless enabled, plus a `testNoAddOnsByDefault` case. Adding the verdict unconditionally to `reviewerBaseInstructions` would fail that test, and rightly: minimal-by-default is a deliberate, tested architecture. Default-on preserves it while keeping the check present unless someone turns it off.
-
-   **Implementation constraint:** the strings around the reviewer block are pinned by two tests. The shared prefix "assess the actual code changes against the plan requirements" is pinned by the reviewer-prompt regression gate, and the non-delegation tail "fix valid material issues, then verify." is byte-identical to pre-delegation text pinned by the render test in `team-scoped-role-routing.test.js`. Attach a separate block; do not reflow the pinned text.
-2. **Optionally** offer `### Goal Invariants` in `improve-plan` / `improve-feature` as a *recommended* section, not a required one. It genuinely helps for Switchboard-authored plans, and a plan that states its own invariant gives the reviewer something concrete to check. But it must not be a gate: the gate is at review, where it reaches every methodology.
+2. **Decide whether refactor work routes through `ACCEPTANCE TESTED` at all**, and if so whether that column should carry `autobanEnabled: true` like `CODE REVIEWED`'s upstream peers. This is the change that would actually have caught the incident, and it is a product decision about pipeline shape rather than a code fix — recorded in Outstanding Questions.
+3. **Optionally** offer `### Goal Invariants` in `improve-plan` / `improve-feature` as a *recommended* section, never a gate. A plan that states its own invariant gives the tester something concrete to measure, which is useful precisely when there is no PRD.
 3. **Extend `src/test/vsix-packaging-contract.test.js`** rather than building a new checker — it already reproduces vsce's filter faithfully. Add must-*not*-exist assertions alongside its existing must-exist ones, so a goal invariant of the form "X no longer ships" is expressible in the same place. Confirm it runs in a gate that cannot be skipped.
 4. **`CONSTITUTION.md`** gains the escalation rule under "Performance & Testing Standards": a reviewer may change implementation freely; changing a destination or goal named in the plan's Goal or Goal Invariants returns the card to the author with the finding recorded.
 5. **A `### Review Deviations` section** appended to a plan when a reviewer changes anything goal-level — inert prose, author-facing, never a directive.
@@ -182,10 +181,11 @@ Forward-only. Plans already in flight keep their current schema; the requirement
 
 ### Automated Tests
 
-- **Minimal-prompt principle intact:** `src/test/minimal-prompt.test.js` still passes, and a reviewer prompt with the add-on explicitly disabled contains no goal-verdict text.
-- **Reviewer goal verdict:** with the add-on at its default, compose a reviewer prompt for a plan whose Goal says "move X out of Y" and assert the emitted prompt requires a stated verdict on whether X is gone from Y. Assert this holds identically for a plan with Switchboard's sections and for a GSD-shaped plan with neither `## Metadata` nor `## Verification Plan`.
-- **Pinned strings intact:** the reviewer-prompt regression gate and `team-scoped-role-routing.test.js` both still pass, confirming the clause was added rather than the surrounding text reflowed.
-- **Methodology neutrality:** point `workflowFilePath` at a GSD path and a Superpowers path; assert the reviewer instruction is unchanged and carries the goal clause in both cases.
+- **Minimal-prompt principle intact:** `src/test/minimal-prompt.test.js` still passes — the clause is scoped to the tester role and must not appear in a default planner or coder prompt.
+- **Tester baseline with no PRD:** compose a tester prompt for a plan with no PRD reference whose Goal says "move X out of Y"; assert the emitted prompt names the plan's Goal as the intent baseline. Repeat with a PRD present and assert the PRD remains primary.
+- **Steps stay demoted:** assert the emitted prompt still instructs the tester to permit implementation deviations that satisfy intent, so promoting the Goal has not turned it into a second code-vs-plan reviewer.
+- **Methodology neutrality:** point `workflowFilePath` at a GSD path and a Superpowers path; assert the tester instruction is unchanged in both cases, since it reads a Goal rather than a section schema.
+- **Pinned strings intact:** the reviewer-prompt regression gate and `team-scoped-role-routing.test.js` both still pass.
 - **Regression against the goal inversion (the gap that remains):** with protocols at `.agents/protocols/`, assert a goal invariant of the form "no protocol body ships as a scaffolded file" fails. The packaging half of this is already covered by `vsix-packaging-contract.test.js`; this is the half nothing checks.
 - **Paired invariant enforcement:** a plan offering only a must-not-exist assertion, with no matching "resolvable there" assertion, must be rejected.
 - **Must-not-exist expressible:** add a must-not-exist entry to `vsix-packaging-contract.test.js` and assert it fails when the path ships.
@@ -196,7 +196,7 @@ Forward-only. Plans already in flight keep their current schema; the requirement
 
 ### Goal Invariants
 
-- `GOAL_VERDICT_DIRECTIVE` exists, is reviewer-scoped, defaults to enabled, and is absent from the emitted prompt when explicitly disabled. The two pinned strings are byte-identical to their current values.
+- `testerBase` names the plan's `## Goal` as an intent baseline when no PRD is referenced, and still demotes the plan's steps to an implementation record. No new prompt constant or add-on flag was introduced.
 - No change requires a section that a GSD- or Superpowers-authored plan would lack.
 - `src/test/vsix-packaging-contract.test.js` supports must-not-exist assertions, still contains no hardcoded copy of any `.vscodeignore` pattern, and runs in a named gate.
 - `CONSTITUTION.md` contains the reviewer-escalation rule.
@@ -206,6 +206,6 @@ Forward-only. Plans already in flight keep their current schema; the requirement
 
 - **[user]** Should `COMPLEXITY_SCORING_DIRECTIVE` stop prescribing `## Complexity Audit` / `### Routine` / `### Complex / Risky` and instead request a complexity classification in whatever shape the active methodology uses? Proceeding on the assumption that the current behaviour is acceptable because the add-on is opt-out, but it does impose Switchboard's headings on third-party plans by default.
 - **[user]** Which gate currently runs `vsix-packaging-contract.test.js`, and can it be skipped? Proceeding on the assumption it needs an explicit release-gate wiring plus a nightly, so a breakage surfaces within a day rather than at release.
-- **[user]** Should the goal verdict be a default-on add-on (respecting minimal-prompt) or unconditional base text (guaranteeing coverage, requiring `minimal-prompt.test.js` to be updated deliberately)? Proceeding with default-on add-on, since the minimal-prompt architecture is tested and intentional — but noting that an add-on someone disables reopens the exact hole this plan exists to close.
-- **[user]** Should the verdict fire on every review, or only when the plan's Goal contains removal or relocation language? Proceeding with every review, since one line is cheap and the failure mode being fixed is silence.
+- **[user]** Should internal/refactor work route through `ACCEPTANCE TESTED`, and should that column get `autobanEnabled: true`? This is the change that would actually have caught the incident — the clause in (1) only helps once the role runs. Proceeding on the assumption that the clause lands regardless, since it is cheap and correct either way, but the pipeline decision is the one that matters.
+- Does `testerBase` have byte-pinned strings in the test suite, as the reviewer block does? Determines whether the clause can be appended freely.
 - Do any existing plans on the board have goals that the new schema would retro-invalidate? The forward-only rule covers it, but the count is worth knowing before the protocol update ships.
