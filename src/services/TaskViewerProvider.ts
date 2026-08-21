@@ -14,6 +14,7 @@ import {
     mutateStandingOrders,
     makeStandingOrder,
     resolveTeamStanding,
+    renderStandaloneOrdersBlock,
 } from './standingOrders';
 import { writeOrchestratorReport, writeInstruction, bootstrapInstructionsDirectory, ingestJobActivity } from './ScheduledJobsService';
 import * as vscode from 'vscode';
@@ -1834,6 +1835,86 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string): void {
         this._terminalAgentInfo.set(suffixedName, { role, displayName });
         this._notifyTerminalAgentNamesChanged();
+        // Fire-and-forget: deliver applicable standing orders as a one-shot
+        // prompt so the terminal sees its orders on establishment, not after
+        // the first dispatch. The registration sweep (20882/20950) calls
+        // _terminalAgentInfo.set directly and is therefore excluded by
+        // structure — only fresh-spawn sites route through this method.
+        this._deliverStandingOrdersOnEstablish(suffixedName, role).catch((err) => {
+            console.error(`[TaskViewerProvider] Standing-orders establish delivery failed for '${suffixedName}':`, err);
+        });
+    }
+
+    /**
+     * One-shot standing-orders delivery on terminal establish. Loads the
+     * effective orders, builds a roleMap from _terminalAgentInfo, renders the
+     * standalone block, and sends it via _dispatchExecuteMessage (reusing the
+     * per-terminal withTerminalSendLock and PTY fleet resolution). Skips the
+     * orchestrator role (its kickoff dispatch carries the orders block). Skips
+     * when no orders apply (renderStandaloneOrdersBlock returns null → no
+     * prompt sent, no noise).
+     */
+    private async _deliverStandingOrdersOnEstablish(terminalName: string, role: string): Promise<void> {
+        // Orchestrator skip — the kickoff dispatch (immediately after spawn)
+        // carries the orders block via applyStandingOrders. A one-shot here
+        // would be a redundant second block in the same spawn sequence.
+        if (role === 'orchestrator') { return; }
+
+        const workspaceRoot = this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '';
+        if (!workspaceRoot) { return; }
+
+        try {
+            const db = await this._getKanbanDb(workspaceRoot);
+            if (!db) { return; }
+
+            const orders = await loadEffectiveStandingOrders(db);
+            if (!orders || orders.length === 0) { return; }
+
+            // Build live-names set spanning PTY fleet + VS Code terminals (same
+            // pattern as _resolveStandingOrdersForVsCode).
+            const live = new Set<string>();
+            try {
+                const listed = await this._ptyHostVerb('ptyListTerminals', {});
+                for (const t of (listed?.terminals || [])) {
+                    if (t?.status === 'active' && t?.friendlyName) { live.add(t.friendlyName); }
+                }
+            } catch { /* PTY host may be unavailable */ }
+            if (this._registeredTerminals) {
+                for (const [name, term] of this._registeredTerminals) {
+                    if (term && term.exitStatus === undefined) { live.add(name); }
+                }
+            }
+            for (const t of (vscode.window.terminals || [])) {
+                if (t.exitStatus === undefined) { live.add(t.name); }
+            }
+
+            // Resolve groups from the same source the dispatch path uses.
+            let groups: TerminalGroup[] = [];
+            try {
+                groups = this._kanbanProvider
+                    ? this._kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
+                    : await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []);
+            } catch { /* empty groups is safe */ }
+
+            // Build roleMap from _terminalAgentInfo — the terminal-to-role
+            // registry. This is the same pattern the dispatch path uses.
+            const roleMap = new Map<string, string>();
+            for (const [name, info] of this._terminalAgentInfo.entries()) {
+                if (name && info?.role) { roleMap.set(name, info.role); }
+            }
+
+            const block = renderStandaloneOrdersBlock(orders, terminalName, live, groups || [], roleMap);
+            if (block === null) { return; }
+
+            // Send via _dispatchExecuteMessage so the per-terminal
+            // withTerminalSendLock and PTY fleet resolution are reused.
+            // promptComposed=true → addonsComposed=true (the block is the payload,
+            // not a suffix on a dispatch; the delivery layer must not append a
+            // seat directive block).
+            await this._dispatchExecuteMessage(workspaceRoot, terminalName, block, {}, 'sidebar', true);
+        } catch (err) {
+            console.error(`[TaskViewerProvider] Standing-orders establish delivery failed for '${terminalName}':`, err);
+        }
     }
 
     private static CLI_BRAND_NAMES: Record<string, string> = {
@@ -10928,7 +11009,7 @@ Each plan file must include:
 
             // Cache the brand-aware agent display name
             const displayName = this.deriveAgentDisplayName(startupCommand);
-            this._terminalAgentInfo.set(suffixedUniqueName, { role: normalizedRole, displayName });
+            this.setTerminalAgentInfo(suffixedUniqueName, normalizedRole, displayName);
         }
 
         this._refreshTerminalStatuses();
@@ -11267,7 +11348,7 @@ Each plan file must include:
                 });
 
                 const displayName = this.deriveAgentDisplayName(startupCommand);
-                this._terminalAgentInfo.set(suffixedForState, { role: 'orchestrator', displayName });
+                this.setTerminalAgentInfo(suffixedForState, 'orchestrator', displayName);
             }
             this._refreshTerminalStatuses();
         }

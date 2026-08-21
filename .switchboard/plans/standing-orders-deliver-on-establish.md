@@ -84,3 +84,7 @@ Key risks: (1) hooking the wrong set sites — the registration sweep (20882/209
 7. Manual: dispatch a plan to a freshly-established grid/worktree terminal. The dispatch carries the standing-orders block (appended). The one-shot establish block is also in context — two idempotent blocks, same orders. Acceptable; verify no corruption/garbling (the `withTerminalSendLock` serializes the two sends).
 8. Manual: spawn a terminal with no standing orders. No prompt is sent (no noise).
 9. Manual: register an already-open terminal via the registration sweep. No one-shot orders prompt is injected into the running terminal.
+
+## Completion Report
+
+Implemented one-shot standing-orders delivery on terminal establish in `src/services/TaskViewerProvider.ts`. Added `renderStandaloneOrdersBlock` to the standingOrders import, added `_deliverStandingOrdersOnEstablish` method (loads effective orders, builds roleMap from `_terminalAgentInfo`, renders standalone block, sends via `_dispatchExecuteMessage` with `promptComposed=true`), and hooked it fire-and-forget into `setTerminalAgentInfo`. Refactored the worktree spawn site (was 10931) and orchestrator spawn site (was 11270) to call `setTerminalAgentInfo` instead of direct `_terminalAgentInfo.set` — the registration sweep (20947/21015) remains on direct `.set` and is excluded by structure. Orchestrator role is skipped (kickoff dispatch carries orders). No issues encountered; compilation and tests skipped per directives.
