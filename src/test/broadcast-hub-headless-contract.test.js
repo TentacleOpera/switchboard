@@ -96,6 +96,62 @@ test('headless hub: pushWebviewOnly drops (no webview, and by definition no WS f
         'pushWebviewOnly must NOT mirror to WS — it is webview-internal by definition');
 });
 
+// ── 1b. pushToWebviewOnly: the secondary-panel primitive ───────────────────
+// A provider that owns two panels (KanbanProvider: board + Agent Control) needs to
+// hand the second panel a copy of something the WS hub has ALREADY been given.
+// `push` targets the BOUND webview (the wrong panel) and `pushTo` mirrors a second
+// time, double-broadcasting to every browser client. Before this primitive existed
+// both such sites in KanbanProvider hand-rolled a raw webview.postMessage, which is
+// how that file drifted to 3 raw sends and broke the push-routing ratchet.
+
+test('pushToWebviewOnly delivers to the NAMED webview, never the bound one', () => {
+    const apiServer = makeApiServer();
+    const bound = makeWebview();
+    const secondary = makeWebview();
+    const hub = new BroadcastHub({ webview: bound, apiServer });
+
+    hub.pushToWebviewOnly(secondary, { type: 'updateBoard', cards: [] });
+
+    assert.strictEqual(secondary.posted.length, 1, 'the named panel must receive its copy');
+    assert.strictEqual(bound.posted.length, 0,
+        'the BOUND webview must not receive it — that is the cross-delivery bug pushTo/push have');
+});
+
+test('pushToWebviewOnly does NOT mirror to WS — this is the whole point', () => {
+    const apiServer = makeApiServer();
+    const hub = new BroadcastHub({ webview: makeWebview(), apiServer });
+
+    hub.pushToWebviewOnly(makeWebview(), { type: 'updateBoard', cards: [] });
+
+    assert.strictEqual(apiServer.calls.length, 0,
+        'a WS mirror here double-broadcasts every push to browser clients — the caller already mirrored');
+});
+
+test('pushToWebviewOnly renders a factory against the webview scope', () => {
+    const hub = new BroadcastHub({ webview: makeWebview(), apiServer: makeApiServer() });
+    hub.setWebviewScope('proj-a');
+    const secondary = makeWebview();
+
+    hub.pushToWebviewOnly(secondary, (scope) => ({ type: 'updateBoard', scope }));
+
+    assert.strictEqual(typeof secondary.posted[0], 'object',
+        'a bare function fails the webview structured clone and is silently dropped');
+    assert.strictEqual(secondary.posted[0].scope, 'proj-a',
+        'the secondary panel must see the same scope the bound webview would');
+});
+
+test('pushToWebviewOnly on a closed/absent panel is a no-op, never a throw or a queue', () => {
+    const apiServer = makeApiServer();
+    const hub = new BroadcastHub({ webview: makeWebview(), apiServer });
+
+    hub.pushToWebviewOnly(null, { type: 'updateBoard' });
+    hub.pushToWebviewOnly(undefined, { type: 'updateBoard' });
+
+    assert.strictEqual(hub.pendingCount, 0,
+        'a secondary panel must never enter the pending queue — that queue is the bound webview cold-start path');
+    assert.strictEqual(apiServer.calls.length, 0, 'still no mirror');
+});
+
 // ── 2. The editor cold-start contract is untouched ─────────────────────────
 // This is the assertion that protects the ~4,000 installed extension hosts.
 test('editor hub (headless unset): queues before the webview binds, flushes on setWebview', () => {

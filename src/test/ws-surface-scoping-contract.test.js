@@ -123,7 +123,20 @@ test('the client declares from dataset.panel INSIDE wsUrl(), not at module scope
 });
 
 test('the client does not double-filter', () => {
-    assert.ok(!/msg\.surface/.test(transportJs),
+    // Logging the surface is not filtering on it. transport.js prints it in the frame
+    // wsLog for diagnosis (added by 3b3c6367) — `'surface=' + (msg.surface || '<untagged>')`
+    // — and a bare /msg\.surface/ read that as a double-filter, failing this CI gate on a
+    // false positive. Strip logging calls, then apply the ORIGINAL strictness to everything
+    // that remains, so a real filter still trips in any form (comparison, if-guard,
+    // .filter callback, early return) rather than only the shapes someone enumerated.
+    const nonLogging = transportJs.replace(
+        /\b(?:wsLog|console\.(?:log|debug|info|warn|error))\s*\([^\n]*\)/g, '');
+    // Matches ANY `.surface` property read, not just `msg.surface`: a filter written as
+    // `.filter(m => m.surface === ...)` renames the binding and slipped straight past the
+    // original `msg.`-prefixed check. The only real `.surface` read in this file is the
+    // stripped wsLog above — every other mention is prose with no leading dot — so this
+    // stays specific while catching a filter under any variable name.
+    assert.ok(!/\.surface\b/.test(nonLogging),
         'a second client-side filter would only mask a producer mis-tag by making it look like a delivery problem');
 });
 

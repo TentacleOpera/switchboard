@@ -1412,8 +1412,9 @@ export class KanbanProvider implements vscode.Disposable {
      * the broadcaster's BOUND webview (the board) — so an AC-only session gets
      * no snapshot, and with both open the AC panel's own ready would re-render
      * the BOARD instead. Do NOT use pushWebviewOnly (targets the board) or
-     * push() (would re-mirror the whole snapshot to every connected WS client).
-     * Shared by the AC ready arm and _tryRecoverRoot's AC arm.
+     * push()/pushTo() (either would re-mirror the whole snapshot to every
+     * connected WS client). `pushToWebviewOnly` is exactly this shape: named
+     * panel, no mirror. Shared by the AC ready arm and _tryRecoverRoot's AC arm.
      */
     private async _postAgentControlSnapshot(workspaceRoot: string): Promise<void> {
         if (!this._agentControlPanel || !workspaceRoot) { return; }
@@ -1421,8 +1422,11 @@ export class KanbanProvider implements vscode.Disposable {
             const panelScope = this._broadcaster?.getWebviewScope();
             const snapshotMessages = await this.getFullStateMessages(workspaceRoot, panelScope);
             for (const msg of snapshotMessages) {
-                this._agentControlPanel.webview.postMessage(msg)
-                    .then(undefined, () => { /* panel may have closed mid-flight */ });
+                if (this._broadcaster) {
+                    this._broadcaster.pushToWebviewOnly(this._agentControlPanel.webview, msg);
+                } else {
+                    this._rawWebviewSend(this._agentControlPanel, msg);
+                }
             }
         } catch (err) {
             console.error('[KanbanProvider] agent-control full-state snapshot pull failed:', err);
@@ -2428,25 +2432,48 @@ export class KanbanProvider implements vscode.Disposable {
             // singleton fallback, i.e. the pre-scoping payload.
             const rendered = typeof message === 'function' ? message(undefined) : message;
             if (this._webviewReady) {
-                this._panel.webview.postMessage(rendered);
+                this._rawWebviewSend(this._panel, rendered);
             } else {
                 this._pendingWebviewMessages.push(rendered);
             }
         }
-        // Secondary panel (Agent Control): best-effort delivery with NO second WS
-        // mirror. The broadcaster above already mirrored to the wsHub; re-mirroring
-        // here would double-broadcast every push to browser clients. Render the
-        // factory form once against the hub's webview scope so a scoped payload sees
-        // the same scope the primary did — a bare function fails the webview's
-        // structured clone and is silently dropped. No pending queue and no ready
-        // flag: a closed panel simply drops its copy (the rejection handler absorbs a
-        // mid-flight close). When `_broadcaster` is absent the scope resolves to
-        // `undefined`, matching the primary's `message(undefined)` fallback above.
+        // Secondary panel (Agent Control): the copy must NOT be mirrored again — the
+        // broadcaster above already mirrored to the wsHub, and re-mirroring here would
+        // double-broadcast every push to browser clients. `pushToWebviewOnly` owns that
+        // rule (named panel, hub-scoped render, no mirror, no pending queue) so it is
+        // stated once in the hub rather than re-derived at each secondary-panel site.
         if (this._agentControlPanel) {
-            const scope = this._broadcaster?.getWebviewScope();
-            const secondaryRendered = typeof message === 'function' ? (message as Function)(scope) : message;
-            this._agentControlPanel.webview.postMessage(secondaryRendered).then(undefined, () => { /* panel may have closed mid-flight */ });
+            if (this._broadcaster) {
+                this._broadcaster.pushToWebviewOnly(this._agentControlPanel.webview, message);
+            } else {
+                this._rawWebviewSend(this._agentControlPanel, message);
+            }
         }
+    }
+
+    /**
+     * The provider's ONLY raw webview send, and the single bypass the push-routing
+     * ratchet accounts for (baseline 1 in scripts/check-push-routing.js).
+     *
+     * Reached solely when `_broadcaster` is absent — which happens when no workspace
+     * root has resolved (_initKanbanService clears it), so there is no hub to render
+     * or mirror through and nothing to mirror to. Every other push site in this file
+     * routes through the hub (push / pushTo / pushWebviewOnly / pushToWebviewOnly).
+     *
+     * Centralised deliberately: the two secondary-panel sites that used to inline this
+     * each carried their own copy of the render-then-send-then-absorb-rejection rule,
+     * which is how the file drifted to three raw sends and broke the ratchet. A new
+     * panel now has one obvious place to reuse instead of a fourth hand-rolled send.
+     */
+    private _rawWebviewSend(panel: { webview: { postMessage(msg: any): Thenable<boolean> } }, message: any): void {
+        const rendered = typeof message === 'function' ? (message as Function)(undefined) : message;
+        // Takes the PANEL, not its webview, deliberately: the ratchet in
+        // scripts/check-push-routing.js counts raw webview sends by source pattern, so
+        // a helper that received the webview directly would spell the send
+        // `webview.postMessage(` and vanish from the count — the gate would report 0
+        // bypasses while this one still existed, and the next real bypass could hide the
+        // same way. This bypass is legitimate but it must stay VISIBLE and counted.
+        panel.webview.postMessage(rendered).then(undefined, () => { /* panel may have closed mid-flight */ });
     }
 
     private _getSessionLog(workspaceRoot: string): SessionActionLog {

@@ -144,6 +144,31 @@ export class BroadcastHub {
     }
 
     /**
+     * Deliver to a SPECIFIC webview with NO WS fan-out — the named-panel analogue of
+     * `pushWebviewOnly`.
+     *
+     * This is the primitive for a secondary panel receiving a copy of something the WS
+     * hub has ALREADY been given (or must not be given at all). `push()` would target
+     * the bound webview — the main panel, not this one — and `pushTo()` would mirror a
+     * second time, double-broadcasting every message to browser clients. Before this
+     * existed, both secondary-panel sites in KanbanProvider hand-rolled the render +
+     * send + no-mirror rule as raw `webview.postMessage` calls, duplicating the
+     * reasoning in two docblocks and bypassing the push-routing ratchet.
+     *
+     * Renders the factory form against the hub's webview scope so a scoped payload sees
+     * the same scope the bound webview would — a bare function fails the webview's
+     * structured clone and is silently dropped. No pending queue: a secondary panel that
+     * is closed simply drops its copy (the rejection handler absorbs a mid-flight close),
+     * matching `pushTo`'s convention. The queue is load-bearing only for the bound
+     * webview's cold-start ordering.
+     */
+    pushToWebviewOnly(webview: { postMessage(msg: any): Thenable<boolean> } | null | undefined, msg: any): void {
+        if (!webview) { return; }
+        const rendered = typeof msg === 'function' ? (msg as Function)(this._webviewScope) : msg;
+        webview.postMessage(rendered).then(undefined, () => { /* panel may have closed mid-flight */ });
+    }
+
+    /**
      * Push to the webview only (no WS fan-out). Used for messages that are
      * webview-internal (e.g. `switchToTab`) and should not go to external clients.
      * In headless mode there is no webview and no WS fan-out by definition —
