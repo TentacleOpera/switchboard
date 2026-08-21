@@ -15,6 +15,8 @@
 
 Fix the bidirectional sync conflict that causes feature subtasks to go invisible — present in the DB but missing from the feature file's `<!-- BEGIN SUBTASKS -->` block, and in the worst case unlinked from the DB entirely by a stale file read.
 
+**Scope note:** the second, worse symptom (DB unlink from a stale read) is already closed — see **Already Landed**. What remains for this plan is the first: a subtask correctly linked in the DB but absent from the file's block, which every agent reading that file sees as absent. The fix keeps the file→DB direction rather than deleting it; see **Approach** for why the original route was retired.
+
 ### Problem
 
 The feature file's subtask block and the DB's `feature_id` assignments are kept in sync by two mechanisms that can race:
@@ -24,6 +26,8 @@ The feature file's subtask block and the DB's `feature_id` assignments are kept 
 2. **File → DB** (`_syncFeatureMarkdownSubtasks` → `syncFeatureSubtasksByPaths`): when the file watcher processes a feature file, it reads the subtask block and reconciles the DB to match. This does two things:
    - **Links** plans found in the file's block to the feature in the DB.
    - **Unlinks** plans that are in the DB as subtasks of this feature but NOT in the file's block.
+
+(Both are described here under their pre-fix names; the unlink half is gone and the symbols are now `_linkFeatureMarkdownSubtasks` → `linkFeatureSubtasksByPaths` — see Already Landed.)
 
 The **unlink** is the dangerous path. When the feature file is stale (missing a subtask that IS in the DB — due to a race between `_regenerateFeatureFile` and an agent's prose edit, a failed regeneration, or a watcher timing issue), the watcher fires on the stale file and `syncFeatureSubtasksByPaths` **clears the `featureId`** from the DB for the missing subtask. The plan becomes a loose plan — no longer in the feature, potentially lost among other loose cards on the board.
 
@@ -38,30 +42,48 @@ The startup self-heal (`regenerateAllFeatureFiles`) eventually fixes it on resta
 - The skill documentation already says: "Never touch the auto-generated `<!-- BEGIN/END SUBTASKS -->` block — the extension regenerates it from the DB." The block is already intended to be DB-derived, not hand-edited.
 - The board reads subtask membership from the DB (`partitionPlansByFeature` groups plans by their `featureId` from DB records), not from the feature file.
 - `_applyFeatureLink` (the plan-file `**Feature:**` frontmatter → DB link path) skips regeneration if the subtask already has a `featureId` (lines 1031-1033 of `PlanIngestionEngine.ts`), so it can't self-heal a stale feature file block.
-- `create-feature.js`'s `viaDirectFile()` fallback (lines 152-205) writes a feature markdown file directly with `<!-- BEGIN SUBTASKS -->` subtask links and relies on the file→DB ingestion path (`_syncFeatureMarkdownSubtasks` → `syncFeatureSubtasksByPaths`) to link those subtasks in the DB. Its header comment (lines 21-22) states this explicitly. Removing the file→DB direction breaks this fallback unless it is made DB-aware (see Change 5).
+- `create-feature.js`'s `viaDirectFile()` fallback writes a feature markdown file directly with `<!-- BEGIN SUBTASKS -->` subtask links and relies on the file→DB ingestion path (now `_linkFeatureMarkdownSubtasks` → `linkFeatureSubtasksByPaths`) to link those subtasks in the DB. Its header comment states this explicitly. This is a reason to KEEP the file→DB direction, not to compensate for removing it — removal was the original route and has been retired (see Approach, Change 5).
 
 ## Approach
 
-Make the DB the single source of truth for subtask membership. The feature file's subtask block becomes purely cosmetic — always derived from the DB, never used to mutate the DB. This eliminates the race entirely because there is no file→DB direction to clobber the DB→file direction.
+Make the two directions **compose** instead of compete, rather than deleting one of them.
 
-This matches the documented intent (the block is auto-generated, do-not-edit) and the board's existing read path (DB-sourced `partitionPlansByFeature`). The one downstream consumer of the file→DB direction — `create-feature.js`'s offline fallback — is updated in Change 5 to write subtask links to the DB directly, so it no longer depends on ingestion.
+The race is not caused by the file→DB direction existing. It is caused by that direction being **bidirectional** — deriving *removals* from a set difference against the file. A stale copy of the file is missing rows the DB legitimately has, and a difference-based reconcile reads that absence as "delete these".
+
+So:
+- **file→DB is link-only.** A path listed in the block sets `feature_id`. A path *absent* from the block means nothing. Removal is an explicit operation only.
+- **DB→file stays authoritative for the block's contents.** After linking, regenerate, so a clobbered or stale block self-heals immediately instead of waiting for the next subtask mutation or a restart.
+
+This keeps the invariant this plan exists to protect (a stale or partial read of a feature file must never remove membership) *and* the capability that `feature_plan_20260818094800_api-server-port-discovery-stale-cleanup-and-dual-host-health-fallback.md` exists to provide (feature membership declarable by writing files alone, with no running API server). Deleting the file→DB direction would satisfy the first and destroy the second.
+
+> **Superseded:** "Make the DB the single source of truth for subtask membership. The feature file's subtask block becomes purely cosmetic — always derived from the DB, never used to mutate the DB." — plus the claim that this "matches the documented intent (the block is auto-generated, do-not-edit)".
+> **Reason:** Removing file→DB was one implementation route to the invariant, not the invariant itself. It also removes offline/remote subtask linking, which is a wanted capability — the requester confirmed the *reason* the sibling plan was written is that the only pre-existing file-based mechanism (`**Feature:**` frontmatter on the subtask plan file) was undocumented and unintuitive, so the gap read as missing capability. The "documented intent" argument was self-referential: the docs said hand-edits were cosmetic *because* the code ignored them. Note also that this plan's own Verification Plan test 1 asserts the **invariant** ("the DB still has 3 subtasks linked"), not the removal — so the tests survive this change of route almost unaltered.
+> **Replaced with:** link-only file→DB, followed by DB→file regeneration. See Proposed Changes.
 
 ## User Review Required
 
-This change alters the behavior of hand-authored feature files: a feature file with subtask links written directly to disk (outside the API) will no longer have those links ingested into the DB on watcher processing — the block will be overwritten from DB state (possibly empty) on the first watcher tick. The supported workflow is feature creation via the API (`POST /kanban/feature`) or `create-feature.js` (which is updated in Change 5 to be DB-aware). Confirm this behavior change is acceptable before implementation.
+None. The open question — whether hand-authored feature files may stop ingesting subtask links — was answered **no**: that capability is wanted, and providing it discoverably is the point of the sibling plan. The approach was re-routed accordingly (see Approach), so no behaviour change needs sign-off.
+
+> **Superseded:** "This change alters the behavior of hand-authored feature files: a feature file with subtask links written directly to disk (outside the API) will no longer have those links ingested into the DB on watcher processing ... Confirm this behavior change is acceptable before implementation."
+> **Reason:** Asked and answered — the requester wants file-authored subtask linking to work. Leaving this as an open question would invite an implementer to re-adopt the rejected route.
 
 ## Complexity Audit
 
 ### Routine
-- Replacing two call sites in `_handlePlanFile` (lines 1990, 2039) — swap one method call for another already wired via `setFeatureFileRegenerator` (line 376).
-- Removing the now-unreferenced `_syncFeatureMarkdownSubtasks` method (lines 1811-1844) — dead-code removal after its callers are gone.
-- Removing the now-unreferenced `syncFeatureSubtasksByPaths` method (lines 2713-2747) — confirmed single code caller at `PlanIngestionEngine.ts:1837`; all other matches are plan-file documentation.
+- Adding one gated `this._regenerateFeatureFile?.(workspaceRoot, featurePlanId)` call inside `_linkFeatureMarkdownSubtasks`, after the link — the callback is already wired via `setFeatureFileRegenerator` (line 376).
+- Threading `workspaceRoot` into `_linkFeatureMarkdownSubtasks` (both call sites already have it in scope).
+- Returning the unresolved-path count from `linkFeatureSubtasksByPaths` (currently logged and discarded) so the caller can gate the regen.
 - Keeping `regenerateAllFeatureFiles` (line 14374) as-is — already the startup safety net.
+
+> **Superseded:** three bullets describing the removal route — "Replacing two call sites ... swap one method call for another", "Removing the now-unreferenced `_syncFeatureMarkdownSubtasks` method", "Removing the now-unreferenced `syncFeatureSubtasksByPaths` method (lines 2713-2747)".
+> **Reason:** Nothing is being removed any more. Both methods are retained (renamed to `_linkFeatureMarkdownSubtasks` / `linkFeatureSubtasksByPaths`) and the line numbers cited no longer resolve.
 
 ### Complex / Risky
 - **Change 3 — `_applyFeatureLink` always-regenerate:** moves the `_regenerateFeatureFile` call (line 1040) outside the `if (!subtaskRow.featureId)` guard (lines 1031-1033). Every re-import of a plan with `**Feature:**` frontmatter now triggers a feature-file regeneration attempt (mitigated by the no-op guard at line 14360, but the DB read + content build still runs). Performance cost on bulk re-imports of large features.
-- **Change 5 — `create-feature.js` fallback DB-aware:** the `viaDirectFile()` fallback must write `feature_id` links directly to `kanban.db` (via the `KanbanDatabase` handle it already opens at line 166) instead of relying on ingestion. Without this, offline feature creation produces features with no subtasks on the board — a regression that replaces the original invisibility bug.
-- **Behavior change — hand-authored feature files no longer ingest subtask links.** Documented as accepted (block is auto-generated), but it is a breaking change for any workflow that writes feature files directly.
+- **Change 1 — the regen gate is the whole risk.** An unconditional post-link regeneration rewrites the block from DB state, which erases any link the author listed for a plan that is not imported yet — and nothing relinks it, because the pull path only fires for subtasks carrying `**Feature:**` frontmatter. The gate (regen only when every listed link resolved and no link line was in an unsupported shape) is load-bearing, not defensive polish.
+
+> **Superseded:** "Change 5 — `create-feature.js` fallback DB-aware ... Without this, offline feature creation produces features with no subtasks on the board" and "Behavior change — hand-authored feature files no longer ingest subtask links."
+> **Reason:** Change 5 is retired and the behaviour change was rejected — hand-authored feature files DO ingest subtask links. Neither is a risk of this plan any more.
 
 ## Edge-Case & Dependency Audit
 
@@ -74,12 +96,12 @@ This change alters the behavior of hand-authored feature files: a feature file w
 - No new attack surface. All operations are internal DB writes and local file writes. `create-feature.js` fallback already opens the DB handle read-only; Change 5 adds write calls using the existing `updateFeatureStatus` method (no raw SQL, no new privileges).
 
 ### Side Effects
-- **Hand-authored feature files:** a feature file with subtask links written directly to disk (outside the API) will have its subtask block overwritten from DB state on the first watcher tick. Acceptable — the block is documented as auto-generated and should not be hand-edited. The supported workflow is API-based creation.
+- **Hand-authored feature files:** subtask links written directly to disk ARE ingested (link-only), so this workflow is supported rather than broken. The block is then regenerated from the DB — but only once every listed link resolves, so an author's not-yet-imported links are never erased mid-flight (see Change 1, "Why gated"). `.agents/skills/manage-features/SKILL.md` documents both file-only linking mechanisms and the link-only contract.
 - **`**Feature:**` frontmatter on plan files:** this path (`_applyFeatureLink`) is separate from the feature file subtask block sync. It reads the `**Feature:**` line from a PLAN file (not a feature file) and links the plan to the feature in the DB. This continues to work — Change 3 ensures it also regenerates the feature file afterward, even when the `featureId` was already set.
 - **Performance:** `_regenerateFeatureFile` reads subtasks from the DB and writes the file. This is already called on every subtask mutation. Replacing `_syncFeatureMarkdownSubtasks` (which read the file and did DB queries) with `_regenerateFeatureFile` (which reads the DB and writes the file) is a net-neutral performance change at the two `_handlePlanFile` call sites. Change 3 adds a regen attempt on every re-import of a `**Feature:**`-frontmatter plan — the no-op guard (line 14360) skips the write when content is unchanged, but the DB read + content build still runs. On a 50-subtask feature touched 50 times during a bulk edit, that is 50 regen attempts (all no-op writes). Accepted as the cost of self-healing stale blocks.
 
 ### Dependencies & Conflicts
-- **`create-feature.js` fallback (Change 5):** the fallback must be updated in the same change set as Change 1. If Change 1 lands without Change 5, offline feature creation (extension unreachable) produces features with empty subtask blocks on the board — a regression. These two changes are coupled and must ship together.
+- **`create-feature.js` fallback:** no longer coupled to Change 1 — the ingestion path it relies on is retained (link-only), so Change 5 was retired and no must-ship-together constraint remains.
 - **`regenerateAllFeatureFiles` (startup self-heal, line 14374):** unchanged. Remains the safety net for any drift that accumulated before the fix was deployed. No conflict.
 - **`_retryPendingFeatureLinks` (line 1802):** unchanged. Handles deferred `**Feature:**` frontmatter links — a separate concern from the feature file subtask block. Stays at both call sites (lines 1991, 2040).
 
@@ -89,18 +111,37 @@ None — this is a self-contained bugfix in the feature subtask sync path. No ot
 
 ## Adversarial Synthesis
 
-Key risks: (1) removing the file→DB ingestion path breaks `create-feature.js`'s offline fallback, which relies on ingestion to link subtasks — mitigated by Change 5 making the fallback DB-aware; (2) Change 3 triggers a feature-file regen attempt on every `**Feature:**`-frontmatter plan re-import — mitigated by the no-op write guard, with the DB-read/content-build cost accepted; (3) the regen callback (`_regenerateFeatureFile`) is optional (`?.`) and must be wired in tests or verification proves nothing. Mitigations: ship Changes 1 and 5 together, wire the regen callback in every test, and state the 10-second `registerPendingCreation` suppression as the loop-break mechanism rather than relying on "convergence."
+Key risks: (1) an unconditional post-link regeneration erases an author's not-yet-imported subtask links from the file, silently losing them — mitigated by gating the regen on a fully-resolved read (Change 1); (2) Change 3 triggers a regen attempt on every `**Feature:**`-frontmatter plan re-import — mitigated by the no-op write guard, with the DB-read/content-build cost accepted; (3) the regen callback (`_regenerateFeatureFile`) is optional (`?.`) and must be wired in tests or verification proves nothing; (4) a future reader sees a link-only reconcile and "completes" it by re-adding an unlink pass, reopening this exact bug — mitigated by the `link` in the method name, the docblock on `linkFeatureSubtasksByPaths`, and the rule under Change 2. Mitigations: gate the regen, wire the regen callback in every test, cite the 10-second `registerPendingCreation` suppression as the loop-break mechanism rather than relying on "convergence", and land the regression test the Verification Plan specifies — nothing in CI currently pins either the link-only contract or the parser fix.
+
+## Already Landed
+
+Delivered during review of `feature_plan_20260818094800_api-server-port-discovery-stale-cleanup-and-dual-host-health-fallback.md` (commits `c8798b9c`, `3c5d671d`). **Symptom (a) of this bug — a stale file read clearing `feature_id` — is closed.** Do not re-do:
+
+- `syncFeatureSubtasksByPaths` → `linkFeatureSubtasksByPaths`: unlink pass deleted, `allowUnlink` option deleted. Omission from the block is no longer a removal instruction.
+- Nested-feature guard: never writes `is_feature=0` onto a row that is itself a feature (reachable via the `./x.md` link shape).
+- Cross-feature guard retained: never steals a plan owned by a different feature.
+- Parser fix: the `## Subtasks` heading fallback carried `/m`, so `$` matched at every end-of-line and only the FIRST link was captured — every later link then read as removed. Re-anchored with `(?:^|\n)`.
+- `create-feature.js`: an unresolvable planId is a hard error instead of a guessed `../plans/<planId>.md` that links nothing while reporting success.
+- `_syncFeatureMarkdownSubtasks` → `_linkFeatureMarkdownSubtasks`.
+- `.agents/skills/manage-features/SKILL.md`: documents both file-only linking mechanisms and the link-only contract; its false claim that offline linking "will need to be done when VS Code is next opened" is gone. `.claude` mirror regenerated.
+
+**What remains for this plan: symptom (b)** — a subtask correctly linked in the DB but missing from the feature file's block, which anything reading the file (i.e. every agent) sees as absent. Changes 1 and 3 close that. No CI test pins any of the above, which is why the Verification Plan below is load-bearing rather than a formality.
 
 ## Proposed Changes
 
 ### `src/services/PlanIngestionEngine.ts`
 
-**Change 1 — Replace `_syncFeatureMarkdownSubtasks` with DB-authoritative regeneration at both watcher call sites.**
+**Change 1 — Regenerate the feature file AFTER linking, gated on a complete read.**
 
-- **Context:** When the watcher processes a feature file (`_handlePlanFile`), it currently calls `_syncFeatureMarkdownSubtasks` (lines 1811-1844) at two sites — line 1990 (new-record import path) and line 2039 (updated-record import path) — which parses the subtask block and calls `db.syncFeatureSubtasksByPaths` to reconcile the DB to match the file. This file→DB direction is the race source.
-- **Logic:** At both call sites (lines 1990 and 2039), replace `await this._syncFeatureMarkdownSubtasks(db, <planId>, content, workspaceId)` with `await this._regenerateFeatureFile?.(workspaceRoot, <planId>)`. The `_regenerateFeatureFile` callback is already wired via `setFeatureFileRegenerator` (line 376). The `_retryPendingFeatureLinks` call that follows (lines 1991, 2040) stays — it handles deferred `**Feature:**` frontmatter links, a separate concern.
-- **Implementation:** Remove or dead-code the `_syncFeatureMarkdownSubtasks` method (lines 1811-1844) entirely once both callers are gone.
-- **Edge Cases:** If `_regenerateFeatureFile` is not wired (optional `?.`), the call is a no-op and the file block is not refreshed — but the DB is also not mutated, so no invisibility occurs. The file block will be refreshed on the next subtask mutation or on startup self-heal. Tests MUST wire `setFeatureFileRegenerator` or the regen never runs (see Verification Plan).
+> **Superseded:** "Replace `_syncFeatureMarkdownSubtasks` with DB-authoritative regeneration at both watcher call sites ... Remove or dead-code the `_syncFeatureMarkdownSubtasks` method entirely once both callers are gone."
+> **Reason:** Replacing the link with a regeneration deletes offline subtask linking. Sequencing the regeneration *after* the link delivers the same self-heal without giving up the capability. The unlink half — the actual race source — was already removed separately (see Already Landed).
+> **Replaced with:** the logic below.
+
+- **Context:** `_linkFeatureMarkdownSubtasks` (renamed from `_syncFeatureMarkdownSubtasks`) runs at two call sites in `_handlePlanFile` and calls `db.linkFeatureSubtasksByPaths`, which is now link-only. The DB can no longer be corrupted by a stale block — but the **file's block can still be stale** (an agent's prose pass clobbers it) until the next subtask mutation or the startup self-heal. That residual staleness is symptom (b) of this bug: the subtask is correctly linked in the DB but invisible to anything reading the file, which includes every agent driven off these files. The board is unaffected (`partitionPlansByFeature` reads the DB).
+- **Logic:** After the `linkFeatureSubtasksByPaths` call, invoke `this._regenerateFeatureFile?.(workspaceRoot, featurePlanId)` — but **only when the block was read completely**: no link line in an unsupported shape, and every listed path resolved to a plan row. `_linkFeatureMarkdownSubtasks` already computes the unsupported-shape count; have `linkFeatureSubtasksByPaths` return its unresolved count (currently only logged) so the caller can gate on both. `_linkFeatureMarkdownSubtasks` needs `workspaceRoot` threaded in as a parameter; both call sites already have it in scope.
+- **Why gated:** an author writing a feature file offline may list plans that are not imported yet (their watcher events are still debouncing, or the plan files land later). Regenerating unconditionally would rewrite the block from current DB state and **erase those pending links from the file**, and nothing would relink them — the pull path only fires for subtasks carrying `**Feature:**` frontmatter. Leaving the file untouched until the read is complete preserves the author's intent; the next ingest of that file, once the plans exist, both links and regenerates.
+- **Implementation:** keep `_linkFeatureMarkdownSubtasks` and both call sites. `_retryPendingFeatureLinks` (which follows at each site) stays unchanged — deferred `**Feature:**` frontmatter links are a separate concern.
+- **Edge Cases:** No regen loop — `_regenerateFeatureFile` calls `registerPendingCreation`, suppressing watcher processing of its own write for 10s (`PlanIngestionEngine.ts:194-201`), and it skips the write entirely when generated content is byte-identical to disk. If `_regenerateFeatureFile` is unwired (optional `?.`) the call is a no-op: the DB is still correct and the block refreshes on the next mutation or at startup. Tests MUST wire `setFeatureFileRegenerator` or the regen never runs and the test passes for the wrong reason.
 
 **Change 3 — Make `_applyFeatureLink` always regenerate the feature file.**
 
@@ -111,21 +152,19 @@ Key risks: (1) removing the file→DB ingestion path breaks `create-feature.js`'
 
 ### `src/services/KanbanDatabase.ts`
 
-**Change 2 — Remove `syncFeatureSubtasksByPaths` (unlink path eliminated).**
+**Change 2 — RETIRED. Already delivered as link-only, not removal.**
 
-- **Context:** `syncFeatureSubtasksByPaths` (lines 2713-2747) is the DB method that reconciled subtask membership from the feature file's block. Its unlink section (lines 2739-2746) is the dangerous path that cleared `feature_id` for plans in the DB but not in the file's block — the direct cause of invisibility.
-- **Logic:** Audit confirmed `syncFeatureSubtasksByPaths` has exactly ONE code caller: `PlanIngestionEngine.ts:1837` (inside `_syncFeatureMarkdownSubtasks`, being removed in Change 1). All other matches across the repo are plan-file documentation, not code. With the sole caller removed, the method has no callers — remove it entirely.
-- **Implementation:** Delete lines 2706-2747 (the method and its docblock). Unlinks now only happen through explicit operations: `_removeSubtaskFromFeature`, `_deleteFeature`, and `assignPlansToFeature` to a different feature.
-- **Edge Cases:** If a future caller needs file→DB link ingestion, it must use explicit `updateFeatureStatus` calls — never re-introduce an unlink-from-file path.
+> **Superseded:** "Remove `syncFeatureSubtasksByPaths` (unlink path eliminated) ... With the sole caller removed, the method has no callers — remove it entirely. Delete lines 2706-2747."
+> **Reason:** Only the *unlink pass* was the race source, not the method. It is now `linkFeatureSubtasksByPaths` — link-only, with a cross-feature guard (never steal a plan owned by another feature) and a nested-feature guard (never write `is_feature=0` onto a row that is itself a feature, which the `./x.md` link shape made reachable). Deleting the method would have taken offline linking with it.
+> **Replaced with:** nothing to do — see Already Landed. The original edge-case note stands and is promoted to a rule: **never re-introduce an unlink-from-file path.** The method name says `link` precisely so its absence is not mistaken for an unfinished feature.
 
 ### `.agents/skills/kanban_operations/create-feature.js`
 
-**Change 5 — Make the `viaDirectFile()` fallback DB-aware (do not rely on file→DB ingestion).**
+**Change 5 — RETIRED. No longer needed.**
 
-- **Context:** `viaDirectFile()` (lines 152-205) is the offline fallback when the extension's API server is unreachable. It writes a feature markdown file with `<!-- BEGIN SUBTASKS -->` links and currently relies on the watcher's file→DB ingestion (`_syncFeatureMarkdownSubtasks` → `syncFeatureSubtasksByPaths`) to link those subtasks in the DB. Its header comment (lines 21-22) states this dependency explicitly. Change 1 removes that ingestion path, so the fallback must write the subtask links to the DB itself.
-- **Logic:** The fallback already opens `KanbanDatabase.forWorkspace(workspaceRoot)` (line 166) and queries each plan (line 169). After resolving each plan, call `await db.updateFeatureStatus(plan.planId, 0, featurePlanId)` to set the `feature_id` link directly in the DB. The feature row itself is still created by the watcher when it imports the feature file (`_handlePlanFile` → `insertFileDerivedPlan` + `updateFeatureStatus(planId, 1, '')`), so the fallback does not need to insert the feature row — only the subtask links. Update the header comment (lines 17-22) to reflect that the fallback now writes subtask links to the DB directly and no longer relies on file→DB ingestion.
-- **Implementation:** Inside the existing `for (const pid of planIds)` loop (line 168), after `const plan = await db.getPlanByPlanId(pid)`, add `await db.updateFeatureStatus(pid, 0, featurePlanId)` (guard with the same try/catch that already wraps the DB access, lines 164-182). Close the DB handle (line 178) as today.
-- **Edge Cases:** If `KanbanDatabase` module is unavailable (the `catch` at line 179), the fallback writes only markdown and the subtask links will NOT be in the DB — the feature will show empty on the board until the extension starts and a subtask mutation or startup self-heal regenerates the file. This is the same degraded state as today when the module is unavailable, and strictly better than the post-change-1-without-change-5 regression. The `updateFeatureStatus` call respects `is_feature` stickiness and will not steal a subtask already linked to a different feature (the cross-feature guard is inherent in the explicit-assignment model — `assignPlansToFeature` already checks this).
+> **Superseded:** "Make the `viaDirectFile()` fallback DB-aware (do not rely on file→DB ingestion) ... add `await db.updateFeatureStatus(pid, 0, featurePlanId)`."
+> **Reason:** This existed only to compensate for Change 1 deleting the ingestion path the fallback depends on. Change 1 no longer deletes it, so the fallback keeps working as designed and this becomes a second, redundant writer of the same link. Its stated degraded case ("if `KanbanDatabase` is unavailable ... the feature will show empty on the board") was independently closed while reviewing the sibling plan: an unresolvable planId is now a hard error instead of a guessed `../plans/<planId>.md` path that links nothing while reporting success.
+> **Replaced with:** nothing to do. The Changes 1+5 shipping coupling described under Dependencies & Conflicts is void.
 
 ### `src/services/KanbanProvider.ts`
 
@@ -142,7 +181,7 @@ Key risks: (1) removing the file→DB ingestion path breaks `create-feature.js`'
 
 ### Automated Tests
 
-1. **Unit test — stale file doesn't unlink:** Create a feature with 3 subtasks in the DB. Manually write a feature file with only 2 subtasks in the block. Trigger the watcher. Verify: (a) the DB still has 3 subtasks linked, (b) the feature file is regenerated with all 3 subtasks. **Test setup requirement:** wire `setFeatureFileRegenerator` on the `PlanIngestionEngine` under test, or the regen is a no-op and the test passes for the wrong reason.
+1. **Unit test — stale file doesn't unlink:** Create a feature with 3 subtasks in the DB. Manually write a feature file with only 2 subtasks in the block. Trigger the watcher. Verify: (a) the DB still has 3 subtasks linked — this is the invariant, and it holds already via link-only, so land it as a **regression pin** so nothing re-adds an unlink pass; (b) the feature file is regenerated with all 3 subtasks — this is what Change 1 adds. **Test setup requirement:** wire `setFeatureFileRegenerator` on the `PlanIngestionEngine` under test, or the regen is a no-op and the test passes for the wrong reason. Add two more pins alongside: an **empty** subtask block must wipe nothing, and a block listing a plan owned by another feature must not steal it.
 
 2. **Unit test — assign + prose edit race:** Create a plan, assign it to a feature (sets featureId in DB, regenerates feature file). Immediately write the feature file with a stale subtask block (simulating an agent's prose edit clobbering the regeneration). Trigger the watcher. Verify: (a) the DB still has the subtask linked, (b) the feature file is regenerated with the correct subtask block.
 
@@ -150,6 +189,9 @@ Key risks: (1) removing the file→DB ingestion path breaks `create-feature.js`'
 
 4. **Integration test — rearrange-feature split flow:** Simulate the `rearrange-feature` split: create a plan via `POST /kanban/plans`, assign it via `POST /kanban/features/assign`, then immediately edit the feature file's prose (simulating step 6 of the skill). Trigger the watcher. Verify the new subtask appears in the feature file's block and remains linked in the DB.
 
-5. **Integration test — `create-feature.js` offline fallback:** With the extension API unreachable, run `create-feature.js` with a set of plan IDs. Verify: (a) the feature markdown file is written with the subtask block, (b) each subtask's `feature_id` is set to the new feature's plan ID in `kanban.db` directly (not via ingestion), (c) when the watcher processes the feature file, the block is regenerated from the DB and matches (no empty-block regression).
+5. **Integration test — `create-feature.js` offline fallback:** With the extension API unreachable, run `create-feature.js` with a set of plan IDs. Verify: (a) the feature markdown file is written with the subtask block; (b) when the watcher ingests that file, each subtask's `feature_id` is set to the new feature's plan ID — **via ingestion**, which is the supported path now that Change 5 is retired; (c) the block is then regenerated from the DB and matches (no empty-block regression); (d) an unresolvable planId aborts with a non-zero exit and writes NO feature file, rather than emitting guessed links and reporting success.
+
+> **Superseded:** assertion (b) previously read "set ... in `kanban.db` directly (not via ingestion)".
+> **Reason:** That wording encoded Change 5, which was retired — asserting "not via ingestion" would now fail against correct behaviour.
 
 6. **Existing tests:** Run the existing test suite (`src/test/headless-feature-management-*.test.js`) to verify no regressions in feature management operations. Ensure these tests wire `setFeatureFileRegenerator` if they exercise the feature-file watcher path.
