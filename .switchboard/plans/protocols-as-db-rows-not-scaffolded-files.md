@@ -2,7 +2,9 @@
 
 ## Goal
 
-Move all 32 protocol definitions (424K) into the store and delete `.agents/protocols/` from every workspace. Protocols are UI-triggered instructions the extension delivers; nothing discovers them by scanning the filesystem, and every one of them is extension-dispatched, so nothing requires any of them to be files.
+Move 30 of the 32 protocol definitions (~396K of 424K) into the store and shrink `.agents/protocols/` to two files. Protocols are UI-triggered instructions the extension delivers; nothing discovers them by scanning the filesystem, so their storage form is a delivery choice rather than a constraint.
+
+Two stay committed: `improve-plan` (16K) and `improve-feature` (12K). `CLAUDE.md:127` and `:130` treat `improve-plan`'s required-section schema as authoritative for all plan authoring, so an agent following `CLAUDE.md` with no connection to the user's machine — a cloud session working from a clone — must be able to read it unaided.
 
 `.agents/workflows/` (4 files, 52K) stays committed and is unaffected. Those are the four user-typeable slash commands — the entry surface an agent reads before it can reach the API — and they are the bootstrap that makes row-delivered protocols reachable.
 
@@ -52,27 +54,23 @@ Protocols were modelled as skills because they were authored as skills and lived
 
 ## User Review Required
 
-Yes — one decision, now that the classification is settled.
+Yes — confirm the delivery model. The discriminator is **what the reader can reach**, not whether the extension dispatches it.
 
-**All 32 protocols are extension-dispatched.** `ClaudeCodeMirrorService.ts:64-71` is the authoritative list and says so directly:
+An earlier revision used `ClaudeCodeMirrorService.ts:64-71`'s "extension-dispatched" list as the test and concluded all 32 could be rows. That list is about CLI skill-discovery mirroring; it says nothing about whether a given reader can obtain the body. Three reachability tiers, and every protocol sits in exactly one:
 
-> "Internal extension-dispatched skills (no-user: hidden from slash, model-loadable) — improve-plan, improve-feature, accuracy, terminal-coder-dispatch, dispatch-analysis, advise_research, switchboard-orchestrator(-external/-internal), switchboard-orchestration, switchboard-contracts, complexity-scoring, deep-planning, web-research, tuning, constitution-builder, external-team-lead, improve-remote-plan, design-system-builder, refine_feature, archive, and the API proxy skills (clickup-*, linear-*, notion-api, get-tickets, generate-diagram) have been moved to `.agents/protocols/` — they are delivered by path reference, not via CLI skill discovery"
-
-So there is no protocol that an agent must read without the extension present, and the whole 424K can move. Two specific cases worth confirming, because they look like exceptions and are not:
-
-- **`improve-remote-plan`** reads like the remote-facing exception, but it *requires* the extension: "The Switchboard extension must be active (LocalApiServer running)". It can therefore be served as a row over the API it already depends on. (Note its own doc contradicts itself — "When to Use" says "no local machine running" while Prerequisites requires the LocalApiServer. Reading it with `switchboard-remote.md`, the intended meaning is "away from your desk, machine still on". Worth fixing in the protocol body, separately.)
-- **`get-tickets` and `generate-diagram`** have no trigger anywhere in `src/`, the workflows, or `CLAUDE.md` prose — they appear only in `CLAUDE.md`'s line-114 inventory list. They are local-UI or dead; either way they are rows, not committed files.
-
-**Remaining decision: `inline` versus `materialize` within the row class.** The rule falls out of who receives the protocol, which is the same consumer logic one level finer:
-
-| Delivery | Protocols | Why |
+| Reader can reach | Delivery | Which protocols |
 | :--- | :--- | :--- |
-| `inline` | the 13 clipboard-delivered ones (~72K, largest 16K) | Switchboard's involvement ends at the clipboard; it cannot know where the prompt is pasted, so the body must travel with it |
-| `materialize` | the rest, incl. `terminal-coder-dispatch` (44K), `switchboard-orchestrator` (40K), `switchboard-orchestration` (28K) | extension-dispatched, so the extension controls both ends — and these are the most frequently dispatched, where inlining would re-add the per-turn token cost the original plan removed |
+| a clipboard from the extension | **`inline`** into the copied prompt | the 13 clipboard-delivered ones (~72K): `get-tickets`, `generate-diagram`, `accuracy`, `advise_research`, `clickup-api`, `clickup-attach`, `clickup-create-subpage`, `clickup-create-task`, `clickup-fetch`, `clickup-modify-task`, `linear-api`, plus `improve-plan` / `improve-feature` |
+| the LocalApiServer — locally, or remotely through the proxy | **`GET /protocol/<name>`** (new endpoint) | everything the `sb_api_call` family already reaches, including `improve-remote-plan` |
+| nothing but a clone | **committed file** | `improve-plan`, `improve-feature` |
 
-Recommendation: adopt exactly that, as a per-row column. Note the two sets overlap on `improve-plan` and `improve-feature`, which are both clipboard-offered *and* extension-dispatched — those must be `inline`, because the weaker guarantee governs.
+**The middle tier is the piece that makes this work and it is cheap.** Any agent already using `sb_api_call` has a channel to the extension, so it can fetch a protocol body the same way it fetches everything else. That is what lets `improve-remote-plan` be a row despite being the "remote" protocol — it *requires* the LocalApiServer by its own Prerequisites, so the channel is guaranteed.
 
-**Do not sweep `.agents/skills/_lib/`.** `improve-remote-plan` sources `sb_api_call.sh` from it via `git rev-parse --show-toplevel`. It is a skill library, not a protocol, and it must stay committed.
+**The third tier is small but non-empty, and this is the correction.** A cloud session working from a clone has no extension, no clipboard, and no proxy. It reads `CLAUDE.md`, which points at `improve-plan`'s section schema as the authority for plan structure. If that body exists only as a row on the user's machine, a cloud agent authoring a plan has no way to learn the schema it is required to follow. `improve-feature` is the same case for features. Two files, ~28K — down from 424K, and for a reason that survives scrutiny rather than a mechanical name-match.
+
+Note `improve-plan` and `improve-feature` appear in two tiers: clipboard-offered *and* repo-committed. That is consistent — the committed file is the floor, and the clipboard prompt inlines the body so a paste works on a machine that has no clone.
+
+**Remaining decision within the row class: `inline` versus `materialize`.** Clipboard-delivered means `inline`, because Switchboard's involvement ends at the clipboard and cannot know where the prompt is pasted. Everything else means `materialize` to a hash-keyed cache — including the three largest, `terminal-coder-dispatch` (44K), `switchboard-orchestrator` (40K) and `switchboard-orchestration` (28K), which are also the most frequently dispatched and where inlining would re-add the per-turn token cost the original plan removed.
 
 ## Complexity Audit
 
@@ -127,7 +125,9 @@ Recommendation: adopt exactly that, as a per-row column. Note the two sets overl
 
 **"Materialising to the home directory just moves the directory."** It moves it out of every repository into one machine-local cache, keyed by content hash, prunable, and never committed. That is the whole ask, and it applies only where the extension dispatches — on the user's own machine, where that cache is guaranteed to exist.
 
-**"Remote agents will lose access to protocols."** They can read them today only because the files are committed, and a cloud session has no extension to inject on its behalf — so this would be fatal if any protocol were genuinely agent-read. None is: `ClaudeCodeMirrorService.ts:64-71` lists all 32 as extension-dispatched, and even `improve-remote-plan` requires the LocalApiServer. What remote agents actually read is `.agents/workflows/` and `CLAUDE.md`, both of which stay committed. The verification test asserting no protocol path appears in agent-read prose is what keeps that boundary honest.
+**"Remote agents will lose access to protocols."** Two of them genuinely would, which is why two stay committed. A cloud session working from a clone has no extension, no clipboard and no proxy, and `CLAUDE.md` points it at `improve-plan`'s section schema as the authority for plan structure — so that body must be readable unaided. Everything else is reachable by one of the other two tiers: clipboard-inlined, or fetched over `GET /protocol/<name>` by any agent that can already reach the LocalApiServer. The failure mode to guard is a protocol *moving* between tiers without its references moving with it, which is what the prose test pins.
+
+**"Two committed files is an arbitrary carve-out."** It is derived, not chosen: they are the protocols `CLAUDE.md` cites as authoritative for work an agent does with no extension present. If `CLAUDE.md` stopped citing them — if plan structure moved into the workflow files, which are committed anyway — the carve-out would go to zero. That is a reasonable follow-up and deliberately out of scope here, because it changes what `CLAUDE.md` means rather than where a file lives.
 
 ## Proposed Changes
 
@@ -148,15 +148,19 @@ Import from all three historical locations, hash-compare, preserve mismatches as
 
 ### Goal Invariants
 
-- `.agents/protocols/` does not exist — asserted against the repo, a packaged VSIX, and every `path.join` in `src/`. This is the assertion the original plan lacked, and it is what would have caught the destination change: it fails whether the protocols sit at `.switchboard/protocols/`, back in `.agents/skills/`, or still in `.agents/protocols/`.
-- No protocol body exists as a file anywhere in the repo; all 32 resolve from `control_plane` rows.
+- `.agents/protocols/` contains exactly `improve-plan/SKILL.md` and `improve-feature/SKILL.md` and nothing else — asserted against the repo, a packaged VSIX, and every `path.join` in `src/`. This is the assertion the original plan lacked, and it fails whether the other 30 sit at `.switchboard/protocols/`, back in `.agents/skills/`, or still in `.agents/protocols/`.
+- `.agents/protocols/` totals under 32KB (currently 424K).
+- Both survivors still ship: they are present in a packaged VSIX, which is the constraint that sank `.switchboard/protocols/`.
+- The other 30 resolve from `control_plane` rows and exist as files nowhere in the repo.
 - No protocol name or description appears in a CLI-discovered skill listing.
 
 ### Automated Tests
 - **Ships and resolves on a clean install:** unpack a built VSIX into a fresh workspace with no `.agents/` at all; assert every one of the 32 protocols resolves. This is the check that was missing when the earlier version passed grep, compile, lint and manual review while being dead on every user install.
+- **API tier:** `GET /protocol/<name>` returns the body for every row-class protocol, rejects an unknown name, and rejects a name containing traversal characters. Assert `improve-remote-plan` is fetchable this way, since its own Prerequisites guarantee the channel.
+- **Cloud tier (the correction this plan needed):** in a bare clone with no extension, no store, no cache and no network path to any machine, assert an agent can read `improve-plan/SKILL.md` and `improve-feature/SKILL.md` by the paths `CLAUDE.md` names. This is the scenario an earlier revision of this plan would have broken.
 - **No protocol path on the clipboard:** click "Copy prompt" for every row of `AGENT_API_CAPABILITIES` in both providers; assert no clipboard payload contains a filesystem path, and that each contains the protocol body inline. This is the assertion that keeps a pasted prompt working on a machine that is not the user's.
 - **Weaker-guarantee-wins:** assert `improve-plan` and `improve-feature` resolve as `inline`, since they are both clipboard-offered and extension-dispatched.
-- **No protocol path in agent-read prose:** assert no `.agents/protocols/` or `.switchboard/protocols/` path appears in `CLAUDE.md`, `AGENTS.md`, `.agents/workflows/*.md` or the remote-flow documents. This test fails today (five stale paths in `CLAUDE.md`) and must pass after.
+- **No unreachable protocol path in agent-read prose:** assert the only protocol paths appearing in `CLAUDE.md`, `AGENTS.md`, `.agents/workflows/*.md` or the remote-flow documents are the two committed ones, and that every such path resolves in a bare clone. No `.switchboard/protocols/` path may appear at all. This test fails today — `CLAUDE.md` carries five stale `.switchboard/protocols/` paths — and must pass after.
 - **Workflows still bootstrap:** assert the four `.agents/workflows/*.md` files remain committed and readable in a fresh clone with no extension, since they are the entry surface that makes row-delivered protocols reachable.
 - **`_lib` survives:** assert `.agents/skills/_lib/sb_api_call.sh` is still committed and resolvable via `git rev-parse --show-toplevel`, as `improve-remote-plan` requires.
 - **Prompt-shape parity:** for each of the ~18 directive sites, assert the emitted prompt still names or contains the correct protocol, compared against a recorded baseline.
