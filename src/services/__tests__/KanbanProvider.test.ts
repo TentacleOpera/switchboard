@@ -228,6 +228,20 @@ suite('KanbanProvider', () => {
             assert.strictEqual(next, 'PLAN REVIEWED', 'CREATED must advance to PLAN REVIEWED, skipping STAGING');
         });
 
+        test('TICKET UPDATER -> COMPLETED (the role-less skip must not close the pipeline)', async () => {
+            stubDeps({ researcher: false, tester: false, ticket_updater: true }, false);
+            const next = await (provider as any)._getNextColumnId('TICKET UPDATER', workspaceRoot);
+            assert.strictEqual(next, 'COMPLETED',
+                'COMPLETED has no role but is the terminal stage — the STAGING skip must carve it out, or nothing can ever be advanced to Completed');
+        });
+
+        test('ACCEPTANCE TESTED -> COMPLETED when the ticket updater is hidden', async () => {
+            stubDeps({ researcher: false, tester: true, ticket_updater: false }, true);
+            const next = await (provider as any)._getNextColumnId('ACCEPTANCE TESTED', workspaceRoot);
+            assert.strictEqual(next, 'COMPLETED',
+                'with TICKET UPDATER hidden the walk must still reach COMPLETED, not fall off the end');
+        });
+
         test('Last column returns null', async () => {
             stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('COMPLETED', workspaceRoot);

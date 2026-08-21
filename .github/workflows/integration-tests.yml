@@ -432,14 +432,26 @@ jobs:
       - name: Kanban viewPlan removal regression (verb stays deleted, card actions survive)
         run: npm run test:contract:kanban-view-plan-removal
 
-      # The Dispatch view's staged count is a call-site property, not a value: the
-      # Planned column header is NOT rebuilt on a board refresh, so a count baked into
-      # the renderColumns template is stale in exactly the state it exists to inform.
+      # The Staging column's staged count is a call-site property, not a value: the
+      # column header is NOT rebuilt on a board refresh, so a count baked into the
+      # renderColumns template is stale in exactly the state it exists to inform.
       # This pins the four call sites, the count's filter predicate, the removal of the
-      # manual entry button (half-done removal is the documented failure mode), and the
-      # fan-out verb's schema + capability gating.
-      - name: Dispatch view count / entry / fan-out contract
+      # manual entry button and the three DISPATCH-view verbs (half-done removal is the
+      # documented failure mode), and the capability gating on terminal creation.
+      - name: Staging column count / entry / removed-verb contract
         run: npm run test:contract:dispatch-view
+
+      # STAGING replaced the DISPATCH display mode with a real column, and every load-
+      # bearing property of that swap is invisible to compile, lint and the behavioural
+      # suites: a column definition that regains a `role` silently becomes an advance
+      # target and swallows every card the pipeline pushes forward; a pop or a
+      # queue-position writer left pointing at DISPATCH leaves the queue permanently
+      # empty with no error; and a drop handler that falls through to the generic
+      # column-move sets the column without ever assigning a queue_position, so the
+      # queue renders in board order and Run queue pops the wrong card first. Each of
+      # those ships green. This is the migration's gate.
+      - name: STAGING column contract (definition, pop filter, queue writer, drag routing)
+        run: npm run test:contract:staging-column
 
       # A dropped card must become authoritative a DB write after the drop, not a
       # full agent dispatch later. The three drag arms persist → post `moveCards` →

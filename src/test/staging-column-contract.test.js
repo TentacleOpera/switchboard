@@ -140,18 +140,29 @@ function run() {
 
     // ─── 3. Queue position writer ──────────────────────────────────────────
 
-    check('appendQueuePositions writes kanban_column = STAGING', () => {
+    check('appendQueuePositions reads and writes kanban_column = STAGING', () => {
         const fnStart = kanbanDatabase.indexOf('public async appendQueuePositions(');
         assert.notStrictEqual(fnStart, -1, 'appendQueuePositions must exist');
         const fnBody = kanbanDatabase.slice(fnStart, kanbanDatabase.indexOf('\n    public ', fnStart + 50));
+        // Both statements bind the column name positionally on the line AFTER the
+        // SQL string, so every predicate here must span newlines ([\s\S], not `.`).
+        // The first draft of this check used `.` and could not match either
+        // statement — it passed only because the file it guards was never run.
         assert.ok(
-            /kanban_column\s*=\s*\?.*'STAGING'/.test(fnBody) || /kanban_column.*STAGING/.test(fnBody),
-            "appendQueuePositions must write kanban_column = 'STAGING' — writing DISPATCH creates invisible cards"
+            !/'DISPATCH'/.test(fnBody),
+            "appendQueuePositions must not bind 'DISPATCH' — cards written there are invisible to the pop"
         );
-        // The MAX query must also filter on STAGING.
+        // The MAX(queue_position) read must be scoped to STAGING, or positions are
+        // appended from another column's high-water mark.
         assert.ok(
-            /kanban_column\s*=\s*\?[^)]*'STAGING'/.test(fnBody),
-            "the MAX(queue_position) query must filter on 'STAGING' — a DISPATCH filter reads the wrong column"
+            /MAX\(queue_position\)[\s\S]*?kanban_column\s*=\s*\?[\s\S]*?\[\s*workspaceId\s*,\s*'STAGING'\s*\]/.test(fnBody),
+            "the MAX(queue_position) query must bind 'STAGING' — reading another column returns the wrong high-water mark"
+        );
+        // The UPDATE must set the column to STAGING, or a staged card keeps its old
+        // column and the pop never sees it.
+        assert.ok(
+            /UPDATE plans SET queue_position = \?, kanban_column = \?[\s\S]*?\[\s*next\s*,\s*'STAGING'/.test(fnBody),
+            "the UPDATE must write kanban_column = 'STAGING' — a card that keeps its old column is never popped"
         );
     });
 
@@ -224,9 +235,9 @@ function run() {
 
     check('no DISPATCH column references remain in the backend source', () => {
         // The column ID DISPATCH must not appear as a column filter in the
-        // backend services. Action names (dispatchAnalyze), constant names
-        // (DISPATCH_ROLES), and UI text (sendDispatchSetToCoders) are NOT
-        // column references and are excluded from this check.
+        // backend services. Action names (dispatchAnalyze) and constant names
+        // (DISPATCH_ROLES) are NOT column references and are excluded from
+        // this check — the quoted-literal match below cannot hit either.
         const offenders = [];
         for (const rel of ['src/services/LocalApiServer.ts', 'src/services/KanbanProvider.ts', 'src/services/KanbanDatabase.ts', 'src/services/TaskViewerProvider.ts']) {
             const src = read(rel);

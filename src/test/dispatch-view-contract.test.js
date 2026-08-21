@@ -16,9 +16,12 @@ const assert = require('assert');
 // (a view overlaid on PLAN REVIEWED). The STAGING migration replaced the toggle with a
 // real column (id STAGING, kind 'staging', order 115). The function names changed
 // (dispatchStagedCount → stagingCount, updateDispatchToggleCount/updateDispatchViewInfo
-// → updateStagingViewInfo) and the sendDispatchSetToCoders handler arm was removed from
-// KanbanProvider (the verb stays in the allowlist for the webview's fan-out button, but
-// the re-read-the-board guard it carried is now enforced by the staging path itself).
+// → updateStagingViewInfo), and the three display-mode verbs — toggleDispatchView,
+// sendDispatchToCoder, sendDispatchSetToCoders — were removed outright: STAGING is a
+// real column, so its cards advance through the ordinary moveSelected/moveAll path with
+// the same complexity routing PLAN REVIEWED uses. Their absence is pinned below in BOTH
+// directions (webview post AND generated allowlist), because a half-done removal is the
+// documented failure mode here and a verb left in the allowlist fails `catalog:check`.
 
 /** Slice a function body out of the source by brace matching from its declaration. */
 function functionBody(source, declaration) {
@@ -121,22 +124,40 @@ function testDispatchViewContract() {
         false,
         'sendToDispatch must not remain in KANBAN_VERBS'
     );
-    // The exit direction stays — it is the operator's override of a wrong analysis.
+    // The card-level "→ Planned" exit button went with the display mode. STAGING is a
+    // real column: the operator's override of a wrong analysis is a drag back out, the
+    // same gesture every other column uses. The button, its listener and its verb must
+    // all be gone together — a listener left behind posts a verb no handler answers.
     assert.strictEqual(
-        kanbanHtml.includes('send-to-planned-btn'),
-        true,
-        'the → Planned exit button must survive the removal'
+        /send-to-planned-btn/.test(kanbanHtml),
+        false,
+        'the → Planned card button and its listener must be gone — STAGING is exited by drag'
     );
 
-    // ── Fan-out ─────────────────────────────────────────────────────────────────
+    // ── The removed display-mode verbs ──────────────────────────────────────────
 
-    // 6. The verb is allowlisted. A verb not in the allowlist is silently dropped by
-    //    the generic verb rail (PRD contract #5).
-    assert.strictEqual(
-        verbAllowlist.includes("'sendDispatchSetToCoders'"),
-        true,
-        'sendDispatchSetToCoders must be in KANBAN_VERBS'
-    );
+    // 6. The three DISPATCH-view verbs are gone from BOTH sides. The allowlist is
+    //    generated from protocol-catalog.json, which is scanned out of the provider's
+    //    switch arms — so a handler deleted without `npm run catalog:generate` leaves a
+    //    verb in the allowlist and turns CI's first gate (`catalog:check`) red. Pinning
+    //    the absence here catches that before the generated file does.
+    for (const verb of ['toggleDispatchView', 'sendDispatchToCoder', 'sendDispatchSetToCoders']) {
+        assert.strictEqual(
+            verbAllowlist.includes(`'${verb}'`),
+            false,
+            `${verb} must not remain in KANBAN_VERBS — its handler was removed with the DISPATCH view (regenerate with \`npm run catalog:generate\`)`
+        );
+        assert.strictEqual(
+            kanbanProvider.includes(`case '${verb}':`),
+            false,
+            `${verb} must not remain as a KanbanProvider switch arm`
+        );
+        assert.strictEqual(
+            kanbanHtml.includes(`type: '${verb}'`),
+            false,
+            `${verb} must not remain as a webview post — the backend no longer answers it`
+        );
+    }
 
     // 7. The coder-terminal count is part of the board SNAPSHOT, not just the payload.
     //    Adding a terminal changes no card, so a cards-only hash skips the push and the

@@ -6973,7 +6973,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // Advance buttons must skip it so cards never land in STAGING via
             // the advance path (STAGING is reachable only by drag-and-drop or
             // orchestrator placement).
-            if (!col.role) {
+            //
+            // COMPLETED is the ONE role-less column that must stay reachable:
+            // it is the pipeline's terminal stage, advanced into from TICKET
+            // UPDATER (or ACCEPTANCE TESTED when the updater is hidden). An
+            // unqualified `!col.role` skip returns null there, which the
+            // moveSelected/moveAll handlers surface as "No next column after
+            // 'TICKET UPDATER'" and the scheduled-agent prompt builder turns
+            // into a "do NOT run the SQL UPDATE" warning. Mirrors the webview's
+            // getNextColumn skip, which carries the same carve-out.
+            if (!col.role && col.kind !== 'completed') {
                 return true;
             }
             if (col.id === 'ACCEPTANCE TESTED' && !acceptanceTesterActive) {
@@ -7045,29 +7054,38 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
         let role: string | null = null;
 
+        // STAGING is the pre-dispatch queue and routes by complexity exactly as
+        // PLAN REVIEWED does (Design Decision 6 — its advance/copy-prompt buttons
+        // are the same buttons). Every complexity-routing carve-out below must
+        // therefore name BOTH source columns, or a copy-prompt out of STAGING
+        // emits the destination column's own role ('lead') and pins every card to
+        // LEAD CODED while the webview optimistically routes them by score.
+        const routesByComplexity = (column === 'PLAN REVIEWED' || column === 'STAGING');
+
         if (roleSourceDef?.role) {
             // PLAN REVIEWED's role ('planner') is for destination dispatch (moving TO it).
             // When it is the source (and we are not moving to it), we want execution (role=null).
-            if (column === 'PLAN REVIEWED' && destinationColumn !== 'PLAN REVIEWED') {
+            if (routesByComplexity && destinationColumn !== column) {
                 role = null;
             } else {
                 role = roleSourceDef.role;
             }
         }
 
-        // The original source column PLAN REVIEWED requires complexity-based role selection (role=null)
-        // when advancing to implementation stages (coded lanes). This overrides the explicit 
-        // role ('lead' or 'coder') of the destination column.
-        if (column === 'PLAN REVIEWED' && destinationColumn && destinationColumn !== 'PLAN REVIEWED') {
+        // The original source column PLAN REVIEWED / STAGING requires complexity-based
+        // role selection (role=null) when advancing to implementation stages (coded
+        // lanes). This overrides the explicit role ('lead' or 'coder') of the
+        // destination column.
+        if (routesByComplexity && destinationColumn && destinationColumn !== column) {
             if (roleSourceDef?.kind === 'coded') {
                 role = null;
             }
         }
 
         if (!role && roleSourceDef) {
-            // When source is PLAN REVIEWED and destination is coded, we want execution (role=null)
-            // Do not fall back to 'reviewer' for coded kind in this case
-            if (column === 'PLAN REVIEWED' && roleSourceDef.kind === 'coded') {
+            // When source is PLAN REVIEWED / STAGING and destination is coded, we want
+            // execution (role=null). Do not fall back to 'reviewer' for coded kind here.
+            if (routesByComplexity && roleSourceDef.kind === 'coded') {
                 role = null; // Keep null for complexity-based execution routing
             } else {
                 switch (roleSourceDef.kind) {
@@ -11045,9 +11063,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     return { success: true, prompt, targetColumn: nextCol };
                 }
 
-                // PLAN REVIEWED uses dynamic complexity routing per-session (visual move only)
-                // This now only fires when destination is NOT a custom column
-                if (column === 'PLAN REVIEWED' && (!dispatchSpec || dispatchSpec.source === 'built-in')) {
+                // PLAN REVIEWED and STAGING use dynamic complexity routing per-session
+                // (visual move only). This now only fires when destination is NOT a
+                // custom column.
+                if ((column === 'PLAN REVIEWED' || column === 'STAGING') && (!dispatchSpec || dispatchSpec.source === 'built-in')) {
                     const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(msg.sessionIds);
                     if (knownIds.length > 0) {
                         const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
@@ -11150,9 +11169,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     return { success: true, prompt, targetColumn: nextCol };
                 }
 
-                // PLAN REVIEWED uses dynamic complexity routing per-session (visual move only)
-                // This now only fires when destination is NOT a custom column
-                if (column === 'PLAN REVIEWED' && (!dispatchSpec || dispatchSpec.source === 'built-in')) {
+                // PLAN REVIEWED and STAGING use dynamic complexity routing per-session
+                // (visual move only). This now only fires when destination is NOT a
+                // custom column.
+                if ((column === 'PLAN REVIEWED' || column === 'STAGING') && (!dispatchSpec || dispatchSpec.source === 'built-in')) {
                     const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(sessionIds);
                     if (knownIds.length > 0) {
                         const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);

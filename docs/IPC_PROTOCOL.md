@@ -90,9 +90,8 @@ Webview: `src/webview/kanban.html` (inline JS). Provider: `src/services/KanbanPr
 | `improvePlan` / `createPlan` | kanban.html | ~10930 / ~10983 | Improve/create a plan. |
 | `toggleBacklogView` | kanban.html | ~11008 | Toggle backlog view. |
 | `sendToBacklog` / `sendToNew` / `sendToPlanned` | kanban.html | ~11013 / ~11022 / ~11031 | Send cards to a column. |
-| `toggleDispatchView` / `dispatchAnalyze` | kanban.html | ~11040 / ~11045 | Dispatch view / analyze. |
-| `sendDispatchToCoder` / `sendDispatchSetToCoders` | kanban.html | ~11086 / ~11174 | Send dispatch to coder(s). |
-| `stageForQueue` / `reorderQueue` / `runQueue` | kanban.html | ~11249 / ~11270 / ~11283 | Queue staging/reorder/run. |
+| `dispatchAnalyze` | kanban.html | ~11045 | Analyze Planned plans for parallel dispatch. |
+| `stageForQueue` / `reorderQueue` / `runQueue` | kanban.html | ~11249 / ~11270 / ~11283 | STAGING queue staging/reorder/run. `stageForQueue` is posted by a drag-and-drop INTO the STAGING column (and by remote intake); it assigns `queue_position`, refuses subtasks, and arms the queue stall watch. |
 | `importFromClipboard` | kanban.html | ~11354 | Import plans from clipboard. |
 | `copyDispatchPromptSelected` | kanban.html | ~11357 | Copy dispatch prompt for selected. |
 | `codeMapConfirm` / `codeMapSelected` | kanban.html | ~11418 / ~11431 | Code-map confirm/select. |

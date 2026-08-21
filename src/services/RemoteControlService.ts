@@ -109,6 +109,14 @@ export interface RemoteSyncHealth {
  * — `queue` is an anti-stampede setting for coder dispatch, not a rule that
  * every remote status change becomes work to code.
  */
+const QUEUEABLE_TARGET_COLUMNS: ReadonlySet<string> = new Set([
+    'LEAD CODED',
+    'CODER CODED',
+    'INTERN CODED',
+    'CODED_AUTO',
+    'STAGING',
+]);
+
 const REMOTE_CONFIG_KEY = 'remote.config';
 const COMMENT_SEEN_CAP = 500;
 
@@ -772,13 +780,6 @@ export class RemoteControlService {
             // mirroring for every non-coding state. Only the columns that would
             // have started a coder are re-pointed at the queue; the rest keep
             // today's mirror behaviour exactly.
-            const QUEUEABLE_TARGET_COLUMNS: ReadonlySet<string> = new Set([
-                'LEAD CODED',
-                'CODER CODED',
-                'INTERN CODED',
-                'CODED_AUTO',
-                'STAGING',
-            ]);
             if (mode === 'queue' && QUEUEABLE_TARGET_COLUMNS.has(targetColumn)) {
                 if (!this._deps.onStageForQueue) {
                     this._log(`Queue mode: onStageForQueue dep absent — cannot stage ${plan.planId}, skipping (no dispatch).`);
