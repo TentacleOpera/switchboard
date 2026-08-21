@@ -24,7 +24,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, type KanbanPlanRecord } from './KanbanDatabase';
-import { matchWorktreePath } from './worktreeResolver';
 import { appendFeatureClobberDiag } from './featureClobberDiag';
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
@@ -85,7 +84,8 @@ export interface TurnEndInfo {
     seatName: string;
     /** The plan file the seat was working on. */
     planFile: string;
-    /** `completed` = plan file mtime advanced (the seat finished); `blocked` = silence without a report;
+    /** `completed` = the seat POSTed /kanban/queue/done (the seat finished);
+     *  `blocked` = silence without a report;
      *  `stalled` = the feature-level nudge — no dispatch is outstanding, the head went idle with
      *  un-accepted subtasks remaining, and the engine is waking it with evidence. */
     outcome: 'completed' | 'blocked' | 'stalled';
@@ -562,74 +562,14 @@ export class PlanIngestionEngine {
                         }
                         if (silentTerminals.length > 0) {
                             try {
-                                const worktrees = await db.getWorktrees();
                                 for (const terminalName of silentTerminals) {
                                     const record = await db.getActiveDispatchedByTerminal(wsId, terminalName);
                                     if (!record || !record.planFile || !record.dispatchedAt) continue;
-                                    const dispatchedMs = Date.parse(record.dispatchedAt);
-                                    // An unparseable stamp is no evidence either way.
-                                    // Skipping beats stamping blocked off a NaN compare.
-                                    if (!Number.isFinite(dispatchedMs)) continue;
-                                    // Candidate roots for the copy the agent actually wrote.
-                                    // `plans.worktree_id` is V26-era vestigial — no live path
-                                    // writes it (repo-wide the only write is `worktree_id =
-                                    // excluded.worktree_id` in the upsert conflict clause, and
-                                    // every caller supplies a preserved value or null), so
-                                    // resolving the root from it ALONE collapses to the main
-                                    // repo and misreads every worktree completion as blocked.
-                                    // matchWorktreePath is the resolver the completion broadcast
-                                    // already uses (TaskViewerProvider/bootstrap). The watched
-                                    // folder stays in the list because a plan whose feature owns
-                                    // a worktree can still be dispatched in the main checkout —
-                                    // an advance at EITHER copy is the same completion evidence
-                                    // the plan watcher's own mtime clear acts on.
-                                    const planRoots: string[] = [];
-                                    const byId = worktrees.find(w => w.id === record.worktreeId);
-                                    if (byId?.path) planRoots.push(byId.path);
-                                    const resolvedWt = matchWorktreePath(worktrees, record);
-                                    if (resolvedWt && !planRoots.includes(resolvedWt)) planRoots.push(resolvedWt);
-                                    if (!planRoots.includes(folder)) planRoots.push(folder);
-                                    let completed = false;
-                                    for (const planRoot of planRoots) {
-                                        try {
-                                            const stat = await fs.promises.stat(path.join(planRoot, record.planFile));
-                                            if (stat.mtimeMs > dispatchedMs) { completed = true; break; }
-                                        } catch (statErr) {
-                                            // Missing or unreadable plan file at this root is no
-                                            // evidence of completion → try the next root, and if
-                                            // none advance, fall through to the conservative
-                                            // blocked arm. No need to log each file access.
-                                        }
-                                    }
-                                    if (completed) {
-                                        const transitioned = await db.clearWorkingState(record.planFile, wsId);
-                                        this._host.logger.appendLine(
-                                            `[GlobalPlanWatcher] Turn-end (plan file mtime advance) for ${terminalName}: ${record.planFile}` +
-                                            (transitioned ? '' : ' (already cleared)')
-                                        );
-                                        // Both consumers hang off the SAME transitioned gate — the
-                                        // completion broadcast (existing) and the turn-end notifier
-                                        // (new). Re-deriving the condition would risk divergence; the
-                                        // boolean is the single-fire contract. Each callback is
-                                        // independently optional, so an unset notifier leaves the
-                                        // broadcast intact and vice versa.
-                                        if (transitioned) {
-                                            if (this._onWorkingStateCleared) {
-                                                try { this._onWorkingStateCleared(record, folder); } catch (cbErr) {
-                                                    this._host.logger.appendLine(`[GlobalPlanWatcher] onWorkingStateCleared callback failed: ${cbErr}`);
-                                                }
-                                            }
-                                            if (this._turnEndNotifier) {
-                                                notifiedSeatsThisTick.add(terminalName);
-                                                try {
-                                                    const body = composeCompletedTurnEndBody(record, terminalName, record.planFile, Date.now());
-                                                    this._turnEndNotifier({ seatName: terminalName, planFile: record.planFile, outcome: 'completed', workspaceRoot: folder, body });
-                                                } catch (cbErr) {
-                                                    this._host.logger.appendLine(`[GlobalPlanWatcher] turnEndNotifier callback failed: ${cbErr}`);
-                                                }
-                                            }
-                                        }
-                                    } else if (!record.blockedAt) {
+                                    // mtime-based completion detection is retired — the API POST
+                                    // /kanban/queue/done is the sole completion trigger. The sweep
+                                    // now only marks silent seats blocked (the `!record.blockedAt`
+                                    // arm below) and the timeout fallback (clearStaleWorkingState).
+                                    if (!record.blockedAt) {
                                         await db.setBlockedState(record.planFile, wsId, livenessIso);
                                         this._host.logger.appendLine(
                                             `[GlobalPlanWatcher] Turn-end (silence) marked blocked for ${terminalName}: ${record.planFile}`
@@ -2094,55 +2034,9 @@ export class PlanIngestionEngine {
                     await this._applyFeatureLink(db, updatedRecord.planId, metadata.feature, relativePath, workspaceId, workspaceRoot);
                 }
                 if (updatedRecord.dispatchedAt) {
-                    try {
-                        // `clearWorkingState` returns TRUE only on a real
-                        // non-NULL→NULL transition. Gate the broadcast on it rather
-                        // than on `updatedRecord.dispatchedAt`, which was read
-                        // earlier and can be stale: any second concurrent clearer
-                        // for the same turn would otherwise fire the completion
-                        // toast twice.
-                        const transitioned = await db.clearWorkingState(relativePath, workspaceId);
-                        const clearedRecord = { ...updatedRecord };
-                        updatedRecord.dispatchedAt = null;
-                        this._host.logger.appendLine(
-                            `[GlobalPlanWatcher] Plan file edit cleared working state for: ${relativePath}` +
-                            (transitioned ? '' : ' (already cleared — broadcast suppressed)')
-                        );
-                        if (transitioned && this._onWorkingStateCleared) {
-                            try { this._onWorkingStateCleared(clearedRecord, workspaceRoot); } catch (cbErr) {
-                                this._host.logger.appendLine(`[GlobalPlanWatcher] onWorkingStateCleared callback failed: ${cbErr}`);
-                            }
-                        }
-                        // Turn-end notifier on the SAME `transitioned` gate as the
-                        // completion broadcast. The sweep's `completed` arm at :423 is
-                        // unreachable for any plan file this watcher imports: by the
-                        // time the seat is silent enough to be swept, `clearWorkingState`
-                        // here has already NULLed `dispatched_at`, so
-                        // `getActiveDispatchedByTerminal` returns null and the sweep
-                        // moves on. The completion transition is observed HERE, not in
-                        // the sweep — so the notifier must fire from here too. Re-
-                        // deriving the condition would re-open the double-fire the
-                        // `transitioned` boolean exists to close; hanging off it keeps
-                        // the single-fire contract. `seatName` comes from the cleared
-                        // record's `dispatchedTerminal` — empty for an unattributed
-                        // dispatch (no agent registered it), which has no seat to name
-                        // and therefore no parent to resolve. Skip silently in that
-                        // case; an empty `seatName` would address nobody. Both
-                        // callbacks stay independently optional, matching the sweep's
-                        // structure at :435–:446.
-                        if (transitioned && this._turnEndNotifier && clearedRecord.dispatchedTerminal) {
-                            try {
-                                const body = composeCompletedTurnEndBody(clearedRecord, clearedRecord.dispatchedTerminal, relativePath, Date.now());
-                                this._turnEndNotifier({ seatName: clearedRecord.dispatchedTerminal, planFile: relativePath, outcome: 'completed', workspaceRoot, body });
-                            } catch (cbErr) {
-                                this._host.logger.appendLine(`[GlobalPlanWatcher] turnEndNotifier callback failed: ${cbErr}`);
-                            }
-                        }
-                    } catch (clearErr) {
-                        this._host.logger.appendLine(
-                            `[GlobalPlanWatcher] clearWorkingState failed for ${relativePath}: ${clearErr}`
-                        );
-                    }
+                    this._host.logger.appendLine(
+                        `[GlobalPlanWatcher] Plan file edited while dispatched (mtime-based completion retired — waiting for POST /kanban/queue/done): ${relativePath}`
+                    );
                 }
                 plan = updatedRecord;
 

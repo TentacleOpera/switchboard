@@ -186,7 +186,7 @@ async function run() {
     });
 
     await check('in-flight is derived from board position, not from dispatchedAt', async () => {
-        // A plan-file mtime advance clears dispatchedAt (clearWorkingState) and
+        // A POST /kanban/queue/done clears dispatchedAt (clearWorkingState) and
         // the staleness sweep clears it too. Neither may make an actively
         // coding team look free.
         const board = [
