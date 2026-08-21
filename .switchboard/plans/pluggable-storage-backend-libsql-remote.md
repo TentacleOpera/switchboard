@@ -46,7 +46,8 @@ Yes — three decisions:
 
 ### Routine
 
-- Adding the libSQL client dependency and a second driver implementation behind the existing `sqliteDriver` interface.
+- **If the sidecar plan adopted `@libsql/client` (its recommendation):** no new dependency and no second driver — this reduces to adding `syncUrl` to the client config, a backend-selection config key, and the operational work below. The "second backend" is a URL.
+- **If the sidecar plan shipped `better-sqlite3` instead:** add the libSQL client dependency and write a second driver implementation behind the existing `sqliteDriver` interface, then verify it independently against the full suite.
 - A Setup-panel section for remote configuration: endpoint, token, connect/test, and current replication status.
 - Storing endpoint and token in `encryptedSecretsStore`, never in `config` or settings JSON.
 - Config keys for backend selection, defaulting to local.
@@ -83,7 +84,7 @@ Yes — three decisions:
 
 ## Dependencies
 
-- **Requires** the sidecar/real-binding plan — the sidecar owns the replica, and the driver interface it introduces is what this plan implements a second time.
+- **Requires** the sidecar/real-binding plan — the sidecar owns the replica, and the driver interface it introduces is what this plan extends. **The size of this plan depends directly on that plan's binding decision:** with `@libsql/client` already in place locally, this plan is a `syncUrl` plus the distributed-migration, conflict and secrets work. With `better-sqlite3` in place, it additionally carries a whole second driver implementation. The operational risks below are unchanged either way — they are properties of putting a database on a network, not of the client library.
 - **Requires** the unscoped-tables plan — a shared database needs every table scoped.
 - **Requires** the single-global-database plan — that topology (one store, many workspaces) is the remote topology; without it there is nothing coherent to replicate.
 - **Requires** the backup/export plan — seeding the remote and promoting the replica both use the export machinery.
@@ -92,7 +93,7 @@ Yes — three decisions:
 
 **"Notion and every other cloud tool does this with a hosted database, so we should use Postgres."** Notion's cloud is a consequence of being a hosted product with a server team and an ops budget, not the thing that gives it its data model. What is worth taking from Notion is the *shape* — one store, many projects, stable ids, cross-project views — and that shape is already achieved by the global local database. Adopting Postgres to imitate the deployment model buys the 18-`rowid` rewrite, loses offline, and adds a service to operate.
 
-**"Build the seam and stop there; skip the remote backend."** A defensible position, and the reason the seam is separable in the change list below. The counter is that a seam with only one implementation is unverified — the second backend is what proves the abstraction is real rather than nominal.
+**"Build the seam and stop there; skip the remote backend."** A defensible position, and the reason the seam is separable in the change list below. The counter is that a seam with only one implementation is unverified — the second mode is what proves the abstraction is real rather than nominal. Note that if the sidecar plan adopted `@libsql/client`, "stopping there" is nearly free to reverse later: the local driver already speaks the remote protocol, so enabling remote is configuration rather than construction. That is the main reason to prefer that binding even if this plan is never scheduled.
 
 **"Users will want their own Postgres."** Some will ask. The support-burden argument stands on its own: arbitrary endpoints across 4,000 installs means owning every operational failure in someone else's database. If demand is proven, Postgres becomes a third implementation behind the same seam, which is exactly what the seam is for — and the seam is what makes that decision cheap to defer rather than expensive to reverse.
 
@@ -102,7 +103,7 @@ Yes — three decisions:
 
 1. **Consolidate and extract the repository seam.** Reduce the 222-method surface where methods are near-duplicates, then define it as an interface. This is the deliverable that has value independent of any remote backend.
 2. **`src/services/storage/localSqlite.ts`** — the existing behaviour, moved behind the interface. No functional change.
-3. **`src/services/storage/libsqlRemote.ts`** — libSQL client with an embedded local replica, implementing the same interface.
+3. **Remote mode.** With `@libsql/client` already the local driver, this is `syncUrl` configuration plus replica lifecycle (bootstrap, sync cadence, lag reporting) — not a new implementation. If the local driver is `better-sqlite3`, add `src/services/storage/libsqlRemote.ts` as a full second implementation of the interface instead.
 4. **Distributed migration safety** — advisory lock plus a schema version floor that refuses to open a database newer than the client understands, with a clear user-facing message.
 5. **Read-path batching** for the per-card N+1 patterns, done before the remote backend is enabled.
 6. **Setup-panel remote section** — endpoint, token (into `encryptedSecretsStore`), test, replication status, and an explicit statement of what is being uploaded. Present the `NotionBackupService` mirror as the lighter alternative.
