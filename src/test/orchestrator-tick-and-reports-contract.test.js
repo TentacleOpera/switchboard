@@ -551,7 +551,7 @@ async function run() {
         assert.ok(bundles >= 7, `ensureDispatchProtocolDirectives has ${bundles} occurrences in the builder, expected at least 7`);
         assert.ok(
             /IN ADDITION TO, never INSTEAD OF/.test(builder),
-            'the report directive must state it is in addition to the plan-file completion report — read as a replacement it breaks completion detection for every card'
+            'the report directive must state it is in addition to the completion POST (POST /kanban/queue/done) — read as a replacement it breaks completion detection for every card'
         );
         assert.ok(
             !/CODING_COMPLETION_REPORT_DIRECTIVE\s*=\s*`[^`]*ORCHESTRATOR REPORT/.test(builder),

@@ -1007,6 +1007,12 @@ test('BEHAVIOUR: ensureDispatchProtocolDirectives attaches both completion and r
     const formatted = ensureDispatchProtocolDirectives(raw);
     assert.ok(formatted.includes('COMPLETION REPORT:'), 'must attach completion directive');
     assert.ok(formatted.includes('ORCHESTRATOR REPORT:'), 'must attach orchestrator report directive');
+    // The completion directive body must name the API POST as the completion
+    // signal — the mtime-based file-watcher phrasing is gone. The sentinel
+    // alone is not enough: a paraphrased body that drops the POST leaves the
+    // agent with no instruction to signal completion.
+    assert.ok(formatted.includes('POST /kanban/queue/done'), 'completion directive body must reference POST /kanban/queue/done');
+    assert.ok(!formatted.includes('the file watcher detects it'), 'completion directive body must not reference the file watcher');
 
     const doubleFormatted = ensureDispatchProtocolDirectives(formatted);
     assert.strictEqual(doubleFormatted, formatted, 'ensureDispatchProtocolDirectives must be idempotent');

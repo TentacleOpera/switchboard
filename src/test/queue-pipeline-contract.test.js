@@ -84,6 +84,8 @@ function makeServer(board, opts = {}) {
         resolveTeamPacing: opts.resolveTeamPacing,
         getRegisteredTerminals: opts.getRegisteredTerminals,
         getFleetOrdersDatabase: opts.getFleetOrdersDatabase,
+        onWorkingStateCleared: opts.onWorkingStateCleared,
+        onTurnEndNotify: opts.onTurnEndNotify,
         armQueueWatch: async () => { /* recorded separately where it matters */ },
     });
     // Stub the dispatch machinery: this contract is about SELECTION and
@@ -284,6 +286,70 @@ async function run() {
         assert.strictEqual(out.status, 200);
         assert.strictEqual(out.payload.released, 'held');
         assert.deepStrictEqual(dispatched, ['next']);
+    });
+
+    await check('_runQueueDone fires onTurnEndNotify and onWorkingStateCleared when clearWorkingState transitions', async () => {
+        // The API completion path must fire the same turn-end / working-state
+        // callbacks the file-watcher path fires, gated on the SAME
+        // `transitioned` boolean — a watcher-first clear returns false and
+        // must NOT reach the callbacks (verified by the duplicate case below).
+        const held = card('held-cb', 'CODER CODED', {
+            dispatchedAt: '2026-08-20T00:00:00Z',
+            dispatchedTerminal: 'StandaloneCoder',
+            planFile: '/tmp/held-cb.md',
+            workspaceId: 'ws1',
+        });
+        const board = [held, card('next-cb', 'STAGING', { queuePosition: 1 })];
+        const clearedCalls = [];
+        const notifyCalls = [];
+        const { server } = makeServer(board, {
+            resolveTeamMembers: async () => null,
+            getRegisteredTerminals: () => ['StandaloneCoder'],
+            onWorkingStateCleared: (record, workspaceRoot) => { clearedCalls.push({ record, workspaceRoot }); },
+            onTurnEndNotify: (info) => { notifyCalls.push(info); },
+            db: {
+                clearWorkingState: async () => { held.dispatchedAt = null; return true; },
+            },
+        });
+        const out = await server.reportQueueDone({ workspaceRoot: WS, from: 'StandaloneCoder', planId: 'held-cb' });
+        assert.strictEqual(out.status, 200, `expected 200, got ${out.status}: ${out.payload.error || ''}`);
+        assert.strictEqual(clearedCalls.length, 1, 'onWorkingStateCleared must fire exactly once on a real transition');
+        assert.strictEqual(clearedCalls[0].workspaceRoot, WS, 'onWorkingStateCleared must receive the workspaceRoot');
+        assert.strictEqual(clearedCalls[0].record.planId, 'held-cb', 'onWorkingStateCleared must receive the pre-clear held record');
+        assert.strictEqual(notifyCalls.length, 1, 'onTurnEndNotify must fire exactly once on a real transition');
+        assert.strictEqual(notifyCalls[0].seatName, 'StandaloneCoder', 'onTurnEndNotify must name the finishing seat');
+        assert.strictEqual(notifyCalls[0].planFile, '/tmp/held-cb.md', 'onTurnEndNotify must carry the held plan file');
+        assert.strictEqual(notifyCalls[0].outcome, 'completed', 'onTurnEndNotify must report outcome completed');
+        assert.strictEqual(notifyCalls[0].workspaceRoot, WS, 'onTurnEndNotify must carry the workspaceRoot');
+    });
+
+    await check('_runQueueDone does NOT fire callbacks when clearWorkingState returns false (watcher-first)', async () => {
+        // A duplicate report or a watcher-first clear makes clearWorkingState
+        // return false (no non-NULL→NULL transition). The callbacks must NOT
+        // fire — the single-fire contract is the `transitioned` boolean.
+        const held = card('held-dup', 'CODER CODED', {
+            dispatchedAt: '2026-08-20T00:00:00Z',
+            dispatchedTerminal: 'StandaloneCoder',
+            planFile: '/tmp/held-dup.md',
+            workspaceId: 'ws1',
+        });
+        const board = [held, card('next-dup', 'STAGING', { queuePosition: 1 })];
+        const clearedCalls = [];
+        const notifyCalls = [];
+        const { server } = makeServer(board, {
+            resolveTeamMembers: async () => null,
+            getRegisteredTerminals: () => ['StandaloneCoder'],
+            onWorkingStateCleared: () => { clearedCalls.push('fired'); },
+            onTurnEndNotify: () => { notifyCalls.push('fired'); },
+            db: {
+                clearWorkingState: async () => false,
+            },
+        });
+        const out = await server.reportQueueDone({ workspaceRoot: WS, from: 'StandaloneCoder', planId: 'held-dup' });
+        assert.strictEqual(out.status, 200);
+        assert.strictEqual(out.payload.cleared, false, 'a no-transition report must report cleared: false');
+        assert.deepStrictEqual(clearedCalls, [], 'onWorkingStateCleared must NOT fire on a no-transition (duplicate) report');
+        assert.deepStrictEqual(notifyCalls, [], 'onTurnEndNotify must NOT fire on a no-transition (duplicate) report');
     });
 
     await check('the global completion order is installed in the fleet orders database and stays idempotent', async () => {
