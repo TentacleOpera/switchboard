@@ -326,6 +326,14 @@ jobs:
       - name: Headless feature management destructive contract (reconcile, delete, split, watcher, WS push)
         run: npm run test:contract:headless-feature-mgmt-destructive
 
+      # The feature file's subtask block is a LINK-ONLY input to the DB: listing a path
+      # sets feature_id, omitting one means nothing. Both halves are invisible to every
+      # other gate — a broken parser yields features silently showing "0 SUBTASKS", and a
+      # re-added unlink pass silently drops subtasks off the board whenever anything
+      # writes back a slightly-stale copy of the file. This is the only gate that sees it.
+      - name: Feature-file subtask link contract (parser, link-only, guards, offline fallback)
+        run: npm run test:contract:feature-file-subtask-link
+
       - name: Verb engine kanban contract (seams, db path, return contract)
         run: npm run test:contract:verb-engine-kanban
 

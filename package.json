@@ -861,6 +861,7 @@
     "test:contract:panel-runtime-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/webview-panel-runtime-surface.test.js",
     "test:contract:headless-feature-mgmt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/headless-feature-management-contract.test.js",
     "test:contract:headless-feature-mgmt-destructive": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/headless-feature-management-destructive.test.js",
+    "test:contract:feature-file-subtask-link": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/feature-file-subtask-link-contract.test.js",
     "test:contract:design-view-state": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-view-state-seats-contract.test.js",
     "test:contract:stitch-html-tab": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/stitch-html-tab-contract.test.js",
     "test:contract:shim-injection": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/webview-shim-injection-contract.test.js",
