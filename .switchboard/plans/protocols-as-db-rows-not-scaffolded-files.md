@@ -87,12 +87,17 @@ An earlier revision used `ClaudeCodeMirrorService.ts:64-71`'s "extension-dispatc
 | Reader can reach | Delivery | Which protocols |
 | :--- | :--- | :--- |
 | a clipboard from the extension | **`inline`** into the copied prompt | the 13 clipboard-delivered ones (~72K): `get-tickets`, `generate-diagram`, `accuracy`, `advise_research`, `clickup-api`, `clickup-attach`, `clickup-create-subpage`, `clickup-create-task`, `clickup-fetch`, `clickup-modify-task`, `linear-api`, plus `improve-plan` / `improve-feature` |
-| the LocalApiServer — locally, or remotely through the proxy | **`GET /protocol/<name>`** (new endpoint) | everything the `sb_api_call` family already reaches, including `improve-remote-plan` |
+| the LocalApiServer — locally, or remotely through the proxy | **`GET /protocol/<name>`** (new endpoint) | everything the `sb_api_call` family already reaches |
+| the tracker by MCP, with no repo and no extension | **synced outward as a tracker document** — the existing context-sync path | the authoring instructions a `switchboard-remote` agent needs |
 | nothing but a clone | **committed file** | `improve-plan`, `improve-feature` |
 
 **The middle tier is the piece that makes this work and it is cheap.** Any agent already using `sb_api_call` has a channel to the extension, so it can fetch a protocol body the same way it fetches everything else. That is what lets `improve-remote-plan` be a row despite being the "remote" protocol — it *requires* the LocalApiServer by its own Prerequisites, so the channel is guaranteed.
 
-**The third tier is small but non-empty, and this is the correction.** A cloud session working from a clone has no extension, no clipboard, and no proxy. It reads `CLAUDE.md`, which points at `improve-plan`'s section schema as the authority for plan structure. If that body exists only as a row on the user's machine, a cloud agent authoring a plan has no way to learn the schema it is required to follow. `improve-feature` is the same case for features. Two files, ~28K — down from 424K, and for a reason that survives scrutiny rather than a mechanical name-match.
+**The third tier already exists and is already running — it is not new infrastructure.** `src/services/remote/notionRemoteConfig.ts:20` describes the *"Switchboard Project Context"* page as the "Dev Docs + PRDs + constitution mirror", with a `contextPageId` slot per provider and a `src/services/remote/` provider layer (`LinearRemoteProvider`, `NotionRemoteProvider`, `ClickUpRemoteProvider`). Switchboard already pushes governance documents outward so a repo-less agent can read them by MCP. Adding the plan-authoring instructions to that sync is one more document on an existing channel.
+
+This is what makes the remote story coherent, and it is the second and better reason `improve-remote-plan` is deleted rather than migrated: the capability it reached for — let a cloud agent improve a Linear plan — is "sync the authoring instructions to tracker docs, then write via MCP". Instructions arrive by the context sync; writes go through the MCP the workflow already assumes. No repo, no `sb_api_call`, no protocol. It solved a documentation-delivery problem with a code-execution mechanism.
+
+**The fourth tier is small but non-empty, and this is the correction.** A cloud session working from a clone — a `/switchboard-cloud` session — has no extension, no clipboard, no proxy, and not necessarily any tracker auth either. It reads `CLAUDE.md`, which points at `improve-plan`'s section schema as the authority for plan structure. If that body exists only as a row on the user's machine, a cloud agent authoring a plan has no way to learn the schema it is required to follow. `improve-feature` is the same case for features. Two files, ~28K — down from 424K, and for a reason that survives scrutiny rather than a mechanical name-match.
 
 Note `improve-plan` and `improve-feature` appear in two tiers: clipboard-offered *and* repo-committed. That is consistent — the committed file is the floor, and the clipboard prompt inlines the body so a paste works on a machine that has no clone.
 
@@ -164,9 +169,10 @@ Note `improve-plan` and `improve-feature` appear in two tiers: clipboard-offered
 4b. **`src/test/vsix-packaging-contract.test.js` updated.** It currently asserts `.agents/protocols/` exists, is non-empty, and fully packages — the exact inverse of this plan's goal invariant. Its packaging machinery (a faithful reproduction of vsce's `collectFiles` filter) stays and remains valuable; the protocol-specific assertion is replaced by one covering whatever seeds the `control_plane` rows.
 5. **`RETIRED_WORKFLOW_PATH_MAP` extended** with `.agents/protocols/*` keys; `normalizeRetiredWorkflowPath` maps a stale path to a protocol *name*.
 6. **Materialisation cache** at `~/.switchboard/cache/protocols/<content-hash>/SKILL.md`, atomic write, idle pruning.
-7. **`improve-remote-plan` deleted**, not migrated to a row. Its `.agents/protocols/improve-remote-plan/` directory goes, along with every reference.
-8. **`.agents/workflows/switchboard-remote.md:25` rewritten** to point at the workflow's own sections 8+ (author into the page/issue body via MCP, then set the column) instead of the deleted protocol. **This is a workflow file — propose the wording and obtain explicit approval before editing it.**
-9. **`.agents/protocols/` deleted** from the repo and from the seeding crawl; `protocol-catalog.json` regenerated or retired; `.switchboard-bundled.json` protocol entries dropped in favour of the version column.
+7. **Plan-authoring instructions added to the outward context sync**, alongside the Dev Docs / PRD / constitution mirror already carried to the "Switchboard Project Context" document. This is the delivery path for repo-less remote agents and reuses `src/services/remote/`'s provider layer rather than adding a mechanism. Subject to the same rule as the context mirror itself: regenerated on every sync, never edited on the tracker.
+8. **`improve-remote-plan` deleted**, not migrated to a row. Its `.agents/protocols/improve-remote-plan/` directory goes, along with every reference.
+9. **`.agents/workflows/switchboard-remote.md:25` rewritten** to point at the workflow's own sections 8+ (author into the page/issue body via MCP, then set the column) instead of the deleted protocol. **This is a workflow file — propose the wording and obtain explicit approval before editing it.**
+10. **`.agents/protocols/` deleted** from the repo and from the seeding crawl; `protocol-catalog.json` regenerated or retired; `.switchboard-bundled.json` protocol entries dropped in favour of the version column.
 
 ### Migration
 
@@ -184,6 +190,7 @@ Import from all three historical locations, hash-compare, preserve mismatches as
 
 ### Automated Tests
 - **Ships and resolves on a clean install:** unpack a built VSIX into a fresh workspace with no `.agents/` at all; assert every one of the 32 protocols resolves. This is the check that was missing when the earlier version passed grep, compile, lint and manual review while being dead on every user install.
+- **Tracker tier:** assert the plan-authoring instructions appear in the synced "Switchboard Project Context" document for each configured provider, carry the same `Synced at` staleness header as the rest of the mirror, and are regenerated (not merged) on the next sync.
 - **`improve-remote-plan` is gone:** assert the directory does not exist, no `control_plane` row is seeded for it, and no reference survives in `src/`, `.agents/`, `CLAUDE.md` or `AGENTS.md`.
 - **`switchboard-remote.md` self-consistency:** assert the workflow names no protocol or path that its own section 7 premise ("no repo access — no git, no file system") makes unreachable. This is the general form of the bug, so it catches the next one.
 - **API tier:** `GET /protocol/<name>` returns the body for every row-class protocol, rejects an unknown name, and rejects a name containing traversal characters. Assert `improve-remote-plan` is fetchable this way, since its own Prerequisites guarantee the channel.
