@@ -1,5 +1,15 @@
 import * as assert from 'assert';
-import { buildKanbanBatchPrompt, columnToPromptRole, buildFeatureSubagentClause, buildCustomAgentPrompt, CODING_COMPLETION_REPORT_DIRECTIVE, COMPLETION_STEP_FULL, COMPLETION_STEP_COMPACT } from '../agentPromptBuilder';
+import {
+    buildKanbanBatchPrompt,
+    columnToPromptRole,
+    buildFeatureSubagentClause,
+    buildCustomAgentPrompt,
+    CODING_COMPLETION_REPORT_DIRECTIVE,
+    COMPLETION_STEP_FULL,
+    COMPLETION_STEP_COMPACT,
+    ORCHESTRATOR_REPORT_DIRECTIVE,
+    STAGGERED_IMPLEMENTATION_DIRECTIVE
+} from '../agentPromptBuilder';
 
 suite('agentPromptBuilder', () => {
     const makePlans = (count: number) =>
@@ -252,6 +262,18 @@ suite('agentPromptBuilder', () => {
             assert.ok(prompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE), 'Generic CODING_COMPLETION_REPORT_DIRECTIVE MUST be appended when a replace override wipes the base step (override-proofing direction)');
             assert.ok(!prompt.includes(COMPLETION_STEP_FULL), 'Base step (COMPLETION_STEP_FULL) must be absent after a replace override wipes the composed base');
             assert.ok(!prompt.includes(COMPLETION_STEP_COMPACT), 'Compact base step (COMPLETION_STEP_COMPACT) must be absent after a replace override wipes the composed base');
+        });
+
+        test('completion directives contain POST /kanban/queue/done and do NOT contain file watcher mtime phrasing', () => {
+            for (const directive of [CODING_COMPLETION_REPORT_DIRECTIVE, COMPLETION_STEP_FULL, COMPLETION_STEP_COMPACT]) {
+                assert.ok(directive.includes('POST /kanban/queue/done'), `Directive should reference POST /kanban/queue/done: ${directive}`);
+                assert.ok(!directive.includes('the file watcher detects it'), `Directive should not reference file watcher: ${directive}`);
+                assert.ok(directive.startsWith('COMPLETION REPORT:'), `Directive must keep sentinel: ${directive}`);
+            }
+            assert.ok(ORCHESTRATOR_REPORT_DIRECTIVE.includes('the completion POST'), 'ORCHESTRATOR_REPORT_DIRECTIVE should reference completion POST');
+            assert.ok(!ORCHESTRATOR_REPORT_DIRECTIVE.includes('the plan-file completion report'), 'ORCHESTRATOR_REPORT_DIRECTIVE should not say the plan-file completion report');
+            assert.ok(STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('POST /kanban/queue/done'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should reference POST /kanban/queue/done');
+            assert.ok(!STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('the per-plan completion report (which still goes to each subtask\'s own plan file)'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should not reference per-plan completion report');
         });
 
         test('skip-tests disclosure absent with no skip flags; present with skipTests or skipCompilation', () => {

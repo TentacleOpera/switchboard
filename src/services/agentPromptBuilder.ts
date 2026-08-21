@@ -981,19 +981,19 @@ If all three sections already exist with substantive content, leave them untouch
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
 export const NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE = `NO SEPARATE REVIEW ARTIFACTS: Do NOT create separate review artifact files (review.md, review_notes.md, review_artifact.md, grumpy_critique.md, balanced_review.md, or any similarly-named new file) at any point in this task. Omit the review-artifact creation step entirely. Record your findings in your response and in the existing target plan file, per the COMPLETION REPORT step. A new .md file in the workspace is imported as a duplicate card on the kanban board.`;
-export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: After completing each subtask, append a brief summary (3-5 sentences) to a ## Implementation Notes section at the END of the feature overview file — the feature file is the entry tagged [FEATURE: ...] Plan File: in PLANS TO PROCESS above. Place the ## Implementation Notes section AFTER the auto-generated Subtasks and Worktrees blocks; if it does not exist, create it. For each subtask note include: what you implemented, files changed, and any issues or decisions the next subtask's agent needs to know. These notes are a context relay — they let the next subtask pick up where you left off without re-reading your code changes. If you are handling subtasks in parallel via subagents/worktrees, do NOT have parallel subtasks append individually — instead, after all subtasks complete and their worktrees merge back, append a single consolidated note for the batch. If the feature file is not present, skip this step. This is in addition to the per-plan completion report (which still goes to each subtask's own plan file); do not skip either. Do NOT skip this step.`;
-// CODING_COMPLETION_REPORT_DIRECTIVE is the completion-protocol handshake. It is the
-// sole signal the completion-detection chain keys on: the activity-light OFF-switch
-// (GlobalPlanWatcherService — clears working state on the first plan-file mtime advance
-// after dispatch), the autoban wake, and the switchboard-manage skill's Column Oversight
-// pass all depend on the dispatched agent editing the plan file at the end. The directive
-// is deliberately NON-overridable for code-touching roles: ensureCompletionDirective()
+export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: After completing each subtask, append a brief summary (3-5 sentences) to a ## Implementation Notes section at the END of the feature overview file — the feature file is the entry tagged [FEATURE: ...] Plan File: in PLANS TO PROCESS above. Place the ## Implementation Notes section AFTER the auto-generated Subtasks and Worktrees blocks; if it does not exist, create it. For each subtask note include: what you implemented, files changed, and any issues or decisions the next subtask's agent needs to know. These notes are a context relay — they let the next subtask pick up where you left off without re-reading your code changes. If you are handling subtasks in parallel via subagents/worktrees, do NOT have parallel subtasks append individually — instead, after all subtasks complete and their worktrees merge back, append a single consolidated note for the batch. If the feature file is not present, skip this step. This is in addition to the per-plan completion POST (POST /kanban/queue/done, which signals task completion to the kanban board); do not skip either. Do NOT skip this step.`;
+// CODING_COMPLETION_REPORT_DIRECTIVE is the completion-protocol handshake. It
+// tells the dispatched agent to POST /kanban/queue/done when ALL work is complete.
+// The API endpoint calls clearWorkingState (activity-light off-switch) and fires
+// the turn-end notification to the lead. The autoban wake and the switchboard-manage
+// skill's Column Oversight pass depend on this handshake. The directive is
+// deliberately NON-overridable for code-touching roles: ensureCompletionDirective()
 // re-appends it idempotently AFTER any defaultPromptOverride is applied, so a `replace`-
 // mode role override cannot silently drop the handshake and leave cards stuck on. Do NOT
 // treat this as prose, move it before the override application, or remove the post-override
-// placement — the three consumers above will break silently (cards never clear, oversight
+// placement — the consumers above will break silently (cards never clear, oversight
 // passes time out on work that succeeded).
-export const CODING_COMPLETION_REPORT_DIRECTIVE = `COMPLETION REPORT: When you have finished implementing the plan, append a brief summary (3-5 sentences) to the END of the original plan file. Include: what you implemented, files changed, and any issues encountered. This edit signals task completion to the kanban board — the file watcher detects it and clears the card's working-state light. Do NOT skip this step.`;
+export const CODING_COMPLETION_REPORT_DIRECTIVE = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, POST /kanban/queue/done with {"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT post after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the POST.`;
 
 export const GATE_WIRING_AUDIT_STEP = `Gate-wiring audit: for every automated check named in the plan's
    \`### Automated\` verification subsection, verify it is actually invoked by CI
@@ -1046,9 +1046,9 @@ export const DELEGATION_ANTI_LEAKAGE_STEP = `ANTI-LEAKAGE RULE (delegation) — 
    coder's notes said it skipped verification — in delegation mode "verify"
    means demanding the coder's verification results, not running them yourself.`;
 
-export const COMPLETION_STEP_FULL = `COMPLETION REPORT: Update the original plan file with fixed items, files changed, validation results, and remaining risks. Do NOT truncate, summarize, or delete existing implementation steps. This edit signals task completion to the kanban board — the file watcher detects it and clears the card's working-state light. Do NOT skip this step.`;
+export const COMPLETION_STEP_FULL = `COMPLETION REPORT: When you have finished ALL parts of the review, POST /kanban/queue/done with {"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT post after finishing individual parts — only when ALL work is complete. Also update the original plan file with fixed items, files changed, validation results, and remaining risks. Do NOT truncate, summarize, or delete existing implementation steps. Do NOT skip the POST.`;
 
-export const COMPLETION_STEP_COMPACT = `COMPLETION REPORT: Update the original plan file by appending a brief summary (≤ 5 sentences) under \`## Review Findings\` — list files changed, validation results, and remaining risks. Do NOT reproduce the full implementation steps or copy large blocks of the original plan. This edit signals task completion to the kanban board — the file watcher detects it and clears the card's working-state light. Do NOT skip this step.`;
+export const COMPLETION_STEP_COMPACT = `COMPLETION REPORT: When you have finished ALL parts of the review, POST /kanban/queue/done with {"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT post after finishing individual parts — only when ALL work is complete. Also update the original plan file by appending a brief summary (≤ 5 sentences) under \`## Review Findings\` — list files changed, validation results, and remaining risks. Do NOT reproduce the full implementation steps or copy large blocks of the original plan. Do NOT skip the POST.`;
 
 /**
  * Idempotent completion-directive guard. Appends CODING_COMPLETION_REPORT_DIRECTIVE to
@@ -1070,8 +1070,8 @@ export function ensureCompletionDirective(text: string): string {
 // completion detection and asserted elsewhere. This directive gives agents a
 // file-based reply channel for mid-work updates (finished, blocked, question,
 // status) that works when ptySendPrompt cannot reach the orchestrator. It is
-// IN ADDITION TO, never INSTEAD OF, the plan-file completion report — an agent
-// that reads it as a replacement breaks completion detection for every card.
+// IN ADDITION TO, never INSTEAD OF, the completion POST (POST /kanban/queue/done) —
+// an agent that reads it as a replacement breaks completion detection for every card.
 export const ORCHESTRATOR_REPORT_DIRECTIVE = `ORCHESTRATOR REPORT: Post a report file to .switchboard/orchestrator/reports/ when you finish, when you are blocked, when you have a question, and when asked for status. Format: a markdown file named report-<UTC timestamp>-<kind>-<5 digits>.md with frontmatter:
 ---
 from: <your seat name>
@@ -1080,7 +1080,7 @@ planId: <plan id>
 created: <UTC timestamp>
 ---
 <one-line message body>
-This is IN ADDITION TO, never INSTEAD OF, the plan-file completion report — the completion report stays in the plan file. Do NOT skip the completion report.`;
+This is IN ADDITION TO, never INSTEAD OF, the completion POST (POST /kanban/queue/done) — the completion POST is the signal that clears your card. Do NOT skip the completion POST.`;
 
 /**
  * Idempotent report-directive guard. Appends ORCHESTRATOR_REPORT_DIRECTIVE to
