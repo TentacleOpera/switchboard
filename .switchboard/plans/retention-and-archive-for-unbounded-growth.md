@@ -18,6 +18,12 @@ Consolidation plus long-term persistence removes both of the mechanisms that cur
 
 Retention was never designed because the per-repo topology made it unnecessary. Abandoning a project was an implicit, free retention policy. Consolidation converts that implicit policy into no policy at all.
 
+### Control-plane content changes the scope
+
+The scaffold plan moves control-plane definitions (protocols, skills, workflows, personas, rules — roughly 744K of text) into the store as bodies, with a version and content hash per row. That is the first time the store holds document content rather than metadata, and it grows on a different axis from everything else here: not per workflow transition, but **per extension release**, since a superseded definition version is exactly the kind of thing "long-term persistence" implies keeping.
+
+So retention has a second target: historical `control_plane` rows. Unlike the event tables, these are trivially safe to prune — they are regenerable from any extension bundle of the matching version, so pruning them is not data loss in any sense. Recommendation: keep the current version plus one prior (rollback safety), plus every row carrying a local override regardless of age, and prune the rest on release. This should be the *first* rotation enabled, since it is the only one with no recovery risk at all.
+
 ### Non-goals
 
 - Deleting user data. This is archival and rotation, not deletion; "long-term persistence" is the requirement being honoured, not overridden.
@@ -74,6 +80,7 @@ Yes — the policy itself is a product decision, not a technical one:
 ## Dependencies
 
 - **Requires** the single-global-database plan (this is a consequence of it).
+- **Interacts with the control-plane scaffold plan** — that plan is what first puts bodies in the store, so the `control_plane` rotation above cannot be built before it lands.
 - **Requires** the real-binding plan (safe concurrent rotation, and `VACUUM` needs a real binding).
 - **Reuses** the export/import id-remapping machinery from the backup/export plan for dormant-workspace archival.
 
@@ -105,6 +112,7 @@ Non-destructive by construction. Existing per-repo DuckDB archives are left in p
 - **History visibility:** with rotation applied, assert history views either show the full set via the archive join or explicitly report a retained window — never silently short.
 - **Vacuum guard:** simulate low free space; assert `VACUUM` is skipped with a warning rather than attempted.
 - **Concurrency:** rotation running while the board is being driven; assert no read errors and no lost writes.
+- **Control-plane pruning:** seed three versions of a definition plus one carrying a local override; prune; assert current-plus-one-prior survive, the overridden row survives regardless of age, and the projection still regenerates byte-identically afterwards.
 - **Default-off:** assert a fresh install performs no rotation until explicitly enabled.
 
 ## Outstanding Questions
