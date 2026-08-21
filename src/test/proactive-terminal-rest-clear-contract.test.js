@@ -22,8 +22,8 @@ const path = require('path');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const read = (rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 
-const SKILL = '.switchboard/protocols/terminal-coder-dispatch/SKILL.md';
-const ORCH = '.switchboard/protocols/switchboard-orchestration/SKILL.md';
+const SKILL = '.agents/protocols/terminal-coder-dispatch/SKILL.md';
+const ORCH = '.agents/protocols/switchboard-orchestration/SKILL.md';
 
 let failures = 0;
 function test(name, fn) {

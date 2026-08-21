@@ -130,3 +130,7 @@ Key risks: (1) ungrepped cross-references to `delegates/` in other skill files â
 ## Completion Summary
 
 Deleted 23 obsolete flat `.md` skill files and the orphaned `delegates/` directory (`delegates/SKILL.md`) from `.agents/skills/`. Only `refine_feature.md` was preserved in `.agents/skills/` for the subsequent protocols migration subtask. No extension code modifications were required as none of these deleted files were referenced at runtime. No issues or conflicts were encountered during the file removals.
+
+## Review Findings
+
+Reviewer pass found no material issues. Verified commit `14322bfb` deleted exactly the 24 specified files (23 flat `.md` + `delegates/SKILL.md`), that `refine_feature.md` was correctly spared, and that `.agents/skills/` now contains only `_lib`, `kanban_operations`, `manage-features`, `query-kanban`, `worktree-cleanup`. Both grep checks from the Verification Plan return zero matches (`skills/delegates` in `src/`, `delegates` in remaining skill files); no code referenced any deleted file. Files changed: none required. Remaining risks: none â€” deletion only, no behavioural surface.

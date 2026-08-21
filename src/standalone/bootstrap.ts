@@ -177,7 +177,7 @@ function buildDispatchAnalysisPrompt(records: any[], root: string, apiPort: numb
     // Same shared resolver the extension host's arm uses — the `PROJECT=` line
     // cannot fork between the two prompt builders because there is only one.
     const scopeLine = buildAnalysisScopeLine(scope);
-    return `Read and follow .switchboard/protocols/dispatch-analysis/SKILL.md now.\n` +
+    return `Read and follow .agents/protocols/dispatch-analysis/SKILL.md now.\n` +
         `This is a read-only analysis pass — do not modify any plan file.\n` +
         `WORKSPACE_ROOT=${root}\n` +
         `API_PORT=${apiPort}\n` +
@@ -459,9 +459,62 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const ingestionEngine = new PlanIngestionEngine(getClickUpService, getLinearService, ingestionHost, getNotionService);
 
     let server: LocalApiServer;
-    const oneTimeToken = crypto.randomBytes(32).toString('hex');
     const sessionToken = crypto.randomBytes(32).toString('hex');
-    let oneTimeConsumed = false;
+
+    // Resolve the durable session token once at boot. The standalone secret store
+    // may already hold a `switchboard.apiToken` (set via `switchboard secrets set
+    // apiToken <value>` or `switchboard token set <value>`); if present and
+    // non-blank after trimming, it becomes the live session secret so the board
+    // survives restarts and a second device can enrol. A whitespace-only value
+    // must fall through to the random token — _checkAuth treats an empty expected
+    // as loopback-trust (allow everything), so a blank stored secret would
+    // silently disable auth on a host serving a browser board.
+    const storedApiToken = await secrets.get('switchboard.apiToken').catch(() => undefined);
+    const trimmedStored = (storedApiToken || '').trim();
+    const usingDurableToken = trimmedStored.length > 0;
+    const resolvedToken = usingDurableToken ? trimmedStored : sessionToken;
+    if (usingDurableToken) {
+        log(opts, `Using durable session token (switchboard.apiToken from secret store).`);
+        log(opts, `Pre-existing switchboard.apiToken adopted as the board's session secret.`);
+    } else {
+        log(opts, `No durable token configured — using ephemeral session token (per-launch).`);
+    }
+
+    // Enrolment tokens: single-use, short-TTL, minted on demand. The boot-time
+    // token is the first-launch path and already works. Additional tokens are
+    // minted by `switchboard token show` via POST /auth/mint (authenticated
+    // against the resolved token). Each token is strictly single-use — a token
+    // leaking into shell history or a process list is not a standing credential.
+    const ENROLMENT_TTL_MS = 15 * 60 * 1000; // 15 minutes
+    const enrolmentTokens = new Map<string, number>(); // token → expiry timestamp
+    const oneTimeToken = crypto.randomBytes(32).toString('hex');
+    enrolmentTokens.set(oneTimeToken, Date.now() + ENROLMENT_TTL_MS);
+
+    const consumeOneTimeToken = (t: string): boolean => {
+        const now = Date.now();
+        // Purge expired tokens on every call (cheap, bounded by mint frequency).
+        for (const [tok, expiry] of enrolmentTokens) {
+            if (expiry <= now) { enrolmentTokens.delete(tok); }
+        }
+        if (!enrolmentTokens.has(t)) { return false; }
+        enrolmentTokens.delete(t); // strictly single-use
+        return true;
+    };
+
+    const mintEnrolmentToken = (): string | null => {
+        // Minting requires a durable token — in ephemeral mode there is no stored
+        // secret for the CLI to present as Authorization: Bearer, so the boot-time
+        // token stays the only route.
+        if (!usingDurableToken) { return null; }
+        // Purge expired tokens (same cheap sweep as consumeOneTimeToken).
+        const now = Date.now();
+        for (const [tok, expiry] of enrolmentTokens) {
+            if (expiry <= now) { enrolmentTokens.delete(tok); }
+        }
+        const fresh = crypto.randomBytes(32).toString('hex');
+        enrolmentTokens.set(fresh, Date.now() + ENROLMENT_TTL_MS);
+        return fresh;
+    };
 
     const getWorkspaceId = async () => (await db.getWorkspaceId()) || '';
 
@@ -2067,7 +2120,7 @@ Each plan file must include:
     // /terminals/verb/ptySendPrompt gets 401 and the link-up relay recipe is a
     // lie on this host. The token reaches the shell as SWITCHBOARD_API_TOKEN
     // (an env var, never prompt text) so it never enters the agent's scrollback.
-    const ptyFleetService = new PtyFleetService(workspaceRoot, db, sessionToken);
+    const ptyFleetService = new PtyFleetService(workspaceRoot, db, resolvedToken);
     // Default for every create() path that passes no explicit claudeInlineRendering.
     // The two ptyCreateTerminal / ptyCreateBatch arms below resolve it themselves, but
     // this host also creates seats from board dispatch, send-by-name, memo→planner and
@@ -2283,7 +2336,7 @@ Each plan file must include:
     // router destroys `/ws/terminal` outright — the same posture the extension host
     // has, rather than a gateway that accepts sockets for a fleet that can't spawn.
     const terminalWsGateway = ptyReady
-        ? new TerminalWsGateway(ptyFleetService, async () => sessionToken)
+        ? new TerminalWsGateway(ptyFleetService, async () => resolvedToken)
         : undefined;
 
     const options: any = {
@@ -2294,7 +2347,7 @@ Each plan file must include:
         getClickUpService: () => clickUpService,
         getLinearService: () => linearService,
         getNotionService: () => notionService,
-        getAuthToken: async () => sessionToken,
+        getAuthToken: async () => resolvedToken,
         getRegisteredTerminals: () => ptyFleetService.listActive().map(t => t.friendlyName),
         terminalWsGateway,
         getSelectedWorkspaceRoot: () => workspaceRoot,
@@ -2547,11 +2600,8 @@ Each plan file must include:
             }
         },
         getFullState,
-        consumeOneTimeToken: (t: string) => {
-            if (oneTimeConsumed || t !== oneTimeToken) return false;
-            oneTimeConsumed = true;
-            return true;
-        },
+        consumeOneTimeToken,
+        mintEnrolmentToken,
         serveStatic: {
             getBoardHtml,
             getProjectHtml,
@@ -2580,6 +2630,13 @@ Each plan file must include:
     // Write the discovery port file for external skills/scripts
     const portFile = path.join(switchboardDir, 'api-server-port.txt');
     fs.writeFileSync(portFile, String(port), 'utf8');
+
+    // Write the PID file alongside the port file. Advisory only — `stop` and
+    // `status` resolve the instance via /health (which returns process.pid)
+    // and never signal based on this file alone, because a recycled PID could
+    // point at an unrelated process.
+    const pidFile = path.join(switchboardDir, 'api-server.pid');
+    fs.writeFileSync(pidFile, String(process.pid), 'utf8');
 
     // The bind address is 127.0.0.1 unconditionally; `hostname` only changes the
     // name the user is handed. Validated here as well as in the CLI so a library
@@ -2648,11 +2705,13 @@ Each plan file must include:
             try { (planningProvider as any).dispose?.(); } catch { /* ignore */ }
             try { await server.stop(); } catch { /* ignore */ }
             try { if (fs.existsSync(portFile)) fs.unlinkSync(portFile); } catch { /* ignore */ }
+            try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* ignore */ }
         },
     };
 
     const syncUnlinkPortFile = () => {
         try { if (fs.existsSync(portFile)) fs.unlinkSync(portFile); } catch { /* ignore */ }
+        try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* ignore */ }
     };
     const signalCleanup = async () => {
         try { await instance.stop(); } catch { /* ignore */ }

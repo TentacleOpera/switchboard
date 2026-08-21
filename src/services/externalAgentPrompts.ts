@@ -5,7 +5,7 @@ export interface LauncherSpec {
     id: string;
     label: string;
     description: string;
-    skillPaths: string[];        // tried in order, e.g. ['.switchboard/protocols/improve-plan/SKILL.md', '.agent/skills/improve-plan/SKILL.md']
+    skillPaths: string[];        // tried in order, e.g. ['.agents/protocols/improve-plan/SKILL.md', '.agent/skills/improve-plan/SKILL.md']
     fallbackPrompt: string;      // used when no skill file resolves
     targetKind: 'plan' | 'feature' | 'memo' | 'none';
 }
@@ -64,7 +64,7 @@ export const LAUNCHER_REGISTRY: LauncherSpec[] = [
         label: 'Write plans from a brief',
         description: 'Generate complete, shippable plan files under .switchboard/plans/ from brief notes or requirements',
         skillPaths: [
-            path.join('.switchboard', 'protocols', 'improve-plan', 'SKILL.md'),
+            path.join('.agents', 'protocols', 'improve-plan', 'SKILL.md'),
             path.join('.agent', 'skills', 'improve-plan', 'SKILL.md')
         ],
         fallbackPrompt: 'Author complete implementation plans in .switchboard/plans/ following Switchboard plan authoring conventions. Include Goal, Metadata, Problem Analysis, and Verification Plan sections. Omit **Project:** unless requested.',
@@ -75,7 +75,7 @@ export const LAUNCHER_REGISTRY: LauncherSpec[] = [
         label: 'Review a plan',
         description: 'Perform adversarial review of a plan file and append/update findings in place',
         skillPaths: [
-            path.join('.switchboard', 'protocols', 'improve-plan', 'SKILL.md'),
+            path.join('.agents', 'protocols', 'improve-plan', 'SKILL.md'),
             path.join('.agent', 'skills', 'improve-plan', 'SKILL.md')
         ],
         fallbackPrompt: 'Review the specified plan file for accuracy, completeness, and edge cases. Write updated plan content directly back to the file path provided.',
@@ -86,7 +86,7 @@ export const LAUNCHER_REGISTRY: LauncherSpec[] = [
         label: 'Review a feature',
         description: 'Reconcile feature subtasks, flesh out spec, and write updated feature content back to disk',
         skillPaths: [
-            path.join('.switchboard', 'protocols', 'improve-feature', 'SKILL.md'),
+            path.join('.agents', 'protocols', 'improve-feature', 'SKILL.md'),
             path.join('.agent', 'skills', 'improve-feature', 'SKILL.md')
         ],
         fallbackPrompt: 'Review and refine feature specification and subtasks. Write updated content directly back to the feature file path provided.',

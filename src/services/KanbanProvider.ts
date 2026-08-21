@@ -74,7 +74,7 @@ import { listIconPalette, validateTeamIcon, type IconPaletteEntry } from './icon
  */
 const ULTRACODE_FEATURE_PREFIX = 'This is a feature with multiple subtasks. Activate your ultracode workflow.';
 const GOAL_FEATURE_PREFIX = '/goal';
-const DRIVE_FEATURE_PREFIX = 'This feature is to be driven through a coder terminal. Read and follow .switchboard/protocols/terminal-coder-dispatch/SKILL.md.';
+const DRIVE_FEATURE_PREFIX = 'This feature is to be driven through a coder terminal. Read and follow .agents/protocols/terminal-coder-dispatch/SKILL.md.';
 
 /**
  * Schedules a fire-and-forget write of the kanban state section to the plan file.
@@ -136,6 +136,7 @@ export interface KanbanCard {
     working?: boolean; // true while an agent is dispatched to this card and the 20-min window hasn't elapsed
     blocked?: boolean; // V59: true while the agent reported itself blocked / waiting on the operator (hook-emitted)
     queuePosition?: number | null; // V60: 1-based DISPATCH session queue position; NULL = not staged (sorts last)
+    columnEnteredAt?: string | null; // V61: when the card entered its current column (board sort key)
 }
 
 // Activity-light window default. A card is `working` while dispatched_at is set and
@@ -2118,6 +2119,7 @@ export class KanbanProvider implements vscode.Disposable {
                 working: cardState.working,
                 blocked: cardState.blocked,
                 queuePosition: row.queuePosition ?? null,
+                columnEnteredAt: row.columnEnteredAt ?? null,
             };
         });
 
@@ -2134,7 +2136,8 @@ export class KanbanProvider implements vscode.Disposable {
             project: rec.project || '',
             isFeature: !!rec.isFeature,
             featureId: rec.featureId || undefined,
-            subtaskCount: rec.isFeature ? (subtaskCountMap.get(rec.planId) || 0) : undefined
+            subtaskCount: rec.isFeature ? (subtaskCountMap.get(rec.planId) || 0) : undefined,
+            columnEnteredAt: rec.columnEnteredAt ?? null
         })));
 
         return cards;
@@ -3928,6 +3931,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         working: cardState2.working,
                         blocked: cardState2.blocked,
                         queuePosition: row.queuePosition ?? null,
+                        columnEnteredAt: row.columnEnteredAt ?? null,
                     };
                 });
 
@@ -3946,7 +3950,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     project: rec.project || '',
                     isFeature: !!rec.isFeature,
                     featureId: rec.featureId || undefined,
-                    subtaskCount: rec.isFeature ? (subtaskCountMap2.get(rec.planId) || 0) : undefined
+                    subtaskCount: rec.isFeature ? (subtaskCountMap2.get(rec.planId) || 0) : undefined,
+                    columnEnteredAt: rec.columnEnteredAt ?? null
                 })));
             } else if (workspaceId) {
                 console.warn(`[KanbanProvider] Kanban DB unavailable: ${db.lastInitError || 'unknown error'}`);
@@ -4156,6 +4161,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     working: cardState3.working,
                     blocked: cardState3.blocked,
                     queuePosition: row.queuePosition ?? null,
+                    columnEnteredAt: row.columnEnteredAt ?? null,
                 };
             });
 
@@ -4169,7 +4175,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 createdAt: rec.createdAt || '',
                 complexity: rec.complexity || 'Unknown',
                 workspaceRoot: resolvedWorkspaceRoot,
-                project: rec.project || ''
+                project: rec.project || '',
+                columnEnteredAt: rec.columnEnteredAt ?? null
             })));
 
             const agentNames = await this._getAgentNames(resolvedWorkspaceRoot);
@@ -5644,7 +5651,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- Do NOT verify work before dispatching. The kanban column is the system\'s record, not a coder\'s claim.',
             '- Clear a terminal only when at rest (completion received AND next work goes elsewhere).',
             '- One subtask per terminal at a time. Use a second terminal for concurrency.',
-            '- Full protocol (escalation ladder, unattended mode, resting terminals, failure modes): .switchboard/protocols/terminal-coder-dispatch/SKILL.md',
+            '- Full protocol (escalation ladder, unattended mode, resting terminals, failure modes): .agents/protocols/terminal-coder-dispatch/SKILL.md',
         ];
 
         if (planEntries.length > 0) {
@@ -5890,7 +5897,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const apiPort = this._taskViewerProvider?.getLocalApiServerPort() ?? 0;
             const scopeLine = buildAnalysisScopeLine(overrides?.analysisScope);
             const dispatchPrompt =
-                `Read and follow .switchboard/protocols/dispatch-analysis/SKILL.md now.\n` +
+                `Read and follow .agents/protocols/dispatch-analysis/SKILL.md now.\n` +
                 `This is a read-only analysis pass — do not modify any plan file.\n` +
                 `WORKSPACE_ROOT=${workspaceRoot}\n` +
                 `API_PORT=${apiPort}\n` +
@@ -6207,7 +6214,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePathEnabled ?? false,
             },
             workflowFilePathByRole: {
-                planner: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.switchboard/protocols/improve-plan/SKILL.md')),
+                planner: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/protocols/improve-plan/SKILL.md')),
                 lead: leadConfig?.addons?.workflowFilePath || '',
                 coder: coderConfig?.addons?.workflowFilePath || '',
                 reviewer: reviewerConfig?.addons?.workflowFilePath || '',
@@ -6243,7 +6250,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             constitutionEnabled: plannerConfig?.addons?.constitution ?? config.get<boolean>('planner.constitutionEnabled', false),
             designSystemDocEnabled: plannerConfig?.addons?.designSystemDoc ?? config.get<boolean>('planner.designSystemDocEnabled', false),
             designSystemDocLink: config.get<string>('planner.designSystemDocLink', ''),
-            plannerWorkflowPath: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.switchboard/protocols/improve-plan/SKILL.md')),
+            plannerWorkflowPath: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/protocols/improve-plan/SKILL.md')),
             skipCompilationByRole: {
                 planner: plannerConfig?.addons?.skipCompilation ?? false,
                 lead: leadConfig?.addons?.skipCompilation ?? true,
@@ -6474,7 +6481,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             plannerFeatureWorkflowPath: normalizeRetiredWorkflowPath(
                 (plannerConfig?.addons?.featureWorkflowFilePathEnabled && plannerConfig?.addons?.featureWorkflowFilePath)
                     ? plannerConfig.addons.featureWorkflowFilePath
-                    : '.switchboard/protocols/improve-feature/SKILL.md'
+                    : '.agents/protocols/improve-feature/SKILL.md'
             ),
         };
     }
@@ -8902,6 +8909,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     featureId: plan.featureId || undefined,
                     ...isWorkingState(plan.dispatchedAt, timeoutMs, plan.lastLivenessAt, plan.blockedAt, blockedTimeoutMs),
                     queuePosition: plan.queuePosition ?? null,
+                    columnEnteredAt: plan.columnEnteredAt ?? null,
                 });
             }
         }
@@ -11699,7 +11707,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const nfs = require('fs') as typeof import('fs');
                     let skillContent = '';
                     try {
-                        skillContent = nfs.readFileSync(path.join(workspaceRoot, '.switchboard', 'protocols', 'improve-plan', 'SKILL.md'), 'utf8');
+                        skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agents', 'protocols', 'improve-plan', 'SKILL.md'), 'utf8');
                     } catch {
                         try {
                             skillContent = nfs.readFileSync(path.join(workspaceRoot, '.claude', 'skills', 'improve-plan', 'SKILL.md'), 'utf8');
@@ -15279,8 +15287,9 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
      * Build the clipboard prompt for the "Suggest Features" board button. Emits a compact
      * pointer prompt — a task directive, the candidate plan list (already pre-filtered by the
      * caller), the skill file path, and an explicit placeholder map — instead of dumping the
-     * raw `group-into-features/SKILL.md` body verbatim. The agent reads and executes the skill
-     * itself; this method no longer reads the filesystem or transforms the skill body.
+     * raw `manage-features/SKILL.md` Group-section body verbatim. The agent reads and
+     * executes the skill itself; this method no longer reads the filesystem or transforms
+     * the skill body.
      *
      * Trade-off vs. `copyRefinePrompt`: a missing skill file is treated as a broken install
      * (the skill ships with the extension) — the agent reports it cannot read the file and
@@ -15304,7 +15313,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
 
         return `You are grouping loose Switchboard plans into features.
 
-Read and execute the skill at ${skillPath} against the candidate plans listed below.
+Read the skill at ${skillPath} and execute its **Group** section against the candidate plans listed below. (That skill covers four operations — Create, Create from Plans, Group, Rearrange. Group is the one that applies here.)
 
 ## Workspace
 - **Root:** ${workspaceRoot}
@@ -15314,13 +15323,13 @@ Read and execute the skill at ${skillPath} against the candidate plans listed be
 ${candidateList}
 
 ## Skip the SCAN Step
-The candidate plans above are already filtered to the pre-coding columns (CREATED, PLAN REVIEWED) and the active project scope. **Do NOT re-scan the board or re-read \`${workspaceRoot}/.switchboard/kanban-board.md\`.** Start at the skill's READ PLAN BODIES step (step 2) using the candidate list above.
+The candidate plans above are already filtered to the pre-coding columns (CREATED, PLAN REVIEWED) and the active project scope. **Do NOT re-scan the board or re-read \`${workspaceRoot}/.switchboard/kanban-board.md\`.** Start at the Group section's READ PLAN BODIES step (step 2) using the candidate list above.
 
 ## Placeholder Map
 The skill file contains literal placeholders that are NOT pre-substituted. When following the skill, substitute:
 - \`{{WORKSPACE_ROOT}}\` → \`${workspaceRoot}\`
 - \`{{ACTIVE_PROJECT_FILTER}}\` → \`${activeProject}\`
 
-Follow the skill's procedure from step 2 onward: read plan bodies, propose feature groupings, and wait for user approval before creating any features. Report back with your proposed groupings.`;
+Follow the Group section's procedure from step 2 onward: read plan bodies, propose feature groupings, and wait for user approval before creating any features. Report back with your proposed groupings.`;
     }
 }

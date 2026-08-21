@@ -461,7 +461,7 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     // report) and unattended (record the blocked card, take the next queue
     // item). Without the unattended half, a head driving overnight ends its
     // turn on the first twice-failed subtask and the queue stalls with cards
-    // behind it — the failure `.switchboard/protocols/terminal-coder-dispatch/SKILL.md`
+    // behind it — the failure `.agents/protocols/terminal-coder-dispatch/SKILL.md`
     // §5.6 exists to remove. Standing orders survive a /clear, which is what
     // makes this instruction durable across a head's context resets.
     const unattendedEscalationSentence = 'stop and report to the human instead of dispatching again '

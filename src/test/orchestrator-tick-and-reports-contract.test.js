@@ -52,10 +52,10 @@ function srcFiles(dir = 'src') {
     return out;
 }
 
-const PERSONA = '.switchboard/protocols/switchboard-orchestrator/SKILL.md';
-const EXTERNAL_RUNSHEET = '.switchboard/protocols/switchboard-orchestrator-external/SKILL.md';
-const INTERNAL_RUNSHEET = '.switchboard/protocols/switchboard-orchestrator-internal/SKILL.md';
-const ORCHESTRATION = '.switchboard/protocols/switchboard-orchestration/SKILL.md';
+const PERSONA = '.agents/protocols/switchboard-orchestrator/SKILL.md';
+const EXTERNAL_RUNSHEET = '.agents/protocols/switchboard-orchestrator-external/SKILL.md';
+const INTERNAL_RUNSHEET = '.agents/protocols/switchboard-orchestrator-internal/SKILL.md';
+const ORCHESTRATION = '.agents/protocols/switchboard-orchestration/SKILL.md';
 const LAUNCHER = '.agents/workflows/switchboard.md';
 const GROUPING = '.agents/skills/manage-features/SKILL.md';
 

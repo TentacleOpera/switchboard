@@ -357,7 +357,7 @@ async function run() {
         assert.strictEqual(await db7.ensureReady(), true, 'Expected kanban DB to initialize for migration test 7.');
 
         const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
-        const NEW_DEFAULT = '.switchboard/protocols/improve-plan/SKILL.md';
+        const NEW_DEFAULT = '.agents/protocols/improve-plan/SKILL.md';
 
         // Seed: one old-default (should rewrite), one custom (should be untouched).
         await db7.setConfigJson(ROLE_KEY, { workflowFilePath: OLD_DEFAULT });
@@ -449,14 +449,20 @@ async function run() {
     // Prefer the real export; fall back to an inline mirror so the transform is
     // still exercised when the compiled export is unavailable.
     const retiredMap = {
-        '.agents/workflows/improve-plan.md': '.switchboard/protocols/improve-plan/SKILL.md',
-        '.agents/workflows/improve-feature.md': '.switchboard/protocols/improve-feature/SKILL.md',
-        '.agents/workflows/accuracy.md': '.switchboard/protocols/accuracy/SKILL.md',
-        '.agents/workflows/switchboard-orchestrator.md': '.switchboard/protocols/switchboard-orchestrator/SKILL.md',
-        '.agents/skills/improve-plan/SKILL.md': '.switchboard/protocols/improve-plan/SKILL.md',
-        '.agents/skills/improve-feature/SKILL.md': '.switchboard/protocols/improve-feature/SKILL.md',
-        '.agents/skills/accuracy/SKILL.md': '.switchboard/protocols/accuracy/SKILL.md',
-        '.agents/skills/switchboard-orchestrator/SKILL.md': '.switchboard/protocols/switchboard-orchestrator/SKILL.md',
+        '.agents/workflows/improve-plan.md': '.agents/protocols/improve-plan/SKILL.md',
+        '.agents/workflows/improve-feature.md': '.agents/protocols/improve-feature/SKILL.md',
+        '.agents/workflows/accuracy.md': '.agents/protocols/accuracy/SKILL.md',
+        '.agents/workflows/switchboard-orchestrator.md': '.agents/protocols/switchboard-orchestrator/SKILL.md',
+        '.agents/skills/improve-plan/SKILL.md': '.agents/protocols/improve-plan/SKILL.md',
+        '.agents/skills/improve-feature/SKILL.md': '.agents/protocols/improve-feature/SKILL.md',
+        '.agents/skills/accuracy/SKILL.md': '.agents/protocols/accuracy/SKILL.md',
+        '.agents/skills/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-orchestrator/SKILL.md',
+        // `.switchboard/protocols/` vintage — an unshippable destination (.vscodeignore
+        // excludes .switchboard/**) that a dev build could have persisted.
+        '.switchboard/protocols/improve-plan/SKILL.md': '.agents/protocols/improve-plan/SKILL.md',
+        '.switchboard/protocols/improve-feature/SKILL.md': '.agents/protocols/improve-feature/SKILL.md',
+        '.switchboard/protocols/accuracy/SKILL.md': '.agents/protocols/accuracy/SKILL.md',
+        '.switchboard/protocols/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-orchestrator/SKILL.md',
     };
     const norm = normalizeRetiredWorkflowPath || ((p) => retiredMap[p] ?? p);
     for (const [oldP, newP] of Object.entries(retiredMap)) {
@@ -464,7 +470,7 @@ async function run() {
     }
     assert.strictEqual(norm('.custom/workflows/x.md'), '.custom/workflows/x.md', 'Expected a custom path to pass through unchanged.');
     assert.strictEqual(norm('/abs/path/improve-plan.md'), '/abs/path/improve-plan.md', 'Expected an absolute path to pass through unchanged.');
-    assert.strictEqual(norm('.switchboard/protocols/improve-plan/SKILL.md'), '.switchboard/protocols/improve-plan/SKILL.md', 'Expected an already-correct protocols path to pass through unchanged (idempotent).');
+    assert.strictEqual(norm('.agents/protocols/improve-plan/SKILL.md'), '.agents/protocols/improve-plan/SKILL.md', 'Expected an already-correct protocols path to pass through unchanged (idempotent).');
     assert.strictEqual(norm(''), '', 'Expected an empty string to pass through unchanged.');
 
     console.log('planner workflow path migration test 8 (normalizeRetiredWorkflowPath transform) passed');
@@ -473,7 +479,7 @@ async function run() {
     // Mirrors the globalState branch of _migratePlannerWorkflowPathProfileTiersWorkflowsToSkills
     // against an in-memory shape (no VS Code/globalState available in the harness).
     const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
-    const NEW_DEFAULT = '.switchboard/protocols/improve-plan/SKILL.md';
+    const NEW_DEFAULT = '.agents/protocols/improve-plan/SKILL.md';
     const staleCfg = { workflowFilePath: OLD_DEFAULT, prompt: 'keep me', addons: { y: 2 } };
     if (staleCfg.workflowFilePath === OLD_DEFAULT) {
         staleCfg.workflowFilePath = NEW_DEFAULT;

@@ -231,20 +231,25 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     /**
-     * Absolutise a root-relative API URL against the loopback server, or undefined when
-     * no server is listening.
+     * Absolutise a root-relative API URL against the loopback server, or return
+     * the relative URL when no webview is active.
      *
-     * Every asset URL this provider emits is pushed to BOTH clients at once (the editor
-     * webview and every browser-cockpit tab share one `postMessage` fan-out), so a
-     * host-detected URL is wrong for one of them whenever both are open: an
-     * `asWebviewUri` result is unresolvable in a browser, and a root-relative
-     * `/design/asset…` path is unresolvable in a webview. An absolute loopback URL is
-     * the only form both hosts can load, so prefer it and keep the host-specific
-     * branches only as the no-server fallback.
+     * Every asset URL this provider emits is pushed to BOTH clients at once (the
+     * editor webview and every browser-cockpit tab share one `postMessage`
+     * fan-out). When the webview is active, a root-relative `/design/asset…`
+     * path is unresolvable in the webview (origin is `vscode-webview://`), so
+     * the absolute loopback form is required. When no webview is active
+     * (standalone browser board), the relative URL is correct under every
+     * access method — direct launch, SSH tunnel (port-shifted or not), reverse
+     * proxy, HTTPS — and the absolute form breaks under a port-shifted tunnel
+     * because it pins the server's real listening port.
      */
     private _absoluteApiUrl(relativeUrl: string): string | undefined {
-        const port: number | undefined = this._apiServer?.getPort?.();
-        return port ? `http://127.0.0.1:${port}${relativeUrl}` : undefined;
+        if (this._panel) {
+            const port: number | undefined = this._apiServer?.getPort?.();
+            return port ? `http://127.0.0.1:${port}${relativeUrl}` : undefined;
+        }
+        return relativeUrl;
     }
 
     /**
@@ -2972,7 +2977,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 await fs.promises.writeFile(candidate, STARTER_DESIGN_SYSTEM_HTML, 'utf8');
                 await this._sendDesignDocsReady();
 
-                const kickoffPrompt = `Read and follow .switchboard/protocols/design-system-builder/SKILL.md to interactively interview me and customize the design system template at ${candidate}. If I want to derive it from an existing app instead of starting from scratch, ask me for the stylesheets, components, or screenshots to read first.`;
+                const kickoffPrompt = `Read and follow .agents/protocols/design-system-builder/SKILL.md to interactively interview me and customize the design system template at ${candidate}. If I want to derive it from an existing app instead of starting from scratch, ask me for the stylesheets, components, or screenshots to read first.`;
                 await this._seams().clipboard.writeText(kickoffPrompt);
                 this._seams().ui.showTemporaryNotification('Created design system starter template and copied kickoff prompt to clipboard.');
 

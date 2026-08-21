@@ -20,7 +20,7 @@ suite('agentPromptBuilder', () => {
                 accurateCodingEnabled: true
             });
             assert.ok(prompt.includes('Accuracy Mode'), 'Should include Accuracy Mode header');
-            assert.ok(prompt.includes('.switchboard/protocols/accuracy/SKILL.md'), 'Should include reference to accuracy workflow');
+            assert.ok(prompt.includes('.agents/protocols/accuracy/SKILL.md'), 'Should include reference to accuracy workflow');
         });
 
         test('accurateCodingEnabled: false omits Accuracy Mode instructions', () => {
@@ -337,7 +337,7 @@ suite('agentPromptBuilder', () => {
         test('adviseResearchIfUnsure: true includes research directive', () => {
             const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { adviseResearchIfUnsure: true });
             assert.ok(prompt.includes('RESEARCH WHEN UNSURE:'), 'Should include research directive');
-            assert.ok(prompt.includes('.switchboard/protocols/advise_research/SKILL.md'), 'Should include path to skill file');
+            assert.ok(prompt.includes('.agents/protocols/advise_research/SKILL.md'), 'Should include path to skill file');
         });
 
         test('adviseResearchIfUnsure: false omits research directive', () => {
@@ -348,7 +348,7 @@ suite('agentPromptBuilder', () => {
         test('adviseResearchIfUnsure: undefined includes research directive (default ON)', () => {
             const prompt = buildKanbanBatchPrompt('planner', makePlans(1), {});
             assert.ok(prompt.includes('RESEARCH WHEN UNSURE:'), 'Should include research directive by default');
-            assert.ok(prompt.includes('.switchboard/protocols/advise_research/SKILL.md'), 'Should include path to skill file');
+            assert.ok(prompt.includes('.agents/protocols/advise_research/SKILL.md'), 'Should include path to skill file');
         });
     });
 
@@ -464,24 +464,24 @@ suite('agentPromptBuilder', () => {
     suite('feature-aware workflow routing', () => {
         test('feature-mode planner prompt uses improve-feature workflow path', () => {
             const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
-            assert.ok(prompt.includes('Read .switchboard/protocols/improve-feature/SKILL.md and follow it step-by-step'), 'Should route to improve-feature SKILL.md');
+            assert.ok(prompt.includes('Read .agents/protocols/improve-feature/SKILL.md and follow it step-by-step'), 'Should route to improve-feature SKILL.md');
             assert.ok(!prompt.includes('improve-plan.md'), 'Should NOT include improve-plan.md');
         });
 
         test('isFeature on plan (no subtasks) uses improve-feature workflow path', () => {
             const prompt = buildKanbanBatchPrompt('planner', [{ topic: 'Lonely Feature', absolutePath: '/workspace/.switchboard/features/lonely.md', isFeature: true }], {});
-            assert.ok(prompt.includes('Read .switchboard/protocols/improve-feature/SKILL.md and follow it step-by-step'), 'Should route to improve-feature SKILL.md');
+            assert.ok(prompt.includes('Read .agents/protocols/improve-feature/SKILL.md and follow it step-by-step'), 'Should route to improve-feature SKILL.md');
         });
 
         test('feature-mode overrides custom plannerWorkflowPath', () => {
             const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, plannerWorkflowPath: '.custom/workflows/my-planner.md' });
             // Path is the skill, not the retired flat improve-feature.md (four-front-doors refactor).
-            assert.ok(prompt.includes('.switchboard/protocols/improve-feature/SKILL.md'), 'Should use improve-feature SKILL.md');
+            assert.ok(prompt.includes('.agents/protocols/improve-feature/SKILL.md'), 'Should use improve-feature SKILL.md');
             assert.ok(!prompt.includes('.custom/workflows/my-planner.md'), 'Should override custom plannerWorkflowPath');
         });
 
         test('non-feature planner prompt still uses configured workflow path (regression)', () => {
-            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { plannerWorkflowPath: '.switchboard/protocols/improve-plan/SKILL.md' });
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { plannerWorkflowPath: '.agents/protocols/improve-plan/SKILL.md' });
             assert.ok(prompt.includes('improve-plan/SKILL.md'), 'Should use default/configured plan workflow');
         });
 

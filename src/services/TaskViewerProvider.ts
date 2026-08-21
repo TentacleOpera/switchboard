@@ -2536,7 +2536,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     /** 2026-07-12 four-front-doors refactor: rewrite persisted plannerWorkflowPath
      *  values that still point at the old default (`.agents/workflows/improve-plan.md`)
-     *  to the new skills path (`.switchboard/protocols/improve-plan/SKILL.md`). Only exact
+     *  to the new skills path (`.agents/protocols/improve-plan/SKILL.md`). Only exact
      *  old-default matches are rewritten — user-custom paths are preserved untouched.
      *  Gated per-DB by `switchboard.migrations.plannerWorkflowPathWorkflowsToSkills.v1`.
      *  Runs after the `.agent→.agents` normalization so the two rewrites compose
@@ -2545,7 +2545,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const ROLE_KEY = 'switchboard.prompts.roleConfig_planner';
         const MARKER_KEY = 'switchboard.migrations.plannerWorkflowPathWorkflowsToSkills.v1';
         const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
-        const NEW_DEFAULT = '.switchboard/protocols/improve-plan/SKILL.md';
+        const NEW_DEFAULT = '.agents/protocols/improve-plan/SKILL.md';
 
         const roots: string[] = [];
         const activeRoot = this._resolveWorkspaceRoot() ?? undefined;
@@ -2607,7 +2607,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      *  but the profile tiers were never ported, so on a dev/UAT machine where the
      *  stale value lives in globalState (the tier the Prompts tab reads and
      *  re-saves) the dead path survived. This rewrites an exact-match
-     *  `.agents/workflows/improve-plan.md` → `.switchboard/protocols/improve-plan/SKILL.md`
+     *  `.agents/workflows/improve-plan.md` → `.agents/protocols/improve-plan/SKILL.md`
      *  in both profile tiers, preserving any other/custom value untouched. Gated
      *  by `switchboard.plannerWorkflowPathWorkflowsToSkills.profile.v1` (a distinct
      *  globalState marker — never reuse the DB or `.agent→.agents` markers). The
@@ -2618,7 +2618,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      *  skills path); see the constructor wiring. */
     private async _migratePlannerWorkflowPathProfileTiersWorkflowsToSkills(): Promise<void> {
         const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
-        const NEW_DEFAULT = '.switchboard/protocols/improve-plan/SKILL.md';
+        const NEW_DEFAULT = '.agents/protocols/improve-plan/SKILL.md';
         const PROFILE_MARKER = 'switchboard.plannerWorkflowPathWorkflowsToSkills.profile.v1';
 
         // Already-migrated this profile — no re-entry.
@@ -11041,11 +11041,11 @@ Each plan file must include:
         initiatorProject?: string | null,
         deliveryMode?: 'host' | 'self'
     ): Promise<{ mode: 'interview' | 'resume' | 'stale-session' | 'no-persona'; prompt: string }> {
-        const sharedLogicPath = path.join(root, '.switchboard', 'protocols', 'switchboard-orchestrator', 'SKILL.md');
+        const sharedLogicPath = path.join(root, '.agents', 'protocols', 'switchboard-orchestrator', 'SKILL.md');
         const runsheetName = deliveryMode === 'self'
             ? 'switchboard-orchestrator-external'
             : 'switchboard-orchestrator-internal';
-        const runsheetPath = path.join(root, '.switchboard', 'protocols', runsheetName, 'SKILL.md');
+        const runsheetPath = path.join(root, '.agents', 'protocols', runsheetName, 'SKILL.md');
         let projectFilter = '';
         try {
             projectFilter = (await this._kanbanProvider?.resolveAuthoringProject(root, initiatorProject)) || '';
@@ -11259,7 +11259,7 @@ Each plan file must include:
             this._refreshTerminalStatuses();
         }
 
-        // Inject the kickoff prompt. The persona workflow (.switchboard/protocols/switchboard-orchestrator/SKILL.md)
+        // Inject the kickoff prompt. The persona workflow (.agents/protocols/switchboard-orchestrator/SKILL.md)
         // encodes the full pre-flight + Kickoff Protocol; this prompt points the agent at it and injects
         // the runtime context (UNATTENDED flag, workspace root, active project filter). The dispatch
         // path uses sendRobustText (clipboard-paste for long payloads).
@@ -21170,7 +21170,7 @@ Each plan file must include:
             return basePayload;
         }
 
-        const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .switchboard/protocols/accuracy/SKILL.md step-by-step while implementing this task.`;
+        const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agents/protocols/accuracy/SKILL.md step-by-step while implementing this task.`;
         return `${basePayload}${accuracyInstruction}`;
     }
 

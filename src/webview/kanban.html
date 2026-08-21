@@ -3462,14 +3462,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               <div id="plannerWorkflowFilePathGroup">
                 <div class="input-group">
                   <label for="workflowFilePath">Workflow File Path:</label>
-                  <input type="text" id="workflowFilePath" value=".switchboard/protocols/improve-plan/SKILL.md" />
+                  <input type="text" id="workflowFilePath" value=".agents/protocols/improve-plan/SKILL.md" />
                   <button id="validateWorkflowPath" class="secondary-btn">Validate</button>
                 </div>
                 <div id="prompts-tab-workflow-path-status" style="font-size:11px; margin-top:4px;"></div>
                 
                 <div class="example-paths">
                   <strong>Example paths:</strong>
-                  <code>.switchboard/protocols/improve-plan/SKILL.md</code> (Switchboard Native)
+                  <code>.agents/protocols/improve-plan/SKILL.md</code> (Switchboard Native)
                   <code>.claude/get-shit-done/agents/gsd-planner.md</code> (GSD)
                   <code>.claude/superpowers/skills/writing-plans.md</code> (Superpowers)
                 </div>
@@ -3566,12 +3566,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                       <div id="plannerFeatureWorkflowFilePathGroup" style="display:none; margin-top: 4px;">
                         <div class="input-group" style="display:flex; gap:6px; align-items:center;">
                           <label for="plannerFeatureWorkflowFilePath" style="font-size:11px;">Path:</label>
-                          <input type="text" id="plannerFeatureWorkflowFilePath" value=".switchboard/protocols/improve-feature/SKILL.md" style="flex:1; padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-input-border, #ccc); background:var(--vscode-input-background, #fff); color:var(--vscode-input-foreground, #000); font-size:11px;" />
+                          <input type="text" id="plannerFeatureWorkflowFilePath" value=".agents/protocols/improve-feature/SKILL.md" style="flex:1; padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-input-border, #ccc); background:var(--vscode-input-background, #fff); color:var(--vscode-input-foreground, #000); font-size:11px;" />
                           <button id="validateFeatureWorkflowPath" class="secondary-btn" style="padding:2px 6px; font-size:11px;">Validate</button>
                         </div>
                         <div id="prompts-tab-feature-workflow-path-status" style="font-size:10px; margin-top:4px; color: var(--vscode-descriptionForeground);"></div>
                         <div class="example-paths" style="font-size:10px; opacity:0.8; margin-top:4px;">
-                          <strong>Default:</strong> <code>.switchboard/protocols/improve-feature/SKILL.md</code>
+                          <strong>Default:</strong> <code>.agents/protocols/improve-feature/SKILL.md</code>
                         </div>
                       </div>
                     </div>
@@ -3959,7 +3959,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             if (currentRole === 'planner') {
                 const config = roleConfigs.planner;
-                document.getElementById('workflowFilePath').value = config.workflowFilePath || '.switchboard/protocols/improve-plan/SKILL.md';
+                document.getElementById('workflowFilePath').value = config.workflowFilePath || '.agents/protocols/improve-plan/SKILL.md';
                 const plannerWorkflowEnabled = config.addons?.workflowFilePathEnabled !== false;
                 document.getElementById('plannerWorkflowEnabled').checked = plannerWorkflowEnabled;
                 document.getElementById('plannerWorkflowFilePathGroup').style.display = plannerWorkflowEnabled ? 'block' : 'none';
@@ -3987,7 +3987,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
 
                 // Load feature workflow path and feature subagent settings for planner
-                document.getElementById('plannerFeatureWorkflowFilePath').value = config.addons?.featureWorkflowFilePath || '.switchboard/protocols/improve-feature/SKILL.md';
+                document.getElementById('plannerFeatureWorkflowFilePath').value = config.addons?.featureWorkflowFilePath || '.agents/protocols/improve-feature/SKILL.md';
                 const plannerFeatureWorkflowEnabled = config.addons?.featureWorkflowFilePathEnabled === true;
                 document.getElementById('plannerFeatureWorkflowEnabled').checked = plannerFeatureWorkflowEnabled;
                 document.getElementById('plannerFeatureWorkflowFilePathGroup').style.display = plannerFeatureWorkflowEnabled ? 'block' : 'none';
@@ -4176,7 +4176,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const textInput = document.createElement('input');
                     textInput.type = 'text';
                     textInput.id = `addon_${addon.id}_path`;
-                    textInput.placeholder = 'e.g. .switchboard/protocols/accuracy/SKILL.md';
+                    textInput.placeholder = 'e.g. .agents/protocols/accuracy/SKILL.md';
                     textInput.style.display = isEnabled ? 'block' : 'none';
                     textInput.style.marginTop = '4px';
                     textInput.style.width = '100%';
@@ -7494,7 +7494,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function buildBoardSignature(cards) {
             if (!Array.isArray(cards) || cards.length === 0) return '';
             return cards
-                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isFeature ? '1' : '0'}|${card.subtaskCount || 0}|${card.featureId || ''}|${card.working ? '1' : '0'}|${card.blocked ? '1' : '0'}`)
+                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isFeature ? '1' : '0'}|${card.subtaskCount || 0}|${card.featureId || ''}|${card.working ? '1' : '0'}|${card.blocked ? '1' : '0'}|${card.columnEnteredAt || ''}`)
                 .sort()
                 .join('||');
         }
@@ -8543,6 +8543,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 const t = new Date(card.lastActivity).getTime();
                 card._ts = isNaN(t) ? 0 : t;
+                // V61: column_entered_at is the board sort key for non-planning
+                // columns. Fall back to lastActivity (_ts) then createdAt for
+                // legacy rows where columnEnteredAt is null/missing.
+                const colTs = card.columnEnteredAt
+                    ? new Date(card.columnEnteredAt).getTime()
+                    : NaN;
+                card._colTs = isNaN(colTs) ? card._ts : colTs;
                 buckets[col].push(card);
             });
 
@@ -8602,9 +8609,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             if (d !== 0) return d;
                         }
                     }
-                    const tsDiff = (b._ts || 0) - (a._ts || 0);
-                    if (tsDiff !== 0) return tsDiff;
-                    // Secondary tiebreaker: createdAt descending (for cards with no lastActivity/same lastActivity)
+                    // V61: sort by column_entered_at DESC (most recently moved
+                    // to column first), then createdAt DESC as tiebreaker.
+                    const colTsDiff = (b._colTs || 0) - (a._colTs || 0);
+                    if (colTsDiff !== 0) return colTsDiff;
+                    // Secondary tiebreaker: createdAt descending
                     let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
                     let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
                     if (isNaN(createdA)) createdA = 0;
@@ -10053,6 +10062,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                         cur.working = nc.working;
                                         cur.blocked = nc.blocked;
                                         cur.lastActivity = nc.lastActivity;
+                                        cur.columnEnteredAt = nc.columnEnteredAt;
                                     }
                                 });
                                 lastBoardSignature = buildBoardSignature(currentCards);

@@ -744,7 +744,18 @@
                     if (msg.error) {
                         archivesPreviewContent.innerHTML = `<div class="empty-state" style="color: var(--vscode-errorForeground, #ff6b6b);">Error: ${escapeHtml(msg.error)}</div>`;
                     } else if (msg.content) {
-                        archivesPreviewContent.innerHTML = `<div class="markdown-body">${msg.html || msg.content}</div>`;
+                        archivesPreviewContent.innerHTML = `<div class="markdown-body">${externalizeAnchors(msg.content)}</div>`;
+                    } else {
+                        // `content` is the host's markdown.api.render output — a VS Code
+                        // built-in, so executeCommand resolves undefined on the standalone /
+                        // browser host. This arm must still repaint: falling through without
+                        // touching the pane leaves the PREVIOUSLY selected plan's body on
+                        // screen under the newly selected plan's title, which reads as real
+                        // content for the wrong plan. An explicit empty state is honest.
+                        // (project.js stays commonmark by contract — no client-side
+                        // renderMarkdown here; see sharedUtils-renderMarkdown.test.js.)
+                        archivesPreviewContent.innerHTML =
+                            '<div class="empty-state">Preview unavailable on this host.</div>';
                     }
                 }
                 break;

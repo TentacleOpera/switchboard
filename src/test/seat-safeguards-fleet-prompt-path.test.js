@@ -62,10 +62,7 @@ const KANBAN_PROVIDER_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'services', 'KanbanProvider.ts'), 'utf8'
 );
 const SKILL_SRC = fs.readFileSync(
-    path.join(__dirname, '..', '..', '.switchboard', 'protocols', 'terminal-coder-dispatch', 'SKILL.md'), 'utf8'
-);
-const CLAUDE_SKILL_SRC = fs.readFileSync(
-    path.join(__dirname, '..', '..', '.claude', 'skills', 'terminal-coder-dispatch', 'SKILL.md'), 'utf8'
+    path.join(__dirname, '..', '..', '.agents', 'protocols', 'terminal-coder-dispatch', 'SKILL.md'), 'utf8'
 );
 
 let passed = 0;
@@ -803,12 +800,10 @@ test('terminal-coder-dispatch SKILL.md has the seat-safeguards paragraph', () =>
     );
 });
 
-test('.claude/skills mirror has the same seat-safeguards paragraph', () => {
-    assert.ok(
-        CLAUDE_SKILL_SRC.includes('Seat safeguards ride the delivery layer'),
-        '.claude/skills/terminal-coder-dispatch/SKILL.md mirror must have the same seat-safeguards paragraph'
-    );
-});
+// The .claude/skills mirror assertion is deliberately absent: terminal-coder-dispatch
+// is a path-delivered protocol and was dropped from MIRROR_MANIFEST, so no mirror copy
+// exists to compare against. A mirror assertion here would pass only while a stale
+// mirror lingered on disk, turning leftover staleness into a green gate.
 
 // ── 15. Standing-orders regex and mirror are unchanged ───────────────────
 

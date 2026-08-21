@@ -1411,13 +1411,13 @@ Your job is to help the user write and refine the following governance documents
    - [unresolved decision or risk]
 
 2. **Constitution** (coding standards) — located at \`CONSTITUTION.md\`
-   Follow instructions in \`.switchboard/protocols/constitution-builder/SKILL.md\`.
+   Follow instructions in \`.agents/protocols/constitution-builder/SKILL.md\`.
 
 3. **System Files** — \`CLAUDE.md\` and \`AGENTS.md\`
    These are agent governance files. Help the user write rules that agents should follow when working in this repo.
 
 4. **Tuning Insights** — \`.switchboard/insights/*.md\`
-   Follow instructions in \`.switchboard/protocols/tuning/SKILL.md\`.
+   Follow instructions in \`.agents/protocols/tuning/SKILL.md\`.
 
 ## Workflow
 
@@ -2445,13 +2445,16 @@ Start by checking which documents exist, then present the menu.`;
      * Loopback URL for a local image, or undefined when the file is outside the
      * allow-list / no API server is listening.
      *
-     * Why an absolute `http://127.0.0.1:<port>` URL and not `asWebviewUri`: the rewritten
-     * markdown is ONE string delivered to BOTH clients (the editor webview and every
-     * browser-cockpit tab, via `postMessageToWebview`'s two-target fan-out). A
-     * `vscode-webview:` URI is unresolvable in a browser, and a root-relative
-     * `/design/asset?…` path is unresolvable in a webview — so neither form can serve
-     * both. The loopback URL resolves in both hosts (webviews can load localhost; the
-     * panel CSPs allow `http://127.0.0.1:*` for img-src).
+     * When the editor webview is active, the rewritten markdown is ONE string
+     * delivered to BOTH clients (the editor webview and every browser-cockpit
+     * tab, via `postMessageToWebview`'s two-target fan-out). A root-relative
+     * `/design/asset?…` path is unresolvable in a webview (origin is
+     * `vscode-webview://`), so the absolute loopback form is required for that
+     * host. When no webview is active (standalone browser board), the relative
+     * URL is correct under every access method — direct launch, SSH tunnel
+     * (port-shifted or not), reverse proxy, HTTPS — and the absolute form
+     * breaks under a port-shifted tunnel because it pins the server's real
+     * listening port.
      */
     private _buildLocalAssetUrl(absPath: string): string | undefined {
         const port: number | undefined = this._apiServer?.getPort?.();
@@ -2470,7 +2473,11 @@ Start by checking which documents exist, then present the menu.`;
         );
         if (!isAllowed) { return undefined; }
         const root = this._getWorkspaceRoot() || '';
-        return `http://127.0.0.1:${port}/design/asset?root=${encodeURIComponent(root)}&path=${encodeURIComponent(realTarget)}`;
+        const relativePath = `/design/asset?root=${encodeURIComponent(root)}&path=${encodeURIComponent(realTarget)}`;
+        if (this._panel) {
+            return `http://127.0.0.1:${port}${relativePath}`;
+        }
+        return relativePath;
     }
 
     private _rewriteLocalImagePaths(markdown: string, baseDir: string): string {
@@ -3642,15 +3649,21 @@ Start by checking which documents exist, then present the menu.`;
                         } catch { /* no archive for this root, skip */ }
                     }
                     if (requestId !== this._latestRequestIds.get(guardKey)) { return { success: false, error: 'Stale request' }; }
-                    this.postMessageToProjectWebview({ type: 'archivedPlansReady', plans: allArchived, workspaceItems });
+                    const payload = { type: 'archivedPlansReady', plans: allArchived, workspaceItems };
+                    this.postMessageToProjectWebview(payload);
+                    // Read arms must RETURN their payload, not just push it: the verb engine
+                    // serves headless/browser callers that have no panel to receive the push,
+                    // and a `break` hands them an empty response. (verb-returns:check ratchet.)
+                    return { success: true, ...payload };
                 } catch (err) {
-                    this.postMessageToProjectWebview({ type: 'archivedPlansReady', plans: [], error: String(err) });
+                    const errPayload = { type: 'archivedPlansReady', plans: [], error: String(err) };
+                    this.postMessageToProjectWebview(errPayload);
+                    return { success: false, ...errPayload };
                 }
-                break;
             }
             case 'fetchArchivedPlanDetail': {
                 const planFile = typeof msg.planFile === 'string' ? msg.planFile : '';
-                if (!planFile) break;
+                if (!planFile) { return { success: false, error: 'planFile is required' }; }
                 try {
                     // Resolve relative to workspace roots
                     let absPath = planFile;
@@ -3663,33 +3676,44 @@ Start by checking which documents exist, then present the menu.`;
                     // SECURITY: must be within an allowed workspace root
                     const isAllowed = Array.from(this._getAllowedRoots()).some(r => path.resolve(absPath).startsWith(path.resolve(r)));
                     if (!isAllowed) {
-                        this.postMessageToProjectWebview({ type: 'archivedPlanDetailReady', error: 'File not in workspace.', planFile });
-                        break;
+                        const denied = { type: 'archivedPlanDetailReady', error: 'File not in workspace.', planFile };
+                        this.postMessageToProjectWebview(denied);
+                        return { success: false, ...denied };
                     }
                     if (fs.existsSync(absPath)) {
                         const content = await fs.promises.readFile(absPath, 'utf8');
+                        // `markdown.api.render` is a VS Code built-in — undefined off VS Code.
+                        // rawContent is the load-bearing field there; the webview renders it
+                        // itself when `content` is empty.
                         const renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content);
-                        this.postMessageToProjectWebview({ type: 'archivedPlanDetailReady', content: renderedHtml, rawContent: content, planFile });
-                    } else {
-                        this.postMessageToProjectWebview({ type: 'archivedPlanDetailReady', error: 'Plan file not found on disk.', planFile });
+                        const okPayload = { type: 'archivedPlanDetailReady', content: renderedHtml, rawContent: content, planFile };
+                        this.postMessageToProjectWebview(okPayload);
+                        return { success: true, ...okPayload };
                     }
+                    const missing = { type: 'archivedPlanDetailReady', error: 'Plan file not found on disk.', planFile };
+                    this.postMessageToProjectWebview(missing);
+                    return { success: false, ...missing };
                 } catch (err) {
-                    this.postMessageToProjectWebview({ type: 'archivedPlanDetailReady', error: 'Error reading plan: ' + String(err), planFile });
+                    const errPayload = { type: 'archivedPlanDetailReady', error: 'Error reading plan: ' + String(err), planFile };
+                    this.postMessageToProjectWebview(errPayload);
+                    return { success: false, ...errPayload };
                 }
-                break;
             }
             case 'queryArchivesPrompt': {
                 try {
                     const wsRoot = typeof msg.workspaceRoot === 'string' ? msg.workspaceRoot : '';
                     const root = wsRoot || this._getAllowedRoots().values().next().value || '';
                     const archivePath = KanbanDatabase.resolveArchiveDbPath(root);
-                    const prompt = `Read and follow .switchboard/protocols/archive/SKILL.md to query the Switchboard archive for workspace: ${root}.\n\nThe archive is a SQLite cold store at ${archivePath}. Use sqlite3 (read-only) to query it.\n\nWhat would you like to find?`;
+                    const prompt = `Read and follow .agents/protocols/archive/SKILL.md to query the Switchboard archive for workspace: ${root}.\n\nThe archive is a SQLite cold store at ${archivePath}. Use sqlite3 (read-only) to query it.\n\nWhat would you like to find?`;
                     await this._seams().clipboard.writeText(prompt);
-                    this.postMessageToProjectWebview({ type: 'archivesPromptCopied', prompt });
+                    const payload = { type: 'archivesPromptCopied', prompt };
+                    this.postMessageToProjectWebview(payload);
+                    return { success: true, ...payload };
                 } catch (err) {
-                    this.postMessageToProjectWebview({ type: 'archivesPromptCopied', error: String(err) });
+                    const errPayload = { type: 'archivesPromptCopied', error: String(err) };
+                    this.postMessageToProjectWebview(errPayload);
+                    return { success: false, ...errPayload };
                 }
-                break;
             }
             case 'fetchKanbanPlans': {
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
@@ -4585,7 +4609,7 @@ Please format the updated output document strictly as follows:
                 if (!allRoots.includes(wsRoot)) {
                     break;
                 }
-                const promptText = `Follow instructions in .switchboard/protocols/constitution-builder/SKILL.md to build or improve CONSTITUTION.md in this project.`;
+                const promptText = `Follow instructions in .agents/protocols/constitution-builder/SKILL.md to build or improve CONSTITUTION.md in this project.`;
                 // Try dispatching via the planner role (gets rotation for free).
                 // Fall back to ad-hoc terminal creation if no planner agent is registered.
                 if (this._taskViewerProvider) {
@@ -4608,7 +4632,7 @@ Please format the updated output document strictly as follows:
                 if (!allRoots.includes(wsRoot)) {
                     break;
                 }
-                const promptText = `Follow instructions in .switchboard/protocols/constitution-builder/SKILL.md to improve and update the existing CONSTITUTION.md in this project.`;
+                const promptText = `Follow instructions in .agents/protocols/constitution-builder/SKILL.md to improve and update the existing CONSTITUTION.md in this project.`;
                 if (this._taskViewerProvider) {
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole(
                         'planner', promptText, wsRoot
@@ -5033,8 +5057,8 @@ Please format the updated output document strictly as follows:
                     // the right skill silently.
                     const hasSubtasks = (typeof subtaskCount === 'number' ? subtaskCount : 0) > 0;
                     const skillRelPath = hasSubtasks
-                        ? path.join('.switchboard', 'protocols', 'improve-feature', 'SKILL.md')
-                        : path.join('.switchboard', 'protocols', 'refine_feature.md');
+                        ? path.join('.agents', 'protocols', 'improve-feature', 'SKILL.md')
+                        : path.join('.agents', 'protocols', 'refine_feature.md');
                     const skillRelPathLegacy = hasSubtasks
                         ? path.join('.agent', 'skills', 'improve-feature', 'SKILL.md')
                         : path.join('.agent', 'skills', 'refine_feature.md');
@@ -5348,7 +5372,7 @@ Please format the updated output document strictly as follows:
                 } else {
                     planFilesList = planFiles.join('\n');
                 }
-                const extractPrompt = `Read and follow .switchboard/protocols/tuning/SKILL.md in extract mode for workspace: ${effectiveWsRoot}\n\nScan the following plan files for adversarial review sections ("Stage 1 — Grumpy Adversarial Findings" and "Stage 2 — Balanced Synthesis"):\n${planFilesList}\n\nFor each plan, extract the review findings. Then cluster recurring problem patterns across plans using these criteria:\n  - Same problem category (e.g., missing error handling, race conditions, prompt-design flaws, unvalidated assumptions)\n  - Same severity level (recurring vs critical vs minor)\n  - Same governance target (CONSTITUTION.md vs AGENTS.md vs CLAUDE.md)\nFor each distinct pattern, create an insight .md file in ${effectiveWsRoot}/.switchboard/insights/ using the insight template. If an existing insight covers the same pattern (same category AND similar description), append new evidence to it instead of creating a duplicate. When appending, update the Source Plans list and add new evidence entries.`;
+                const extractPrompt = `Read and follow .agents/protocols/tuning/SKILL.md in extract mode for workspace: ${effectiveWsRoot}\n\nScan the following plan files for adversarial review sections ("Stage 1 — Grumpy Adversarial Findings" and "Stage 2 — Balanced Synthesis"):\n${planFilesList}\n\nFor each plan, extract the review findings. Then cluster recurring problem patterns across plans using these criteria:\n  - Same problem category (e.g., missing error handling, race conditions, prompt-design flaws, unvalidated assumptions)\n  - Same severity level (recurring vs critical vs minor)\n  - Same governance target (CONSTITUTION.md vs AGENTS.md vs CLAUDE.md)\nFor each distinct pattern, create an insight .md file in ${effectiveWsRoot}/.switchboard/insights/ using the insight template. If an existing insight covers the same pattern (same category AND similar description), append new evidence to it instead of creating a duplicate. When appending, update the Source Plans list and add new evidence entries.`;
                 await this._seams().clipboard.writeText(extractPrompt);
                 this._seams().ui.showTemporaryNotification('Tuning extract prompt copied to clipboard. Paste it into your agent chat.');
                 this.postMessageToProjectWebview({ type: 'tuningExtractComplete', planCount: planFiles.length });
@@ -5357,7 +5381,7 @@ Please format the updated output document strictly as follows:
             case 'runTuningGovernance': {
                 const wsRoot = String(msg.workspaceRoot || '');
                 const effectiveWsRoot = wsRoot || (allRoots.length > 0 ? allRoots[0] : '');
-                const governancePrompt = `Read and follow .switchboard/protocols/tuning/SKILL.md in governance mode for workspace: ${effectiveWsRoot}\n\nRead all insight files in ${effectiveWsRoot}/.switchboard/insights/ with status 'open'. Review the insights and propose specific edits to governance files (CONSTITUTION.md, AGENTS.md, CLAUDE.md) to address the recurring patterns. Present proposed changes as diffs.`;
+                const governancePrompt = `Read and follow .agents/protocols/tuning/SKILL.md in governance mode for workspace: ${effectiveWsRoot}\n\nRead all insight files in ${effectiveWsRoot}/.switchboard/insights/ with status 'open'. Review the insights and propose specific edits to governance files (CONSTITUTION.md, AGENTS.md, CLAUDE.md) to address the recurring patterns. Present proposed changes as diffs.`;
                 await this._seams().clipboard.writeText(governancePrompt);
                 this._seams().ui.showTemporaryNotification('Tuning governance prompt copied to clipboard. Paste it into your agent chat.');
                 this.postMessageToProjectWebview({ type: 'tuningGovernanceComplete' });

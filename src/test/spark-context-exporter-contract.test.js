@@ -81,12 +81,12 @@ Append-only.
 
 function writeGoodWorkspace(dir) {
     fs.mkdirSync(path.join(dir, '.switchboard'), { recursive: true });
-    fs.mkdirSync(path.join(dir, '.switchboard', 'protocols', 'improve-plan'), { recursive: true });
-    fs.mkdirSync(path.join(dir, '.switchboard', 'protocols', 'improve-feature'), { recursive: true });
+    fs.mkdirSync(path.join(dir, '.agents', 'protocols', 'improve-plan'), { recursive: true });
+    fs.mkdirSync(path.join(dir, '.agents', 'protocols', 'improve-feature'), { recursive: true });
     fs.mkdirSync(path.join(dir, '.agents', 'workflows'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), sampleAgentsMd, 'utf8');
-    fs.writeFileSync(path.join(dir, '.switchboard', 'protocols', 'improve-plan', 'SKILL.md'), sampleImprovePlan, 'utf8');
-    fs.writeFileSync(path.join(dir, '.switchboard', 'protocols', 'improve-feature', 'SKILL.md'), sampleImproveFeature, 'utf8');
+    fs.writeFileSync(path.join(dir, '.agents', 'protocols', 'improve-plan', 'SKILL.md'), sampleImprovePlan, 'utf8');
+    fs.writeFileSync(path.join(dir, '.agents', 'protocols', 'improve-feature', 'SKILL.md'), sampleImproveFeature, 'utf8');
     fs.writeFileSync(path.join(dir, '.agents', 'workflows', 'switchboard-memo.md'), sampleMemo, 'utf8');
 }
 

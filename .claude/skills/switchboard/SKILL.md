@@ -111,11 +111,6 @@ terminal. Read that directory on each pass.
 Never call `POST /orchestration/start` from here — that door creates a *separate*
 Orchestrator terminal, which is the opposite of what `/switchboard` is for.
 
-**To end the session:** call `POST /orchestration/stop`. This disarms the
-orchestrator, clears the seat, archives the session file, and broadcasts the
-state change. The shell rail's UFO icon will dim. You can also tell the user to
-click the lit UFO icon in the rail.
-
 ---
 
 ## Everything else

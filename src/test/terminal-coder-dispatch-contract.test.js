@@ -18,8 +18,12 @@ const path = require('path');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const read = (rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 
-const SKILL = '.switchboard/protocols/terminal-coder-dispatch/SKILL.md';
-const CLAUDE_SKILL = '.claude/skills/terminal-coder-dispatch/SKILL.md';
+const SKILL = '.agents/protocols/terminal-coder-dispatch/SKILL.md';
+// This protocol is delivered by PATH, not via CLI skill discovery, so it is no
+// longer mirrored into .claude/skills/ (it was dropped from MIRROR_MANIFEST by the
+// skill-injection-cleanup feature). Asserting against a mirror copy would only
+// re-pass while a stale mirror lingered on disk — which is precisely the staleness
+// that feature removes. The single source of truth is the protocol file itself.
 
 let failures = 0;
 function test(name, fn) {
@@ -32,7 +36,7 @@ function test(name, fn) {
     }
 }
 
-for (const target of [SKILL, CLAUDE_SKILL]) {
+for (const target of [SKILL]) {
     console.log(`\nValidating contract on ${target}:`);
 
     test(`[${target}] authority order appears and names the plan file as last`, () => {

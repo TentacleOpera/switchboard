@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-08-20T12:32:16.056Z",
+  "generatedAt": "2026-08-20T23:05:10.935Z",
   "summary": {
     "totalArms": 629,
     "totalVerbs": 541,
@@ -14,7 +14,7 @@
       "TaskViewer": 109,
       "Setup": 99
     },
-    "apiEndpointCount": 83,
+    "apiEndpointCount": 87,
     "manualReviewCount": 6
   },
   "providers": {
@@ -1120,567 +1120,567 @@
       "arms": [
         {
           "verb": "webviewReady",
-          "line": 2628,
+          "line": 2635,
           "dynamic": false
         },
         {
           "verb": "renderMarkdownLive",
-          "line": 2630,
+          "line": 2637,
           "dynamic": false
         },
         {
           "verb": "fetchRoots",
-          "line": 2636,
+          "line": 2643,
           "dynamic": false
         },
         {
           "verb": "persistTabState",
-          "line": 2708,
+          "line": 2715,
           "dynamic": false
         },
         {
           "verb": "submitComment",
-          "line": 2728,
+          "line": 2735,
           "dynamic": false
         },
         {
           "verb": "savePlanningContainerSelection",
-          "line": 2778,
+          "line": 2785,
           "dynamic": false
         },
         {
           "verb": "fetchChildren",
-          "line": 2825,
+          "line": 2832,
           "dynamic": false
         },
         {
           "verb": "fetchPreview",
-          "line": 2828,
-          "dynamic": false
-        },
-        {
-          "verb": "appendToPlannerPrompt",
-          "line": 2831,
-          "dynamic": false
-        },
-        {
-          "verb": "importFullDoc",
           "line": 2835,
           "dynamic": false
         },
         {
-          "verb": "fetchPageContent",
-          "line": 2839,
+          "verb": "appendToPlannerPrompt",
+          "line": 2838,
           "dynamic": false
         },
         {
-          "verb": "fetchAntigravityArtifact",
+          "verb": "importFullDoc",
           "line": 2842,
           "dynamic": false
         },
         {
+          "verb": "fetchPageContent",
+          "line": 2846,
+          "dynamic": false
+        },
+        {
+          "verb": "fetchAntigravityArtifact",
+          "line": 2849,
+          "dynamic": false
+        },
+        {
           "verb": "addLocalFolder",
-          "line": 2869,
+          "line": 2876,
           "dynamic": false
         },
         {
           "verb": "removeLocalFolder",
-          "line": 2886,
+          "line": 2893,
           "dynamic": false
         },
         {
           "verb": "listLocalFolders",
-          "line": 2895,
+          "line": 2902,
           "dynamic": false
         },
         {
           "verb": "listPlanningHtmlFolders",
-          "line": 2908,
+          "line": 2915,
           "dynamic": false
         },
         {
           "verb": "addPlanningHtmlFolder",
-          "line": 2916,
+          "line": 2923,
           "dynamic": false
         },
         {
           "verb": "removePlanningHtmlFolder",
-          "line": 2933,
+          "line": 2940,
           "dynamic": false
         },
         {
           "verb": "serveAndOpenHtml",
-          "line": 2942,
+          "line": 2949,
           "dynamic": false
         },
         {
           "verb": "refreshSource",
-          "line": 2960,
+          "line": 2967,
           "dynamic": false
         },
         {
           "verb": "fetchContainers",
-          "line": 2974,
+          "line": 2981,
           "dynamic": false
         },
         {
           "verb": "fetchImportedDocs",
-          "line": 2993,
+          "line": 3000,
           "dynamic": false
         },
         {
           "verb": "fetchDocsFile",
-          "line": 2996,
-          "dynamic": false
-        },
-        {
-          "verb": "syncToSource",
-          "line": 2999,
-          "dynamic": false
-        },
-        {
-          "verb": "fetchFilteredDocs",
           "line": 3003,
           "dynamic": false
         },
         {
+          "verb": "syncToSource",
+          "line": 3006,
+          "dynamic": false
+        },
+        {
+          "verb": "fetchFilteredDocs",
+          "line": 3010,
+          "dynamic": false
+        },
+        {
           "verb": "fetchDocPages",
-          "line": 3042,
+          "line": 3049,
           "dynamic": false
         },
         {
           "verb": "fetchPageContent",
-          "line": 3069,
+          "line": 3076,
           "dynamic": false
         },
         {
           "verb": "importPlansFromClipboard",
-          "line": 3102,
+          "line": 3109,
           "dynamic": false
         },
         {
           "verb": "createPlansInit",
-          "line": 3108,
+          "line": 3115,
           "dynamic": false
         },
         {
           "verb": "createPlansCopyPrompt",
-          "line": 3128,
+          "line": 3135,
           "dynamic": false
         },
         {
           "verb": "createPlansPickFolder",
-          "line": 3154,
+          "line": 3161,
           "dynamic": false
         },
         {
           "verb": "createPlansDownloadZip",
-          "line": 3171,
+          "line": 3178,
           "dynamic": false
         },
         {
           "verb": "createPlansPasteBack",
-          "line": 3204,
+          "line": 3211,
           "dynamic": false
         },
         {
           "verb": "createPlansImproveSource",
-          "line": 3234,
+          "line": 3241,
           "dynamic": false
         },
         {
           "verb": "docsHealthCopyPrompt",
-          "line": 3261,
+          "line": 3268,
           "dynamic": false
         },
         {
           "verb": "importResearchDoc",
-          "line": 3281,
+          "line": 3288,
           "dynamic": false
         },
         {
           "verb": "linkToDocument",
-          "line": 3287,
+          "line": 3294,
           "dynamic": false
         },
         {
           "verb": "linkToFolder",
-          "line": 3291,
+          "line": 3298,
           "dynamic": false
         },
         {
           "verb": "createLocalDoc",
-          "line": 3295,
+          "line": 3302,
           "dynamic": false
         },
         {
           "verb": "draftImproveLocalDoc",
-          "line": 3300,
+          "line": 3307,
           "dynamic": false
         },
         {
           "verb": "resolveDuplicate",
-          "line": 3333,
+          "line": 3340,
           "dynamic": false
         },
         {
           "verb": "deleteLocalDoc",
-          "line": 3338,
+          "line": 3345,
           "dynamic": false
         },
         {
           "verb": "saveOnlineDocFile",
-          "line": 3373,
+          "line": 3380,
           "dynamic": false
         },
         {
           "verb": "deleteImportedDoc",
-          "line": 3420,
+          "line": 3427,
           "dynamic": false
         },
         {
           "verb": "importPlans",
-          "line": 3464,
+          "line": 3471,
           "dynamic": false
         },
         {
           "verb": "copyArtifactPrompt",
-          "line": 3469,
+          "line": 3476,
           "dynamic": false
         },
         {
           "verb": "sendArtifactPromptToTerminal",
-          "line": 3475,
+          "line": 3482,
           "dynamic": false
         },
         {
           "verb": "copyHtmlTweakPrompt",
-          "line": 3494,
-          "dynamic": false
-        },
-        {
-          "verb": "sendHtmlTweakPrompt",
           "line": 3501,
           "dynamic": false
         },
         {
+          "verb": "sendHtmlTweakPrompt",
+          "line": 3508,
+          "dynamic": false
+        },
+        {
           "verb": "copyChatPrompt",
-          "line": 3521,
+          "line": 3528,
           "dynamic": false
         },
         {
           "verb": "uploadPlanAttachment",
-          "line": 3530,
+          "line": 3537,
           "dynamic": false
         },
         {
           "verb": "createPlan",
-          "line": 3616,
+          "line": 3623,
           "dynamic": false
         },
         {
           "verb": "fetchArchivedPlans",
-          "line": 3620,
+          "line": 3627,
           "dynamic": false
         },
         {
           "verb": "fetchArchivedPlanDetail",
-          "line": 3651,
+          "line": 3658,
           "dynamic": false
         },
         {
           "verb": "queryArchivesPrompt",
-          "line": 3681,
+          "line": 3688,
           "dynamic": false
         },
         {
           "verb": "fetchKanbanPlans",
-          "line": 3694,
+          "line": 3701,
           "dynamic": false
         },
         {
           "verb": "openKanbanPlan",
-          "line": 3804,
+          "line": 3811,
           "dynamic": false
         },
         {
           "verb": "fetchKanbanPlanPreview",
-          "line": 3820,
+          "line": 3827,
           "dynamic": false
         },
         {
           "verb": "copyKanbanPlanPrompt",
-          "line": 3826,
+          "line": 3833,
           "dynamic": false
         },
         {
           "verb": "copyFeaturePlannerPrompt",
-          "line": 3855,
+          "line": 3862,
           "dynamic": false
         },
         {
           "verb": "moveKanbanPlanColumn",
-          "line": 3880,
+          "line": 3887,
           "dynamic": false
         },
         {
           "verb": "planShown",
-          "line": 3905,
-          "dynamic": false
-        },
-        {
-          "verb": "setKanbanPlanComplexity",
           "line": 3912,
           "dynamic": false
         },
         {
+          "verb": "setKanbanPlanComplexity",
+          "line": 3919,
+          "dynamic": false
+        },
+        {
           "verb": "deleteKanbanPlan",
-          "line": 3960,
+          "line": 3967,
           "dynamic": false
         },
         {
           "verb": "fetchKanbanPlanLog",
-          "line": 4016,
+          "line": 4023,
           "dynamic": false
         },
         {
           "verb": "getFeatureDetails",
-          "line": 4039,
+          "line": 4046,
           "dynamic": false
         },
         {
           "verb": "addSubtaskToFeature",
-          "line": 4060,
+          "line": 4067,
           "dynamic": false
         },
         {
           "verb": "removeSubtaskFromFeature",
-          "line": 4095,
+          "line": 4102,
           "dynamic": false
         },
         {
           "verb": "deleteFeature",
-          "line": 4120,
+          "line": 4127,
           "dynamic": false
         },
         {
           "verb": "createFeature",
-          "line": 4153,
+          "line": 4160,
           "dynamic": false
         },
         {
           "verb": "updateFeatureConfig",
-          "line": 4204,
-          "dynamic": false
-        },
-        {
-          "verb": "loadConstitutionFiles",
           "line": 4211,
           "dynamic": false
         },
         {
+          "verb": "loadConstitutionFiles",
+          "line": 4218,
+          "dynamic": false
+        },
+        {
           "verb": "getConstitutionStatus",
-          "line": 4237,
+          "line": 4244,
           "dynamic": false
         },
         {
           "verb": "readConstitutionFile",
-          "line": 4258,
+          "line": 4265,
           "dynamic": false
         },
         {
           "verb": "saveConstitutionFile",
-          "line": 4310,
+          "line": 4317,
           "dynamic": false
         },
         {
           "verb": "getProjectContextEnabled",
-          "line": 4369,
+          "line": 4376,
           "dynamic": false
         },
         {
           "verb": "setProjectContextEnabled",
-          "line": 4379,
+          "line": 4386,
           "dynamic": false
         },
         {
           "verb": "getProjectPrd",
-          "line": 4390,
+          "line": 4397,
           "dynamic": false
         },
         {
           "verb": "saveProjectPrd",
-          "line": 4422,
+          "line": 4429,
           "dynamic": false
         },
         {
           "verb": "invokePrdBuilder",
-          "line": 4462,
+          "line": 4469,
           "dynamic": false
         },
         {
           "verb": "copyPrdBuildPrompt",
-          "line": 4482,
+          "line": 4489,
           "dynamic": false
         },
         {
           "verb": "toggleConstitutionAddon",
-          "line": 4491,
+          "line": 4498,
           "dynamic": false
         },
         {
           "verb": "copyConstitutionPrompt",
-          "line": 4500,
+          "line": 4507,
           "dynamic": false
         },
         {
           "verb": "copyConstitutionUpdatePrompt",
-          "line": 4537,
+          "line": 4544,
           "dynamic": false
         },
         {
           "verb": "invokeConstitutionBuilder",
-          "line": 4583,
+          "line": 4590,
           "dynamic": false
         },
         {
           "verb": "invokeConstitutionUpdater",
-          "line": 4606,
+          "line": 4613,
           "dynamic": false
         },
         {
           "verb": "invokeSystemBuilder",
-          "line": 4627,
+          "line": 4634,
           "dynamic": false
         },
         {
           "verb": "copySystemBuildPrompt",
-          "line": 4654,
+          "line": 4661,
           "dynamic": false
         },
         {
           "verb": "openArchitectTerminal",
-          "line": 4674,
+          "line": 4681,
           "dynamic": false
         },
         {
           "verb": "copyArchitectPrompt",
-          "line": 4701,
+          "line": 4708,
           "dynamic": false
         },
         {
           "verb": "deleteConstitutionFile",
-          "line": 4712,
+          "line": 4719,
           "dynamic": false
         },
         {
           "verb": "getConstitutionPaths",
-          "line": 4726,
+          "line": 4733,
           "dynamic": false
         },
         {
           "verb": "addConstitutionPath",
-          "line": 4738,
+          "line": 4745,
           "dynamic": false
         },
         {
           "verb": "removeConstitutionPath",
-          "line": 4764,
+          "line": 4771,
           "dynamic": false
         },
         {
           "verb": "setConstitutionPath",
-          "line": 4781,
+          "line": 4788,
           "dynamic": false
         },
         {
           "verb": "saveFileContent",
-          "line": 4817,
+          "line": 4824,
           "dynamic": false
         },
         {
           "verb": "linearLoadAutomationCatalog",
-          "line": 4976,
+          "line": 4983,
           "dynamic": false
         },
         {
           "verb": "openTicketsPanel",
-          "line": 4988,
+          "line": 4995,
           "dynamic": false
         },
         {
           "verb": "openExternalUrl",
-          "line": 4997,
+          "line": 5004,
           "dynamic": false
         },
         {
           "verb": "copyToClipboard",
-          "line": 5009,
+          "line": 5016,
           "dynamic": false
         },
         {
           "verb": "copyDiagramPrompt",
-          "line": 5013,
+          "line": 5020,
           "dynamic": false
         },
         {
           "verb": "improveFeature",
-          "line": 5018,
+          "line": 5025,
           "dynamic": false
         },
         {
           "verb": "createOnlineDocument",
-          "line": 5080,
+          "line": 5087,
           "dynamic": false
         },
         {
           "verb": "setUploadLocation",
-          "line": 5177,
+          "line": 5184,
           "dynamic": false
         },
         {
           "verb": "syncDocToOnline",
-          "line": 5201,
+          "line": 5208,
           "dynamic": false
         },
         {
           "verb": "getSyncConfig",
-          "line": 5258,
+          "line": 5265,
           "dynamic": false
         },
         {
           "verb": "loadInsights",
-          "line": 5274,
+          "line": 5281,
           "dynamic": false
         },
         {
           "verb": "readInsight",
-          "line": 5296,
+          "line": 5303,
           "dynamic": false
         },
         {
           "verb": "runTuningExtract",
-          "line": 5320,
+          "line": 5327,
           "dynamic": false
         },
         {
           "verb": "runTuningGovernance",
-          "line": 5357,
+          "line": 5364,
           "dynamic": false
         },
         {
           "verb": "updateInsightStatus",
-          "line": 5366,
+          "line": 5373,
           "dynamic": false
         },
         {
           "verb": "deleteInsight",
-          "line": 5380,
+          "line": 5387,
           "dynamic": false
         },
         {
           "verb": "copyInsightLink",
-          "line": 5394,
+          "line": 5401,
           "dynamic": false
         }
       ]
@@ -1779,427 +1779,427 @@
       "arms": [
         {
           "verb": "getStatusShowTicketsSetting",
-          "line": 1318,
+          "line": 1330,
           "dynamic": false
         },
         {
           "verb": "setStatusShowTicketsSetting",
-          "line": 1325,
+          "line": 1337,
           "dynamic": false
         },
         {
           "verb": "persistTabState",
-          "line": 1332,
+          "line": 1344,
           "dynamic": false
         },
         {
           "verb": "fetchRoots",
-          "line": 1338,
+          "line": 1350,
           "dynamic": false
         },
         {
           "verb": "switchTicketsProvider",
-          "line": 1348,
+          "line": 1360,
           "dynamic": false
         },
         {
           "verb": "setTicketsAutoSync",
-          "line": 1386,
+          "line": 1398,
           "dynamic": false
         },
         {
           "verb": "addTicketsFolder",
-          "line": 1409,
+          "line": 1421,
           "dynamic": false
         },
         {
           "verb": "removeTicketsFolder",
-          "line": 1425,
+          "line": 1437,
           "dynamic": false
         },
         {
           "verb": "listTicketsFolders",
-          "line": 1433,
+          "line": 1445,
           "dynamic": false
         },
         {
           "verb": "saveTicketsFolderPaths",
-          "line": 1442,
+          "line": 1454,
           "dynamic": false
         },
         {
           "verb": "browseTicketsFolder",
-          "line": 1452,
+          "line": 1464,
           "dynamic": false
         },
         {
           "verb": "saveTicketsFolder",
-          "line": 1468,
+          "line": 1480,
           "dynamic": false
         },
         {
           "verb": "linearLoadProject",
-          "line": 1484,
+          "line": 1496,
           "dynamic": false
         },
         {
           "verb": "linearLoadProjects",
-          "line": 1545,
+          "line": 1557,
           "dynamic": false
         },
         {
           "verb": "linearSaveProjectSelection",
-          "line": 1594,
+          "line": 1606,
           "dynamic": false
         },
         {
           "verb": "clickupLoadSpaces",
-          "line": 1613,
+          "line": 1625,
           "dynamic": false
         },
         {
           "verb": "clickupLoadFolders",
-          "line": 1647,
+          "line": 1659,
           "dynamic": false
         },
         {
           "verb": "clickupLoadLists",
-          "line": 1684,
+          "line": 1696,
           "dynamic": false
         },
         {
           "verb": "invalidateClickUpCache",
-          "line": 1720,
+          "line": 1732,
           "dynamic": false
         },
         {
           "verb": "clickupLoadProject",
-          "line": 1729,
+          "line": 1741,
           "dynamic": false
         },
         {
           "verb": "clickupLoadSpaceTags",
-          "line": 1798,
+          "line": 1810,
           "dynamic": false
         },
         {
           "verb": "clickupLoadListStatuses",
-          "line": 1823,
+          "line": 1835,
           "dynamic": false
         },
         {
           "verb": "clickupSaveSpaceSelection",
-          "line": 1849,
+          "line": 1861,
           "dynamic": false
         },
         {
           "verb": "clickupSaveFolderSelection",
-          "line": 1872,
+          "line": 1884,
           "dynamic": false
         },
         {
           "verb": "clickupSaveListSelection",
-          "line": 1893,
+          "line": 1905,
           "dynamic": false
         },
         {
           "verb": "setupTicketsWatcher",
-          "line": 1919,
+          "line": 1931,
           "dynamic": false
         },
         {
           "verb": "ticketsDefaultRoot",
-          "line": 1936,
+          "line": 1948,
           "dynamic": false
         },
         {
           "verb": "ticketsRootChanged",
-          "line": 1991,
+          "line": 2003,
           "dynamic": false
         },
         {
           "verb": "refreshTicketsDelta",
-          "line": 2029,
+          "line": 2041,
           "dynamic": false
         },
         {
           "verb": "saveLocalTicketFile",
-          "line": 2142,
+          "line": 2154,
           "dynamic": false
         },
         {
           "verb": "listLocalTicketFiles",
-          "line": 2181,
+          "line": 2193,
           "dynamic": false
         },
         {
           "verb": "getTicketSyncStatuses",
-          "line": 2387,
+          "line": 2399,
           "dynamic": false
         },
         {
           "verb": "readLocalTicketFile",
-          "line": 2419,
+          "line": 2431,
           "dynamic": false
         },
         {
           "verb": "linearLoadTaskDetails",
-          "line": 2450,
+          "line": 2462,
           "dynamic": false
         },
         {
           "verb": "clickupLoadTaskDetails",
-          "line": 2545,
+          "line": 2557,
           "dynamic": false
         },
         {
           "verb": "linearUpdateIssueLabels",
-          "line": 2613,
+          "line": 2625,
           "dynamic": false
         },
         {
           "verb": "clickupUpdateTaskTags",
-          "line": 2649,
+          "line": 2661,
           "dynamic": false
         },
         {
           "verb": "loadTicketAssignees",
-          "line": 2686,
+          "line": 2698,
           "dynamic": false
         },
         {
           "verb": "loadTicketMembers",
-          "line": 2742,
+          "line": 2754,
           "dynamic": false
         },
         {
           "verb": "linearUpdateIssueAssignee",
-          "line": 2789,
+          "line": 2801,
           "dynamic": false
         },
         {
           "verb": "clickupUpdateTaskAssignees",
-          "line": 2825,
+          "line": 2837,
           "dynamic": false
         },
         {
           "verb": "linearUpdateIssuePriority",
-          "line": 2876,
+          "line": 2888,
           "dynamic": false
         },
         {
           "verb": "clickupUpdateTaskPriority",
-          "line": 2912,
+          "line": 2924,
           "dynamic": false
         },
         {
           "verb": "editTicket",
-          "line": 2948,
+          "line": 2960,
           "dynamic": false
         },
         {
           "verb": "pushTicket",
-          "line": 2975,
+          "line": 2987,
           "dynamic": false
         },
         {
           "verb": "pushTicketWithSubtasks",
-          "line": 3008,
+          "line": 3020,
           "dynamic": false
         },
         {
           "verb": "deleteTicketConfirmed",
-          "line": 3060,
+          "line": 3072,
           "dynamic": false
         },
         {
           "verb": "importTicketSubtasks",
-          "line": 3086,
+          "line": 3098,
           "dynamic": false
         },
         {
           "verb": "fetchMoveTargets",
-          "line": 3138,
+          "line": 3150,
           "dynamic": false
         },
         {
           "verb": "moveTicket",
-          "line": 3188,
+          "line": 3200,
           "dynamic": false
         },
         {
           "verb": "changeTicketStatus",
-          "line": 3217,
+          "line": 3229,
           "dynamic": false
         },
         {
           "verb": "convertToSubtask",
-          "line": 3245,
+          "line": 3257,
           "dynamic": false
         },
         {
           "verb": "ticketAttachImage",
-          "line": 3330,
+          "line": 3342,
           "dynamic": false
         },
         {
           "verb": "postTicketComment",
-          "line": 3374,
+          "line": 3386,
           "dynamic": false
         },
         {
           "verb": "loadTicketComments",
-          "line": 3402,
+          "line": 3414,
           "dynamic": false
         },
         {
           "verb": "postTicketReply",
-          "line": 3437,
+          "line": 3449,
           "dynamic": false
         },
         {
           "verb": "downloadAttachment",
-          "line": 3465,
+          "line": 3477,
           "dynamic": false
         },
         {
           "verb": "viewAttachments",
-          "line": 3495,
+          "line": 3507,
           "dynamic": false
         },
         {
           "verb": "openAttachment",
-          "line": 3547,
+          "line": 3559,
           "dynamic": false
         },
         {
           "verb": "revealAttachment",
-          "line": 3572,
+          "line": 3584,
           "dynamic": false
         },
         {
           "verb": "linearImportTask",
-          "line": 3603,
+          "line": 3615,
           "dynamic": false
         },
         {
           "verb": "clickupImportTask",
-          "line": 3647,
+          "line": 3659,
           "dynamic": false
         },
         {
           "verb": "importAllTickets",
-          "line": 3691,
+          "line": 3703,
           "dynamic": false
         },
         {
           "verb": "syncAllTickets",
-          "line": 3769,
+          "line": 3781,
           "dynamic": false
         },
         {
           "verb": "clickupCreateTask",
-          "line": 3877,
+          "line": 3889,
           "dynamic": false
         },
         {
           "verb": "linearCreateIssue",
-          "line": 3951,
+          "line": 3963,
           "dynamic": false
         },
         {
           "verb": "ticketsAskAgent",
-          "line": 4036,
+          "line": 4048,
           "dynamic": false
         },
         {
           "verb": "applyClickUpConfig",
-          "line": 4080,
+          "line": 4092,
           "dynamic": false
         },
         {
           "verb": "saveClickUpMappings",
-          "line": 4090,
+          "line": 4102,
           "dynamic": false
         },
         {
           "verb": "saveClickUpAutomation",
-          "line": 4099,
+          "line": 4111,
           "dynamic": false
         },
         {
           "verb": "applyLinearConfig",
-          "line": 4108,
+          "line": 4120,
           "dynamic": false
         },
         {
           "verb": "saveLinearAutomation",
-          "line": 4127,
+          "line": 4139,
           "dynamic": false
         },
         {
           "verb": "linearBrowseProjects",
-          "line": 4136,
+          "line": 4148,
           "dynamic": false
         },
         {
           "verb": "enableTriagePipeline",
-          "line": 4176,
+          "line": 4188,
           "dynamic": false
         },
         {
           "verb": "browseIntegrationTicketSaveLocation",
-          "line": 4187,
+          "line": 4199,
           "dynamic": false
         },
         {
           "verb": "saveIntegrationTicketSaveLocation",
-          "line": 4204,
+          "line": 4216,
           "dynamic": false
         },
         {
           "verb": "getIntegrationTicketSaveLocations",
-          "line": 4219,
+          "line": 4231,
           "dynamic": false
         },
         {
           "verb": "getIntegrationSetupStates",
-          "line": 4241,
+          "line": 4253,
           "dynamic": false
         },
         {
           "verb": "getPlanningSources",
-          "line": 4246,
+          "line": 4258,
           "dynamic": false
         },
         {
           "verb": "savePlanningSources",
-          "line": 4261,
+          "line": 4273,
           "dynamic": false
         },
         {
           "verb": "openExternalUrl",
-          "line": 4281,
+          "line": 4293,
           "dynamic": false
         },
         {
           "verb": "copyDiagramPrompt",
-          "line": 4284,
+          "line": 4296,
           "dynamic": false
         },
         {
           "verb": "copyToClipboard",
-          "line": 4287,
+          "line": 4299,
           "dynamic": false
         },
         {
           "verb": "renderMarkdownLive",
-          "line": 4290,
+          "line": 4302,
           "dynamic": false
         },
         {
           "verb": "linearLoadAutomationCatalog",
-          "line": 4293,
+          "line": 4305,
           "dynamic": false
         }
       ]
@@ -2274,307 +2274,307 @@
       "arms": [
         {
           "verb": "renderMarkdownLive",
-          "line": 2494,
+          "line": 2499,
           "dynamic": false
         },
         {
           "verb": "ready",
-          "line": 2515,
+          "line": 2520,
           "dynamic": false
         },
         {
           "verb": "persistTabState",
-          "line": 2572,
+          "line": 2577,
           "dynamic": false
         },
         {
           "verb": "inspectRequestDataUrl",
-          "line": 2584,
+          "line": 2589,
           "dynamic": false
         },
         {
           "verb": "activeTabChanged",
-          "line": 2614,
+          "line": 2619,
           "dynamic": false
         },
         {
           "verb": "setActivePlanningContext",
-          "line": 2632,
+          "line": 2637,
           "dynamic": false
         },
         {
           "verb": "disableDesignDoc",
-          "line": 2664,
+          "line": 2669,
           "dynamic": false
         },
         {
           "verb": "saveFileContent",
-          "line": 2690,
+          "line": 2695,
           "dynamic": false
         },
         {
           "verb": "fetchPreview",
-          "line": 2759,
+          "line": 2764,
           "dynamic": false
         },
         {
           "verb": "copyStitchTweakPrompt",
-          "line": 2842,
+          "line": 2847,
           "dynamic": false
         },
         {
           "verb": "copyDesignSystemPrompt",
-          "line": 2850,
+          "line": 2855,
           "dynamic": false
         },
         {
           "verb": "bindDesignSystemToProject",
-          "line": 2884,
+          "line": 2889,
           "dynamic": false
         },
         {
           "verb": "createDesignSystemTemplate",
-          "line": 2943,
+          "line": 2948,
           "dynamic": false
         },
         {
           "verb": "sendStitchTweakPrompt",
-          "line": 2982,
+          "line": 2987,
           "dynamic": false
         },
         {
           "verb": "copyHtmlTweakPrompt",
-          "line": 3004,
+          "line": 3009,
           "dynamic": false
         },
         {
           "verb": "sendHtmlTweakPrompt",
-          "line": 3012,
+          "line": 3017,
           "dynamic": false
         },
         {
           "verb": "copyClaudeImportPrompt",
-          "line": 3034,
+          "line": 3039,
           "dynamic": false
         },
         {
           "verb": "sendClaudeImportPrompt",
-          "line": 3042,
+          "line": 3047,
           "dynamic": false
         },
         {
           "verb": "copyClaudeArtifactPrompt",
-          "line": 3063,
+          "line": 3068,
           "dynamic": false
         },
         {
           "verb": "sendClaudeArtifactPrompt",
-          "line": 3072,
+          "line": 3077,
           "dynamic": false
         },
         {
           "verb": "linkToDocument",
-          "line": 3096,
+          "line": 3101,
           "dynamic": false
         },
         {
           "verb": "linkToFolder",
-          "line": 3111,
-          "dynamic": false
-        },
-        {
-          "verb": "serveAndOpenHtml",
           "line": 3116,
           "dynamic": false
         },
         {
+          "verb": "serveAndOpenHtml",
+          "line": 3121,
+          "dynamic": false
+        },
+        {
           "verb": "stitchSaveApiKey",
-          "line": 3136,
+          "line": 3141,
           "dynamic": false
         },
         {
           "verb": "stitchSaveAuthConfig",
-          "line": 3162,
+          "line": 3167,
           "dynamic": false
         },
         {
           "verb": "stitchValidateAuth",
-          "line": 3194,
+          "line": 3199,
           "dynamic": false
         },
         {
           "verb": "stitchListDesignSystems",
-          "line": 3226,
+          "line": 3231,
           "dynamic": false
         },
         {
           "verb": "stitchCreateDesignSystem",
-          "line": 3259,
+          "line": 3264,
           "dynamic": false
         },
         {
           "verb": "stitchUpdateDesignSystem",
-          "line": 3294,
+          "line": 3299,
           "dynamic": false
         },
         {
           "verb": "stitchApplyDesignSystem",
-          "line": 3331,
+          "line": 3336,
           "dynamic": false
         },
         {
           "verb": "stitchListProjects",
-          "line": 3405,
+          "line": 3410,
           "dynamic": false
         },
         {
           "verb": "stitchGetProjectScreens",
-          "line": 3474,
+          "line": 3479,
           "dynamic": false
         },
         {
           "verb": "stitchRebuildImageCache",
-          "line": 3572,
+          "line": 3577,
           "dynamic": false
         },
         {
           "verb": "stitchForceReloadScreens",
-          "line": 3617,
+          "line": 3622,
           "dynamic": false
         },
         {
           "verb": "stitchCreateProject",
-          "line": 3692,
+          "line": 3697,
           "dynamic": false
         },
         {
           "verb": "stitchRefreshScreen",
-          "line": 3733,
+          "line": 3738,
           "dynamic": false
         },
         {
           "verb": "stitchOpenManifest",
-          "line": 3748,
+          "line": 3753,
           "dynamic": false
         },
         {
           "verb": "stitchDownloadPalette",
-          "line": 3813,
+          "line": 3818,
           "dynamic": false
         },
         {
           "verb": "listDesignFolders",
-          "line": 3856,
+          "line": 3861,
           "dynamic": false
         },
         {
           "verb": "addDesignFolder",
-          "line": 3863,
+          "line": 3868,
           "dynamic": false
         },
         {
           "verb": "removeDesignFolder",
-          "line": 3880,
+          "line": 3885,
           "dynamic": false
         },
         {
           "verb": "listHtmlFolders",
-          "line": 3891,
+          "line": 3896,
           "dynamic": false
         },
         {
           "verb": "addHtmlFolder",
-          "line": 3898,
+          "line": 3903,
           "dynamic": false
         },
         {
           "verb": "removeHtmlFolder",
-          "line": 3914,
+          "line": 3919,
           "dynamic": false
         },
         {
           "verb": "listClaudeFolders",
-          "line": 3924,
+          "line": 3929,
           "dynamic": false
         },
         {
           "verb": "addClaudeFolder",
-          "line": 3931,
+          "line": 3936,
           "dynamic": false
         },
         {
           "verb": "removeClaudeFolder",
-          "line": 3947,
+          "line": 3952,
           "dynamic": false
         },
         {
           "verb": "stitchHtmlListDocs",
-          "line": 3963,
+          "line": 3968,
           "dynamic": false
         },
         {
           "verb": "refreshDocsForTab",
-          "line": 3983,
+          "line": 3988,
           "dynamic": false
         },
         {
           "verb": "listImagesFolders",
-          "line": 4005,
+          "line": 4010,
           "dynamic": false
         },
         {
           "verb": "addImagesFolder",
-          "line": 4012,
+          "line": 4017,
           "dynamic": false
         },
         {
           "verb": "removeImagesFolder",
-          "line": 4028,
+          "line": 4033,
           "dynamic": false
         },
         {
           "verb": "listStitchFolders",
-          "line": 4039,
+          "line": 4044,
           "dynamic": false
         },
         {
           "verb": "addStitchFolder",
-          "line": 4046,
+          "line": 4051,
           "dynamic": false
         },
         {
           "verb": "removeStitchFolder",
-          "line": 4060,
+          "line": 4065,
           "dynamic": false
         },
         {
           "verb": "stitchPickAttachFiles",
-          "line": 4069,
+          "line": 4074,
           "dynamic": false
         },
         {
           "verb": "stitchGenerate",
-          "line": 4098,
+          "line": 4103,
           "dynamic": false
         },
         {
           "verb": "stitchEdit",
-          "line": 4155,
+          "line": 4160,
           "dynamic": false
         },
         {
           "verb": "stitchVariants",
-          "line": 4212,
+          "line": 4217,
           "dynamic": false
         },
         {
           "verb": "stitchDownloadAsset",
-          "line": 4271,
+          "line": 4276,
           "dynamic": false
         },
         {
           "verb": "stitchPreviewHtml",
-          "line": 4335,
+          "line": 4340,
           "dynamic": false
         }
       ]
@@ -13791,7 +13791,7 @@
       "verb": "error",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2611,
+      "line": 2618,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13803,7 +13803,7 @@
       "verb": "artifactPromptCopied",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3472,
+      "line": 3479,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13815,7 +13815,7 @@
       "verb": "artifactPromptSent",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3484,
+      "line": 3491,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13827,7 +13827,7 @@
       "verb": "chatPromptCopied",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3526,
+      "line": 3533,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13838,7 +13838,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4830,
+      "line": 4837,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13852,7 +13852,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4854,
+      "line": 4861,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13866,7 +13866,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4864,
+      "line": 4871,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13881,7 +13881,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4873,
+      "line": 4880,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13895,7 +13895,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4886,
+      "line": 4893,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13909,7 +13909,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4952,
+      "line": 4959,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": "dynamic"
@@ -13918,7 +13918,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4963,
+      "line": 4970,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13932,7 +13932,7 @@
       "verb": "integrationProviderStates",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 1371,
+      "line": 1383,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -13948,7 +13948,7 @@
       "verb": "ticketsAutoSyncChanged",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 1401,
+      "line": 1413,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -13961,7 +13961,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 1421,
+      "line": 1433,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -13974,7 +13974,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 1430,
+      "line": 1442,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -13987,7 +13987,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 1449,
+      "line": 1461,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14000,7 +14000,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 1480,
+      "line": 1492,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14013,7 +14013,7 @@
       "verb": "clickupApplyResult",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4085,
+      "line": 4097,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": "dynamic"
@@ -14022,7 +14022,7 @@
       "verb": "clickupMappingsSaved",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4094,
+      "line": 4106,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": "dynamic"
@@ -14031,7 +14031,7 @@
       "verb": "clickupAutomationSaved",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4103,
+      "line": 4115,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": "dynamic"
@@ -14040,7 +14040,7 @@
       "verb": "linearApplyResult",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4114,
+      "line": 4126,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": "dynamic"
@@ -14049,7 +14049,7 @@
       "verb": "linearApplyResult",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4119,
+      "line": 4131,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14062,7 +14062,7 @@
       "verb": "linearAutomationSaved",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4131,
+      "line": 4143,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": "dynamic"
@@ -14071,7 +14071,7 @@
       "verb": "linearBrowseProjectsResult",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4139,
+      "line": 4151,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14084,7 +14084,7 @@
       "verb": "linearBrowseProjectsResult",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4160,
+      "line": 4172,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14098,7 +14098,7 @@
       "verb": "linearBrowseProjectsResult",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4168,
+      "line": 4180,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14111,7 +14111,7 @@
       "verb": "triagePipelineResult",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4182,
+      "line": 4194,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": "dynamic"
@@ -14120,7 +14120,7 @@
       "verb": "integrationTicketSaveLocationBrowsed",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4196,
+      "line": 4208,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14133,7 +14133,7 @@
       "verb": "integrationTicketSaveLocations",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4211,
+      "line": 4223,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14146,7 +14146,7 @@
       "verb": "integrationTicketSaveLocations",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4222,
+      "line": 4234,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14159,7 +14159,7 @@
       "verb": "integrationTicketSaveLocations",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4227,
+      "line": 4239,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14172,7 +14172,7 @@
       "verb": "integrationSetupStates",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4243,
+      "line": 4255,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": "dynamic"
@@ -14181,7 +14181,7 @@
       "verb": "planningSources",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4255,
+      "line": 4267,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14193,7 +14193,7 @@
       "verb": "planningSourcesSaved",
       "direction": "push",
       "file": "src/services/TicketsPanelProvider.ts",
-      "line": 4271,
+      "line": 4283,
       "receiver": "pushTo:tickets",
       "provider": "Tickets",
       "payloadKeys": [
@@ -14205,7 +14205,7 @@
       "verb": "stitchElementSelected",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 521,
+      "line": 526,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -14222,7 +14222,7 @@
       "verb": "sbInspectState",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 564,
+      "line": 569,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -14234,7 +14234,7 @@
       "verb": "sbSpacePan",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 583,
+      "line": 588,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -14246,7 +14246,7 @@
       "verb": "sbSpacePan",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 587,
+      "line": 592,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -14258,7 +14258,7 @@
       "verb": "sbSpacePan",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 590,
+      "line": 595,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -14270,7 +14270,7 @@
       "verb": "sbWheel",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 602,
+      "line": 607,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -14286,7 +14286,7 @@
       "verb": "sbContentDims",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 629,
+      "line": 634,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -14299,7 +14299,7 @@
       "verb": "workspaceItemsUpdated",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 741,
+      "line": 746,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14311,7 +14311,7 @@
       "verb": "themeChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 762,
+      "line": 767,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14322,7 +14322,7 @@
       "verb": "cyberAnimationSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 769,
+      "line": 774,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14334,7 +14334,7 @@
       "verb": "cyberScanlinesSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 773,
+      "line": 778,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14346,7 +14346,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 777,
+      "line": 782,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14358,7 +14358,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 781,
+      "line": 786,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14370,7 +14370,7 @@
       "verb": "activeDesignDocUpdated",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2124,
+      "line": 2129,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14382,7 +14382,7 @@
       "verb": "previewRenderStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2402,
+      "line": 2407,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -14399,7 +14399,7 @@
       "verb": "markdownLiveRendered",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2497,
+      "line": 2502,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14413,7 +14413,7 @@
       "verb": "markdownLiveRendered",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2505,
+      "line": 2510,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14428,7 +14428,7 @@
       "verb": "workspaceItemsUpdated",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2528,
+      "line": 2533,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14440,7 +14440,7 @@
       "verb": "restoredTabState",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2532,
+      "line": 2537,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14453,7 +14453,7 @@
       "verb": "stitchApiKeyStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2538,
+      "line": 2543,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14465,7 +14465,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2539,
+      "line": 2544,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14478,7 +14478,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2545,
+      "line": 2550,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14490,7 +14490,7 @@
       "verb": "cyberAnimationSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2546,
+      "line": 2551,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14502,7 +14502,7 @@
       "verb": "cyberScanlinesSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2547,
+      "line": 2552,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14514,7 +14514,7 @@
       "verb": "activeContextSet",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2636,
+      "line": 2641,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14527,7 +14527,7 @@
       "verb": "activeContextSet",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2656,
+      "line": 2661,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14539,7 +14539,7 @@
       "verb": "activeContextSet",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2659,
+      "line": 2664,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14552,7 +14552,7 @@
       "verb": "activeContextSet",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2685,
+      "line": 2690,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14565,7 +14565,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2697,
+      "line": 2702,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14579,7 +14579,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2718,
+      "line": 2723,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14593,7 +14593,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2728,
+      "line": 2733,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14608,7 +14608,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2737,
+      "line": 2742,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14622,7 +14622,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2745,
+      "line": 2750,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14636,7 +14636,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2751,
+      "line": 2756,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14649,7 +14649,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2754,
+      "line": 2759,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14663,7 +14663,7 @@
       "verb": "copyDesignSystemPromptResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2864,
+      "line": 2869,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14676,7 +14676,7 @@
       "verb": "copyDesignSystemPromptResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2876,
+      "line": 2881,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14690,7 +14690,7 @@
       "verb": "copyDesignSystemPromptResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2879,
+      "line": 2884,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14703,7 +14703,7 @@
       "verb": "designSystemBindingChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2931,
+      "line": 2936,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14716,7 +14716,7 @@
       "verb": "designSystemBindingChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2936,
+      "line": 2941,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14730,7 +14730,7 @@
       "verb": "stitchApiKeyStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3153,
+      "line": 3158,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14742,7 +14742,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3154,
+      "line": 3159,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14755,7 +14755,7 @@
       "verb": "stitchApiKeyStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3181,
+      "line": 3186,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14767,7 +14767,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3182,
+      "line": 3187,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14780,7 +14780,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3198,
+      "line": 3203,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14794,7 +14794,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3209,
+      "line": 3214,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14807,7 +14807,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3217,
+      "line": 3222,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14815,19 +14815,6 @@
         "configured",
         "valid",
         "error"
-      ]
-    },
-    {
-      "verb": "stitchError",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3231,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "error",
-        "workspaceRoot"
       ]
     },
     {
@@ -14844,10 +14831,23 @@
       ]
     },
     {
+      "verb": "stitchError",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3241,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "error",
+        "workspaceRoot"
+      ]
+    },
+    {
       "verb": "stitchDesignSystemsReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3252,
+      "line": 3257,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14860,7 +14860,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3255,
+      "line": 3260,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14873,7 +14873,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3261,
+      "line": 3266,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14886,7 +14886,7 @@
       "verb": "stitchDesignSystemCreated",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3285,
+      "line": 3290,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14898,7 +14898,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3288,
+      "line": 3293,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14911,7 +14911,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3296,
+      "line": 3301,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14924,7 +14924,7 @@
       "verb": "stitchDesignSystemUpdated",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3322,
+      "line": 3327,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14936,7 +14936,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3325,
+      "line": 3330,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14949,7 +14949,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3333,
+      "line": 3338,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14962,7 +14962,7 @@
       "verb": "stitchDesignSystemApplied",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3396,
+      "line": 3401,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14974,7 +14974,7 @@
       "verb": "stitchScreensReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3397,
+      "line": 3402,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14987,7 +14987,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3399,
+      "line": 3404,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15000,7 +15000,7 @@
       "verb": "stitchApiKeyStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3409,
+      "line": 3414,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15013,7 +15013,7 @@
       "verb": "stitchProjectsReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3426,
+      "line": 3431,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15029,7 +15029,7 @@
       "verb": "stitchProjectsReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3459,
+      "line": 3464,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15045,7 +15045,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3470,
+      "line": 3475,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15058,7 +15058,7 @@
       "verb": "stitchScreensReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3499,
+      "line": 3504,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15071,7 +15071,7 @@
       "verb": "stitchScreensReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3547,
+      "line": 3552,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15084,7 +15084,7 @@
       "verb": "stitchScreenReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3556,
+      "line": 3561,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15097,7 +15097,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3568,
+      "line": 3573,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15110,7 +15110,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3576,
+      "line": 3581,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15121,19 +15121,6 @@
     },
     {
       "verb": "stitchScreensReady",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3608,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "screens",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
       "line": 3613,
@@ -15141,6 +15128,19 @@
       "provider": "Design",
       "payloadKeys": [
         "type",
+        "screens",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchError",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3618,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
         "error",
         "workspaceRoot"
       ]
@@ -15149,7 +15149,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3621,
+      "line": 3626,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15162,7 +15162,7 @@
       "verb": "stitchScreensReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3682,
+      "line": 3687,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15175,7 +15175,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3688,
+      "line": 3693,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15188,7 +15188,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3697,
+      "line": 3702,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15201,7 +15201,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3701,
+      "line": 3706,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15214,7 +15214,7 @@
       "verb": "stitchProjectsReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3724,
+      "line": 3729,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15229,7 +15229,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3729,
+      "line": 3734,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15242,7 +15242,7 @@
       "verb": "stitchScreenReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3741,
+      "line": 3746,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15255,7 +15255,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3744,
+      "line": 3749,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15268,7 +15268,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3809,
+      "line": 3814,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15281,7 +15281,7 @@
       "verb": "designFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3860,
+      "line": 3865,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15294,7 +15294,7 @@
       "verb": "designFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3877,
+      "line": 3882,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15307,7 +15307,7 @@
       "verb": "designFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3887,
+      "line": 3892,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15320,7 +15320,7 @@
       "verb": "htmlFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3895,
+      "line": 3900,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15333,7 +15333,7 @@
       "verb": "htmlFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3911,
+      "line": 3916,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15346,7 +15346,7 @@
       "verb": "htmlFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3921,
+      "line": 3926,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15359,7 +15359,7 @@
       "verb": "claudeFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3928,
+      "line": 3933,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15372,7 +15372,7 @@
       "verb": "claudeFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3944,
+      "line": 3949,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15385,7 +15385,7 @@
       "verb": "claudeFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3954,
+      "line": 3959,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15398,7 +15398,7 @@
       "verb": "imagesFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4009,
+      "line": 4014,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15411,7 +15411,7 @@
       "verb": "imagesFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4025,
+      "line": 4030,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15424,7 +15424,7 @@
       "verb": "imagesFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4035,
+      "line": 4040,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15437,7 +15437,7 @@
       "verb": "stitchFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4043,
+      "line": 4048,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15450,7 +15450,7 @@
       "verb": "stitchFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4057,
+      "line": 4062,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15463,7 +15463,7 @@
       "verb": "stitchFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4065,
+      "line": 4070,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15476,7 +15476,7 @@
       "verb": "stitchAttachedFilesPicked",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4090,
+      "line": 4095,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15488,7 +15488,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4102,
+      "line": 4107,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15501,7 +15501,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4109,
+      "line": 4114,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15512,19 +15512,6 @@
     },
     {
       "verb": "stitchScreenReady",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 4146,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "screen",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
       "line": 4151,
@@ -15532,6 +15519,19 @@
       "provider": "Design",
       "payloadKeys": [
         "type",
+        "screen",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchError",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 4156,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
         "error",
         "workspaceRoot"
       ]
@@ -15540,7 +15540,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4159,
+      "line": 4164,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15553,7 +15553,7 @@
       "verb": "stitchScreenReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4203,
+      "line": 4208,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15566,7 +15566,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4208,
+      "line": 4213,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15579,7 +15579,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4216,
+      "line": 4221,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15592,7 +15592,7 @@
       "verb": "stitchScreensReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4262,
+      "line": 4267,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15605,7 +15605,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4267,
+      "line": 4272,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15618,7 +15618,7 @@
       "verb": "stitchAssetDownloaded",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4321,
+      "line": 4326,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15632,7 +15632,7 @@
       "verb": "stitchHtmlPreviewError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4332,
+      "line": 4337,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15645,7 +15645,7 @@
       "verb": "stitchHtmlPreviewReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4364,
+      "line": 4369,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -15660,7 +15660,7 @@
       "verb": "stitchHtmlPreviewError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4367,
+      "line": 4372,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -26550,6 +26550,11 @@
       "prefix": false
     },
     {
+      "path": "/auth/mint",
+      "method": "POST",
+      "prefix": false
+    },
+    {
       "path": "/metadata/clickup",
       "method": "GET",
       "prefix": false
@@ -26598,6 +26603,16 @@
       "path": "/teams/create-external",
       "method": "POST",
       "prefix": false
+    },
+    {
+      "path": "/teams/",
+      "method": "GET",
+      "prefix": true
+    },
+    {
+      "path": "/teams/",
+      "method": "POST",
+      "prefix": true
     },
     {
       "path": "/kanban/queue/next",
@@ -26863,6 +26878,11 @@
       "path": "/worktree/list",
       "method": "GET",
       "prefix": false
+    },
+    {
+      "path": "/worktree/",
+      "method": "GET",
+      "prefix": true
     },
     {
       "path": "/orchestrator/session-log",

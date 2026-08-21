@@ -194,6 +194,50 @@ check('platform targeting is supported by the declared engines.vscode floor', ()
     );
 });
 
+// The control plane the extension SEEDS into a user workspace must itself be
+// packaged, or every path the extension emits is dead on arrival. This has already
+// happened once: the skill-injection-cleanup feature moved 33 protocols to
+// `.switchboard/protocols/`, which `.vscodeignore` excludes wholesale — the files
+// existed in the dev repo, so every grep, compile, lint and manual check passed
+// while the shipped artifact contained none of them. Nothing else can see this:
+// the seeding code is correct, the paths are correct, and the only broken thing is
+// membership in the zip. Asserted against the real vsce filter, not by reading
+// `.vscodeignore` (whose negations override ignores regardless of line order).
+check('the .agents control plane the extension seeds WOULD be packaged', () => {
+    const AGENTS = path.join(REPO_ROOT, '.agents');
+    if (!fs.existsSync(AGENTS)) {
+        assert.fail('.agents/ is missing from the repo — it is the seeded control plane and must ship.');
+    }
+    const excluded = walkRel(AGENTS, REPO_ROOT).filter(f => !included(f));
+    assert.deepStrictEqual(
+        excluded, [],
+        `${excluded.length} .agents file(s) would NOT be packaged (e.g. ${excluded.slice(0, 5).join(', ')}). `
+        + 'Everything under .agents/ is seeded into user workspaces by extension.ts and '
+        + 'ControlPlaneMigrationService; a file that does not ship cannot be seeded, and the '
+        + 'extension will emit path references to a file no user has.'
+    );
+});
+
+check('protocol files referenced by path live under a packaged root', () => {
+    // Protocols are delivered by path reference rather than CLI skill discovery, so
+    // there is no discovery-time error to notice when one is absent — the agent is
+    // simply told to read a file that is not there. Pin the two facts that keep the
+    // delivery honest: the directory exists, and it ships.
+    const PROTOCOLS = path.join(REPO_ROOT, '.agents', 'protocols');
+    assert.ok(
+        fs.existsSync(PROTOCOLS),
+        'protocols must live under .agents/protocols/ — .switchboard/** is excluded from the VSIX, '
+        + 'so a protocol placed there ships to nobody.'
+    );
+    const files = walkRel(PROTOCOLS, REPO_ROOT);
+    assert.ok(files.length > 0, '.agents/protocols/ is empty — no protocol would be seeded.');
+    const excluded = files.filter(f => !included(f));
+    assert.deepStrictEqual(
+        excluded, [],
+        `${excluded.length} protocol file(s) would NOT be packaged (e.g. ${excluded.slice(0, 5).join(', ')}).`
+    );
+});
+
 if (failures > 0) {
     console.error(`\n${failures} contract check(s) failed.\n`);
     process.exit(1);
