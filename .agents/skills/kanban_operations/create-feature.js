@@ -159,12 +159,29 @@ async function viaDirectFile() {
   }
   const featureFile = path.join(featuresDir, `${slug}-${featurePlanId}.md`);
 
-  // Query kanban.db if available to resolve plan_file paths and titles
-  let subtaskLines = [];
+  // Resolve every planId to its real plan_file via kanban.db. This is REQUIRED, not
+  // best-effort: the fallback's whole safety argument is that PlanIngestionEngine links
+  // the subtasks it finds in the SUBTASKS block, and it links them by matching
+  // `plan_file`. A guessed path (`../plans/<planId>.md` — plan files are never named
+  // after their planId) matches no row, so ingestion links nothing and we would emit a
+  // feature with zero subtasks while reporting success. That is precisely the
+  // orphaned-feature failure mode the superseded safety note warned about, so an
+  // unresolvable planId is a hard error instead.
+  const subtaskLines = [];
+  const unresolved = [];
+  let db;
   try {
     const { KanbanDatabase } = require('../../../out/services/KanbanDatabase');
-    const db = KanbanDatabase.forWorkspace(workspaceRoot);
+    db = KanbanDatabase.forWorkspace(workspaceRoot);
     await db.ensureReady();
+  } catch (err) {
+    throw new Error(
+      `Offline fallback needs kanban.db to resolve plan file paths, but the database module ` +
+      `could not be loaded (${err.message}). Build the extension (npm run compile-tests) or ` +
+      `start Switchboard so the API path can be used instead.`
+    );
+  }
+  try {
     for (const pid of planIds) {
       const plan = await db.getPlanByPlanId(pid);
       if (plan && plan.planFile) {
@@ -172,17 +189,22 @@ async function viaDirectFile() {
         const topic = plan.topic || basename;
         subtaskLines.push(`- [ ] [${topic}](../plans/${basename})`);
       } else {
-        subtaskLines.push(`- [ ] [${pid}](../plans/${pid}.md)`);
+        unresolved.push(pid);
       }
     }
-    if (typeof db.close === 'function') db.close();
-  } catch {
-    // If KanbanDatabase module unavailable, write basic plan links
-    subtaskLines = planIds.map(pid => `- [ ] [${pid}](../plans/${pid}.md)`);
+  } finally {
+    if (db && typeof db.close === 'function') db.close();
+  }
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Cannot resolve ${unresolved.length} planId(s) to a plan file in kanban.db: ` +
+      `${unresolved.join(', ')}. Pass planId UUIDs from the kanban DB (not filenames); ` +
+      `writing the feature file with unresolvable links would create a feature with no subtasks.`
+    );
   }
 
   const descText = description || `Implementation plan for ${featureName}.`;
-  const subtasksBlock = subtaskLines.length > 0 ? subtaskLines.join('\n') : '- [ ] (no subtasks)';
+  const subtasksBlock = subtaskLines.join('\n');
 
   const content = `---
 description: '${featureName.replace(/'/g, "''")}'

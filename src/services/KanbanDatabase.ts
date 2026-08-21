@@ -2745,23 +2745,52 @@ export class KanbanDatabase {
      * Reconciles database state to match declarative markdown feature file subtask list:
      * - Links unlinked subtasks (feature_id = '' or feature_id = featurePlanId)
      * - Never steals plans belonging to a different feature (cross-feature guard)
+     * - Never demotes a plan that is itself a feature (nested-feature guard)
      * - Unlinks subtasks previously belonging to featurePlanId but no longer in linkedPaths
+     *
+     * `opts.allowUnlink` gates the destructive half. Pass false whenever the caller's
+     * view of the file's subtask list is known to be incomplete — the unlink is derived
+     * from set *difference*, so an under-read block reads as "these were removed" and
+     * would silently destroy live links. Link-only is always safe; unlink is only safe
+     * from a block that was read in full.
      */
-    public async syncFeatureSubtasksByPaths(featurePlanId: string, linkedPaths: string[], workspaceId: string): Promise<void> {
+    public async syncFeatureSubtasksByPaths(
+        featurePlanId: string,
+        linkedPaths: string[],
+        workspaceId: string,
+        opts?: { allowUnlink?: boolean }
+    ): Promise<void> {
         if (!featurePlanId || !(await this.ensureReady()) || !this._db) return;
 
         const normalizedPaths = new Set(linkedPaths.map(p => this._ensureRelativePlanFile(p)));
         const targetPlans: KanbanPlanRecord[] = [];
+        const unresolvedPaths: string[] = [];
 
         for (const normPath of normalizedPaths) {
             const plan = await this.getPlanByPlanFile(normPath, workspaceId);
             if (plan) {
                 targetPlans.push(plan);
+            } else {
+                // Listed but not (yet) imported. The watcher may still be debouncing
+                // the subtask's own file event, so this is not evidence of removal.
+                unresolvedPaths.push(normPath);
             }
         }
 
         // 1. Link plans that match the linkedPaths
         for (const plan of targetPlans) {
+            // Never write is_feature=0 onto a row that is itself a feature. The parser
+            // accepts `./x.md` targets, which resolve into .switchboard/features/, so a
+            // feature file naming a sibling feature reaches here — and updateFeatureStatus
+            // takes is_feature as a positional argument, so linking would demote the
+            // child feature and orphan its own subtasks. Mirrors the same skip in
+            // KanbanProvider.assignPlansToFeature.
+            if (plan.isFeature) {
+                console.warn(
+                    `[KanbanDatabase] syncFeatureSubtasksByPaths: ${plan.planFile} is itself a feature; skipping link to ${featurePlanId} (nested-feature guard)`
+                );
+                continue;
+            }
             if (!plan.featureId || plan.featureId === '' || plan.featureId === featurePlanId) {
                 if (plan.featureId !== featurePlanId) {
                     await this.updateFeatureStatus(plan.planId, 0, featurePlanId);
@@ -2773,12 +2802,25 @@ export class KanbanDatabase {
             }
         }
 
-        // 2. Unlink subtasks previously linked to this feature but removed from linkedPaths
+        // 2. Unlink subtasks previously linked to this feature but removed from linkedPaths.
+        // Skipped when the caller flagged an incomplete read, or when a listed path did not
+        // resolve to a row — in both cases the file describes subtasks this pass cannot see,
+        // so the set difference is not a removal set.
+        if (opts?.allowUnlink === false) return;
+        if (unresolvedPaths.length > 0) {
+            console.warn(
+                `[KanbanDatabase] syncFeatureSubtasksByPaths: ${unresolvedPaths.length} listed path(s) for feature ${featurePlanId} ` +
+                `are not imported yet (${unresolvedPaths.slice(0, 5).join(', ')}); linked what resolved, skipping the unlink pass.`
+            );
+            return;
+        }
         const currentSubtasks = await this.getSubtasksByFeatureId(featurePlanId);
         for (const subtask of currentSubtasks) {
             const normSubtaskFile = this._ensureRelativePlanFile(subtask.planFile);
             if (!normalizedPaths.has(normSubtaskFile)) {
-                await this.updateFeatureStatus(subtask.planId, 0, '');
+                // Preserve is_feature: a nested feature row that ends up carrying this
+                // feature_id must lose the link without losing its feature identity.
+                await this.updateFeatureStatus(subtask.planId, subtask.isFeature ? 1 : 0, '');
             }
         }
     }

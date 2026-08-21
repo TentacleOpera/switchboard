@@ -1815,10 +1815,18 @@ export class PlanIngestionEngine {
         workspaceId: string
     ): Promise<void> {
         try {
+            // The heading fallback is deliberately NOT /m. Under /m, `$` in the
+            // lookahead matches at every end-of-line, so `[\s\S]*?` stops at the
+            // first newline and the capture is the FIRST subtask line only — every
+            // later link then reads as "removed from the file" and gets unlinked.
+            // `(?:^|\n)` keeps the heading line-anchored without the flag (a bare
+            // /##\s*Subtasks/ also matches the literal text inside prose or
+            // backticks — e.g. a feature that documents this very code).
             const subtaskMatch = content.match(/<!-- BEGIN SUBTASKS[\s\S]*?-->([\s\S]*?)<!-- END SUBTASKS/i)
-                || content.match(/^##\s*Subtasks\s*\n([\s\S]*?)(?=\n##|\n<!--|$)/im);
+                || content.match(/(?:^|\n)##[ \t]*Subtasks[ \t]*\r?\n([\s\S]*?)(?=\n##|\n<!--|$)/i);
             if (subtaskMatch && subtaskMatch[1]) {
                 const linkedPaths: string[] = [];
+                const unparsedTargets: string[] = [];
                 for (const line of subtaskMatch[1].split('\n')) {
                     const linkMatch = line.match(/\[([^\]]+)\]\(([^)]+)\)/);
                     if (!linkMatch || !linkMatch[2]) continue;
@@ -1830,11 +1838,25 @@ export class PlanIngestionEngine {
                     } else if (target.startsWith('./')) {
                         target = path.join('.switchboard', 'features', target.slice(2));
                     } else {
+                        // A link we cannot map to a plan path (plan-ID-only, bare
+                        // basename, external URL). Record it: the block lists a
+                        // subtask we cannot see, so the parsed set is not the whole
+                        // truth and must not authorise unlinking.
+                        unparsedTargets.push(target);
                         continue;
                     }
                     linkedPaths.push(target.replace(/\\/g, '/'));
                 }
-                await db.syncFeatureSubtasksByPaths(featurePlanId, linkedPaths, workspaceId);
+                if (unparsedTargets.length > 0) {
+                    this._host.logger.appendLine(
+                        `[GlobalPlanWatcher] _syncFeatureMarkdownSubtasks: feature ${featurePlanId} lists ` +
+                        `${unparsedTargets.length} link(s) in an unsupported shape (${unparsedTargets.slice(0, 5).join(', ')}) — ` +
+                        `linking the ${linkedPaths.length} resolvable one(s) but NOT unlinking, since the parsed set is incomplete.`
+                    );
+                }
+                await db.syncFeatureSubtasksByPaths(featurePlanId, linkedPaths, workspaceId, {
+                    allowUnlink: unparsedTargets.length === 0
+                });
             }
         } catch (err) {
             this._host.logger.appendLine(
