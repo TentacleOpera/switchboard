@@ -48,8 +48,11 @@ const {
     NEW_CODING_HEAD_PROMPT,
     CURRENT_BUGGY_CODING_HEAD_PROMPT,
     PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT,
+    PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT,
     BUGGY_HEADPROMPT_FRAGMENT,
     PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT,
+    PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT,
+    COMMIT_INSTRUCTION_MARKER,
     PRE_REWRITE_CALLBACK_INSTRUCTION,
     STANDING_ORDERS_PREMIGRATION_BAK_KEY
 } = require('../../out/services/teamWiring');
@@ -628,6 +631,102 @@ test('a persisted team-head order carrying the pre-role-boundary headPrompt is r
     assert.strictEqual(row.instruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1'));
     assert.ok(row.instruction.includes('PLAN FILES ARE THE SOURCE OF TRUTH'));
     assert.strictEqual(migrateCodingTeamOrders(out), out, 'the migration is not idempotent');
+});
+
+// ── Commit-instruction fragment + marker: two-copy rule and migration ──
+
+test('PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT exists in exactly two files and is byte-identical', () => {
+    const hostWiringSrc = SRC('services', 'teamWiring.ts');
+    const hostMatch = hostWiringSrc.match(/const PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(hostMatch, 'PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT not found in teamWiring.ts');
+    const hostFragment = hostMatch[1];
+
+    const clientMatch = TERMINALS_JS_SRC.match(/var PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT\s*=\s*'([^']+)'/);
+    assert.ok(clientMatch, 'PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT not found in terminals.js');
+    const clientFragment = clientMatch[1];
+
+    assert.strictEqual(clientFragment, hostFragment,
+        'PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT drifted between teamWiring.ts and terminals.js');
+
+    const carriers = walkSrc()
+        .filter(({ body }) => body.includes(hostFragment))
+        .map(({ rel }) => rel)
+        .sort();
+    assert.deepStrictEqual(carriers,
+        [path.normalize('services/teamWiring.ts'), path.normalize('webview/terminals.js')].sort(),
+        'the pre-commit-instruction fragment must live in exactly two files — the exported '
+        + 'host const and the terminals.js mirror. '
+        + `Found: ${carriers.join(', ')}`);
+});
+
+test('COMMIT_INSTRUCTION_MARKER exists in exactly two files and is byte-identical', () => {
+    const hostWiringSrc = SRC('services', 'teamWiring.ts');
+    const hostMatch = hostWiringSrc.match(/const COMMIT_INSTRUCTION_MARKER\s*=\s*'([^']+)'/);
+    assert.ok(hostMatch, 'COMMIT_INSTRUCTION_MARKER not found in teamWiring.ts');
+    const hostMarker = hostMatch[1];
+
+    const clientMatch = TERMINALS_JS_SRC.match(/var COMMIT_INSTRUCTION_MARKER\s*=\s*'([^']+)'/);
+    assert.ok(clientMatch, 'COMMIT_INSTRUCTION_MARKER not found in terminals.js');
+    const clientMarker = clientMatch[1];
+
+    assert.strictEqual(clientMarker, hostMarker,
+        'COMMIT_INSTRUCTION_MARKER drifted between teamWiring.ts and terminals.js');
+
+    // The marker text appears in the prompt constants too (it is a substring
+    // of the commit instruction), so the two-copy rule applies to the
+    // DECLARATION sites, not every substring occurrence. Verify the
+    // declarations exist in exactly two files.
+    const hostDecl = /const COMMIT_INSTRUCTION_MARKER\s*=/.test(hostWiringSrc);
+    const clientDecl = /var COMMIT_INSTRUCTION_MARKER\s*=/.test(TERMINALS_JS_SRC);
+    assert.ok(hostDecl && clientDecl,
+        'COMMIT_INSTRUCTION_MARKER must be declared in both teamWiring.ts and terminals.js');
+});
+
+test('PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT includes the fragment but NOT the marker', () => {
+    assert.ok(PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT.includes(PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT),
+        'the fragment must appear in the frozen snapshot it is meant to recognise');
+    assert.ok(!PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT.includes(COMMIT_INSTRUCTION_MARKER),
+        'the frozen snapshot must NOT contain the commit marker — it is pre-commit-instruction text');
+});
+
+test('NEW_CODING_HEAD_PROMPT includes the marker (commit instruction was appended)', () => {
+    assert.ok(NEW_CODING_HEAD_PROMPT.includes(COMMIT_INSTRUCTION_MARKER),
+        'NEW_CODING_HEAD_PROMPT must include the commit instruction marker');
+    assert.ok(NEW_CODING_HEAD_PROMPT.includes(PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT),
+        'NEW_CODING_HEAD_PROMPT must still include the fragment (it is a prefix of the new text)');
+});
+
+test('a persisted team-head order carrying the pre-commit-instruction headPrompt is rewritten and idempotent', () => {
+    const installed = PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1');
+    const raw = [{ id: 'o3', parent: 'lead-1', child: '', scope: 'team-head', teamId: 't1', instruction: installed }];
+    const out = migrateCodingTeamOrders(raw);
+    assert.notStrictEqual(out, raw, 'the recogniser did not fire for pre-commit-instruction order');
+    const row = out.find(o => o.id === 'o3');
+    assert.ok(row, 'the rewritten row lost its id');
+    assert.strictEqual(row.instruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead-1'));
+    assert.ok(row.instruction.includes(COMMIT_INSTRUCTION_MARKER),
+        'the rewritten instruction must carry the commit marker');
+    // Idempotent: the marker is now present, so the negative check fails and
+    // the row does not re-match.
+    assert.strictEqual(migrateCodingTeamOrders(out), out, 'the migration is not idempotent — the negative check failed');
+});
+
+test('migrateAgentGroups converts an untouched pre-commit-instruction Coding team', () => {
+    const group = {
+        id: 'g-pci',
+        name: 'Coding',
+        headRole: 'lead',
+        headPrompt: PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT,
+        members: [
+            { role: 'coder', count: 3, scope: 'per-team', relationship: 'reports-to-head' }
+        ]
+    };
+    const out = migrateAgentGroups([group]);
+    assert.ok(out, 'converter returned null on a group that needed converting');
+    assert.strictEqual(out[0].headPrompt, NEW_CODING_HEAD_PROMPT,
+        'the pre-commit-instruction group must be rewritten to the new text');
+    // Idempotent: second pass returns null.
+    assert.strictEqual(migrateAgentGroups(out), null, 'a converted group must not be re-flagged as changed');
 });
 
 // An operator-edited head order must survive untouched. Neither fragment is

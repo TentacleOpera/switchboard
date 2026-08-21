@@ -10756,7 +10756,10 @@
         + 'empty and stop. '
         + 'If your team has NO reviewer seat, do NOT move the card to CODE REVIEWED — that is not your role. '
         + 'Post a finished report to .switchboard/orchestrator/reports/ naming the feature and its planId, '
-        + 'and stop. The card stays where it is.';
+        + 'and stop. The card stays where it is.'
+        + ' When the work is complete, stage the files you changed by explicit path '
+        + '— never `git add -A` or `git add .`. Then create a single commit with a '
+        + 'descriptive message.';
 
     /**
      * Client-side mirror of migrateTeamPairOrders from teamWiring.ts.
@@ -10876,6 +10879,17 @@
         // on disk, so match by indexOf — same as OLD_HEADPROMPT_FRAGMENT and
         // BUGGY_HEADPROMPT_FRAGMENT.
         var PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT = 'then make one call: ';
+        // Mirror of PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT in teamWiring.ts.
+        // Recognises the role-boundary headPrompt before the durable commit
+        // instruction was appended. The fragment is present in both old and new
+        // text, so the rewriter uses a NEGATIVE check: match if the fragment is
+        // present AND COMMIT_INSTRUCTION_MARKER is absent. After rewriting, the
+        // marker is present, so the row does not re-match.
+        var PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT = 'PLAN FILES ARE THE SOURCE OF TRUTH';
+        // Mirror of COMMIT_INSTRUCTION_MARKER in teamWiring.ts. Substring unique
+        // to TEAM_HEAD_COMMIT_INSTRUCTION — the negative-check gate for the
+        // pre-commit-instruction recogniser.
+        var COMMIT_INSTRUCTION_MARKER = 'create a single commit with a descriptive message';
 
         for (var i = 0; i < orders.length; i++) {
             var o = orders[i];
@@ -10901,7 +10915,9 @@
             if (o.scope === 'team-head' && typeof o.instruction === 'string') {
                 if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1
                     || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1
-                    || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1) {
+                    || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1
+                    || (o.instruction.indexOf(PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT) !== -1
+                        && o.instruction.indexOf(COMMIT_INSTRUCTION_MARKER) === -1)) {
                     var newInstruction = NEW_CODING_HEAD_PROMPT_CLIENT
                         .replace(/\{head\}/g, o.parent || '');
                     var copy = {};

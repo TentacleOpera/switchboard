@@ -360,8 +360,8 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         if (value !== null) { headPromptMatches.push(value); }
     }
     assert.strictEqual(
-        headPromptMatches.length, 2,
-        `Expected exactly 2 shipped headPrompts (Coding and Review), found ${headPromptMatches.length}.`
+        headPromptMatches.length, 4,
+        `Expected exactly 4 shipped headPrompts (Coding, Review, Multi-agent planning, Planning with analyst), found ${headPromptMatches.length}.`
     );
     const codingHeadPrompt = headPromptMatches.find(hp => hp.includes('/kanban/dispatch'));
     assert.ok(codingHeadPrompt, 'Coding headPrompt not found among shipped headPrompts');
@@ -526,6 +526,46 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     assert.notStrictEqual(
         preRoleBoundarySnapshot, tsHeadPrompt,
         'PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT must differ from NEW_CODING_HEAD_PROMPT'
+    );
+
+    // ── commit instruction assertions ───────────────────────────────
+    // The durable commit instruction (TEAM_HEAD_COMMIT_INSTRUCTION) is
+    // appended to both NEW_CODING_HEAD_PROMPT and NEW_REVIEW_TEAM_HEAD_PROMPT.
+    // The frozen pre-commit-instruction snapshots must NOT contain it.
+    const commitInstructionText = 'create a single commit with a descriptive message';
+    assert.ok(
+        tsHeadPrompt.includes(commitInstructionText),
+        'NEW_CODING_HEAD_PROMPT must include the durable commit instruction text'
+    );
+    assert.ok(
+        tsReviewHeadPrompt.includes(commitInstructionText),
+        'NEW_REVIEW_TEAM_HEAD_PROMPT must include the durable commit instruction text'
+    );
+
+    const preCommitCodingAnchor = /PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
+    assert.ok(preCommitCodingAnchor, 'PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT not found in teamWiring.ts');
+    const preCommitCodingSnapshot = readQuotedChain(TEAM_WIRING_SRC, preCommitCodingAnchor.index + preCommitCodingAnchor[0].length);
+    assert.ok(preCommitCodingSnapshot, 'could not read PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT as a quoted chain');
+    assert.ok(
+        !preCommitCodingSnapshot.includes(commitInstructionText),
+        'PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT is a frozen snapshot — the commit instruction must NOT be in it'
+    );
+    assert.notStrictEqual(
+        preCommitCodingSnapshot, tsHeadPrompt,
+        'PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT must differ from NEW_CODING_HEAD_PROMPT'
+    );
+
+    const preCommitReviewAnchor = /PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
+    assert.ok(preCommitReviewAnchor, 'PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT not found in teamWiring.ts');
+    const preCommitReviewSnapshot = readQuotedChain(TEAM_WIRING_SRC, preCommitReviewAnchor.index + preCommitReviewAnchor[0].length);
+    assert.ok(preCommitReviewSnapshot, 'could not read PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT as a quoted chain');
+    assert.ok(
+        !preCommitReviewSnapshot.includes(commitInstructionText),
+        'PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT is a frozen snapshot — the commit instruction must NOT be in it'
+    );
+    assert.notStrictEqual(
+        preCommitReviewSnapshot, tsReviewHeadPrompt,
+        'PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT must differ from NEW_REVIEW_TEAM_HEAD_PROMPT'
     );
 });
 
