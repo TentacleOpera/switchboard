@@ -149,7 +149,13 @@ async function makeProvider(tmpRoot, fleetLiveness, db) {
         const keys = Object.keys(g).sort();
         assert.deepStrictEqual(
             keys,
-            ['externalHead', 'headRole', 'id', 'layout', 'members', 'name', 'order', 'source', 'teamGroup'].sort(),
+            // `head` and `teamKind` are the identity pair wireSpawnedTeam always
+            // writes: `head` is the DECLARED head name (never inferred from
+            // order[0], which the operator can reorder), and `teamKind:'spawned'`
+            // is the positive marker isSpawnedTeamGroup reads first. `teamGroup`
+            // is the legacy flag migrateTeamGroupFlags backfills on older rows.
+            ['externalHead', 'head', 'headRole', 'id', 'layout', 'members', 'name',
+                'order', 'source', 'teamGroup', 'teamKind'].sort(),
             `persisted group must carry exactly these keys (got ${JSON.stringify(keys)}); a future writer that adds or drops a field must update this gate`);
     });
 

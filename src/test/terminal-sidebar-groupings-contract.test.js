@@ -482,9 +482,14 @@ test('the locked free-slot precondition matches what assignToFocusedPane will ac
 
 test('setLayoutMode drops the lock unless keepLock is set', () => {
     const fn = block(terminalsJs, 'function setLayoutMode(', 'function locateTerminal(');
+    // Pinned to the full condition, not a prefix: `&& !teamScopeId` is the third
+    // term team-scoped mode added, and a prefix match would also accept a fourth
+    // term that disables the guard outright. Add a term here deliberately or not
+    // at all.
     assert.ok(
-        fn.includes('if (activeGroupId && !opts.keepLock)'),
-        'setLayoutMode must exit the lock when keepLock is not set'
+        fn.includes('if (activeGroupId && !opts.keepLock && !teamScopeId)'),
+        'setLayoutMode must exit the lock when keepLock is not set (and must not '
+        + 'drop the team scope, which IS the lock in team-scoped mode)'
     );
 });
 

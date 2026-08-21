@@ -37,6 +37,8 @@ const {
     mutateTerminalGroups,
     saveTerminalGroupsGuarded,
     wireSpawnedTeam,
+    migrateTeamGroupFlags,
+    isSpawnedTeamGroup,
 } = require('../../out/services/teamWiring');
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -91,6 +93,16 @@ function makeScopedSettings(seed) {
 const group = (id, extra) => Object.assign({
     id, name: id, source: 'manual', layout: '1x2', members: [id], order: [id],
 }, extra);
+
+/** Slice a named source span out of a webview file so an assertion cannot pass
+ *  on a coincidental match elsewhere in a 12k-line panel. */
+function block(code, startMarker, endMarker) {
+    const start = code.indexOf(startMarker);
+    assert.ok(start !== -1, `marker not found: ${startMarker}`);
+    const end = code.indexOf(endMarker, start);
+    assert.ok(end !== -1, `end marker not found: ${endMarker}`);
+    return code.substring(start, end);
+}
 
 // ── 1. One key, addressed one way ──────────────────────────────────────────
 
@@ -396,6 +408,129 @@ async function item5() {
     });
 }
 
+// ── 6. Team groups are Teams-tab-only — the sidebar cannot inject into them ──
+
+async function item6() {
+    console.log('\n── Item 6: team membership is Teams-tab-only ──');
+
+    await test('migrateTeamGroupFlags flags team_ rows, spares grp_ rows, and is idempotent', () => {
+        const out = migrateTeamGroupFlags([
+            group('team_lead_1'),
+            group('grp_1755000000000_ab12c'),
+        ]);
+        assert.ok(out !== null, 'an unflagged team_ row must produce a converted array');
+        assert.strictEqual(out[0].teamGroup, true, 'the team_ row must be flagged');
+        assert.strictEqual(
+            out[1].teamGroup, undefined,
+            'a grp_ row is a hand-saved selection — flagging it would freeze a manual '
+            + 'group the operator is entitled to edit from the sidebar'
+        );
+        assert.strictEqual(
+            migrateTeamGroupFlags(out), null,
+            'a second pass must return null so the caller does not write — the migration '
+            + 'runs on every mutateTerminalGroups call and must not churn the row'
+        );
+        assert.strictEqual(migrateTeamGroupFlags([]), null, 'empty in, null out');
+        assert.strictEqual(migrateTeamGroupFlags(null), null, 'non-array in, null out');
+    });
+
+    await test('mutateTerminalGroups persists the flag even when the transform is a no-op', async () => {
+        // The whole install base has unflagged team_ rows. If the migration only
+        // landed alongside an unrelated edit, every guard below would stay dark
+        // on exactly the machines that have the bug.
+        const db = makeInMemoryDb({
+            [TERMINALS_GROUPS_KEY]: [group('team_lead_1'), group('grp_x')],
+        });
+        await mutateTerminalGroups({ db }, (current) => current);
+        const stored = await db.getConfigJson(TERMINALS_GROUPS_KEY, []);
+        assert.strictEqual(
+            stored.find(g => g.id === 'team_lead_1').teamGroup, true,
+            'an identity transform must still persist the migrated flag'
+        );
+        assert.strictEqual(
+            stored.find(g => g.id === 'grp_x').teamGroup, undefined,
+            'the manual group must come back untouched'
+        );
+    });
+
+    await test('isSpawnedTeamGroup is the seam: teamKind alone is enough, grp_ never matches', () => {
+        assert.strictEqual(
+            isSpawnedTeamGroup({ id: 'anything', teamKind: 'spawned' }), true,
+            'teamKind is the positive marker and must not require the legacy flag'
+        );
+        assert.strictEqual(
+            isSpawnedTeamGroup(group('team_lead_1', { teamGroup: true })), true,
+            'a legacy flagged team_ row is still a team'
+        );
+        assert.strictEqual(
+            isSpawnedTeamGroup(group('grp_1', { teamGroup: true })), false,
+            'a grp_ id is a hand-saved selection even if something stamped the flag'
+        );
+        assert.strictEqual(isSpawnedTeamGroup(null), false, 'null is not a team');
+    });
+
+    await test('the panel guards route through isSpawnedTeamGroup, not a bare teamGroup test', () => {
+        // A bare `g.teamGroup` test waves a `teamKind:'spawned'` row straight
+        // past the guard. Pin all three call sites to the seam.
+        const addFn = block(terminalsJs, 'function addTerminalToActiveGroup(', 'function handleLockedTerminalClick(');
+        assert.ok(
+            /if \(isSpawnedTeamGroup\(group\)\) \{ return; \}/.test(addFn),
+            'addTerminalToActiveGroup must refuse team groups via isSpawnedTeamGroup — '
+            + 'injecting a terminal into a team hands it the team standing orders on every prompt'
+        );
+        assert.ok(
+            !/if \(group\.teamGroup\)/.test(addFn),
+            'addTerminalToActiveGroup must not test the legacy flag directly'
+        );
+        const isTeamFn = block(terminalsJs, 'function isTeamGroup(', 'function sortGroups(');
+        assert.ok(
+            /isSpawnedTeamGroup\(/.test(isTeamFn) && !/g\.teamGroup/.test(isTeamFn),
+            'isTeamGroup must delegate to the seam rather than re-testing the flag'
+        );
+        assert.ok(
+            terminalsJs.includes('if (group && !isSpawnedTeamGroup(group)) {'),
+            'the pane-unassign path must skip team groups — unassigning a pane is a '
+            + 'layout action, never a team-membership edit'
+        );
+        assert.ok(
+            !/\{ *return g\.teamGroup === true *\}/.test(terminalsJs),
+            'no second bare-flag predicate may reappear'
+        );
+    });
+
+    await test('handleLockedTerminalClick falls through instead of seating under a team lock', () => {
+        const fn = block(terminalsJs, 'function handleLockedTerminalClick(', 'function promoteGroupMember(');
+        const guardIdx = fn.indexOf('if (!isTeamGroup(activeGroupId)) {');
+        assert.ok(guardIdx !== -1, 'the free-slot branch must gate on isTeamGroup');
+        const addIdx = fn.indexOf('addTerminalToActiveGroup(name)');
+        const seatIdx = fn.indexOf('assignToFocusedPane(name, { keepLock: true })');
+        assert.ok(
+            guardIdx < addIdx && guardIdx < seatIdx,
+            'the guard must precede BOTH the add and the keepLock seat — letting the seat '
+            + 'run alone puts a non-member in a pane under the lock, and the next '
+            + 'seatActiveGroupPage reconcile evicts it (a visible flicker that reads as a bug)'
+        );
+        assert.ok(
+            /activeGroupId = null;/.test(fn.slice(seatIdx)),
+            'the fall-through must reach the lock-drop path so the click is never dead'
+        );
+    });
+
+    await test('both client load paths stamp the flag — the guards cannot read an unflagged row', () => {
+        // isSpawnedTeamGroup's legacy arm requires the flag. That is only safe
+        // because every read path backfills it on arrival.
+        const load = block(terminalsJs, 'async function loadLayoutSettings(', 'async function reloadTerminalGroups(');
+        const reload = block(terminalsJs, 'async function reloadTerminalGroups(', 'function getDerivedGroups(');
+        for (const [label, src] of [['loadLayoutSettings', load], ['reloadTerminalGroups', reload]]) {
+            assert.ok(
+                /startsWith\('team_'\) && !g\.teamGroup/.test(src)
+                && /\{ \.\.\.g, teamGroup: true \}/.test(src),
+                `${label} must stamp teamGroup on team_-prefixed rows as they load`
+            );
+        }
+    });
+}
+
 (async () => {
     console.log('Terminal groups key-unification contract');
     await item1();
@@ -403,6 +538,7 @@ async function item5() {
     await item3();
     await item4();
     await item5();
+    await item6();
     console.log(`\n${passed} passed, ${failed} failed`);
     process.exit(failed === 0 ? 0 : 1);
 })();

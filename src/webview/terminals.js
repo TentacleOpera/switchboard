@@ -833,8 +833,8 @@
         // The .sidebar-title click handler that silently called clearGroupLock()
         // is gone too: it was a third, unlabelled way to drop the lock, and with
         // updateLockIndicator removed the title no longer changes on lock/unlock
-        // so there was nothing suggesting it was clickable. The "All" tab in the
-        // group tab strip is the single, visible way to drop the lock now.
+        // so there was nothing suggesting it was clickable. The "Unassigned" tab
+        // in the group tab strip is the single, visible way to drop the lock now.
 
         const btnNewWindow = document.getElementById('btn-new-window');
         if (btnNewWindow) {
@@ -1564,7 +1564,19 @@
 
     /** Whether a terminals.groups row is a spawned team (not a hand-saved
      *  selection). Mirrors isSpawnedTeamGroup in teamWiring.ts: teamKind
-     *  'spawned' OR legacy team_-prefixed + teamGroup flag. */
+     *  'spawned' OR legacy team_-prefixed + teamGroup flag.
+     *
+     *  THE single seam for "is this a real team?" on this panel — the sole
+     *  declaration in this IIFE (a second one further down was deleted; it
+     *  hoisted over this body and won). Every consumer, guards included, must
+     *  call this rather than testing `g.teamGroup` alone: a row carrying
+     *  `teamKind: 'spawned'` without the legacy flag is still a team, and a
+     *  bare-flag test would wave it straight past the sidebar guards.
+     *
+     *  Requiring the flag on the legacy arm is safe here because BOTH client
+     *  load paths (loadLayoutSettings, reloadTerminalGroups) stamp
+     *  `teamGroup: true` onto every team_-prefixed row as it lands, and
+     *  derived groups are `dg_`-prefixed so they can never match. */
     function isSpawnedTeamGroup(g) {
         if (!g || typeof g !== 'object') { return false; }
         if (g.teamKind === 'spawned') { return true; }
@@ -2172,8 +2184,8 @@
                             // Role grouping is off, so getDerivedGroups emits no role tab at all and
                             // this id can never resolve. switchToGroup would early-return and leave
                             // the panel soft-dead: no active tab, an inert seatActiveGroupPage, and
-                            // a dead empty-pane fill. clearGroupLock re-seats from the live fleet
-                            // honouring pins, and saves.
+                            // a dead empty-pane fill. clearGroupLock re-seats from the UNASSIGNED
+                            // live fleet honouring pins, and saves.
                             //
                             // Deliberately NOT "any unresolved dg_role_ id": with role grouping ON,
                             // an absent group means the location is merely below threshold, and
@@ -3281,9 +3293,12 @@
         return sortGroups([...terminalGroups, ...getDerivedGroups()]);
     }
 
+    /** Whether the given group id names a spawned team. Routes through
+     *  isSpawnedTeamGroup, NOT a bare `g.teamGroup` test: a row written with
+     *  `teamKind: 'spawned'` but no legacy flag is a team, and testing the flag
+     *  alone would let the sidebar guards below wave it through. */
     function isTeamGroup(groupId) {
-        const g = getAllGroups().find(g => g.id === groupId);
-        return !!(g && g.teamGroup);
+        return isSpawnedTeamGroup(getAllGroups().find(g => g.id === groupId));
     }
 
     function sortGroups(groups) {
@@ -3439,7 +3454,7 @@
         // the Teams tab). The sidebar must not inject terminals into a team —
         // doing so causes the terminal to receive the team's standing orders on
         // every prompt, making it believe it is a team member.
-        if (group.teamGroup) { return; }
+        if (isSpawnedTeamGroup(group)) { return; }
         if (group.source === 'manual') {
             if (!group.members) { group.members = []; }
             if (!group.members.includes(name)) { group.members.push(name); }
@@ -5884,7 +5899,7 @@
             // is not in scope.
             if (activeGroupId) {
                 const group = getAllGroups().find(g => g.id === activeGroupId);
-                if (group && !group.teamGroup) {
+                if (group && !isSpawnedTeamGroup(group)) {
                     if (group.source !== 'manual' && groupPrefs.extras && Array.isArray(groupPrefs.extras[activeGroupId])) {
                         groupPrefs.extras[activeGroupId] = groupPrefs.extras[activeGroupId].filter(n => n !== targetName);
                     } else if (group.source === 'manual' && Array.isArray(group.members)) {
@@ -10507,14 +10522,14 @@
 
     // ── Team-scoped mode helpers ──────────────────────────────────────────
 
-    /** Client-side mirror of `isSpawnedTeamGroup` from `teamWiring.ts`.
-     *  A manual group with a `team_`-prefixed id is a spawned team; the
-     *  `teamGroup` flag is stamped on load for legacy rows that predate it. */
-    function isSpawnedTeamGroup(g) {
-        if (!g || typeof g.id !== 'string') { return false; }
-        if (g.teamKind === 'spawned') { return true; }
-        return g.id.startsWith('team_') && g.source === 'manual';
-    }
+    // isSpawnedTeamGroup is NOT redeclared here. A second `function
+    // isSpawnedTeamGroup` in this same IIFE used to live at this spot, and
+    // because function declarations hoist, THAT one silently won for all eight
+    // call sites — including the seven above it, which a reader would attribute
+    // to the definition near getAgentGroupsCache. The two bodies had different
+    // predicates (`teamGroup && team_` vs `team_ && source==='manual'`), so the
+    // dead one documented behaviour the program never ran. One definition only,
+    // declared once, mirroring teamWiring.ts.
 
     /** Client-side mirror of `teamHeadName` from `teamWiring.ts`.
      *  Reads the explicit `head` field on the group record, falling back to

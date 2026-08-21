@@ -82,10 +82,17 @@ test('compareTerminals encodes the documented total order', () => {
 
 test('renderSidebarList sorts before iterating', () => {
     const render = block(terminalsJs, 'function renderSidebarList() {', 'for (const item of directSplit.loose) {');
-    assert.ok(/group\.direct\.sort\(compareTerminals\)/.test(render),
+    // The comparator is `teamComparator`, not bare `compareTerminals`: team-scoped
+    // mode honours the group's authored `order` first and falls back to
+    // compareTerminals. Assert both halves — a teamComparator that stopped
+    // delegating would silently drop role ordering for every unscoped view.
+    assert.ok(/group\.direct\.sort\(teamComparator\)/.test(render),
         'direct terminals must sort before rendering');
-    assert.ok(/wtGroup\.items\.sort\(compareTerminals\)/.test(render),
+    assert.ok(/wtGroup\.items\.sort\(teamComparator\)/.test(render),
         'worktree terminals must sort before rendering');
+    assert.ok(/return compareTerminals\(a, b\);/.test(render),
+        'teamComparator must fall back to compareTerminals — role ordering is the '
+        + 'default the scoped `order` only overrides');
     assert.ok(/bucketRowsByTeam\(parentGroup\.direct, claimMap\)/.test(render),
         'direct rows must be bucketed by team AFTER sorting — bucketing preserves input order, so a bucket built from an unsorted run is unsorted');
 });
@@ -100,8 +107,16 @@ test('fetchKanbanColumnStructure sends no workspaceRoot and shares body', () => 
 });
 
 test('init wires window focus bypass and boot fetch', () => {
-    const initFn = block(terminalsJs, 'function init() {', 'function postFleetStateToShell() {');
-    assert.ok(/window\.addEventListener\('focus', \(\) => fetchKanbanColumnStructure\(true\)\)/.test(initFn),
+    // The listener is no longer the one-line arrow it was: it grew a
+    // renderer-resync arm (visibilitychange does not fire on same-browser window
+    // blur/focus). Assert the bypassed refetch is still the FIRST thing it does,
+    // which is the behaviour this gate exists for — not the arrow shape.
+    const focusListener = block(
+        terminalsJs,
+        "window.addEventListener('focus', () => {",
+        'for (const entry of terminalsMap.values()) {'
+    );
+    assert.ok(/fetchKanbanColumnStructure\(true\);/.test(focusListener),
         'focus must refetch with throttle bypassed');
 });
 

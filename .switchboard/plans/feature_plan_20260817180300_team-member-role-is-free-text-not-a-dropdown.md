@@ -282,3 +282,7 @@ Implemented role `<select>` dropdown for team member rows and head role picker u
 
 **Issues Encountered:**
 - None. DOM parsing and data-field addressing verified.
+
+## Review Findings
+
+Reviewed as implemented in `src/webview/kanban.html`: `teamsTabRoleOptions` is built at call time, the member row and head select are both `<select>`s addressed by `data-field`, `teamsTabSaveAgentGroup` reads by field with a `console.warn` on a malformed row, and the unknown-role `(not configured)` preserve path is present — no code changes were required. One deliberate deviation from the plan: the roster is filtered by `ROLE_KEYS` rather than raw `BUILT_IN_AGENT_LABELS`, which drops `jules`; verified correct, since `jules` is the Jules Monitor (`role: 'jules_monitor'`) and is absent from `DEFAULT_ROLE_CONFIG`, so offering it would author a seat that cannot boot a CLI — the plan's manual step 1 listing "Jules" is the stale half. Contract coverage exists and passes in `src/test/standalone-agent-team-isolation-contract.test.js` (CI-wired as `test:contract:standalone-agent-isolation`), despite the plan declaring no automated tests apply; `parity:check`, `push-routing:check` and `verb-returns:check` all pass and are CI-invoked. Remaining risk is cosmetic only: a `customAgents` message landing while the form is open leaves the head select's optgroup stale until reopen (the plan's explicitly optional mitigation), and a role that is both claimed and unknown renders `x (not configured) (claimed)`.
