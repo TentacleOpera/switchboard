@@ -19,7 +19,7 @@ Broken down by section (measured on `AGENTS.md`, the actual injected source):
 | 🏗️ Switchboard Global Architecture | 1,182 | No — orientation diagram, not routing |
 | 📌 Memo Capture Mode — Priority Rule | 1,122 | No — only inside memo capture |
 | 📂 Workspace Detection for Plan Creation | 1,013 | No — only while authoring a plan |
-| ⚠️ MANDATORY PRE-FLIGHT CHECK | 913 | **Yes** — routing discipline |
+| ⚠️ MANDATORY PRE-FLIGHT CHECK | 913 | **Mostly** — step 4 (~250) is not routing; see below |
 | 🚨 STRICT PROTOCOL ENFORCEMENT | 804 | **Yes** — the framing the registry depends on |
 | Execution Rules | 593 | **Yes** — routing |
 | Code-Level Enforcement | 341 | **Yes** — small, and it is a hard constraint |
@@ -27,6 +27,16 @@ Broken down by section (measured on `AGENTS.md`, the actual injected source):
 **The distinction that matters is resident-routing versus action-reference.** A block injected into a user's instruction file has to be resident because the agent cannot know whether the *next* message triggers a workflow. That argument applies to the registry, the pre-flight check, and the execution rules. It does not apply to anything that only matters *while* an action is underway, because at that moment a protocol or workflow file is already being read.
 
 Four sections are action-reference: plan authoring, workspace detection, memo-capture priority, and project pinning. Each has a natural home. Plan authoring and workspace detection belong in `improve-plan` (already read by the planner) and in the cloud and remote workflows (already read on entry). Memo-capture priority belongs in `switchboard-memo.md`, which is by definition open when capture mode is active.
+
+**Step 4 of the pre-flight check is not a routing rule and should not be resident.** The section as a whole earns its place, and step 2 in particular is the only part that *must* be resident: it is a suppression rule — do not auto-trigger on "review this", "delegate this", "quick start" — and suppression cannot live in a file, because there is nothing to load at the moment you decide not to load something. Steps 1, 3 and 5 are the routing skeleton around it.
+
+Step 4 is different. It reads:
+
+> **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `query-kanban` skill (read `.switchboard/workspace-id` for ID and DB path, then query with sqlite3) to instantly identify the target plans.
+
+Two problems. First, it is an efficiency hint naming implementation details — the workspace-id file, the DB path, `sqlite3` — which the global-database plan invalidates: once `kanban.db` moves to `~/.switchboard`, "read `.switchboard/workspace-id` for the DB path" is wrong, and wrong silently. Second, `query-kanban` is `invocation: 'no-user'`, so the model already discovers it, and the skill's own text carries the schema reference and query templates. This is a resident duplicate of what arrives on load, and it is the same pattern this plan removes elsewhere: implementation detail held resident for an action that is not happening.
+
+Cut step 4 to a routing-shaped clause with no paths in it — "column and board-state questions: use the `query-kanban` skill" — and let the skill carry its own mechanics. Roughly 250 of the section's 913 chars.
 
 **Project pinning is the largest section in the file, and the responsibility it documents should not be the agent's at all.** 2,785 chars — a fifth of the entire payload — instruct an agent on how to transcribe board state into a plan file, where the extension already read that state at prompt-generation time and reads the same config key again as the importer's fallback (`_resolveProjectForInsert` precedence #2, `KanbanDatabase.ts:2242`). A board-level sticky-project toggle removes the transport step and the rules that guard it; see `replace-agent-project-pinning-with-a-sticky-ui-setting.md`. Nothing needs relocating, because nothing needs saying.
 
@@ -91,6 +101,7 @@ Yes — two decisions.
 
 ## Dependencies
 
+- **Protects against** the global-database plan: pre-flight step 4 hardcodes `.switchboard/workspace-id` as the DB-path source, which that plan invalidates. Cutting it here removes a silent-staleness dependency between the two.
 - **Requires** `replace-agent-project-pinning-with-a-sticky-ui-setting.md` for the largest single reduction (2,785 chars). That plan can ship independently; this one's size gate assumes it has.
 - **Interacts with** the protocols-as-rows plan: the tracker-synced context document is one of the destinations for relocated plan-authoring rules, and that plan is what establishes the sync as a delivery tier.
 - **Independent of** the storage programme otherwise. Can ship on its own.
@@ -110,9 +121,10 @@ Yes — two decisions.
 1. **`AGENTS.md`: Plan Project Pinning deleted in full** — owned by `replace-agent-project-pinning-with-a-sticky-ui-setting.md`, which removes the directive the section exists to explain. Nothing relocates; the responsibility leaves the agent entirely.
 2. **Memo Capture priority rule → `.agents/workflows/switchboard-memo.md`**, replaced by one line in the registry noting that capture mode overrides default behaviour while active.
 3. **Plan Authoring & Problem Analysis + Workspace Detection → `improve-plan/SKILL.md`**, plus every other plan-authoring entry point enumerated first (`switchboard-cloud.md`, the remote flow's tracker context, memo processing).
-4. **Switchboard Global Architecture diagram removed** from the injected block; `ARCHITECTURE.md` retains it.
-5. **Available Skills table**: confirm host self-discovery on Antigravity; remove if redundant, otherwise keep and note it as the case for a per-host split.
-6. **Regenerate** the managed block and confirm the emitted size.
+4. **Pre-flight step 4 reduced to a routing clause** — name the skill, drop the paths and the `sqlite3` mechanic. The skill is `no-user` so the model already discovers it, and its own text carries the schema and templates. This also removes a line the global-database plan would otherwise silently falsify.
+5. **Switchboard Global Architecture diagram removed** from the injected block; `ARCHITECTURE.md` retains it.
+6. **Available Skills table**: confirm host self-discovery on Antigravity; remove if redundant, otherwise keep and note it as the case for a per-host split.
+7. **Regenerate** the managed block and confirm the emitted size.
 
 ### Migration
 
@@ -131,6 +143,8 @@ None. The block is regenerated from `AGENTS.md` on sync; shorter output replaces
 - **Size gate:** assert the emitted managed block is under the threshold, so the block cannot silently regrow. This is the test that keeps the reduction from being undone by the next individually-justified addition.
 - **Coverage:** for each relocated rule, assert it appears in every enumerated authoring path — `improve-plan`, `switchboard-cloud.md`, the tracker-synced context template, memo processing.
 - **No dangling pointers:** assert every path named in the resident block resolves in a bare clone.
+- **No filesystem paths in the pre-flight check:** assert the section names no path, so the global-database plan's relocation of `kanban.db` cannot falsify it. This is the specific way step 4 would have rotted.
+- **Column questions still route:** ask a column-state question and assert the agent reaches `query-kanban`, with the skill supplying the DB mechanics rather than the resident block.
 - **Marker integrity:** regenerate over an existing longer block and assert exactly one clean marker pair remains, exercising `stripProtocolMarkers`.
 - **Plan authoring still works:** author a plan via `/switchboard-cloud` and via the planner path; assert both produce the required sections and a correct project pin from a directive.
 - **Duplicate schema copies:** assert `SparkContextExporter.ts:201` and `TaskViewerProvider.ts:6538` either reference the single source or are updated in lockstep — they are independent restatements today.
