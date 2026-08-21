@@ -22,6 +22,7 @@ Deliberately **not** a networked database of any kind. The measured dialect coup
 - **Retention and archive policy for a global database that never gets deleted**: consolidation plus long-term persistence removes both mechanisms that used to bound database size. Ships size reporting first, then a rotation policy for the four append-only tables, with dormant-workspace archival — non-destructive throughout.
 - **Retire the Google Drive, Dropbox and iCloud database-path presets**: a file-sync folder cannot hold a database that is rewritten whole on every write, and the codebase already names "stale image restored from a .tmp/backup" as the cause of its blank-board failure. Migrates anyone currently on a preset into the global store and removes the mechanism.
 - **Get the control-plane scaffold out of the repository**: the one the user actually feels. `.agents/` (744K, ~51 files) and the `.claude/` mirror (152K) are extension-shipped content, byte-identical in every workspace, and committed — neither appears in `.gitignore`. Makes the store authoritative for control-plane definitions and the on-disk tree a gitignored, regenerated projection, because agent hosts discover capability by globbing the filesystem rather than calling an API. Also relocates seven machine-local JSON config files into the `config` table and moves the caches out of the repo. Independent of the engine work, so it could ship first.
+- **Protocols become database rows injected into prompts**: the proof that the `control_plane` table can hold real, load-bearing content. The 32 protocols (424K) are UI-triggered instructions the extension delivers — nothing discovers them by globbing, and in the content-injection case the extension already reads the file itself, so a row read is a drop-in substitution. Removes the files rather than relocating them, which is what the earlier `move-protocols-out-of-skill-discovery` plan intended before its destination proved unshippable. Delivery becomes a per-protocol column (`inline` for small bodies, `materialize` to a hash-keyed home cache for the 44KB ones), forced to `inline` for remote hosts that cannot read a local cache.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
@@ -33,6 +34,7 @@ Deliberately **not** a networked database of any kind. The measured dialect coup
 - [ ] [Retention and archive policy for a global database that never gets deleted](../plans/retention-and-archive-for-unbounded-growth.md)
 - [ ] [Retire the Google Drive, Dropbox and iCloud database-path presets](../plans/retire-cloud-file-sync-db-path-presets.md)
 - [ ] [Get the control-plane scaffold out of the repository](../plans/control-plane-scaffold-out-of-the-repo.md)
+- [ ] [Protocols become database rows injected into prompts, not files scaffolded into every repo](../plans/protocols-as-db-rows-not-scaffolded-files.md)
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

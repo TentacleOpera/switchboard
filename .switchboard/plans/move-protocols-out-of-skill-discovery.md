@@ -1,5 +1,20 @@
 # Move Protocols Out of Skill Discovery
 
+> **SUPERSEDED (destination only) — do NOT re-implement the file move.**
+> This plan's intent (get non-discoverable protocols out of skill discovery) was achieved.
+> Its destination was not: `.switchboard/protocols/` cannot ship (`.vscodeignore` excludes
+> `.switchboard/**`, and neither seeding path copies outside `.agents/`), so review fix
+> `33d4f3d` relocated the 33 items to `.agents/protocols/`. That restored shipping and kept
+> the token goal, but left 424K across 32 files scaffolded into every repository — the
+> scaffolding cost this plan existed to remove.
+> **Current state:** protocols live at `.agents/protocols/<name>/SKILL.md`.
+> **Superseded by:** `protocols-as-db-rows-not-scaffolded-files.md`, which removes the files
+> entirely rather than relocating them — protocols become `control_plane` rows the extension
+> injects or materialises, since nothing discovers them by globbing.
+> Every `.switchboard/protocols/` path in the body below is stale; read it for the protocol
+> inventory and the reference-site audit, not for the destination.
+
+
 ## Goal
 
 Move 33 items (32 skill directories + 1 flat file) from `.agents/skills/` to `.switchboard/protocols/`, merge 6 skills into 2 new discoverable skills, kill 6 mirror aliases, and update all code path references — reducing the CLI system prompt's `<available_skills>` block from 91 entries to 4.
