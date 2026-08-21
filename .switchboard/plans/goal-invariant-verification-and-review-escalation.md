@@ -49,12 +49,29 @@ That pins *the destination the reviewer chose*, not *the goal the plan had*. It 
 
 Verification is specified in terms of the diff rather than in terms of the goal, so correctness is checked against what changed instead of against what the change was for. Compounded by a verification surface that is the developer's working tree rather than the shipped artifact, which makes an entire class of defect (present here, absent for users) invisible to every fast check.
 
+### The schema change governs Switchboard's own methodology only
+
+The planner workflow file is a **deliberate extension point**. `kanban.html:3464` presents it as a user-editable path with third-party examples offered as equals:
+
+| Path | Label |
+| :--- | :--- |
+| `.agents/protocols/improve-plan/SKILL.md` | Switchboard Native |
+| `.claude/get-shit-done/agents/gsd-planner.md` | GSD |
+| `.claude/superpowers/skills/writing-plans.md` | Superpowers |
+
+with a matching `plannerFeatureWorkflowFilePath` field for features. The product decision is explicit: users may bring their own methodology, plans will differ in shape as a result, and Switchboard does not force its own.
+
+So this plan adds `### Goal Invariants` to **`improve-plan`'s and `improve-feature`'s** required-section schema — a change to Switchboard's own protocol, governing only the plans those protocols author. It must not become a board-wide gate.
+
+**The distinction is load-bearing.** A check that rejects any plan lacking `### Goal Invariants` would reject every GSD- and Superpowers-authored plan, which is precisely the forcing the product has decided against. Any enforcement must key off *"was this authored by Switchboard's planner"*, never *"is this a plan on the board"*. The storage layer already models this correctly — `parsePlanMetadata` returns empty values rather than erroring when the Switchboard sections are absent, so a third-party plan imports cleanly with `Unknown` complexity and no tags. The gate must be at least as tolerant as the importer already is.
+
 ### Non-goals
 
 - Reducing reviewer authority to fix real blockers. The finding in `33d4f3d` was excellent and must remain possible to make.
 - Adding a confirmation dialog anywhere. Per project rule, no confirm gates — escalation here means a plan-file state and a board signal, not a modal.
 - Rewriting the protocol migration itself (separate plan).
 - Building a general CI system. This adds specific assertions to existing gates.
+- Enforcing any section schema on plans authored by a third-party methodology. See above — that is a product decision already made, and this plan must not quietly reverse it.
 
 ## Metadata
 
@@ -83,6 +100,7 @@ Yes — one decision.
 
 ### Complex / Risky
 
+- **Scoping the gate is the highest-risk part of this plan.** The natural implementation — "reject a plan with no Goal Invariants" — is wrong, and wrong in a way that only shows up for users on GSD or Superpowers, i.e. not for anyone testing it. The check needs the authoring methodology as an input, which means either a marker the Switchboard planner writes, or keying off the configured `workflowFilePath` at dispatch time. Neither is free, and getting it wrong ships methodology lock-in as a side effect of a verification improvement.
 - **A schema addition that authors treat as boilerplate is worse than nothing.** `improve-plan` already warns that an empty-but-present `## Outstanding Questions` heading is "a schema violation, not 'done'" — the same failure mode applies here, and harder, because a vacuous invariant ("assert the feature works") looks like compliance. The schema must require invariants to be *executable assertions naming concrete paths, symbols or counts*, and the plan-review pass must reject prose.
 - **Deciding when a negative assertion is required.** "The goal is a removal or relocation" needs a test an author can apply without interpretation. Proposal: if the Goal contains any of *move, relocate, remove, delete, retire, stop, out of, no longer*, a negative invariant is mandatory. Crude, and it will produce false positives — which is the right direction for a gate whose failure mode is silence.
 - **Where the existing packaging test runs is the open question, not whether it works.** It reproduces the filter faithfully and needs no rebuild of a VSIX, so it is cheap — but a check nobody runs is the problem this plan exists to fix, reproduced. Confirm its gate.
@@ -143,6 +161,7 @@ Forward-only. Plans already in flight keep their current schema; the requirement
 - **Must-not-exist expressible:** add a must-not-exist entry to `vsix-packaging-contract.test.js` and assert it fails when the path ships.
 - **Escalation path:** simulate an agent reviewer concluding a destination must change; assert a `### Review Deviations` section is written and the card returns to the author's column via the sanctioned API path, not SQL.
 - **Forward-only:** assert an existing plan with no `### Goal Invariants` section still passes review.
+- **Methodology pluralism (the regression this plan could cause):** author a plan in GSD shape and one in Superpowers shape — neither carrying `## Goal`, `## Metadata` or `### Goal Invariants` — and assert both import cleanly, appear on the board, dispatch, and are never rejected by any gate this plan adds. This test must exist before the gate ships, not after.
 - **No confirm gates introduced:** grep the diff for `confirm(`, `window.confirm`, `showWarningMessage` — escalation must be a state, not a modal.
 
 ### Goal Invariants
