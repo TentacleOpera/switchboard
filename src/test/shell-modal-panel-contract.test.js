@@ -78,8 +78,12 @@ test('shell.js still sets no native title tooltips', () => {
 
 test('shell.html body markup keeps #content and #tooltip-overlay as siblings', () => {
     const body = block(shellHtml, '<body>', '<script');
+    // #agent-dock is a third body-level flex child sitting between #content and
+    // the overlay, so the two are no longer adjacent. The invariant that matters
+    // is that the overlay stays at BODY level — nested inside #content or the
+    // dock it would be clipped and painted invisible.
     assert.ok(
-        /<div id="content"><\/div>\s*<div id="tooltip-overlay"><\/div>/.test(body),
+        /(?:<div id="content"><\/div>|<\/aside>)\s*<div id="tooltip-overlay"><\/div>/.test(body),
         'the overlay must remain a body-level sibling of #content'
     );
 });

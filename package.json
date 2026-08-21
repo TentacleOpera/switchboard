@@ -67,6 +67,10 @@
         "title": "Switchboard: Open Agent Terminals"
       },
       {
+        "command": "switchboard.openTerminalGrid",
+        "title": "Switchboard: Open Terminal Grid"
+      },
+      {
         "command": "switchboard.deregisterAllTerminals",
         "title": "Switchboard: Reset Agent Terminals"
       },
@@ -766,6 +770,11 @@
           "default": false,
           "description": "Automatically reopen Kanban, Project, Planning, and Design panels when VS Code restarts."
         },
+        "switchboard.agentDock.role": {
+          "type": "string",
+          "default": "project_manager",
+          "description": "Agent role started by the browser cockpit's right-hand agent dock."
+        },
         "switchboard.theme.cyberPanel": {
           "type": "boolean",
           "default": false,
@@ -939,6 +948,8 @@
     "test:contract:terminal-chrome-not-in-buffer": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-chrome-not-in-buffer.test.js",
     "test:contract:shell-terminal-strip": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-terminal-strip.test.js",
     "test:contract:shell-modal-panel": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-modal-panel-contract.test.js",
+    "test:contract:shell-agent-dock": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-agent-dock.test.js",
+    "test:contract:terminal-grid-entry-point": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-grid-entry-point.test.js",
     "test:contract:terminal-pane-pinning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-pane-pinning-contract.test.js",
     "test:contract:terminal-sidebar-groupings": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-sidebar-groupings-contract.test.js",
     "test:contract:terminal-open-all-seating": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-open-all-seating-contract.test.js",

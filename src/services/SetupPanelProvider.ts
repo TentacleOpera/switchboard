@@ -764,6 +764,29 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'protocolTarget', value });
                     return { success: true };
                 }
+                // Agent dock role — a workspace-level string setting with a
+                // default, modelled on the getProtocolTarget / setProtocolTarget
+                // pair above. Both RETURN the value in the body (PRD contract
+                // #4): shell.js is not a panel and receives no postMessage push,
+                // so it reads the HTTP body directly. These are the provider's
+                // first return-in-body arms; the file's own TODO at :79-84
+                // documents that the rest still `break`. They add no `break`, so
+                // npm run verb-returns:check is unaffected.
+                case 'getAgentDockRole': {
+                    const pathConfig = this._seams().pathConfig;
+                    const role = pathConfig.getConfigStringWithDefault('agentDock.role', 'project_manager');
+                    this.postMessage({ type: 'agentDockRole', role });
+                    return { success: true, role };
+                }
+                case 'setAgentDockRole': {
+                    const pathConfig = this._seams().pathConfig;
+                    const role = typeof message.role === 'string' && message.role.trim()
+                        ? message.role.trim()
+                        : 'project_manager';
+                    await pathConfig.updateConfigGlobal('agentDock.role', role);
+                    this.postMessage({ type: 'agentDockRole', role });
+                    return { success: true, role };
+                }
 
                 case 'getStatusShowTerminalsSetting':
                     this.postMessage({

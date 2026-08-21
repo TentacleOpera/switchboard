@@ -2646,6 +2646,46 @@ Each plan file must include:
     designProvider.setApiServer(server);
     setupProvider.setApiServer(server);
     taskViewerProvider.setApiServer(server);
+    // setApiServer only feeds the broadcast hub — it does NOT populate the
+    // _localApiServer field the PM-dispatch pre-flight reads, and standalone
+    // suppresses _startLocalApiServer entirely, so _ptyHostPort is never set
+    // either. Without this injection the manage dispatch fails with "API server
+    // is not running" on a request that arrived over that very server, and can
+    // never see the in-process fleet.
+    //
+    // Every accessor is a LAZY arrow: `await server.start()` runs on the next
+    // line, so an eagerly-evaluated getApiPort would bake in 0 and the manage
+    // prompt would send the agent to a dead port.
+    taskViewerProvider.setHeadlessRuntime({
+        getApiPort: () => server.getPort(),
+        isApiListening: () => server.isListening(),
+        // Honest capability signal: with node-pty unavailable there is no fleet at
+        // all, and delivery must fall straight through to the clipboard branch.
+        hasFleet: () => ptyReady,
+        ptyVerb: async (verb: string, payload: any) => {
+            // Same guard `terminalVerb` carries — an unguarded call into the
+            // fleet with node-pty missing surfaces as an unhandled spawn
+            // exception instead of a readable error.
+            //
+            // KNOWN, ACCEPTED consequence of routing host-internal calls through
+            // handlePtyVerb: its ptySendPrompt case strips the host-only
+            // `addonsComposed` / `seatBlock` fields (the wire boundary, pinned by
+            // seat-safeguards-fleet-prompt-path.test.js). A pre-composed relay
+            // (TaskViewerProvider._handleTriggerAgentActionInternal passes
+            // promptComposed: true) therefore has its marker dropped here and
+            // deliverPrompt appends a second seat-directive block. That is a
+            // duplicated safety block, not a delivery failure — and before this
+            // injection those calls did not reach a terminal at ALL, because
+            // _ptyHostVerb short-circuited on the missing pty-host child. The fix
+            // would be an internal-caller escape on handlePtyVerb, which weakens
+            // a boundary that exists to stop the WIRE forging those fields. Not
+            // worth that trade; recorded so the next reader does not re-derive it.
+            if (!ptyReady) {
+                return { success: false, error: 'PTY terminals are unavailable: the optional node-pty module could not be loaded on this machine.' };
+            }
+            return handlePtyVerb(verb, payload, workspaceRoot);
+        },
+    });
     planningProvider.setApiServer(server);
     kanbanProvider.setApiServer(server);
     // Tickets was missing. Without it _apiServer stays undefined, _buildLocalAssetUrl

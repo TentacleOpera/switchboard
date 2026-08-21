@@ -196,8 +196,8 @@ function run() {
         const body = extractMethodBody(providerSource, '_isLikelyPtyDispatchTarget');
         assert.match(
             body,
-            /if\s*\(!this\._ptyHostPort\)\s*\{\s*return\s+false;\s*\}/,
-            '_isLikelyPtyDispatchTarget must short-circuit to false when !this._ptyHostPort (no-PTY install keeps today\'s behaviour, never throws).'
+            /if\s*\(!this\._hasFleet\(\)\)\s*\{\s*return\s+false;\s*\}/,
+            '_isLikelyPtyDispatchTarget must short-circuit to false when !this._hasFleet() (no-PTY install keeps today\'s behaviour, never throws). _hasFleet() resolves to !!this._ptyHostPort in the extension host and to the injected capability signal in standalone.'
         );
         assert.match(
             body,

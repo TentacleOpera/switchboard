@@ -161,3 +161,12 @@ No web research is required. The platform questions that mattered were answered 
 ## Recommendation
 
 Complexity 2 → **Send to Intern.** One command, one Hub entry, one panel button, one message arm, one accessor. Two things must survive review: the browser choice (`vscode.env.openExternal`, never `simpleBrowser.show`) and keeping the new button out of `updateTerminalButtonState()`. Comment both at their call sites so the next reader inherits the reasons and not just the rules.
+
+## Implementation Summary
+
+Implemented the "Open Terminal Grid" button and command to open the live PTY terminal cockpit in the external default system browser via `vscode.env.openExternal` and `vscode.env.asExternalUri`. Added the `switchboard.openTerminalGrid` command contribution in `package.json` and registered it in `src/extension.ts`, wired the command into the Switchboard Hub quick-pick actions and standalone status bar item at priority 97.5 under the `showTerminalControls` configuration gate. Added `OPEN TERMINAL GRID` button to the Terminals sub-tab in `src/webview/implementation.html` along with message routing in `src/services/TaskViewerProvider.ts` and state accessor `getTerminalGridState()`. No issues encountered during implementation.
+
+
+## Review Findings
+
+Reviewed 2026-08-21. Implementation is correct: `vscode.env.openExternal` + `asExternalUri`, the Simple-Browser prohibition commented at the call site, `enabledCount += 4`, both Hub and status-bar entries, and the new button kept out of `updateTerminalButtonState()`. One MAJOR: the plan's four `### Automated` checks were never implemented and nothing new was wired into CI — fixed by adding `src/test/terminal-grid-entry-point.test.js` (7 assertions, including a comment-stripped source scan that fails if `simpleBrowser` ever appears in the handler's executable text) plus a `package.json` script and an `integration-tests.yml` step. Two NITs left as-is: the dead `suppressLocalApiServer` ternary in `getTerminalGridState()`, and the panel button not being hidden on a pty-less host (it reports a reason, so no dead click). Validation: `tsc --noEmit` clean, eslint 0 errors, all 8 non-test CI ratchets pass, 99/114 CI contract suites pass with the 15 failures confirmed red at HEAD in a detached baseline worktree — 0 new.

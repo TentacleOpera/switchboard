@@ -17,6 +17,22 @@
     const content = document.getElementById('content');
     if (!strip || !content) { return; }
 
+    // ── Right-hand agent dock element refs ───────────────────────────
+    // The dock is a third flex child beside #content, hosting one live agent
+    // terminal via /terminals?solo=&dock=1. All visibility is class-driven
+    // (.is-open / .is-visible), never [hidden] alone — see shell.html's
+    // dock CSS comment for the cascade reason.
+    const dockEl = document.getElementById('agent-dock');
+    const splitterEl = document.getElementById('dock-splitter');
+    const dockFrame = document.getElementById('dock-frame');
+    const dockTitleEl = document.getElementById('dock-title');
+    const dockRoleBtn = document.getElementById('dock-role-btn');
+    const dockRoleMenu = document.getElementById('dock-role-menu');
+    const dockCloseBtn = document.getElementById('dock-close');
+    const emptyEl = document.getElementById('dock-empty');
+    const startBtn = document.getElementById('dock-start');
+    const dockEmptyHint = document.getElementById('dock-empty-hint');
+
     const frames = new Map(); // id -> HTMLIFrameElement
     const icons = new Map();  // id -> HTMLButtonElement
     let activePanel = null;
@@ -25,6 +41,48 @@
     let openModalId = null;
     let modalReturnFocus = null;
     let modalHost = null, modalDialog = null;
+
+    // ── Agent dock state + persistence (browser-local UI chrome) ──────
+    // The role is NOT stored here — it is a workspace-level setting (change 4),
+    // so it follows the workspace across browsers. `seat` holds the friendlyName
+    // the server returned and is treated as an opaque string (edge case 4).
+    const DOCK_STATE_KEY = 'sb.agentDock';
+    // 648 = 80 cols × 7.80px worst-case advance + 24px chrome. Default IS the
+    // floor: this is a board-first cockpit, and 804px (100 cols) would leave a
+    // 1280px laptop only 424px of board. See edge case 13.
+    const DOCK_MIN = 648, DOCK_DEFAULT = 648, DOCK_MAX = 1100;
+    const DOCK_MIN_CONTENT = 280;
+    // Smallest viewport that fits rail + splitter + dock floor + board floor.
+    // Below it the dock is disabled rather than shrunk — edge case 7.
+    const DOCK_VIABLE_MIN = 48 + 4 + DOCK_MIN + DOCK_MIN_CONTENT; // 980
+
+    let dockOpen = false;
+    let dockRole = 'project_manager';   // replaced by the boot fetch in loadDockRole
+    let lastFleet = [];
+    // Cached ptyVisibleRoles response {visibleAgents, hasCommand} — fetched once
+    // when the dock first opens, used to label the role picker and the empty state.
+    let dockRolesCache = null;
+
+    function readDockState() {
+        try {
+            const raw = localStorage.getItem(DOCK_STATE_KEY);
+            const s = raw ? JSON.parse(raw) : {};
+            return {
+                open: s.open === true,
+                width: clampDockWidth(Number(s.width) || DOCK_DEFAULT),
+                seat: typeof s.seat === 'string' ? s.seat : null,
+            };
+        } catch { return { open: false, width: DOCK_DEFAULT, seat: null }; }
+    }
+    function writeDockState(patch) {
+        const next = { ...readDockState(), ...patch };
+        try { localStorage.setItem(DOCK_STATE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+        return next;
+    }
+    function clampDockWidth(px) {
+        const max = Math.min(DOCK_MAX, window.innerWidth - 48 - 4 - DOCK_MIN_CONTENT);
+        return Math.max(DOCK_MIN, Math.min(px, Math.max(DOCK_MIN, max)));
+    }
 
     function ensureModalHost() {
         if (modalHost) { return modalHost; }
@@ -568,6 +626,27 @@
         return btn;
     }
 
+    /* ── Agent dock: rail toggle ──────────────────────────────────────
+       Carries `strip-placement-bottom`, so applyBottomAnchor() already
+       treats it as a cluster member — strip.querySelectorAll('.strip-
+       placement-bottom') picks it up with NO change to that function.
+       Inserted in renderManifest BEFORE the Setup icon so the cluster
+       reads Dock | Setup | Toggle Theme. The glyph is nav-dock.svg, NOT
+       nav-terminals.svg — the Terminals panel already uses that glyph in
+       the top group, and two identical icons with different actions is an
+       unresolvable affordance (edge case 17). */
+    function buildDockToggle() {
+        const btn = document.createElement('button');
+        btn.className = 'strip-icon strip-placement-bottom dock-toggle-btn';
+        btn.type = 'button';
+        btn.setAttribute('aria-label', 'Agent Dock');
+        btn.dataset.tooltip = 'Agent Dock';
+        btn.setAttribute('aria-expanded', 'false');
+        btn.appendChild(buildMaskedGlyph('/static/icons/nav-dock.svg'));
+        btn.addEventListener('click', () => setDockOpen(!dockOpen));
+        return btn;
+    }
+
     const popoutWindows = new Set();
 
     // name -> { stamp, startedAt }. renderTerminalSection rebuilds EVERY button from
@@ -604,6 +683,14 @@
                 frame.contentWindow?.postMessage({ type: 'switchboardThemeChanged', theme: themeName }, '*');
             } catch { /* ignore */ }
         }
+        // The dock frame is NOT in `frames` (it is a /terminals?solo=&dock=1
+        // iframe, not a manifest panel), so applyThemeToAll's loop above misses
+        // it — a live theme toggle would leave the dock in the old palette
+        // until reload. Fan out explicitly (edge case 10).
+        try {
+            dockFrame.contentWindow?.postMessage(
+                { type: 'switchboardThemeChanged', theme: themeName }, '*');
+        } catch { /* ignore */ }
         for (const win of Array.from(popoutWindows)) {
             if (win.closed) {
                 popoutWindows.delete(win);
@@ -624,6 +711,297 @@
         frame.setAttribute('allow', 'clipboard-read; clipboard-write');
         return frame;
     }
+
+    /* ══ Agent dock module ══════════════════════════════════════════════
+       The dock hosts one live agent terminal beside #content, mirroring the
+       right-sidebar agent-chat placement users know from agentic IDEs. It
+       reuses /terminals?solo=&dock=1 as its iframe src — no new terminal
+       renderer. Seats are adopt-if-present-else-create, keyed by a stable
+       dock seat name; the friendlyName the server actually returned is
+       persisted and treated as opaque (edge case 4). */
+
+    // Roles that operate via skills/addons, not as dockable agent CLIs —
+    // same exclusion onNewTerminalClicked applies (terminals.js:3605-3607).
+    const DOCK_SYSTEM_ROLES = new Set(['orchestrator', 'mcp_monitor']);
+
+    function labelForRole(role) {
+        const meta = (typeof BUILT_IN_AGENT_LABELS !== 'undefined')
+            ? BUILT_IN_AGENT_LABELS.find(r => r.key === role)
+            : null;
+        return meta ? meta.label : role;
+    }
+
+    function dockSeatName(role) { return `dock-${role}`; }
+
+    function setDockOpen(open) {
+        dockOpen = !!open;
+        dockEl.classList.toggle('is-open', dockOpen);
+        splitterEl.classList.toggle('is-open', dockOpen);
+        dockEl.hidden = !dockOpen;
+        splitterEl.hidden = !dockOpen;
+        const toggle = strip.querySelector('.dock-toggle-btn');
+        if (toggle) {
+            toggle.classList.toggle('is-active', dockOpen);
+            toggle.setAttribute('aria-expanded', String(dockOpen));
+        }
+        writeDockState({ open: dockOpen });
+        if (dockOpen) {
+            // Apply the persisted width BEFORE the frame gets a box, so the pty
+            // is sized once. Without this the dock always reopens at the CSS
+            // default and the saved width is write-only.
+            dockEl.style.width = clampDockWidth(readDockState().width) + 'px';
+            syncDockSeat();
+            // Fetch the role list once on first open — needed to label the
+            // picker and the empty-state hint. Cached for the session.
+            if (!dockRolesCache) { fetchDockRoles(); }
+        }
+    }
+
+    // Seat resolution — adopt, never implicitly create. The fleet snapshot
+    // (cached in lastFleet) is the only liveness oracle. `saved.seat` is the
+    // friendlyName the SERVER returned, treated as opaque — PtyFleetService
+    // drops the requested name entirely on collision and falls back to the
+    // `<role>-N` series, so nothing may key on the `dock-` prefix.
+    function syncDockSeat() {
+        const saved = readDockState();
+        const wanted = saved.seat || dockSeatName(dockRole);
+        const live = lastFleet.find(t => t.name === wanted && t.light !== 'exited');
+        if (live) {
+            mountDockFrame(wanted);
+        } else {
+            showDockEmptyState();
+        }
+    }
+
+    function mountDockFrame(name) {
+        const url = `/terminals?solo=${encodeURIComponent(name)}&dock=1`;
+        if (dockFrame.getAttribute('src') !== url) { dockFrame.src = url; }
+        dockFrame.hidden = false;
+        dockFrame.classList.add('is-visible');
+        emptyEl.hidden = true;
+        emptyEl.classList.remove('is-visible');
+        dockTitleEl.textContent = name;
+        writeDockState({ seat: name });
+    }
+
+    function showDockEmptyState() {
+        dockFrame.hidden = true;
+        dockFrame.classList.remove('is-visible');
+        emptyEl.hidden = false;
+        emptyEl.classList.add('is-visible');
+        // Label the start button from BUILT_IN_AGENT_LABELS (now reachable via
+        // sharedDefaults.js — edge case 15). When the role has no CLI configured,
+        // show the same honest hint onNewTerminalClicked gives.
+        const label = labelForRole(dockRole);
+        startBtn.textContent = `Start ${label}`;
+        const hasCmd = dockRolesCache && dockRolesCache.hasCommand
+            ? dockRolesCache.hasCommand[dockRole] === true
+            : true;   // optimistic until the first fetch resolves
+        dockEmptyHint.textContent = hasCmd
+            ? ''
+            : 'No agent CLI configured — this opens a plain shell.';
+        dockTitleEl.textContent = '';
+    }
+
+    // Create on explicit click only — never implicitly on shell load (edge
+    // case 4). data.terminal.friendlyName — NOT the requested name — is what
+    // gets mounted and persisted. On a collision the server returns something
+    // from the `<role>-N` series instead, and the dock must follow it.
+    async function startDockTerminal() {
+        startBtn.disabled = true;
+        try {
+            const res = await fetch('/terminals/verb/ptyCreateTerminal', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ role: dockRole, name: dockSeatName(dockRole) })
+            });
+            const data = await res.json();
+            if (data && data.success && data.terminal) {
+                mountDockFrame(data.terminal.friendlyName);
+            } else {
+                dockEmptyHint.textContent = (data && data.error) || 'Could not start the terminal.';
+            }
+        } catch (err) {
+            dockEmptyHint.textContent = 'Could not reach the terminal service.';
+        } finally {
+            startBtn.disabled = false;
+        }
+    }
+
+    // Fetch the role list once when the dock first opens. ptyVisibleRoles
+    // returns {visibleAgents, hasCommand} and is the one pty verb served even
+    // when the fleet is unavailable. Cached for the session.
+    async function fetchDockRoles() {
+        try {
+            const res = await fetch('/terminals/verb/ptyVisibleRoles', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            const data = await res.json();
+            if (data && Array.isArray(data.visibleAgents)) {
+                dockRolesCache = { visibleAgents: data.visibleAgents, hasCommand: data.hasCommand || {} };
+                buildDockRoleMenu();
+                // Re-paint the empty state now that the hasCommand hint is known.
+                if (dockOpen && emptyEl.classList.contains('is-visible')) { showDockEmptyState(); }
+            }
+        } catch { /* keep the optimistic default */ }
+    }
+
+    // Build the role picker menu from the cached ptyVisibleRoles response.
+    // Same SYSTEM_ROLES exclusion onNewTerminalClicked applies, labels from
+    // BUILT_IN_AGENT_LABELS. Selecting a role persists it (change 4), updates
+    // dockRole, and re-runs syncDockSeat() — which lands on the empty state
+    // for the new role's seat: changing the agent means starting that agent.
+    // The previously running seat is NOT killed; it stays in the fleet strip.
+    function buildDockRoleMenu() {
+        if (!dockRolesCache) { return; }
+        dockRoleMenu.innerHTML = '';
+        const roles = dockRolesCache.visibleAgents.filter(r => !DOCK_SYSTEM_ROLES.has(r));
+        for (const role of roles) {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'dock-role-item' + (role === dockRole ? ' is-selected' : '');
+            item.textContent = labelForRole(role);
+            item.addEventListener('click', () => {
+                dockRole = role;
+                writeDockState({ seat: null });   // new role → new seat
+                // Persist the role choice server-side (workspace-level setting).
+                fetch('/setup/verb/setAgentDockRole', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role })
+                }).catch(() => { /* non-fatal — the local dockRole is already set */ });
+                dockRoleMenu.classList.remove('is-visible');
+                dockRoleBtn.textContent = labelForRole(dockRole);
+                buildDockRoleMenu();   // refresh selected highlight
+                syncDockSeat();
+            });
+            dockRoleMenu.appendChild(item);
+        }
+    }
+
+    // Boot: fetch the persisted role before first paint of the dock. The role
+    // is a workspace-level setting (change 4), so it follows the workspace
+    // across browsers. This read is the shell's second-ever server call and
+    // follows the same read-the-HTTP-body pattern as the theme write.
+    async function loadDockRole() {
+        try {
+            const res = await fetch('/setup/verb/getAgentDockRole', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            const data = await res.json();
+            if (data && data.success && typeof data.role === 'string' && data.role) {
+                dockRole = data.role;
+            }
+        } catch { /* keep the built-in default */ }
+        dockRoleBtn.textContent = labelForRole(dockRole);
+        // After the role resolves, restore the dock if it was left open — but
+        // only if the window is wide enough. On a narrow window the viability
+        // gate (updateDockViableGating, already called synchronously in
+        // renderManifest) has disabled the toggle; opening the dock here would
+        // bypass that gate and squeeze the board (edge case 7).
+        if (readDockState().open && window.innerWidth >= DOCK_VIABLE_MIN) {
+            setDockOpen(true);
+        }
+    }
+
+    // Narrow-window gate (edge case 7). Below DOCK_VIABLE_MIN the dock is not
+    // offered at all — the rail toggle renders disabled with a tooltip, and an
+    // open dock auto-closes. The board keeps the full content area and is
+    // never squeezed to 200px. The dock does NOT reopen by itself (closing was
+    // a forced action, not a user preference — leave open:false written).
+    function updateDockViableGating() {
+        const toggle = strip.querySelector('.dock-toggle-btn');
+        if (!toggle) { return; }
+        const viable = window.innerWidth >= DOCK_VIABLE_MIN;
+        toggle.disabled = !viable;
+        toggle.dataset.tooltip = viable
+            ? 'Agent Dock'
+            : 'Window too narrow for the agent dock (needs 980px)';
+        if (!viable && dockOpen) {
+            setDockOpen(false);
+        }
+    }
+
+    // Splitter drag with pointer capture. Dragging a splitter over an iframe
+    // loses mousemove to the frame's document, so body.dock-dragging makes
+    // both .panel-frame and #dock-frame pointer-inert for the duration
+    // (edge case 6). setPointerCapture keeps the events on the splitter.
+    if (splitterEl) {
+        splitterEl.addEventListener('pointerdown', (e) => {
+            splitterEl.setPointerCapture(e.pointerId);
+            splitterEl.classList.add('is-dragging');
+            document.body.classList.add('dock-dragging');
+            const startX = e.clientX, startW = dockEl.getBoundingClientRect().width;
+            const onMove = (ev) => {
+                dockEl.style.width = clampDockWidth(startW + (startX - ev.clientX)) + 'px';
+            };
+            const onUp = (ev) => {
+                splitterEl.releasePointerCapture(ev.pointerId);
+                splitterEl.classList.remove('is-dragging');
+                document.body.classList.remove('dock-dragging');
+                splitterEl.removeEventListener('pointermove', onMove);
+                splitterEl.removeEventListener('pointerup', onUp);
+                writeDockState({ width: dockEl.getBoundingClientRect().width });
+            };
+            splitterEl.addEventListener('pointermove', onMove);
+            splitterEl.addEventListener('pointerup', onUp);
+        });
+    }
+
+    // Re-clamp on resize so a narrowed window does not strand the board at
+    // 0px with no way back. #content is safe from min-content pressure: every
+    // .panel-frame is position:absolute, so absolutely-positioned children
+    // contribute nothing to #content's min-content size and it can shrink
+    // freely (edge case 7).
+    window.addEventListener('resize', () => {
+        updateDockViableGating();
+        if (!dockOpen) { return; }
+        dockEl.style.width = clampDockWidth(dockEl.getBoundingClientRect().width) + 'px';
+    });
+
+    // Dock close button.
+    if (dockCloseBtn) {
+        dockCloseBtn.addEventListener('click', () => setDockOpen(false));
+    }
+
+    // Start button — the ONLY create path (edge case 4).
+    if (startBtn) {
+        startBtn.addEventListener('click', startDockTerminal);
+    }
+
+    // Role picker: toggle the menu, dismiss on outside click / Escape.
+    if (dockRoleBtn) {
+        dockRoleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!dockRolesCache) { fetchDockRoles(); }
+            dockRoleMenu.classList.toggle('is-visible');
+            if (dockRoleMenu.classList.contains('is-visible')) {
+                const rect = dockRoleBtn.getBoundingClientRect();
+                dockRoleMenu.style.left = rect.left + 'px';
+                dockRoleMenu.style.top = (rect.bottom + 4) + 'px';
+            }
+        });
+    }
+    document.addEventListener('click', (e) => {
+        if (dockRoleMenu && dockRoleMenu.classList.contains('is-visible')) {
+            if (!dockRoleMenu.contains(e.target) && e.target !== dockRoleBtn) {
+                dockRoleMenu.classList.remove('is-visible');
+            }
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && dockRoleMenu && dockRoleMenu.classList.contains('is-visible')) {
+            dockRoleMenu.classList.remove('is-visible');
+        }
+    });
 
     /**
      * Hand the rail's bottom anchor to the FIRST member of the bottom cluster.
@@ -1036,20 +1414,30 @@
             if (panel.placement === 'bottom') { bottomPanels.push(icon); } else { strip.appendChild(icon); }
         }
 
-        // Bottom cluster: settings icons are appended here, then the theme
-        // toggle. renderTerminalSection (called next) inserts the fleet
-        // container BEFORE the settings icons, yielding the DOM order:
-        // top group → terminals → settings → theme toggle. applyBottomAnchor
-        // hands margin-top:auto to the settings icon, pinning settings +
-        // theme toggle together at the foot of the rail with the fleet list
-        // above them — keeping the two controls adjacent even as the fleet
-        // list grows toward its 40vh cap.
+        // Bottom cluster, in rail order: dock toggle → settings panels → theme
+        // toggle. Only added when the host actually has a Terminals panel —
+        // `enabled:false` panels are omitted from `frames` entirely (see the
+        // comment at the top of the loop), so this is the same test the fleet
+        // strip makes, and it fails closed on a node-pty-less install (edge
+        // case 3). The dock toggle carries strip-placement-bottom, so
+        // applyBottomAnchor() picks it up as a cluster member with no change
+        // to that function.
+        if (frames.has('terminals')) { strip.appendChild(buildDockToggle()); }
         for (const icon of bottomPanels) { strip.appendChild(icon); }
 
         const themeBtn = buildThemeToggle();
         strip.appendChild(themeBtn);
 
         renderTerminalSection([]);
+
+        // Dock boot: fetch the persisted role, then restore the dock if it
+        // was left open across a reload. Only when the host has a Terminals
+        // panel — the same gate the toggle itself makes. Also apply the
+        // narrow-window viability gate on first paint.
+        if (frames.has('terminals')) {
+            updateDockViableGating();
+            loadDockRole();
+        }
 
         // The orchestrator rail icon must exist on a cold load with no
         // orchestratorState message — without this the start control is
@@ -1111,7 +1499,15 @@
             applyThemeToAll(data.theme);
         } else if (data.type === 'terminalFleetState' && Array.isArray(data.terminals)) {
             if (event.origin !== location.origin) { return; }
+            // Cache the fleet snapshot as the dock's liveness oracle. The dock
+            // treats the friendlyName as opaque (edge case 4) and uses this
+            // cache to decide adopt-vs-empty-state on every push.
+            lastFleet = data.terminals;
             renderTerminalSection(data.terminals, Array.isArray(data.teams) ? data.teams : []);
+            // If the dock is open, re-sync the seat — a fleet push may report
+            // the seat we just created, or report that a previously-live seat
+            // has exited.
+            if (dockOpen) { syncDockSeat(); }
         } else if (data.type === 'orchestratorState') {
             // Relayed from terminals.js (autobanStateSync / updateAutobanConfig
             // over the WS broadcast rail). Origin-guarded: the relay targets

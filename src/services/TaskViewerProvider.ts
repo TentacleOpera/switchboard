@@ -414,6 +414,25 @@ type DirectPushDelivery = {
     standingOrders?: false;
 };
 
+/**
+ * Result of delivering a Project Manager prompt. `delivered` distinguishes a
+ * real terminal push from the clipboard fallback — both are legitimate outcomes.
+ * `prompt` is always populated for host-side use; verb arms include it in the
+ * HTTP body ONLY when `delivered === false` so transport.js's unconditional
+ * clipboard write does not clobber the operator's clipboard on a successful
+ * terminal delivery.
+ */
+export interface PmDeliveryResult {
+    /** true = pushed into a live PM terminal; false = fell back to the prompt. */
+    delivered: boolean;
+    /** Always present. Surfaced over HTTP only on the fallback branch. */
+    prompt: string;
+    /** Terminal that received it, when delivered. */
+    target?: string;
+    /** One-line operator-facing status. */
+    message: string;
+}
+
 export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private async _handleMessage(message: any): Promise<any> {
@@ -462,6 +481,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * p50 in-process vs 0.24 ms out).
      */
     private async _ptyHostVerb(verb: string, payload: any, signal?: AbortSignal): Promise<any> {
+        if (this._headlessRuntime) {
+            // Standalone: the fleet is in THIS process. Same verb names, same
+            // result shape — ptySendPrompt still owns bracketed-paste framing,
+            // chunking and the send lock on the other side (bootstrap.ts).
+            return await this._headlessRuntime.ptyVerb(verb, payload);
+        }
         if (!this._ptyHostChild || !this._ptyHostPort) {
             return { success: false, error: 'PTY host unavailable on this platform/installation' };
         }
@@ -1028,6 +1053,51 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public setApiServer(server: any): void {
         this._apiServerForBroadcast = server ?? null;
         this._broadcaster?.setApiServer(server);
+    }
+
+    /**
+     * Host runtime facts the standalone (`npx`) host must supply, because it
+     * suppresses _startLocalApiServer — the method that would otherwise assign
+     * _localApiServer and _ptyHostPort. Without this the API-liveness pre-flight
+     * in _handleDispatchProjectManager fails on a request that ARRIVED over the
+     * server it reports as down, and the fleet lookup cannot see a fleet that
+     * lives in this very process.
+     *
+     * The extension host injects nothing and keeps its existing behaviour.
+     */
+    private _headlessRuntime?: {
+        getApiPort: () => number;
+        isApiListening: () => boolean;
+        hasFleet: () => boolean;
+        ptyVerb: (verb: string, payload: any) => Promise<any>;
+    };
+
+    public setHeadlessRuntime(runtime: {
+        getApiPort: () => number;
+        isApiListening: () => boolean;
+        hasFleet: () => boolean;
+        ptyVerb: (verb: string, payload: any) => Promise<any>;
+    }): void {
+        this._headlessRuntime = runtime;
+    }
+
+    /** Real listening port in BOTH hosts. Never a placeholder — it is interpolated
+     *  into the manage prompt and an agent will dial it. */
+    private _effectiveApiPort(): number {
+        if (this._headlessRuntime) { return this._headlessRuntime.getApiPort(); }
+        return this.getLocalApiServerPort();
+    }
+
+    private _isApiServerAlive(): boolean {
+        if (this._headlessRuntime) { return this._headlessRuntime.isApiListening(); }
+        return !!this._localApiServer && this._localApiServer.isListening();
+    }
+
+    /** True when a fleet is reachable by SOME route: the out-of-process pty host
+     *  (extension) or the injected in-process bridge (standalone). */
+    private _hasFleet(): boolean {
+        if (this._headlessRuntime) { return this._headlessRuntime.hasFleet(); }
+        return !!this._ptyHostPort;
     }
 
     public initHeadlessVerbServing(seams: HostSeams, broadcaster: BroadcastHub): void {
@@ -4007,6 +4077,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     /** Whether a PTY host is connected — used by panel providers for host-derived creation policy. */
     public hasPtyHost(): boolean {
         return !!this._ptyHostPort;
+    }
+
+    /**
+     * Narrow accessor for the PTY terminal grid state and LocalApiServer port.
+     * Returns { apiPort, ready } so the pair cannot be read half-updated across an await.
+     */
+    public getTerminalGridState(): { apiPort?: number; ready: boolean } {
+        const apiPort = this._localApiServer?.getPort() || undefined;
+        const isListening = this._localApiServer?.isListening() ?? false;
+        const ptyReady = isPtyAvailable() && (this.suppressLocalApiServer ? true : (!!this._ptyHostChild && !this._ptyHostBootFailed && !!this._ptyHostPort));
+        return {
+            apiPort,
+            ready: !!apiPort && isListening && ptyReady
+        };
     }
 
     private _browserTokens = new Map<string, number>();
@@ -13924,8 +14008,25 @@ Each plan file must include:
                         this._seams().commands.executeCommand('switchboard.setupIDEs');
                         return { success: true };
                     case 'dispatchProjectManager': {
-                        const sent = await this._handleDispatchProjectManager();
-                        return { success: sent, ...(sent ? {} : { error: 'No Project Manager terminal could be reached.' }) };
+                        const result = await this._handleDispatchProjectManager();
+                        if (!result) {
+                            return { success: false, error: 'Switchboard API server is not running.' };
+                        }
+                        // success:true on BOTH branches — the clipboard fallback is a
+                        // designed outcome, and success:false would make LocalApiServer
+                        // answer 502 and transport.js paint a red toast for an action
+                        // that worked.
+                        return {
+                            success: true,
+                            type: 'dispatchProjectManager',
+                            delivered: result.delivered,
+                            message: result.message,
+                            // Only on the fallback branch: transport.js copies `prompt`
+                            // UNCONDITIONALLY (transport.js), so returning it on a
+                            // successful terminal delivery would silently clobber the
+                            // operator's clipboard for no reason.
+                            ...(result.delivered ? {} : { prompt: result.prompt })
+                        };
                     }
                     case 'openKanban':
                         this._seams().commands.executeCommand('switchboard.openKanban', data.tab);
@@ -14874,6 +14975,9 @@ Each plan file must include:
                         }
                     case 'createAgentGridEditor':
                         await this._seams().commands.executeCommand('switchboard.createAgentGridEditor');
+                        return { success: true };
+                    case 'openTerminalGrid':
+                        await this._seams().commands.executeCommand('switchboard.openTerminalGrid');
                         return { success: true };
                     case 'closeChatAgent':
                         if (data.agentName) {
@@ -21373,7 +21477,7 @@ Each plan file must include:
      * un-revealed terminal. The toast itself is suppressed by `silent`, not by this.
      */
     private _isLikelyPtyDispatchTarget(agentName: string): boolean {
-        if (!this._ptyHostPort) { return false; }
+        if (!this._hasFleet()) { return false; }
         const normalized = this._normalizeAgentKey(this._stripIdeSuffix(agentName));
         if (!normalized) { return false; }
         return this._ptyTerminalNames.some(name =>
@@ -21401,7 +21505,7 @@ Each plan file must include:
         workspaceRoot: string,
         metadata: Record<string, any> = {}
     ): Promise<boolean> {
-        if (!this._ptyHostPort) { return false; }
+        if (!this._hasFleet()) { return false; }
         // Authoritative single lookup: ask the fleet for an ACTIVE terminal of this role.
         // A miss means "no fleet terminal for this role" — return false and let the caller
         // run its unchanged VS Code path (roles like claude_artifacts may exist only there).
@@ -21511,8 +21615,8 @@ Each plan file must include:
         // The PTY fleet is checked FIRST. Checking it first (rather than as a
         // not-found fallback) matters — a PTY and a VS Code terminal can normalize
         // to the same agent key, and the PTY is the one the browser cockpit can
-        // display. The !this._ptyHostPort guard short-circuits fleet-less installs.
-        if (this._ptyHostPort) {
+        // display. The _hasFleet() guard short-circuits fleet-less installs.
+        if (this._hasFleet()) {
             const normalizedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
             try {
                 const res = await this._ptyHostVerb('ptyListTerminals', {});
@@ -27863,22 +27967,33 @@ Each plan file must include:
      * skill hard-fails without it. Deliberately does NOT auto-spawn a terminal
      * (unlike sendPromptToAgentTerminal) so the clipboard escape hatch stays
      * available when no PM terminal is configured.
+     *
+     * Returns PmDeliveryResult on success (either branch), or null when a
+     * pre-flight rejects (no workspace root, API server down).
+     *
+     * `options.workspaceRoot` is the board surface's already-VALIDATED root
+     * (KanbanProvider._resolveWorkspaceRoot, which only ever returns a member of
+     * the allowed-roots set). It matters because the prompt below tells the agent
+     * "this is the board's selected workspace" — on a multi-root board showing
+     * workspace B, falling back to this provider's own root would hand the agent
+     * workspace A's path under that claim. The sidebar caller passes nothing and
+     * keeps the provider root, which for it IS the selected workspace.
      */
-    private async _handleDispatchProjectManager(): Promise<boolean> {
-        const workspaceRoot = this._getWorkspaceRoot();
+    private async _handleDispatchProjectManager(options?: { workspaceRoot?: string }): Promise<PmDeliveryResult | null> {
+        const workspaceRoot = options?.workspaceRoot || this._getWorkspaceRoot();
         if (!workspaceRoot) {
             this._seams().ui.showErrorMessage('No workspace root open.');
-            return false;
+            return null;
         }
 
         // 1. Pre-flight: API server liveness — the manage skill needs it.
-        const port = this.getLocalApiServerPort();
-        const serverAlive = !!this._localApiServer && this._localApiServer.isListening();
+        const port = this._effectiveApiPort();
+        const serverAlive = this._isApiServerAlive();
         if (!serverAlive || port === 0) {
             this._seams().ui.showErrorMessage(
                 'Switchboard API server is not running. Open the Switchboard panel and try again.'
             );
-            return false;
+            return null;
         }
 
         // 2. Build the manage prompt (static string + port interpolation only).
@@ -27886,6 +28001,11 @@ Each plan file must include:
 
         // 3. Deliver via the shared PM-terminal-else-clipboard path.
         return await this._deliverPromptToPmTerminal(prompt, workspaceRoot);
+    }
+
+    /** Public wrapper so KanbanProvider can dispatch the manage prompt from the board surface. */
+    public async dispatchProjectManager(options?: { workspaceRoot?: string }): Promise<PmDeliveryResult | null> {
+        return this._handleDispatchProjectManager(options);
     }
 
     /**
@@ -27896,12 +28016,11 @@ Each plan file must include:
     private async _deliverPromptToPmTerminal(
         prompt: string,
         workspaceRoot: string
-    ): Promise<boolean> {
+    ): Promise<PmDeliveryResult> {
         if (await this._tryFleetDeliveryForRole('project_manager', prompt, workspaceRoot, { source: 'pmTerminal' })) {
-            this._seams().ui.showInformationMessage(
-                'Manage prompt sent to Project Manager terminal.'
-            );
-            return true;
+            const message = 'Manage prompt sent to Project Manager terminal.';
+            this._seams().ui.showInformationMessage(message);
+            return { delivered: true, prompt, message };
         }
 
         // Resolve the PM terminal — two-stage lookup matching sendPromptToAgentTerminal
@@ -27932,25 +28051,25 @@ Each plan file must include:
             await withTerminalSendLock(sendLockKey, async () => {
                 await sendRobustText(terminal!, prompt, true, undefined, { standingOrders: await this._resolveStandingOrdersForVsCode() });
             });
-            this._seams().ui.showInformationMessage(
-                'Manage prompt sent to Project Manager terminal.'
-            );
-            return true;
+            const message = 'Manage prompt sent to Project Manager terminal.';
+            this._seams().ui.showInformationMessage(message);
+            return { delivered: true, prompt, target: terminal.name, message };
         }
 
-        // Fallback path: copy to clipboard (same pattern as Guided Setup).
+        // Fallback: this is a DESIGNED outcome, not a failure. Still write to the
+        // host clipboard (real in the editor, a no-op under the standalone shim),
+        // and return the prompt so the browser's transport copies it client-side.
+        const message = 'No Project Manager terminal registered — manage prompt copied. ' +
+            'Paste it into your agent chat (Cmd/Ctrl+V), or register a PM terminal ' +
+            'in the Kanban agents tab.';
         try {
             await this._seams().clipboard.writeText(prompt);
-            this._seams().ui.showInformationMessage(
-                'No Project Manager terminal registered — manage prompt copied. ' +
-                'Paste it into your agent chat (Cmd/Ctrl+V), or register a PM terminal ' +
-                'in the Kanban agents tab.'
-            );
+            this._seams().ui.showInformationMessage(message);
         } catch (err: any) {
             this._seams().ui.showErrorMessage(
                 `Couldn't copy to clipboard: ${err?.message || err}`
             );
         }
-        return false;
+        return { delivered: false, prompt, message };
     }
 }

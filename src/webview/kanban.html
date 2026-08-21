@@ -3017,6 +3017,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </button>
                 <button class="strip-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">CHAT PROMPT</button>
                 <button class="strip-btn" id="btn-suggest-features" data-tooltip="Scan pre-coding columns and copy a prompt asking an agent to propose feature groupings">SUGGEST FEATURES</button>
+                <button class="strip-btn is-teal" id="btn-project-manager" data-tooltip="Activate the Switchboard management console in the Project Manager agent terminal. If none is running, the prompt is copied to your clipboard instead — paste it into any agent chat.">MANAGE</button>
                 <button class="strip-btn is-teal" id="btn-feature-action" data-tooltip="Convert selected plans to feature or manage existing feature" disabled>PROMOTE TO FEATURE</button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
                 <div id="wt-indicator" style="display:none; margin-left:auto; align-items:center; gap:4px; font-size:10px; color:var(--text-secondary);">
@@ -6346,6 +6347,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         document.getElementById('btn-suggest-features')?.addEventListener('click', () => {
             postKanbanMessage({ type: 'suggestFeatures', workspaceRoot: getActiveWorkspaceRoot(), projectFilter: boardProjectFilter ?? null });
+        });
+
+        document.getElementById('btn-project-manager')?.addEventListener('click', () => {
+            // Send the board's selected workspace: the manage prompt tells the
+            // agent "this is the board's selected workspace", and the arm has no
+            // other way to know which one that is on a multi-root board.
+            postKanbanMessage({ type: 'dispatchProjectManager', workspaceRoot: getActiveWorkspaceRoot() });
         });
 
         document.getElementById('btn-create-worktree')?.addEventListener('click', () => {
@@ -9729,6 +9737,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'showStatusMessage': {
                     showStatusBarMessage(msg.message || '', { isError: !!msg.isError });
+                    break;
+                }
+                case 'dispatchProjectManager': {
+                    // Browser-only path: transport.js re-dispatches the HTTP body as a
+                    // MessageEvent. In the editor webview the provider's return value is
+                    // discarded and the operator gets a VS Code toast instead — that
+                    // asymmetry is by design, not a gap.
+                    // Both branches are successes. `delivered:false` means the prompt was
+                    // copied (transport.js already wrote it from the `prompt` field).
+                    showStatusBarMessage(msg.message || (msg.delivered
+                        ? 'Manage prompt sent to Project Manager terminal.'
+                        : 'Manage prompt copied — paste it into your agent chat.'), { isError: false });
                     break;
                 }
                 case 'reloadRoleConfigs': {

@@ -14,9 +14,9 @@ Every agent surface in Switchboard is reachable from exactly one place, and it i
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add an "Open Terminal Grid" Button Beside "Open Agent Terminals"](../plans/vscode-terminals-view-onto-pty-fleet.md) — **PLAN REVIEWED**
-- [ ] [Right-Hand Agent Dock in the Browser Shell — a Persistent Agent Terminal Where IDE Users Expect Agent Chat](../plans/feature_plan_20260808220200_shell-right-agent-dock-terminal.md) — **PLAN REVIEWED**
-- [ ] [Project Manager Agent Has No Entry Point Outside the VS Code Sidebar — Add a Board Button and Make the Dispatch Path Work Headlessly](../plans/feature_plan_20260808220300_project-manager-entry-point-browser-standalone.md) — **PLAN REVIEWED**
+- [ ] [Add an "Open Terminal Grid" Button Beside "Open Agent Terminals"](../plans/vscode-terminals-view-onto-pty-fleet.md) — **CODE REVIEWED**
+- [ ] [Right-Hand Agent Dock in the Browser Shell — a Persistent Agent Terminal Where IDE Users Expect Agent Chat](../plans/feature_plan_20260808220200_shell-right-agent-dock-terminal.md) — **CODE REVIEWED**
+- [ ] [Project Manager Agent Has No Entry Point Outside the VS Code Sidebar — Add a Board Button and Make the Dispatch Path Work Headlessly](../plans/feature_plan_20260808220300_project-manager-entry-point-browser-standalone.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -28,3 +28,7 @@ The Open Terminal Grid subtask is fully independent and can land at any time. Ro
 ⚠ **Cross-feature:** the agent dock and *Multi-Window Cockpit Reliability*'s solo pop-out sizing fix both own `?solo=` behaviour. **Land the sizing fix before or with the dock**, or the dock ships hosting a seat clamped to the cockpit grid cell.
 
 ⚠ The PM entry-point subtask edits the standalone `bootstrap.ts` verb surface, shared with *One Board Operation Layer*'s parity audit. Sequence them.
+
+## Review Findings
+
+Reviewed 2026-08-21 — all three subtasks reviewed together in one pass over the shared tree. Files changed by the review: `src/test/terminal-grid-entry-point.test.js` (new, 7 assertions for the Open-Terminal-Grid plan's previously unimplemented `### Automated` section), `src/test/shell-terminal-strip.test.js` and `src/test/shell-modal-panel-contract.test.js` (tooltip-overlay sibling assertions updated for the new dock flex child), `src/test/browser-direct-terminal-helpers.test.js` and `src/test/pty-dispatch-focus-contract.test.js` (`_ptyHostPort` pins moved onto `_hasFleet()`), `scripts/standalone-parity-allowlist.json`, `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`, `src/webview/kanban.html`, `src/standalone/bootstrap.ts`, `package.json` and `.github/workflows/integration-tests.yml`. Five CI gates were newly red and are now green (two shell markup contracts, two `_ptyHostPort` pins, `standalone-parity:check`); two orphaned test files are now invoked by CI. Validation: `tsc --noEmit` clean, eslint 0 errors, all 8 non-test ratchets pass, 99/114 CI contract suites pass — the 15 remaining failures were confirmed red at HEAD in a detached baseline worktree, so 0 regressions. Remaining risks: no manual UAT was run (the dock's rendering, the 80-column `tput cols` check, and standalone MANAGE delivery are all browser-only and untestable headlessly), and the `addonsComposed` strip on the new standalone bridge can duplicate a seat-directive block on pre-composed relays — documented at the bridge, deliberately not fixed.

@@ -13421,6 +13421,30 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                 this.postMessage({ type: 'showStatusMessage', message: `Suggest-features prompt copied (${candidateCards.length} pre-coding card(s) in scope). Paste into chat.`, isError: false });
                 return { success: true, prompt, candidateCount: candidateCards.length };
             }
+            case 'dispatchProjectManager': {
+                if (!this._taskViewerProvider) {
+                    return { success: false, error: 'TaskViewer provider not available' };
+                }
+                // Thread the board's OWN selected workspace through — the manage
+                // prompt states "this is the board's selected workspace", so on a
+                // multi-root board TaskViewer's provider root would make that
+                // sentence false. _resolveWorkspaceRoot validates against the
+                // allowed-roots set, so a caller cannot supply an arbitrary path.
+                const pmWorkspaceRoot = this._resolveWorkspaceRoot(msg?.workspaceRoot);
+                const result = await this._taskViewerProvider.dispatchProjectManager(
+                    pmWorkspaceRoot ? { workspaceRoot: pmWorkspaceRoot } : undefined
+                );
+                if (!result) {
+                    return { success: false, error: 'Switchboard API server is not running.' };
+                }
+                return {
+                    success: true,
+                    type: 'dispatchProjectManager',
+                    delivered: result.delivered,
+                    message: result.message,
+                    ...(result.delivered ? {} : { prompt: result.prompt })
+                };
+            }
             case 'removeSubtaskFromFeature': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.subtaskSessionId) {

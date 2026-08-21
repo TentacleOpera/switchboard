@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Dock — right-hand side panel motif: a split layout with a narrower right
+       pane, reading as "panel docked to the right edge". Single-colour codicon-
+       shaped house style so buildMaskedGlyph's CSS-mask/currentColor path works. -->
+  <path fill="#45e0e6" fill-rule="evenodd" d="
+    M1 2 H15 V14 H1 Z
+    M2 3 V13 H10 V3 Z
+    M11 3 V13 H14 V3 Z
+  "/>
+  <path fill="#45e0e6" d="M12 5 H13 V6 H12 Z M12 7 H13 V8 H12 Z M12 9 H13 V10 H12 Z M12 11 H13 V12 H12 Z"/>
+</svg>

@@ -426,6 +426,142 @@
             pointer-events: none;
         }
 
+        /* ── Right-hand agent dock ───────────────────────────────────────
+           A third flex child beside #content, hosting one live agent terminal
+           via /terminals?solo=&dock=1. Visibility follows the file's own
+           .panel-frame / .panel-frame.is-active idiom — NEVER the [hidden]
+           attribute alone: [hidden]{display:none} is a USER-AGENT rule and
+           loses the cascade to any author `display` declaration on the same
+           element, regardless of specificity (edge case 14). The attribute
+           stays on the markup for assistive tech; the class is the mechanism.
+           648px = 80 columns × 7.80px (worst-case mono advance at fontSize 13,
+           Menlo/DejaVu) + 24px chrome. Below this the agent CLI inside the dock
+           folds its own diffs and box frames — see edge case 13. Do not lower. */
+        #agent-dock {
+            flex: 0 0 auto;
+            width: 648px;
+            min-width: 648px;
+            background: var(--bg-elev);
+            border-left: 1px solid var(--border);
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #agent-dock.is-open { display: flex; }
+        #dock-splitter {
+            flex: 0 0 4px;
+            cursor: col-resize;
+            background: transparent;
+            display: none;
+        }
+        #dock-splitter.is-open { display: block; }
+        #dock-splitter:hover, #dock-splitter.is-dragging { background: var(--accent-dim); }
+        #dock-header {
+            flex: 0 0 32px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 0 6px;
+            border-bottom: 1px solid var(--border);
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+        #dock-title {
+            flex: 1 1 auto;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--text);
+        }
+        .dock-chip {
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-dim);
+            font-family: var(--font);
+            font-size: 11px;
+            padding: 2px 6px;
+            cursor: pointer;
+        }
+        .dock-chip:hover { color: var(--text); border-color: var(--accent-dim); }
+        .dock-icon-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            color: var(--text-dim);
+            font-family: var(--font);
+            font-size: 16px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+        .dock-icon-btn:hover { color: var(--text); background: var(--bg); border-color: var(--border); }
+        .dock-start-btn {
+            background: var(--bg);
+            border: 1px solid var(--accent-dim);
+            border-radius: 6px;
+            color: var(--accent);
+            font-family: var(--font);
+            font-size: 13px;
+            padding: 8px 16px;
+            cursor: pointer;
+        }
+        .dock-start-btn:hover { background: var(--accent-dim); color: var(--text); }
+        .dock-start-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+        /* Visibility via a class, NOT the hidden attribute: [hidden]{display:none}
+           is a USER-AGENT rule and loses the cascade to any author `display`
+           declaration on the same element, regardless of specificity. The
+           attribute stays on the markup for assistive tech; the class is the
+           mechanism. Same pattern as .panel-frame / .panel-frame.is-active. */
+        #dock-frame { display: none; flex: 1 1 auto; border: none; width: 100%; background: var(--bg); }
+        #dock-frame.is-visible { display: block; }
+        #dock-empty {
+            display: none;
+            flex: 1 1 auto;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 16px;
+            text-align: center;
+        }
+        #dock-empty.is-visible { display: flex; }
+        #dock-empty-hint { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+        /* position:fixed escapes #agent-dock's overflow:hidden — no ancestor here
+           establishes a fixed-position containing block (no transform/filter/
+           will-change/contain). Same idiom as #tooltip-overlay. */
+        #dock-role-menu {
+            display: none;
+            position: fixed;
+            z-index: 9999;
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 4px;
+            min-width: 180px;
+        }
+        #dock-role-menu.is-visible { display: block; }
+        .dock-role-item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: transparent;
+            border: none;
+            border-radius: 3px;
+            color: var(--text);
+            font-family: var(--font);
+            font-size: 12px;
+            padding: 5px 8px;
+            cursor: pointer;
+        }
+        .dock-role-item:hover { background: var(--bg); }
+        .dock-role-item.is-selected { color: var(--accent); }
+        /* Splitter drag: iframes swallow mousemove, so both the panel frames and
+           the dock frame go pointer-inert for the duration of the drag. Without
+           this the drag dies the instant the cursor crosses into a frame. */
+        body.dock-dragging .panel-frame,
+        body.dock-dragging #dock-frame { pointer-events: none; }
+
         /* Browser-only shell: dark native palette + a 6px strip scrollbar to
            match the panels it frames. #strip is the document's only scroller
            (html, body are overflow:hidden). No --vscode-* fallback — the shell
@@ -473,7 +609,26 @@
 <body>
     <div id="strip" role="tablist" aria-label="Switchboard panels"></div>
     <div id="content"></div>
+    <div id="dock-splitter" role="separator" aria-orientation="vertical"
+         aria-label="Resize agent dock" hidden></div>
+    <aside id="agent-dock" aria-label="Agent dock" hidden>
+        <div id="dock-header">
+            <button id="dock-role-btn" type="button" class="dock-chip"
+                    data-tooltip="Choose which agent this dock starts"></button>
+            <span id="dock-title"></span>
+            <button id="dock-close" type="button" class="dock-icon-btn"
+                    aria-label="Close agent dock" data-tooltip="Close">&times;</button>
+        </div>
+        <div id="dock-role-menu" hidden></div>
+        <div id="dock-empty">
+            <button id="dock-start" type="button" class="dock-start-btn"></button>
+            <div id="dock-empty-hint"></div>
+        </div>
+        <iframe id="dock-frame" title="Agent terminal"
+                allow="clipboard-read; clipboard-write" hidden></iframe>
+    </aside>
     <div id="tooltip-overlay"></div>
+    <script nonce="{{NONCE}}" src="/static/webview/sharedDefaults.js"></script>
     <script nonce="{{NONCE}}" src="/static/webview/shell.js"></script>
 </body>
 

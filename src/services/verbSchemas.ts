@@ -185,6 +185,11 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
+    dispatchProjectManager: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
     // `initiatorProject` (optional, never required — a required field would reject
     // valid payloads from shipped webview builds) is the initiating client's own
     // view filter; the arm prefers it over the last-writer-wins DB row. The
@@ -1267,6 +1272,11 @@ export const SETUP_VERB_SCHEMAS: Record<string, VerbSchema> = {
     setProtocolTarget: {
         fields: {
             value: { type: 'string' },
+        },
+    },
+    setAgentDockRole: {
+        fields: {
+            role: { type: 'string', required: true },
         },
     },
     setRemoteConfig: {

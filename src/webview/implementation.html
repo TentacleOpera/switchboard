@@ -1575,6 +1575,7 @@
                 <!-- Terminal Operations content -->
                 <div class="terminals-tab-content" style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
                     <button id="createAgentGrid" class="secondary-btn is-teal w-full">OPEN AGENT TERMINALS</button>
+                    <button id="openTerminalGrid" class="secondary-btn w-full">OPEN TERMINAL GRID</button>
                     <button id="btn-deregister-all" class="secondary-btn error w-full">RESET ALL AGENTS</button>
                     <button id="btn-open-central-setup" class="secondary-btn is-teal w-full">AGENT SETUP</button>
                     <button id="btn-easter-egg" class="secondary-btn w-full" style="margin-top: 6px;">Access main program</button>
@@ -1793,6 +1794,12 @@
                         updateTerminalButtonState(); // Will show correct state based on terminal status
                     }, 30000);
                 }
+            });
+        }
+        const btnOpenTerminalGrid = document.getElementById('openTerminalGrid');
+        if (btnOpenTerminalGrid) {
+            btnOpenTerminalGrid.addEventListener('click', () => {
+                vscode.postMessage({ type: 'openTerminalGrid' });
             });
         }
         const btnDeregister = document.getElementById('btn-deregister-all');

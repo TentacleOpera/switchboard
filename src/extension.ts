@@ -62,6 +62,7 @@ function registerSwitchboardCommand(name: string, handler: (...args: any[]) => a
 // Status bar item for setup notification
 let setupStatusBarItem: vscode.StatusBarItem;
 let terminalOpenStatusBarItem: vscode.StatusBarItem;
+let terminalGridStatusBarItem: vscode.StatusBarItem;
 let terminalClearStatusBarItem: vscode.StatusBarItem;
 let terminalResetStatusBarItem: vscode.StatusBarItem;
 let kanbanStatusBarItem: vscode.StatusBarItem;
@@ -1214,11 +1215,23 @@ export async function activate(context: vscode.ExtensionContext) {
     const createAgentGridEditorDisposable = registerSwitchboardCommand('switchboard.createAgentGridEditor', async () => {
         await createAgentGrid();
     });
+    const openTerminalGridDisposable = registerSwitchboardCommand('switchboard.openTerminalGrid', async () => {
+        const gridState = taskViewerProvider?.getTerminalGridState();
+        if (!gridState || !gridState.ready || !gridState.apiPort) {
+            vscode.window.showWarningMessage('Terminal Grid is not ready yet (PTY host or API server is initializing). Please try again in a moment.');
+            return;
+        }
+        // Simple Browser is a webview wrapping a cross-origin iframe — clipboard and Ctrl+C do not survive it (microsoft/vscode#182642, #129178). Do not "improve" this to simpleBrowser.show.
+        const targetUri = vscode.Uri.parse(`http://127.0.0.1:${gridState.apiPort}/terminals`);
+        const externalUri = await vscode.env.asExternalUri(targetUri);
+        await vscode.env.openExternal(externalUri);
+    });
     const disposeAllGridTerminalsDisposable = vscode.commands.registerCommand('switchboard.disposeAllGridTerminals', async () => {
         await disposeAllGridTerminals();
     });
     context.subscriptions.push(createAgentGridDisposable);
     context.subscriptions.push(createAgentGridEditorDisposable);
+    context.subscriptions.push(openTerminalGridDisposable);
     context.subscriptions.push(disposeAllGridTerminalsDisposable);
 
     // Kanban Board
@@ -2422,6 +2435,12 @@ export async function activate(context: vscode.ExtensionContext) {
     terminalOpenStatusBarItem.command = 'switchboard.createAgentGrid';
     context.subscriptions.push(terminalOpenStatusBarItem);
 
+    terminalGridStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 97.5);
+    terminalGridStatusBarItem.text = '$(browser) Grid';
+    terminalGridStatusBarItem.tooltip = 'Open Terminal Grid (browser)';
+    terminalGridStatusBarItem.command = 'switchboard.openTerminalGrid';
+    context.subscriptions.push(terminalGridStatusBarItem);
+
     terminalClearStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 97);
     terminalClearStatusBarItem.text = '$(clear-all) Clear';
     terminalClearStatusBarItem.tooltip = 'Clear Agent Terminals';
@@ -2497,6 +2516,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
         if (compactMode) {
             terminalOpenStatusBarItem.hide();
+            terminalGridStatusBarItem.hide();
             terminalClearStatusBarItem.hide();
             terminalResetStatusBarItem.hide();
             kanbanStatusBarItem.hide();
@@ -2509,7 +2529,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
             let enabledCount = 0;
             if (showTerminalControls) {
-                enabledCount += 3;
+                enabledCount += 4;
             }
             if (showKanbanButton) {
                 enabledCount++;
@@ -2543,10 +2563,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
             if (showTerminalControls) {
                 terminalOpenStatusBarItem.show();
+                terminalGridStatusBarItem.show();
                 terminalClearStatusBarItem.show();
                 terminalResetStatusBarItem.show();
             } else {
                 terminalOpenStatusBarItem.hide();
+                terminalGridStatusBarItem.hide();
                 terminalClearStatusBarItem.hide();
                 terminalResetStatusBarItem.hide();
             }
@@ -2618,6 +2640,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (showTerminalControls) {
             if (lines.length > 2) lines.push('---');
             lines.push(`[$(hubot) Agents](command:switchboard.createAgentGrid)`);
+            lines.push(`[$(browser) Grid](command:switchboard.openTerminalGrid)`);
             lines.push(`[$(clear-all) Clear](command:switchboard.clearAllTerminals)`);
             lines.push(`[$(stop-circle) Reset](command:switchboard.deregisterAllTerminals)`);
         }
@@ -2704,6 +2727,11 @@ export async function activate(context: vscode.ExtensionContext) {
                 label: '$(hubot) Agents',
                 description: 'Open agent terminals',
                 command: 'switchboard.createAgentGrid'
+            });
+            items.push({
+                label: '$(browser) Terminal Grid',
+                description: 'Open the PTY terminal grid in your browser',
+                command: 'switchboard.openTerminalGrid'
             });
             items.push({
                 label: '$(clear-all) Clear',

@@ -492,9 +492,17 @@ test('the tooltip overlay is a direct child of body, outside the strip clip box'
     const stripDiv = block(shellHtml, '<div id="strip"', '</div>');
     assert.ok(!stripDiv.includes('tooltip-overlay'), 'the overlay must NOT live inside #strip');
     const body = block(shellHtml, '<body>', '<script');
+    // #agent-dock is a third body-level flex child between #content and the
+    // overlay, so the overlay is no longer #content's immediate next sibling.
+    // What must still hold is that it is not nested inside ANY clipping box:
+    // #strip (above), #content, or the dock (which is overflow:hidden).
+    const dockAside = shellHtml.includes('<aside id="agent-dock"')
+        ? block(shellHtml, '<aside id="agent-dock"', '</aside>')
+        : '';
+    assert.ok(!dockAside.includes('tooltip-overlay'), 'the overlay must NOT live inside #agent-dock');
     assert.ok(
-        /<div id="content"><\/div>\s*<div id="tooltip-overlay"><\/div>/.test(body),
-        'the overlay must be a body-level sibling of #strip and #content'
+        /(?:<div id="content"><\/div>|<\/aside>)\s*<div id="tooltip-overlay"><\/div>/.test(body),
+        'the overlay must be a body-level sibling of #strip, #content and #agent-dock'
     );
     const css = block(shellHtml, '#tooltip-overlay {', '}');
     assert.ok(/position:\s*fixed/.test(css), 'the overlay must be position:fixed to escape ancestor clips');

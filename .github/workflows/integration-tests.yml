@@ -684,6 +684,27 @@ jobs:
       - name: Shell modal panel contract (selectPanel interception, frame survival)
         run: npm run test:contract:shell-modal-panel
 
+      # The right-hand agent dock is browser-only DOM code in an IIFE with no
+      # export surface, so every failure mode is a rendering or lifecycle defect
+      # a headless run cannot observe. What CAN be pinned are the decisions that
+      # are invisible on inspection and were each wrong in a first pass: the dock
+      # is a sibling after #content (not an overlay), visibility is class-driven
+      # (the UA [hidden] rule loses the cascade to any author `display`), the
+      # 648px floor is the 80-column guarantee the agent CLI inside it needs, and
+      # the dock frame's fleet relay is suppressed so it cannot repaint the rail.
+      - name: Shell agent dock contract (dock placement, width floor, relay guard)
+        run: npm run test:contract:shell-agent-dock
+
+      # The Terminal Grid button must open the SYSTEM browser. Simple Browser is
+      # a webview wrapping a cross-origin iframe: navigator.clipboard throws and
+      # Electron eats Cmd/Ctrl+C before it reaches the frame (vscode#182642,
+      # #129178), so "keep the user in the editor" ships a terminal that cannot
+      # be interrupted. That substitution is the regression this gate exists to
+      # catch; it also pins the readiness gate (no URI from an undefined port)
+      # and keeps the new button out of #createAgentGrid's relabelling machine.
+      - name: Terminal Grid entry point contract (openExternal, never simpleBrowser)
+        run: npm run test:contract:terminal-grid-entry-point
+
       - name: Terminal pane pinning contract
         run: npm run test:contract:terminal-pane-pinning
 

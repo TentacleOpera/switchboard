@@ -70,10 +70,19 @@ function run() {
     console.log('\n── Browser direct terminal helpers contract ──\n');
 
     // 1. _tryFleetDeliveryForRole: guards on _ptyHostPort and delivers via _dispatchExecuteMessage.
-    test('_tryFleetDeliveryForRole guards on _ptyHostPort and delivers via _dispatchExecuteMessage', () => {
+    test('_tryFleetDeliveryForRole guards on _hasFleet and delivers via _dispatchExecuteMessage', () => {
         const body = extractMethodBody(taskViewerSource, '_tryFleetDeliveryForRole');
-        assert.match(body, /if\s*\(!this\._ptyHostPort\)\s*\{\s*return\s+false;\s*\}/,
-            '_tryFleetDeliveryForRole must short-circuit when !this._ptyHostPort.');
+        assert.match(body, /if\s*\(!this\._hasFleet\(\)\)\s*\{\s*return\s+false;\s*\}/,
+            '_tryFleetDeliveryForRole must short-circuit when !this._hasFleet().');
+        // The guard moved one level down, so pin _hasFleet() itself: the
+        // extension host must still resolve to _ptyHostPort truthiness, and the
+        // standalone branch must delegate to the injected capability signal
+        // rather than assuming a fleet exists because a runtime was injected.
+        const hasFleet = extractMethodBody(taskViewerSource, '_hasFleet');
+        assert.match(hasFleet, /return\s+!!this\._ptyHostPort;/,
+            '_hasFleet() must fall back to !!this._ptyHostPort — the extension host\'s behaviour is unchanged.');
+        assert.match(hasFleet, /this\._headlessRuntime\.hasFleet\(\)/,
+            '_hasFleet() must delegate to the injected hasFleet() signal, never report a fleet merely because a runtime object was injected.');
         assert.match(body, /_ptyHostVerb\('ptyListTerminals'/,
             '_tryFleetDeliveryForRole must authoritatively ask the fleet via ptyListTerminals.');
         assert.match(body, /_dispatchExecuteMessage\(/,
@@ -171,10 +180,10 @@ function run() {
     });
 
     // 7. _deliverPromptToPmTerminal and _handleSendAnalystMessage are fleet-aware.
-    test('_deliverPromptToPmTerminal tries the fleet first and returns boolean', () => {
+    test('_deliverPromptToPmTerminal tries the fleet first and returns PmDeliveryResult', () => {
         const sigIdx = taskViewerSource.search(/private\s+async\s+_deliverPromptToPmTerminal\s*\(/);
         const sigRegion = taskViewerSource.slice(sigIdx, sigIdx + 300);
-        assert.match(sigRegion, /:\s*Promise<boolean>/, '_deliverPromptToPmTerminal must return Promise<boolean>.');
+        assert.match(sigRegion, /:\s*Promise<PmDeliveryResult>/, '_deliverPromptToPmTerminal must return Promise<PmDeliveryResult>.');
         const body = extractMethodBody(taskViewerSource, '_deliverPromptToPmTerminal');
         assert.match(body, /_tryFleetDeliveryForRole\(\s*'project_manager'/,
             '_deliverPromptToPmTerminal must try the fleet first for project_manager.');

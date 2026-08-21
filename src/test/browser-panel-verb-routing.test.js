@@ -196,6 +196,14 @@ function run() {
             "the PLANNING_VERBS guard must still throw on unknown verbs (the network trust boundary).");
     });
 
+    // --- agent dock role verbs are catalogued and reachable on /setup/verb/* ──
+    test('getAgentDockRole and setAgentDockRole are in SETUP_VERBS (reachable on /setup/verb/*)', () => {
+        assert.ok(SETUP_VERBS.has('getAgentDockRole'),
+            "getAgentDockRole must be in SETUP_VERBS so POST /setup/verb/getAgentDockRole returns 200, not 500.");
+        assert.ok(SETUP_VERBS.has('setAgentDockRole'),
+            "setAgentDockRole must be in SETUP_VERBS so POST /setup/verb/setAgentDockRole returns 200, not 500.");
+    });
+
     console.log(`\nResult: ${passed} passed, ${failed} failed`);
     if (failed > 0) { process.exit(1); }
 }

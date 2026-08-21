@@ -188,6 +188,12 @@
     let soloTerminalName = null;
     let peekTerminalName = null;
     let hasFetchedList = false;
+    // The right-hand dock iframe carries &dock=1 alongside its solo name. Solo
+    // mode skips fetchAgentNames, so the dock's fleet snapshot would repaint
+    // the rail with default brand icons — postFleetStateToShell returns early
+    // when this flag is set (edge case 2). Everything else in solo mode is
+    // unchanged; the dock is an ordinary solo page.
+    let isDockFrame = false;
     /** Team-scoped mode: when set, the sidebar and grid show only this team's
      *  members. Parsed from `?team=<groupId>`. Solo wins over team if both are
      *  present (solo is the narrower scope). */
@@ -200,6 +206,7 @@
         if (urlParams.has('team') && !soloTerminalName) {
             teamScopeId = urlParams.get('team');
         }
+        isDockFrame = urlParams.get('dock') === '1';
     } catch { /* ignore */ }
 
     const PTY_HOST_ORIGIN = (document.body && document.body.dataset && document.body.dataset.ptyHostOrigin)
@@ -1464,6 +1471,14 @@
 
     function postFleetStateToShell() {
         if (window.parent === window) { return; }
+        // The right-hand dock is a SECOND /terminals page inside the same shell.
+        // The guard above covers pop-outs (no parent) but NOT the dock, which has
+        // one. Its snapshot comes from the same ptyListTerminals, so relaying it
+        // only adds a racing writer for the rail's fleet strip — and a WORSE one:
+        // solo mode skips fetchAgentNames, so agentLabelForRole returns '' for
+        // every role and the dock's snapshot would repaint the whole rail with
+        // default brand icons. The panel is the single relay; the dock is mute.
+        if (isDockFrame) { return; }
         const terminals = fleetList.map(t => {
             let light = 'active';
             let doneStamp = 0;
