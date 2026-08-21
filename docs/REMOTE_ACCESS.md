@@ -142,16 +142,27 @@ The credential difference is the auth model:
 - A **browser** uses the `sb_session` cookie, obtained via the one-time `?token=`
   exchange at launch.
 - An **agent** uses `Authorization: Bearer <token>` — which `_checkAuth`
-  (`src/services/LocalApiServer.ts`) already accepts. The durable
-  `switchboard.apiToken` (once that feature lands) makes this credential stable
-  across restarts, which is what makes remote agent use practical rather than a token
-  that dies on every relaunch.
+  (`src/services/LocalApiServer.ts`) already accepts. Set a durable
+  `switchboard.apiToken` (`npx switchboard token rotate`) so the credential survives
+  restarts; without one the server mints a fresh secret per launch and the agent's
+  token dies on every relaunch.
 
 See the `switchboard-orchestration` skill for the full endpoint contract.
 
-**Known limitation:** the external-team-lead pattern's file-inbox verification loop
-(reading `.switchboard/teams/<teamId>/reports/`, running `git -C <worktree> diff`)
-requires filesystem access the tunnel does not provide. A remote lead can command via
-HTTP through the tunnel, and verify via the HTTP report-inbox endpoints:
-`GET /teams/<teamId>/reports`, `POST /teams/<teamId>/reports/claim`, and
-`GET /worktree/<worktreeId>/diff` — no filesystem access needed.
+### External team leads
+
+A remote external team lead can run the whole loop over HTTP — no filesystem access
+to the host required. The file-inbox path (reading
+`.switchboard/teams/<teamId>/reports/`, running `git -C <worktree> diff`, `mv`-ing to
+`claimed/`) stays the primary route for a lead that shares a filesystem with the
+host; these are the equivalents for one that does not:
+
+| Filesystem | HTTP equivalent |
+|---|---|
+| `ls .switchboard/teams/<teamId>/reports/*.md` | `GET /teams/<teamId>/reports` |
+| `mv <report>.md reports/claimed/` | `POST /teams/<teamId>/reports/claim` — body `{"filename": "..."}` |
+| `git -C <worktree> rev-list --count <base>..HEAD` / `git diff` | `GET /worktree/<worktreeId>/diff` (add `?stat=true` for a summary) |
+
+`<worktreeId>` is the numeric `id` from `GET /worktree/list`. The diff endpoint
+derives its refs from the recorded `base_branch`, not from the caller, and returns
+`{ commitCount, log, diff }`.

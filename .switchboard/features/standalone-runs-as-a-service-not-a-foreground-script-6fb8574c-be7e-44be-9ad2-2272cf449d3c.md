@@ -22,10 +22,10 @@ Deliberately excluded: no `--bind` flag, no public exposure, no accounts, no hos
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`npx switchboard` has no lifecycle — add detached start/stop/status/logs and per-OS autostart](../plans/standalone-daemon-lifecycle.md) — **CODER CODED**
-- [ ] [Standalone auth is destroyed on every restart — adopt the already-shipped `switchboard.apiToken` as a durable session token](../plans/standalone-durable-session-token.md) — **CODER CODED**
-- [ ] [The loopback lockdown is undocumented, and the asset route bakes the server port into absolute URLs](../plans/standalone-remote-access-story.md) — **CODER CODED**
-- [ ] [Remote external-team-lead verification over HTTP — close the file-inbox gap](../plans/remote-team-lead-verification-over-http.md) — **CODER CODED**
+- [ ] [`npx switchboard` has no lifecycle — add detached start/stop/status/logs and per-OS autostart](../plans/standalone-daemon-lifecycle.md) — **CODE REVIEWED**
+- [ ] [Standalone auth is destroyed on every restart — adopt the already-shipped `switchboard.apiToken` as a durable session token](../plans/standalone-durable-session-token.md) — **CODE REVIEWED**
+- [ ] [The loopback lockdown is undocumented, and the asset route bakes the server port into absolute URLs](../plans/standalone-remote-access-story.md) — **CODE REVIEWED**
+- [ ] [Remote external-team-lead verification over HTTP — close the file-inbox gap](../plans/remote-team-lead-verification-over-http.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -33,3 +33,7 @@ Deliberately excluded: no `--bind` flag, no public exposure, no accounts, no hos
 - **Durable session token first.** The other two are shippable alone but incomplete without it: `switchboard status` prints a board URL that 401s after any restart, an autostarted server is precisely the case where nobody is watching stdout for the replacement token, and the remote-access doc would have to instruct the reader to re-enrol from a terminal on every restart.
 - **Lifecycle second.** It depends on nothing in the docs subtask, and the autostart units are only worth installing once a session survives the restarts they cause.
 - **Remote access is independent and can run in parallel with either.** Its one code change (`_buildLocalAssetUrl`) touches a file neither other subtask opens. Two caveats for whoever takes it: the tunnel recipes are testable today without either other subtask landing, but the Tailscale path needs its exact working configuration verified before publishing rather than asserted — a tailnet name is not in the accepted Host set — and no snippet ships unrun, since an untested recipe in a security document is worse than no document.
+
+## Review Findings
+
+Reviewed all four subtasks in dependency order with full caller/race/orphan tracing; the feature's core claim holds — the durable token reaches all four auth paths, the lifecycle verbs work end-to-end, and the loopback guards are provably untouched. Nine CRITICAL/MAJOR defects were found and fixed across `src/standalone/bootstrap.ts`, `src/standalone/cli.ts`, `src/services/LocalApiServer.ts`, `src/test/verb-engine-tickets-headless.test.js`, `docs/REMOTE_ACCESS.md` and all four `docs/autostart/` files — the headline three being SIGHUP tearing down the whole PTY fleet on terminal close, `--detach` in every service-manager template defeating crash supervision, and the new fixed default port making an EADDRINUSE retry path reachable that double-boots the entire stack. The two defects the daemon-lifecycle plan had itself pre-recorded as "must be fixed as part of code review" were both still present on arrival. Verification: `npm run compile-tests` clean, `npm run compile` 0 errors, eslint 0 errors on all touched files, 12 contract tests green (including the previously-red `verb-engine-tickets`), and `catalog:check`/`parity:check`/`standalone-parity:check`/`mirror:check` all pass; `push-routing:check` is red but pre-existing (`KanbanProvider.ts` sites from `c29377ed`/`744a895f`, untouched here). Remaining risk, unfixed and deliberately surfaced rather than absorbed: **zero automated tests were added for any of the four subtasks**, so blank-token fail-closed, enrolment single-use, every lifecycle verb, and all twelve checks named in the team-lead plan's `### Automated Tests` section have no CI guard.

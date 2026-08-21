@@ -31,7 +31,7 @@
 -->
 <Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Switchboard standalone server (detached)</Description>
+    <Description>Switchboard standalone server</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
@@ -44,13 +44,17 @@
       <Interval>PT1M</Interval>
       <Count>3</Count>
     </RestartOnFailure>
+    <!-- PT0S = no time limit. Task Scheduler tracks the process it starts,   -->
+    <!-- so RestartOnFailure above only observes a crash while that process IS  -->
+    <!-- the server: do NOT add --detach, which exits 0 immediately and would   -->
+    <!-- complete the task while the real daemon runs on unsupervised.          -->
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
   </Settings>
   <Actions>
     <Exec>
       <!-- EDIT: full path to npx.cmd (run `where npx` in cmd to find it) -->
       <Command>C:\Program Files\nodejs\npx.cmd</Command>
-      <Arguments>switchboard start --detach --port 7777 --workspace "C:\Users\YOUR_USERNAME\path\to\workspace"</Arguments>
+      <Arguments>switchboard start --no-open --port 7777 --workspace "C:\Users\YOUR_USERNAME\path\to\workspace"</Arguments>
       <!-- EDIT: workspace directory -->
       <WorkingDirectory>C:\Users\YOUR_USERNAME\path\to\workspace</WorkingDirectory>
     </Exec>

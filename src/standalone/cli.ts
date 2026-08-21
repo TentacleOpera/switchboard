@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as util from 'util';
@@ -236,9 +237,23 @@ function setupFileLogging(logFile: string, alsoStdout: boolean): void {
         return (...args: unknown[]) => {
             const msg = `${util.format(...args)}\n`;
             writeToFile(msg);
-            if (alsoStdout) { orig(...args); }
+            // The terminal mirror is best-effort. Once the controlling terminal is
+            // gone (SIGHUP — closed window, dropped SSH session) these writes EPIPE,
+            // and a server that survives SIGHUP would otherwise die on its next log
+            // line instead — externally indistinguishable from the bug the SIGHUP
+            // handler fixes. The file sink stays live either way.
+            if (alsoStdout) {
+                try { orig(...args); } catch { /* terminal gone */ }
+            }
         };
     };
+
+    // Node delivers a mid-write EPIPE as a stream 'error' event, not a synchronous
+    // throw, and an unhandled 'error' on stdout/stderr is an uncaught exception.
+    // Same reasoning as the try/catch above: losing the terminal must not stop the
+    // process.
+    process.stdout.on('error', () => { /* terminal gone */ });
+    process.stderr.on('error', () => { /* terminal gone */ });
 
     // log, info, and debug all write to stdout in Node — wrap all three so the
     // file captures everything routeLogsToStderr would redirect.
@@ -318,6 +333,22 @@ async function openBrowser(url: string): Promise<void> {
     } catch (err) {
         console.error(`[switchboard] Failed to open browser: ${err}`);
     }
+}
+
+/**
+ * Can we bind `port` on loopback right now?
+ *
+ * Used to choose the listen port before `startHeadlessSwitchboard` builds anything,
+ * so a busy default port costs one throwaway socket rather than a half-booted
+ * instance that has to be abandoned mid-flight.
+ */
+function isPortFree(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        const probe = net.createServer();
+        probe.once('error', () => resolve(false));
+        probe.once('listening', () => probe.close(() => resolve(true)));
+        try { probe.listen(port, '127.0.0.1'); } catch { resolve(false); }
+    });
 }
 
 async function waitForHealth(port: number, timeoutMs = 10000): Promise<void> {
@@ -443,6 +474,12 @@ async function main() {
                             const json = JSON.parse(body);
                             console.log(`[switchboard] Board URL (single-use, expires in 15 minutes):`);
                             console.log(json.boardUrl || `http://127.0.0.1:${port}/?token=${json.token}`);
+                            // Exit here. Falling through returns to main(), which has no
+                            // `token` guard left to stop it — it would reach the server
+                            // launch path, hit the single-writer check against the very
+                            // instance we just minted against, and print "already
+                            // running" + exit 1 on top of a successful mint.
+                            exitFlushed(0);
                         } catch {
                             console.error('[switchboard] Unexpected response from server.');
                             process.exit(1);
@@ -471,12 +508,12 @@ async function main() {
             });
             req.on('timeout', () => { req.destroy(); });
             req.end();
-            // Wait for the response to drain before exiting — the http callback
-            // calls process.exit() internally, so this await just keeps the event
-            // loop alive until the response arrives.
-            await new Promise<void>((resolve) => {
-                req.on('close', () => resolve());
-            });
+            // Every branch of the response handler above (and the error handler)
+            // exits the process, so this await deliberately never resolves — it
+            // only keeps the event loop alive until one of them does. Resolving on
+            // 'close' instead would race the exit and let control fall through to
+            // main()'s server-launch path.
+            await new Promise<never>(() => { /* exits via the handlers above */ });
         } else if (sub === 'set') {
             const value = process.argv[4];
             if (!value) {
@@ -1006,30 +1043,27 @@ async function main() {
     setupFileLogging(logFile, !isDetachedChild);
 
     // Default port is 7777 (parseArgs). If it is taken, fall back to ephemeral
-    // (port 0) and log the fallback. `--port 0` is an explicit opt-in to
-    // ephemeral and bypasses the retry.
-    let instance: Awaited<ReturnType<typeof startHeadlessSwitchboard>>;
-    try {
-        instance = await startHeadlessSwitchboard({
-            workspaceRoot,
-            port: args.port,
-            hostname,
-            verbose: true,
-        });
-    } catch (err) {
-        const code = (err as any)?.code;
-        if (args.port && args.port !== 0 && code === 'EADDRINUSE') {
-            console.warn(`[switchboard] Port ${args.port} is in use, falling back to an ephemeral port.`);
-            instance = await startHeadlessSwitchboard({
-                workspaceRoot,
-                port: 0,
-                hostname,
-                verbose: true,
-            });
-        } else {
-            throw err;
-        }
+    // (port 0) and log the fallback. `--port 0` is an explicit opt-in to ephemeral.
+    //
+    // The probe happens BEFORE the boot, not as a catch-and-retry around it:
+    // startHeadlessSwitchboard opens the kanban DB, initialises the plan-ingestion
+    // engine (which attaches fs watchers) and constructs the PTY fleet well before
+    // it calls server.start(), and it disposes none of that when the listen fails.
+    // Retrying after an EADDRINUSE would therefore leave the half-built first
+    // instance's watchers and DB handle live and stack a second full instance on
+    // top — two engines importing the same plan files. Probing first keeps the
+    // fallback to exactly one boot.
+    let listenPort = args.port;
+    if (typeof listenPort === 'number' && listenPort > 0 && !(await isPortFree(listenPort))) {
+        console.warn(`[switchboard] Port ${listenPort} is in use, falling back to an ephemeral port.`);
+        listenPort = 0;
     }
+    const instance = await startHeadlessSwitchboard({
+        workspaceRoot,
+        port: listenPort,
+        hostname,
+        verbose: true,
+    });
 
     await waitForHealth(instance.port);
 
@@ -1037,8 +1071,15 @@ async function main() {
     const boardUrl = `${instance.url}/?token=${instance.oneTimeToken}`;
 
     console.log(`\nSwitchboard is running at ${instance.url}`);
-    console.log(`Board URL (one-time token, expires in 15 minutes): ${boardUrl}`);
-    console.log(`To enrol another device or re-enter after expiry: npx switchboard token show`);
+    if (instance.usingDurableToken) {
+        console.log(`Board URL (one-time token, expires in 15 minutes): ${boardUrl}`);
+        console.log(`To enrol another device or re-enter after expiry: npx switchboard token show`);
+    } else {
+        // Ephemeral mode: this token does not expire, because there is no durable
+        // secret for `token show` to authenticate a replacement mint with.
+        console.log(`Board URL (one-time token): ${boardUrl}`);
+        console.log(`For a token that survives restarts and can enrol a second device: npx switchboard token rotate`);
+    }
     if (displayHost !== '127.0.0.1') {
         // The token is consumed server-side, so a name the browser fails to
         // resolve never reaches the server and never spends it — this fallback

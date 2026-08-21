@@ -39,12 +39,19 @@ Description=Switchboard standalone server
 After=network.target
 
 [Service]
-Type=forking
+# Type=simple, NOT forking: systemd must own the real server process. `--detach`
+# would background it for systemd, whose entire job is that backgrounding — the
+# parent exits 0, systemd loses the daemon, and Restart=on-failure below never
+# fires when the board crashes. journald captures the foreground process's output
+# for free, and `systemctl --user stop` delivers SIGTERM to the real process,
+# which is what the 5s grace period covering the debounced kanban.db persist was
+# built for.
+Type=simple
 
 # ── EDIT THESE VALUES ───────────────────────────────────────────
 # ExecStart: path to npx or the switchboard binary, followed by args.
 #   Use `which npx` to find the full path.
-ExecStart=/usr/bin/npx switchboard start --detach --port 7777 --workspace /home/YOUR_USERNAME/path/to/workspace
+ExecStart=/usr/bin/npx switchboard start --port 7777 --no-open --workspace /home/YOUR_USERNAME/path/to/workspace
 
 # WorkingDirectory: the workspace root (must match --workspace above).
 WorkingDirectory=/home/YOUR_USERNAME/path/to/workspace
@@ -55,8 +62,8 @@ WorkingDirectory=/home/YOUR_USERNAME/path/to/workspace
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/YOUR_USERNAME/.local/bin
 Environment=HOME=/home/YOUR_USERNAME
 
-# --detach forks and the parent exits 0, so systemd considers the
-# service "started" once the parent exits. The child is the real daemon.
+# systemd tracks the ExecStart process itself, so a crash is observed and
+# restarted. Verify this by `kill -9`ing the server and confirming it comes back.
 Restart=on-failure
 RestartSec=5
 

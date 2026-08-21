@@ -414,7 +414,7 @@ async function main() {
         assert.strictEqual(result.type, 'attachmentsListResult');
     });
 
-    await test('viewAttachments decorates webviewUri via the loopback asset route (browser cockpit preview)', async () => {
+    await test('viewAttachments decorates webviewUri via the ORIGIN-RELATIVE asset route (browser cockpit preview)', async () => {
         // A real file inside an allowed asset root — _buildLocalAssetUrl realpaths the
         // target and rejects anything outside getTicketsAssetRoots(root).
         const assetDir = path.join(tmpRoot, '.switchboard', 'tickets', 'clickup', 'a-list', 'attachments');
@@ -433,9 +433,21 @@ async function main() {
         assert.strictEqual(result.success, true);
         const uri = result.attachments[0].webviewUri;
         assert.ok(uri, 'a downloaded image inside an allowed asset root must get a webviewUri with no panel present');
+        // Origin-relative, NOT `http://127.0.0.1:<port>/…`. The absolute form pinned the
+        // server's real listening port, so every ticket image 404'd under a port-shifted
+        // SSH tunnel (`-L 7777:127.0.0.1:41234` → the browser asks its own machine for
+        // 41234) and was blocked as mixed content behind an HTTPS reverse proxy. The
+        // route is served by the same origin the page came from, so a relative URL is
+        // correct under a direct launch, a tunnel, a proxy and HTTPS alike. The absolute
+        // form is kept only for the VS Code webview host, where the page origin is
+        // `vscode-webview://` and a root-relative path resolves to nothing.
         assert.ok(
-            uri.startsWith('http://127.0.0.1:45999/design/asset?'),
-            `webviewUri must be the loopback asset URL (got ${uri})`
+            uri.startsWith('/design/asset?'),
+            `webviewUri must be the origin-relative asset URL (got ${uri})`
+        );
+        assert.ok(
+            !uri.includes('45999') && !uri.includes('127.0.0.1'),
+            `webviewUri must not bake in the listening port or host (got ${uri})`
         );
         assert.ok(uri.includes(encodeURIComponent(fs.realpathSync(assetPath))), 'the asset URL must carry the resolved path');
     });

@@ -30,7 +30,11 @@ Its docblock already states the right principle — *"gate callers on these, nev
 
 Meanwhile there is no `NotionSyncService` and no `NotionAutomationService`, against `LinearSyncService`/`LinearAutomationService`/`LinearDocsAdapter` and the matching ClickUp trio. Each tracker implements the other's missing half.
 
-**And nothing enforces symmetry.** `ls src/test/ | grep -iE "provider|parity|capab"` returns nothing. So ClickUp's `archive: false` and a Notion-only board restore both pass every gate silently.
+**And nothing enforces symmetry.** Three per-provider tests exist in `src/test/integrations/` (`clickup/`, `linear/`, `notion/` — each has a `*-remote-provider.test.js`), but they are scattered and inconsistent: only ClickUp's checks capabilities (`clickup-remote-provider.test.js:102-105`), and it asserts `capabilities.projectContextPush === false` — a field that **does not exist** in `RemoteProviderCapabilities` (`RemoteProvider.ts:65-72` declares only `pull`, `push`, `archive`). The Linear and Notion provider tests do not check capabilities at all. So ClickUp's `archive: false` and a Notion-only board restore both pass every gate silently — the "watchers" are inconsistent, and one is asserting against a phantom field. The contract test must **replace and supersede** these three scattered assertions with one symmetric enumeration, not add a fourth alongside them.
+
+> **Superseded:** "`ls src/test/ | grep -iE "provider|parity|capab"` returns nothing."
+> **Reason:** The grep searched only `src/test/` top-level and missed `src/test/integrations/{clickup,linear,notion}/*-remote-provider.test.js`. Three provider tests exist; the claim of absence was a search-path error, not a real absence. The problem is inconsistency and phantom-field drift, not "no test exists."
+> **Replaced with:** Three per-provider tests exist but are scattered and inconsistent — only ClickUp's checks capabilities, and it asserts a field (`projectContextPush`) the interface doesn't declare. The contract test supersedes them with one symmetric enumeration.
 
 ### Root Cause
 
@@ -62,7 +66,7 @@ None.
 - **The exemption mechanism is the whole design.** A test that simply demands all-true fails on day one and gets disabled. It must accept explicitly declared exemptions carrying a reason, so an asymmetry is a visible, reviewed decision with a name attached — and removing an exemption is how a later plan proves it landed.
 - **Deciding the capability granularity.** Too coarse (`boardSync: boolean`) and it cannot express "pushes but cannot restore", which is the exact current state of ClickUp and Linear. Too fine and every provider carries a dozen flags nobody gates on.
 - **A boolean cannot distinguish a working implementation from a stub, and that is the flaw that produced this problem.** `ClickUpRemoteProvider.fetchCommentDeltas` (`:119-121`) is `return { deltas: [], nextCursor: sinceCursor };` — it satisfies the interface and does nothing. ClickUp nonetheless declares `pull: true`, and the interface docblock admits the split in prose: *"Provider can pull/ingest state + comments (Linear, Notion). ClickUp = state-pull only (no comment bus)."* A test comparing declarations sees `pull: true` on all three, calls it symmetric, and passes. **The asymmetry hides inside a `true`.** Two things follow: the capability set must be split to the granularity that actually varies (`pullState` and `pullComments` are different capabilities, not one `pull`), and the test must assert that a declared capability *does something* — the empty-stub shape, returning an empty collection plus the input cursor unchanged, is mechanically detectable.
-- **The enumerated surface must extend past `RemoteProvider`, or the next capability drifts the same way.** Board sync escaped notice precisely because it lived outside the one interface that had a declaration. The same is true today of `ResearchSourceAdapter` — `LinearDocsAdapter:15` and `ClickUpDocsAdapter:16` both implement it and Notion implements it nowhere — and of the automation services, where `LinearAutomationService` and `ClickUpAutomationService` exist and no Notion equivalent does. If the enumeration covers only one interface, this plan fixes one instance rather than the pattern.
+- **The enumerated surface must extend past `RemoteProvider`, or the next capability drifts the same way.** Board sync escaped notice precisely because it lived outside the one interface that had a declaration. The same is true today of the automation services, where `LinearAutomationService` (`LinearAutomationService.ts:42`) and `ClickUpAutomationService` (`ClickUpAutomationService.ts:45`) exist and no `NotionAutomationService` does. (Note: `ResearchSourceAdapter` is **not** an asymmetry — `NotionResearchAdapter` at `ResearchImportService.ts:49` implements it alongside `LinearDocsAdapter:15` and `ClickUpDocsAdapter:16`; all three providers have research adapters. Only the automation service gap is real.) If the enumeration covers only one interface, this plan fixes one instance rather than the pattern.
 
 ## Edge-Case & Dependency Audit
 
@@ -78,6 +82,8 @@ None.
 
 ## Adversarial Synthesis
 
+**Key risks:** (1) The contract test is added alongside the three existing inconsistent per-provider tests instead of superseding them, reproducing four-test drift. (2) A ResearchSourceAdapter exemption is seeded for Notion based on a false premise — `NotionResearchAdapter` exists. (3) The stub-detection assertion has no specified mechanism and becomes a green metric. **Mitigations:** The contract test replaces the three scattered assertions; the adapter exemption is dropped; the stub-detection is specified as runtime with mock services matching the existing test architecture.
+
 The tempting shortcut is to add `restore: boolean` to the existing object and stop. That gets a flag with nothing enforcing it — precisely the state that produced this problem, since `RemoteProviderCapabilities` already existed and still allowed the board seam to drift. The flag is not the fix; the test is.
 
 The second temptation is to make the test a lint warning so it never blocks. An asymmetry that does not fail is an asymmetry that ships.
@@ -89,10 +95,10 @@ The third, and the one this plan was revised to close: keep `pull` as one boolea
 1. **Extend `RemoteProviderCapabilities`** with board-sync capabilities distinguishing push from restore, documented in the same voice as the existing three.
 2. **Split `pull` into `pullState` and `pullComments`**, so ClickUp's absent comment bus is a declared `false` rather than a `true` backed by an empty stub.
 3. **Declare the current truth at every site** — Notion restorable, ClickUp and Linear not; ClickUp `pullComments: false` — so the object stops describing only half the system.
-4. **Widen the enumeration past `RemoteProvider`** to cover `ResearchSourceAdapter` and the automation services, so Notion's two absences are visible rather than invisible.
-5. **Add a provider capability contract test** that enumerates every provider and every capability and fails on any asymmetry lacking an explicit exemption.
-6. **Assert that a declared capability does something.** Detect the empty-stub shape — an empty collection returned with the input cursor unchanged — so a `true` backed by a no-op fails rather than passing.
-7. **Add a typed exemption declaration** distinguishing platform limitation from not-yet-built, the latter requiring a plan reference. Seed it with ClickUp `archive: false` and `pullComments: false`, the two absent board restores, and Notion's absent adapter and automation service.
+4. **Widen the enumeration past `RemoteProvider`** to cover the automation services, so Notion's absent `NotionAutomationService` (against `LinearAutomationService:42` and `ClickUpAutomationService:45`) is visible rather than invisible. **Do NOT add a ResearchSourceAdapter exemption for Notion** — `NotionResearchAdapter` at `ResearchImportService.ts:49` implements it; all three providers have research adapters.
+5. **Add a provider capability contract test** that enumerates every provider and every capability and fails on any asymmetry lacking an explicit exemption. This test **supersedes** the three existing per-provider capability assertions (`clickup-remote-provider.test.js:102-105` and the absence of capability checks in the Linear/Notion provider tests) — one symmetric enumeration replaces three inconsistent ones, and the phantom `projectContextPush` assertion is removed.
+6. **Assert that a declared capability does something.** Detect the empty-stub shape — an empty collection returned with the input cursor unchanged — so a `true` backed by a no-op fails rather than passing. **Mechanism:** runtime, not static — construct each provider with a mock service (matching the existing test architecture in `src/test/integrations/`), call the declared-capability method, and assert the result is not the empty-stub shape. For `fetchCommentDeltas`, the stub at `ClickUpRemoteProvider.ts:119-121` returns `{ deltas: [], nextCursor: sinceCursor }` — the test calls it with a mock that returns tasks and confirms ClickUp's implementation still returns empty (proving it's a stub, not a working pull), then asserts `pullComments: false` matches.
+7. **Add a typed exemption declaration** distinguishing platform limitation from not-yet-built, the latter requiring a plan reference. Seed it with ClickUp `archive: false` and `pullComments: false`, the two absent board restores, and Notion's absent automation service.
 8. **Gate the UI on the new flags**, honouring the interface's existing promise that no toggle offers a capability a provider lacks.
 
 ### Migration
@@ -109,8 +115,10 @@ None. Interface and test only; no persisted state and no behaviour change until 
 6. **`archive: false` survives.** Confirm ClickUp's pre-existing asymmetry is carried as an exemption and was not quietly flipped.
 7. **A stub fails.** With ClickUp declaring `pullComments: true` while `fetchCommentDeltas` still returns an empty collection and the input cursor, confirm the suite goes red. This is the assertion that would have caught the original drift.
 8. **The split is honest.** Confirm ClickUp declares `pullComments: false` with an exemption, and that `pullState` remains `true` for all three.
-9. **The wider surface is covered.** Confirm the test sees Notion's absent `ResearchSourceAdapter` and automation service, and that both are carried as exemptions rather than passing unnoticed.
+9. **The wider surface is covered.** Confirm the test sees Notion's absent automation service and carries it as an exemption rather than passing unnoticed. Confirm the test does NOT flag a ResearchSourceAdapter exemption for Notion (it has one — `NotionResearchAdapter` at `ResearchImportService.ts:49`).
 10. **Exemption types behave differently.** Confirm a not-yet-built exemption without a plan reference is rejected, and that a platform-limitation exemption needs none.
+11. **Existing tests superseded, not duplicated.** Confirm the three per-provider capability assertions are removed (or delegated to the contract test) and the phantom `projectContextPush` assertion is gone. No four-test drift.
+12. **Split blast radius.** Confirm `capabilities.pull` is no longer read by any production code (only the old ClickUp test read it; `ContinuousSyncService:963` reads `.push`, `AutoArchiveService:223` reads `.archive`). The split to `pullState`/`pullComments` touches three declaration sites and zero production consumers.
 
 ## Outstanding Questions
 

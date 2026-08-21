@@ -61,14 +61,19 @@ None.
 - **Depends on the capability + contract test plan.** This plan's proof of landing is deleting ClickUp's board-restore exemption.
 - Independent of the Notion and Linear plans; no shared files.
 
+## Adversarial Synthesis
+
+**Key risks:** (1) The restore uses `getListTasks` which drops the `complete` flag, making the "refuse truncated" defense a no-op. (2) The bulk fetch is unspecified — a coder defaults to N per-plan `_findTaskByPlanId` calls, which has no bulk completeness story. (3) The `boardSyncRestore` signature doesn't match Plan 2's contract. **Mitigations:** A `getListTasksWithCompleteness` variant exposes the flag with `includeClosed: true`; the bulk fetch iterates mapped lists (not per-plan); the method signature matches Plan 2's `boardSyncRestore?(workspaceRoot, progress?)`.
+
 ## Proposed Changes
 
-1. **Add board restore to `ClickUpSyncService`**, exposed through the provider seam and gated on the declared capability.
-2. **Fetch by tag and custom field with completeness reporting**, refusing to apply a result known to be truncated.
-3. **Apply plan board state additively**, keyed on `planId`, using `stateKeyToColumn` for the column and resolve-only handling for project names.
-4. **Apply feature structure in a second pass**, mirroring the ordering Notion's restore already uses.
-5. **Report restored, skipped, unmapped and not-found-locally counts.**
-6. **Flip the declared capability and delete the exemption.**
+1. **Add board restore to `ClickUpSyncService`**, exposed through the provider seam as `boardSyncRestore?(workspaceRoot, progress?)` on `RemoteProvider` (the signature Plan 2 specifies), gated on the declared capability.
+2. **Bulk fetch: iterate all mapped lists with `includeClosed: true`**, reusing `reconcileLiveIds`'s pattern (`ClickUpRemoteProvider.ts:223-255`) but with `includeClosed: true` (a completed card is still board state). Match each task to a local plan by parsing the three anchors — `switchboard:{planId}` tag (`:2976`), description footer `[Switchboard] PlanFile: … | Plan: …` (`:2980`), custom field (`:2986`) — locally from the bulk result. This is NOT N per-plan calls to `_findTaskByPlanId`; it is one paginated fetch per mapped list.
+3. **Expose the `complete` flag.** `getListTasks` (`:1318`) drops the `complete` flag from `_fetchListTasksInternal` (`:1315`); `getListTasksLive` (`:1333`) returns `complete` but accepts no options (no `includeClosed`). The restore needs both. Add a `getListTasksWithCompleteness(listId, options)` method that returns `{ tasks, complete }` AND accepts `includeClosed: true`. The restore refuses to apply if ANY list's fetch is incomplete (`complete === false`) — the same contract `reconcileLiveIds` enforces.
+4. **Apply plan board state additively**, keyed on `planId`, using `stateKeyToColumn` for the column and resolve-only handling for project names.
+5. **Apply feature structure in a second pass**, mirroring the ordering Notion's restore already uses.
+6. **Report restored, skipped, unmapped and not-found-locally counts.**
+7. **Flip the declared capability and delete the exemption.**
 
 ### Migration
 

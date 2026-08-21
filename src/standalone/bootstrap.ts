@@ -102,6 +102,13 @@ export interface HeadlessSwitchboardInstance {
     port: number;
     url: string;
     oneTimeToken: string;
+    /**
+     * True when the session secret came from the stored `switchboard.apiToken`
+     * rather than the per-launch random one. Callers use it to decide what the
+     * boot URL can promise: only in durable mode can `token show` mint a
+     * replacement, so only there does the boot token carry a TTL.
+     */
+    usingDurableToken: boolean;
     stop: () => Promise<void>;
 }
 
@@ -500,7 +507,15 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const ENROLMENT_TTL_MS = 15 * 60 * 1000; // 15 minutes
     const enrolmentTokens = new Map<string, number>(); // token → expiry timestamp
     const oneTimeToken = crypto.randomBytes(32).toString('hex');
-    enrolmentTokens.set(oneTimeToken, Date.now() + ENROLMENT_TTL_MS);
+    // The boot-time token keeps its historical unlimited lifetime in ephemeral mode.
+    // A TTL is only safe where a replacement can be minted: without a durable secret
+    // there is no credential for the CLI to present to POST /auth/mint, so expiring
+    // the boot token would leave a running board with no way in at all — recoverable
+    // only by a restart, which kills every agent. That is worse than the stale-URL
+    // risk the TTL exists to bound, and it is a regression on today's behaviour. In
+    // durable mode `token show` mints on demand, so the TTL applies and an unredeemed
+    // URL left in scrollback goes stale on its own.
+    enrolmentTokens.set(oneTimeToken, usingDurableToken ? Date.now() + ENROLMENT_TTL_MS : Number.POSITIVE_INFINITY);
 
     const consumeOneTimeToken = (t: string): boolean => {
         const now = Date.now();
@@ -2708,6 +2723,8 @@ Each plan file must include:
         port,
         url,
         oneTimeToken,
+        /** True when the session secret came from the stored `switchboard.apiToken`. */
+        usingDurableToken,
         stop: async () => {
             try { terminalWsGateway?.dispose(); } catch { /* ignore */ }
             try { await ptyFleetService.disposeAll(); } catch { /* ignore */ }
@@ -2732,7 +2749,20 @@ Each plan file must include:
     };
     process.once('SIGINT', signalCleanup);
     process.once('SIGTERM', signalCleanup);
-    process.once('SIGHUP', signalCleanup);
+    // SIGHUP is "your controlling terminal went away" — a request to stop *printing*,
+    // not to stop *running*. Treating it as a stop signal meant closing a terminal
+    // window, dropping an SSH session, or a terminal app restarting on OS update tore
+    // down every in-flight agent terminal and exited 0, as though the operator had
+    // asked for it. Ignoring it is the conventional behaviour for anything long-lived
+    // (it is precisely what `nohup` means).
+    //
+    // The listener is registered rather than the line deleted, deliberately: SIGHUP's
+    // default disposition is terminate, and Node only overrides it while a listener
+    // exists — removing this would convert a graceful teardown into an immediate hard
+    // exit with no cleanup at all, which is strictly worse.
+    process.on('SIGHUP', () => {
+        log(opts, 'SIGHUP received (controlling terminal closed) — staying up. Use `npx switchboard stop` or Ctrl+C to shut down.');
+    });
     process.on('exit', syncUnlinkPortFile);
 
     return instance;

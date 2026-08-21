@@ -15,10 +15,10 @@ Board sync — the half of provider integration that carries kanban columns and 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [ClickUp can already be queried by planId but cannot rebuild a board — add the restore orchestration](../plans/clickup-board-restore.md) — **CREATED**
-- [ ] [Board sync is a seam with no interface — extend RemoteProviderCapabilities to cover it and add the contract test that keeps it symmetric](../plans/provider-capability-board-sync-and-contract-test.md) — **CREATED**
-- [ ] [Notion's board sync is misnamed as "backup" and sits outside the provider seam — move it behind the interface without breaking shipped Notion databases](../plans/notion-board-sync-behind-the-seam.md) — **CREATED**
-- [ ] [Linear issues carry no planId, so a board can never be rebuilt from Linear — add the anchor, then the restore](../plans/linear-board-restore-and-planid-anchor.md) — **CREATED**
+- [ ] [ClickUp can already be queried by planId but cannot rebuild a board — add the restore orchestration](../plans/clickup-board-restore.md) — **PLAN REVIEWED**
+- [ ] [Board sync is a seam with no interface — extend RemoteProviderCapabilities to cover it and add the contract test that keeps it symmetric](../plans/provider-capability-board-sync-and-contract-test.md) — **PLAN REVIEWED**
+- [ ] [Notion's board sync is misnamed as "backup" and sits outside the provider seam — move it behind the interface without breaking shipped Notion databases](../plans/notion-board-sync-behind-the-seam.md) — **PLAN REVIEWED**
+- [ ] [Linear issues carry no planId, so a board can never be rebuilt from Linear — add the anchor, then the restore](../plans/linear-board-restore-and-planid-anchor.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

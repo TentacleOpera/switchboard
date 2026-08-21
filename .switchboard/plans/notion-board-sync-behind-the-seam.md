@@ -67,17 +67,22 @@ Shipped surfaces that a rename must preserve or migrate:
 
 ## Adversarial Synthesis
 
+**Key risks:** (1) Board-sync methods are exposed as public class methods instead of declared interface methods, making the capability gate decorative — the `createPageForPlan` precedent at `:262` shows this pattern already exists. (2) The method signatures are unspecified, so ClickUp/Linear plans invent incompatible contracts. (3) A regression in the only working board restore removes the capability while claiming to formalise it. **Mitigations:** Methods are declared on `RemoteProvider` with explicit signatures; the contract test calls the method (not just reads the flag); round-trip verification against a real Notion database created by the old code proves no regression.
+
 The tempting version is a pure rename — file and class — leaving the setting keys and webview messages alone "for compatibility". That produces a third naming scheme rather than fewer, and the next reader is worse off than before. Either the user-facing vocabulary moves with a migration, or the rename is not worth doing.
 
 The opposite temptation is to rename everything including the Notion property names, which is the one change that destroys user data.
 
 ## Proposed Changes
 
-1. **Expose Notion's board push and restore through `RemoteProvider`**, gated on the new capabilities, with `NotionRemoteProvider` declaring them.
+1. **Expose Notion's board push and restore through `RemoteProvider` as declared interface methods**, gated on the new capabilities, with `NotionRemoteProvider` declaring them. The methods must be ON the `RemoteProvider` interface (optional, gated on capability flags), not merely public methods on the class — `NotionRemoteProvider.createPageForPlan` (`:262`) is the cautionary precedent: a public method the interface doesn't declare, invisible to any capability gate. The board-sync methods are:
+   - `boardSyncPush?(plans: KanbanPlanRecord[]): Promise<{ success: boolean; pushed: number; skipped: number; error?: string }>` — bulk push (delegates to the renamed service's backup method).
+   - `boardSyncRestore?(workspaceRoot: string, progress?): Promise<{ success: boolean; restored: number; skipped: number; error?: string }>` — bulk restore (delegates to the renamed service's restore method).
+   These signatures are the contract ClickUp and Linear will implement in their respective plans. Specifying them here means the three implementations match, not three guesses.
 2. **Rename the service to name its capability**, not its original purpose, so it reads as a peer of the ClickUp and Linear equivalents.
-3. **Migrate the shipped setting key**, reading the legacy key and preserving unknown or legacy fields rather than dropping them.
-4. **Update the webview message names in lockstep** with the Setup panel, both directions, in one change.
-5. **Leave every Notion database property name exactly as-is**, and add a test asserting they are unchanged.
+3. **Migrate the shipped setting key** (`switchboard.notionBackup` at `package.json:706`), reading the legacy key and preserving unknown or legacy fields rather than dropping them.
+4. **Update the webview message names in lockstep** with the Setup panel (`setup.html` — `notionBackupSetupComplete`, `notionBackupConfigResult`, `notionBackupResult`, `notion-backup-status`, `notion-backup-btn`, `notion-restore-btn`), both directions, in one change.
+5. **Leave every Notion database property name exactly as-is** (`'Kanban Column'`, `'Plan ID'`, `'Feature'`, `'Status'`, `'Complexity'`, `'Tags'`, `'Is Feature'`, `'Repo Scope'`, etc. — `NotionBackupService.ts:557-575`), and add a test asserting they are unchanged.
 
 ### Migration
 
