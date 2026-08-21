@@ -89,9 +89,12 @@ preserved by _regenerateFeatureFile on subsequent subtask changes.}
    section MAY be added (the watcher will parse it if present), but it is not part of the
    extension-generated format.
 
-The `<!-- BEGIN SUBTASKS ... -->` / `<!-- END SUBTASKS -->` block is managed by the extension.
-Write it with the `## Subtasks` heading and `- [ ] (no subtasks)` placeholder — the extension
-replaces this when subtasks are linked via `_regenerateFeatureFile`.
+The `<!-- BEGIN SUBTASKS ... -->` / `<!-- END SUBTASKS -->` block is regenerated from the DB
+by `_regenerateFeatureFile`, so treat it as DB-derived: never rely on an edit *surviving*
+there, and never delete a line expecting the subtask to detach. Writing links INTO it does
+work — that is the offline linking path (see "Linking Existing Plans as Subtasks" below) — but
+the block will be rewritten from DB state afterwards. If you have no subtasks to link yet,
+write the `- [ ] (no subtasks)` placeholder.
 
 ### Filename Convention
 
@@ -109,16 +112,47 @@ replaces this when subtasks are linked via `_regenerateFeatureFile`.
 
 ### Linking Existing Plans as Subtasks
 
-After writing the feature file, to link existing plans (identified by their `planId` from
-`kanban-board.md`):
+**If the extension is running**, this is authoritative — it links in the DB and regenerates
+the feature file in one step:
 
 ```bash
 node .agents/skills/kanban_operations/assign-to-feature.js "{featurePlanId}" '["subtaskPlanId1","subtaskPlanId2"]' "{workspaceRoot}"
 ```
 
-This also routes through the extension; in a remote session it will fail and the agent should
-note that subtask linking will need to be done when VS Code is next opened, OR the user can
-drag-and-drop in the kanban UI.
+**If it is not running**, subtask linking still works — you do NOT have to wait for VS Code.
+Two file-only mechanisms exist, both picked up by `GlobalPlanWatcherService` on the next
+import. Prefer the first:
+
+1. **List the subtasks in the feature file's block** (one write links all of them). Use the
+   exact link shape the extension generates — a root-relative `../plans/<file>.md` target:
+
+   ```markdown
+   <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+   ## Subtasks
+   - [ ] [Add the login form](../plans/feature_plan_20260101_login-form.md)
+   - [ ] [Wire the session cookie](../plans/feature_plan_20260101_session-cookie.md)
+   <!-- END SUBTASKS -->
+   ```
+
+   Only `../plans/<file>.md`, `.switchboard/plans/<file>.md` and `./<file>.md` targets are
+   understood. A bare planId or a bare filename is silently ignored — link by **plan file
+   path**, never by planId, and never invent a path (`../plans/<planId>.md` is not a real
+   file and links nothing).
+
+2. **Add `**Feature:** {featurePlanId}` to the subtask plan file's metadata.** A durable
+   fact on the *subtask* side, parsed by `parsePlanMetadata` and applied by
+   `_applyFeatureLink`. Useful when you are authoring the subtask plan anyway, or when the
+   feature file is owned by someone else. Costs one edit per subtask, so option 1 is
+   usually less work.
+
+**Both mechanisms are link-only.** Removing a link from the block does NOT detach the
+subtask — omission means "no statement", not "remove". Detaching is an explicit operation
+(board drag, `assign-to-feature.js` onto a different feature, or the remove/delete verbs),
+because the block is regenerated from the DB and any stale copy of the file would otherwise
+read as an instruction to delete rows the DB legitimately has.
+
+Neither mechanism performs project inheritance, kanban column resolution, or integration
+sync — those stay extension-only.
 
 ### Sourcing Existing Suggest-Feature Content
 

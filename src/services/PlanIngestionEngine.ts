@@ -1808,7 +1808,13 @@ export class PlanIngestionEngine {
         }
     }
 
-    private async _syncFeatureMarkdownSubtasks(
+    /**
+     * Link the subtasks a feature file's `<!-- BEGIN SUBTASKS -->` / `## Subtasks` block
+     * names, so feature membership can be declared by writing files alone (no running
+     * API server). Additive only — see KanbanDatabase.linkFeatureSubtasksByPaths for why
+     * omission from the block must never imply removal.
+     */
+    private async _linkFeatureMarkdownSubtasks(
         db: KanbanDatabase,
         featurePlanId: string,
         content: string,
@@ -1849,18 +1855,16 @@ export class PlanIngestionEngine {
                 }
                 if (unparsedTargets.length > 0) {
                     this._host.logger.appendLine(
-                        `[GlobalPlanWatcher] _syncFeatureMarkdownSubtasks: feature ${featurePlanId} lists ` +
+                        `[GlobalPlanWatcher] _linkFeatureMarkdownSubtasks: feature ${featurePlanId} lists ` +
                         `${unparsedTargets.length} link(s) in an unsupported shape (${unparsedTargets.slice(0, 5).join(', ')}) — ` +
-                        `linking the ${linkedPaths.length} resolvable one(s) but NOT unlinking, since the parsed set is incomplete.`
+                        `linking the ${linkedPaths.length} resolvable one(s) and ignoring the rest.`
                     );
                 }
-                await db.syncFeatureSubtasksByPaths(featurePlanId, linkedPaths, workspaceId, {
-                    allowUnlink: unparsedTargets.length === 0
-                });
+                await db.linkFeatureSubtasksByPaths(featurePlanId, linkedPaths, workspaceId);
             }
         } catch (err) {
             this._host.logger.appendLine(
-                `[GlobalPlanWatcher] _syncFeatureMarkdownSubtasks failed for feature ${featurePlanId}: ${err instanceof Error ? err.message : String(err)}`
+                `[GlobalPlanWatcher] _linkFeatureMarkdownSubtasks failed for feature ${featurePlanId}: ${err instanceof Error ? err.message : String(err)}`
             );
         }
     }
@@ -2009,7 +2013,7 @@ export class PlanIngestionEngine {
                 await db.insertFileDerivedPlan(newRecord);
                 if (relativePath.startsWith('.switchboard/features/')) {
                     await db.updateFeatureStatus(newRecord.planId, 1, '');
-                    await this._syncFeatureMarkdownSubtasks(db, newRecord.planId, content, workspaceId);
+                    await this._linkFeatureMarkdownSubtasks(db, newRecord.planId, content, workspaceId);
                     await this._retryPendingFeatureLinks(db, workspaceRoot);
                 } else if (metadata.feature) {
                     await this._applyFeatureLink(db, newRecord.planId, metadata.feature, relativePath, workspaceId, workspaceRoot);
@@ -2058,7 +2062,7 @@ export class PlanIngestionEngine {
                 await db.insertFileDerivedPlan(updatedRecord);
                 if (relativePath.startsWith('.switchboard/features/')) {
                     await db.updateFeatureStatus(updatedRecord.planId, 1, '');
-                    await this._syncFeatureMarkdownSubtasks(db, updatedRecord.planId, content, workspaceId);
+                    await this._linkFeatureMarkdownSubtasks(db, updatedRecord.planId, content, workspaceId);
                     await this._retryPendingFeatureLinks(db, workspaceRoot);
                     const tombKey = `${relativePath}|${workspaceId}`;
                     const tomb = this._recentlyDeletedColumns.get(tombKey);

@@ -2741,87 +2741,65 @@ export class KanbanDatabase {
     }
 
     /**
-     * Synchronize subtasks for a feature from a list of relative plan file paths.
-     * Reconciles database state to match declarative markdown feature file subtask list:
-     * - Links unlinked subtasks (feature_id = '' or feature_id = featurePlanId)
-     * - Never steals plans belonging to a different feature (cross-feature guard)
-     * - Never demotes a plan that is itself a feature (nested-feature guard)
-     * - Unlinks subtasks previously belonging to featurePlanId but no longer in linkedPaths
+     * Link a feature's subtasks from a list of relative plan file paths.
      *
-     * `opts.allowUnlink` gates the destructive half. Pass false whenever the caller's
-     * view of the file's subtask list is known to be incomplete — the unlink is derived
-     * from set *difference*, so an under-read block reads as "these were removed" and
-     * would silently destroy live links. Link-only is always safe; unlink is only safe
-     * from a block that was read in full.
+     * LINK-ONLY, deliberately. A path listed in the feature file's subtask block sets
+     * `feature_id`; a path *absent* from it means nothing. There is no unlink-from-file
+     * pass and one must never be added back.
+     *
+     * Why: the block is regenerated from the DB (`_regenerateFeatureFile`), so any
+     * process holding a slightly-old copy of the file — an agent doing a prose pass, a
+     * `git checkout`, a failed regen — writes back a block that is missing rows the DB
+     * legitimately has. Deriving removals from that set difference reads a stale copy as
+     * an instruction to delete, which silently drops subtasks off the board. Removal is
+     * an explicit operation only: `_removeSubtaskFromFeature`, `_deleteFeature`,
+     * `assignPlansToFeature` to a different feature, or `reconcileFeatures`.
+     *
+     * Guards: never steals a plan owned by a different feature (cross-feature), and never
+     * writes is_feature=0 onto a row that is itself a feature (nested-feature).
      */
-    public async syncFeatureSubtasksByPaths(
-        featurePlanId: string,
-        linkedPaths: string[],
-        workspaceId: string,
-        opts?: { allowUnlink?: boolean }
-    ): Promise<void> {
+    public async linkFeatureSubtasksByPaths(featurePlanId: string, linkedPaths: string[], workspaceId: string): Promise<void> {
         if (!featurePlanId || !(await this.ensureReady()) || !this._db) return;
 
         const normalizedPaths = new Set(linkedPaths.map(p => this._ensureRelativePlanFile(p)));
-        const targetPlans: KanbanPlanRecord[] = [];
         const unresolvedPaths: string[] = [];
 
         for (const normPath of normalizedPaths) {
             const plan = await this.getPlanByPlanFile(normPath, workspaceId);
-            if (plan) {
-                targetPlans.push(plan);
-            } else {
-                // Listed but not (yet) imported. The watcher may still be debouncing
-                // the subtask's own file event, so this is not evidence of removal.
+            if (!plan) {
+                // Listed but not imported yet — the watcher may still be debouncing the
+                // subtask's own file event. Harmless: the subtask's own ingest, or the
+                // next feature-file write, links it. Logged so it is diagnosable.
                 unresolvedPaths.push(normPath);
+                continue;
             }
-        }
-
-        // 1. Link plans that match the linkedPaths
-        for (const plan of targetPlans) {
-            // Never write is_feature=0 onto a row that is itself a feature. The parser
-            // accepts `./x.md` targets, which resolve into .switchboard/features/, so a
-            // feature file naming a sibling feature reaches here — and updateFeatureStatus
-            // takes is_feature as a positional argument, so linking would demote the
-            // child feature and orphan its own subtasks. Mirrors the same skip in
+            // updateFeatureStatus takes is_feature positionally, and the parser accepts
+            // `./x.md` targets that resolve into .switchboard/features/ — so a feature
+            // file naming a sibling feature reaches here. Linking it would demote that
+            // feature to a plan and orphan its own subtasks. Mirrors the same skip in
             // KanbanProvider.assignPlansToFeature.
             if (plan.isFeature) {
                 console.warn(
-                    `[KanbanDatabase] syncFeatureSubtasksByPaths: ${plan.planFile} is itself a feature; skipping link to ${featurePlanId} (nested-feature guard)`
+                    `[KanbanDatabase] linkFeatureSubtasksByPaths: ${plan.planFile} is itself a feature; skipping link to ${featurePlanId} (nested-feature guard)`
                 );
                 continue;
             }
-            if (!plan.featureId || plan.featureId === '' || plan.featureId === featurePlanId) {
-                if (plan.featureId !== featurePlanId) {
-                    await this.updateFeatureStatus(plan.planId, 0, featurePlanId);
-                }
-            } else {
+            if (plan.featureId && plan.featureId !== featurePlanId) {
                 console.warn(
-                    `[KanbanDatabase] syncFeatureSubtasksByPaths: Plan ${plan.planFile} already belongs to feature ${plan.featureId}; skipping link to ${featurePlanId} (cross-feature guard)`
+                    `[KanbanDatabase] linkFeatureSubtasksByPaths: Plan ${plan.planFile} already belongs to feature ${plan.featureId}; skipping link to ${featurePlanId} (cross-feature guard)`
                 );
+                continue;
+            }
+            if (plan.featureId !== featurePlanId) {
+                await this.updateFeatureStatus(plan.planId, 0, featurePlanId);
             }
         }
 
-        // 2. Unlink subtasks previously linked to this feature but removed from linkedPaths.
-        // Skipped when the caller flagged an incomplete read, or when a listed path did not
-        // resolve to a row — in both cases the file describes subtasks this pass cannot see,
-        // so the set difference is not a removal set.
-        if (opts?.allowUnlink === false) return;
         if (unresolvedPaths.length > 0) {
             console.warn(
-                `[KanbanDatabase] syncFeatureSubtasksByPaths: ${unresolvedPaths.length} listed path(s) for feature ${featurePlanId} ` +
-                `are not imported yet (${unresolvedPaths.slice(0, 5).join(', ')}); linked what resolved, skipping the unlink pass.`
+                `[KanbanDatabase] linkFeatureSubtasksByPaths: ${unresolvedPaths.length} listed path(s) for feature ${featurePlanId} ` +
+                `are not imported yet (${unresolvedPaths.slice(0, 5).join(', ')}); they link on their own ingest.`
             );
-            return;
-        }
-        const currentSubtasks = await this.getSubtasksByFeatureId(featurePlanId);
-        for (const subtask of currentSubtasks) {
-            const normSubtaskFile = this._ensureRelativePlanFile(subtask.planFile);
-            if (!normalizedPaths.has(normSubtaskFile)) {
-                // Preserve is_feature: a nested feature row that ends up carrying this
-                // feature_id must lose the link without losing its feature identity.
-                await this.updateFeatureStatus(subtask.planId, subtask.isFeature ? 1 : 0, '');
-            }
         }
     }
 
