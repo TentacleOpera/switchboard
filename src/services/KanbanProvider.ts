@@ -14613,7 +14613,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         planIds: string[],
         description?: string,
         initiatorProject?: string | null
-    ): Promise<{ success: boolean; featurePlanId?: string; featureSessionId?: string; error?: string }> {
+    ): Promise<{ success: boolean; featurePlanId?: string; featureSessionId?: string; linked?: string[]; skipped?: string[]; error?: string }> {
         // Strip newlines so a multi-line name cannot inject a second YAML key or H1 heading.
         const featureName = (name || '').replace(/[\r\n]+/g, ' ').trim();
         const subtaskPlanIds = Array.isArray(planIds) ? planIds : [];
@@ -14641,17 +14641,26 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             return { success: false, error: 'Workspace ID not found. Cannot create feature.' };
         }
         const subtasks: any[] = [];
+        const skippedPlanIds: string[] = [];
         for (const pid of subtaskPlanIds) {
             const plan = await db.getPlanByPlanId(pid);
-            if (plan) subtasks.push(plan);
+            if (plan) subtasks.push(plan); else skippedPlanIds.push(pid);
         }
-        // Zero subtasks is now valid — creates a blank feature. The "No valid subtasks"
-        // guard is removed; callers that pass invalid IDs simply get a feature with
-        // fewer linked subtasks than requested.
-        // WARNING: if the caller expected subtasks but none resolved (stale IDs),
-        // emit a warning so the silent failure is visible.
-        if (subtaskPlanIds.length > 0 && subtasks.length === 0) {
-            console.warn(`[KanbanProvider] createFeatureFromPlanIds: ${subtaskPlanIds.length} subtask IDs provided but 0 resolved to valid plans. Creating blank feature anyway.`);
+        // Zero subtasks is valid — `planIds: []` deliberately creates a blank feature
+        // (the verb path does this; the HTTP route rejects an empty array with a 400).
+        //
+        // A NON-EMPTY list that does not fully resolve is a different thing: the caller
+        // asked for subtasks it did not get. Both counts are returned to the caller as
+        // `linked` / `skipped` — mirroring assignPlansToFeature's shape — because the
+        // response used to carry no trace of it at all, so `{success: true}` covered
+        // everything from "all linked" to "none linked, here is a blank card on your
+        // board". The console.warn below is not a substitute: it lands in the extension
+        // host's dev-tools console, which no HTTP or CLI caller can see.
+        if (skippedPlanIds.length > 0) {
+            console.warn(
+                `[KanbanProvider] createFeatureFromPlanIds: ${skippedPlanIds.length} of ${subtaskPlanIds.length} subtask ID(s) did not resolve to a plan and were skipped ` +
+                `(${skippedPlanIds.slice(0, 5).join(', ')}). Feature created with ${subtasks.length} subtask(s).`
+            );
         }
         // Inherit project from subtasks so the feature appears on the same project-filtered
         // board as its children. Without this, the new feature record has project='' /
@@ -14829,7 +14838,13 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             complexity: st.complexity
         }));
         await this._syncFeatureOutbound(workspaceRoot, featurePlanFile, effectiveFeaturePlanId, featureName, effectiveColumn, subtaskSyncParams);
-        return { success: true, featurePlanId: effectiveFeaturePlanId, featureSessionId: sessionId };
+        return {
+            success: true,
+            featurePlanId: effectiveFeaturePlanId,
+            featureSessionId: sessionId,
+            linked: subtasks.map((st: any) => String(st.planId)),
+            skipped: skippedPlanIds,
+        };
     }
 
     /**

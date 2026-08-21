@@ -141,6 +141,24 @@ async function tryViaExtension() {
     let parsed = {};
     try { parsed = JSON.parse(resp.body); } catch { /* non-JSON body */ }
     if (resp.status >= 200 && resp.status < 300 && parsed.success) {
+      // A 200 does NOT mean every planId was linked. createFeatureFromPlanIds skips
+      // planIds that resolve to no plan row and still returns success — historically
+      // with no trace in the response at all, so a stale planId produced a blank
+      // feature card and an `ok: true`. Treat any skip as a failure, matching the
+      // offline fallback below: the same bad input must not succeed just because the
+      // extension happens to be running.
+      const skipped = Array.isArray(parsed.skipped) ? parsed.skipped : [];
+      if (skipped.length > 0) {
+        return {
+          reachable: true,
+          success: false,
+          error: `Feature created but ${skipped.length} planId(s) did not resolve to a plan and were not linked: ${skipped.join(', ')}. `
+            + `Feature planId ${parsed.featurePlanId} now exists with ${Array.isArray(parsed.linked) ? parsed.linked.length : 0} subtask(s) — `
+            + `delete it or link the intended plans, then retry with planId UUIDs from the kanban DB.`,
+          featurePlanId: parsed.featurePlanId,
+          skipped,
+        };
+      }
       return { reachable: true, success: true, featurePlanId: parsed.featurePlanId, featureSessionId: parsed.featureSessionId };
     }
     return { reachable: true, success: false, error: parsed.error || `HTTP ${resp.status}` };
@@ -233,7 +251,12 @@ ${subtasksBlock}
       console.log(JSON.stringify({ ok: true, featurePlanId: viaExt.featurePlanId, featureSessionId: viaExt.featureSessionId }));
       process.exit(0);
     }
-    console.log(JSON.stringify({ ok: false, error: viaExt.error || 'unknown error' }));
+    console.log(JSON.stringify({
+      ok: false,
+      error: viaExt.error || 'unknown error',
+      ...(viaExt.featurePlanId ? { featurePlanId: viaExt.featurePlanId } : {}),
+      ...(viaExt.skipped ? { skipped: viaExt.skipped } : {}),
+    }));
     process.exit(1);
   }
 

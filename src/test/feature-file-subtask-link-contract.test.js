@@ -66,6 +66,8 @@ const shimPath = path.join(__dirname, '..', '..', 'out', 'standalone', 'vscodeSh
 }
 
 const { KanbanDatabase } = require('../../out/services/KanbanDatabase');
+const { KanbanProvider } = require('../../out/services/KanbanProvider');
+const { BroadcastHub } = require('../../out/services/broadcastHub');
 const { PlanIngestionEngine } = require('../../out/services/PlanIngestionEngine');
 const { createStandalonePlanIngestionHost } = require('../../out/standalone/planIngestionHost');
 
@@ -297,6 +299,50 @@ async function run() {
         assert.strictEqual(
             fs.readdirSync(path.join(tmpRoot, '.switchboard', 'features')).length, before,
             'no feature file may be written when a planId cannot be resolved');
+    });
+
+    console.log('\n── createFeatureFromPlanIds: unresolved planIds must be REPORTED ──');
+
+    // `{success: true}` used to be the entire response, so a caller could not tell
+    // "all linked" from "none linked, here is a blank card". The console.warn it
+    // emitted instead lands in the extension host's dev-tools console, which no HTTP
+    // or CLI caller can read. Both the total and the PARTIAL case are pinned — the
+    // partial case previously produced no signal at all, not even the warning.
+    const memento = () => {
+        const m = new Map();
+        return { get: (k, d) => (m.has(k) ? m.get(k) : d), update: async (k, v) => { m.set(k, v); }, keys: () => Array.from(m.keys()) };
+    };
+    const kp = new KanbanProvider({ fsPath: repoRoot }, {
+        globalState: memento(), workspaceState: memento(),
+        secrets: { get: async () => undefined, store: async () => {}, delete: async () => {}, onDidChange: () => ({ dispose() {} }) },
+        extensionUri: { fsPath: repoRoot }, extensionPath: repoRoot, subscriptions: [],
+    }, undefined, undefined);
+    kp._hostSeams = undefined;
+    kp._broadcaster = new BroadcastHub({ webview: null, apiServer: null });
+    kp._currentWorkspaceRoot = tmpRoot;
+
+    await test('every planId unresolvable: success reports them all as skipped', async () => {
+        const r = await kp.createFeatureFromPlanIds(tmpRoot, 'All Bogus', ['nope-1', 'nope-2']);
+        assert.strictEqual(r.success, true, r.error);
+        assert.deepStrictEqual(r.skipped, ['nope-1', 'nope-2'], 'both unresolvable ids must be reported');
+        assert.deepStrictEqual(r.linked, [], 'nothing may be reported as linked');
+    });
+
+    await test('PARTIAL resolution is reported (previously no signal at all)', async () => {
+        const r = await kp.createFeatureFromPlanIds(tmpRoot, 'Half Bogus',
+            ['11110000-0000-4000-8000-000000000001', 'nope-3']);
+        assert.strictEqual(r.success, true, r.error);
+        assert.deepStrictEqual(r.skipped, ['nope-3'], 'the unresolvable id must be reported');
+        assert.deepStrictEqual(r.linked, ['11110000-0000-4000-8000-000000000001'],
+            'the resolvable id must be reported as linked');
+    });
+
+    await test('a fully-resolvable request reports an empty skipped list', async () => {
+        const r = await kp.createFeatureFromPlanIds(tmpRoot, 'All Good',
+            ['33330000-0000-4000-8000-000000000003']);
+        assert.strictEqual(r.success, true, r.error);
+        assert.deepStrictEqual(r.skipped, [], 'skipped must be present and empty, never undefined');
+        assert.strictEqual(r.linked.length, 1, 'the one requested subtask must be linked');
     });
 
     try { engine.dispose(); } catch { /* never constructed a watcher */ }
