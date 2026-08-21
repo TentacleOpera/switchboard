@@ -247,6 +247,28 @@ test('BEHAVIOUR: a divergent worktree git policy is NOT deduped against the boar
     // this clause set), the seat block is empty — also correct.
 });
 
+// The dedupe above is INERT unless both hosts actually hand the prompt to the
+// composer. That is link 2 of the chain and it is invisible to every behavioural
+// assertion in this file: the composer keeps its old single-argument behaviour, so
+// a host that drops the second argument re-duplicates every directive on the
+// drag-to-terminal path while all 90+ cases here stay green. Pinned as source
+// text because reaching either call site needs a live host. The standalone twin is
+// the seam that goes silently un-wired, so both are asserted, not just the
+// extension host.
+test('SOURCE: both hosts pass the stripped prompt as buildSeatDirectiveBlock\'s second argument', () => {
+    for (const [name, src, arg] of [
+        ['TaskViewerProvider', TASK_VIEWER_SRC, 'data'],
+        ['bootstrap', BOOTSTRAP_SRC, 'out'],
+    ]) {
+        assert.ok(
+            new RegExp(`buildSeatDirectiveBlock\\(\\s*\\{[^}]*\\}\\s*,\\s*${arg}\\s*\\)`).test(src),
+            `${name} must call buildSeatDirectiveBlock({ ... }, ${arg}) — without the prompt argument the `
+            + 'seat block cannot dedupe against a board-composed prompt, and the drag-to-terminal path '
+            + 'delivers every add-on directive twice'
+        );
+    }
+});
+
 // ── 1. buildSeatDirectiveBlock exists and is a pure composer ─────────────
 
 test('agentPromptBuilder.ts exports buildSeatDirectiveBlock', () => {
@@ -340,8 +362,13 @@ test('buildSeatDirectiveBlock returns empty string when all addons are no-op', (
     const fnStart = AGENT_PROMPT_BUILDER_SRC.indexOf('export function buildSeatDirectiveBlock');
     const fnEnd = AGENT_PROMPT_BUILDER_SRC.indexOf('\n}', fnStart);
     const fnBody = AGENT_PROMPT_BUILDER_SRC.slice(fnStart, fnEnd);
+    // The guard must exist; WHICH array it guards is not the contract. It was
+    // `parts` before the composed-prompt dedupe landed and is `emitted` (the
+    // post-filter array) after — pinning the identifier made this gate fail on a
+    // rename while the behavioural assertion above (`buildSeatDirectiveBlock({})
+    // === ''`) stayed green, which is the wrong way round.
     assert.ok(
-        /parts\.length\s*===\s*0.*return\s+''/.test(fnBody),
+        /(?:emitted|parts)\.length\s*===\s*0.*return\s+''/.test(fnBody),
         'buildSeatDirectiveBlock must return empty string when no parts are emitted'
     );
 });
@@ -1580,9 +1607,19 @@ test('SOURCE: both hosts resolve planIds from standing.members minus head (head)
         assert.ok(src.includes(`[ ${target} ]`) || src.includes(`[${target}]`),
             `${name}: for a non-head, planIds names must be [targetName] — its own dispatch record`);
         // No hand-rolled membership test — the roster comes from resolveTeamStanding.
-        assert.ok(!src.includes('groups.find('),
+        // SCOPED to the prompt-delivery region, not the whole file: the contract is
+        // about how THIS path resolves a roster, and a whole-file substring test
+        // fires on any unrelated feature that legitimately looks a group up by id
+        // (the team-automation work at TaskViewerProvider.ts:27839 is one). A gate
+        // that goes red for correct code elsewhere stops being read.
+        const regionStart = src.indexOf('if (applySeatBlock) {');
+        assert.ok(regionStart > 0, `${name}: seat-block delivery region not found`);
+        const regionEnd = src.indexOf('= applyStandingOrders(', regionStart);
+        assert.ok(regionEnd > regionStart, `${name}: standing-orders application must follow the seat block`);
+        const region = src.slice(regionStart, regionEnd);
+        assert.ok(!region.includes('groups.find('),
             `${name} must NOT hand-roll groups.find( — resolveTeamStanding is the one roster source`);
-        assert.ok(!src.includes('.members.includes('),
+        assert.ok(!region.includes('.members.includes('),
             `${name} must NOT hand-roll .members.includes( — resolveTeamStanding is the one predicate`);
     }
 });

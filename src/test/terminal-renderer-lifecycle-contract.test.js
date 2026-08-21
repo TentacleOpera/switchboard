@@ -20,7 +20,7 @@
  * DECLARATION ORDER IS PART OF THE CONTRACT — see the last test. The new functions must
  * be declared ABOVE `readRenderedGrid`, because terminal-pane-fit-verification-contract
  * slices spans between `readRenderedGrid -> inspectPaneFit -> resyncPaneRenderer ->
- * startFitLadder -> batchFitVisiblePanes -> const DEFAULT_ROLES`. Declaring any of them
+ * startFitLadder -> batchFitVisiblePanes -> const NO_ROLE`. Declaring any of them
  * between those markers silently widens another suite's spans.
  */
 

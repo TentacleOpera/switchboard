@@ -1298,12 +1298,16 @@
         // moment the operator comes back, so refetch the structure then (throttle bypassed).
         window.addEventListener('focus', () => {
             fetchKanbanColumnStructure(true);
-            // Mirror the visibilitychange repair (lines 1290-1304): arm the latch on
-            // every live entry, then let the fit ladder schedule the actual repaint.
-            // `visibilitychange` does NOT fire on same-browser window blur/focus (the
-            // document stays 'visible'), so without this arm the corruption class goes
-            // unrepaired until a manual pane click. rebuildAtlas stays false: the atlas
-            // is intact on this path (see resyncPaneRenderer doc, lines 6226-6235).
+            // Mirror the visibilitychange repair (the `document.addEventListener
+            // ('visibilitychange', ...)` listener further down this function): arm the
+            // latch on every live entry, then let the fit ladder schedule the actual
+            // repaint. `visibilitychange` does NOT fire on same-browser window
+            // blur/focus (the document stays 'visible'), so without this arm the
+            // corruption class goes unrepaired until a manual pane click. rebuildAtlas
+            // stays false: the atlas is intact on this path — see the latch consumer in
+            // startFitLadder's attempt(), and resyncPaneRenderer's own doc block.
+            // Line numbers deliberately omitted; the previous revision of this comment
+            // cited two that were already stale when it was written.
             for (const entry of terminalsMap.values()) {
                 if (!entry || entry.disposed || !entry.term) { continue; }
                 entry.needsRendererResync = true;
@@ -7504,8 +7508,10 @@
             // a bare .includes() would also match a terminal parked off-screen.
             if (!paneAssignments.slice(0, getSlotCount(effectiveLayout)).includes(name)) { return; }
 
-            // Visibility-regain repair, latched by the visibilitychange listener in
-            // init(). UNCONDITIONAL and NOT gated on inspectPaneFit: unpainted rows
+            // Visibility-regain repair, latched by init()'s visibilitychange listener
+            // AND its window-focus listener (focus covers the same-browser window
+            // switch, where visibilitychange never fires because the document stays
+            // 'visible'). UNCONDITIONAL and NOT gated on inspectPaneFit: unpainted rows
             // leave cols/rows and the painted grid in perfect agreement (inspectPaneFit
             // compares grid geometry, never pixel content), so the verdict is 'ok' and
             // the ladder's early return below would skip the repair entirely.

@@ -780,9 +780,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 }
                             } catch { /* stage-only beats a lost dispatch */ }
                             // `data` here is post-strip (standing orders already removed
-                            // by stripStandingOrdersBlock at :670), which is what we want
-                            // to test against — the SO block is handled by
-                            // applyStandingOrders' own strip at :746.
+                            // by the stripStandingOrdersBlock call at the top of this
+                            // branch), which is what we want to test against — the SO
+                            // block is handled by applyStandingOrders' own strip below.
                             const seatBlock = effectiveOpts
                                 ? buildSeatDirectiveBlock({ ...effectiveOpts, planIds }, data)
                                 : '';

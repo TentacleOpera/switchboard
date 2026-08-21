@@ -11,7 +11,12 @@
  * DECLARATION ORDER IS PART OF THE CONTRACT. The spans below are forward-only and
  * non-overlapping only if terminals.js declares, in this order:
  *   readRenderedGrid -> inspectPaneFit -> resyncPaneRenderer -> startFitLadder
- *   -> batchFitVisiblePanes -> const DEFAULT_ROLES
+ *   -> batchFitVisiblePanes -> const NO_ROLE
+ *
+ * The tail landmark is `const NO_ROLE`, the declaration that immediately follows
+ * batchFitVisiblePanes. It was `const DEFAULT_ROLES` until that constant was
+ * deleted (2026-08-06), after which this suite failed STALE on a missing marker
+ * rather than on a real regression.
  * An inverted slice yields '' — which silently satisfies every negative assertion.
  */
 
@@ -43,7 +48,7 @@ test('declaration order keeps every contract span forward-only', () => {
         'function resyncPaneRenderer(',
         'function startFitLadder(',
         'function batchFitVisiblePanes(',
-        'const DEFAULT_ROLES'
+        'const NO_ROLE'
     ].map(m => [m, SRC.indexOf(m)]);
     for (const [marker, at] of order) {
         assert.ok(at !== -1, `missing declaration: ${marker}`);
@@ -57,7 +62,7 @@ test('declaration order keeps every contract span forward-only', () => {
 });
 
 test('the fit is verified, not fired once and forgotten', () => {
-    const batch = block('function batchFitVisiblePanes(', 'const DEFAULT_ROLES');
+    const batch = block('function batchFitVisiblePanes(', 'const NO_ROLE');
     assert.ok(batch.includes('startFitLadder'), 'batchFitVisiblePanes must drive the ladder');
     // The old body was a bare requestAnimationFrame around fitAndReportSize.
     assert.ok(!batch.includes('requestAnimationFrame'), 'the single-rAF body must be gone');
@@ -122,6 +127,46 @@ test('retries run off timers as well as rAF, so a hidden tab converges', () => {
     const ladder = block('function startFitLadder(', 'function batchFitVisiblePanes(');
     assert.ok(ladder.includes('setTimeout'), 'a backgrounded tab fires no rAF');
     assert.ok(ladder.includes('requestAnimationFrame'), 'attempt 0 must still land on a frame');
+});
+
+// Both regain triggers must arm the latch. `visibilitychange` alone leaves the
+// same-browser window switch (document stays 'visible', window merely blurs)
+// unrepaired until a manual pane click, and `window.focus` alone misses the dock
+// minimize. Pinned as source text because neither event nor the painted canvas is
+// reachable from Node — and pinned per listener, because the fix is exactly "the
+// second listener also arms it": a reviewer reading only the ladder sees an
+// unconditional repair and cannot tell which events reach it.
+test('BOTH visibility regain and window focus arm the renderer-resync latch', () => {
+    for (const [label, marker] of [
+        ['visibilitychange', "document.addEventListener('visibilitychange', () => {"],
+        ['window focus', "window.addEventListener('focus', () => {"],
+    ]) {
+        const start = SRC.indexOf(marker);
+        assert.ok(start !== -1, `${label} listener not found`);
+        // Bound the slice at the NEXT addEventListener rather than a character
+        // count: a fixed window spills into the sibling listener the moment a
+        // comment grows, and the sibling arms the SAME latch — which would make
+        // every assertion below pass on a listener that lost its arm entirely.
+        const next = SRC.indexOf('addEventListener(', start + marker.length);
+        const listener = SRC.slice(start, next === -1 ? SRC.length : next);
+        assert.ok(/entry\.needsRendererResync\s*=\s*true/.test(listener),
+            `the ${label} listener must arm needsRendererResync — the ladder's repair is latch-gated, `
+            + 'not verdict-gated (unpainted rows leave inspectPaneFit at "ok")');
+        assert.ok(/startFitLadder\(name\)/.test(listener),
+            `the ${label} listener must start a fit ladder for the visible panes — arming the latch `
+            + 'without a ladder defers the repair to the next unrelated resize');
+        // The atlas is intact on both paths; a rebuild only pays a full glyph
+        // re-rasterisation per regain. Three code comments warn against it.
+        assert.ok(!/rebuildAtlas:\s*true/.test(listener),
+            `the ${label} listener must NOT force an atlas rebuild — the corruption is unpainted rows `
+            + 'over a correct atlas, and refresh(0, rows-1) is the repair');
+        // The repair must be LATCHED, not run inline: an inline call skips every
+        // pane in a display:none iframe (zero-box container) and never sets the
+        // flag, so the later reveal repairs nothing.
+        assert.ok(!/resyncPaneRenderer\(/.test(listener),
+            `the ${label} listener must not call resyncPaneRenderer inline — a zero-box container in a `
+            + 'hidden iframe would be skipped with no latch left to carry the intent to the reveal');
+    }
 });
 
 test('a newer request supersedes an in-flight ladder', () => {
