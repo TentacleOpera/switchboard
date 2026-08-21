@@ -1328,14 +1328,14 @@ export class PlanIngestionEngine {
                 kept.push(watch);
                 continue;
             }
-            // The queue is DISPATCH and only DISPATCH — the same predicate
+            // The queue is STAGING and only STAGING — the same predicate
             // `dispatchNextFromQueue` pops with. Counting PLAN REVIEWED here
             // would mean the watch never reaches this gate on a real board
             // (PLAN REVIEWED is rarely empty), so a session that finished its
             // staged work would keep nudging the lead to dispatch cards nobody
             // staged instead of ending quietly.
             const queueCards = board.filter(p =>
-                p && p.kanbanColumn === 'DISPATCH'
+                p && p.kanbanColumn === 'STAGING'
                 && (!p.dispatchedAt)
                 && (!p.featureId || p.featureId === '')
             );

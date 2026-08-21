@@ -300,7 +300,7 @@ export async function applySeatPacingOrders(opts: {
  *
  * `groupId` is baked into the text at install time — the coder does not need to
  * discover its team; the order tells it the endpoint directly. Mirrors
- * {@link SEAT_QUEUE_DONE_ORDER_BODY} (the kanban DISPATCH column's seat-paced
+ * {@link SEAT_QUEUE_DONE_ORDER_BODY} (the kanban STAGING column's seat-paced
  * equivalent) but targets the file-based team queue
  * (`POST /terminals/teams/<groupId>/queue/done`), not the kanban column.
  *
@@ -345,7 +345,7 @@ const TEAM_QUEUE_ORDER_ID_PREFIX = 'team-queue-done:';
  * Idempotent: install skips an order that already exists; remove is a no-op
  * when none are present. Serialized through `mutateStandingOrders`' own chain.
  *
- * Mirrors {@link applySeatPacingOrders} (the kanban DISPATCH column's
+ * Mirrors {@link applySeatPacingOrders} (the kanban STAGING column's
  * seat-paced equivalent). `roster` is the team's full seat list (head +
  * members) — referenced so a future editor who needs per-member scoping has the
  * roster to hand without re-deriving it (delivery resolves membership from the

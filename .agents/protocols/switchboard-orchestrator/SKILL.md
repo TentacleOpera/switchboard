@@ -76,7 +76,7 @@ Nothing else answers this question:
   is noise (`switchboard-contracts` #6: subtasks carry their own column).
 - **Exclude every other column.** `LEAD CODED` / `CODER CODED` / `INTERN CODED` is
   in progress; `CODE REVIEWED`, `ACCEPTANCE TESTED` and `COMPLETED` are finished
-  work; `BACKLOG` is parked; `DISPATCH` is a manual staging view. On a mature board
+  work; `BACKLOG` is parked; `STAGING` is a manual staging column. On a mature board
   the finished columns are the overwhelming majority of all rows, so a summary that
   starts there buries the answer instead of giving it.
 - **Honour the project filter.** Your prompt carries `ACTIVE_PROJECT_FILTER`. When
@@ -255,10 +255,10 @@ When handing off to a single team, execute these five steps in order, then exit:
 
 1. **Scope:** Determine the ready plans for this session using `## What Is Ready To Go`.
 2. **Launch:** Ensure the coding team is seated. If not live, spawn the team lead terminal.
-3. **Stage:** Move the scoped plans into `DISPATCH` (session queue) in execution order:
+3. **Stage:** Move the scoped plans into `STAGING` (session queue) in execution order:
    `POST /kanban/verb/stageForQueue` with `{ sessionIds: [...] }`. The array order IS the queue order.
 4. **Dispatch card one:** Call `POST /kanban/queue/next` with `{ from: "<head terminal name>" }`. Where the card lands depends on the team's pacing field — **head pacing:** the call hands the card to the lead; **seat pacing:** the call routes the card to the complexity-matched seat. Read the response to name the actual destination in your report — do not assume.
-5. **Report and exit:** `POST /orchestration/handoff` closes your seat and finishes the session. It refuses with `409` if no coding head is live or the `DISPATCH` queue is empty — that refusal means you are not done, not that handoff is broken:
+5. **Report and exit:** `POST /orchestration/handoff` closes your seat and finishes the session. It refuses with `409` if no coding head is live or the `STAGING` queue is empty — that refusal means you are not done, not that handoff is broken:
 
 ```bash
 # Resolve BASE (see ## Port Discovery). A failed resolve means the board is

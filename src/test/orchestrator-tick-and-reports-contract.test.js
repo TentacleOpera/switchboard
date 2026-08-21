@@ -150,7 +150,7 @@ async function run() {
             /Exclude every other column[\s\S]{0,400}CODE REVIEWED/.test(persona),
             'persona does not exclude the finished columns from the ready set'
         );
-        assert.ok(/BACKLOG/.test(persona) && /DISPATCH/.test(persona), 'persona does not exclude the two display-mode columns');
+        assert.ok(/BACKLOG/.test(persona) && /STAGING/.test(persona), 'persona does not exclude the staging and backlog columns');
     });
 
     await check('pre-flight check 5 and the tick both defer to the one ready definition', () => {

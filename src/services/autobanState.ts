@@ -307,7 +307,7 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
     // not just the five older aliases: `scheduled` was the common running mode
     // on shipped installs, and under the old engine `enabled: true` meant "walk
     // the run sheet over CREATED / PLAN REVIEWED". Under the new engine the same
-    // flag means "pop the DISPATCH queue on a timer" — so carrying `enabled`
+    // flag means "pop the STAGING queue on a timer" — so carrying `enabled`
     // across the upgrade starts dispatching from a queue the user never staged.
     // `agent-managed` is worse: it never installed a schedule timer at all, and
     // a naive carry-over gives that install one it never had.

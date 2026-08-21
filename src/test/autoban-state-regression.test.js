@@ -392,7 +392,7 @@ async function run() {
     // The whole mode axis is retired, not just the older aliases. `scheduled`
     // was the common running mode on shipped installs and `enabled: true` used
     // to mean "walk the run sheet over CREATED / PLAN REVIEWED"; under the new
-    // engine the same flag means "pop the DISPATCH queue on a timer", so
+    // engine the same flag means "pop the STAGING queue on a timer", so
     // carrying it across the upgrade starts dispatching from a queue the user
     // never staged. `agent-managed` is worse — it never installed a schedule
     // timer at all, so carrying `enabled` GIVES that install a clock it never

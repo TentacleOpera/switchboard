@@ -122,7 +122,7 @@ export interface KanbanColumnDefinition {
     label: string;
     role?: string;
     order: number;
-    kind: 'created' | 'review' | 'gather' | 'coded' | 'reviewed' | 'merge' | 'custom-agent' | 'custom-user' | 'completed';
+    kind: 'created' | 'review' | 'gather' | 'coded' | 'reviewed' | 'merge' | 'custom-agent' | 'custom-user' | 'completed' | 'staging';
     source: 'built-in' | 'custom-agent' | 'custom-user';
     autobanEnabled: boolean;
     dragDropMode: 'cli' | 'prompt' | 'disabled';
@@ -150,6 +150,7 @@ export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 110, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt' },
     { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'STAGING', label: 'Staging', order: 115, kind: 'staging', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
     { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
@@ -162,11 +163,9 @@ export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
 /** Display-mode columns: stored column IDs that are NOT peer columns and MUST NOT
  *  appear in DEFAULT_KANBAN_COLUMNS (the webview renders one column per entry).
  *  Each renders inside another column's slot, toggled by a header button:
- *  - BACKLOG:  display mode of CREATED (kanban.html backlog toggle).
- *  - DISPATCH: display mode of PLAN REVIEWED (kanban.html dispatch toggle). */
+ *  - BACKLOG:  display mode of CREATED (kanban.html backlog toggle). */
 export const DISPLAY_MODE_COLUMNS: Record<string, { label: string; displayModeOf: string }> = {
     'BACKLOG':  { label: 'Backlog',  displayModeOf: 'CREATED' },
-    'DISPATCH': { label: 'Dispatch', displayModeOf: 'PLAN REVIEWED' },
 };
 
 /** Display labels for legacy stored column IDs that are NOT peer columns and MUST NOT

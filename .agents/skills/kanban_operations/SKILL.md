@@ -33,7 +33,7 @@ node .agents/skills/kanban_operations/move-card.js my-plan.md CODER_CODED
 
 - `<session_or_plan_file>` can be a legacy `session_id`, or a **plan file path** (relative or absolute), or a plan basename. The script resolves it to the DB `planId`.
 
-**Valid columns:** Sourced from `VALID_KANBAN_COLUMNS` export in `KanbanDatabase.ts`. Includes all built-in columns (CREATED, BACKLOG, PLAN REVIEWED, CONTEXT GATHERER, INTERN CODED, LEAD CODED, CODER CODED, CODE REVIEWED, ACCEPTANCE TESTED, CODED, COMPLETED) plus any custom agent columns matching the safe-name regex.
+**Valid columns:** Sourced from `VALID_KANBAN_COLUMNS` export in `KanbanDatabase.ts`. Includes all built-in columns (CREATED, BACKLOG, PLAN REVIEWED, CONTEXT GATHERER, STAGING, INTERN CODED, LEAD CODED, CODER CODED, CODE REVIEWED, ACCEPTANCE TESTED, CODED, COMPLETED) plus any custom agent columns matching the safe-name regex.
 
 ### ⚠️ The user names the BOARD LABEL — translate it before you move anything
 
@@ -46,7 +46,7 @@ storage ids back at them.
 | **New** | `CREATED` |
 | **Backlog** | `BACKLOG` |
 | **Planned** | `PLAN REVIEWED` |
-| **Dispatch** | `DISPATCH` |
+| **Staging** | `STAGING` |
 | **Researcher** | `RESEARCHER` |
 | **Lead Coder** | `LEAD CODED` |
 | **Coder** | `CODER CODED` |

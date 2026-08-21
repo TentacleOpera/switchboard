@@ -22,18 +22,18 @@ function run() {
     // The run-sheet tick that used to chain
     // _getEligibleAutobanCards → _selectAutobanPlanReviewedCards →
     // _stopAutobanIfNoValidTicketsRemain is deleted; the schedule pops the
-    // DISPATCH session queue instead. The invariant the old assertion protected
+    // STAGING session queue instead. The invariant the old assertion protected
     // — no-work detection must use the SAME predicate the dispatch path uses,
     // or the sweep stops the engine while dispatchable work exists — now lands
-    // on the queue. Staging five plans into DISPATCH with CREATED and PLAN
+    // on the queue. Staging five plans into STAGING with CREATED and PLAN
     // REVIEWED empty must NOT stop the schedule.
     expectRegex(
-        /private\s+async\s+_autobanHasStagedQueueCards\(workspaceRoot:\s*string\):\s*Promise<boolean>\s*\{[\s\S]*kanbanColumn\s*===\s*'DISPATCH'[\s\S]*!p\.dispatchedAt[\s\S]*!p\.featureId/s,
-        'Expected a staged-queue check using the queue pop\'s own predicate (DISPATCH, un-dispatched, non-subtask).'
+        /private\s+async\s+_autobanHasStagedQueueCards\(workspaceRoot:\s*string\):\s*Promise<boolean>\s*\{[\s\S]*kanbanColumn\s*===\s*'STAGING'[\s\S]*!p\.dispatchedAt[\s\S]*!p\.featureId/s,
+        'Expected a staged-queue check using the queue pop\'s own predicate (STAGING, un-dispatched, non-subtask).'
     );
     expectRegex(
         /private\s+async\s+_stopAutobanIfNoValidTicketsRemain\(workspaceRoot:\s*string\):\s*Promise<boolean>\s*\{[\s\S]*await\s+this\._autobanHasStagedQueueCards\(workspaceRoot\)[\s\S]*await\s+this\._autobanHasEligibleCardsInEnabledColumns\(workspaceRoot\)[\s\S]*await\s+this\._stopAutobanForNoValidTickets\(\);/s,
-        'Expected the empty-column sweep to consult the DISPATCH queue BEFORE stopping the schedule.'
+        'Expected the empty-column sweep to consult the STAGING queue BEFORE stopping the schedule.'
     );
 
     console.log('autoban no-valid-tickets regression test passed');

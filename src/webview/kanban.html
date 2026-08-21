@@ -3018,7 +3018,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <button class="strip-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">CHAT PROMPT</button>
                 <button class="strip-btn" id="btn-suggest-features" data-tooltip="Scan pre-coding columns and copy a prompt asking an agent to propose feature groupings">SUGGEST FEATURES</button>
                 <button class="strip-btn is-teal" id="btn-feature-action" data-tooltip="Convert selected plans to feature or manage existing feature" disabled>PROMOTE TO FEATURE</button>
-                <button class="strip-btn" id="btn-stage-for-queue" data-tooltip="Stage selected plans into the Dispatch queue, in selection order" disabled>STAGE FOR QUEUE</button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
                 <div id="wt-indicator" style="display:none; margin-left:auto; align-items:center; gap:4px; font-size:10px; color:var(--text-secondary);">
                     <span class="sb-icon sb-icon-sm sb-icon-branch" style="opacity:0.6;" aria-hidden="true"></span>
@@ -6135,12 +6134,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // column when `collapseCodersEnabled` is true. Hoisted as a single shared
         // constant so the logical→DOM resolution stays consistent across all call sites.
         const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
-        /** Columns whose plans are eligible for staging into the DISPATCH queue.
+        /** Columns whose plans are eligible for staging into the STAGING queue.
          *  Plans in coded/reviewed/tested/completed columns have already been
-         *  dispatched and must not be re-queued. DISPATCH itself is included so
+         *  dispatched and must not be re-queued. STAGING itself is included so
          *  a card already in the queue can be re-positioned by re-staging.
          *  Mirrors the backend stageableColumns Set in _resolveStageablePlanIds. */
-        const STAGEABLE_COLUMNS = ['CREATED', 'BACKLOG', 'PLAN REVIEWED', 'DISPATCH'];
+        const STAGEABLE_COLUMNS = ['CREATED', 'BACKLOG', 'PLAN REVIEWED', 'STAGING'];
         /** Map a logical column id to its rendered DOM column id.
          *  When coders are collapsed, the three coder columns share the synthetic
          *  `col-CODED_AUTO` container; otherwise each maps to itself. */
@@ -6410,7 +6409,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let routingMapConfig = { lead: [7, 8, 9, 10], coder: [4, 5, 6], intern: [1, 2, 3] };
         let routingMapDraggedCard = null;
         // Column abbreviations for inline timers
-        const COLUMN_ABBREV = { 'CREATED': 'C', 'PLAN REVIEWED': 'P', 'INTERN CODED': 'I', 'LEAD CODED': 'L', 'CODER CODED': 'R', 'CODED_AUTO': 'A', 'COMPLETED': 'D' };
+        const COLUMN_ABBREV = { 'CREATED': 'C', 'PLAN REVIEWED': 'P', 'STAGING': 'S', 'INTERN CODED': 'I', 'LEAD CODED': 'L', 'CODER CODED': 'R', 'CODED_AUTO': 'A', 'COMPLETED': 'D' };
 
         // Icon URIs injected by extension
         const ICON_AUTOBAN = '{{ICON_22}}';           // Play/automation icon
@@ -7109,11 +7108,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         }
 
-        /** Get the next column in the pipeline (returns null for last column). */
+        /** Get the next column in the pipeline (returns null for last column).
+         *  Skips columns with no dispatch role (e.g. STAGING — a queue, not a
+         *  coding seat). Advancing from any column must land on the next
+         *  role-bearing column, not a queue. */
         function getNextColumn(col) {
             const idx = columns.indexOf(col);
             if (idx < 0 || idx >= columns.length - 1) return null;
-            return columns[idx + 1];
+            for (let i = idx + 1; i < columns.length; i++) {
+                const def = columnDefinitions.find(d => d.id === columns[i]);
+                if (def && !def.role && def.kind !== 'completed') continue; // skip role-less non-terminal columns
+                return columns[i];
+            }
+            return null;
         }
 
         /** Flash an icon button for visual feedback. */
@@ -7161,12 +7168,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             } else if (col === 'BACKLOG') {
                 return null;
             }
-            if (showingDispatch) {
-                if (col === 'PLAN REVIEWED') return null;
-                if (col === 'DISPATCH') col = 'PLAN REVIEWED';
-            } else if (col === 'DISPATCH') {
-                return null;
-            }
             const domCol = resolveDomColumn(col);
             if (domCol === 'CODED_AUTO') return domCol;
             return (columns.includes(domCol) || CODED_IDS.includes(domCol)) ? domCol : null;
@@ -7207,13 +7208,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (emptyState) emptyState.remove();
 
                 const cardTs = parseInt(cardEl.dataset.ts || '0', 10);
-                // V60: when the target renders as the DISPATCH queue (Dispatch
-                // view, PLAN REVIEWED slot), insert by queue_position ascending
-                // with NULL last — the SAME comparator the initial render uses,
-                // so a staged card does not jump to the top on the next board
-                // move and the queue stays visibly ordered mid-session. Falls
-                // back to the legacy ts-descending insert for every other target.
-                const queueInsert = (domTargetColumn === 'PLAN REVIEWED' && showingDispatch);
+                // V60: when the target is the STAGING queue, insert by
+                // queue_position ascending with NULL last — the SAME
+                // comparator the initial render uses, so a staged card does
+                // not jump to the top on the next board move and the queue
+                // stays visibly ordered mid-session. Falls back to the
+                // legacy ts-descending insert for every other target.
+                const queueInsert = (domTargetColumn === 'STAGING');
                 const cardQp = queueInsert ? parseInt(cardEl.dataset.queuePosition || '', 10) : NaN;
                 const cardQpNull = queueInsert && isNaN(cardQp);
                 const existingCards = Array.from(targetBody.querySelectorAll('.kanban-card'));
@@ -7335,8 +7336,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 renderBoard(currentCards);
                 lastBoardSignature = buildBoardSignature(currentCards);
             }
-            updateDispatchToggleCount();
-            updateDispatchViewInfo();
+            updateStagingViewInfo();
         }
 
         /** Get all selected session IDs within a specific column. */
@@ -7364,19 +7364,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (col === 'CODED_AUTO') {
                 return currentCards.filter(c => CODED_IDS.includes(c.column) && !c.featureId).map(c => c.planId || c.sessionId || '').filter(Boolean);
             }
-            // BACKLOG and DISPATCH are display modes of CREATED and PLAN REVIEWED, not
-            // columns of their own — in those views the DOM column holds the alternate
-            // set. Match renderBoard's `_effectiveColumn` mapping (see displayCards) so
-            // "all in this column" means all cards the user can actually SEE there, not
-            // the hidden set behind the toggle.
+            // BACKLOG is a display mode of CREATED, not a column of its own —
+            // in that view the DOM column holds the alternate set. Match
+            // renderBoard's `_effectiveColumn` mapping (see displayCards) so
+            // "all in this column" means all cards the user can actually SEE
+            // there, not the hidden set behind the toggle.
             const effectiveColumnOf = (c) => {
                 if (showingBacklog && c.column === 'BACKLOG') return 'CREATED';
-                if (showingDispatch && c.column === 'DISPATCH') return 'PLAN REVIEWED';
                 return c.column;
             };
             const isHiddenByView = (c) =>
-                (showingBacklog ? c.column === 'CREATED' : c.column === 'BACKLOG') ||
-                (showingDispatch ? c.column === 'PLAN REVIEWED' : c.column === 'DISPATCH');
+                (showingBacklog ? c.column === 'CREATED' : c.column === 'BACKLOG');
             return currentCards
                 .filter(c => !c.featureId && !isHiddenByView(c) && effectiveColumnOf(c) === col)
                 .map(c => c.planId || c.sessionId || '')
@@ -7583,13 +7581,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     ? `<button class="backlog-toggle-btn${showingBacklog ? ' is-active' : ''}" id="btn-toggle-backlog" style="${draggedSessionId !== null ? 'pointer-events:none;opacity:0.5;' : ''}" data-tooltip="${showingBacklog ? 'Switch to New view' : 'Switch to Backlog view'}">${showingBacklog ? 'NEW' : 'BACKLOG'}</button>`
                     : '';
 
-                // Dispatch toggle on the Planned column (display mode of PLAN REVIEWED,
-                // mirroring the backlog toggle on New). When the view is active the button
-                // reads PLANNED (click returns to the Planned view); otherwise DISPATCH.
-                const dispatchToggleBtn = isPlanReviewed
-                    ? `<button class="backlog-toggle-btn${showingDispatch ? ' is-active' : ''}" id="btn-toggle-dispatch" style="${draggedSessionId !== null ? 'pointer-events:none;opacity:0.5;' : ''}" data-tooltip="${showingDispatch ? 'Switch to Planned view' : 'Switch to Dispatch view'}">${showingDispatch ? 'PLANNED' : 'DISPATCH'}</button>`
-                    : '';
-
 
                 const rightSide = isCreated
                     ? `<div style="display: flex; align-items: center; gap: 4px; line-height: 1;">
@@ -7639,8 +7630,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // ONE button, not a Selected/All pair: it copies the selection, or the
                     // whole column when nothing is selected. A second "All" button would be
                     // an identical-looking twin of this one with no distinct behaviour.
-                    // Shown in BOTH Planned and Dispatch view — in Dispatch view the same
-                    // DOM column holds the DISPATCH cards, so the ids collected are that set.
                     const copyDispatchPromptBtn = isPlanReviewed
                         ? `<button class="column-icon-btn" data-action="copyDispatchPromptSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Copy the dispatch-analysis prompt to clipboard (the Analyze prompt, not sent to a terminal) — selected plans, or the whole column if none are selected">
                                <img src="${ICON_PROMPT_SELECTED}" alt="Copy Dispatch Prompt">
@@ -7663,11 +7652,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         : '';
                     // In backlog view, the CREATED column shows BACKLOG cards — a holding
                     // pen, not a pipeline stage. Suppress the four advance/prompt buttons
-                    // so only the feature-group button remains. The same suppression applies
-                    // to the Planned column in Dispatch view: it shows DISPATCH cards (a
-                    // parallel-safe staging set), so the normal advance/prompt buttons are
-                    // replaced by a Send-selected-to-coder button.
-                    const suppressPipeline = (isCreated && showingBacklog) || (isPlanReviewed && showingDispatch);
+                    // so only the feature-group button remains.
+                    const suppressPipeline = (isCreated && showingBacklog);
                     const pipelineButtons = suppressPipeline ? '' : `
                         <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (triggers CLI if enabled)">
                             <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
@@ -7681,35 +7667,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <button class="column-icon-btn" data-action="promptAll" data-column="${escapeAttr(def.id)}" data-tooltip="Copy prompt for all plans in this column and advance">
                             <img src="${ICON_PROMPT_ALL}" alt="Prompt All">
                         </button>`;
-                    // Analyze button: visible on the Planned column when NOT in Dispatch view.
+                    // Analyze button: visible on the Planned column.
                     // Disabled when the host reports no terminal capability (standalone without
                     // node-pty) — no dead click (PRD contract #6).
-                    const analyzeBtn = (isPlanReviewed && !showingDispatch)
+                    const analyzeBtn = (isPlanReviewed)
                         ? `<button class="column-icon-btn${dispatchAnalyzeAvailable ? '' : ' is-disabled'}" data-action="dispatchAnalyze" data-column="${escapeAttr(def.id)}"${dispatchAnalyzeAvailable ? '' : ' disabled'} data-tooltip="${dispatchAnalyzeAvailable ? 'Analyze Planned plans for parallel dispatch' : 'Analyze requires a terminal (unavailable in this host)'}">
                                <img src="${ICON_DYNAMIC_ROUTING}" alt="Analyze">
                            </button>`
                         : '';
-                    // Send selected Dispatch cards to a coder (forward move with complexity
-                    // routing). Visible only in Dispatch view.
-                    // ONE button, same rule as copyDispatchPromptBtn: selection, or the whole
-                    // column when nothing is selected.
-                    const sendDispatchBtn = (isPlanReviewed && showingDispatch)
-                        ? `<button class="column-icon-btn" data-action="sendDispatchToCoder" data-column="${escapeAttr(def.id)}" data-tooltip="Send to a coder, routed by complexity — selected plans, or all plans in Dispatch if none are selected">
-                               <img src="${ICON_MOVE_SELECTED}" alt="Send to Coder">
-                           </button>`
-                        : '';
-                    const dispatchStagedNow = (isPlanReviewed && showingDispatch) ? dispatchStagedCount() : 0;
-                    const dispatchViewControls = (isPlanReviewed && showingDispatch)
-                        ? `<span id="dispatch-view-info" class="dispatch-view-info" style="font-size:11px; margin-right:auto; color:var(--vscode-descriptionForeground);">0 plans · 0 coder terminals</span>
+                    // STAGING column has its own button set: advance/prompt (complexity
+                    // routing to coder columns) + Run queue + info span.
+                    const isStaging = (def.id === 'STAGING');
+                    const stagingStagedNow = isStaging ? stagingCount() : 0;
+                    const stagingViewControls = isStaging
+                        ? `<span id="staging-view-info" class="dispatch-view-info" style="font-size:11px; margin-right:auto; color:var(--vscode-descriptionForeground);">0 plans · 0 coder terminals</span>
                            <button class="column-icon-btn" id="btn-add-coder-terminal" data-action="addCoderTerminal" data-column="${escapeAttr(def.id)}" data-tooltip="${(dispatchAnalyzeAvailable && terminalCreateAvailable) ? 'Add a coder terminal' : 'Creating terminals requires a terminal host (unavailable here)'}"${(dispatchAnalyzeAvailable && terminalCreateAvailable) ? '' : ' disabled'} style="font-size:12px; width:22px;">+</button>
-                           <button class="column-icon-btn" id="btn-send-dispatch-set" data-action="sendDispatchSetToCoders" data-column="${escapeAttr(def.id)}" data-tooltip="Fan out: send all staged plans to complexity-routed coders in parallel" style="width:auto; padding:0 8px; font-size:10px;"${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable) ? ' disabled' : ''}>Send all to coders</button>
-                           <button class="column-icon-btn" id="btn-run-queue" data-action="runQueue" data-column="${escapeAttr(def.id)}" data-tooltip="${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable) ? 'Run the queue in order — stage plans and seat a coder first' : (!(lastCodingHeadLive || lastAnyCodingTerminalLive) ? 'Run the queue — no coding terminal is live; open a coder terminal first' : 'Run the queue: dispatch the first staged plan to a coding terminal, completion pulls the rest in order')}" style="width:auto; padding:0 8px; font-size:10px;"${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable || !(lastCodingHeadLive || lastAnyCodingTerminalLive)) ? ' disabled' : ''}>Run queue</button>`
+                           <button class="column-icon-btn" id="btn-run-queue" data-action="runQueue" data-column="${escapeAttr(def.id)}" data-tooltip="${(stagingStagedNow === 0 || !dispatchAnalyzeAvailable) ? 'Run the queue in order — stage plans and seat a coder first' : (!(lastCodingHeadLive || lastAnyCodingTerminalLive) ? 'Run the queue — no coding terminal is live; open a coder terminal first' : 'Run the queue: dispatch the first staged plan to a coding terminal, completion pulls the rest in order')}" style="width:auto; padding:0 8px; font-size:10px;"${(stagingStagedNow === 0 || !dispatchAnalyzeAvailable || !(lastCodingHeadLive || lastAnyCodingTerminalLive)) ? ' disabled' : ''}>Run queue</button>`
                         : '';
                     buttonArea = `<div class="column-button-area" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
                         ${pipelineButtons}
                         ${analyzeBtn}
-                        ${sendDispatchBtn}
-                        ${dispatchViewControls}
+                        ${stagingViewControls}
                         ${julesBtn}
                         ${copyDispatchPromptBtn}
                         ${featureAddBtn}
@@ -7719,14 +7697,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
 
                 const columnDisplayLabel = (isCreated && showingBacklog) ? 'BACKLOG'
-                    : (isPlanReviewed && showingDispatch) ? 'DISPATCH' : def.label;
+                    : def.label;
                 return `<div class="kanban-column" data-column="${escapeAttr(def.id)}">
                     <div class="column-header">
                         <div style="display:flex; flex-direction:column;">
                             <div style="display:flex; align-items:center; gap:8px;">
                                 <span class="column-name">${escapeHtml(columnDisplayLabel)}</span>
                                 ${backlogToggleBtn}
-                                ${dispatchToggleBtn}
                             </div>
                             ${subline}
                         </div>
@@ -7740,12 +7717,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             document.getElementById('btn-toggle-backlog')?.addEventListener('click', () => {
                 postKanbanMessage({ type: 'toggleBacklogView' });
             });
-
-            document.getElementById('btn-toggle-dispatch')?.addEventListener('click', () => {
-                postKanbanMessage({ type: 'toggleDispatchView' });
-            });
-            updateDispatchToggleCount();
-            updateDispatchViewInfo();
+            updateStagingViewInfo();
 
             document.getElementById('btn-add-plan')?.addEventListener('click', () => {
                 const btn = document.getElementById('btn-add-plan');
@@ -8372,16 +8344,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             } else {
                 displayCards = cards.filter(card => card.column !== 'CREATED');
             }
-            if (!showingDispatch) {
-                displayCards = displayCards.filter(card => card.column !== 'DISPATCH');
-            } else {
-                displayCards = displayCards.filter(card => card.column !== 'PLAN REVIEWED');
-            }
             displayCards = displayCards.filter(card => !card.featureId);
             displayCards.forEach(card => {
                 let effectiveCol = card.column;
                 if (showingBacklog && card.column === 'BACKLOG') effectiveCol = 'CREATED';
-                if (showingDispatch && card.column === 'DISPATCH') effectiveCol = 'PLAN REVIEWED';
                 const col = columns.includes(effectiveCol) ? effectiveCol : (CODED_IDS.includes(effectiveCol) ? effectiveCol : null);
                 if (!col) return;
                 counts[col] = (counts[col] || 0) + 1;
@@ -8390,7 +8356,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         // Lightweight count-only refresh: updates column count badges AND the
-        // DISPATCH toggle label from the unfiltered allCards cache without
+        // STAGING view info from the unfiltered allCards cache without
         // rebuilding card DOM. Used when the filtered board signature is unchanged
         // but allCards changed (e.g. a card added to a hidden project) so
         // occupancy counts and the staged-plan badge stay accurate.
@@ -8408,60 +8374,38 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const countEl = document.getElementById('count-' + col);
                 if (countEl) countEl.textContent = String(counts[col] || 0);
             });
-            updateDispatchToggleCount();
-            updateDispatchViewInfo();
+            updateStagingViewInfo();
         }
 
-        // Staged-plan count for the DISPATCH toggle on the Planned column header.
+        // Staged-plan count for the STAGING column header.
         // Derived from currentCards, which is ALREADY project-filtered at every
-        // assignment (:6427, :7887, :8962) — do not re-apply applyBoardProjectFilter.
-        // Read BEFORE renderBoard's `card.column !== 'DISPATCH'` strip (:6383, :6472),
-        // which is why this cannot come from displayCards or computeColumnOccupancy.
-        // `!card.featureId` mirrors the board's subtask roll-up contract (:6388, :6481):
-        // a staged feature is ONE card in the Dispatch view, not one-plus-its-subtasks.
-        function dispatchStagedCount() {
+        // assignment — do not re-apply applyBoardProjectFilter.
+        // `!card.featureId` mirrors the board's subtask roll-up contract:
+        // a staged feature is ONE card in the Staging column, not one-plus-its-subtasks.
+        function stagingCount() {
             if (!Array.isArray(currentCards)) return 0;
-            return currentCards.filter(c => c.column === 'DISPATCH' && !c.featureId).length;
+            return currentCards.filter(c => c.column === 'STAGING' && !c.featureId).length;
         }
 
-        // The header shell (renderColumns) is NOT rebuilt on a board refresh, so the
-        // toggle's label has to be patchable in place. Both the template at :5600 and
-        // every refresh path go through this.
-        function updateDispatchToggleCount() {
-            const btn = document.getElementById('btn-toggle-dispatch');
-            if (!btn) return;                       // Planned column not rendered (or collapsed away)
-            const n = showingDispatch ? 0 : dispatchStagedCount();
-            btn.textContent = showingDispatch ? 'PLANNED' : (n ? `DISPATCH ${n}` : 'DISPATCH');
-            btn.setAttribute('data-tooltip', showingDispatch
-                ? 'Switch to Planned view'
-                : (n ? `Switch to Dispatch view — ${n} plan${n === 1 ? '' : 's'} staged` : 'Switch to Dispatch view'));
-        }
-
-        // Patch the Dispatch view control text: staged-plan vs alive-coder count.
-        // Called from renderColumns (first paint / view toggle) and renderBoard (refresh).
-        function updateDispatchViewInfo() {
-            const info = document.getElementById('dispatch-view-info');
-            const sendBtn = document.getElementById('btn-send-dispatch-set');
+        // Patch the Staging view control text: staged-plan vs alive-coder count.
+        // Called from renderColumns (first paint) and renderBoard (refresh).
+        function updateStagingViewInfo() {
+            const info = document.getElementById('staging-view-info');
             const addBtn = document.getElementById('btn-add-coder-terminal');
             const runBtn = document.getElementById('btn-run-queue');
             if (!info) return;
-            const n = dispatchStagedCount();
+            const n = stagingCount();
             const m = lastCoderTerminalCount;
             info.textContent = `${n} plan${n === 1 ? '' : 's'} · ${m} coder terminal${m === 1 ? '' : 's'}`;
-            if (sendBtn) sendBtn.disabled = !(n > 0 && dispatchAnalyzeAvailable);
             if (addBtn) addBtn.disabled = !(dispatchAnalyzeAvailable && terminalCreateAvailable);
-            // V60: Run queue mirrors Send all's disable pattern — empty queue
-            // or no terminal host leaves it inert — AND adds a coding-head-live
-            // gate: pressing Run with no team seated is an error, not an
-            // auto-start (the plan's explicit decision). lastCodingHeadLive
-            // tracks the same thing the runQueue backend resolver does (lead
-            // preferred, coder fallback), so a live lead with zero coder-role
-            // terminals still enables the button.
-            // kanban-queue-dispatch-without-team: also enable when
+            // V60: Run queue — empty queue or no terminal host leaves it inert
+            // — AND adds a coding-head-live gate: pressing Run with no team
+            // seated is an error, not an auto-start. lastCodingHeadLive tracks
+            // the same thing the runQueue backend resolver does (lead preferred,
+            // coder fallback), so a live lead with zero coder-role terminals
+            // still enables the button. Also enable when
             // lastAnyCodingTerminalLive is true (a standalone coder with no
-            // team). The backend fallback resolves `from` via
-            // getAliveCodingTerminalNames() and dispatches via workspace-wide
-            // routing.
+            // team).
             if (runBtn) runBtn.disabled = !(n > 0 && dispatchAnalyzeAvailable && (lastCodingHeadLive || lastAnyCodingTerminalLive));
         }
 
@@ -8516,13 +8460,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 displayCards = displayCards
                     .filter(card => card.column !== 'CREATED')
                     .map(card => card.column === 'BACKLOG' ? { ...card, _effectiveColumn: 'CREATED' } : card);
-            }
-            if (!showingDispatch) {
-                displayCards = displayCards.filter(card => card.column !== 'DISPATCH');
-            } else {
-                displayCards = displayCards
-                    .filter(card => card.column !== 'PLAN REVIEWED')
-                    .map(card => card.column === 'DISPATCH' ? { ...card, _effectiveColumn: 'PLAN REVIEWED' } : card);
             }
 
             // Subtasks roll up into their feature card. Hide them from the main board.
@@ -8590,14 +8527,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const countEl = document.getElementById('count-' + col);
                 const items = buckets[col];
                 if (!container || !countEl) return;
-                // V60: in Dispatch view the PLAN REVIEWED slot renders the
-                // DISPATCH session queue, ordered by queue_position ascending
-                // with NULL last. The tie-break is the board's existing ts
-                // descending order so duplicate positions (a partial rewrite,
-                // or two windows staging at once) sort deterministically rather
+                // V60: the STAGING column renders the session queue, ordered
+                // by queue_position ascending with NULL last. The tie-break is
+                // the board's existing ts descending order so duplicate
+                // positions (a partial rewrite, or two windows staging at
+                // once) sort deterministically rather
                 // than randomly — see the plan's Race Conditions note. Every
                 // other column keeps the ts-descending render it always had.
-                const queueOrdered = (col === 'PLAN REVIEWED' && showingDispatch);
+                const queueOrdered = (col === 'STAGING');
                 const sortedItems = [...items].sort((a, b) => {
                     if (queueOrdered) {
                         const ap = a.queuePosition, bp = b.queuePosition;
@@ -8629,8 +8566,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
             });
 
-            updateDispatchToggleCount();
-            updateDispatchViewInfo();
+            updateStagingViewInfo();
 
             // Attach card-level event listeners
             document.querySelectorAll('.kanban-card').forEach(el => {
@@ -8764,19 +8700,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                         backendColumn = (column === 'CODED_AUTO') ? (columnDefinitions.find(d => d.kind === 'coded')?.id || 'LEAD CODED') : column;
                     }
-                    // DISPATCH is a display mode of PLAN REVIEWED — resolve it for BOTH the
-                    // next-column walk and the backend column, or promptSelected lands on a
-                    // column the backend's ordered walk cannot resolve.
-                    if (column === 'DISPATCH') {
-                        nextColSource = 'PLAN REVIEWED';
-                        backendColumn = 'PLAN REVIEWED';
-                    }
                     nextCol = getNextColumn(nextColSource);
 
-                    // PLAN REVIEWED advances are routed by the BACKEND (_partitionByComplexityRoute).
-                    // The optimistic move must either predict that exactly or not move at all —
-                    // otherwise the backend's moveCards delta bounces the card to the real column.
-                    if ((column === 'PLAN REVIEWED' || column === 'DISPATCH') && dynamicComplexityRoutingEnabled) {
+                    // PLAN REVIEWED and STAGING advances are routed by the BACKEND
+                    // (_partitionByComplexityRoute). The optimistic move must either predict
+                    // that exactly or not move at all — otherwise the backend's moveCards
+                    // delta bounces the card to the real column.
+                    if ((column === 'PLAN REVIEWED' || column === 'STAGING') && dynamicComplexityRoutingEnabled) {
                         const card = currentCards.find(c => (c.planId || c.sessionId) === sessionId);
                         const score = parseInt(card?.complexity, 10);
                         const pairModeActive =
@@ -8891,12 +8821,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
             });
 
-            document.querySelectorAll('.send-to-planned-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'sendToPlanned', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
-                });
-            });
-
             requestAnimationFrame(() => restoreBoardViewState(viewState));
             updateReassignButtonVisibility();
             updateFeatureActionButton();
@@ -9004,13 +8928,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const visibleCodedIds = CODED_IDS.filter(id => columns.includes(id));
                     sourceColumn = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                 }
-                // DISPATCH is a display mode of PLAN REVIEWED, not a real column — it is not
-                // in `columns`, so getNextColumn(DISPATCH) returns null and the card's
-                // copy-prompt button was suppressed entirely. Resolve it to the column it is
-                // a view of (same normalization sendDispatchToCoder does on the backend).
-                if (sourceColumn === 'DISPATCH') {
-                    sourceColumn = 'PLAN REVIEWED';
-                }
 
                 const nextColId = getNextColumn(sourceColumn);
                 const nextDef = nextColId ? columnDefinitions.find(d => d.id === nextColId) : null;
@@ -9048,21 +8965,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     : '';
             }
 
-            // DISPATCH is an ordered session queue (V60): cards enter via the
-            // Analyze button (planner + dispatch-analysis skill), an explicit
-            // Stage for queue action on the selection, or remote intake; each
-            // entry gets a queue_position. A same-column drag inside the
-            // Dispatch view reorders the queue. The `→ Planned` arm is the exit
-            // direction and stays.
+            // STAGING is an ordered session queue (V60): cards enter via a
+            // drag-into-STAGING drop (which posts stageForQueue), the Analyze
+            // button (planner + dispatch-analysis skill), or remote intake; each
+            // entry gets a queue_position. A same-column drag inside STAGING
+            // reorders the queue.
             const backlogActionBtn = (!isCompleted && card.column === 'CREATED' && !showingBacklog)
                 ? `<button class="card-btn icon-btn send-to-backlog-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Backlog">
                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v9M4.5 8.5L8 12l3.5-3.5"/></svg>
                    </button>`
                 : (!isCompleted && showingBacklog && card.column === 'BACKLOG')
                     ? `<button class="card-btn send-to-new-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
-                    : (!isCompleted && showingDispatch && card.column === 'DISPATCH')
-                        ? `<button class="card-btn send-to-planned-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to Planned">→ Planned</button>`
-                        : '';
+                    : '';
 
             const featureClass = card.isFeature ? ' feature-card' : '';
             const featureBadge = ''; // Badge removed; feature identity shown via purple border + meta line
@@ -9256,8 +9170,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         // Backlog toggle state
         let showingBacklog = false;
-        // Dispatch toggle state (display mode of PLAN REVIEWED, mirrors BACKLOG/CREATED).
-        let showingDispatch = false;
         // Host terminal-capability flag for the Analyze button (false in standalone
         // without node-pty). Defaults true so the extension host (which always has a
         // terminal) enables the button before the first board push arrives.
@@ -9414,8 +9326,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
                     if (cardEl && targetBody) {
                         const sourceDomCol = CODED_IDS.includes(card.column) ? 'CODED_AUTO' :
-                                             (card.column === 'BACKLOG' && showingBacklog ? 'CREATED' :
-                                             (card.column === 'DISPATCH' && showingDispatch ? 'PLAN REVIEWED' : card.column));
+                                             (card.column === 'BACKLOG' && showingBacklog ? 'CREATED' : card.column);
                         const emptyState = targetBody.querySelector('.empty-state');
                         if (emptyState) emptyState.remove();
                         if (sourceDomCol !== 'CODED_AUTO') {
@@ -9469,63 +9380,89 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const forwardIds = [];
             const backwardIds = [];
 
-            // When a display-mode view is active, dropping to the parent slot means the
-            // display-mode column (BACKLOG for CREATED, DISPATCH for PLAN REVIEWED).
-            const effectiveTargetColumn = (showingBacklog && targetColumn === 'CREATED') ? 'BACKLOG'
-                : (showingDispatch && targetColumn === 'PLAN REVIEWED') ? 'DISPATCH' : targetColumn;
+            // When the backlog display-mode view is active, dropping to the
+            // CREATED slot means BACKLOG.
+            const effectiveTargetColumn = (showingBacklog && targetColumn === 'CREATED') ? 'BACKLOG' : targetColumn;
 
-            // V60: a same-column drop inside the Dispatch view is a queue
-            // REORDER, not a no-op. Today's handler returns early on
-            // `card.column === effectiveTargetColumn` (:8743), which dead-ends
-            // the paced-queue case. Fill that branch: compute the insertion
-            // index from the drop position relative to the rendered cards
-            // (nearest-card midpoint against the pointer's clientY — the board
-            // has no existing drop-index helper, so this is new), then post the
-            // full ordered id list to reorderQueue. Do not fall through to the
-            // column-move path. A multi-card drag reorders the whole selection
-            // as a contiguous block at the drop index.
-            if (showingDispatch && effectiveTargetColumn === 'DISPATCH') {
+            // V60: STAGING is a queue, not a plain column. A drop into STAGING
+            // has two cases:
+            //  1. Same-column reorder (cards already in STAGING) — compute the
+            //     insertion index from the drop position, post reorderQueue.
+            //  2. Cross-column staging (cards from other columns) — post
+            //     stageForQueue so cards get queue_position, subtask refusal,
+            //     and stall-watch arming. Do NOT fall through to the generic
+            //     column-move path in either case.
+            if (effectiveTargetColumn === 'STAGING') {
                 const draggedIds = sessionIds.filter(id => {
                     const card = currentCards.find(c => (c.planId || c.sessionId) === id);
-                    return card && card.column === 'DISPATCH';
+                    return card && card.column === 'STAGING';
                 });
-                if (draggedIds.length === 0) return;
-                const targetBody = document.getElementById('col-' + targetColumn);
-                if (!targetBody) return;
-                // Build the current rendered order of DISPATCH cards (excluding
-                // the dragged set), then splice the dragged block in at the
-                // insertion index derived from the pointer's clientY.
-                const stationaryEls = Array.from(targetBody.querySelectorAll('.kanban-card'))
-                    .filter(el => {
+                if (draggedIds.length > 0) {
+                    const targetBody = document.getElementById('col-' + targetColumn);
+                    if (!targetBody) return;
+                    // Build the current rendered order of STAGING cards (excluding
+                    // the dragged set), then splice the dragged block in at the
+                    // insertion index derived from the pointer's clientY.
+                    const stationaryEls = Array.from(targetBody.querySelectorAll('.kanban-card'))
+                        .filter(el => {
+                            const pid = el.dataset.planId || el.dataset.session || '';
+                            return !draggedIds.includes(pid);
+                        });
+                    let insertIndex = stationaryEls.length;  // default: drop at end
+                    const pointerY = e.clientY;
+                    for (let i = 0; i < stationaryEls.length; i++) {
+                        const rect = stationaryEls[i].getBoundingClientRect();
+                        const midpoint = rect.top + rect.height / 2;
+                        if (pointerY < midpoint) { insertIndex = i; break; }
+                    }
+                    const stationaryIds = stationaryEls.map(el => el.dataset.planId || el.dataset.session || '').filter(Boolean);
+                    const orderedIds = [...stationaryIds.slice(0, insertIndex), ...draggedIds, ...stationaryIds.slice(insertIndex)];
+                    // Optimistic DOM reorder so the queue reflects the drop before
+                    // the server round-trip. Re-append in the new order.
+                    targetBody.querySelectorAll('.kanban-card').forEach(el => {
                         const pid = el.dataset.planId || el.dataset.session || '';
-                        return !draggedIds.includes(pid);
+                        if (draggedIds.includes(pid)) el.classList.add('card-dropped');
                     });
-                let insertIndex = stationaryEls.length;  // default: drop at end
-                const pointerY = e.clientY;
-                for (let i = 0; i < stationaryEls.length; i++) {
-                    const rect = stationaryEls[i].getBoundingClientRect();
-                    const midpoint = rect.top + rect.height / 2;
-                    if (pointerY < midpoint) { insertIndex = i; break; }
+                    const emptyState = targetBody.querySelector('.empty-state');
+                    if (emptyState) emptyState.remove();
+                    orderedIds.forEach(id => {
+                        const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
+                        if (cardEl) targetBody.appendChild(cardEl);
+                    });
+                    document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                    selectedCards.clear();
+                    updateReassignButtonVisibility();
+                    updateFeatureActionButton();
+                    postKanbanMessage({ type: 'reorderQueue', sessionIds: orderedIds, workspaceRoot });
+                    return;
                 }
-                const stationaryIds = stationaryEls.map(el => el.dataset.planId || el.dataset.session || '').filter(Boolean);
-                const orderedIds = [...stationaryIds.slice(0, insertIndex), ...draggedIds, ...stationaryIds.slice(insertIndex)];
-                // Optimistic DOM reorder so the queue reflects the drop before
-                // the server round-trip. Re-append in the new order.
-                targetBody.querySelectorAll('.kanban-card').forEach(el => {
-                    const pid = el.dataset.planId || el.dataset.session || '';
-                    if (draggedIds.includes(pid)) el.classList.add('card-dropped');
+                // Cross-column drop INTO STAGING — route through stageForQueue
+                // so cards get queue_position, subtask refusal, and stall-watch
+                // arming. The backend handler refuses subtasks and reports the
+                // refused count.
+                const stagedIds = sessionIds.filter(id => {
+                    const card = currentCards.find(c => (c.planId || c.sessionId) === id);
+                    return card && card.column !== 'STAGING';
                 });
-                const emptyState = targetBody.querySelector('.empty-state');
-                if (emptyState) emptyState.remove();
-                orderedIds.forEach(id => {
-                    const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
-                    if (cardEl) targetBody.appendChild(cardEl);
-                });
-                document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
-                selectedCards.clear();
-                updateReassignButtonVisibility();
-                updateFeatureActionButton();
-                postKanbanMessage({ type: 'reorderQueue', sessionIds: orderedIds, workspaceRoot });
+                if (stagedIds.length > 0) {
+                    postKanbanMessage({ type: 'stageForQueue', sessionIds: stagedIds, workspaceRoot });
+                    // Optimistic DOM move for visual feedback
+                    const targetBody = document.getElementById('col-' + targetColumn);
+                    if (targetBody) {
+                        const emptyState = targetBody.querySelector('.empty-state');
+                        if (emptyState) emptyState.remove();
+                        stagedIds.forEach(id => {
+                            const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
+                            if (cardEl) targetBody.appendChild(cardEl);
+                        });
+                    }
+                    document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                    selectedCards.clear();
+                    updateReassignButtonVisibility();
+                    updateFeatureActionButton();
+                    return;
+                }
+                // No stageable cards and no reorder — nothing to do
                 return;
             }
 
@@ -9533,11 +9470,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const card = currentCards.find(c => (c.planId || c.sessionId) === id);
                 if (!card || card.column === effectiveTargetColumn) return;
 
-                // BACKLOG cards are treated as index 0 (same as CREATED); DISPATCH cards
-                // as the PLAN REVIEWED index (the column DISPATCH is a display mode of),
-                // for forward/backward calculation.
-                const sourceColForIndex = card.column === 'BACKLOG' ? 'CREATED'
-                    : (card.column === 'DISPATCH' ? 'PLAN REVIEWED' : card.column);
+                // BACKLOG cards are treated as index 0 (same as CREATED) for
+                // forward/backward calculation.
+                const sourceColForIndex = card.column === 'BACKLOG' ? 'CREATED' : card.column;
                 const sourceIndex = columns.indexOf(sourceColForIndex);
                 const targetIndex = columns.indexOf(effectiveTargetColumn);
 
@@ -9567,10 +9502,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         targetBody.appendChild(cardEl);
                         // Update source column empty state
                         if (card) {
-                            // Source DOM column: BACKLOG/DISPATCH cards display in their
-                            // parent slot when the corresponding view is active.
-                            const srcDomCol = (card.column === 'BACKLOG' && showingBacklog) ? 'CREATED'
-                                : (card.column === 'DISPATCH' && showingDispatch) ? 'PLAN REVIEWED' : card.column;
+                            // Source DOM column: BACKLOG cards display in the CREATED
+                            // slot when the backlog view is active.
+                            const srcDomCol = (card.column === 'BACKLOG' && showingBacklog) ? 'CREATED' : card.column;
                             const sourceBody = document.getElementById('col-' + srcDomCol);
                             if (sourceBody && sourceBody.querySelectorAll('.kanban-card').length === 0) {
                                 sourceBody.innerHTML = '<div class="empty-state">No plans</div>';
@@ -9642,10 +9576,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             validIds.forEach(id => {
                 const card = currentCards.find(c => (c.planId || c.sessionId) === id);
                 const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
-                // Source DOM column: BACKLOG/DISPATCH cards display in their parent slot
-                // when the corresponding view is active.
-                const sourceDomColumn = (card && card.column === 'BACKLOG' && showingBacklog) ? 'CREATED'
-                    : (card && card.column === 'DISPATCH' && showingDispatch) ? 'PLAN REVIEWED' : (card?.column || targetColumn);
+                // Source DOM column: BACKLOG cards display in the CREATED slot
+                // when the backlog view is active.
+                const sourceDomColumn = (card && card.column === 'BACKLOG' && showingBacklog) ? 'CREATED' : (card?.column || targetColumn);
                 if (cardEl && targetBody) {
                     // Remove empty-state placeholder if present
                     const emptyState = targetBody.querySelector('.empty-state');
@@ -10003,9 +9936,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (typeof msg.showingBacklog !== 'undefined') {
                         showingBacklog = msg.showingBacklog;
                     }
-                    if (typeof msg.showingDispatch !== 'undefined') {
-                        showingDispatch = msg.showingDispatch;
-                    }
                     if (typeof msg.dispatchAnalyzeAvailable !== 'undefined') {
                         dispatchAnalyzeAvailable = msg.dispatchAnalyzeAvailable === true;
                     }
@@ -10019,7 +9949,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         lastCoderTerminalCount = msg.coderTerminalCount;
                     }
                     // V60: codingHeadLive (lead OR coder). Edge-trigger
-                    // updateDispatchViewInfo so the Run-queue button flips the
+                    // updateStagingViewInfo so the Run-queue button flips the
                     // moment a lead comes online even when coder count is 0.
                     let codingHeadLiveChanged = false;
                     if (typeof msg.codingHeadLive !== 'undefined') {
@@ -10029,7 +9959,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (typeof msg.anyCodingTerminalLive !== 'undefined') {
                         const anyChanged = !!msg.anyCodingTerminalLive !== lastAnyCodingTerminalLive;
                         lastAnyCodingTerminalLive = !!msg.anyCodingTerminalLive;
-                        // Edge-trigger updateDispatchViewInfo when the
+                        // Edge-trigger updateStagingViewInfo when the
                         // any-coding-terminal flag flips so the Run-queue
                         // button enables the moment a standalone coder comes
                         // online even when coder count is 0 and no team head
@@ -10109,7 +10039,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     // Edge-triggered, so the common (cards-changed) path does not repaint
                     // twice — renderBoard already called this.
-                    if (coderTerminalCountChanged || codingHeadLiveChanged) updateDispatchViewInfo();
+                    if (coderTerminalCountChanged || codingHeadLiveChanged) updateStagingViewInfo();
                     break;
                 }
                 case 'settingResult': {
@@ -10340,12 +10270,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'backlogViewState':
                     showingBacklog = event.data.showing;
-                    renderColumns();
-                    renderBoard(currentCards);
-                    updateAllColumnAgents();
-                    break;
-                case 'dispatchViewState':
-                    showingDispatch = event.data.showing;
                     renderColumns();
                     renderBoard(currentCards);
                     updateAllColumnAgents();
@@ -10986,25 +10910,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     btn.disabled = true;
                     btn.textContent = 'ASSIGN';
                 }
-            }
-            // V60: Stage for queue is enabled when at least one selected
-            // card is in a pre-dispatch column (CREATED, BACKLOG, PLAN
-            // REVIEWED) or already in DISPATCH (re-positioning). Cards in
-            // coded, reviewed, tested, or completed columns have already
-            // been dispatched and must not be re-queued.
-            const stageBtn = document.getElementById('btn-stage-for-queue');
-            if (stageBtn) {
-                let stageableCount = 0;
-                for (const id of selectedCards.keys()) {
-                    const card = currentCards.find(c => (c.planId || c.sessionId) === id);
-                    if (card && STAGEABLE_COLUMNS.includes(card.column)) {
-                        stageableCount++;
-                    }
-                }
-                stageBtn.disabled = stageableCount === 0;
-                stageBtn.textContent = stageableCount > 0
-                    ? `STAGE FOR QUEUE (${stageableCount})`
-                    : 'STAGE FOR QUEUE';
             }
         }
 
@@ -12006,9 +11911,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // is one step now, and rendering the old CREATED→planner /
                 // PLAN REVIEWED→coder pair here would tell the user the board
                 // still feeds a planner lane on a timer. It does not: the
-                // schedule pops DISPATCH and nothing else.
+                // schedule pops STAGING and nothing else.
                 const runSheet = [
-                    { sourceColumn: 'DISPATCH', headRole: 'coding' }
+                    { sourceColumn: 'STAGING', headRole: 'coding' }
                 ];
                 runSheet.forEach((step, i) => {
                     const stepRow = document.createElement('div');
@@ -13406,20 +13311,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 } else if (features.length === 0 && nonFeatures.length > 1) {
                     openFeatureCreateModal({ singlePlanPromote: false });
                 }
-            });
-            // V60: Stage the selected plans into the Dispatch queue, in
-            // selection order (selectedCards insertion order). Clears the
-            // selection afterwards, matching the neighbouring handlers
-            // (sendDispatchToCoder, completeSelected). The backend refuses
-            // subtasks and reports how many were refused.
-            document.getElementById('btn-stage-for-queue')?.addEventListener('click', () => {
-                const ids = Array.from(selectedCards.keys()).filter(Boolean);
-                if (ids.length === 0) return;
-                postKanbanMessage({ type: 'stageForQueue', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
-                selectedCards.clear();
-                document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
-                updateReassignButtonVisibility();
-                updateFeatureActionButton();
             });
             document.getElementById('feature-create-close')?.addEventListener('click', closeFeatureCreateModal);
             document.getElementById('feature-create-cancel')?.addEventListener('click', closeFeatureCreateModal);

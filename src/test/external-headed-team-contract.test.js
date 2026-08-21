@@ -189,7 +189,7 @@ function makeMockDb(initialState = {}) {
             planId: 'plan-123',
             sessionId: 'plan-123',
             topic: 'Build Feature',
-            kanbanColumn: 'DISPATCH',
+            kanbanColumn: 'STAGING',
             featureId: '',
             dispatchedAt: null,
             dispatchedTerminal: '',
@@ -284,7 +284,7 @@ function makeMockDb(initialState = {}) {
         const WS = '/tmp/ext-team-ws-2';
         const planInDb = {
             planId: 'plan-777', sessionId: 'plan-777', topic: 'Terminal lead card',
-            kanbanColumn: 'DISPATCH', featureId: '', dispatchedAt: null,
+            kanbanColumn: 'STAGING', featureId: '', dispatchedAt: null,
             dispatchedTerminal: '', queuePosition: 1, complexity: 5,
         };
         let lastTriggerAction = null;
@@ -332,7 +332,7 @@ function makeMockDb(initialState = {}) {
         const WS = '/tmp/ext-team-ws-3';
         const planInDb = {
             planId: 'plan-888', sessionId: 'plan-888', topic: 'Needs a lead',
-            kanbanColumn: 'DISPATCH', featureId: '', dispatchedAt: null,
+            kanbanColumn: 'STAGING', featureId: '', dispatchedAt: null,
             dispatchedTerminal: '', queuePosition: 1, complexity: 9,
         };
         let triggered = false;
@@ -359,7 +359,7 @@ function makeMockDb(initialState = {}) {
         const res = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'ExternalLead' });
         assert.strictEqual(res.status, 409, 'A role miss on an external team must refuse');
         assert.strictEqual(triggered, false, 'No dispatch may fire — the card stays staged');
-        assert.strictEqual(planInDb.kanbanColumn, 'DISPATCH', 'Card must stay in the queue');
+        assert.strictEqual(planInDb.kanbanColumn, 'STAGING', 'Card must stay in the queue');
     });
 
     await test('7. No dispatch path can target the external head', async () => {

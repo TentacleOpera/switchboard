@@ -10832,7 +10832,7 @@ Each plan file must include:
 
     private _getEnabledAutobanSourceColumns(): string[] {
         // The run sheet and per-column rules are deleted. The schedule dispatches
-        // via the queue pop, which reads DISPATCH / PLAN REVIEWED directly. This
+        // via the queue pop, which reads STAGING / PLAN REVIEWED directly. This
         // helper remains for the empty-column sweep, which checks whether any
         // source column still has eligible cards.
         return [AUTOBAN_SOURCE_COLUMN];
@@ -10929,10 +10929,10 @@ Each plan file must include:
         if (this.isOversightAgentRunning()) {
             return false;
         }
-        // The schedule now pops the DISPATCH session queue, so "no work left"
+        // The schedule now pops the STAGING session queue, so "no work left"
         // has to include the queue. Checking only the `rules` columns is the
         // run sheet's question, and it has the worst possible answer for the
-        // headline flow: stage five plans into DISPATCH with CREATED and PLAN
+        // headline flow: stage five plans into STAGING with CREATED and PLAN
         // REVIEWED empty, and this sweep turns the schedule off within 60s —
         // silently, while the work the user just staged sits there.
         if (await this._autobanHasStagedQueueCards(workspaceRoot)) {
@@ -10948,9 +10948,9 @@ Each plan file must include:
     }
 
     /**
-     * True when the DISPATCH session queue holds at least one un-dispatched
+     * True when the STAGING session queue holds at least one un-dispatched
      * top-level card — the same predicate `dispatchNextFromQueue` pops with
-     * (column DISPATCH, no `dispatchedAt`, empty `featureId`). Read directly
+     * (column STAGING, no `dispatchedAt`, empty `featureId`). Read directly
      * from the board so it cannot disagree with the pop.
      */
     private async _autobanHasStagedQueueCards(workspaceRoot: string): Promise<boolean> {
@@ -10960,7 +10960,7 @@ Each plan file must include:
             const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
             const board: any[] = (await db.getBoard?.(wsId)) || [];
             return board.some((p: any) =>
-                p && p.kanbanColumn === 'DISPATCH'
+                p && p.kanbanColumn === 'STAGING'
                 && !p.dispatchedAt
                 && (!p.featureId || p.featureId === '')
             );
@@ -11622,8 +11622,8 @@ Each plan file must include:
 
         // Ground truth over self-report: always verify queue state against the board.
         // The queue candidate predicate matches dispatchNextFromQueue in LocalApiServer.ts
-        // exactly: column DISPATCH AND !dispatchedAt AND (!featureId || featureId === '').
-        // DISPATCH only — a handoff that "succeeded" off a full PLAN REVIEWED lane with
+        // exactly: column STAGING AND !dispatchedAt AND (!featureId || featureId === '').
+        // STAGING only — a handoff that "succeeded" off a full PLAN REVIEWED lane with
         // an empty queue would exit the orchestrator having handed the lead nothing it
         // will actually be given, which is the outage this gate exists to refuse.
         const isQueueable = (p: any): boolean =>
@@ -11641,12 +11641,12 @@ Each plan file must include:
         }
         const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
         const board: any[] = (await db.getBoard?.(wsId)) || [];
-        const candidates = board.filter((p: any) => p && p.kanbanColumn === 'DISPATCH' && isQueueable(p));
+        const candidates = board.filter((p: any) => p && p.kanbanColumn === 'STAGING' && isQueueable(p));
         if (candidates.length === 0) {
             return {
                 success: false,
                 status: 409,
-                error: 'Empty queue: no dispatchable top-level cards in DISPATCH — stage the scoped plans into the session queue before handing off'
+                error: 'Empty queue: no dispatchable top-level cards in STAGING — stage the scoped plans into the session queue before handing off'
             };
         }
 

@@ -72,8 +72,8 @@ const MAX_GIT_CAPTURE_BYTES = 10 * 1024 * 1024;
  * finishing simultaneously both POST `queue/done`; this chain processes them
  * sequentially so the first completion dispatches the next queue item and the
  * second finds the queue after that pop (or empty). Mirrors `_queueNextChain`
- * (the kanban DISPATCH column's chain) but is deliberately SEPARATE — the
- * file-based team queue and the kanban DISPATCH column are independent queue
+ * (the kanban STAGING column's chain) but is deliberately SEPARATE — the
+ * file-based team queue and the kanban STAGING column are independent queue
  * surfaces with independent endpoints, and serialising them together would
  * make a team-queue completion block a kanban pop (and vice versa) for no
  * reason.
@@ -1861,19 +1861,19 @@ export class LocalApiServer {
             }
 
             // ── Queue source ───────────────────────────────────────────
-            // DISPATCH is THE queue, ordered by queue_position ASC NULLS
+            // STAGING is THE queue, ordered by queue_position ASC NULLS
             // LAST then board order. Subtask exclusion: empty `featureId`
             // (switchboard-contracts #6) — a subtask nested under a feature
             // must not leak into the pop.
             //
             // There is deliberately NO fallback to PLAN REVIEWED. The
-            // interim fallback existed only while subtask 2's `DISPATCH`
+            // interim fallback existed only while subtask 2's `STAGING`
             // queue was unlanded; with the queue live it is actively
             // harmful — an empty queue would drain the whole PLAN REVIEWED
             // lane unattended instead of ending the session, the queue
             // watch would never reach its "queue empty → drop silently"
             // gate, and a schedule would dispatch cards the user never
-            // staged. An empty DISPATCH is the session ending normally.
+            // staged. An empty STAGING is the session ending normally.
             const isQueueable = (p: any): boolean =>
                 !!p
                 && (!p.dispatchedAt)
@@ -1897,7 +1897,7 @@ export class LocalApiServer {
             };
 
             const candidates = board
-                .filter((p: any) => p && p.kanbanColumn === 'DISPATCH' && isQueueable(p))
+                .filter((p: any) => p && p.kanbanColumn === 'STAGING' && isQueueable(p))
                 .sort(byQueueThenBoard);
 
             if (candidates.length === 0) {
@@ -2262,7 +2262,7 @@ export class LocalApiServer {
                     if (outcome === 'failed') {
                         const routedTo = String(held.routedTo || '').toLowerCase();
                         // Guard against double re-stage: the watch (subtask 3)
-                        // may have already re-staged this card to DISPATCH. A
+                        // may have already re-staged this card to STAGING. A
                         // late `failed` report from the original seat must
                         // check the card's CURRENT column, not the pre-release
                         // `held` read (which still shows the coding column).
@@ -2286,29 +2286,29 @@ export class LocalApiServer {
                             // No re-stage, no park — fall through to the pop.
                             escalated = 'none';
                         } else if (routedTo === 'intern' || routedTo === 'coder') {
-                            // Step up one rung: re-stage the card into DISPATCH
+                            // Step up one rung: re-stage the card into STAGING
                             // at the FRONT so it is the next thing dispatched,
                             // and carry a role override to getFallbackRole so
                             // the next dispatch lands it in the stronger seat's
                             // coding column. Re-staging is TWO writes: move the
-                            // card's kanban_column back to DISPATCH (it is
+                            // card's kanban_column back to STAGING (it is
                             // currently in its coding column), then rewrite the
                             // queue order with the failed card first.
                             // setQueuePositions only sets queue_position — it
                             // does NOT move the column, so without the move the
                             // card would keep its coding column and never be
-                            // picked by the pop's `kanbanColumn === 'DISPATCH'`
+                            // picked by the pop's `kanbanColumn === 'STAGING'`
                             // filter. appendQueuePositions is NOT used — it
                             // appends to the BACK (MAX+1), which would send the
                             // failed card behind every other staged card.
                             const fallbackRole = getFallbackRole(routedTo as 'intern' | 'coder');
                             try {
-                                // 1. Move the card back to DISPATCH. This is
+                                // 1. Move the card back to STAGING. This is
                                 // legitimate (contracts #1): the card moves
                                 // because it is being dispatched again, not
                                 // because it finished.
                                 const moved = await db.updateColumnByPlanFile(
-                                    held.planFile, held.workspaceId || wsId, 'DISPATCH'
+                                    held.planFile, held.workspaceId || wsId, 'STAGING'
                                 );
                                 if (!moved) {
                                     console.warn(`[LocalApiServer] updateColumnByPlanFile failed for failed card ${held.planId}; card rests coded`);
@@ -2322,7 +2322,7 @@ export class LocalApiServer {
                                     // included.
                                     const liveBoard: any[] = await db.getBoard?.(wsId) || [];
                                     const staged = liveBoard
-                                        .filter((p: any) => p && p.kanbanColumn === 'DISPATCH'
+                                        .filter((p: any) => p && p.kanbanColumn === 'STAGING'
                                             && (!p.dispatchedAt)
                                             && (!p.featureId || p.featureId === '')
                                             && p.planId !== held.planId)
@@ -2345,7 +2345,7 @@ export class LocalApiServer {
                                         escalated = 'restaged';
                                     } else {
                                         // Position write failed — the card is in
-                                        // DISPATCH but at the back. Still
+                                        // STAGING but at the back. Still
                                         // dispatchable, just not next. Log and
                                         // carry the override so it steps up when
                                         // it does dispatch.
@@ -4039,7 +4039,7 @@ export class LocalApiServer {
      * report to the lead, clears the finishing terminal, and dispatches the
      * next queued item to the lead (the lead delegates to members).
      *
-     * Mirrors the kanban DISPATCH column's `_runQueueDone` (release → clear →
+     * Mirrors the kanban STAGING column's `_runQueueDone` (release → clear →
      * pop) but operates on the file-based queue (`.switchboard/teams/<groupId>/
      * queue/`) instead of the kanban DB, and dispatches to the team head
      * (resolved from the URL's registered group) instead of seat-routing a
@@ -5100,8 +5100,8 @@ export class LocalApiServer {
                             .map((p: any) => p.kanbanColumn)
                             .filter((c: string) => c && !builtInIds.has(c))
                     ));
-                    // Publish the RELATIONSHIP as well as the label: BACKLOG/DISPATCH are
-                    // display modes of their parent column and CODED a legacy alias of
+                    // Publish the RELATIONSHIP as well as the label: BACKLOG is
+                    // a display mode of its parent column and CODED a legacy alias of
                     // LEAD CODED, so a caller that only sees `{id,label}` would read any as
                     // an independent peer column — the exact misreading the labels exist to
                     // prevent. Sourced from DISPLAY_MODE_COLUMNS / LEGACY_COLUMN_LABELS

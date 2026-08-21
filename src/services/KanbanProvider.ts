@@ -135,7 +135,7 @@ export interface KanbanCard {
     subtaskCount?: number;
     working?: boolean; // true while an agent is dispatched to this card and the 20-min window hasn't elapsed
     blocked?: boolean; // V59: true while the agent reported itself blocked / waiting on the operator (hook-emitted)
-    queuePosition?: number | null; // V60: 1-based DISPATCH session queue position; NULL = not staged (sorts last)
+    queuePosition?: number | null; // V60: 1-based STAGING session queue position; NULL = not staged (sorts last)
     columnEnteredAt?: string | null; // V61: when the card entered its current column (board sort key)
 }
 
@@ -303,9 +303,6 @@ export class KanbanProvider implements vscode.Disposable {
     private _currentWorkspaceRoot: string | null = null;
     private _columnDragDropModes: Record<string, 'cli' | 'prompt' | 'disabled'>;
     private _showingBacklog: boolean = false;
-    // Dispatch is a display mode of PLAN REVIEWED (mirrors BACKLOG/CREATED). When true,
-    // DISPATCH cards render in the Planned slot and PLAN REVIEWED cards are hidden.
-    private _showingDispatch: boolean = false;
     private _allowUnknownComplexityAutoMove: boolean;
     private _clearTerminalBeforePrompt: boolean;
     private _clearTerminalBeforePromptDelay: number;
@@ -1321,7 +1318,7 @@ export class KanbanProvider implements vscode.Disposable {
                     projectContextEnabled,
                 },
                 { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, showingDispatch: this._showingDispatch, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
@@ -2326,7 +2323,6 @@ export class KanbanProvider implements vscode.Disposable {
                     cards,
                     dbUnavailable: false,
                     showingBacklog: this._showingBacklog,
-                    showingDispatch: this._showingDispatch,
                     dispatchAnalyzeAvailable: true,
                     coderTerminalCount,
                     codingHeadLive,
@@ -2413,11 +2409,6 @@ export class KanbanProvider implements vscode.Disposable {
     /** Live backlog-view flag. Standalone reads this for the board payload so the flag
      *  is never a hardcoded literal that clobbers the toggle. */
     public get showingBacklog(): boolean { return this._showingBacklog; }
-
-    /** Live dispatch-view flag (display mode of PLAN REVIEWED). Standalone reads this
-     *  for the board payload so the flag is never a hardcoded literal that clobbers
-     *  the toggle (the defect the backlog-view plan documents for showingBacklog). */
-    public get showingDispatch(): boolean { return this._showingDispatch; }
 
     /**
      * Post message to webview (used by ContinuousSyncService).
@@ -2613,8 +2604,8 @@ export class KanbanProvider implements vscode.Disposable {
                 return this._remoteApplyColumnMove(resolved, plan, targetColumn);
             },
             // Queue-mode staging (subtask 7): stage a remote-arriving card into
-            // the session queue instead of dispatching. Reuses the same
-            // stageForQueue the webview's Stage for queue button calls — one
+            // the session queue (STAGING column) instead of dispatching. Reuses the same
+            // stageForQueue the webview's drag-into-STAGING calls — one
             // staging path, one queue_position assignment. Returns the position
             // so the ack comment can name it.
             onStageForQueue: async (plan) => {
@@ -4056,7 +4047,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 cards,
                 dbUnavailable,
                 showingBacklog: this._showingBacklog,
-                showingDispatch: this._showingDispatch,
                 dispatchAnalyzeAvailable: true,
                 coderTerminalCount,
                 codingHeadLive,
@@ -4263,7 +4253,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 cards,
                 dbUnavailable: false,
                 showingBacklog: this._showingBacklog,
-                showingDispatch: this._showingDispatch,
                 dispatchAnalyzeAvailable: true,
                 coderTerminalCount,
                 codingHeadLive,
@@ -5664,7 +5653,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'Your terminal name is in $SWITCHBOARD_TERMINAL.',
             'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
             '',
-            'DISPATCH (one call per subtask):',
+            'STAGING (one call per subtask):',
             'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
             '  -d \'{"name":"<seat>","data":"Implement the plan at <path>. This subtask only.","clearBeforePrompt":false,"dispatch":{"planId":"<id>","role":"coder"}}\'',
             '',
@@ -5905,7 +5894,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // existing planner terminal with a 'dispatch-analysis' instruction. It does NOT
         // run improve-plan — it reads the dispatch-analysis skill, queries the API for
         // the Planned column, selects the largest non-overlapping set, and moves that
-        // set to DISPATCH. Built here (before the normal planner path) so the improve-plan
+        // set to STAGING. Built here (before the normal planner path) so the improve-plan
         // workflow body is never emitted for this instruction. The plan list is included
         // so the agent sees the candidate plan IDs/files directly; the skill re-queries
         // the API for freshness (late additions are never stale).
@@ -6978,6 +6967,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
         /** Returns true if the column should NOT be considered a next step. */
         const shouldSkip = (col: typeof allColumns[0]): boolean => {
             if (col.featureOnly) {
+                return true;
+            }
+            // STAGING has no dispatch role — it is a queue, not a coding seat.
+            // Advance buttons must skip it so cards never land in STAGING via
+            // the advance path (STAGING is reachable only by drag-and-drop or
+            // orchestrator placement).
+            if (!col.role) {
                 return true;
             }
             if (col.id === 'ACCEPTANCE TESTED' && !acceptanceTesterActive) {
@@ -8111,13 +8107,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         )
                     );
                 }
-                // V60: a card leaving DISPATCH drops its queue_position so a later
+                // V60: a card leaving STAGING drops its queue_position so a later
                 // re-stage does not jump the queue on a stale position. Covers both
-                // the dispatch-to-coder path (sendDispatchToCoder / sendDispatchSetToCoders
-                // / Run queue) and a manual drag out of the Dispatch view. The feature
-                // cascade clears the feature card's position; subtask positions are
-                // already NULL (subtasks never stage — the staged count excludes them).
-                if (plan && plan.kanbanColumn === 'DISPATCH' && targetColumn !== 'DISPATCH') {
+                // the dispatch-to-coder path (advance / Run queue) and a manual drag
+                // out of the Staging column. The feature cascade clears the feature
+                // card's position; subtask positions are already NULL (subtasks never
+                // stage — the staged count excludes them).
+                if (plan && plan.kanbanColumn === 'STAGING' && targetColumn !== 'STAGING') {
                     const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
                     if (wsId) { await db.clearQueuePosition(plan.planId, wsId); }
                 }
@@ -8173,9 +8169,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
         let refused = 0;
         if (!db || !workspaceId) return { planIds, refused: ids.length, workspaceId };
         // Plans in coded/reviewed/tested/completed columns have already been
-        // dispatched and must not be re-queued. DISPATCH itself is stageable
+        // dispatched and must not be re-queued. STAGING itself is stageable
         // (re-positioning). Mirrors the frontend STAGEABLE_COLUMNS gate.
-        const stageableColumns = new Set(['CREATED', 'BACKLOG', 'PLAN REVIEWED', 'DISPATCH']);
+        const stageableColumns = new Set(['CREATED', 'BACKLOG', 'PLAN REVIEWED', 'STAGING']);
         for (const id of ids) {
             let plan = await db.getPlanByPlanId(id);
             if (!plan) { plan = await db.getPlanBySessionId(id); }
@@ -8193,13 +8189,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
 
     /**
-     * V60 — stage the given plan ids into DISPATCH as an ordered session
+     * V60 — stage the given plan ids into STAGING as an ordered session
      * queue, appending positions from MAX(queue_position)+1 in the caller's
      * order. The webview passes selection order; subtask 6 (scoped handoff)
      * and subtask 7 (remote intake) call this same helper so all three stage
-     * identically. A card already in DISPATCH is re-positioned rather than
+     * identically. A card already in STAGING is re-positioned rather than
      * duplicated. Subtasks are refused (features stage as one card). Posts a
-     * board refresh so the staged cards appear in DISPATCH in order.
+     * board refresh so the staged cards appear in STAGING in order.
      */
     public async stageForQueue(
         workspaceRoot: string,
@@ -8215,7 +8211,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (!db || !(await db.ensureReady())) return { success: false, staged: 0, refused, error: 'Kanban database not ready' };
         const ok = await db.appendQueuePositions(workspaceId, planIds);
         if (!ok) return { success: false, staged: 0, refused, error: 'Failed to write queue positions' };
-        // Post a board refresh so the staged cards render in DISPATCH in order.
+        // Post a board refresh so the staged cards render in STAGING in order.
         await this._refreshBoard(workspaceRoot);
         // Arm the queue-level stall watch (subtask 3). Staging is the EARLIEST
         // moment a silent night becomes possible — a queue staged but never
@@ -8241,9 +8237,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
 
     /**
-     * V60 — rewrite the DISPATCH queue order from a full ordered id list (the
+     * V60 — rewrite the STAGING queue order from a full ordered id list (the
      * post-drop order). Assigns 1..N in one transaction. Called by the webview
-     * drop handler's same-column DISPATCH reorder. Posts a board refresh so the
+     * drop handler's same-column STAGING reorder. Posts a board refresh so the
      * new order renders immediately.
      */
     public async reorderQueue(
@@ -8640,7 +8636,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
      * Used by _advanceCards to classify forward vs backward moves.
      */
     private _isColumnBefore(colA: string, colB: string): boolean {
-        const order = ['CREATED', 'BACKLOG', 'RESEARCHER', 'PLAN REVIEWED', 'DISPATCH',
+        const order = ['CREATED', 'BACKLOG', 'RESEARCHER', 'PLAN REVIEWED', 'STAGING',
             'LEAD CODED', 'CODER CODED', 'INTERN CODED', 'CODE REVIEWED',
             'ACCEPTANCE TESTED', 'COMPLETED', 'TICKET UPDATER'];
         const idxA = order.indexOf(colA);
@@ -9633,7 +9629,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // is a batch affordance) but must still route by complexity.
                 //
                 // Checked BEFORE the CLI-triggers gate, matching triggerBatchAction.
-                // _advanceCards applies the gate to the DISPATCH only, so with
+                // _advanceCards applies the gate to the STAGING only, so with
                 // triggers off the card still moves — which is the documented
                 // behaviour ("advance moves cards without dispatching"). Gating here
                 // instead made a one-card CODED_AUTO drop refuse outright while a
@@ -10666,8 +10662,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 const column: string = msg.column;
 
-                // PLAN REVIEWED uses dynamic complexity routing per-session
-                if (column === 'PLAN REVIEWED') {
+                // PLAN REVIEWED and STAGING use dynamic complexity routing per-session
+                if (column === 'PLAN REVIEWED' || column === 'STAGING') {
                     const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(msg.sessionIds);
                     if (knownIds.length === 0) {
                         this._notifySkippedUnknownComplexity(skippedCount, 0);
@@ -10695,7 +10691,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 movedSids.push(...cascadeIds);
                                 dispatchSids.push(sid);
                             } else {
-                                failures.push({ id: sid, sourceColumn: 'PLAN REVIEWED', reason: outcome.detail });
+                                failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
                             }
                         }
                         if (movedSids.length > 0) {
@@ -10810,8 +10806,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 const sessionIds = sourceCards.map(card => this._cardId(card));
 
-                // PLAN REVIEWED uses dynamic complexity routing per-session
-                if (column === 'PLAN REVIEWED') {
+                // PLAN REVIEWED and STAGING use dynamic complexity routing per-session
+                if (column === 'PLAN REVIEWED' || column === 'STAGING') {
                     const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(sessionIds);
                     if (knownIds.length === 0) {
                         this._notifySkippedUnknownComplexity(skippedCount, 0);
@@ -10839,7 +10835,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 movedSids.push(...cascadeIds);
                                 dispatchSids.push(sid);
                             } else {
-                                failures.push({ id: sid, sourceColumn: 'PLAN REVIEWED', reason: outcome.detail });
+                                failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
                             }
                         }
                         if (movedSids.length > 0) {
@@ -11780,10 +11776,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     this._showingBacklog = false;
                     this.postMessage({ type: 'backlogViewState', showing: false });
                 }
-                if (this._showingDispatch) {
-                    this._showingDispatch = false;
-                    this.postMessage({ type: 'dispatchViewState', showing: false });
-                }
 
                 // LAZY CHANGE: Ensure DB exists before plan creation
                 try {
@@ -11832,17 +11824,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 this.refresh();
                 return { success: true, sessionId: resolvedSessionId };
             }
-            case 'toggleDispatchView':
-                this._showingDispatch = !this._showingDispatch;
-                this.postMessage({ type: 'dispatchViewState', showing: this._showingDispatch });
-                this.refresh();
-                return { success: true, showing: this._showingDispatch };
             case 'dispatchAnalyze': {
                 // Analyze collects every card currently in PLAN REVIEWED and fires the
                 // existing planner batch-dispatch command with a 'dispatch-analysis'
                 // instruction. The planner prompt arm routes that instruction to the
                 // dispatch-analysis skill, which selects the parallelizable set and
-                // moves it to DISPATCH. No new launch path — triggerBatchAgentFromKanban
+                // moves it to STAGING. No new launch path — triggerBatchAgentFromKanban
                 // is registered in both hosts (extension.ts / standalone bootstrap.ts).
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
                 if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
@@ -11878,171 +11865,8 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 void this._seams().ui.showInformationMessage(`Analyzing ${plannedIds.length} plan(s) for parallel dispatch.`);
                 return { success: true, sent: plannedIds.length };
             }
-            case 'sendDispatchToCoder': {
-                // Send selected DISPATCH cards forward to a coder column. DISPATCH is not
-                // in DEFAULT_KANBAN_COLUMNS, so _getNextColumnId's ordered walk cannot
-                // resolve it (it hits the null-return guard). Resolve the target
-                // explicitly from PLAN REVIEWED — the column DISPATCH is a display mode
-                // of — respecting complexity routing where enabled (same per-card role
-                // resolution moveSelected uses for PLAN REVIEWED).
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
-                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
-                if (!Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
-                    void this._seams().ui.showWarningMessage('Please select at least one plan in Dispatch to send to a coder.');
-                    return { success: false, error: 'Please select at least one plan in Dispatch to send to a coder.' };
-                }
-                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
-                    void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
-                    return { success: false, error: 'No coding agent is currently enabled.' };
-                }
-                // Unknown-complexity plans are excluded from auto-routing exactly as they
-                // are on the PLAN REVIEWED forward move — routing them would pick a coder
-                // column from a score that does not exist.
-                const { filtered: knownDispatchIds, skippedCount: dispatchSkipped } =
-                    this._filterUnknownComplexitySessions(msg.sessionIds);
-                if (knownDispatchIds.length === 0) {
-                    this._notifySkippedUnknownComplexity(dispatchSkipped, 0);
-                    return { success: false, error: 'All selected plans have unknown complexity' };
-                }
-                // Group by resolved target column BEFORE moving: the webview's `moveCards`
-                // delta carries ONE targetColumn and writes it onto every id it names, so a
-                // mixed-target batch must post one delta per column. (A placeholder like
-                // 'forward' would be written verbatim into card.column and the cards would
-                // vanish from the board until the next full push.)
-                const dispatchGroups = await this._partitionByComplexityRoute(workspaceRoot, knownDispatchIds);
-                const dispatchFailures: { id: string; sourceColumn: string; reason: string }[] = [];
-                const dispatchMovedParts: string[] = [];
-                let dispatchMovedCount = 0;
-                for (const [role, sids] of dispatchGroups) {
-                    if (sids.length === 0) { continue; }
-                    let targetCol: string;
-                    try {
-                        targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
-                    } catch (e) {
-                        // sourceColumn is required by the webview's moveCardsFailed revert —
-                        // without it every failed card's column is set to undefined.
-                        for (const sid of sids) { dispatchFailures.push({ id: sid, sourceColumn: 'DISPATCH', reason: (e as Error).message }); }
-                        continue;
-                    }
-                    const dispatchRole = this._columnToRole(targetCol) || role;
-                    const movedSids: string[] = [];
-                    const dispatchSids: string[] = [];
-                    for (const sid of sids) {
-                        const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
-                        if (outcome.ok) {
-                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                            const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                            movedSids.push(...cascadeIds);
-                            dispatchSids.push(sid);
-                        } else {
-                            dispatchFailures.push({ id: sid, sourceColumn: 'DISPATCH', reason: outcome.detail });
-                        }
-                    }
-                    if (movedSids.length > 0) {
-                        this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
-                    }
-                    // Send-to-coder must actually reach the coder, not just repaint the board.
-                    // Same gate and same commands the PLAN REVIEWED forward move uses.
-                    if (this._cliTriggersEnabled && dispatchSids.length > 0) {
-                        if (dispatchSids.length === 1) {
-                            await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
-                        } else {
-                            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
-                        }
-                    }
-                    dispatchMovedCount += dispatchSids.length;
-                    dispatchMovedParts.push(`${dispatchSids.length} → ${targetCol}`);
-                }
-                if (dispatchFailures.length > 0) {
-                    this.postMessage({ type: 'moveCardsFailed', failures: dispatchFailures });
-                }
-                // No full refresh — each group posted its own targeted moveCards delta above
-                // (mirrors the PLAN REVIEWED forward move, where a trailing refresh raced the
-                // optimistic advance and bounced cards back to their source column).
-                const dispatchSkippedSuffix = dispatchSkipped > 0 ? ` (${dispatchSkipped} skipped — unknown complexity)` : '';
-                void this._seams().ui.showInformationMessage(
-                    `Sent ${dispatchMovedCount} plan(s) from Dispatch to coder: ${dispatchMovedParts.join(', ')}.${dispatchSkippedSuffix}`
-                );
-                return { success: true, sent: dispatchMovedCount, skipped: dispatchSkipped, failures: dispatchFailures };
-            }
-            case 'sendDispatchSetToCoders': {
-                // Fan the entire Dispatch staging set out to complexity-routed coder
-                // terminals. Re-reads the set from the latest board state inside the
-                // handler so a card dragged out between render and press is skipped,
-                // not dispatched.
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
-                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
-                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
-                    void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
-                    return { success: false, error: 'No coding agent is currently enabled.' };
-                }
-                const dispatchCards = (this._lastCards || []).filter(
-                    c => c.workspaceRoot === workspaceRoot && c.column === 'DISPATCH' && !c.featureId
-                );
-                if (dispatchCards.length === 0) {
-                    return { success: false, error: 'No plans in Dispatch' };
-                }
-                const dispatchIds = dispatchCards.map(c => this._cardId(c));
-                const { filtered: knownIds, skippedCount: dispatchSkipped } =
-                    this._filterUnknownComplexitySessions(dispatchIds);
-                if (knownIds.length === 0) {
-                    this._notifySkippedUnknownComplexity(dispatchSkipped, 0);
-                    return { success: false, error: 'All dispatch plans have unknown complexity' };
-                }
-                const dispatchGroups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
-                const dispatchFailures: { id: string; sourceColumn: string; reason: string }[] = [];
-                const dispatchMovedParts: string[] = [];
-                let dispatchMovedCount = 0;
-                for (const [role, sids] of dispatchGroups) {
-                    if (sids.length === 0) { continue; }
-                    let targetCol: string;
-                    try {
-                        targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
-                    } catch (e) {
-                        for (const sid of sids) { dispatchFailures.push({ id: sid, sourceColumn: 'DISPATCH', reason: (e as Error).message }); }
-                        continue;
-                    }
-                    const dispatchRole = this._columnToRole(targetCol) || role;
-                    const movedSids: string[] = [];
-                    const dispatchSids: string[] = [];
-                    for (const sid of sids) {
-                        const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
-                        if (outcome.ok) {
-                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                            const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                            movedSids.push(...cascadeIds);
-                            dispatchSids.push(sid);
-                        } else {
-                            dispatchFailures.push({ id: sid, sourceColumn: 'DISPATCH', reason: outcome.detail });
-                        }
-                    }
-                    if (movedSids.length > 0) {
-                        this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
-                    }
-                    if (this._cliTriggersEnabled && dispatchSids.length > 0) {
-                        if (dispatchSids.length === 1) {
-                            await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
-                        } else {
-                            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
-                        }
-                    }
-                    dispatchMovedCount += dispatchSids.length;
-                    dispatchMovedParts.push(`${dispatchSids.length} → ${targetCol}`);
-                }
-                if (dispatchFailures.length > 0) {
-                    this.postMessage({ type: 'moveCardsFailed', failures: dispatchFailures });
-                }
-                const dispatchSkippedSuffix = dispatchSkipped > 0 ? ` (${dispatchSkipped} skipped — unknown complexity)` : '';
-                const failureSuffix = dispatchFailures.length > 0 ? `; ${dispatchFailures.length} failed` : '';
-                const message = `Sent ${dispatchMovedCount} plan(s) from Dispatch to coder: ${dispatchMovedParts.join(', ')}.${dispatchSkippedSuffix}${failureSuffix}`;
-                this.postMessage({ type: 'showStatusMessage', message, isError: false });
-                void this._seams().ui.showInformationMessage(message);
-                return { success: dispatchFailures.length === 0, sent: dispatchMovedCount, skipped: dispatchSkipped, failures: dispatchFailures };
-            }
             case 'stageForQueue': {
-                // V60: stage the selected plans into DISPATCH as an ordered
+                // V60: stage the selected plans into STAGING as an ordered
                 // session queue, appending positions in selection order. The
                 // webview passes the selection order (selectedCards insertion
                 // order), not board order — the user's pick order IS the queue
@@ -12057,13 +11881,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 const result = await this.stageForQueue(workspaceRoot, ids);
                 const refusedSuffix = result.refused > 0 ? ` (${result.refused} refused — subtasks or already-dispatched plans cannot be staged)` : '';
                 const message = result.success
-                    ? `Staged ${result.staged} plan(s) into the Dispatch queue.${refusedSuffix}`
+                    ? `Staged ${result.staged} plan(s) into the Staging queue.${refusedSuffix}`
                     : (result.error || 'Failed to stage plans');
                 this.postMessage({ type: 'showStatusMessage', message, isError: !result.success });
                 return result;
             }
             case 'reorderQueue': {
-                // V60: rewrite the DISPATCH queue order from the post-drop id
+                // V60: rewrite the STAGING queue order from the post-drop id
                 // list. The webview's same-column drop handler computes the
                 // insertion index and sends the full ordered list.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
@@ -12087,11 +11911,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
                 if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
                 const dispatchCards = (this._lastCards || []).filter(
-                    c => c.workspaceRoot === workspaceRoot && c.column === 'DISPATCH' && !c.featureId
+                    c => c.workspaceRoot === workspaceRoot && c.column === 'STAGING' && !c.featureId
                 );
                 if (dispatchCards.length === 0) {
-                    this.postMessage({ type: 'showStatusMessage', message: 'Dispatch queue is empty — stage plans first.', isError: true });
-                    return { success: false, error: 'Dispatch queue is empty' };
+                    this.postMessage({ type: 'showStatusMessage', message: 'Staging queue is empty — stage plans first.', isError: true });
+                    return { success: false, error: 'Staging queue is empty' };
                 }
                 const apiServer: any = this._apiServer;
                 if (!apiServer || typeof apiServer.dispatchNextFromQueue !== 'function') {

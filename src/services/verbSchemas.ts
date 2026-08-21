@@ -367,33 +367,15 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
-    // Dispatch view (display mode of PLAN REVIEWED). toggleDispatchView dereferences
-    // no payload field (mirrors toggleBacklogView, which has no schema), so it needs
-    // none. dispatchAnalyze reads workspaceRoot (optional — the arm falls back to the
+    // dispatchAnalyze reads workspaceRoot (optional — the arm falls back to the
     // provider's current root) and initiatorProject (optional, never required — the
     // validator accepts an explicit null, which is the "no scope" sentinel; see the
-    // createFeature comment at :186 for the same reasoning). sendDispatchToCoder reads
-    // sessionIds + workspaceRoot. Permissive per PRD contract #5 — require only what
-    // each arm dereferences.
+    // createFeature comment at :186 for the same reasoning). Permissive per PRD
+    // contract #5 — require only what each arm dereferences.
     dispatchAnalyze: {
         fields: {
             workspaceRoot: { type: 'string' },
             initiatorProject: { type: 'string' },
-        },
-    },
-    sendDispatchToCoder: {
-        fields: {
-            sessionIds: { type: 'array', required: true },
-            workspaceRoot: { type: 'string' },
-        },
-    },
-    // The fan-out counterpart of sendDispatchToCoder. It takes NO sessionIds by design —
-    // the arm re-reads the DISPATCH set itself so a card dragged out between render and
-    // press is skipped rather than dispatched. workspaceRoot is optional; the arm falls
-    // back to the provider's current root, same as dispatchAnalyze.
-    sendDispatchSetToCoders: {
-        fields: {
-            workspaceRoot: { type: 'string' },
         },
     },
     // V60 session queue. Permissive and field-accurate per PRD contract #5:

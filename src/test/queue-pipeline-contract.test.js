@@ -101,7 +101,7 @@ async function run() {
 
     // ── Subtask 1: the queue source ────────────────────────────────────────
 
-    await check('the queue is DISPATCH — an empty queue does NOT drain PLAN REVIEWED', async () => {
+    await check('the queue is STAGING — an empty queue does NOT drain PLAN REVIEWED', async () => {
         const board = [
             card('pr-1', 'PLAN REVIEWED'),
             card('pr-2', 'PLAN REVIEWED'),
@@ -110,15 +110,15 @@ async function run() {
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
         assert.strictEqual(out.status, 200, 'an empty queue is not an error');
         assert.strictEqual(out.payload.dispatched, null,
-            'an empty DISPATCH queue must report dispatched: null — the interim PLAN REVIEWED fallback would drain the whole lane unattended');
+            'an empty STAGING queue must report dispatched: null — the interim PLAN REVIEWED fallback would drain the whole lane unattended');
         assert.deepStrictEqual(dispatched, [], 'nothing may be dispatched from an empty queue');
     });
 
     await check('the pop takes the lowest queue_position, NULLs last', async () => {
         const board = [
-            card('c', 'DISPATCH', { queuePosition: null }),
-            card('b', 'DISPATCH', { queuePosition: 7 }),
-            card('a', 'DISPATCH', { queuePosition: 2 }),
+            card('c', 'STAGING', { queuePosition: null }),
+            card('b', 'STAGING', { queuePosition: 7 }),
+            card('a', 'STAGING', { queuePosition: 2 }),
         ];
         const { server, dispatched } = makeServer(board);
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
@@ -128,9 +128,9 @@ async function run() {
 
     await check('subtasks and already-dispatched cards are excluded from the queue', async () => {
         const board = [
-            card('sub', 'DISPATCH', { featureId: 'feat-1', queuePosition: 1 }),
-            card('gone', 'DISPATCH', { dispatchedAt: '2026-08-18T00:00:00Z', queuePosition: 2 }),
-            card('real', 'DISPATCH', { queuePosition: 3 }),
+            card('sub', 'STAGING', { featureId: 'feat-1', queuePosition: 1 }),
+            card('gone', 'STAGING', { dispatchedAt: '2026-08-18T00:00:00Z', queuePosition: 2 }),
+            card('real', 'STAGING', { queuePosition: 3 }),
         ];
         const { server, dispatched } = makeServer(board);
         await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
@@ -143,7 +143,7 @@ async function run() {
     await check('seat pacing ignores resting coded cards and routes the next queued card', async () => {
         const board = [
             card('resting', 'INTERN CODED', { dispatchedTerminal: 'Intern 1', dispatchedAt: null }),
-            card('next', 'DISPATCH', { queuePosition: 1 }),
+            card('next', 'STAGING', { queuePosition: 1 }),
         ];
         const { server, dispatched } = makeServer(board, {
             resolveTeamMembers: async () => ['Coding', 'Intern 1'],
@@ -162,7 +162,7 @@ async function run() {
         // stops after card one.
         const board = [
             card('done', 'CODE REVIEWED', { dispatchedAt: '2026-08-18T00:00:00Z', dispatchedTerminal: 'Reviewer' }),
-            card('next', 'DISPATCH', { queuePosition: 1 }),
+            card('next', 'STAGING', { queuePosition: 1 }),
         ];
         const { server, dispatched } = makeServer(board, {
             resolveTeamMembers: async () => ['Coding', 'Reviewer', 'Coder 1'],
@@ -175,7 +175,7 @@ async function run() {
     await check('a team holding a card in a coding column is refused with 409', async () => {
         const board = [
             card('wip', 'CODER CODED', { dispatchedTerminal: 'Coder 1' }),
-            card('next', 'DISPATCH', { queuePosition: 1 }),
+            card('next', 'STAGING', { queuePosition: 1 }),
         ];
         const { server, dispatched } = makeServer(board, {
             resolveTeamMembers: async () => ['Coding', 'Coder 1'],
@@ -191,7 +191,7 @@ async function run() {
         // coding team look free.
         const board = [
             card('wip', 'INTERN CODED', { dispatchedTerminal: 'Coder 1', dispatchedAt: null }),
-            card('next', 'DISPATCH', { queuePosition: 1 }),
+            card('next', 'STAGING', { queuePosition: 1 }),
         ];
         const { server, dispatched } = makeServer(board, {
             resolveTeamMembers: async () => ['Coding', 'Coder 1'],
@@ -204,7 +204,7 @@ async function run() {
     await check("another team's coding card does not block this team", async () => {
         const board = [
             card('theirs', 'CODER CODED', { dispatchedTerminal: 'Other Coder' }),
-            card('next', 'DISPATCH', { queuePosition: 1 }),
+            card('next', 'STAGING', { queuePosition: 1 }),
         ];
         const { server, dispatched } = makeServer(board, {
             resolveTeamMembers: async () => ['Coding', 'Coder 1'],
@@ -215,7 +215,7 @@ async function run() {
     });
 
     await check("a `from` that is not a live terminal is a 400", async () => {
-        const board = [card('next', 'DISPATCH', { queuePosition: 1 })];
+        const board = [card('next', 'STAGING', { queuePosition: 1 })];
         const { server, dispatched } = makeServer(board, {
             resolveTeamMembers: async () => null,
             getRegisteredTerminals: () => ['OtherTerminal'],
@@ -226,7 +226,7 @@ async function run() {
     });
 
     await check("a live `from` not on any team dispatches via workspace-wide routing", async () => {
-        const board = [card('next', 'DISPATCH', { queuePosition: 1 })];
+        const board = [card('next', 'STAGING', { queuePosition: 1 })];
         const { server, dispatched, dispatchOptions } = makeServer(board, {
             resolveTeamMembers: async () => null,
             getRegisteredTerminals: () => ['StandaloneCoder'],
@@ -241,7 +241,7 @@ async function run() {
     await check('non-team dispatch skips the team in-flight refusal', async () => {
         const board = [
             card('wip', 'CODER CODED', { dispatchedTerminal: 'StandaloneCoder' }),
-            card('next', 'DISPATCH', { queuePosition: 1 }),
+            card('next', 'STAGING', { queuePosition: 1 }),
         ];
         const { server, dispatched } = makeServer(board, {
             resolveTeamMembers: async () => null,
@@ -253,7 +253,7 @@ async function run() {
     });
 
     await check('a single-head team keeps head-scoped routing', async () => {
-        const board = [card('next', 'DISPATCH', { queuePosition: 1 })];
+        const board = [card('next', 'STAGING', { queuePosition: 1 })];
         const { server, dispatchOptions } = makeServer(board, {
             resolveTeamMembers: async () => ['Coding'],
         });
@@ -272,7 +272,7 @@ async function run() {
             planFile: '/tmp/held.md',
             workspaceId: 'ws1',
         });
-        const board = [held, card('next', 'DISPATCH', { queuePosition: 1 })];
+        const board = [held, card('next', 'STAGING', { queuePosition: 1 })];
         const { server, dispatched } = makeServer(board, {
             resolveTeamMembers: async () => null,
             getRegisteredTerminals: () => ['StandaloneCoder'],
@@ -287,7 +287,7 @@ async function run() {
     });
 
     await check('the global completion order is installed in the fleet orders database and stays idempotent', async () => {
-        const board = [card('next', 'DISPATCH', { queuePosition: 1 })];
+        const board = [card('next', 'STAGING', { queuePosition: 1 })];
         let fleetOrders = [];
         let boardOrderWrites = 0;
         const fleetDb = {
@@ -313,7 +313,7 @@ async function run() {
     });
 
     await check('a failed dispatch is passed through and consumes nothing', async () => {
-        const board = [card('next', 'DISPATCH', { queuePosition: 1 })];
+        const board = [card('next', 'STAGING', { queuePosition: 1 })];
         const { server } = makeServer(board);
         server.performKanbanDispatch = async () => ({ status: 409, payload: { success: false, error: 'No terminal agent is live right now' } });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
@@ -329,14 +329,14 @@ async function run() {
             planFile: '/tmp/failed.md',
             workspaceId: 'ws1',
         });
-        const board = [failed, card('next', 'DISPATCH', { queuePosition: 2 })];
+        const board = [failed, card('next', 'STAGING', { queuePosition: 2 })];
         const { server } = makeServer(board, {
             resolveTeamMembers: async () => ['Coding', 'Coder 1', 'Lead 1'],
             resolveTeamPacing: async () => 'seat',
             db: {
                 clearWorkingState: async () => { failed.dispatchedAt = null; return true; },
                 getPlanByPlanId: async (planId) => board.find(p => p.planId === planId),
-                updateColumnByPlanFile: async () => { failed.kanbanColumn = 'DISPATCH'; return true; },
+                updateColumnByPlanFile: async () => { failed.kanbanColumn = 'STAGING'; return true; },
                 setQueuePositions: async (_wsId, ids) => {
                     ids.forEach((id, index) => { const row = board.find(p => p.planId === id); if (row) row.queuePosition = index + 1; });
                     return true;
@@ -362,10 +362,10 @@ async function run() {
     });
 
     await check('concurrent pops are serialized — one card, one dispatch', async () => {
-        const board = [card('only', 'DISPATCH', { queuePosition: 1 })];
+        const board = [card('only', 'STAGING', { queuePosition: 1 })];
         const { server, dispatched } = makeServer(board);
         // Drain the card inside the critical section, exactly as a real
-        // dispatch does by moving it out of DISPATCH.
+        // dispatch does by moving it out of STAGING.
         server.performKanbanDispatch = async (workspaceRoot, planId) => {
             await new Promise(r => setTimeout(r, 10));
             const row = board.find(p => p.planId === planId);
@@ -430,14 +430,14 @@ async function run() {
 
     // ── Subtask 3: the queue watch ────────────────────────────────────────
 
-    await check('the queue watch counts DISPATCH only, and escalates exactly once', () => {
+    await check('the queue watch counts STAGING only, and escalates exactly once', () => {
         const fs = require('fs');
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'PlanIngestionEngine.ts'), 'utf8');
         const i = src.indexOf('private async _runQueueNudgeSweep(');
         assert.notStrictEqual(i, -1, '_runQueueNudgeSweep must exist');
         const body = src.slice(i, src.indexOf('\n    private ', i + 10));
         assert.ok(!/kanbanColumn === 'PLAN REVIEWED'/.test(body),
-            "the watch's queue must be DISPATCH only — counting PLAN REVIEWED means it never reaches 'queue empty' on a real board and nudges forever");
+            "the watch's queue must be STAGING only — counting PLAN REVIEWED means it never reaches 'queue empty' on a real board and nudges forever");
         assert.ok(/watch\.escalatedAt/.test(body),
             'escalation must be bounded by a one-shot stamp — re-escalating every silence window trains the user to ignore it');
         assert.ok(/nudgeCount >= 1/.test(body),

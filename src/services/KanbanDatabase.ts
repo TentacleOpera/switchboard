@@ -116,10 +116,10 @@ export interface KanbanPlanRecord {
     workspaceName?: string;
     projectId?: number | null;
     /**
-     * V60: 1-based position within the DISPATCH session queue. NULL = not staged
+     * V60: 1-based position within the STAGING session queue. NULL = not staged
      * (sorts last). Assigned by stageForQueue (append from MAX+1), rewritten by
      * reorderQueue (one transaction), and cleared by clearQueuePosition when a
-     * card leaves DISPATCH (dispatch to a coder, or a drag out) so a card that
+     * card leaves STAGING (dispatch to a coder, or a drag out) so a card that
      * returns to the board does not carry a stale position and jump the queue
      * on re-stage. Read through PLAN_COLUMNS alongside dispatchedAt.
      */
@@ -505,12 +505,12 @@ const MIGRATION_V59_SQL = [
     `ALTER TABLE plans ADD COLUMN blocked_at TEXT DEFAULT NULL`,
 ];
 
-// V60: plans.queue_position — the DISPATCH session queue's explicit order.
-// Membership in DISPATCH already exists (a stored column value rendered inside
-// PLAN REVIEWED's slot); what was missing was an order. queue_position is a
+// V60: plans.queue_position — the STAGING session queue's explicit order.
+// Membership in STAGING already exists (a stored column value rendered as its
+// own column); what was missing was an order. queue_position is a
 // 1-based sort key assigned by stageForQueue (append from MAX+1), rewritten by
 // reorderQueue (one transaction), and cleared by clearQueuePosition when a
-// card leaves DISPATCH. NULL sorts last so pre-existing staged cards (staged
+// card leaves STAGING. NULL sorts last so pre-existing staged cards (staged
 // before this migration lands) keep working and drop to the end of the queue
 // rather than vanishing or jumping the front. The column is also present in
 // SCHEMA_TABLES_SQL, so fresh DBs get it from creation and the migration ALTER
@@ -964,7 +964,6 @@ export const VALID_KANBAN_COLUMNS = new Set([
     ...DEFAULT_KANBAN_COLUMNS.map(c => c.id),
     'BACKLOG',
     'CODED',
-    'DISPATCH',
 ]);
 // VALID_COMPLEXITIES is now handled by isValidComplexityValue() in complexityScale.ts
 const VALID_STATUSES = new Set(['active', 'archived', 'completed', 'deleted', 'missing']);
@@ -8564,7 +8563,7 @@ export class KanbanDatabase {
             console.log('[KanbanDatabase] V59 migration completed: blocked_at column added to plans');
         }
 
-        // V60: plans.queue_position (DISPATCH session queue order).
+        // V60: plans.queue_position (STAGING session queue order).
         const v60 = await this.getMigrationVersion();
         if (v60 < 60) {
             for (const sql of MIGRATION_V60_SQL) {
@@ -9294,7 +9293,6 @@ FROM plans
             }
             columns.set('BACKLOG', []);
             columns.set('CODED', []);
-            columns.set('DISPATCH', []);
             for (const plan of allPlans) {
                 const list = columns.get(plan.kanbanColumn);
                 if (list) list.push(plan);
@@ -10045,7 +10043,7 @@ FROM plans
     }
 
     /**
-     * V60 — clear a card's queue_position when it leaves DISPATCH (dispatch to
+     * V60 — clear a card's queue_position when it leaves STAGING (dispatch to
      * a coder, or a drag out to another column). A card that returns to the
      * board later does not carry a stale position and jump the queue on
      * re-stage. Scoped by plan_id + workspace_id. Idempotent (NULL → NULL is a
@@ -10063,9 +10061,9 @@ FROM plans
     /**
      * V60 — append queue positions to the given plan ids, in the caller's
      * order, starting from MAX(queue_position)+1 within the workspace's
-     * DISPATCH set. NULL positions (pre-existing staged cards, or cards staged
+     * STAGING set. NULL positions (pre-existing staged cards, or cards staged
      * before V60) sort last and are not renumbered here — they keep working
-     * and drop to the end. A card already in DISPATCH is re-positioned rather
+     * and drop to the end. A card already in STAGING is re-positioned rather
      * than duplicated (its row is updated, not inserted). Callers MUST pass the
      * selection order, not board order, for the webview staging arm.
      */
@@ -10078,7 +10076,7 @@ FROM plans
             let maxPos = 0;
             const stmt = this._db.prepare(
                 'SELECT COALESCE(MAX(queue_position), 0) AS m FROM plans WHERE workspace_id = ? AND kanban_column = ?',
-                [workspaceId, 'DISPATCH']
+                [workspaceId, 'STAGING']
             );
             try {
                 if (stmt.step()) { maxPos = Number(stmt.getAsObject().m ?? 0); }
@@ -10091,7 +10089,7 @@ FROM plans
                 next += 1;
                 this._db.run(
                     'UPDATE plans SET queue_position = ?, kanban_column = ?, column_entered_at = ? WHERE plan_id = ? AND workspace_id = ?',
-                    [next, 'DISPATCH', dispatchNow, planId, workspaceId]
+                    [next, 'STAGING', dispatchNow, planId, workspaceId]
                 );
             }
             await this._persist();

@@ -385,7 +385,7 @@ suite('Kanban Auto-Export (Markdown)', () => {
         // Definition guard: the webview renders one column per DEFAULT_KANBAN_COLUMNS
         // entry, so the legacy IDs must NEVER join the list — they would render as
         // extra board columns. Their labels live in LEGACY_COLUMN_LABELS instead.
-        assert.strictEqual(DEFAULT_KANBAN_COLUMNS.length, 10, 'DEFAULT_KANBAN_COLUMNS must stay at exactly ten entries');
+        assert.strictEqual(DEFAULT_KANBAN_COLUMNS.length, 11, 'DEFAULT_KANBAN_COLUMNS must stay at exactly eleven entries');
         assert.ok(!DEFAULT_KANBAN_COLUMNS.some(c => c.id === 'BACKLOG' || c.id === 'CODED'),
             'BACKLOG/CODED must not appear in DEFAULT_KANBAN_COLUMNS');
         // Display-mode columns render inside another column's slot. Adding one to
@@ -413,7 +413,10 @@ suite('Kanban Auto-Export (Markdown)', () => {
         // Display-mode IDs must NOT report labelSource 'legacy' — that source is consumed
         // by state export, GET /kanban/columns and write-path canonicalisation, and would
         // mislabel a current feature as a deprecated alias to every agent-facing surface.
-        assert.deepStrictEqual(resolveColumnLabel('DISPATCH'), { label: 'Dispatch', labelSource: 'display-mode' });
+        // STAGING replaced the old DISPATCH display-mode toggle as a real built-in column.
+        assert.deepStrictEqual(resolveColumnLabel('STAGING'), { label: 'Staging', labelSource: 'built-in' });
+        // DISPATCH is gone — it must fall back, not resolve to a display-mode or legacy label.
+        assert.deepStrictEqual(resolveColumnLabel('DISPATCH'), { label: 'DISPATCH', labelSource: 'fallback' });
         assert.deepStrictEqual(resolveColumnLabel('BACKLOG'), { label: 'Backlog', labelSource: 'display-mode' });
         assert.strictEqual(resolveColumnLabel('CODED').labelSource, 'legacy');
         // Unknown ID falls back to the ID itself, tagged so callers can tell a stand-in.

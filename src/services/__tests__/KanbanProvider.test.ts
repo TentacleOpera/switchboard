@@ -144,6 +144,7 @@ suite('KanbanProvider', () => {
             { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 110, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt' },
+            { id: 'STAGING', label: 'Staging', order: 115, kind: 'staging', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
             { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
@@ -207,6 +208,24 @@ suite('KanbanProvider', () => {
             stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('RESEARCHER', workspaceRoot);
             assert.strictEqual(next, 'LEAD CODED');
+        });
+
+        test('PLAN REVIEWED -> next skips STAGING (no role) to LEAD CODED', async () => {
+            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            const next = await (provider as any)._getNextColumnId('PLAN REVIEWED', workspaceRoot);
+            assert.strictEqual(next, 'LEAD CODED', 'STAGING has no dispatch role — advance must skip it');
+        });
+
+        test('RESEARCHER -> next skips STAGING to LEAD CODED', async () => {
+            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            const next = await (provider as any)._getNextColumnId('RESEARCHER', workspaceRoot);
+            assert.strictEqual(next, 'LEAD CODED', 'STAGING has no dispatch role — advance must skip it');
+        });
+
+        test('CREATED -> next goes to PLAN REVIEWED, not STAGING', async () => {
+            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
+            const next = await (provider as any)._getNextColumnId('CREATED', workspaceRoot);
+            assert.strictEqual(next, 'PLAN REVIEWED', 'CREATED must advance to PLAN REVIEWED, skipping STAGING');
         });
 
         test('Last column returns null', async () => {

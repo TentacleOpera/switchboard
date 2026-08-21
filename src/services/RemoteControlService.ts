@@ -109,14 +109,6 @@ export interface RemoteSyncHealth {
  * — `queue` is an anti-stampede setting for coder dispatch, not a rule that
  * every remote status change becomes work to code.
  */
-const QUEUEABLE_TARGET_COLUMNS: ReadonlySet<string> = new Set([
-    'LEAD CODED',
-    'CODER CODED',
-    'INTERN CODED',
-    'CODED_AUTO',
-    'DISPATCH',
-]);
-
 const REMOTE_CONFIG_KEY = 'remote.config';
 const COMMENT_SEEN_CAP = 500;
 
@@ -132,7 +124,7 @@ interface RemoteControlDeps {
     /** Apply a remote-driven column move + dispatch the destination column's agent (§9). */
     onColumnMove: (plan: KanbanPlanRecord, targetColumn: string) => Promise<{ dispatched: boolean }>;
     /**
-     * Stage a card into the session queue (DISPATCH column, next queue_position).
+     * Stage a card into the session queue (STAGING column, next queue_position).
      * Called in `queue` mode instead of `onColumnMove`. Returns the position
      * assigned, or -1 on failure. Optional — absent in test harnesses.
      */
@@ -339,7 +331,7 @@ export class RemoteControlService {
     /**
      * Normalize the remote mode. Unknown or corrupt values resolve to `ingest`
      * (unchanged from the original ternary's default) — NOT `queue`, because
-     * `queue` moves cards to DISPATCH on garbage input and that is a behaviour
+     * `queue` stages cards to STAGING on garbage input and that is a behaviour
      * change on ~4,000 shipped installs. `queue` is only ever reached by an
      * explicit user choice, and `full` keeps its explicit meaning.
      */
@@ -766,20 +758,27 @@ export class RemoteControlService {
             refreshedThisCycle.add(remoteId);
 
             // ── Queue mode: stage instead of dispatch ──────────────────────
-            // A delta resolving to a DISPATCH COLUMN stages the card into the
-            // session queue (DISPATCH, next queue_position) and does NOT call
+            // A delta resolving to a coding column stages the card into the
+            // session queue (STAGING, next queue_position) and does NOT call
             // onColumnMove. The lead walks staged cards one at a time via
             // subtask 1's queue/next. No agent is woken — staging is
             // mechanical, and no judgement belongs in the correctness path of
             // the one mechanism whose value is having none.
             //
-            // The dispatch-column test is load-bearing. `stateKeyToColumn` maps
+            // The coding-column test is load-bearing. `stateKeyToColumn` maps
             // a remote state onto ANY local column, so an unguarded queue
             // branch stages a card the remote user moved to COMPLETED — into
             // the coding queue, to be coded again — and silently drops column
             // mirroring for every non-coding state. Only the columns that would
             // have started a coder are re-pointed at the queue; the rest keep
             // today's mirror behaviour exactly.
+            const QUEUEABLE_TARGET_COLUMNS: ReadonlySet<string> = new Set([
+                'LEAD CODED',
+                'CODER CODED',
+                'INTERN CODED',
+                'CODED_AUTO',
+                'STAGING',
+            ]);
             if (mode === 'queue' && QUEUEABLE_TARGET_COLUMNS.has(targetColumn)) {
                 if (!this._deps.onStageForQueue) {
                     this._log(`Queue mode: onStageForQueue dep absent — cannot stage ${plan.planId}, skipping (no dispatch).`);

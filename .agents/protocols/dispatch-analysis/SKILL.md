@@ -2,7 +2,7 @@
 
 > Read-only analysis pass that examines all plans in the **PLAN REVIEWED** (Planned) column,
 > identifies the largest subset that can safely run in parallel without file-level conflicts,
-> and moves that subset to the **DISPATCH** column. Plans that cannot be parallelized remain
+> and moves that subset to the **STAGING** column. Plans that cannot be parallelized remain
 > in Planned. This skill never modifies plan files — it only moves cards via the API.
 
 ## When This Skill Runs
@@ -92,7 +92,7 @@ out of the analysis. Use the resolved path only.
 also returns the plan record if you need the `planFile` field on its own.
 
 **If a plan file is missing or unreadable, LEAVE THAT PLAN IN PLANNED.** You cannot prove
-it parallel-safe, so it does not go to Dispatch. Name it in the report (step 6) with the
+it parallel-safe, so it does not go to Staging. Name it in the report (step 6) with the
 reason. Never guess at its file set, and never promote it on the assumption that an
 unreadable plan touches nothing.
 
@@ -133,11 +133,11 @@ POST http://localhost:{API_PORT}/kanban/move
 {
   "workspaceRoot": "{WORKSPACE_ROOT}",
   "sessionId": "{planId}",
-  "targetColumn": "DISPATCH"
+  "targetColumn": "STAGING"
 }
 ```
 
-After each call, print `moved <planId> — <topic> → DISPATCH` on success, or the error on
+After each call, print `moved <planId> — <topic> → STAGING` on success, or the error on
 failure. **A failed move does not abort the run** — carry on with the rest and list the
 failures in the report.
 
@@ -149,10 +149,10 @@ directly via `curl` / the API proxy.
 Output a summary:
 - Scope analysed: the project (or `PLANS TO PROCESS` list) the candidates came from
 - Total Planned plans analyzed: N
-- Plans moved to Dispatch (parallel-safe): list with plan IDs and brief descriptions
+- Plans moved to Staging (parallel-safe): list with plan IDs and brief descriptions
 - Plans remaining in Planned (conflicts): list with plan IDs and the conflict reason
 - Moves that failed, if any, with the error
-- Recommended next step: "Send Dispatch plans to coder" or "Resolve conflicts and re-analyze"
+- Recommended next step: "Send Staging plans to coder" or "Resolve conflicts and re-analyze"
 
 ## Rules
 
