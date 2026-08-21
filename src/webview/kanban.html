@@ -7555,17 +7555,26 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             kanbanBoard.innerHTML = renderDefs.map(def => {
                 const isCreated = def.id === 'CREATED';
                 const isPlanReviewed = def.id === 'PLAN REVIEWED';
+                const isStaging = def.id === 'STAGING';
                 const isCompleted = def.kind === 'completed';
                 // Last working column = the column immediately before the completed column
                 const completedIndex = renderDefs.findIndex(d => d.kind === 'completed');
                 const defIndex = renderDefs.indexOf(def);
                 const isLastWorkingColumn = !isCompleted && completedIndex > 0 && defIndex === completedIndex - 1;
-                const hasAgent = !isCreated && !isCompleted;
+                // STAGING is a queue with no registered agent (Design Decision 3), so it
+                // gets neither an agent subline nor a drag-drop mode toggle. The toggle
+                // would be worse than redundant: it persists a mode via
+                // setColumnDragDropMode that nothing can ever read — the only reader is
+                // the generic drop path's `columnDragDropModes[effectiveTargetColumn]`,
+                // and a drop into STAGING returns from the stageForQueue/reorderQueue
+                // branch well before that — while its tooltip promises "drag cards to
+                // trigger CLI agent" on the one column that triggers no agent at all.
+                const hasAgent = !isCreated && !isCompleted && !isStaging;
                 
                 const mode = columnDragDropModes[def.id] || 'cli';
                 const modeIcon = mode === 'prompt' ? ICON_PROMPT : ICON_CLI;
                 const modeTitle = mode === 'prompt' ? 'Mode: Copy Prompt (drag cards to copy prompt to clipboard)' : 'Mode: CLI Dispatch (drag cards to trigger CLI agent)';
-                const modeToggle = (!isCreated && !isCompleted)
+                const modeToggle = (!isCreated && !isCompleted && !isStaging)
                     ? `<div class="mode-toggle mode-${mode}" data-column="${escapeAttr(def.id)}" data-tooltip="${escapeAttr(modeTitle)}">
                            <img src="${modeIcon}" alt="${mode}">
                        </div>` 
@@ -7677,7 +7686,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         : '';
                     // STAGING column has its own button set: advance/prompt (complexity
                     // routing to coder columns) + Run queue + info span.
-                    const isStaging = (def.id === 'STAGING');
                     const stagingStagedNow = isStaging ? stagingCount() : 0;
                     const stagingViewControls = isStaging
                         ? `<span id="staging-view-info" class="dispatch-view-info" style="font-size:11px; margin-right:auto; color:var(--vscode-descriptionForeground);">0 plans · 0 coder terminals</span>
