@@ -2,9 +2,9 @@
 
 ## Goal
 
-Move the 27 extension-dispatched protocol definitions (380K of the 424K) into the store and stop shipping them as a directory inside every user's workspace. Protocols are UI-triggered instructions the extension delivers; nothing discovers them by scanning the filesystem, so nothing requires them to be files.
+Move all 32 protocol definitions (424K) into the store and delete `.agents/protocols/` from every workspace. Protocols are UI-triggered instructions the extension delivers; nothing discovers them by scanning the filesystem, and every one of them is extension-dispatched, so nothing requires any of them to be files.
 
-Five protocols stay committed files: `improve-plan`, `improve-feature`, `improve-remote-plan`, `get-tickets`, `generate-diagram` (44K). These are read by an agent following `CLAUDE.md` with no extension running — in a cloud or remote session there is no extension, no local store, and no cache, so being in the repo is their only viable delivery path.
+`.agents/workflows/` (4 files, 52K) stays committed and is unaffected. Those are the four user-typeable slash commands — the entry surface an agent reads before it can reach the API — and they are the bootstrap that makes row-delivered protocols reachable.
 
 This supersedes the destination chosen by `move-protocols-out-of-skill-discovery.md`. That plan's intent — get non-discoverable protocols out of the scaffold — was correct and is restored here. Its `.switchboard/protocols/` destination was unshippable, and the review fix that relocated them to `.agents/protocols/` solved shipping by abandoning the intent.
 
@@ -35,7 +35,7 @@ Protocols were modelled as skills because they were authored as skills and lived
 ### Non-goals
 
 - Moving `.agents/skills/` — the four genuinely discoverable skills stay files, because hosts glob for them.
-- Converting the five `bundled-file` protocols to rows. They are the delivery mechanism for agents with no extension in the loop; committing them is not scaffolding overhead, it is the only path that works.
+- Moving `.agents/workflows/` (the four user-typeable slash commands) or `.agents/skills/_lib/`. Both stay committed: workflows are the bootstrap entry surface, and `_lib/sb_api_call.sh` is sourced from the repo by `improve-remote-plan`.
 - Changing protocol *content*.
 - Re-litigating the token-cost goal; it is already achieved and must stay achieved.
 - Removing `RETIRED_WORKFLOW_PATH_MAP` — it stays as the read-time guard for persisted stale paths.
@@ -47,22 +47,20 @@ Protocols were modelled as skills because they were authored as skills and lived
 
 ## User Review Required
 
-Yes — confirm the split, which is by **consumer**, not by host.
+Yes — one decision, now that the classification is settled.
 
-**Two delivery classes, decided by who reads the protocol:**
+**All 32 protocols are extension-dispatched.** `ClaudeCodeMirrorService.ts:64-71` is the authoritative list and says so directly:
 
-| Class | Protocols | Size | Reader |
-| :--- | :--- | :--- | :--- |
-| `bundled-file` — stays committed in `.agents/protocols/` | `improve-plan`, `improve-feature`, `improve-remote-plan`, `get-tickets`, `generate-diagram` | **44K (10%)** | an agent following `CLAUDE.md` with **no extension in the loop** |
-| `row` — `control_plane` row, extension injects or materialises | the other 27, incl. `terminal-coder-dispatch` (44K), `switchboard-orchestrator` (40K), `switchboard-orchestration` (28K) | **380K (90%)** | the extension, on the user's machine |
+> "Internal extension-dispatched skills (no-user: hidden from slash, model-loadable) — improve-plan, improve-feature, accuracy, terminal-coder-dispatch, dispatch-analysis, advise_research, switchboard-orchestrator(-external/-internal), switchboard-orchestration, switchboard-contracts, complexity-scoring, deep-planning, web-research, tuning, constitution-builder, external-team-lead, improve-remote-plan, design-system-builder, refine_feature, archive, and the API proxy skills (clickup-*, linear-*, notion-api, get-tickets, generate-diagram) have been moved to `.agents/protocols/` — they are delivered by path reference, not via CLI skill discovery"
 
-**Why the 5 must stay files.** They are reached by an agent reading `CLAUDE.md` and following a path — in a cloud or remote session there is no extension running, no local DB, and no home cache. Being committed to the repo *is* their delivery mechanism, and it is the only one available: a clone carries them, which is exactly how a `/switchboard-cloud` session reads `improve-plan` today. Any design that turns these into rows removes them from remote agents entirely, because nothing in the remote path can inject on the extension's behalf.
+So there is no protocol that an agent must read without the extension present, and the whole 424K can move. Two specific cases worth confirming, because they look like exceptions and are not:
 
-**Why the 27 can be rows.** They are extension-dispatched, and the extension only ever runs where the store exists. `terminal-coder-dispatch` and the orchestrator protocols are never needed by a remote agent — a cloud session does not dispatch coders or run the orchestrator. So there is no host for which a row is unreachable.
+- **`improve-remote-plan`** reads like the remote-facing exception, but it *requires* the extension: "The Switchboard extension must be active (LocalApiServer running)". It can therefore be served as a row over the API it already depends on. (Note its own doc contradicts itself — "When to Use" says "no local machine running" while Prerequisites requires the LocalApiServer. Reading it with `switchboard-remote.md`, the intended meaning is "away from your desk, machine still on". Worth fixing in the protocol body, separately.)
+- **`get-tickets` and `generate-diagram`** have no trigger anywhere in `src/`, the workflows, or `CLAUDE.md` prose — they appear only in `CLAUDE.md`'s line-114 inventory list. They are local-UI or dead; either way they are rows, not committed files.
 
-This is the whole design, and it removes the per-host delivery forcing an earlier revision of this plan proposed. Delivery is a property of the protocol's consumer, fixed at authoring time, not a runtime decision about who is asking.
+**Remaining decision: within the row class, `inline` versus `materialize`.** Median is 4KB, but the three largest — `terminal-coder-dispatch` 44K, `switchboard-orchestrator` 40K, `switchboard-orchestration` 28K — are also the most frequently dispatched, so blanket inlining would re-add the per-turn token cost the original plan removed. Recommendation: `materialize` to a hash-keyed cache under `~/.switchboard` by default, `inline` under ~8KB where a disk round-trip buys nothing. A per-row column, not a policy.
 
-**Remaining decision:** within the `row` class, `inline` versus `materialize`. Median is 4KB, but the three largest are also the most frequently dispatched, so blanket inlining would re-add the per-turn token cost the original plan removed. Recommendation: `materialize` to a hash-keyed cache under `~/.switchboard` by default, `inline` under ~8KB where a disk round-trip buys nothing. A per-row column, not a policy.
+**Do not sweep `.agents/skills/_lib/`.** `improve-remote-plan` sources `sb_api_call.sh` from it via `git rev-parse --show-toplevel`. It is a skill library, not a protocol, and it must stay committed.
 
 ## Complexity Audit
 
@@ -79,7 +77,7 @@ This is the whole design, and it removes the per-host delivery forcing an earlie
 - **60 reference sites across 9 files.** Every `path.join('.agents', 'protocols', …)` becomes a resolver call. The single content-injection site is trivial; the ~18 directive sites each need their prompt string rebuilt, because the emitted text changes shape (a path that is now absolute, or an inlined body). `DEFAULT_PLANNER_WORKFLOW` and `DEFAULT_FEATURE_PLANNER_WORKFLOW` in `agentPromptBuilder.ts` are persisted-config defaults, so changing them interacts with `RETIRED_WORKFLOW_PATH_MAP`.
 - **Persisted user config points at file paths.** A user may have a customised planner workflow path stored in config. That path must keep resolving — extend `RETIRED_WORKFLOW_PATH_MAP` with `.agents/protocols/*` keys the same way the review fix added `.switchboard/protocols/*` keys, and make `normalizeRetiredWorkflowPath` map a stale path to a protocol *name* rather than another path.
 - **Local overrides must survive.** A user who edited `.agents/protocols/improve-plan/SKILL.md` has customised behaviour. On migration, any file whose hash does not match the bundled version must be imported as an override row, never discarded. This is the difference between a migration and data loss.
-- **The 27/5 boundary is the load-bearing decision and must be enforced, not documented.** If a protocol in the `row` class ever gets referenced from a path an agent reaches without the extension — a `CLAUDE.md` directive, a workflow file, a remote flow — that agent silently gets nothing. A test must assert that every protocol named in `CLAUDE.md`, `.agents/workflows/*.md`, or any remote-flow document is in the `bundled-file` class. Adding a protocol reference to `CLAUDE.md` later is the realistic way this breaks.
+- **Nothing outside the extension may name a protocol by path.** Once all 32 are rows, a `CLAUDE.md` directive or workflow file that says "read `.agents/protocols/X/SKILL.md`" hands an agent a path that does not exist, and the failure is silent — the agent reports a missing file, or proceeds without the instructions. A test must assert that no protocol path appears in `CLAUDE.md`, `AGENTS.md`, `.agents/workflows/*.md`, or any remote-flow document. Someone adding such a reference later is the realistic way this breaks, and `CLAUDE.md` already carries five stale `.switchboard/protocols/` paths today, which is the same bug in its current form.
 - **The orchestrator reads protocols mid-session.** `TaskViewerProvider.ts:11230` resolves `switchboard-orchestrator/SKILL.md` plus a runsheet by name at dispatch time. If materialisation is lazy, a protocol must be on disk *before* the prompt naming it is sent, not after.
 
 ## Edge-Case & Dependency Audit
@@ -114,15 +112,15 @@ This is the whole design, and it removes the per-host delivery forcing an earlie
 
 **"Inlining 40KB into every dispatch is worse than a 424K directory."** Correct, which is why delivery is a per-protocol column rather than a policy, and why `materialize` is the default. The directory cost is paid per repository forever; an inline cost is paid per dispatch for the protocols where it is cheap.
 
-**"Materialising to the home directory just moves the directory."** It moves it out of every repository into one machine-local cache, keyed by content hash, prunable, and never committed. That is the whole ask, and it applies only to the 27 protocols the extension dispatches on the user's own machine — where that cache is guaranteed to exist.
+**"Materialising to the home directory just moves the directory."** It moves it out of every repository into one machine-local cache, keyed by content hash, prunable, and never committed. That is the whole ask, and it applies only where the extension dispatches — on the user's own machine, where that cache is guaranteed to exist.
 
-**"Remote agents will lose access to protocols."** They would, if the boundary were drawn by host instead of by consumer. They can read protocols today only because the files are committed, and there is no extension in a cloud session to inject on their behalf — so a row is genuinely unreachable there. That is precisely why the five protocols remote flows reference stay committed files, and why the 27 that move are exactly the ones no remote agent ever needs. The boundary test in the verification plan is what keeps that true as `CLAUDE.md` changes.
+**"Remote agents will lose access to protocols."** They can read them today only because the files are committed, and a cloud session has no extension to inject on its behalf — so this would be fatal if any protocol were genuinely agent-read. None is: `ClaudeCodeMirrorService.ts:64-71` lists all 32 as extension-dispatched, and even `improve-remote-plan` requires the LocalApiServer. What remote agents actually read is `.agents/workflows/` and `CLAUDE.md`, both of which stay committed. The verification test asserting no protocol path appears in agent-read prose is what keeps that boundary honest.
 
 ## Proposed Changes
 
 1. **`control_plane` table gains `body`, `delivery`, `version`, `content_hash`, and a nullable `override_body`** — extending the scaffold plan's schema rather than adding a second table.
 2. **Bundle seeding**: the 32 protocols are compiled into the extension and upserted at activation by name and version, with hash comparison so an override row is never overwritten.
-3. **`resolveProtocol(name)`** — the single resolution point for `row`-class protocols. Returns the body for `inline` or an absolute materialised path for `materialize`, and validates any emitted path against the cache root. No host argument: `row`-class protocols are only ever resolved by the extension, and `bundled-file` protocols are never resolved through it at all — they are read from the repo by path, as today.
+3. **`resolveProtocol(name)`** — the single resolution point for all 32. Returns the body for `inline` or an absolute materialised path for `materialize`, and validates any emitted path against the cache root. No host argument: protocols are only ever resolved by the extension, which only runs where the store exists.
 4. **60 call sites across 9 files** rewritten to call the resolver instead of constructing `path.join('.agents', 'protocols', …)`.
 5. **`RETIRED_WORKFLOW_PATH_MAP` extended** with `.agents/protocols/*` keys; `normalizeRetiredWorkflowPath` maps a stale path to a protocol *name*.
 6. **Materialisation cache** at `~/.switchboard/cache/protocols/<content-hash>/SKILL.md`, atomic write, idle pruning.
@@ -136,14 +134,15 @@ Import from all three historical locations, hash-compare, preserve mismatches as
 
 ### Goal Invariants
 
-- `.agents/protocols/` contains exactly the five `bundled-file` protocols and no others — asserted against the repo, a packaged VSIX, and every `path.join` in `src/`. This is the assertion the original plan lacked, and it is what would have caught the destination change: it fails whether the 27 are at `.switchboard/protocols/`, back in `.agents/skills/`, or still in `.agents/protocols/`.
-- `.agents/protocols/` totals under 64KB (currently 424K).
+- `.agents/protocols/` does not exist — asserted against the repo, a packaged VSIX, and every `path.join` in `src/`. This is the assertion the original plan lacked, and it is what would have caught the destination change: it fails whether the protocols sit at `.switchboard/protocols/`, back in `.agents/skills/`, or still in `.agents/protocols/`.
+- No protocol body exists as a file anywhere in the repo; all 32 resolve from `control_plane` rows.
 - No protocol name or description appears in a CLI-discovered skill listing.
 
 ### Automated Tests
 - **Ships and resolves on a clean install:** unpack a built VSIX into a fresh workspace with no `.agents/` at all; assert every one of the 32 protocols resolves. This is the check that was missing when the earlier version passed grep, compile, lint and manual review while being dead on every user install.
-- **The 27/5 boundary:** assert every protocol named in `CLAUDE.md`, `.agents/workflows/*.md` and the remote-flow documents is in the `bundled-file` class and present in the repo. Assert no `row`-class protocol is named in any of them. This is the test that keeps a remote agent from silently getting nothing.
-- **Remote reachability:** clone the repo with no extension, no store and no cache; assert all five `bundled-file` protocols are readable by path, exactly as a `/switchboard-cloud` session reads `improve-plan` today.
+- **No protocol path in agent-read prose:** assert no `.agents/protocols/` or `.switchboard/protocols/` path appears in `CLAUDE.md`, `AGENTS.md`, `.agents/workflows/*.md` or the remote-flow documents. This test fails today (five stale paths in `CLAUDE.md`) and must pass after.
+- **Workflows still bootstrap:** assert the four `.agents/workflows/*.md` files remain committed and readable in a fresh clone with no extension, since they are the entry surface that makes row-delivered protocols reachable.
+- **`_lib` survives:** assert `.agents/skills/_lib/sb_api_call.sh` is still committed and resolvable via `git rev-parse --show-toplevel`, as `improve-remote-plan` requires.
 - **Prompt-shape parity:** for each of the ~18 directive sites, assert the emitted prompt still names or contains the correct protocol, compared against a recorded baseline.
 - **Override preservation:** hand-edit a protocol at each of the three historical locations, migrate, assert the edit survives as an override row, the file is archived as `.migrated.bak`, and the override wins at resolution.
 - **Persisted stale config:** set a planner workflow config to each historical path, assert `normalizeRetiredWorkflowPath` resolves it to the right protocol name and the dispatch succeeds.
