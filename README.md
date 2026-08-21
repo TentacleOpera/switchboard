@@ -28,7 +28,7 @@ Download the latest packaged extension from the **[Releases page](https://github
 - **VS Code UI:** Extensions panel → `…` menu → **Install from VSIX…** → pick the downloaded `.vsix`.
 - **CLI:** `code --install-extension switchboard-<version>.vsix`
 
-No editor? `npx switchboard` runs the same board in your browser.
+No editor? `npx switchboard` runs the same board in your browser. The board is loopback-only by design — see [Remote Access](docs/REMOTE_ACCESS.md) for SSH tunnel, Tailscale, and reverse proxy setup.
 
 Full setup steps: **[Installation guide](https://tentacleopera.github.io/switchboard-site/docs/getting-started/installation)**.
 

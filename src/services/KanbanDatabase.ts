@@ -124,6 +124,17 @@ export interface KanbanPlanRecord {
      * on re-stage. Read through PLAN_COLUMNS alongside dispatchedAt.
      */
     queuePosition?: number | null;
+    /**
+     * V61: ISO timestamp of the last real column transition. Distinct from
+     * updatedAt (which any touch bumps) and createdAt (which is when the plan
+     * was authored). The board sorts non-planning columns by this field DESC
+     * so cards appear in "most recently moved to column" order. Set on every
+     * column-move UPDATE and on INSERT (defaults to createdAt). Preserved on
+     * upsert conflict (a file re-import is not a column move). NULL on legacy
+     * rows that haven't been migrated yet — consumers must fall back to
+     * updatedAt or createdAt.
+     */
+    columnEnteredAt?: string | null;
 }
 
 export interface ImportedDocEntry {
@@ -212,7 +223,8 @@ CREATE TABLE IF NOT EXISTS plans (
     feature_id           TEXT DEFAULT '',
     workspace_name    TEXT DEFAULT '',
     project_id        INTEGER DEFAULT NULL,
-    queue_position    INTEGER DEFAULT NULL
+    queue_position    INTEGER DEFAULT NULL,
+    column_entered_at TEXT DEFAULT NULL
 );
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -507,6 +519,20 @@ const MIGRATION_V59_SQL = [
 // stamped). Never edit a shipped V51–V59 body.
 const MIGRATION_V60_SQL = [
     `ALTER TABLE plans ADD COLUMN queue_position INTEGER DEFAULT NULL`,
+];
+
+// V61: plans.column_entered_at — the timestamp of the last real column
+// transition. Distinct from updated_at (which any touch bumps) and created_at
+// (which is when the plan was authored). The board sorts non-planning columns
+// by this field DESC so cards appear in "most recently moved to column" order —
+// the order the operator is working on them. Backfill: existing rows get
+// updated_at as the closest approximation (a no-op move may have bumped it, but
+// it's still better than created_at for cards that have been worked on). The
+// column is also in SCHEMA_TABLES_SQL, so fresh DBs get it from creation and
+// the ALTER is a no-op there. Idempotent under the version gate.
+const MIGRATION_V61_SQL = [
+    `ALTER TABLE plans ADD COLUMN column_entered_at TEXT DEFAULT NULL`,
+    `UPDATE plans SET column_entered_at = updated_at WHERE column_entered_at IS NULL`,
 ];
 
 
@@ -833,8 +859,8 @@ INSERT INTO plans (
     repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, dispatched_at,
     clickup_task_id, linear_issue_id, notion_page_id, worktree_id, is_feature, feature_id,
-    workspace_name, project_id
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    workspace_name, project_id, column_entered_at
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     topic = excluded.topic,
     plan_file = excluded.plan_file,
@@ -849,6 +875,13 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     kanban_column = CASE
         WHEN status = 'deleted' AND excluded.status = 'active' THEN excluded.kanban_column
         ELSE kanban_column
+    END,
+    -- column_entered_at follows the same reactivation rule as kanban_column: only
+    -- set on deleted→active recovery, otherwise preserved (a file re-import is not
+    -- a column move).
+    column_entered_at = CASE
+        WHEN status = 'deleted' AND excluded.status = 'active' THEN excluded.column_entered_at
+        ELSE column_entered_at
     END,
     complexity = excluded.complexity,
     tags = excluded.tags,
@@ -883,7 +916,7 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
                        dispatched_terminal, dispatched_at, last_liveness_at, blocked_at,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
-                       workspace_name, project_id, queue_position`;
+                       workspace_name, project_id, queue_position, column_entered_at`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -2321,7 +2354,8 @@ export class KanbanDatabase {
                     record.isFeature ?? 0,              // 26 — DEFAULT 0, not NULL (prevents is_feature=NULL clobber)
                     record.featureId || '',             // 27
                     record.workspaceName || '',      // 28
-                    r.projectId          // 29 — resolved (auto-created if needed)
+                    r.projectId,         // 29 — resolved (auto-created if needed)
+                    record.columnEnteredAt ?? record.createdAt ?? null // 30 — column_entered_at (preserved on conflict)
                 ]);
             }
             this._db.run('COMMIT');
@@ -2392,12 +2426,12 @@ export class KanbanDatabase {
                 plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                 repo_scope, project, project_id, workspace_id, created_at, updated_at, last_action, source_type,
                 brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                clickup_task_id, linear_issue_id, notion_page_id, workspace_name, is_feature
+                clickup_task_id, linear_issue_id, notion_page_id, workspace_name, is_feature, column_entered_at
             ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '',
                 CASE WHEN COALESCE(?, (SELECT id FROM projects WHERE name = ? AND workspace_id = ?)) IS NOT NULL
                      THEN ? ELSE '' END,
                 COALESCE(?, (SELECT id FROM projects WHERE name = ? AND workspace_id = ?)),
-                ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?, ?)
+                ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?, ?, ?)
             ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
                 topic = excluded.topic,
                 complexity = excluded.complexity,
@@ -2438,7 +2472,8 @@ export class KanbanDatabase {
                 record.updatedAt,
                 record.sourceType,
                 record.workspaceName || '',
-                effectiveIsFeature
+                effectiveIsFeature,
+                record.createdAt
             ]);
             this._db.run('COMMIT');
         } catch (error) {
@@ -2534,9 +2569,10 @@ export class KanbanDatabase {
         // return true and _fireColumnChanged would fire for a no-op write.
         let affected = 0;
         try {
+            const now = new Date().toISOString();
             this._db.run(
-                'UPDATE plans SET kanban_column = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-                [newColumn, new Date().toISOString(), normalized, workspaceId]
+                'UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                [newColumn, now, now, normalized, workspaceId]
             );
             affected = this._db.getRowsModified();   // NO await between run() and this line
             await this._persist();
@@ -2606,8 +2642,9 @@ export class KanbanDatabase {
     public async migrateDeprecatedColumns(workspaceId: string): Promise<number> {
         const deprecatedColumns = ['CONTEXT GATHERER', 'CODE_RESEARCHER', 'SPLITTER'];
         const placeholders = deprecatedColumns.map(() => '?').join(', ');
-        const sql = `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE workspace_id = ? AND kanban_column IN (${placeholders})`;
-        const params: unknown[] = ['PLAN REVIEWED', new Date().toISOString(), workspaceId, ...deprecatedColumns];
+        const now = new Date().toISOString();
+        const sql = `UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE workspace_id = ? AND kanban_column IN (${placeholders})`;
+        const params: unknown[] = ['PLAN REVIEWED', now, now, workspaceId, ...deprecatedColumns];
         if (!(await this.ensureReady()) || !this._db) return 0;
         try {
             // Count matching rows first (the local sql.js type doesn't expose getRowsModified)
@@ -2763,11 +2800,11 @@ export class KanbanDatabase {
         let params: unknown[];
 
         if (newPlanFile) {
-            sql = 'UPDATE plans SET kanban_column = ?, plan_file = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?';
-            params = [newColumn, this._ensureRelativePlanFile(newPlanFile), now, normalized, workspaceId];
+            sql = 'UPDATE plans SET kanban_column = ?, plan_file = ?, updated_at = ?, column_entered_at = ? WHERE plan_file = ? AND workspace_id = ?';
+            params = [newColumn, this._ensureRelativePlanFile(newPlanFile), now, now, normalized, workspaceId];
         } else {
-            sql = 'UPDATE plans SET kanban_column = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?';
-            params = [newColumn, now, normalized, workspaceId];
+            sql = 'UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE plan_file = ? AND workspace_id = ?';
+            params = [newColumn, now, now, normalized, workspaceId];
         }
 
         const result = await this._persistedUpdate(sql, params);
@@ -2952,9 +2989,10 @@ export class KanbanDatabase {
     ): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const normalized = this._ensureRelativePlanFile(planFile);
+        const now = new Date().toISOString();
         return this._persistedUpdate(
-            'UPDATE plans SET status = ?, kanban_column = ?, last_action = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-            [status, 'COMPLETED', status, new Date().toISOString(), normalized, workspaceId]
+            'UPDATE plans SET status = ?, kanban_column = ?, last_action = ?, updated_at = ?, column_entered_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [status, 'COMPLETED', status, now, now, normalized, workspaceId]
         );
     }
 
@@ -5371,8 +5409,8 @@ export class KanbanDatabase {
             for (const { planFile, workspaceId } of entries) {
                 const normalized = this._ensureRelativePlanFile(planFile);
                 this._db.run(
-                    'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-                    ['completed', 'COMPLETED', now, normalized, workspaceId]
+                    'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                    ['completed', 'COMPLETED', now, now, normalized, workspaceId]
                 );
                 // Cascade: if this plan is a feature, complete its active subtasks too (Class 8).
                 // WHERE feature_id = ? AND status = 'active' is atomic within this BEGIN/COMMIT and race-free.
@@ -5384,8 +5422,8 @@ export class KanbanDatabase {
                 try { if (stmt.step()) { const r = stmt.getAsObject(); isFeature = !!Number(r.is_feature); featurePlanId = String(r.plan_id); } } finally { stmt.free(); }
                 if (isFeature && featurePlanId) {
                     this._db.run(
-                        "UPDATE plans SET status = 'completed', kanban_column = 'COMPLETED', updated_at = ? WHERE feature_id = ? AND status = 'active'",
-                        [now, featurePlanId]
+                        "UPDATE plans SET status = 'completed', kanban_column = 'COMPLETED', updated_at = ?, column_entered_at = ? WHERE feature_id = ? AND status = 'active'",
+                        [now, now, featurePlanId]
                     );
                 }
             }
@@ -5410,8 +5448,8 @@ export class KanbanDatabase {
                 const plan = await this.getPlanBySessionId(sessionId);
                 if (!plan) continue;
                 this._db.run(
-                    'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ? WHERE plan_id = ?',
-                    ['completed', 'COMPLETED', now, plan.planId]
+                    'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE plan_id = ?',
+                    ['completed', 'COMPLETED', now, now, plan.planId]
                 );
             }
             this._db.run('COMMIT');
@@ -6559,14 +6597,14 @@ export class KanbanDatabase {
         try {
             this._db.run('BEGIN');
             this._db.run(
-                `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE plan_id = ?`,
-                [targetColumn, now, featurePlanId]
+                `UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE plan_id = ?`,
+                [targetColumn, now, now, featurePlanId]
             );
             if (subtaskPlanIds.length > 0) {
                 const placeholders = subtaskPlanIds.map(() => '?').join(',');
                 this._db.run(
-                    `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE plan_id IN (${placeholders})`,
-                    [targetColumn, now, ...subtaskPlanIds]
+                    `UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE plan_id IN (${placeholders})`,
+                    [targetColumn, now, now, ...subtaskPlanIds]
                 );
             }
             this._db.run('COMMIT');
@@ -6613,18 +6651,18 @@ export class KanbanDatabase {
             this._db.run('BEGIN');
             // Move the feature itself
             const featureParams: unknown[] = targetStatus
-                ? [targetColumn, targetStatus, now, featurePlanId]
-                : [targetColumn, now, featurePlanId];
+                ? [targetColumn, targetStatus, now, now, featurePlanId]
+                : [targetColumn, now, now, featurePlanId];
             this._db.run(
-                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ? WHERE plan_id = ?`,
+                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ?, column_entered_at = ? WHERE plan_id = ?`,
                 featureParams
             );
             // Cascade subtasks atomically (no read-then-write race)
             const subtaskParams: unknown[] = targetStatus
-                ? [targetColumn, targetStatus, now, featurePlanId]
-                : [targetColumn, now, featurePlanId];
+                ? [targetColumn, targetStatus, now, now, featurePlanId]
+                : [targetColumn, now, now, featurePlanId];
             this._db.run(
-                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ? WHERE feature_id = ?${subtaskStatusFilter}`,
+                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ?, column_entered_at = ? WHERE feature_id = ?${subtaskStatusFilter}`,
                 subtaskParams
             );
             this._db.run('COMMIT');
@@ -8515,6 +8553,16 @@ export class KanbanDatabase {
             await this.setMigrationVersion(60);
             console.log('[KanbanDatabase] V60 migration completed: queue_position column added to plans');
         }
+
+        // V61: plans.column_entered_at (column-entry timestamp for board sort).
+        const v61 = await this.getMigrationVersion();
+        if (v61 < 61) {
+            for (const sql of MIGRATION_V61_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(61);
+            console.log('[KanbanDatabase] V61 migration completed: column_entered_at column added + backfilled');
+        }
     }
 
     /**
@@ -8950,7 +8998,8 @@ FROM plans
                     workspaceName: p.workspace_name || p.workspaceName || '',
                     projectId: p.project_id !== null && p.project_id !== undefined ? Number(p.project_id) : (p.projectId !== null && p.projectId !== undefined ? Number(p.projectId) : null),
                     isFeature: p.is_feature !== undefined ? Number(p.is_feature) : (p.isFeature !== undefined ? Number(p.isFeature) : 0),
-                    featureId: p.feature_id || p.featureId || ''
+                    featureId: p.feature_id || p.featureId || '',
+                    columnEnteredAt: p.column_entered_at ?? p.columnEnteredAt ?? null
                 };
 
                 try {
@@ -8963,7 +9012,8 @@ FROM plans
                         record.dispatchedIde, record.dispatchedAt ?? null, record.clickupTaskId, record.linearIssueId, record.notionPageId || '',
                         record.worktreeId ?? null,
                         record.isFeature ?? null, record.featureId || '',
-                        record.workspaceName || '', record.projectId ?? null
+                        record.workspaceName || '', record.projectId ?? null,
+                        record.columnEnteredAt ?? record.createdAt ?? null
                     ]);
                     restored++;
                 } catch (e) {
@@ -10016,11 +10066,12 @@ FROM plans
                 stmt.free();
             }
             let next = maxPos;
+            const dispatchNow = new Date().toISOString();
             for (const planId of orderedPlanIds) {
                 next += 1;
                 this._db.run(
-                    'UPDATE plans SET queue_position = ?, kanban_column = ? WHERE plan_id = ? AND workspace_id = ?',
-                    [next, 'DISPATCH', planId, workspaceId]
+                    'UPDATE plans SET queue_position = ?, kanban_column = ?, column_entered_at = ? WHERE plan_id = ? AND workspace_id = ?',
+                    [next, 'DISPATCH', dispatchNow, planId, workspaceId]
                 );
             }
             await this._persist();
@@ -10483,7 +10534,9 @@ FROM plans
                     isFeature: row.is_feature !== null && row.is_feature !== undefined ? Number(row.is_feature) : undefined,
                     featureId: String(row.feature_id || ''),
                     workspaceName: String(row.workspace_name || ""),
-                    projectId: row.project_id !== null && row.project_id !== undefined ? Number(row.project_id) : null
+                    projectId: row.project_id !== null && row.project_id !== undefined ? Number(row.project_id) : null,
+                    // Absent from SELECT lists that predate V61 → undefined → null.
+                    columnEnteredAt: row.column_entered_at !== null && row.column_entered_at !== undefined ? String(row.column_entered_at) : null
                 });
             }
         } finally {

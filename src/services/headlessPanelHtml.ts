@@ -274,12 +274,10 @@ export function getPlanningHtml(repoRoot: string, workspaceRoot: string, capabil
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    // `img-src` includes the loopback origins because local ticket screenshots are
-    // rewritten to an absolute `http://127.0.0.1:<port>/design/asset?…` URL (one string
-    // has to satisfy both the editor webview and this browser — see
-    // PlanningPanelProvider._buildLocalAssetUrl). 'self' alone drops them whenever the
-    // cockpit is opened on `localhost` rather than `127.0.0.1`.
-    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' http://127.0.0.1:* http://localhost:* http://*.localhost:* data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
+    // `img-src` is `'self' data:` — local ticket screenshots are now origin-relative
+    // (see PlanningPanelProvider._buildLocalAssetUrl), so `'self'` covers them by
+    // construction under every access method (direct, tunnel, proxy, HTTPS).
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
     // Browser cockpit: the shared template's meta CSP hardcodes `connect-src https:`
@@ -312,11 +310,10 @@ export function getDesignHtml(repoRoot: string, workspaceRoot: string, capabilit
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    // `img-src` includes the loopback origins because local/Stitch assets are emitted as
-    // absolute `http://127.0.0.1:<port>/…` URLs so one string works in both hosts (see
-    // DesignPanelProvider._absoluteApiUrl). 'self' alone drops them whenever the cockpit
-    // is opened on `localhost` rather than `127.0.0.1`.
-    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' http://127.0.0.1:* http://localhost:* http://*.localhost:* data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
+    // `img-src` is `'self' data:` — local/Stitch assets are now origin-relative
+    // (see DesignPanelProvider._absoluteApiUrl), so `'self'` covers them by
+    // construction under every access method (direct, tunnel, proxy, HTTPS).
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
     // Browser cockpit: the shared template's meta CSP hardcodes `connect-src https:`

@@ -1449,6 +1449,9 @@ export class ControlPlaneMigrationService {
         // Un-ignore .switchboard/ — the mirror content (kanban-board.md, etc.)
         // lives here and MUST be tracked when the control plane is a git repo.
         lines.push('!.switchboard/');
+        // Server logs are per-session runtime state, not shareable — exclude
+        // even though .switchboard/ is un-ignored above for mirror content.
+        lines.push('.switchboard/logs/');
         // Write the .gitignore, preserving any existing user content that isn't
         // already managed by Switchboard. Merge: keep existing non-Switchboard lines,
         // replace the Switchboard-managed block (delimited by sentinel comments).
@@ -1468,8 +1471,8 @@ export class ControlPlaneMigrationService {
             for (const line of existingLines) {
                 if (line === switchboardStart) { inSwitchblock = true; continue; }
                 if (inSwitchblock) {
-                    // End of switchblock: a line that doesn't start with #, /, !, or empty
-                    if (line && !line.startsWith('#') && !line.startsWith('/') && !line.startsWith('!')) {
+                    // End of switchblock: a line that doesn't start with #, /, !, ., or empty
+                    if (line && !line.startsWith('#') && !line.startsWith('/') && !line.startsWith('!') && !line.startsWith('.')) {
                         inSwitchblock = false;
                         preserved.push(line);
                     }

@@ -2012,23 +2012,6 @@
             color: var(--text-secondary);
             flex-shrink: 0;
         }
-        .team-header-orders {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border-color);
-            color: var(--text-secondary);
-            font-size: 10px;
-            font-weight: 600;
-            font-family: inherit;
-            cursor: pointer;
-            padding: 2px 6px;
-            border-radius: 3px;
-            margin-left: 6px;
-        }
-        .team-header-orders:hover {
-            color: var(--text-primary);
-            background: rgba(255, 255, 255, 0.1);
-            border-color: var(--accent-violet, #c586c0);
-        }
 
         .fill-grid-form {
             display: flex; flex-direction: column; gap: 6px;
@@ -2211,62 +2194,6 @@
             font-size: 11px;
             color: var(--text-secondary);
             white-space: nowrap;
-        }
-        .team-header-add {
-            background: transparent;
-            border: 1px solid var(--border-color, rgba(255,255,255,0.1));
-            color: var(--text-secondary);
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-            line-height: 1;
-            padding: 2px 8px;
-            flex-shrink: 0;
-        }
-        .team-header-add:hover {
-            color: var(--text-primary);
-            border-color: var(--accent-teal, #4ec9b0);
-        }
-        /* Team Action Bar — five bulk verb buttons in the team header.
-           No confirm gates (per CLAUDE.md). Destructive actions get a
-           red-tinted hover; non-destructive reuse the orders button style. */
-        .team-action-bar {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            margin-left: 8px;
-            flex-wrap: wrap;
-        }
-        .team-action-btn {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border-color, rgba(255,255,255,0.1));
-            color: var(--text-secondary);
-            font-size: 10px;
-            font-weight: 600;
-            font-family: inherit;
-            cursor: pointer;
-            padding: 2px 6px;
-            border-radius: 3px;
-            white-space: nowrap;
-        }
-        .team-action-btn:hover {
-            color: var(--text-primary);
-            background: rgba(255, 255, 255, 0.1);
-            border-color: var(--accent-teal, #4ec9b0);
-        }
-        .team-action-btn:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        .team-action-btn:disabled:hover {
-            color: var(--text-secondary);
-            background: rgba(255, 255, 255, 0.05);
-            border-color: var(--border-color, rgba(255,255,255,0.1));
-        }
-        .team-action-btn.is-destructive:hover {
-            color: var(--state-readonly, #e06c75);
-            border-color: var(--state-readonly, #e06c75);
-            background: rgba(224, 108, 117, 0.08);
         }
         /* Drag-to-reorder roster rows in team-scoped sidebar */
         .terminal-item.is-draggable {

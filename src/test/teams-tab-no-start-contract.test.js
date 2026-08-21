@@ -150,5 +150,33 @@ test('the host startAgentGroup verb arm stays registered', () => {
     );
 });
 
+// ------------------------------------------- UAT: the pacing toggle is gone
+
+test('the SEATS PACE THE QUEUE toggle is absent from the TEAMS tab', () => {
+    // Routing is automatic — features to the team lead, standalone plans to
+    // members by complexity. The per-team checkbox was a manual control over a
+    // decision the system makes, and it is removed. The backend `pacing` field
+    // is untouched: teams that already carry pacing:'seat' keep seat-paced
+    // dispatch, they just cannot be flipped from this tab.
+    for (const marker of ['SEATS PACE THE QUEUE', 'pacingCb', 'pacingNote', 'pacingDiv', 'pacingLabel']) {
+        assert.ok(
+            !kanbanHtml.includes(marker),
+            `the pacing toggle must not survive in kanban.html — found "${marker}"`
+        );
+    }
+});
+
+test('the misleading head-advances-the-queue note is gone', () => {
+    // The note claimed "Head paces the queue: cards go to the head, which
+    // delegates and advances on review pass." The head cannot advance a card to
+    // CODE REVIEWED without a reviewer seat — teamWiring.ts's head prompt says
+    // so explicitly. The note contradicted the enforcement, so it is deleted
+    // rather than reworded.
+    assert.ok(
+        !/paces the queue|advances on review pass/.test(kanbanHtml),
+        'the pacing note must not survive — it contradicted the reviewer-seat enforcement in teamWiring.ts'
+    );
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) { process.exit(1); }

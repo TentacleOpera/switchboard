@@ -533,6 +533,14 @@ interface LocalApiServerOptions {
      */
     consumeOneTimeToken?: (token: string) => boolean;
     /**
+     * Standalone-only: mint a fresh single-use enrolment token on demand.
+     * Returns the token string, or null when minting is unavailable (ephemeral
+     * mode — no durable secret for the CLI to authenticate with). The minted
+     * token is single-use with a short TTL, exactly like the boot-time token.
+     * Reached via POST /auth/mint (Bearer-authenticated against getAuthToken).
+     */
+    mintEnrolmentToken?: () => string | null;
+    /**
      * Standalone-only: serve the browser board UI and static assets.
      * `getBoardHtml` returns the transformed HTML + CSP string.
      * `staticRoutes` maps a URL prefix (e.g. 'webview') to filesystem roots to try.
@@ -796,16 +804,54 @@ export class LocalApiServer {
         return false;
     }
 
-    // NOTE: Switchboard has no API-token setter UI today, so getAuthToken() is
-    // effectively always empty and auth is localhost-trust. This 401 only fires
-    // when a client sends an Authorization header at all. If a token-setter is
-    // ever added, revisit this wording.
+    // NOTE: The extension host has no API-token setter UI, so getAuthToken() is
+    // empty there and auth is localhost-trust. The standalone host, however,
+    // resolves a durable or ephemeral session token at boot (bootstrap.ts), so
+    // this 401 fires whenever a request lacks a valid Bearer header or sb_session
+    // cookie. A blank/empty expected token falls through to loopback-trust —
+    // bootstrap.ts guards against this by trimming the stored value and falling
+    // back to a random token when it is blank.
     private _sendUnauthorized(res: http.ServerResponse): void {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             error: 'Unauthorized',
             detail: 'Invalid or missing session. Open the board URL from a fresh `npx switchboard` launch to obtain a session cookie.'
         }));
+    }
+
+    /**
+     * POST /auth/mint — mint a fresh single-use enrolment token.
+     *
+     * Authenticated against getAuthToken (Bearer header). Returns the token and
+     * a board URL the caller can open in a browser. Returns 503 when minting is
+     * unavailable (ephemeral mode — no durable secret for the CLI to present).
+     */
+    private async _handleMintEnrolmentToken(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        if (!this._options.mintEnrolmentToken) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Minting unavailable',
+                detail: 'This server does not support enrolment-token minting.'
+            }));
+            return;
+        }
+        const token = this._options.mintEnrolmentToken();
+        if (!token) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Minting unavailable',
+                detail: 'No durable session token is configured. Set one with `switchboard token set <value>` or `switchboard token rotate`, then restart the server. In ephemeral mode the boot-time URL is the only enrolment path.'
+            }));
+            return;
+        }
+        const host = req.headers['host'] || `127.0.0.1:${this._port}`;
+        const boardUrl = `http://${host}/?token=${token}`;
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ token, boardUrl }));
     }
 
     private _serveStaticMimeType(filePath: string): string {
@@ -4767,6 +4813,164 @@ export class LocalApiServer {
         });
     }
 
+    private async _handleGetTeamReports(req: http.IncomingMessage, res: http.ServerResponse, teamId: string): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const root = this._options.workspaceRoot;
+            if (!root) {
+                const err: any = new Error('Workspace root not available');
+                err.statusCode = 400;
+                throw err;
+            }
+            if (!teamId || !/^team_[A-Za-z0-9_-]+$/.test(teamId)) {
+                const err: any = new Error('Invalid teamId format');
+                err.statusCode = 400;
+                throw err;
+            }
+            const reportsDir = path.join(root, '.switchboard', 'teams', teamId, 'reports');
+            let entries: any[] = [];
+            try {
+                entries = await fs.readdir(reportsDir, { withFileTypes: true });
+            } catch (err: any) {
+                if (err && err.code === 'ENOENT') {
+                    return [];
+                }
+                throw err;
+            }
+            const reportFiles = entries.filter(e => (typeof e.isFile === 'function' ? e.isFile() : true) && typeof e.name === 'string' && e.name.endsWith('.md'));
+            const reports = await Promise.all(
+                reportFiles.map(async (file) => {
+                    const content = await fs.readFile(path.join(reportsDir, file.name), 'utf8');
+                    return { filename: file.name, content };
+                })
+            );
+            return reports;
+        });
+    }
+
+    private async _handleClaimTeamReport(req: http.IncomingMessage, res: http.ServerResponse, teamId: string): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const root = this._options.workspaceRoot;
+            if (!root) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Workspace root not available' }));
+                return;
+            }
+            if (!teamId || !/^team_[A-Za-z0-9_-]+$/.test(teamId)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Invalid teamId format' }));
+                return;
+            }
+            const body = await this._parseJsonBody(req);
+            const filename = String(body?.filename || '').trim();
+            if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\') || !/^[\w.-]+\.md$/.test(filename)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Invalid or missing filename' }));
+                return;
+            }
+            const sourcePath = path.join(root, '.switchboard', 'teams', teamId, 'reports', filename);
+            const destDir = path.join(root, '.switchboard', 'teams', teamId, 'reports', 'claimed');
+            try {
+                await fs.mkdir(destDir, { recursive: true });
+                await fs.rename(sourcePath, path.join(destDir, filename));
+            } catch (err: any) {
+                if (err && err.code === 'ENOENT') {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Report not found: ${filename}` }));
+                    return;
+                }
+                throw err;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+        } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'Claim failed' }));
+        }
+    }
+
+    private async _handleGetWorktreeDiff(req: http.IncomingMessage, res: http.ServerResponse, worktreeId: string): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const root = this._options.workspaceRoot;
+            if (!root) {
+                const err: any = new Error('Workspace root not available');
+                err.statusCode = 400;
+                throw err;
+            }
+            const url = new URL(req.url || '', `http://localhost:${this._port}`);
+            const isStat = url.searchParams.get('stat') === 'true';
+
+            const db = await this._resolveDbFromQuery(req);
+            if (!db) {
+                const err: any = new Error('Kanban database not available');
+                err.statusCode = 500;
+                throw err;
+            }
+            const worktrees = await db.getWorktrees();
+            const target = (worktrees || []).find((wt: any) => String(wt.id) === String(worktreeId));
+            if (!target) {
+                const err: any = new Error(`Worktree not found: ${worktreeId}`);
+                err.statusCode = 404;
+                throw err;
+            }
+            const baseBranch = target.base_branch || target.baseBranch;
+            if (!baseBranch) {
+                const err: any = new Error('worktree has no base_branch recorded');
+                err.statusCode = 400;
+                throw err;
+            }
+            const wtPath = target.path;
+            if (!wtPath || !fsSync.existsSync(wtPath)) {
+                const err: any = new Error(`Worktree path not found: ${wtPath || ''}`);
+                err.statusCode = 404;
+                throw err;
+            }
+
+            const countRes = await execFileAsync('git', ['rev-list', '--count', `${baseBranch}..HEAD`], {
+                cwd: wtPath,
+                encoding: 'utf8',
+                timeout: 30000,
+            });
+            const commitCount = parseInt(countRes.stdout.trim(), 10) || 0;
+
+            const logRes = await execFileAsync('git', ['log', '--oneline', `${baseBranch}..HEAD`], {
+                cwd: wtPath,
+                encoding: 'utf8',
+                timeout: 30000,
+            });
+            const log = logRes.stdout;
+
+            if (isStat) {
+                const statRes = await execFileAsync('git', ['diff', '--stat', `${baseBranch}..HEAD`], {
+                    cwd: wtPath,
+                    encoding: 'utf8',
+                    timeout: 30000,
+                    maxBuffer: 10 * 1024 * 1024,
+                });
+                let stat = statRes.stdout;
+                if (stat.length > 512 * 1024) {
+                    stat = stat.slice(0, 512 * 1024) + '\n\n[truncated: diff exceeds 512KB limit]';
+                }
+                return { commitCount, log, stat };
+            } else {
+                const diffRes = await execFileAsync('git', ['diff', `${baseBranch}..HEAD`], {
+                    cwd: wtPath,
+                    encoding: 'utf8',
+                    timeout: 30000,
+                    maxBuffer: 10 * 1024 * 1024,
+                });
+                let diff = diffRes.stdout;
+                if (diff.length > 512 * 1024) {
+                    diff = diff.slice(0, 512 * 1024) + '\n\n[truncated: diff exceeds 512KB limit]';
+                }
+                return { commitCount, log, diff };
+            }
+        });
+    }
+
     private async _resolveDbFromQuery(req: http.IncomingMessage): Promise<any | null> {
         const getKanbanDatabase = this._options.getKanbanDatabase;
         if (!getKanbanDatabase) return null;
@@ -5775,6 +5979,8 @@ export class LocalApiServer {
                     ...(terminals !== undefined ? { terminals, terminalCount: terminals.length } : {}),
                     ...(selectedWorkspaceRoot !== undefined ? { selectedWorkspaceRoot } : {})
                 }));
+            } else if (pathname === '/auth/mint' && req.method === 'POST') {
+                await this._handleMintEnrolmentToken(req, res);
             } else if (pathname === '/metadata/clickup' && req.method === 'GET') {
                 await this._handleGetMetadata('clickup', res);
             } else if (pathname === '/metadata/linear' && req.method === 'GET') {
@@ -5800,6 +6006,14 @@ export class LocalApiServer {
                 await this._handleKanbanDispatch(req, res);
             } else if (pathname === '/teams/create-external' && req.method === 'POST') {
                 await this._handleTeamsCreateExternal(req, res);
+            } else if (pathname.startsWith('/teams/') && pathname.endsWith('/reports') && req.method === 'GET') {
+                const parts = pathname.split('/');
+                const teamId = parts[2]; // /teams/<teamId>/reports
+                await this._handleGetTeamReports(req, res, teamId);
+            } else if (pathname.startsWith('/teams/') && pathname.endsWith('/reports/claim') && req.method === 'POST') {
+                const parts = pathname.split('/');
+                const teamId = parts[2]; // /teams/<teamId>/reports/claim
+                await this._handleClaimTeamReport(req, res, teamId);
             } else if (pathname === '/kanban/queue/next' && req.method === 'POST') {
                 await this._handleKanbanQueueNext(req, res);
             } else if (pathname === '/kanban/queue/done' && req.method === 'POST') {
@@ -5951,6 +6165,10 @@ export class LocalApiServer {
                 await this._handleGetColumns(req, res);
             } else if (pathname === '/worktree/list' && req.method === 'GET') {
                 await this._handleGetWorktrees(req, res);
+            } else if (pathname.startsWith('/worktree/') && pathname.endsWith('/diff') && req.method === 'GET') {
+                const parts = pathname.split('/');
+                const worktreeId = parts[2]; // /worktree/<worktreeId>/diff
+                await this._handleGetWorktreeDiff(req, res, worktreeId);
             } else if (pathname === '/orchestrator/session-log' && req.method === 'GET') {
                 await this._handleGetOrchestratorSessionLog(req, res);
             } else if (pathname === '/catalog' && req.method === 'GET') {

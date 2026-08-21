@@ -1,0 +1,64 @@
+# Switchboard — systemd USER service template.
+#
+# This is a USER unit (not system) because the agent CLIs (claude, codex)
+# need the user's own credentials and login session.
+#
+# Install:
+#   1. Copy this file to ~/.config/systemd/user/switchboard.service
+#   2. Edit the three values below: ExecStart (path to npx/switchboard),
+#      WorkingDirectory (your workspace), and PATH in Environment.
+#   3. Enable and start:
+#        systemctl --user daemon-reload
+#        systemctl --user enable switchboard.service
+#        systemctl --user start switchboard.service
+#   4. Verify:
+#        npx switchboard status
+#
+#   To survive logout (linger):
+#        loginctl enable-linger $USER
+#
+# Uninstall:
+#   systemctl --user disable switchboard.service
+#   rm ~/.config/systemd/user/switchboard.service
+#   systemctl --user daemon-reload
+#
+# ┌────────────────────────────────────────────────────────────────────┐
+# │ TWO NON-OBVIOUS REQUIREMENTS (getting these wrong = silent failure) │
+# │                                                                    │
+# │ 1. Node >= 22 must be on PATH.  package.json "engines" requires    │
+# │    node >= 22.0.0.  systemd does NOT inherit your shell PATH —     │
+# │    set it explicitly in Environment=PATH below.                    │
+# │                                                                    │
+# │ 2. Agent CLIs must be on PATH.  `claude`, `codex`, etc. must be    │
+# │    findable or every dispatched terminal will fail to spawn.        │
+# │    A login-shell PATH is NOT what systemd hands a user service.    │
+# └────────────────────────────────────────────────────────────────────┘
+
+[Unit]
+Description=Switchboard standalone server
+After=network.target
+
+[Service]
+Type=forking
+
+# ── EDIT THESE VALUES ───────────────────────────────────────────
+# ExecStart: path to npx or the switchboard binary, followed by args.
+#   Use `which npx` to find the full path.
+ExecStart=/usr/bin/npx switchboard start --detach --port 7777 --workspace /home/YOUR_USERNAME/path/to/workspace
+
+# WorkingDirectory: the workspace root (must match --workspace above).
+WorkingDirectory=/home/YOUR_USERNAME/path/to/workspace
+
+# PATH must include:
+#   - Node >= 22 (e.g. /usr/local/bin, ~/.nvm/versions/node-v22.x/bin)
+#   - Agent CLIs (claude, codex) — wherever you installed them
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/YOUR_USERNAME/.local/bin
+Environment=HOME=/home/YOUR_USERNAME
+
+# --detach forks and the parent exits 0, so systemd considers the
+# service "started" once the parent exits. The child is the real daemon.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

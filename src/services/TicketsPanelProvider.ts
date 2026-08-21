@@ -552,7 +552,19 @@ export class TicketsPanelProvider {
         // symlinked tickets tree would ENOENT on the pre-realpath path.
         let version = '';
         try { version = `&v=${Math.floor(fs.statSync(realTarget).mtimeMs)}`; } catch { /* best effort */ }
-        return `http://127.0.0.1:${port}/design/asset?root=${encodeURIComponent(root)}&path=${encodeURIComponent(realTarget)}${version}`;
+        const relativePath = `/design/asset?root=${encodeURIComponent(root)}&path=${encodeURIComponent(realTarget)}${version}`;
+        // When the editor webview is active, the same markdown string is fanned out
+        // to both the webview and the browser (BroadcastHub two-target send). A
+        // root-relative URL is unresolvable in the webview (origin is
+        // vscode-webview://), so the absolute loopback form is required. When no
+        // webview is active (standalone browser board), the relative URL is correct
+        // under every access method — direct launch, SSH tunnel (port-shifted or
+        // not), reverse proxy, HTTPS — and the absolute form breaks under a
+        // port-shifted tunnel because it pins the server's real listening port.
+        if (this._panel) {
+            return `http://127.0.0.1:${port}${relativePath}`;
+        }
+        return relativePath;
     }
 
     private _rewriteLocalImagePaths(markdown: string, baseDir: string): string {

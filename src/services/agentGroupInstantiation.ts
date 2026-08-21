@@ -260,11 +260,18 @@ There is no \`GET /kanban/feature\` — \`/kanban/feature\` is POST-only (featur
 Read features with \`GET /kanban/features\` and pick yours out of the list.
 
 ## 6. Verification Pattern
-Verify worker progress directly via git in the workspace / worktree:
+If you share a filesystem with the Switchboard host:
 \`\`\`bash
 git -C <worktree> rev-list --count <base>..HEAD
 git -C <worktree> diff <base>..HEAD
 \`\`\`
+
+If you are remote (reaching Switchboard through a tunnel):
+- \`GET /worktree/<worktreeId>/diff\` — full diff + commit count + commit log
+- \`GET /worktree/<worktreeId>/diff?stat=true\` — summary only
+- \`GET /teams/<teamId>/reports\` — list unclaimed worker reports
+- \`POST /teams/<teamId>/reports/claim\` — mark a report processed
+
 Do not rely on worker self-reports alone; inspect the actual git commits.
 
 ## 7. Advancing & Review
@@ -294,8 +301,8 @@ POST /kanban/queue/next
 ## 9. Tick Loop (Schedule / Periodic Wake)
 On each wake (or when notified by a background watcher):
 1. Read this file (\`.switchboard/teams/${teamId}/head-prompt.md\`) to re-orient.
-2. Read incoming reports in \`.switchboard/teams/${teamId}/reports/\`.
-3. Process each report, verify with git, and move processed reports to \`.switchboard/teams/${teamId}/reports/claimed/\`.
+2. Read incoming reports in \`.switchboard/teams/${teamId}/reports/\` (or \`GET /teams/${teamId}/reports\` if remote).
+3. Process each report, verify with git (or \`GET /worktree/<worktreeId>/diff\` if remote), and move processed reports to \`.switchboard/teams/${teamId}/reports/claimed/\` (or \`POST /teams/${teamId}/reports/claim\` if remote).
 4. Dispatch new subtasks to available workers or advance cards.
 5. If the feature is complete and reviewed, pull the next feature via \`POST /kanban/queue/next\`.
 `;

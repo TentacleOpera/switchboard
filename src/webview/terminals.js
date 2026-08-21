@@ -10410,32 +10410,98 @@
      *  Called by the switchToTeam message handler when the shell rail's team
      *  button is clicked. Sets teamScopeId BEFORE calling switchToGroup so the
      *  guard at switchToGroup (teamScopeId && id !== teamScopeId) passes —
-     *  mirrors the init() path at lines 772–782 which sets teamScopeId first. */
-    function enterTeamScope(groupId) {
+     *  mirrors the init() path at lines 772–782 which sets teamScopeId first.
+     *
+     *  Async because entering scope has to re-read state under the new scope,
+     *  exactly as the init() team branch does. In-place entry is now the ONLY
+     *  way into a team view (the pop-out is gone), so anything init did on the
+     *  way in has to happen here or it never happens at all. */
+    async function enterTeamScope(groupId) {
         const group = getAllGroups().find(g => g.id === groupId);
         if (!group || !isSpawnedTeamGroup(group)) { return; }
         dismissPeek();
         teamScopeId = groupId;
         document.body.classList.add('is-team-scoped');
         document.title = group.shortName || group.name || 'Team';
-        switchToGroup(groupId);  // seats the team's members into panes
-        renderSidebarList();
+        // mapSettingKey now prefixes the layout-family keys with
+        // `terminals.team.<groupId>.`, so re-read them BEFORE anything writes.
+        // switchToGroup below ends in saveLayoutSettings(); without this load
+        // that save stamps the FLEET's layout, pins and pane modes over the
+        // team's own namespaced copies, destroying them on every entry.
+        await loadLayoutSettings();
+        // Two rail clicks in quick succession interleave across these awaits.
+        // Whoever set teamScopeId last owns the panel; an older call that wakes
+        // up afterwards must not seat its team over the newer one. (Cheap here,
+        // and switchToGroup's own guard would only half-catch it.)
+        if (teamScopeId !== groupId) { return; }
+        // The Manual/Auto toggle is derived from whether the completion-driven
+        // standing order is installed — never from a persisted hint. init()
+        // derived it on the pop-out path; it has to be derived here too, or the
+        // toggle reports Manual for an auto team and carries the previous
+        // team's mode across a switch.
+        await loadQueueModeFromOrders();
+        if (teamScopeId !== groupId) { return; }
+        switchToGroup(groupId);  // seats the team's members into panes; renders the sidebar
+        syncLayoutPickerUI();
         renderPaneGrid();
+        // Push the fleet state to the shell rail so the team button's light
+        // reflects the current scope immediately, not on the next 5s poll.
+        postFleetStateToShell();
     }
 
     /** Exit team-scoped mode and return to the full fleet view. Called by the
      *  back button in renderTeamHeader. Clears teamScopeId, removes the body
      *  class, resets the group lock and layout, and re-renders the full fleet. */
-    function exitTeamScope() {
+    async function exitTeamScope() {
         teamScopeId = null;
         document.body.classList.remove('is-team-scoped');
         document.title = 'Terminals';
+        // The work queue belongs to the team, not the fleet. Left set, the next
+        // team entered would paint this team's items and mode for one frame.
+        _queueItems = [];
+        _queueMode = 'manual';
+        // mapSettingKey maps back to the unprefixed keys now the scope is
+        // clear, so re-read them: this is what restores the fleet's own pane
+        // assignments, pins and modes. Without it the team's layout stays in
+        // memory and the next saveLayoutSettings() writes it over the fleet's
+        // keys — the mirror image of the clobber guarded against on entry.
+        // It also does the reseat the old seatActiveGroupPage() call could
+        // never do: that call ran after activeGroupId was nulled, and
+        // seatActiveGroupPage early-returns without a locked group, so the grid
+        // kept the team's members after the user asked for all terminals.
+        // Save the team groups before loadLayoutSettings REPLACES terminalGroups
+        // — the load is for layout-family keys (pane assignments, pins, modes),
+        // not for the fleet-wide groups roster. If the storage read returns a
+        // stale version (e.g. a race with enterTeamScope's fire-and-forget
+        // saveLayoutSettings), the team groups would be lost and the next
+        // postFleetStateToShell would push an empty teams array, making
+        // individual terminals reappear on the shell rail.
+        const savedGroups = terminalGroups.map(g => ({ ...g }));
+        await loadLayoutSettings();
+        // Merge back any groups that loadLayoutSettings dropped (stale storage
+        // read or a clobbered key). Only adds groups whose id is no longer
+        // present — it does NOT overwrite groups that survived the load.
+        const loadedIds = new Set(terminalGroups.map(g => g && g.id).filter(Boolean));
+        for (const g of savedGroups) {
+            if (g && g.id && !loadedIds.has(g.id)) {
+                terminalGroups.push(g);
+                loadedIds.add(g.id);
+            }
+        }
+        // Return unlocked: the back button means "all terminals", not "whatever
+        // group was locked before". Set after the load, which restores the
+        // fleet's persisted activeGroupId.
         activeGroupId = null;
         activeGroupPage = 0;
         setLayoutMode(layoutForFleetCount(fleetList.length));
-        seatActiveGroupPage();
+        syncLayoutPickerUI();
         renderSidebarList();
         renderPaneGrid();
+        // Push the fleet state to the shell rail immediately — without this the
+        // rail retains its last-pushed state until the next 5s fleet poll, and
+        // if that poll sees a terminalGroups missing the team groups (the race
+        // above), individual terminals reappear.
+        postFleetStateToShell();
     }
 
     /** The render-boundary filter. Returns `fleetList` filtered to the scoped

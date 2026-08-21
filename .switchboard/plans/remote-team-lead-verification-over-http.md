@@ -289,3 +289,7 @@ No state, files, settings, or formats change. The endpoints read existing files 
 
 - **[user]** Should the diff endpoint support arbitrary ref ranges (e.g. `?from=<ref>&to=<ref>`), or is `base_branch..HEAD` sufficient? Proceeding on the assumption that `base_branch..HEAD` is sufficient — it is what the skill's verification pattern uses, and accepting arbitrary refs from the caller is a command-injection risk that deriving from the DB avoids.
 - **[user]** Should the report list endpoint support pagination or filtering, or is returning all unclaimed reports in one response sufficient? Proceeding on the assumption that unbounded is fine — teams typically have a small number of pending reports (one per worker per tick).
+
+## Completion Report
+
+Implemented three HTTP endpoints in `LocalApiServer.ts` enabling remote external team leads to complete the verification loop without filesystem access: `GET /teams/:teamId/reports` (listing unclaimed reports), `POST /teams/:teamId/reports/claim` (moving processed reports to `claimed/`), and `GET /worktree/:worktreeId/diff` (computing commit counts, commit logs, and diff/stat via `execFileAsync`). Updated head prompt template in `agentGroupInstantiation.ts`, external-team-lead skill definitions in `.switchboard/protocols/external-team-lead/SKILL.md` and `.claude/skills/external-team-lead/SKILL.md`, and remote access documentation in `standalone-remote-access-story.md`. Regenerated `protocol-catalog.json` with the new endpoint registrations. No issues encountered.

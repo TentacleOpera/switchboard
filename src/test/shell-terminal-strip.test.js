@@ -1027,6 +1027,113 @@ test('the team-header-back CSS exists in terminals.html', () => {
     assert.ok(/\.team-header-back:hover\s*\{/.test(terminalsHtml), '.team-header-back:hover CSS must exist');
 });
 
+// ------------------------------- UAT: the team action bar lives in the sidebar
+
+test('the team action verbs are static sidebar buttons, not a header strip', () => {
+    // The action bar was a horizontal strip on top of the team header. The
+    // intent was always that team controls TAKE THE PLACE of the generic fleet
+    // buttons, so they are static `.sidebar-ops` buttons shown by teamScopeId —
+    // the same pattern #btn-team-orders already used.
+    const expected = [
+        ['btn-team-clear', 'CLEAR ALL CONTEXTS'],
+        ['btn-team-clear-members', 'CLEAR MEMBERS (KEEP HEAD)'],
+        ['btn-team-close', 'STOP ALL TERMINALS'],
+        ['btn-team-restart', 'RESTART EXITED MEMBERS'],
+        ['btn-team-ack', 'ACKNOWLEDGE COMPLETIONS'],
+        ['btn-team-add', 'ADD TERMINAL'],
+        ['btn-team-automations', 'SCHEDULED AUTOMATIONS'],
+        ['btn-team-orders', 'STANDING ORDERS']
+    ];
+    const ops = block(terminalsHtml, '<div class="sidebar-ops">', '<div id="terminals-list"');
+    for (const [id, label] of expected) {
+        assert.ok(
+            new RegExp(`id="${id}"[\\s\\S]*?>${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<`).test(ops),
+            `#${id} must be a .sidebar-ops button labelled "${label}"`
+        );
+    }
+    // Every relocated button starts hidden — the fleet view must not grow six
+    // team-only controls.
+    for (const [id] of expected) {
+        assert.ok(
+            new RegExp(`id="${id}"[\\s\\S]*?hidden`).test(ops),
+            `#${id} must be hidden by default and shown only in team-scoped mode`
+        );
+    }
+});
+
+test('the old header action bar and its abbreviated buttons are gone', () => {
+    const fn = block(terminalsJs, 'function renderTeamHeader() {', 'function fetchTeamQueue');
+    for (const gone of ['mkActionBtn', 'team-action-bar', "'ORDERS'", "'AUTOS'", 'CLEAR BADGES', 'RESTART MISSING', 'CLOSE TEAM']) {
+        assert.ok(
+            !fn.includes(gone),
+            `renderTeamHeader must not still build "${gone}" — the verbs moved to the sidebar and were renamed`
+        );
+    }
+    // The dead styles must go with the elements, or the next reader thinks a
+    // header action bar is still a thing.
+    assert.ok(
+        !/\.team-action-b(ar|tn)|\.team-header-add|\.team-header-orders/.test(terminalsHtml),
+        'the header action-bar / add / orders CSS must not outlive the elements it styled'
+    );
+});
+
+test('every relocated sidebar button is wired and toggled by teamScopeId', () => {
+    const ids = ['btn-team-clear', 'btn-team-clear-members', 'btn-team-close', 'btn-team-restart', 'btn-team-ack', 'btn-team-add'];
+    const wiring = block(terminalsJs, 'function wireTeamActionBar()', 'let currentTeamAutosTeamId');
+    for (const id of ids) {
+        assert.ok(
+            wiring.includes(`getElementById('${id}')`),
+            `#${id} must get a click handler at init — a static button nothing listens to is a dead control`
+        );
+    }
+    const sidebar = block(terminalsJs, 'function renderSidebarList()', 'function renderPaneGrid()');
+    for (const id of ids) {
+        assert.ok(
+            new RegExp(`getElementById\\('${id}'\\)`).test(sidebar),
+            `#${id} must be shown/hidden by renderSidebarList based on teamScopeId`
+        );
+    }
+    // RESTART EXITED MEMBERS carries a dynamic disabled state that moved out of
+    // renderTeamHeader with it.
+    assert.ok(
+        /btnTeamRestart\.disabled = !hasDefinition/.test(sidebar),
+        'the RESTART disabled state must be re-evaluated in renderSidebarList — it moved out of renderTeamHeader'
+    );
+});
+
+test('entering and leaving team scope re-reads the settings for that scope', () => {
+    // mapSettingKey prefixes the layout-family keys with
+    // `terminals.team.<groupId>.` whenever teamScopeId is set. In-place scope
+    // switching therefore has to reload on BOTH edges: entering without a load
+    // lets switchToGroup's saveLayoutSettings() stamp the fleet's layout over
+    // the team's, and leaving without one lets the team's layout be written
+    // back over the fleet's.
+    const enter = block(terminalsJs, 'async function enterTeamScope(groupId) {', 'async function exitTeamScope()');
+    const scopeAt = enter.indexOf('teamScopeId = groupId');
+    const loadAt = enter.indexOf('await loadLayoutSettings()');
+    const switchAt = enter.indexOf('switchToGroup(groupId)');
+    assert.ok(loadAt !== -1, 'enterTeamScope must reload the layout settings under the new scope');
+    assert.ok(scopeAt < loadAt && loadAt < switchAt,
+        'the load must sit between setting teamScopeId and switchToGroup — before the scope is set it reads the fleet keys, after switchToGroup it is too late');
+    assert.ok(
+        enter.includes('await loadQueueModeFromOrders()'),
+        'enterTeamScope must derive the Manual/Auto toggle from the installed standing order — in-place entry is the only entry path left'
+    );
+
+    const exit = block(terminalsJs, 'async function exitTeamScope()', 'function scopedFleet(');
+    const clearAt = exit.indexOf('teamScopeId = null');
+    const exitLoadAt = exit.indexOf('await loadLayoutSettings()');
+    assert.ok(exitLoadAt !== -1, "exitTeamScope must reload the fleet's own layout settings");
+    assert.ok(clearAt < exitLoadAt, 'the scope must be cleared before the load, or it re-reads the team keys');
+    // Comments stripped: the body explains in prose why the call is gone, and
+    // the assertion is about executable statements, not the explanation.
+    const exitCode = exit.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+    assert.ok(
+        !/seatActiveGroupPage\(\)/.test(exitCode),
+        'exitTeamScope must not call seatActiveGroupPage — activeGroupId is null by then, so it early-returns and never reseats'
+    );
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
     process.exit(1);

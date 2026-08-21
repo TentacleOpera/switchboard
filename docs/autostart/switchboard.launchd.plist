@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Switchboard — macOS launchd user agent template.
+
+  This is a USER agent (LaunchAgent, not LaunchDaemon) because the agent CLIs
+  (claude, codex) need the user's own credentials and login session.
+
+  Install:
+    1. Copy this file to ~/Library/LaunchAgents/com.switchboard.server.plist
+    2. Edit the three <string> values below: NPM_PATH, WORKSPACE, and the
+       path to the switchboard CLI (the npx shim or a global install).
+    3. Load it:
+         launchctl load ~/Library/LaunchAgents/com.switchboard.server.plist
+    4. Verify:
+         npx switchboard status
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.switchboard.server.plist
+    rm ~/Library/LaunchAgents/com.switchboard.server.plist
+
+  ┌────────────────────────────────────────────────────────────────────┐
+  │ TWO NON-OBVIOUS REQUIREMENTS (getting these wrong = silent failure) │
+  │                                                                    │
+  │ 1. Node >= 22 must be on PATH.  package.json "engines" requires    │
+  │    node >= 22.0.0.  launchd does NOT inherit your shell PATH —     │
+  │    set it explicitly via PATH below.                               │
+  │                                                                    │
+  │ 2. Agent CLIs must be on PATH.  `claude`, `codex`, etc. must be    │
+  │    findable or every dispatched terminal will fail to spawn.        │
+  │    A login-shell PATH is NOT what launchd hands a service.         │
+  └────────────────────────────────────────────────────────────────────┘
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.switchboard.server</string>
+
+    <!-- ── EDIT THESE THREE VALUES ────────────────────────────────── -->
+    <!-- Path to the switchboard CLI. Use `which switchboard` (after a   -->
+    <!-- global install) or the full path to npx.                        -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/npx</string>
+        <string>switchboard</string>
+        <string>start</string>
+        <string>--detach</string>
+        <string>--port</string>
+        <string>7777</string>
+        <string>--workspace</string>
+        <!-- WORKSPACE: full path to your Switchboard workspace root -->
+        <string>/Users/YOUR_USERNAME/path/to/workspace</string>
+    </array>
+
+    <!-- PATH must include:                                               -->
+    <!--   - Node >= 22 (e.g. /opt/homebrew/bin or ~/.nvm/versions/...)   -->
+    <!--   - Agent CLIs (claude, codex) — wherever you installed them     -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/YOUR_USERNAME/.local/bin</string>
+        <key>HOME</key>
+        <string>/Users/YOUR_USERNAME</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Logs go to .switchboard/logs/server.log via the --detach child,  -->
+    <!-- but launchd also captures stdout/stderr here as a fallback.       -->
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/path/to/workspace/.switchboard/logs/launchd-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/path/to/workspace/.switchboard/logs/launchd-stderr.log</string>
+</dict>
+</plist>

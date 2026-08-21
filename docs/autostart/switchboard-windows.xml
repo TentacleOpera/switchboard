@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<!--
+  Switchboard — Windows Task Scheduler template.
+
+  This is a user-scheduled task (not a system task) because the agent CLIs
+  (claude, codex) need the user's own credentials and login session.
+
+  Install:
+    1. Edit WORKSPACE and NPM_PATH below.
+    2. Import:
+         schtasks /Create /TN "Switchboard" /XML switchboard-windows.xml
+    3. Start:
+         schtasks /Run /TN "Switchboard"
+    4. Verify:
+         npx switchboard status
+
+  Uninstall:
+    schtasks /Delete /TN "Switchboard" /F
+
+  ┌────────────────────────────────────────────────────────────────────┐
+  │ TWO NON-OBVIOUS REQUIREMENTS (getting these wrong = silent failure) │
+  │                                                                    │
+  │ 1. Node >= 22 must be on PATH.  package.json "engines" requires    │
+  │    node >= 22.0.0.  Task Scheduler runs with a minimal PATH —      │
+  │    set the full path to npx.cmd below, and ensure node is in the   │
+  │    system PATH or specify the full node path.                      │
+  │                                                                    │
+  │ 2. Agent CLIs must be on PATH.  `claude`, `codex`, etc. must be    │
+  │    findable or every dispatched terminal will fail to spawn.        │
+  └────────────────────────────────────────────────────────────────────┘
+-->
+<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Switchboard standalone server (detached)</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Settings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+  </Settings>
+  <Actions>
+    <Exec>
+      <!-- EDIT: full path to npx.cmd (run `where npx` in cmd to find it) -->
+      <Command>C:\Program Files\nodejs\npx.cmd</Command>
+      <Arguments>switchboard start --detach --port 7777 --workspace "C:\Users\YOUR_USERNAME\path\to\workspace"</Arguments>
+      <!-- EDIT: workspace directory -->
+      <WorkingDirectory>C:\Users\YOUR_USERNAME\path\to\workspace</WorkingDirectory>
+    </Exec>
+  </Actions>
+  <Principals>
+    <Principal>
+      <UserId>YOUR_USERNAME</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+</Task>
