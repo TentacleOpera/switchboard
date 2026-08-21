@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 
-export type StandingOrderScope = 'global' | 'team' | 'pair' | 'team-head';
+export type StandingOrderScope = 'global' | 'team' | 'pair' | 'team-head' | 'role';
 
 export interface StandingOrder {
     id: string;
@@ -10,6 +10,8 @@ export interface StandingOrder {
     createdAt: number;
     scope?: StandingOrderScope;
     teamId?: string;
+    /** The role name this order applies to (e.g. 'planner', 'coder', 'reviewer', 'lead'). Used only when `scope === 'role'`. */
+    role?: string;
 }
 
 export const STANDING_ORDERS_CONFIG_KEY = 'terminals.standingOrders';
@@ -176,6 +178,10 @@ export function resolveTeamStanding(
  *   deliberately `''` so that an older build with no `team-head` branch falls
  *   through to the `pair` rule and evaluates `liveNames.has('')` → false,
  *   dropping the order instead of mis-delivering it to the wrong terminal.
+ * - `role`: applies when the target terminal's role matches `o.role`. The
+ *   target's role is resolved from `roleMap` (terminal name → role), passed
+ *   by the caller from the terminal registry. When `roleMap` is absent
+ *   (headless/test harness), role-scoped orders are skipped — no regression.
  * - `pair` (default): applies when `o.parent === targetName` and `o.child` is
  *   live. A note about a dead terminal is noise.
  */
@@ -183,7 +189,8 @@ function selectOrders(
     orders: StandingOrder[],
     targetName: string,
     liveNames: Set<string>,
-    groups: TerminalGroup[]
+    groups: TerminalGroup[],
+    roleMap?: Map<string, string>
 ): StandingOrder[] {
     // Resolve the target's team standing once via the shared predicate, so
     // the delivery layer and this selector cannot diverge on what "is a
@@ -193,6 +200,16 @@ function selectOrders(
         const scope = scopeOf(o);
         if (scope === 'global') {
             return true;
+        }
+        if (scope === 'role') {
+            // An order with no `role` field is malformed — skip it rather
+            // than mis-delivering to every terminal. When `roleMap` is
+            // absent (headless/test harness), role-scoped orders are skipped
+            // gracefully — no regression on existing call sites.
+            if (!o.role) { return false; }
+            if (!roleMap) { return false; }
+            const targetRole = roleMap.get(targetName);
+            return !!targetRole && targetRole === o.role;
         }
         if (scope === 'team') {
             if (!o.teamId) { return false; }
@@ -245,18 +262,72 @@ export function stripStandingOrdersBlock(prompt: string): string {
 }
 
 /**
+ * Render a standalone standing-orders block (marker + rules + trailing line)
+ * for the orders that apply to `targetName`. Returns `null` when no orders
+ * apply — the caller should send no prompt in that case.
+ *
+ * This is the shared rendering core used by both `applyStandingOrders` (which
+ * appends the block as a suffix on a prompt) and the establish/clear delivery
+ * path (which sends the block as a standalone prompt via `ptySendPrompt`).
+ * Extracting it avoids duplicating the selection + scope-rank + rendering
+ * logic across the two consumers.
+ *
+ * The `roleMap` parameter (terminal name → role) is used to resolve
+ * `role`-scoped orders. When absent, role-scoped orders are skipped.
+ */
+export function renderStandaloneOrdersBlock(
+    orders: StandingOrder[],
+    targetName: string,
+    liveNames: Set<string>,
+    groups: TerminalGroup[],
+    roleMap?: Map<string, string>
+): string | null {
+    const mine = selectOrders(orders, targetName, liveNames, groups, roleMap);
+    if (mine.length === 0) {
+        return null;
+    }
+
+    // Render safeguard-bearing scopes (global, role, team) before pair so that
+    // whatever renders last is the least safety-critical. Truncation is gone,
+    // so this is moot for correctness today — but deterministic order is
+    // better than not, and a future re-introduction of a cap would eat the
+    // right end. Stable sort preserves creation order within each scope.
+    // `role` sits between `global` and `team`/`team-head` (both at rank 2) so
+    // role-level instructions render after the global baseline but before the
+    // team-specific prompt — a role order is broader than a team order but
+    // narrower than a global one.
+    const scopeRank: Record<StandingOrderScope, number> = { global: 0, role: 1, 'team-head': 2, team: 2, pair: 3 };
+    const sorted = [...mine].sort(
+        (a, b) => scopeRank[scopeOf(a)] - scopeRank[scopeOf(b)]
+    );
+
+    let block = `\n\n${STANDING_ORDERS_MARKER}\n`;
+    for (const o of sorted) {
+        block += renderOrder(o);
+    }
+    block += `These apply to everything you do in this terminal until told otherwise.\n`;
+    return block;
+}
+
+/**
  * Idempotent. Returns `prompt` unchanged when there is nothing to add.
  *
  * The fifth parameter (`groups`) is the registered `terminals.groups` array,
  * used to resolve `team`-scoped order membership. It defaults to `[]` so
  * existing two-argument call sites that only have `pair` orders keep working.
+ *
+ * The sixth parameter (`roleMap`) is a terminal-name → role map used to
+ * resolve `role`-scoped orders. It defaults to `undefined` so existing call
+ * sites (and the test suite) keep working — role-scoped orders are simply
+ * skipped when no map is provided.
  */
 export function applyStandingOrders(
     prompt: string,
     targetName: string,
     orders: StandingOrder[],
     liveNames: Set<string>,
-    groups: TerminalGroup[] = []
+    groups: TerminalGroup[] = [],
+    roleMap?: Map<string, string>
 ): string {
     if (!prompt) { return prompt; }
 
@@ -270,8 +341,8 @@ export function applyStandingOrders(
     // contain the marker.
     const cleanPrompt = stripStandingOrdersBlock(prompt);
 
-    const mine = selectOrders(orders, targetName, liveNames, groups);
-    if (mine.length === 0) {
+    const block = renderStandaloneOrdersBlock(orders, targetName, liveNames, groups, roleMap);
+    if (block === null) {
         if (groups.some(g => Array.isArray(g?.members) && g.members.includes(targetName))) {
             const rejected = orders.map(o => ({
                 parent: o.parent,
@@ -285,22 +356,6 @@ export function applyStandingOrders(
         }
         return cleanPrompt;
     }
-
-    // Render safeguard-bearing scopes (global, team) before pair so that
-    // whatever renders last is the least safety-critical. Truncation is gone,
-    // so this is moot for correctness today — but deterministic order is
-    // better than not, and a future re-introduction of a cap would eat the
-    // right end. Stable sort preserves creation order within each scope.
-    const scopeRank: Record<StandingOrderScope, number> = { global: 0, 'team-head': 1, team: 1, pair: 2 };
-    const sorted = [...mine].sort(
-        (a, b) => scopeRank[scopeOf(a)] - scopeRank[scopeOf(b)]
-    );
-
-    let block = `\n\n${STANDING_ORDERS_MARKER}\n`;
-    for (const o of sorted) {
-        block += renderOrder(o);
-    }
-    block += `These apply to everything you do in this terminal until told otherwise.\n`;
     return cleanPrompt + block;
 }
 
@@ -317,7 +372,8 @@ export function makeStandingOrder(
     child: string,
     instruction: string,
     scope?: StandingOrderScope,
-    teamId?: string
+    teamId?: string,
+    role?: string
 ): StandingOrder {
     return {
         id: crypto.randomUUID(),
@@ -327,6 +383,7 @@ export function makeStandingOrder(
         createdAt: Date.now(),
         ...(scope ? { scope } : {}),
         ...(teamId ? { teamId } : {}),
+        ...(role ? { role } : {}),
     };
 }
 

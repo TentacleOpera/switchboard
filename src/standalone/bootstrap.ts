@@ -371,8 +371,18 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         if (applyOrders) {
             try {
                 if (effectiveOrders.length > 0) {
-                    const live = new Set(ptyFleetService.listActive().map(t => t.friendlyName));
-                    out = applyStandingOrders(out, handle.friendlyName, effectiveOrders, live, groups || []);
+                    const activeHandles = ptyFleetService.listActive();
+                    const live = new Set(activeHandles.map(t => t.friendlyName));
+                    // Build a terminal-name → role map from the same active
+                    // fleet list used for liveness, so role-scoped standing
+                    // orders are resolved on the standalone host too.
+                    const roleMap = new Map<string, string>();
+                    for (const h of activeHandles) {
+                        if (h?.friendlyName && h?.role) {
+                            roleMap.set(h.friendlyName, h.role);
+                        }
+                    }
+                    out = applyStandingOrders(out, handle.friendlyName, effectiveOrders, live, groups || [], roleMap);
                 }
             } catch { /* a degraded prompt beats a lost dispatch */ }
         }

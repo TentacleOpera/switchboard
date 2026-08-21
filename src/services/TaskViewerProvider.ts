@@ -774,7 +774,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // one prompt and disagree about who is a head.
                     if (applySO) {
                         if (effectiveOrders.length > 0) {
-                            data = applyStandingOrders(data, payload.name, effectiveOrders, live, groups || []);
+                            // Build a terminal-name → role map from the same
+                            // roleRows list used for seat-block resolution
+                            // (terminals + hiddenTerminals). This is the
+                            // snapshot `selectOrders` uses to resolve
+                            // `role`-scoped standing orders — built once per
+                            // dispatch, so a role change between dispatch and
+                            // delivery is picked up on the next dispatch.
+                            const roleMap = new Map<string, string>();
+                            for (const row of roleRows) {
+                                if (row?.friendlyName && row?.role) {
+                                    roleMap.set(row.friendlyName, row.role);
+                                }
+                            }
+                            data = applyStandingOrders(data, payload.name, effectiveOrders, live, groups || [], roleMap);
                         }
                     }
 

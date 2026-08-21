@@ -4292,16 +4292,18 @@ export class LocalApiServer {
                 const instruction = typeof body?.instruction === 'string' ? body.instruction : '';
                 const scope = (typeof body?.scope === 'string' ? body.scope : 'pair') as StandingOrderScope;
                 const teamId = typeof body?.teamId === 'string' ? body.teamId.trim() : '';
+                const role = typeof body?.role === 'string' ? body.role.trim() : '';
 
                 // Validate scope
-                if (!['global', 'team', 'pair', 'team-head'].includes(scope)) {
+                if (!['global', 'team', 'pair', 'team-head', 'role'].includes(scope)) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: "scope must be 'global', 'team', 'pair', or 'team-head'" }));
+                    res.end(JSON.stringify({ success: false, error: "scope must be 'global', 'team', 'pair', 'team-head', or 'role'" }));
                     return;
                 }
 
-                // parent/child are required for pair scope; for global/team/team-head they
-                // are optional (a global order has no partner terminal; team/team-head carry teamId and parent=head).
+                // parent/child are required for pair scope; for global/team/team-head/role they
+                // are optional (a global order has no partner terminal; team/team-head carry teamId and parent=head;
+                // role carries the role name in the `role` field).
                 if (scope === 'pair') {
                     if (!parent || !child) {
                         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -4319,6 +4321,11 @@ export class LocalApiServer {
                     res.end(JSON.stringify({ success: false, error: `teamId is required for ${scope} scope` }));
                     return;
                 }
+                if (scope === 'role' && !role) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'role is required for role scope' }));
+                    return;
+                }
 
                 const instructionErr = validateInstruction(instruction);
                 if (instructionErr) {
@@ -4329,7 +4336,7 @@ export class LocalApiServer {
 
                 let added: StandingOrder | undefined;
                 await mutateStandingOrders(db, async (orders) => {
-                    added = makeStandingOrder(parent, child, instruction, scope, teamId || undefined);
+                    added = makeStandingOrder(parent, child, instruction, scope, teamId || undefined, role || undefined);
                     return [...orders, added];
                 });
 
