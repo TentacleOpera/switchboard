@@ -6,11 +6,37 @@ Move 29 of the 32 protocol definitions into the store, delete one outright, and 
 
 One is deleted rather than migrated: **`improve-remote-plan` (8K)**. It cannot be executed in any configuration — see below.
 
-Two stay committed: `improve-plan` (16K) and `improve-feature` (12K). `CLAUDE.md:127` and `:130` treat `improve-plan`'s required-section schema as authoritative for all plan authoring, so an agent following `CLAUDE.md` with no connection to the user's machine — a cloud session working from a clone — must be able to read it unaided.
+Two stay committed **permanently**: `improve-plan` (16K) and `improve-feature` (12K). They are the default values of a user-facing extension point, not merely convenient defaults — see below.
 
 `.agents/workflows/` (4 files, 52K) stays committed and is unaffected. Those are the four user-typeable slash commands — the entry surface an agent reads before it can reach the API — and they are the bootstrap that makes row-delivered protocols reachable.
 
 This supersedes the destination chosen by `move-protocols-out-of-skill-discovery.md`. That plan's intent — get non-discoverable protocols out of the scaffold — was correct and is restored here. Its `.switchboard/protocols/` destination was unshippable, and the review fix that relocated them to `.agents/protocols/` solved shipping by abandoning the intent.
+
+### Why `improve-plan` and `improve-feature` can never be rows
+
+The Prompts tab (`kanban.html`, also served as the Agent Control panel via `data-view="agent-control"`) exposes two **user-editable path fields**:
+
+| Field | Default |
+| :--- | :--- |
+| `workflowFilePath` (`kanban.html:3464`) | `.agents/protocols/improve-plan/SKILL.md` |
+| `plannerFeatureWorkflowFilePath` (`:3568`) | `.agents/protocols/improve-feature/SKILL.md` |
+
+Both persist into `roleConfigs.planner.addons`, both have a **Validate** button, and the add-on tooltip is "Read a workflow file and follow it step-by-step". The plan field lists its alternatives explicitly:
+
+```
+.agents/protocols/improve-plan/SKILL.md          (Switchboard Native)
+.claude/get-shit-done/agents/gsd-planner.md      (GSD)
+.claude/superpowers/skills/writing-plans.md      (Superpowers)
+```
+
+**This is a third-party extension point.** The field is designed to accept any planning methodology file, and Switchboard's own protocol is one option among interchangeable ones.
+
+That makes row delivery impossible for these two, for a reason that does not depend on who is reading:
+
+- **The extension cannot inline or materialise a user-supplied path.** It does not own the content behind an arbitrary path and cannot assume a `control_plane` row exists for it. All it can do is emit the path and let the dispatched agent read it.
+- **Symmetry.** A "Workflow File Path" field that accepts a real path for GSD and Superpowers but a special-cased non-path for its own default is incoherent, and `Validate` would need a carve-out — precisely the asymmetry that rots.
+
+So these two are not a carve-out to be eliminated later. They are files because the feature's contract requires files. (`CLAUDE.md:127`/`:130` also cite `improve-plan`'s section schema as authoritative, which is a second, weaker reason pointing the same way.)
 
 ### Problem Analysis
 
@@ -158,7 +184,7 @@ Note `improve-plan` and `improve-feature` appear in two tiers: clipboard-offered
 
 **"Remote agents will lose access to protocols."** Two of them genuinely would, which is why two stay committed. A cloud session working from a clone has no extension, no clipboard and no proxy, and `CLAUDE.md` points it at `improve-plan`'s section schema as the authority for plan structure — so that body must be readable unaided. Everything else is reachable by one of the other two tiers: clipboard-inlined, or fetched over `GET /protocol/<name>` by any agent that can already reach the LocalApiServer. The failure mode to guard is a protocol *moving* between tiers without its references moving with it, which is what the prose test pins.
 
-**"Two committed files is an arbitrary carve-out."** It is derived, not chosen: they are the protocols `CLAUDE.md` cites as authoritative for work an agent does with no extension present. If `CLAUDE.md` stopped citing them — if plan structure moved into the workflow files, which are committed anyway — the carve-out would go to zero. That is a reasonable follow-up and deliberately out of scope here, because it changes what `CLAUDE.md` means rather than where a file lives.
+**"Two committed files is an arbitrary carve-out."** It is required, not chosen. They are the defaults of a user-editable path field whose documented purpose is accepting third-party methodology files (GSD, Superpowers). The extension cannot inline or materialise a path a user typed, so the field's contract requires real files — and its own default cannot be the one entry that is not one. This is permanent, not a step toward zero.
 
 ## Proposed Changes
 
@@ -194,6 +220,8 @@ Import from all three historical locations, hash-compare, preserve mismatches as
 - **`improve-remote-plan` is gone:** assert the directory does not exist, no `control_plane` row is seeded for it, and no reference survives in `src/`, `.agents/`, `CLAUDE.md` or `AGENTS.md`.
 - **`switchboard-remote.md` self-consistency:** assert the workflow names no protocol or path that its own section 7 premise ("no repo access — no git, no file system") makes unreachable. This is the general form of the bug, so it catches the next one.
 - **API tier:** `GET /protocol/<name>` returns the body for every row-class protocol, rejects an unknown name, and rejects a name containing traversal characters. Assert `improve-remote-plan` is fetchable this way, since its own Prerequisites guarantee the channel.
+- **The extension point still works:** with both fields at their defaults, assert `Validate` succeeds and a planner dispatch resolves each file. Then set each field to a third-party path (a GSD-style and a Superpowers-style file), assert `Validate` succeeds and the dispatch emits that path unchanged. Then set a nonexistent path and assert `Validate` fails cleanly. This is the contract that forbids row delivery for these two.
+- **Persisted config:** a user who saved `.agents/protocols/improve-plan/SKILL.md` before this change must still resolve after it — automatic once the files stay, but assert it rather than assuming, and keep the `RETIRED_WORKFLOW_PATH_MAP` entries for the older locations.
 - **Cloud tier (the correction this plan needed):** in a bare clone with no extension, no store, no cache and no network path to any machine, assert an agent can read `improve-plan/SKILL.md` and `improve-feature/SKILL.md` by the paths `CLAUDE.md` names. This is the scenario an earlier revision of this plan would have broken.
 - **No protocol path on the clipboard:** click "Copy prompt" for every row of `AGENT_API_CAPABILITIES` in both providers; assert no clipboard payload contains a filesystem path, and that each contains the protocol body inline. This is the assertion that keeps a pasted prompt working on a machine that is not the user's.
 - **Weaker-guarantee-wins:** assert `improve-plan` and `improve-feature` resolve as `inline`, since they are both clipboard-offered and extension-dispatched.
