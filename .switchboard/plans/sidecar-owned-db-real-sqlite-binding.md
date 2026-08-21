@@ -47,7 +47,6 @@ Not an aesthetic preference. The global-database and backup plans both rest on "
 
 - Changing the SQL dialect, the schema, or the DB file location. File format is unchanged; `.switchboard/kanban.db` stays where it is in this plan.
 - Consolidating per-workspace databases into one (separate plan).
-- Adding a remote/cloud backend (separate plan).
 - Fixing the `updateFeatureStatus` logic bug (separate plan — it survives this change).
 
 ## Metadata
@@ -59,15 +58,13 @@ Not an aesthetic preference. The global-database and backup plans both rest on "
 
 Yes — two decisions:
 
-1. **Binding choice.** Three candidates: `node:sqlite` (built into Node — no native module at all), `better-sqlite3` (synchronous, closest to existing call shapes, node-gyp prebuilds per ABI), and `@libsql/client` (N-API prebuilds, async-first, and the same client can later speak a remote protocol).
+1. **Binding choice.** Two candidates: `node:sqlite` (built into Node — no native module at all) and `better-sqlite3` (synchronous, closest to the existing call shapes, but node-gyp prebuilds per ABI).
 
-   **Recommendation: `node:sqlite`.** It is the only candidate with *no native dependency*, so there is no per-platform prebuild that can be missing at install time. That matters more here than anywhere else in the codebase: `node-pty` is already a native dependency, but it is guarded by `isPtyAvailable()` and its absence degrades to "no terminals". **A missing database binding has no graceful degradation — it means no product.** So the platform-coverage bar for this dependency is strictly higher than anything shipped natively so far, and eliminating the native module outright beats managing a matrix.
+   **Recommendation: `node:sqlite`.** It is the only option with *no native dependency*, so there is no per-platform prebuild that can be missing at install time. That matters more here than anywhere else in the codebase: `node-pty` is already a native dependency, but it is guarded by `isPtyAvailable()` and its absence degrades to "no terminals". **A missing database binding has no graceful degradation — it means no product.** So the platform-coverage bar for this dependency is strictly higher than anything shipped natively so far, and eliminating the native module outright beats managing a matrix.
 
    Cost: a Node >= 22.5 floor for the sidecar (`engines.node` is already `>=22.0.0`), and the API was experimental through 22.x before stabilising in 24.
 
    **Fallback if that floor is unacceptable:** `better-sqlite3`, accepting a *complete* prebuild matrix — Windows x64 and ARM64, macOS x64 and arm64, Linux glibc and musl — with no `isPtyAvailable`-style escape hatch to hide a gap.
-
-   **Explicitly NOT `@libsql/client`.** An earlier revision of this plan recommended it, reasoning that adopting it here would collapse the pluggable-backend plan into a config flip. That reasoning was wrong, and the error is worth recording so it is not repeated: the *seam* is what makes a future remote backend cheap — that is the entire function of a seam — so prepaying for it in the foundation is exactly what having one makes unnecessary. libSQL entered this programme to answer a hypothetical about a cloud database, and was then allowed to back-propagate into the most load-bearing plan in the set. The four drivers actually stated — stability, memory, storage location, one global store — are served by getting off `sql.js` onto *any* real binding. None of them is served by libSQL specifically. Pick the boring option here; keep libSQL as the right answer for the remote plan if that plan is ever scheduled.
 
 2. **Extension-host fallback.** When the sidecar is not running, does the extension host (a) start it, (b) degrade to read-only from a snapshot, or (c) fall back to opening sql.js directly? Recommendation: (a), with (b) as the failure path. (c) reintroduces the two-image clobber and should be rejected.
 
@@ -75,7 +72,7 @@ Yes — two decisions:
 
 ### Routine
 
-- Adding the binding dependency and a `SqliteDriver` wrapper exposing `run`/`all`/`get`/`prepare`/`transaction` over the ~460 existing call shapes.
+- Adding the binding dependency and a `SqliteDriver` wrapper exposing `run`/`all`/`get`/`prepare`/`transaction` over the existing call shapes (see the cursor-rewrite item below for the real count).
 - Deleting `_doPersist()`, `_persist()`'s debounce arming, `flushPersist()`, `_dirty`, and `_persistDebounceTimer` — writes become synchronous statements.
 - Deleting `_residentDbBudgetBytes`, `_summedResidentDbBytes()`, `_residentDbBytes()`, `startEvictionSweep()`, `_evictKey()`, `_evictArchiveKey()`, `_isActiveRoot()`, `setActiveWorkspaceRoot()` and their tests.
 - Deleting `_loadedMtime`, `_lastLoadedMtimes`, `_reloadIfStale()` — a single owner with WAL has no stale-image problem.
@@ -84,12 +81,12 @@ Yes — two decisions:
 
 ### Complex / Risky
 
-- **`_dataVersion` must survive.** `KanbanProvider` short-circuits no-op refreshes in O(1) off `getDataVersion()`, and it is currently bumped inside `_persist()`. With `_persist()` gone, every mutating method must bump it, or the board goes stale. This is the single easiest thing to get wrong: a missed bump is a silently stale board, and there are ~460 call sites to audit. Mitigation: bump inside the driver's `run`/`transaction` wrapper, not at call sites.
+- **`_dataVersion` must survive.** `KanbanProvider` short-circuits no-op refreshes in O(1) off `getDataVersion()`, and it is currently bumped inside `_persist()`. With `_persist()` gone, every mutating method must bump it, or the board goes stale. This is the single easiest thing to get wrong: a missed bump is a silently stale board, and there are ~780 touchpoints to audit. Mitigation: bump inside the driver's `run`/`transaction` wrapper, not at call sites.
 - **`last_insert_rowid()` semantics.** `:4094` does `SELECT last_insert_rowid() as id` as a separate prepared statement. That is connection-scoped and safe under sql.js's single connection; under a real binding with a transaction wrapper it must become the driver's `lastInsertRowid` from the same statement, or it can return another statement's id.
 - **Transaction semantics change.** The comment at `:2312` notes existing care around "BEGIN/COMMIT on sql.js's single shared connection". A real binding has real nested-transaction rules; every existing BEGIN/COMMIT block needs auditing against `SAVEPOINT` behaviour.
 - **Routing extension-host reads through HTTP.** 62 importing files currently call `KanbanDatabase` synchronously in-process. Making those calls cross a process boundary makes them async. Any synchronous call site in a `postMessage` arm becomes an await, and the verb return-contract ratchet (`scripts/check-verb-return-contract.js`) must still pass.
 - **Sidecar lifecycle.** Start, health-check, crash-restart, and version-match between extension and sidecar. A sidecar running older code than the extension must refuse to serve rather than silently mis-migrate.
-- **The cursor rewrite is the dominant cost, and it is unavoidable with every candidate.** Measured touchpoints in `KanbanDatabase.ts`: `.prepare(` 146, `.exec(` 156, `_db.run(` 150, `.free()` 117, `.step()` 109, `.getAsObject(` 102 — roughly 780, not the ~460 an earlier revision of this plan claimed. The `prepare` / `bind` / `step` / `getAsObject` / `free` triple is sql.js's **cursor** idiom:
+- **The cursor rewrite is the dominant cost, and it is unavoidable with either candidate.** Measured touchpoints in `KanbanDatabase.ts`: `.prepare(` 146, `.exec(` 156, `_db.run(` 150, `.free()` 117, `.step()` 109, `.getAsObject(` 102 — roughly 780 in total. The `prepare` / `bind` / `step` / `getAsObject` / `free` triple is sql.js's **cursor** idiom:
 
   ```js
   const stmt = this._db.prepare('SELECT value FROM config WHERE key = ? LIMIT 1', [key]);
@@ -97,11 +94,11 @@ Yes — two decisions:
   finally { stmt.free(); }
   ```
 
-  No other binding has that shape — `node:sqlite` and `@libsql/client` return batched rows, `better-sqlite3` offers `.get()`/`.all()`/`.iterate()`. So ~330 sites need their **loop shape** rewritten, not an `await` added. This cost is identical across all three candidates, so it is not a differentiator — but it is the real size of this plan, and it is why the complexity score is 10 rather than 9.
+  Neither candidate has that shape — `node:sqlite` returns batched rows and `better-sqlite3` offers `.get()`/`.all()`/`.iterate()`. So ~330 sites need their **loop shape** rewritten, not an `await` added. This cost is the same either way, so it is not a differentiator between the two — but it is the real size of this plan, and it is why the complexity score is 10 rather than 9.
 
   **Mitigation worth evaluating first:** a sql.js-shaped cursor shim — a `prepare()` that returns an object exposing `.step()` / `.getAsObject()` / `.free()` backed by a pre-materialised row array. That leaves ~330 sites untouched and makes the migration nearly mechanical. The risk is that it materialises result sets that currently stream lazily; only one `SELECT * FROM plans` lacks a `LIMIT`, so the exposure is small and auditable. Do not let the shim become permanent — it re-imports the O(result-set) memory shape this plan exists to remove.
 - **Async conversion is a much smaller problem than the cursor rewrite.** 217 public methods on `KanbanDatabase` are *already* `public async`. Exactly three sync methods touch `_db`: `dispose()`, `getConfigSync()`, and `getProjectConfigJsonSync()`. `getConfigSync` is already documented as best-effort — `KanbanProvider.ts:515` records that it "returns null while the DB is still loading at activation", and the constructor deliberately routes around it. `getProjectConfigJsonSync` is the genuine blocker, called at `KanbanProvider.ts:695` and `:775` inside tiered config resolution; those callers need either a cache or an async conversion.
-- **Latency.** The ~460 call sites assume microsecond in-memory reads. Over loopback HTTP, chatty N+1 patterns (e.g. `getWorktrees()` inside a board refresh) become visible. Read paths that run per-card must be batched before this ships.
+- **Latency.** The ~780 sql.js touchpoints assume microsecond in-memory reads. Over loopback HTTP, chatty N+1 patterns (e.g. `getWorktrees()` inside a board refresh) become visible. Read paths that run per-card must be batched before this ships.
 
 ## Edge-Case & Dependency Audit
 
@@ -124,7 +121,7 @@ Yes — two decisions:
 ## Dependencies
 
 - None upstream. This plan is the base of the storage program.
-- Blocks: the global-single-database plan, the pluggable-backend plan, and (partially) the single-instance/clobber plan.
+- Blocks: the global-single-database plan and (partially) the single-instance/clobber plan.
 
 ## Adversarial Synthesis
 
@@ -136,7 +133,7 @@ Yes — two decisions:
 
 ## Proposed Changes
 
-1. **`src/services/sqliteDriver.ts` (new).** A thin driver interface — `run`, `get`, `all`, `prepare`, `transaction`, `close`, `lastInsertRowid` — with a `node:sqlite` implementation. Bumps `_dataVersion` on every mutating call. The interface is the seam the (unscheduled) pluggable-backend plan would implement a second time — defining it here is worth doing for testability alone, independently of whether a second backend is ever built.
+1. **`src/services/sqliteDriver.ts` (new).** A thin driver interface — `run`, `get`, `all`, `prepare`, `transaction`, `close`, `lastInsertRowid` — with a `node:sqlite` implementation. Bumps `_dataVersion` on every mutating call. A thin interface rather than a full repository abstraction — it exists to keep the ~780 sql.js touchpoints funnelling through one place, not to support alternative backends.
 2. **`src/services/KanbanDatabase.ts`.** Replace the sql.js handle with the driver. Delete `_doPersist`, `_persist` debounce, `flushPersist`, `_dirty`, `_persistDebounceTimer`, `_loadedMtime`, `_reloadIfStale`, and the whole eviction/budget subsystem. Set WAL pragmas at open.
 3. **`src/standalone/bootstrap.ts`.** The sidecar becomes the sole DB owner; construct the driver here.
 4. **`src/services/LocalApiServer.ts`.** Expose the DB verbs the extension host now needs, validated through `verbSchemas.ts`.
@@ -155,7 +152,7 @@ No user-data migration. Ship-order safety: the sidecar must refuse to serve an e
 - **Data version:** a regression test asserting every mutating public method bumps `getDataVersion()`. Generated from the method list so it cannot drift.
 - **Concurrency:** two sidecar clients writing different plans in a loop for 60s; assert no lost writes and no `SQLITE_BUSY` escapes.
 - **Rollback:** WAL-enabled DB, run the downgrade pragmas, assert sql.js can still open it.
-- **Dialect parity:** assert the 18 `rowid` sites, `last_insert_rowid()` (`:4094`), the 6 `PRAGMA` uses, 13 `AUTOINCREMENT` columns and 15 `datetime('now')` calls behave identically under the new binding as under sql.js. All three candidates are SQLite, so this should be a formality — run it anyway, because "should be" is the assumption the whole binding choice rests on, and `node:sqlite`'s API surface is narrower than sql.js's.
+- **Dialect parity:** assert the 18 `rowid` sites, `last_insert_rowid()` (`:4094`), the 6 `PRAGMA` uses, 13 `AUTOINCREMENT` columns and 15 `datetime('now')` calls behave identically under the new binding as under sql.js. Both candidates are SQLite, so this should be a formality — run it anyway, because "should be" is the assumption the whole binding choice rests on, and `node:sqlite`'s API surface is narrower than sql.js's.
 - **Existing suite:** the ~220-file test suite must pass, with the eviction/persist tests deleted rather than skipped.
 
 ## Outstanding Questions

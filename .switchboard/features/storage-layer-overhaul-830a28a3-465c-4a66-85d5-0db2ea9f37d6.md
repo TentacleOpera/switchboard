@@ -8,9 +8,9 @@ description: 'Storage layer overhaul: real engine, one global store, durable per
 
 Replace the storage foundation underneath the Switchboard board. Today `kanban.db` is a `sql.js` image held entirely in RAM, rewritten in full on every write, living inside the repository, with one database per workspace. That single set of choices is the shared root cause of five separate problems: silent whole-database clobber between concurrent in-memory images, a 500 MB resident budget plus an LRU eviction subsystem and six enumerated leak mechanisms for a metadata-only schema, an entire location-guard/`db-pointer`/workspace-mapping apparatus that exists only to answer "which database does this folder use?", no coherent story for long-term persistence across projects, and ~900K of extension-shipped control-plane content committed into every repository Switchboard touches.
 
-The end state: one global SQLite database in `~/.switchboard`, owned by a single sidecar process using a real SQLite binding with WAL, holding every workspace at once, with verified backups, per-project export/import, a defined retention policy, and an optional libSQL remote backend for anyone who wants their board state in a cloud database without losing offline operation.
+The end state: one global SQLite database in `~/.switchboard`, owned by a single sidecar process using a real SQLite binding with WAL, holding every workspace at once, with verified backups, per-project export/import, a defined retention policy, and the control-plane scaffold out of the repository entirely.
 
-Deliberately **not** Postgres. The measured dialect coupling (18 load-bearing `rowid` sites, 13 `AUTOINCREMENT`, 6 `PRAGMA`, 15 `datetime('now')`), the loss of offline operation, and a mandatory data migration across ~4,000 installs buy nothing that a real SQLite binding does not already deliver. What is worth taking from the hosted tools is the *data model* — one store, many projects, stable ids, cross-project views — not the deployment model.
+Deliberately **not** a networked database of any kind. The measured dialect coupling (18 load-bearing `rowid` sites, 13 `AUTOINCREMENT`, 6 `PRAGMA`, 15 `datetime('now')`), the loss of offline operation, and a mandatory data migration across ~4,000 installs buy nothing that a real SQLite binding does not already deliver. What is worth taking from the hosted tools is the *data model* — one store, many projects, stable ids, cross-project views — not the deployment model.
 
 ## How the Subtasks Achieve This
 
@@ -22,7 +22,6 @@ Deliberately **not** Postgres. The measured dialect coupling (18 load-bearing `r
 - **Retention and archive policy for a global database that never gets deleted**: consolidation plus long-term persistence removes both mechanisms that used to bound database size. Ships size reporting first, then a rotation policy for the four append-only tables, with dormant-workspace archival — non-destructive throughout.
 - **Retire the Google Drive, Dropbox and iCloud database-path presets**: a file-sync folder cannot hold a database that is rewritten whole on every write, and the codebase already names "stale image restored from a .tmp/backup" as the cause of its blank-board failure. Migrates anyone currently on a preset into the global store and removes the mechanism.
 - **Get the control-plane scaffold out of the repository**: the one the user actually feels. `.agents/` (744K, ~51 files) and the `.claude/` mirror (152K) are extension-shipped content, byte-identical in every workspace, and committed — neither appears in `.gitignore`. Makes the store authoritative for control-plane definitions and the on-disk tree a gitignored, regenerated projection, because agent hosts discover capability by globbing the filesystem rather than calling an API. Also relocates seven machine-local JSON config files into the `config` table and moves the caches out of the repo. Independent of the engine work, so it could ship first.
-- **Pluggable storage backend with libSQL as the one supported remote option** *(NOT SCHEDULED — costed, not queued)*: Extracts a repository-level seam (there is none today — 222 public methods and ~460 call sites in one 10,820-line class) and turns on an embedded local replica, giving genuine cloud persistence with local-speed reads and full offline operation. One blessed provider, not bring-your-own connection string. It entered this set to answer a hypothetical rather than a stated driver, and `NotionBackupService` already provides a cloud mirror of plans — which is what most people asking for cloud storage actually want. The repository seam it extracts is worth building regardless; the remote backend waits for real demand.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
@@ -34,7 +33,6 @@ Deliberately **not** Postgres. The measured dialect coupling (18 load-bearing `r
 - [ ] [Retention and archive policy for a global database that never gets deleted](../plans/retention-and-archive-for-unbounded-growth.md)
 - [ ] [Retire the Google Drive, Dropbox and iCloud database-path presets](../plans/retire-cloud-file-sync-db-path-presets.md)
 - [ ] [Get the control-plane scaffold out of the repository](../plans/control-plane-scaffold-out-of-the-repo.md)
-- [ ] [Pluggable storage backend with libSQL as the one supported remote option](../plans/pluggable-storage-backend-libsql-remote.md)
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -53,13 +51,10 @@ Ordering is load-bearing here, unusually so — two of the constraints are data-
 5. *Retention and archive* is a direct consequence of (4) and needs its measurement surface shipped before any policy is set.
 6. *Retire the cloud presets* is cheapest after (4), because a synced database then becomes just one more merge source rather than needing bespoke relocation code.
 
-**Tier 4 — the optional endpoint:**
-7. *Pluggable backend + libSQL* is **not scheduled**. If it ever is, it requires (1), (2), (3) and (4): the seam it extends is introduced by (1), a shared database needs (2), seeding and promotion use (3)'s export machinery, and (4)'s topology *is* the remote topology. Its real cost is operational — distributed migrations, conflict policy, replication lag, token handling — not the driver.
-
 **Independent, and the best candidate to ship first:** *Get the control-plane scaffold out of the repository* needs only a store, and the current per-workspace one suffices. If it ships before consolidation the registry lives in the per-workspace DB and migrates along with everything else; if after, it lands in the global store directly. Either order works.
 
 **Programme-wide boundary rule, introduced by the scaffold plan:** the store may hold control-plane definitions as bodies; it must never become the sole home of a user artifact. This is load-bearing rather than aesthetic — the consolidation and backup subtasks both rest on the database being a derived index over committed markdown, so plan identity survives total loss by re-ingesting the repo. Control-plane definitions are regenerable from the extension bundle; plans are regenerable from nothing. It also bounds the engine problem: 744K of protocol text in a sql.js image is tolerable, whereas the 43M in `plans/` would mean ~129M of transient copies on every single write.
 
 **Independent:** *Single-instance enforcement + the `is_feature` clobber fix* can ship at any point, including first. Its stale-image half is largely superseded by (1), but the `updateFeatureStatus` wrong-row bug is unaffected by every other subtask here and should not wait on them.
 
-One caution on read paths: the ~460 existing call sites assume microsecond in-memory reads, so the per-card N+1 patterns need auditing and batching before (1) routes extension-host reads over a process boundary, and again before (7) introduces any network round-trip.
+One caution on read paths: the ~780 existing sql.js touchpoints assume microsecond in-memory reads, so the per-card N+1 patterns need auditing and batching before (1) routes extension-host reads across a process boundary.

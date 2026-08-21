@@ -93,7 +93,6 @@ Yes — three decisions:
 - **Hard prerequisite:** the sidecar/real-binding plan. Consolidation under `sql.js` is a data-loss event.
 - **Hard prerequisite:** the unscoped-tables plan. `worktrees.branch UNIQUE` makes consolidation literally impossible.
 - **Hard prerequisite:** the backup/per-project-export plan, because of the blast-radius inversion.
-- **Enables:** the pluggable-backend plan (this is already the cloud topology).
 
 ## Adversarial Synthesis
 

@@ -22,7 +22,7 @@ Backup was implemented as an incidental write alongside persistence, at a time w
 
 ### Non-goals
 
-- Cloud/remote backup destinations (the pluggable-backend plan covers remote storage; `NotionBackupService` already provides a cloud mirror of plans).
+- Cloud/remote backup destinations. `NotionBackupService` already provides a cloud mirror of plans, which covers durability-and-access without making the network a dependency.
 - Backing up the markdown. That is git's job and it already does it.
 - Cross-user merge of imported projects. Import targets a workspace id that does not already exist, or refuses.
 
@@ -67,7 +67,7 @@ Yes — two decisions:
 
 **Side effects**
 - Removing `_writeKanbanStateBackup` from the persist tick changes nothing user-visible but does remove a write per card move.
-- Export gives a second, sanctioned way to move a project between machines, which partially overlaps the remote-backend plan. That is fine — one is sync, one is transfer.
+- Export gives a sanctioned way to move a project between machines, which is what replaces the multi-device story the cloud-path presets were reaching for.
 
 **Migration**
 - No schema change to user data. Any pre-existing `kanban-state` backup files written by the old path should be left in place, not deleted, and listed in the UI if they parse.

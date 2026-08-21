@@ -18,7 +18,7 @@ Concurrency control does not help: it is only an mtime baseline (`_loadedMtime`,
 
 ### Root Cause
 
-The feature answers a real need — multi-device access to one board — with the only mechanism available at the time. The need is now served properly: the global home store gives one board per machine, and the pluggable-backend plan gives a genuine remote database with an offline-capable local replica. The preset is a workaround whose replacement has arrived.
+The feature answers a real need — multi-device access to one board — with the only mechanism available at the time. The need is now served properly: the global home store gives one board per machine, per-project export moves a project between machines deliberately, and `NotionBackupService` already mirrors plans to the cloud for durability and access. The preset is a workaround whose replacements have arrived.
 
 ### Non-goals
 
@@ -78,7 +78,7 @@ Yes — one decision. For users currently pointed at a synced folder: migrate th
 
 **"Just warn instead of removing."** A warning on a mechanism with no safe operating mode is an invitation to lose data with informed consent. The presets are product-constructed paths, so their removal is unambiguous and complete; the heuristic warning is reserved for custom paths, where the product cannot be certain.
 
-**"Wait until the remote backend ships so there is a replacement first."** Tempting, but the presets are actively causing the blank-board failure now, and the global-store move already provides a safe destination. The remote backend is the better replacement for the multi-machine case and can follow.
+**"Remove them only once there is a replacement."** There already is one: the global store is a safe destination, and per-project export covers moving a project between machines. Meanwhile the presets are actively producing the blank-board failure, so waiting has a running cost.
 
 ## Proposed Changes
 
