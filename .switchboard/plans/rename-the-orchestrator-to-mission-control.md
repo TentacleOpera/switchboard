@@ -1,8 +1,8 @@
-# Rename the orchestrator to the operator
+# Rename the orchestrator to Mission Control
 
 ## Goal
 
-Rename the orchestrator persona to *operator*, because its actual role — track progress, notice stalls, nudge, escalate — is operating the board, not orchestrating the work. The name promises a driver and the design deliberately built a monitor.
+Rename the orchestrator persona to **Mission Control**, because its actual role — track progress, notice stalls, nudge, escalate — is watching a field, not orchestrating the work. The name promises a driver and the design deliberately built a monitor.
 
 ### Problem Analysis
 
@@ -35,7 +35,11 @@ The persona was named for the ambition — coordinate multiple teams — and the
 
 ## User Review Required
 
-- **"Operator" or something else?** The protocol's own language suggests *operator* (it repeatedly contrasts the persona with "the operator" as the human — `:244` says "the operator wants to walk away", which would collide). If the human is already called the operator in the docs, this rename creates an ambiguity and a different word is needed — *monitor*, *supervisor*, *watch*. **This needs settling before any renaming, because the collision is in the very text that justifies the rename.**
+- **Decided: Mission Control.** An earlier revision proposed *operator* and flagged a collision: the protocol already uses "the operator" for the human (`:244`, *"the operator wants to walk away"*), so renaming the persona to operator would make its own justifying sentences ambiguous. **Mission Control names the station, not the person** — the human stays the operator, the persona becomes the surface they watch. The collision disappears rather than being worked around.
+
+  It is also the branded fit. The product's second homepage illustration is `agent-fleet-air-combat-detailed.svg` — a radar scope with tagged interceptors (CLAUDE, DEVIN, GEMINI, OLLAMA) pinging around the central Switchboard saucer, amid range rings and distant contacts, under the heading *"Your terminals, on autopilot."* That is an air-traffic scope: you watch tagged aircraft on a field, you do not fly them. Which is the persona's contract exactly — and the protocol's own line, *"a resident orchestrator over a one-at-a-time pipeline is a manager watching a manager"* (`:244`), is a sentence about a radar operator.
+
+  And it gives the cluster one naming spine: missions on the board, a `missions` panel, a Mission Control dock (`feature_plan_20260808220200_shell-right-agent-dock-terminal.md`), and Mission Control as the persona. Streams read as lanes on a scope, which is what the art already draws.
 - **How far does the rename reach?** Proposed: protocol filenames, UI labels and prose everywhere; config keys and on-disk paths **only with migration**. A prose-and-labels-only rename is a legitimate cheaper option.
 
 ## Complexity Audit
@@ -72,15 +76,15 @@ The persona was named for the ambition — coordinate multiple teams — and the
 
 ## Adversarial Synthesis
 
-**"It's just a name — 1,067 occurrences of churn for nothing."** Names set expectations, and this one already misled a design discussion into treating the persona as the pipeline driver. That said, the argument for the *cheap* version is strong: prose, labels and protocol filenames carry nearly all of the expectation-setting, while config keys and on-disk paths carry almost none and hold all the migration risk.
+**"It's just a name — 1,067 occurrences of churn for nothing."** Names set expectations, and this one already misled a design discussion into treating the persona as the pipeline driver. It is also no longer only a correction: with missions as the unit of work, Mission Control is the term the rest of the product now implies, so the alternative is a persona named after a job the system no longer describes. That said, the argument for the *cheap* version is strong: prose, labels and protocol filenames carry nearly all of the expectation-setting, while config keys and on-disk paths carry almost none and hold all the migration risk.
 
 **"Rename the concept and keep the identifiers."** Genuinely defensible, and the recommended v1: users and agents read prose and labels, not config keys. `orchestratorArmed` staying is a mild internal inconsistency; a botched reports-directory migration loses queued work.
 
-**"The persona should just be given dispatch authority so the name is true."** That inverts a documented decision made to prevent unattended side effects — `:244` calls it out by name. If that decision is ever revisited it should be on its own merits, not to justify a name.
+**"The persona should just be given dispatch authority so the name is true."** That inverts a documented decision made to prevent unattended side effects — `:244` calls it out by name. If that decision is ever revisited it should be on its own merits, not to justify a name. Note this argument dissolves under the new name: Mission Control is *supposed* to watch, so there is no gap between the name and the contract to close.
 
 ## Proposed Changes
 
-1. **Settle the target word first**, given the possible collision with "operator" as the human in the protocol's own text.
+1. **Target word settled: Mission Control.** No collision with "the operator" as the human, which stays as-is throughout.
 2. **v1 — prose, labels, protocol filenames:** rename the persona in all protocol text, comments and UI labels; rename the protocol directories and update the by-path references (`TaskViewerProvider.ts:11230`), adding `RETIRED_WORKFLOW_PATH_MAP` entries.
 3. **v2 — identifiers, only if wanted:** config keys with dual-read, the reports directory with dual-read, and `/orchestration/*` route aliases.
 4. **No global replace.** Distinguish the persona, the human, and the generic word case by case.
@@ -100,13 +104,12 @@ v1: `RETIRED_WORKFLOW_PATH_MAP` entries for renamed protocol paths. v2 adds dual
 ### Automated Tests
 
 - **Every protocol path resolves:** assert each `.agents/protocols/...` string literal in `src/` names an existing file. This catches the silent dispatch-time failure that a filename rename causes, and it is the single most valuable test here.
-- **No persona-as-orchestrator in user-facing text:** assert UI labels and protocol prose are clean, with an explicit allowlist for occurrences that mean the human or the generic word — the allowlist being the honest record of where the word legitimately survives.
+- **No persona-as-orchestrator in user-facing text:** assert UI labels and protocol prose are clean, with an explicit allowlist for occurrences that mean the human or the generic word — the allowlist being the honest record of where the word legitimately survives. Note "the operator" meaning the *human* must survive untouched, and a rename pass that also rewrites those is the likeliest over-reach.
 - **Retired paths map:** assert old protocol paths resolve through `RETIRED_WORKFLOW_PATH_MAP`, and that the three pre-existing generations still do.
 - **(v2) Dual-read:** assert a stored `orchestratorArmed` and a populated `.switchboard/orchestrator/reports/` are both still honoured after the rename. Without this, a rename silently orphans queued reports.
 - **(v2) Route aliases:** assert `/orchestration/*` still responds.
 
 ## Outstanding Questions
 
-- **[user]** Which word, given the likely collision with "operator" as the human?
 - **[user]** v1 only (prose, labels, protocol files), or v2 as well (config keys, paths, routes)?
 - How many of the 1,067 occurrences mean the human or the generic word rather than the persona? That count decides whether the mechanical pass is an afternoon or a week, and it is worth taking before committing to v2.
