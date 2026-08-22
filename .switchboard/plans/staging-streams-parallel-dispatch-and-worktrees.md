@@ -1,4 +1,4 @@
-# Staging streams: turn dispatch analysis into a stage map, and dispatch it in parallel
+# Mission cards: turn dispatch analysis into a stream map on a card, launched from the board
 
 ## Goal
 
@@ -46,6 +46,28 @@ The analysis was built to answer the safe question — "which of these can I fir
 **Tags:** backend, database, api, ui, reliability
 
 ## User Review Required
+
+### The carrier is a mission card, not a run parameter
+
+The map lives on a **mission card**: a board card the analysis writes, holding the streams and their order, which **launches the run when advanced**. That replaces two earlier designs — a per-run parameter store, and an inbox instruction to set it — and dissolves the questions both raised:
+
+- **Storage** — a card is a plan file plus a DB record. No `orchestrationConfig`-vs-`workspaceState` decision, and no new run-parameter store. (`workspaceState` was disqualified anyway: `autoban.state` lives in `this._context.workspaceState` (`TaskViewerProvider.ts:1452`), reachable only from inside the extension host — invisible to an external orchestrator and to the standalone host.)
+- **Channel** — a card is created by writing markdown into the plans directory, which the watcher imports automatically with no git precondition. So the file-based tier works **by default**: a sandboxed orchestrator that cannot reach the API needs no endpoint and no new inbox instruction kind. An API-capable one can POST instead. Both reachability tiers, existing machinery.
+- **Visibility** — the map stops being invisible DB state. It can be read, reordered and deleted like any card, and its staleness is inspectable rather than inferred.
+- **Trigger** — advancing a card is already the system's universal "start this" gesture, with UI that exists.
+
+**It must not be a feature, and nesting is actively refused.** `linkFeatureSubtasksByPaths` *"never writes `is_feature=0` onto a row that is itself a feature (**nested-feature**)"*, and the project side guards too (`subtask_project_governed_by_feature`). Three further reasons the feature machinery would fight it:
+- `feature_id` is a single parent pointer — a two-level tree, not three.
+- `recomputeFeatureComplexity` is max-of-active-subtasks and does not recurse, so a super-feature's complexity would be meaningless.
+- **The cascade is the wrong semantics.** `cascadeFeatureByPlanId` moves the feature *and every active subtask* to the same column atomically. Advancing a mission card must start **stream heads only** — not drop every chain into a coding column at once.
+
+So a mission card **references without owning**: members keep their own `feature_id` (or none) and are linked by `stream_id`. No nesting, no cascade, no derived complexity.
+
+### The launch modal is a decision dialog, not a confirm gate
+
+Advancing a mission card fans out — teams seated, worktrees provisioned, N cards dispatched. That needs a modal, and the form is constrained by a hard project rule: **plain confirm gates are banned, multi-choice decision dialogs are allowed.** A launch modal is the latter — it presents the streams and takes choices (which streams, which teams, how many worktrees), so it is a configuration step, not an "Are you sure?".
+
+**It must not use `window.confirm()`.** That is a silent no-op in a VS Code webview (sandboxed iframe without `allow-modals`, always returns `false`) — the bug that broke the kanban delete-plan button. The codebase contains zero `confirm()` calls and two comments recording why (`kanban.html:12121`, `:12964`). Build it as a custom in-webview modal on the existing pattern: `feature-create-modal` / `openFeatureCreateModal` (`:11493`) / `closeModal` (`:11216`).
 
 - **Decided: stream id + sequence**, not a single stage number. Records the chain identity as well as the order, which is what the operator's detection and reporting need — "stream 3 is blocked at step 2" is answerable; "stage 2 is blocked" is not.
 - **A stream/sequence pair is the recommendation, not `base_branch`.** `queue_position` is documented as "a 1-based sort key" assigned append-from-`MAX+1` (`KanbanDatabase.ts:508-516`) — a total order that never ties by construction, so encoding stages as equal positions would overload a sort key with grouping semantics nothing reads. And `base_branch` expresses *one* predecessor, which cannot express "these four run together, then those two." So: `stream_id` + `stream_seq` columns carry the map, `queue_position` remains the tiebreak among cards at the same sequence, and `base_branch` becomes **derived** — a card at sequence *n* cuts from the merged result of sequence *n-1* in its own stream. This reverses an earlier recommendation of `base_branch` as the encoding.
@@ -111,7 +133,10 @@ Advice remains strictly more capable than a rule for the *decision*: it can say 
 5. **`queue/next` gates on stage**: refuse a card whose stage predecessors are incomplete, with its own test.
 6. **Derive `base_branch`** from the stage: a later stage's worktree cuts from the previous stage's merged result.
 7. **Analyze control in the STAGING header** as well as Planned.
-8. **Expose the map to the operator**: a read path returning streams, their depth, and each card's `stream_id` / `stream_seq`.
+8. **The mission card is the carrier.** Analysis writes it as a plan file (file tier, works sandboxed) or via the API; it holds the streams and their order. Members are linked by `stream_id`, never re-parented. A new card kind — not a feature, no cascade, no derived complexity.
+8a. **Mission card UI**: the card renders its streams and depth on the board, and its launch modal is a custom in-webview decision dialog (streams to activate, team per stream), never `window.confirm()`.
+8b. **Advance is idempotent.** Moving the card twice must not double-seat teams or double-dispatch. This is the one behaviour on the board where a card's move fans out beyond itself, so it needs an explicit guard rather than relying on the user not doing it.
+8c. **Expose the map to the operator**: a read path returning streams, their depth, and each card's `stream_id` / `stream_seq`.
 9. **Sequential stays the default; the handoff sequence generalises from one team to N.** `## The handoff sequence` (`:252-266`) is already scope → launch → stage → dispatch card one → report and exit. For streams it becomes:
    1. **Scope** — read the map.
    2. **Advise and stop** — streams available, what running several costs, where the map is weakest. The user confirms which streams to run. *(The only genuinely new step.)*
@@ -147,6 +172,10 @@ Additive nullable column. A plan with no stage behaves as today.
 - **Dependency cycle reported:** declare A→B→A; assert an input error, not an arbitrary order.
 - **Features stay whole:** a feature with subtasks gets one stage on the feature card and none on subtasks; assert no subtask is staged independently.
 - **Nullable columns are inert:** with no map, the queue behaves byte-identically to today.
+- **No confirm gate, and the modal is not `confirm()`:** assert the launch path contains no `window.confirm(`/`confirm(` call and that the modal is a real in-webview element. Both halves — a `confirm()` implementation would pass a "modal exists" check while doing literally nothing, which is precisely the shipped bug this rule was written from.
+- **Advance is idempotent:** advance the mission card twice; assert one set of teams, one set of worktrees, one dispatch per stream.
+- **Mission card is not a feature:** assert it does not set `feature_id` on its members, does not cascade on move, and is not counted in feature complexity derivation.
+- **Sandboxed creation path:** create a mission card by writing only a plan file, with no API call; assert it imports and is launchable. This is the tier that makes the design work for a sandboxed client, and it is the one nobody will test by hand.
 - **Advice degrades to a question:** with no map, assert the opening proposal says so and offers to run Analyze, rather than silently omitting the subject. With a map, assert it states stream count and depth. There is no mode to assert, which is the point — advice has no dead-control failure mode.
 - **Operator writes run state, never user settings:** assert no operator path writes `feature_worktree_mode` or `orchestration_prior_feature_worktree_mode`, and that the run parameters it *does* write do not persist past the session. This is the test that distinguishes legitimate execution from the deleted forcing machinery, and asserting "writes nothing" instead would forbid the handoff the operator already performs.
 - **Nothing to restore after a crash:** kill the session mid-run and assert no user setting was changed and no stash key is populated. The precise failure the strategy contract was written for, checked against the new run parameters rather than the old forced setting.
@@ -160,7 +189,7 @@ Additive nullable column. A plan with no stage behaves as today.
 ## Outstanding Questions
 
 - **[user]** Analyze on both headers confirmed?
-- **[user]** Where does the per-run stream parameter live? It must not be a stored user preference (see above) — session state on `orchestrationConfig` or the run record are the candidates. This is the one storage decision the strategy contract constrains.
+- Which column does a mission card live in, and which advance launches it? STAGING is where the streams already sit; a mission card in the same column as its members may read oddly. Its own lane, or a distinct card style in STAGING?
 - With several streams free and the user having approved parallel work, does the operator still pick per wake, or does the user name the streams up front? The protocol's *"assess both, act on what is free"* was written for two lanes; at five it is ambiguous. Naming them up front keeps the choice with the user and needs no rule.
 - What content signal makes the staleness check reliable — plan-file mtime, a hash of the declared file sets, or the plan set alone? mtime is cheap and noisy; a hash is accurate and needs the analysis to record more.
 - Does anything today read `queue_position` in a way that assumes uniqueness? The migration comment calls it a 1-based sort key; if a consumer assumes no gaps or no ties, adding a stage dimension beside it needs that consumer checked.
