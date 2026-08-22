@@ -63,7 +63,19 @@ Neither ends anything. `#strip-orchestrator` is the only button in the rail whos
 
 **What stop actually does, verified:** it disarms the session and archives it, and **deliberately leaves the terminal alive**. `TaskViewerProvider.ts:11668-11670` states why: *"This intentionally differs from stopOrchestratorFromKanban (which leaves the terminal alive because a running agent might have uncommitted context)."* Only `/handoff` closes the seat, and only because the persona has just posted its report so *"there is nothing in-flight to lose."*
 
-That is a **session** end, not a terminal kill — which is precisely why it reads wrong as an unlabelled toggle and reads fine as a labelled control. Recommending stop move to a labelled control in the Mission Control panel ("End controller session"), where the words can say what it does. No confirmation dialog is available (project rule, and `confirm()` is inert in a webview), so the label is the whole protection — and a nav-rail icon cannot carry one.
+That is a **session** end, not a terminal kill — which is precisely why it reads wrong as an unlabelled toggle and reads fine as a labelled control. So stop moves to a labelled control in the Mission Control panel ("End controller session"), where the words can say what it does. No confirmation dialog is available (project rule, and `confirm()` is inert in a webview), so the label is the whole protection — and a nav-rail icon cannot carry one.
+
+**And that control is required, not optional — because `/handoff` is not an exit.** It exists and is fully wired (route `LocalApiServer.ts:6157`, handler `:4639`, implementation `handoffOrchestrationSession` at `TaskViewerProvider.ts:11585`, with a contract test suite asserting the persona documents `## The handoff sequence`). But read what it does: it is *"hand off orchestration to a coding lead and exit"* — a **graduation**, permitted only when the pipeline can run without the controller. It refuses with 409 in five cases:
+
+1. already handed off;
+2. **the session is armed** (`orchestratorArmed`) — *"cannot hand off an armed session"*;
+3. no live coding head — *"handoff requires an active lead to pace the pipeline"*;
+4. self-reported `stagedCount <= 0`;
+5. no dispatchable top-level STAGING cards, verified against the board rather than trusted from the caller — the comment explains that a handoff off an empty queue *"would exit the orchestrator having handed the lead nothing it will actually be given, which is the outage this gate exists to refuse."*
+
+So handoff cannot end an armed session, a session with no lead, or a session with an empty queue — which is to say it cannot end any session that has gone wrong. The rail toggle is currently the **only** general way out. Removing it without landing the panel control first would leave a controller session with no exit at all.
+
+**Sequencing, therefore:** the labelled panel control ships *before or with* the rail button's change of meaning, never after.
 
 **The guard still needs the disarmed-but-alive state**, wherever stop lives. After a stop there is a terminal but no seat: neither "no terminal" nor "live controller". A start in that state must re-seat the existing terminal, because the name is taken and the collision loop would otherwise increment. This is the likeliest duplicate path in practice — stop, then start from any surface — and a naive "is there a live seat?" check misses it exactly.
 
@@ -92,7 +104,7 @@ That is a **session** end, not a terminal kill — which is precisely why it rea
 
 **Side effects.** The rail button changes meaning: today a lit press ends the session, after this it reveals. That is a deliberate behaviour change to a shipped control, and the only one here — worth calling out in release notes, since a user who has learned the toggle will expect stop. The compensating control is the labelled one in the panel, so the capability is not lost, only moved somewhere it can be read.
 
-**Ordering.** Independent and shippable now. It is a **precondition** for the Mission Control surfaces: the panel, the dock and the rail button all reach the same start path, and three entry points over an unenforced singleton is three ways to break it.
+**Ordering.** Internally ordered: the panel's stop control precedes the rail button's change of meaning, or there is a window with no way to end a session. Otherwise independent and shippable now. It is a **precondition** for the Mission Control surfaces: the panel, the dock and the rail button all reach the same start path, and three entry points over an unenforced singleton is three ways to break it.
 
 ## Dependencies
 
@@ -118,7 +130,8 @@ That is a **session** end, not a terminal kill — which is precisely why it rea
 2c. **Source the global fact from somewhere global** — `globalState` or the service's in-process registry, not `workspaceState`, which cannot answer it.
 3. **Reclaim, do not refuse, when the named terminal is dead** — a stale name must not lock the role out.
 4. **Demote the client flag** to a UI affordance (disable the button while a start is pending); it is no longer the guard.
-4a. **Make the rail button navigational.** Dimmed → start; lit → reveal, matching every other button in the rail. Stop moves to a labelled control in the Mission Control panel, since no button in a nav rail can say what it does.
+4a. **Add a labelled stop to the Mission Control panel** ("End controller session"). This lands **before or with** 4b — `/handoff` refuses armed, lead-less and empty-queue sessions, so the rail toggle is today's only general exit.
+4b. **Make the rail button navigational.** Dimmed → start; lit → reveal, matching every other button in the rail.
 5. **Report pre-existing duplicates** rather than removing them — scrollback may matter.
 6. **Verify the standalone creation path** routes through the same `create()`.
 
@@ -143,6 +156,7 @@ None. Existing duplicates are reported, not deleted.
 - **Stop-then-start re-seats, never duplicates:** press stop, assert the terminal survives (per `:11668`), then call start from a *different* surface and assert the same terminal is re-seated with no `orchestrator-2`. This is the realistic duplicate path and the one a naive "is there a live seat?" check would miss, because after stop there is no seat but there is a terminal.
 - **Global, not per workspace:** with two control-plane roots open, start from each; assert one controller total. Asserting per-root uniqueness would pass while violating the requirement.
 - **The rail button never stops:** press it while lit and assert it navigates — no `/orchestration/stop` call from any rail path. This is the behaviour change, so it needs the test that would fail today.
+- **The panel can end any session handoff refuses:** arm a session, then assert `/handoff` 409s while the panel's stop succeeds. This is the pair that proves the exit exists — testing stop alone would pass even if handoff were the only route.
 - **An adopted controller blocks creation:** adopt an ordinary terminal into the seat, then call start; assert no new terminal. A role scan alone passes this test wrongly, because the adopted terminal's role is not `orchestrator`.
 - **The PM key is the same singleton:** create a `project_manager` seat, then start the controller; assert one, not two. Two separate set entries would fail this while looking correct.
 - **Collision loop intact for others:** create three coders; assert `coder-2` and `coder-3`.
@@ -151,5 +165,4 @@ None. Existing duplicates are reported, not deleted.
 
 ## Outstanding Questions
 
-- **[user]** Does stop belong in the Mission Control panel as a labelled control, or should `/handoff` be the only way to end a session? Recommending the labelled panel control — `/handoff` requires the persona to be cooperative, and a wedged controller needs an out.
 - Does anything today rely on creating a second controller — a test fixture, or a harness that spawns one per root? A global singleton would break such a fixture, and it is better to find it now than in CI.
