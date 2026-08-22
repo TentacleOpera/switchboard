@@ -49,7 +49,13 @@ The analysis was built to answer the safe question — "which of these can I fir
 
 - **Decided: stream id + sequence**, not a single stage number. Records the chain identity as well as the order, which is what the operator's detection and reporting need — "stream 3 is blocked at step 2" is answerable; "stage 2 is blocked" is not.
 - **A stream/sequence pair is the recommendation, not `base_branch`.** `queue_position` is documented as "a 1-based sort key" assigned append-from-`MAX+1` (`KanbanDatabase.ts:508-516`) — a total order that never ties by construction, so encoding stages as equal positions would overload a sort key with grouping semantics nothing reads. And `base_branch` expresses *one* predecessor, which cannot express "these four run together, then those two." So: `stream_id` + `stream_seq` columns carry the map, `queue_position` remains the tiebreak among cards at the same sequence, and `base_branch` becomes **derived** — a card at sequence *n* cuts from the merged result of sequence *n-1* in its own stream. This reverses an earlier recommendation of `base_branch` as the encoding.
-- **The operator advises; it does not gain a mode.** Sequential stays the default. The operator reads the map and, in its opening proposal, states what parallelism is available and what it would cost and risk *against the goal the user stated* — then waits. An earlier revision of this plan added stream-parallel as a fourth session model plus a stream-selection rule; that was over-prescriptive and cut against the persona's own disposition (`## Role & Scope` "Advisory Entries", `:200` "Report, don't fix", `:206` "Propose a goal, then stop"). Advice is also strictly more capable than a rule here: it can say "streams 2 and 3 have no file overlap, but 3 declares a dependency the analysis took on faith" — which no shallowest-first heuristic can express, and which a rule would decide silently. It must not write worktree strategy — `worktree-strategy-control-contract.test.js` pins that only the user does, because `applyOversightWorktreeTopology` used to force `per-feature` on arm and a crash left the forced value in place. The protocol already states the read-only rule itself (`switchboard-orchestrator/SKILL.md:354-357`, "Obey the worktree setting; never write it").
+- **The operator advises before confirmation and acts after it.** Sequential stays the default. The operator reads the map and, in its opening proposal, states what parallelism is available and what it would cost and risk *against the goal the user stated* — then waits. An earlier revision added stream-parallel as a fourth session model plus a selection rule; that was over-prescriptive. A later revision then swung too far and left the operator advisory-only, which would have removed the execution it already performs. Both were wrong in the same way — treating this as a question about *how much the operator does* rather than *which state it writes*.
+
+**The real line is state lifetime, not authority.** `worktree-strategy-control-contract.test.js` exists because `applyOversightWorktreeTopology` forced `feature_worktree_mode` on arm and restored it on disarm, and a crash left the forced value in place with the user's own parked in `orchestration_prior_feature_worktree_mode`. The defect was *taking away and giving back a persistent user setting*. So:
+- **Never written by the operator:** `feature_worktree_mode` and anything else that is a stored user preference.
+- **Legitimately written by the operator, after confirmation:** per-run parameters — how many streams this session runs, which team takes which stream, the worktrees provisioned for it. These shadow no user setting, so nothing is stashed and a crash leaves no forced value to restore.
+
+Advice remains strictly more capable than a rule for the *decision*: it can say "streams 2 and 3 have no file overlap, but 3 declares a dependency the analysis took on faith" — which no shallowest-first heuristic expresses and which a rule would decide silently. It must not write worktree strategy — `worktree-strategy-control-contract.test.js` pins that only the user does, because `applyOversightWorktreeTopology` used to force `per-feature` on arm and a crash left the forced value in place. The protocol already states the read-only rule itself (`switchboard-orchestrator/SKILL.md:354-357`, "Obey the worktree setting; never write it").
 - Confirm Analyze should appear on **both** Planned and STAGING headers.
 
 ## Complexity Audit
@@ -106,7 +112,15 @@ The analysis was built to answer the safe question — "which of these can I fir
 6. **Derive `base_branch`** from the stage: a later stage's worktree cuts from the previous stage's merged result.
 7. **Analyze control in the STAGING header** as well as Planned.
 8. **Expose the map to the operator**: a read path returning streams, their depth, and each card's `stream_id` / `stream_seq`.
-9. **Sequential stays the default.** No new session model, no selection rule. In its opening proposal the operator states available parallelism, its cost, and where the map is least trustworthy — measured against the goal the user gave — then waits.
+9. **Sequential stays the default; the handoff sequence generalises from one team to N.** `## The handoff sequence` (`:252-266`) is already scope → launch → stage → dispatch card one → report and exit. For streams it becomes:
+   1. **Scope** — read the map.
+   2. **Advise and stop** — streams available, what running several costs, where the map is weakest. The user confirms which streams to run. *(The only genuinely new step.)*
+   3. **Launch** — seat one team per confirmed stream.
+   4. **Provision** — one worktree per stream, host-owned as today. *(The only step needing a run parameter.)*
+   5. **Stage** — in the map's order; `stream_id`/`stream_seq` are already persisted.
+   6. **Dispatch the head of each confirmed stream** — one `queue/next` per team. The per-team in-flight refusal already serialises this correctly.
+   7. **Report and exit** — `POST /orchestration/handoff`, whose `409` on a dead head or empty queue becomes an N-team check.
+   Steps 3–7 are what it already does, once per stream instead of once.
 10. **Operator detects and reports** stream violations. It never writes strategy, reorders work, or cuts branches.
 
 ### Migration
@@ -134,7 +148,9 @@ Additive nullable column. A plan with no stage behaves as today.
 - **Features stay whole:** a feature with subtasks gets one stage on the feature card and none on subtasks; assert no subtask is staged independently.
 - **Nullable columns are inert:** with no map, the queue behaves byte-identically to today.
 - **Advice degrades to a question:** with no map, assert the opening proposal says so and offers to run Analyze, rather than silently omitting the subject. With a map, assert it states stream count and depth. There is no mode to assert, which is the point — advice has no dead-control failure mode.
-- **Operator writes nothing:** assert no operator path writes `stream_id`, `stream_seq` or the worktree strategy — the negative test that keeps the deleted forcing machinery from returning by another route.
+- **Operator writes run state, never user settings:** assert no operator path writes `feature_worktree_mode` or `orchestration_prior_feature_worktree_mode`, and that the run parameters it *does* write do not persist past the session. This is the test that distinguishes legitimate execution from the deleted forcing machinery, and asserting "writes nothing" instead would forbid the handoff the operator already performs.
+- **Nothing to restore after a crash:** kill the session mid-run and assert no user setting was changed and no stash key is populated. The precise failure the strategy contract was written for, checked against the new run parameters rather than the old forced setting.
+- **N-team handoff refusal:** assert `POST /orchestration/handoff` still refuses when any confirmed stream has no live head, rather than reporting a partial handoff as complete.
 
 ### Manual Verification
 
@@ -144,6 +160,7 @@ Additive nullable column. A plan with no stage behaves as today.
 ## Outstanding Questions
 
 - **[user]** Analyze on both headers confirmed?
+- **[user]** Where does the per-run stream parameter live? It must not be a stored user preference (see above) — session state on `orchestrationConfig` or the run record are the candidates. This is the one storage decision the strategy contract constrains.
 - With several streams free and the user having approved parallel work, does the operator still pick per wake, or does the user name the streams up front? The protocol's *"assess both, act on what is free"* was written for two lanes; at five it is ambiguous. Naming them up front keeps the choice with the user and needs no rule.
 - What content signal makes the staleness check reliable — plan-file mtime, a hash of the declared file sets, or the plan set alone? mtime is cheap and noisy; a hash is accurate and needs the analysis to record more.
 - Does anything today read `queue_position` in a way that assumes uniqueness? The migration comment calls it a 1-based sort key; if a consumer assumes no gaps or no ties, adding a stage dimension beside it needs that consumer checked.
