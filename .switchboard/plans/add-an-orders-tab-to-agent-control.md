@@ -2,7 +2,9 @@
 
 ## Goal
 
-Give standing orders a visible surface in the Agent Control view — a read-first list of every installed order with its scope, target and body — so the instructions actually governing agent behaviour can be inspected, and contradictory or stale orders can be seen rather than inferred from behaviour.
+Give standing orders a visible surface in Agent Control — a read-first list of every installed order with its scope, target and body — so the instructions actually governing agent behaviour can be inspected, and contradictory or stale orders can be seen rather than inferred from behaviour.
+
+**The tab lands in `src/webview/agent-control.html`, not in `kanban.html`.** An earlier revision of this plan targeted the board's `data-view="agent-control"` projection, which is interim scaffolding: `agent-control.html` is meant to exist as a real panel, and `extract-agent-control-into-its-own-panel-file.md` creates it. Adding Orders to the projection would mean adding it twice — once to `kanban.html` now and once to the new file on extraction — and then deleting one copy. This plan therefore **depends on the extraction** and adds a fourth tab to the new file.
 
 ### Problem Analysis
 
@@ -31,7 +33,7 @@ Orders were introduced as a *mechanism* — a way for code to attach durable ins
 ## User Review Required
 
 - **Read-only first, or read-write?** This plan proposes read + delete, and deliberately not authoring. Rationale in Adversarial Synthesis; the decision is yours because it sets how much of the tab exists in v1.
-- Confirm the tab belongs in Agent Control specifically. It is the operator-facing view (`agents`, `teams`, `prompts`), which is the right neighbourhood — but the same tab would be visible in the full Kanban view unless deliberately hidden there, and that may be desirable rather than not.
+- Confirm Orders is the fourth tab of the new panel rather than a fifth board tab. It joins `agents`, `teams`, `prompts` — cross-cutting agent configuration — which is the same reason those three are being extracted.
 
 ## Complexity Audit
 
@@ -43,8 +45,8 @@ Orders were introduced as a *mechanism* — a way for code to attach durable ins
 
 ### Complex / Risky
 
-- **The Agent Control tab filter is a negative selector chain and will silently hide this tab.** `kanban.html:2913` reads `body[data-view="agent-control"] .shared-tab-btn:not([data-tab="agents"]):not([data-tab="teams"]):not([data-tab="prompts"]) { display: none; }`. A new tab is hidden by default in the very view this plan targets, and the failure mode is a tab that exists, works, and cannot be seen — indistinguishable from "the feature wasn't built". The `:not()` chain must gain `:not([data-tab="orders"])`, and the content-hiding block at `:2914-2918` must NOT gain the new pane. Both are one-line edits in opposite directions, which is exactly how one gets done and the other forgotten.
-- **`AGENT_CONTROL_VIEW` gates JS separately** (`:6533`), and `:6563-6567` resolves an initial tab button by `data-tab`. Adding a tab that is reachable by CSS but not by the JS tab resolver, or vice versa, yields a half-wired tab. Both paths need checking, not just the stylesheet.
+- **If this ships before the extraction, it costs double and the negative-selector filter bites.** In `kanban.html` the Agent Control filter is `.shared-tab-btn:not([data-tab="agents"]):not([data-tab="teams"]):not([data-tab="prompts"])` (`:2913`), so a new tab is hidden by default in that view — a tab that exists, works and cannot be seen, indistinguishable from one never built. In the extracted file there is no projection and no filter, so the whole class of bug disappears. That is the strongest reason to wait for the extraction rather than land this first.
+- **The new panel follows the companion-`.js` convention**, so the tab's code belongs in `agent-control.js` rather than an inline script — matching the seven panels that already do this, not the two inline-script exceptions.
 - **The client mirrors the server resolver, and the marker string is the contract.** `terminals.js:10353-10354` states it explicitly — "Keep in sync with `src/services/standingOrders.ts` — the marker string is the contract" — and `:10667` mirrors `applyStandingOrders`. This tab must render what the *server* returns and must not add a third implementation of resolution. If the tab needs to show "which orders would reach terminal X", it calls the existing endpoint or a new server-side resolve; it does not re-derive selection client-side.
 - **Deletion is destructive and the orders are load-bearing.** Removing the wrong row breaks a live pipeline — deleting a `queue/done` order leaves seats with no completion path, which presents as a hung queue, not an error. Deletion must name what it is removing and which scope it affects. Per this repo's standing rule there is **no confirmation dialog**; the protection is that the row states its scope and target plainly, and that deletion is per-row rather than bulk.
 - **Programmatic reinstallation will resurrect deleted orders.** `applyTeamQueueOrders` and `applySeatPacingOrders` are idempotent installers keyed on deterministic ids — they reinstall on the next toggle or team wiring pass. So a user who deletes a queue order may see it return, which reads as the UI not working. The tab must show enough (the deterministic id, or the installer that owns it) that a re-appearing row is legible rather than mysterious.
@@ -57,10 +59,12 @@ Orders were introduced as a *mechanism* — a way for code to attach durable ins
 
 **Side effects.** Making orders visible will surface existing contradictions beyond the one named above. That is the point, but it means the tab's first users may find several — worth expecting rather than treating each as a regression.
 
-**Ordering.** Independent and shippable alone. It is also the natural surface for a future situational orders library (composing different orders for reviewer/no-reviewer teams, and for feature versus plan dispatch); building the reader first means that work has somewhere to be seen and a way to be verified.
+**Ordering.** Blocked on the extraction. It is also the natural surface for a future situational orders library (composing different orders for reviewer/no-reviewer teams, and for feature versus plan dispatch); building the reader first means that work has somewhere to be seen and a way to be verified.
 
 ## Dependencies
 
+- **Requires** `extract-agent-control-into-its-own-panel-file.md`. Landing Orders before it means building the tab twice and fighting the negative-selector filter for a week.
+- **Unaffected by** `retire-the-agent-tabs-from-kanban-html.md` — Orders is never added to the board, so retirement has nothing of this plan's to delete.
 - **Supersedes nothing.** `context-aware-completion-reporting.md` (C5, unbuilt) rewrites *which* orders are installed; this renders whatever is installed. They do not conflict, and this one makes that one testable by eye.
 - No dependency on the unbuilt task-complete endpoint.
 
@@ -76,9 +80,9 @@ Orders were introduced as a *mechanism* — a way for code to attach durable ins
 
 ## Proposed Changes
 
-1. **Tab button** `data-tab="orders"` beside the existing four in `kanban.html:2939-2947`, and an `id="orders-tab-content"` pane following the existing convention.
-2. **Add `:not([data-tab="orders"])`** to the Agent Control filter chain at `:2913`, and deliberately do **not** add `#orders-tab-content` to the hide block at `:2914-2918`.
-3. **Verify the JS tab path** — `AGENT_CONTROL_VIEW` (`:6533`) and the initial-tab resolver (`:6563-6567`) both handle the new tab.
+1. **Tab button** `data-tab="orders"` and an `id="orders-tab-content"` pane in `agent-control.html`, following the established `<name>-tab-content` convention.
+2. **Tab logic in `agent-control.js`**, per the companion-file convention.
+3. **No projection edits.** Nothing in `kanban.html` changes; if the extraction has not shipped, this plan waits.
 4. **Render from `GET /terminals/standing-orders`**, grouped by scope, each row showing scope, target/parent, team id, deterministic order id, and body as **text**.
 5. **Per-row delete** through the existing mutation path (`mutateStandingOrders`), no confirmation gate, with the row's scope and target legible before the click.
 6. **Label installer-owned rows** so a reinstalled order is legible rather than looking like a failed delete.
@@ -99,8 +103,8 @@ None.
 
 ### Automated Tests
 
-- **Visible in Agent Control:** assert the `:not()` chain at `:2913` contains `[data-tab="orders"]` AND that `#orders-tab-content` is absent from the hide block at `:2914-2918`. Both halves, as one test — the two edits pull in opposite directions and asserting only the first passes while the tab stays invisible. This is the single test that matters most, because its absence is indistinguishable from the feature not existing.
-- **JS and CSS agree:** assert the tab is reachable through the initial-tab resolver as well as the stylesheet, so a CSS-only or JS-only wiring fails.
+- **Tab is present and reachable:** assert `agent-control.html` carries the `data-tab="orders"` button and `#orders-tab-content` pane, and that the tab activates. In the extracted file there is no filter to fight, so this is an ordinary assertion rather than the two-sided one the projection would have required.
+- **Nothing was added to the board:** assert `kanban.html` contains no `data-tab="orders"` — the guard against this being back-ported into the projection during dual-run.
 - **Renders every scope:** seed one order in each of the five scopes (`global`, `team`, `pair`, `team-head`, `role`) and assert all five render. A tab that silently drops `pair` or `role` is worse than no tab, since absence reads as "no such order".
 - **Body is text, not markup:** seed an order whose body contains `<script>` and angle brackets; assert it renders as literal text. Bodies are written by installers today, but they are free text by type.
 - **Delete is surgical:** with several orders installed, delete one by id and assert the others are untouched — including one sharing the same scope and team, which is the realistic near-miss.
@@ -115,6 +119,6 @@ None.
 ## Outstanding Questions
 
 - **[user]** Read + delete only, or authoring in v1?
-- **[user]** Should the tab also be visible in the full Kanban view, or Agent Control only?
+- **[user]** Agent Control only, or should the board keep an Orders view too? Default assumption is Agent Control only — the board is being narrowed to the board, not widened.
 - Does any order body today contain anything that should not be displayed? The credential-injection design says no, but the tab makes bodies visible for the first time, so it is worth one pass over the installed set before shipping rather than after.
 - Is there a server-side "which orders reach terminal X" resolve worth exposing, so the tab can answer that without mirroring the resolver? `resolveTeamStanding` (`standingOrders.ts:101`) suggests the logic is already factored for it.
