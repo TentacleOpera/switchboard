@@ -10,6 +10,29 @@ The automation model settled in `the-automation-model-four-things-not-a-mode-axi
 
 This plan is the UI half. It assumes the model and specifies where each part lives.
 
+### The rail already has an orchestrator control — consolidate, do not stack
+
+`shell.js:271` creates **`#strip-orchestrator`**, a UFO button at the top of `#strip-terminals` that already is the start/stop control:
+
+- lights when a session is active, dims when inactive; state arrives via `orchestratorState` postMessages relayed from `terminals.js` off the WS broadcast rail
+- **lit click → `POST /orchestration/stop`**; **dimmed click → `POST /orchestration/start`**, where the *server* picks the path — a pty terminal carrying the persona prompt when a lead/coder agent is configured, else the `/switchboard` launcher text as a clipboard fallback
+- carries a double-click in-flight guard, because the agent adopts the seat seconds after creation so two fast clicks would otherwise spawn `orchestrator-2` via the collision loop
+- no confirmation dialog, per project rule
+
+**This supersedes the start controls earlier revisions proposed** — one in this panel, one in the dock's empty state. Neither is needed: the rail button exists, has the right semantics, is already stateful, and already solves the double-start race that a naive second control would reintroduce.
+
+**And it fixes an affordance count that was heading for three.** With the fighter-jet panel icon plus the dock toggle plus this button, Mission Control would have had three rail entries, one duplicating another's function. The intended set is two, each doing a distinct thing:
+
+| Rail affordance | Does |
+|---|---|
+| `#strip-orchestrator` (existing, restyled to the fighter-jet/Mission Control identity) | **start / stop** the persona, with live state |
+| Mission Control panel icon | opens the panel — missions, schedules, Control |
+| ~~dock toggle~~ | folded into the dock plan's own bottom-cluster toggle, which shows/hides a pane rather than starting anything |
+
+So the rename plan's mechanical pass should reach this button's tooltip and identity, and the dock's empty state **points at the existing rail button** rather than offering a start of its own.
+
+**One thing to preserve rather than re-derive:** the clipboard fallback. When no agent is configured the server returns launcher text instead of creating a terminal, and that path is why the button works on an install with no pty. Any new surface that starts the persona must keep both outcomes, or it works only where `node-pty` does.
+
 ### Rail placement
 
 The rail renders from `getPanelsManifest` in array order, with `placement: 'bottom'` the only override (`headlessPanelHtml.ts:520-529`, `shell.js:501`). Target order:

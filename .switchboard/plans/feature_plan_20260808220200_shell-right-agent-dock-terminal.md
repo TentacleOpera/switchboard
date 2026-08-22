@@ -26,7 +26,11 @@ The markup in section 1a below is the **original role-configurable** dock and co
 
 **A link to the Mission Control panel** belongs here too: the dock is the persona's terminal, the panel is what it is working on. Pairing them is the whole point of the name.
 
-**Empty state: a Start Mission Control button, plus an intro link.**
+**Empty state: a pointer to the existing rail button, plus an intro link.**
+
+**Correction:** `shell.js:271` already provides `#strip-orchestrator` — a rail button that starts and stops the persona, lights with live state, guards double-start (two fast clicks would otherwise spawn `orchestrator-2`), and falls back to clipboard launcher text when no agent is configured. So the dock needs no start control of its own, and adding one would reintroduce the double-start race that button already handles. The empty state names that button and explains what it does.
+
+The reasoning below stands on why an *explicit* start is safe — it just turns out the explicit start already exists.
 
 An earlier revision of this section made the empty state a pointer to the Mission Control panel and argued the dock should never start anything. **Withdrawn.** Two use cases beat it, and the safety argument behind it was mis-aimed:
 
