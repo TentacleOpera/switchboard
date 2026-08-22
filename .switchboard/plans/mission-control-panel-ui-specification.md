@@ -2,7 +2,7 @@
 
 ## Goal
 
-Give automation one comprehensible home. Remove the kanban AUTOMATION tab, add a Mission Control panel to the shell rail, and put the two things a user actually configures — **missions** and **schedules** — behind one tab each, with a sidebar-list-plus-detail layout in both.
+Give automation one comprehensible home. Remove the kanban AUTOMATION tab, add a Mission Control panel to the shell rail, and put the two things a user actually configures — **missions** and **schedules** — behind one tab each, with a sidebar-list-plus-detail layout in both, plus a **Control** tab hosting the persona's terminal so it is reachable at any window width.
 
 ### Problem Analysis
 
@@ -32,6 +32,26 @@ The **fighter-jet icon** ties to the brand: the product's second homepage illust
 Both tabs use **sidebar list + detail**, the pattern `tickets.html` already implements — `#tree-pane` inside a `.content-row`, with a `.sidebar-toggle-row` and a `collapsed` state (`tickets.html:364-366`). Reuse it rather than inventing a third layout.
 
 ---
+
+## A third tab: Control — the guaranteed terminal access
+
+The Mission Control **dock** (`feature_plan_20260808220200_shell-right-agent-dock-terminal.md`) is gated at `DOCK_VIABLE_MIN = 980`, because `48 + 4 + 648 + 280` is the narrowest viewport that fits a legible terminal *beside* the board. Below that the toggle is disabled, and on a `node-pty`-less install the dock does not exist at all. So on a laptop, or in a split window, the controller is reachable only through the full-screen terminals panel or a solo pop-out — the mode switch the dock was built to remove.
+
+**The panel has no such constraint, because there is no board to preserve inside it.** The content area is the viewport minus the 48px rail, so at 1280px it is ~1232px — comfortably past the 648px a terminal needs. The dock's floor is about *coexistence*, not legibility.
+
+So: a **Control** tab hosting the same `?solo=<seat>` frame the dock uses. Same mechanism, second host.
+
+That settles the access story cleanly:
+
+| Width | Path |
+|---|---|
+| ≥ 980px | dock beside the board — the point of the dock |
+| < 980px, or split window | **Control tab** — full width, no mode switch away from Mission Control |
+| no `node-pty` | neither; both absent by the same manifest gate |
+
+It also makes the dock honestly optional: a convenience for wide monitors rather than the only front door, which is what a capability-gated front door would be. And it gives the first-run intro a home that every user can reach — the reason the dock's empty state is a copy rather than the canonical surface.
+
+**Do not solve this by lowering the dock's 648px floor.** That number exists so the terminal stays legible; shrinking it produces an unusable terminal *and* a squeezed board.
 
 ## Missions tab
 
@@ -219,6 +239,7 @@ None of its own; the retired-mode notice surfaces on first open of this panel.
 - **Retired-mode notice appears once:** open the panel with a stored legacy mode; assert one notice, and none on reopen.
 - **External has no local effect:** select external, copy the prompt; assert no config write and no scheduler change.
 - **Log is honest about currency:** assert the log view states its as-of time rather than implying live updates.
+- **Control tab works below the dock floor:** at a 900px viewport, assert the dock toggle is disabled *and* the Control tab hosts a live terminal. This is the pair that proves narrow windows are served; asserting only the disabled toggle passes while leaving a laptop with no access.
 
 ### Manual Verification
 
