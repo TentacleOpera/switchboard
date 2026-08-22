@@ -10,12 +10,36 @@ Give `src/webview/shell.html` a **right-hand Mission Control dock** that hosts t
 - **is bound to the orchestrator seat** — it shows whatever terminal `autobanState.orchestratorSeat.terminalName` names, and nothing else,
 - **never creates or starts that seat.** With no orchestrator seated, the dock shows an empty state pointing at the existing start control.
 
+### The dock's own UI — supersedes the markup in Proposed Changes
+
+The markup in section 1a below is the **original role-configurable** dock and contradicts this rewrite in three places. Where they disagree, this section wins:
+
+| Element in 1a | Fate |
+|---|---|
+| `#dock-role-btn` ("Choose which agent this dock starts") | **removed** — no role to choose |
+| `#dock-role-menu` | **removed** with it |
+| `#dock-start` (empty-state start button) | **replaced by a pointer** — see below |
+| `#dock-title` | keeps the **seat name**, or "Mission Control" when unseated |
+| `#dock-close`, `#dock-splitter`, `#dock-frame` | unchanged — close, resize, and the `?solo=` iframe |
+
+**Header:** the seat's terminal name, a liveness indicator, a close button. Nothing else. The liveness indicator is not decoration — `orchestratorSeat` is adopted and can name a terminal that has exited, and the edge case below requires the dock to follow adopt/re-adopt/clear. A dead pane with a live-looking header reads as a broken terminal rather than an absent persona.
+
+**A link to the Mission Control panel** belongs here too: the dock is the persona's terminal, the panel is what it is working on. Pairing them is the whole point of the name.
+
+**Empty state — and this is a gap the rewrite created.** The earlier revision said the dock "displays; the existing start control starts." That control is the AUTOMATION tab's **Start orchestrator** — and `the-automation-model-four-things-not-a-mode-axis.md` deletes that tab. So there is no existing control to defer to once that lands.
+
+Resolution: **starting moves to the Mission Control panel**, alongside the missions the persona would work on, and the dock's empty state is a **pointer to it** rather than a button. Two reasons beyond tidiness:
+- The original safety argument was against launching as a *side effect of opening a dock*. An explicit button is not that — but a narrow dock is a poor place to start an unattended persona, because you cannot see what it would pick up. The panel can show that.
+- It keeps one start path. Two controls for launching the same persona is how the queue-order contradiction happened.
+
+**So the dock never starts anything.** It shows a seat, or it shows where to make one.
+
 ### Scope change from the original plan: Mission Control, not a general agent dock
 
 This plan was written as a *role-configurable* dock — auto-create a seat on first open using a persisted role, with a picker in the dock header. It is rewritten as a single-purpose surface bound to the orchestrator. What that removes and why:
 
 - **No role picker, no persisted role, no new Setup verb pair.** The whole of former section 4 (`getAgentDockRole` / `setAgentDockRole`, a `package.json` configuration property, and a `npm run catalog:generate` pass) goes. That was the largest piece of backend work in the plan and it exists only to answer "which role does this dock start", a question a bound dock does not ask.
-- **No auto-create on first open, and this is a safety property rather than a simplification.** Auto-creating an orchestrator seat means *opening a dock launches the orchestrator persona* — and `switchboard-manage-console-skill.md` records exactly that failure from the other direction: invoking the persona as a human *"grouped loose plans into a feature and fired dispatch with no confirmation"*. A UI affordance whose side effect is starting unattended automation is the same defect with a smaller trigger. The dock displays; the existing start control starts.
+- **No auto-create on first open, and no start button at all** — a safety property rather than a simplification. Auto-creating an orchestrator seat means *opening a dock launches the orchestrator persona* — and `switchboard-manage-console-skill.md` records exactly that failure from the other direction: invoking the persona as a human *"grouped loose plans into a feature and fired dispatch with no confirmation"*. A UI affordance whose side effect is starting unattended automation is the same defect with a smaller trigger. The dock displays; the Mission Control panel starts (see the UI section above — the control this originally deferred to is in a tab being deleted).
 - **The PM-delivery synergy argument no longer applies.** The original plan's strongest case for defaulting the dock to `project_manager` was that `_tryFleetDeliveryForRole('project_manager', …)` would then deliver the sibling plan's `MANAGE` button into it for free. That argument dies with the role config, and the sibling subtask must not silently depend on this dock hosting a PM seat.
 
 **Naming.** "Mission Control" is the right label only if missions land (`staging-streams-parallel-dispatch-and-worktrees.md`) — and it becomes the fourth name in this area after *orchestrator*, *orchestration* and the proposed *operator*. `rename-the-orchestrator-to-the-operator.md` counts 1,067 occurrences across 55 files; if the persona is renamed at all, that plan should absorb this label rather than two renames landing separately. **Pick the word once, there.**
@@ -78,6 +102,7 @@ This is not a regression — the shell was **designed** as `rail + single conten
 
 ## User Review Required
 
+- **Confirm starting moves to the Mission Control panel.** The dock's empty state points there rather than offering a button, and the AUTOMATION tab's Start orchestrator goes with that tab. If you would rather keep a start button in the dock, that is a one-line change here — but then two controls launch the same persona.
 - **Confirm the dock is orchestrator-only.** The parent feature's stated goal is that *"every agent surface in Switchboard is reachable from where the operator is standing"*, with this dock as the general front door. Binding it to one persona narrows that deliberately — a decision about the feature's intent, not just this subtask.
 - **The label depends on the rename.** See Naming above: settle the persona's word in `rename-the-orchestrator-to-the-operator.md` rather than introducing a fourth name here.
 
@@ -187,6 +212,7 @@ This is not a regression — the shell was **designed** as `rail + single conten
 ## Proposed Changes
 
 ### 1a. `src/webview/shell.html` — dock markup + CSS
+> **Superseded in part.** The role picker (`#dock-role-btn`, `#dock-role-menu`) and the empty-state start button (`#dock-start`) below are from the original role-configurable design. Build the header and empty state per "The dock's own UI" above; the splitter, frame, close button and CSS carry over unchanged.
 
 Add the dock as a **third flex child**, after `#content`:
 
