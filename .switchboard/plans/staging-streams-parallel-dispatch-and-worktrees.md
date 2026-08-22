@@ -63,9 +63,19 @@ The map lives on a **mission card**: a board card the analysis writes, holding t
 
 So a mission card **references without owning**: members keep their own `feature_id` (or none) and are linked by `stream_id`. No nesting, no cascade, no derived complexity.
 
-### The launch modal is a decision dialog, not a confirm gate
+### Missions get their own panel; the board move is navigation, not launch
 
-Advancing a mission card fans out — teams seated, worktrees provisioned, N cards dispatched. That needs a modal, and the form is constrained by a hard project rule: **plain confirm gates are banned, multi-choice decision dialogs are allowed.** A launch modal is the latter — it presents the streams and takes choices (which streams, which teams, how many worktrees), so it is a configuration step, not an "Are you sure?".
+The mission card's home is a **`missions` panel** (`missions.html` + `missions.js`). The card appears on the board, but **moving it switches to the panel** — it does not launch, and it does not move. The card only takes its new column when **Launch mission** is pressed in the panel.
+
+**Intercept the drag; never move-then-revert.** Board drags are already optimistic: `optimisticMoveUntil` (`kanban.html:6225`) opens a window during which full `renderBoard` calls are suppressed, and `:6215-6222` records that a column move landing inside an optimistic tick can be silently mishandled. A provisional move that reverts on an unlaunched mission would fight exactly that machinery and can strand a card in a column it was never committed to. So a drag on a mission card is **intercepted before the optimistic path**: open the panel, write nothing. The move happens once, inside Launch, alongside the fan-out. Nothing to revert because nothing moved.
+
+**This supersedes the launch modal.** An earlier revision put a decision modal on the move. The panel is the decision surface, so no modal is needed on the board at all — which is the better answer to the same problem, since the panel can show streams, depth, per-stream team assignment and the map's weak points at a size no modal should.
+
+**Panel registration is a solved path — and this is a chance to use it properly.** `getPanelsManifest` (`headlessPanelHtml.ts:511`) takes an entry of `{id, label, icon, route, enabled}`; `getPanelHtmlById` gains a `missions` case; `LocalApiServer` serves the route. `shell.html` renders the rail from the manifest — its own comment: *"adding a panel route later adds a strip icon with no shell code change"* — so the icon is free. Follow the **companion-`.js` convention** that seven panels already use (`connections`, `planning`, `tickets`, `terminals`, `design`, `memo`, `project`), not the two inline-script exceptions. Note the contrast worth not repeating: `agent-control` was retrofitted as a `data-view` projection of `kanban.html` and now needs `extract-agent-control-into-its-own-panel-file.md` to undo it. A new panel should start as a panel.
+
+### If a launch dialog is still wanted inside the panel: decision dialog, not confirm gate
+
+If the panel's Launch step wants a final choice step of its own, the form is constrained by a hard project rule: **plain confirm gates are banned, multi-choice decision dialogs are allowed.** A launch modal is the latter — it presents the streams and takes choices (which streams, which teams, how many worktrees), so it is a configuration step, not an "Are you sure?".
 
 **It must not use `window.confirm()`.** That is a silent no-op in a VS Code webview (sandboxed iframe without `allow-modals`, always returns `false`) — the bug that broke the kanban delete-plan button. The codebase contains zero `confirm()` calls and two comments recording why (`kanban.html:12121`, `:12964`). Build it as a custom in-webview modal on the existing pattern: `feature-create-modal` / `openFeatureCreateModal` (`:11493`) / `closeModal` (`:11216`).
 
@@ -134,9 +144,11 @@ Advice remains strictly more capable than a rule for the *decision*: it can say 
 6. **Derive `base_branch`** from the stage: a later stage's worktree cuts from the previous stage's merged result.
 7. **Analyze control in the STAGING header** as well as Planned.
 8. **The mission card is the carrier.** Analysis writes it as a plan file (file tier, works sandboxed) or via the API; it holds the streams and their order. Members are linked by `stream_id`, never re-parented. A new card kind — not a feature, no cascade, no derived complexity.
-8a. **Mission card UI**: the card renders its streams and depth on the board, and its launch modal is a custom in-webview decision dialog (streams to activate, team per stream), never `window.confirm()`.
-8b. **Advance is idempotent.** Moving the card twice must not double-seat teams or double-dispatch. This is the one behaviour on the board where a card's move fans out beyond itself, so it needs an explicit guard rather than relying on the user not doing it.
-8c. **Expose the map to the operator**: a read path returning streams, their depth, and each card's `stream_id` / `stream_seq`.
+8a. **`missions` panel** — `missions.html` + `missions.js`, registered in `getPanelsManifest`, a `getPanelHtmlById` case, and a `LocalApiServer` route. The rail icon follows from the manifest. Companion-`.js` convention, not an inline-script monolith.
+8b. **Board move = navigate.** A drag on a mission card is intercepted before the optimistic path (`optimisticMoveUntil`, `kanban.html:6225`), opens the panel, and writes nothing. The card keeps its column until Launch.
+8c. **Launch mission** in the panel performs the column move and the fan-out as one action: seat teams, provision worktrees, stage, dispatch each stream head.
+8d. **Launch is idempotent.** Moving the card twice must not double-seat teams or double-dispatch. This is the one behaviour on the board where a card's move fans out beyond itself, so it needs an explicit guard rather than relying on the user not doing it.
+8e. **Expose the map to the operator**: a read path returning streams, their depth, and each card's `stream_id` / `stream_seq`.
 9. **Sequential stays the default; the handoff sequence generalises from one team to N.** `## The handoff sequence` (`:252-266`) is already scope → launch → stage → dispatch card one → report and exit. For streams it becomes:
    1. **Scope** — read the map.
    2. **Advise and stop** — streams available, what running several costs, where the map is weakest. The user confirms which streams to run. *(The only genuinely new step.)*
@@ -173,7 +185,9 @@ Additive nullable column. A plan with no stage behaves as today.
 - **Features stay whole:** a feature with subtasks gets one stage on the feature card and none on subtasks; assert no subtask is staged independently.
 - **Nullable columns are inert:** with no map, the queue behaves byte-identically to today.
 - **No confirm gate, and the modal is not `confirm()`:** assert the launch path contains no `window.confirm(`/`confirm(` call and that the modal is a real in-webview element. Both halves — a `confirm()` implementation would pass a "modal exists" check while doing literally nothing, which is precisely the shipped bug this rule was written from.
-- **Advance is idempotent:** advance the mission card twice; assert one set of teams, one set of worktrees, one dispatch per stream.
+- **Launch is idempotent:** press Launch twice; assert one set of teams, one set of worktrees, one dispatch per stream.
+- **A board move launches nothing and persists nothing:** drag a mission card to another column; assert the panel opens, the card's stored column is unchanged, and no team was seated. Then assert the same for a drag that is abandoned — the failure mode the optimistic window makes possible.
+- **Panel registered in both hosts:** assert `/missions` serves the panel over HTTP and the rail renders its icon from the manifest, with no `shell.html` edit.
 - **Mission card is not a feature:** assert it does not set `feature_id` on its members, does not cascade on move, and is not counted in feature complexity derivation.
 - **Sandboxed creation path:** create a mission card by writing only a plan file, with no API call; assert it imports and is launchable. This is the tier that makes the design work for a sandboxed client, and it is the one nobody will test by hand.
 - **Advice degrades to a question:** with no map, assert the opening proposal says so and offers to run Analyze, rather than silently omitting the subject. With a map, assert it states stream count and depth. There is no mode to assert, which is the point — advice has no dead-control failure mode.
@@ -189,7 +203,8 @@ Additive nullable column. A plan with no stage behaves as today.
 ## Outstanding Questions
 
 - **[user]** Analyze on both headers confirmed?
-- Which column does a mission card live in, and which advance launches it? STAGING is where the streams already sit; a mission card in the same column as its members may read oddly. Its own lane, or a distinct card style in STAGING?
+- **[user]** Which column does a mission card sit in before launch, and where does it land after? Its members sit in STAGING; a mission card beside them may read oddly.
+- Does the panel list *all* mission cards or only the selected one? A list makes past missions inspectable — useful for the staleness question — but the board card is the entry point, so a detail view may be the whole panel.
 - With several streams free and the user having approved parallel work, does the operator still pick per wake, or does the user name the streams up front? The protocol's *"assess both, act on what is free"* was written for two lanes; at five it is ambiguous. Naming them up front keeps the choice with the user and needs no rule.
 - What content signal makes the staleness check reliable — plan-file mtime, a hash of the declared file sets, or the plan set alone? mtime is cheap and noisy; a hash is accurate and needs the analysis to record more.
 - Does anything today read `queue_position` in a way that assumes uniqueness? The migration comment calls it a 1-based sort key; if a consumer assumes no gaps or no ties, adding a stage dimension beside it needs that consumer checked.
