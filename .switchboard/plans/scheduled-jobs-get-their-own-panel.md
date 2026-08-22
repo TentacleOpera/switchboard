@@ -2,6 +2,9 @@
 
 ## Goal
 
+> **SUPERSEDED by `the-automation-model-four-things-not-a-mode-axis.md`.** This plan approached automation piecemeal — extracting the scheduler to its own panel — and together with its sibling it reproduced the complexity both were meant to remove. The replacement states the whole model as four independent things (schedules, an external prompt generator, and Mission Control unattended/operations) rather than patching the mode axis. Retained for the measurements and the migration precedent it records; do not build it.
+
+
 Move the scheduler out of the kanban AUTOMATION tab into its own shell panel (`jobs`), because recurring jobs and standing jobs are a different subsystem from board automation and are the only part of that tab missions do not supersede.
 
 ### Problem Analysis

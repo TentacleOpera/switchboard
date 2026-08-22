@@ -2,6 +2,9 @@
 
 ## Goal
 
+> **SUPERSEDED by `the-automation-model-four-things-not-a-mode-axis.md`.** This plan approached automation piecemeal — bounding the existing triggers — and together with its sibling it reproduced the complexity both were meant to remove. The replacement states the whole model as four independent things (schedules, an external prompt generator, and Mission Control unattended/operations) rather than patching the mode axis. Retained for the measurements and the migration precedent it records; do not build it.
+
+
 Keep the queue schedule and the orchestrator wake exactly as they are, and change only **what they act on**: a mission's finite membership instead of whatever happens to be sitting in a column. Automation gains an end state without losing a trigger.
 
 ### Problem Analysis
