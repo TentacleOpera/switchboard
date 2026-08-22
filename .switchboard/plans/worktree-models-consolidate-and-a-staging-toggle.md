@@ -52,7 +52,11 @@ Each model was added for a real case — per-plan for an agent that wanted isola
 ## User Review Required
 
 - **What does the STAGING toggle write?** Either `feature_worktree_mode` (reusing the existing key, so board setting and toggle are one state) or a new staging-scoped key. **This is a contract question, not a preference:** `worktree-strategy-control-contract.test.js` pins that the control "offers exactly the two modes the verb arm accepts" and that *nothing but the user writes the strategy*. Reusing the key keeps one source of truth; a second key needs its own reason.
-- **Where does a feature worktree get merged?** Narrowing the strip button to projects removes the only UI entry point for feature-worktree merging (its merge mode). That has to land somewhere before the narrowing ships.
+- **Settled: worktree management has three homes, not one.**
+  1. **The kanban WORKTREES tab** — the canonical surface, and it already exists: tab button at `kanban.html:2944` (`data-tab="worktrees"`), pane at `:3864`, hydrated on activation at `:6510`. Merging belongs here as a listed action per worktree, which is also what makes narrowing the strip button safe — the capability moves to a surface that lists worktrees rather than inferring one from selection.
+  2. **The Mission Control panel**, for a worktree that is part of a mission — where the mission's own membership defines the set, so a stage's merge is visible next to the stage it belongs to.
+  3. **The controller agent**, which can merge as an action like any other. This is what covers the unattended path: a stream that completes with nobody watching still gets merged.
+  Note the three are not alternatives — the same operation reached three ways, which is the existing pattern (`/kanban/move` is the API path a human's click takes). One endpoint, three callers.
 
 ## Complexity Audit
 
@@ -66,7 +70,7 @@ Each model was added for a real case — per-plan for an agent that wanted isola
 
 - **Do not add a third strategy mode.** The contract test states it directly: *"A third radio ahead of its provisioning is a dead control (PRD contract #6)."* The STAGING toggle is a **second surface for the existing two modes**, not a new one.
 - **Do not let anything but the user write the strategy.** The same contract exists because `applyOversightWorktreeTopology` used to force `per-feature` on arm and restore it on disarm, and a crash left the forced value in place with the user's real one stashed under `orchestration_prior_feature_worktree_mode`. That machinery was deleted deliberately, and the stash key survives in exactly one place: a one-shot drain that consumes the key. **So the operator must never set worktree strategy** — it may detect and report a dependency violation, nothing more. Any design where the operator "ensures dependencies are respected" by changing configuration recreates the exact defect the contract was written to prevent.
-- **Merge mode is live state the split must preserve.** Feature-worktree merging currently has no home other than the strip button's merge mode. Options: the STAGING surface, the lead's completion path, or the operator. This is also the same merge-back gap the per-feature-worktree queue design has, which today has no mechanism at all — worth solving once for both rather than twice.
+- **Merge mode is live state the split must preserve.** Feature-worktree merging currently has no home other than the strip button's merge mode, so the WORKTREES-tab action must land before the narrowing does, or the capability disappears between commits. Per the decision above it rehomes to three callers over one endpoint. This is also the same merge-back gap the per-feature-worktree queue design has, which today has no mechanism at all — one endpoint serves both.
 - **Moving provisioning from creation to staging changes when a branch is cut.** A worktree cut at staging is based on the default branch as it is *then*, not as it was at feature creation — usually better, and a behaviour change to state explicitly. Features already created under the old timing have worktrees; the transition must not orphan or double-provision them.
 - **`subtask_plan_id` is write-dead but still read.** A resolution branch consults it ("legacy per-subtask rows, now write-dead"). Retiring it is in scope only as a deletion of dead resolution; do not repurpose the column.
 - **`branch TEXT NOT NULL UNIQUE` is workspace-unscoped in the current schema**, though the V24/V25 migrations used `UNIQUE(branch, workspace_id)`. Two workspaces cutting the same branch name collide. Owned by `scope-unscoped-tables-by-workspace-id.md`; noted because parallel worktrees make collisions more likely, not less.
@@ -103,7 +107,7 @@ Each model was added for a real case — per-plan for an agent that wanted isola
 1. **STAGING column toggle** — "worktrees on/off" for features, writing the existing strategy key (pending the User Review decision), reflecting broadcast state rather than a local click assumption.
 2. **Provision at staging, not at feature creation** — the toggle's value is read when work is staged, so it applies to work as it goes out.
 3. **Narrow `#btn-create-worktree`** to project/workspace scope: tooltip, handler, enablement. Merge mode narrows with it.
-4. **Rehome feature-worktree merging** to whichever surface the User Review decision names, solved jointly with the queue design's merge-back gap.
+4. **Rehome feature-worktree merging** as one endpoint with three callers: a per-worktree action on the kanban WORKTREES tab, the same action in the Mission Control panel for mission-owned worktrees, and an agent-reachable route for the controller. This is also the queue design's and the streams design's missing merge-back — one mechanism, not three.
 5. **Delete the dead `subtask_plan_id` resolution branch**; leave the column.
 
 ### Migration
@@ -133,6 +137,7 @@ Existing feature worktrees are untouched. The toggle governs newly staged work. 
 
 - Toggle worktrees in STAGING, stage a feature, confirm the worktree is cut and the team lands in it.
 - Confirm the strip button no longer offers a feature worktree, and still creates and merges a project one.
+- Confirm a feature worktree can be merged from the WORKTREES tab, from the Mission Control panel when it belongs to a mission, and by the controller — all three reaching the same endpoint, so a fix to one is a fix to all.
 
 ## Outstanding Questions
 

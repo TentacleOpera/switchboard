@@ -141,7 +141,7 @@ Advice remains strictly more capable than a rule for the *decision*: it can say 
 
 - **Requires** `worktree-models-consolidate-and-a-staging-toggle.md`.
 - **Practical precondition:** `scope-unscoped-tables-by-workspace-id.md` for the `branch` uniqueness collision.
-- **Shares the merge-back gap** with the per-feature-worktree queue design: a stage-2 worktree cutting from "stage 1's merged result" presumes stage 1 merged, and nothing merges today. Solve once.
+- **Shares the merge-back gap** with the per-feature-worktree queue design: a stage-2 worktree cutting from "stage 1's merged result" presumes stage 1 merged, and nothing merges today. Now settled in `worktree-models-consolidate-and-a-staging-toggle.md`: one merge endpoint with three callers — the kanban WORKTREES tab, the Mission Control panel for mission-owned worktrees, and the controller agent. **The controller caller is the one this plan depends on**, since a stream advancing unattended has nobody to click either UI.
 - Independent of the orders work.
 
 ## Adversarial Synthesis
