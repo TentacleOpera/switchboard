@@ -36,7 +36,9 @@ Four rules qualify. The useful finding is that each earns its place for a *diffe
 
 **Absence of a completion signal — the import rule.** Agents repeatedly ask how plans reach the board: whether they must import them, whether only committed plans count. This is not covered by any other category — the agent writes a file, has no way to know the job is finished, and invents an action to close the gap: a manual import, an unnecessary commit, or telling the user to do something that is not needed. It sits upstream of the card-move rule, removing the anxiety that sends an agent looking for board operations at all.
 
-The facts are checkable and the common assumption is backwards. `GlobalPlanWatcherService` registers a filesystem watcher on `.switchboard/{plans,features}/**/*.md` with no git precondition anywhere, so an untracked file imports exactly like a committed one. And `isGitOpActive` (`PlanIngestionEngine.ts:852`) sets a **15-second suppression window** during git operations — so committing does not trigger import and can briefly *delay* it.
+The facts are checkable and the common assumption is backwards. `GlobalPlanWatcherService` registers a filesystem watcher over the plans and features directories with no git precondition anywhere, so an untracked file imports exactly like a committed one. And `isGitOpActive` (`PlanIngestionEngine.ts:852`) sets a **15-second suppression window** during git operations — so committing does not trigger import and can briefly *delay* it.
+
+**The rule must not name a path.** The scanned location is user-configurable: `switchboard.planScanner.customSources` accepts globs, absolute or workspace-relative, resolved by `readPlanScannerCustomSourceDirs` (`planIngestionHost.ts:290`) and fed to the engine as `extraRoots` covering both the periodic scan and the watcher. So `.switchboard/plans/` is a default, not the rule. Naming it would be wrong for anyone using custom sources, and it is the same staleness trap as pre-flight step 4's hardcoded `.switchboard/workspace-id` — which is why "the block contains no filesystem path" is already a goal invariant here. The rule is about the *mechanism*: markdown in a designated plans directory becomes a kanban plan by itself.
 
 **Silent-failure prevention — the query-kanban redirect.** Not about discovery: `query-kanban` is `invocation: 'no-user'`, so a general agent already has it listed with a description. The gap is that an agent will hand-roll trivial-looking SQL, and the column labels lie. `DEFAULT_KANBAN_COLUMNS` maps `CREATED`→"New", `PLAN REVIEWED`→"Planned", `CODE REVIEWED`→"Reviewed". A user asks about "Planned"; `WHERE kanban_column = 'Planned'` returns zero rows and the agent reports an empty column. Wrong answer, no error. The clause explaining *why not to improvise* is the load-bearing half.
 
@@ -73,7 +75,7 @@ Yes — two decisions.
 ### Complex / Risky
 
 - **`AGENTS.md` is a governance file.** Editing it changes every user's injected block on next sync. Explicit approval required, and the diff should be reviewed as content, not as a refactor.
-- **Relocating the card-move rule needs the role set enumerated correctly.** It goes into the coder, intern, reviewer and tester prompts and must be *absent* from lead and orchestrator, which legitimately move cards. Getting that backwards either blocks legitimate dispatch or leaves the original gap. `CODE_TOUCHING_ROLES` (`agentPromptBuilder.ts:1510`) enumerates planner/lead/coder/intern/reviewer/tester and is the starting point, not the answer — planner does not move cards either.
+- **The card-move rule's role set is settled: present for planner, coder, intern, reviewer and tester; absent only for lead and orchestrator.** Those two legitimately move cards — the orchestrator via `move-card.js`/`POST /kanban/move`, a lead when dispatching — which is why the current resident text spends most of its length enumerating exceptions. Getting the set backwards either blocks legitimate dispatch or leaves the original gap.
 - **`minimal-prompt.test.js` constrains the planner default, not the reviewer.** All fourteen of its minimality assertions target `'planner'`; its single reviewer call is a newline check. So per-role additions are permitted, but the planner prompt must stay one line.
 - **The memo suppression may not hold even when prominent.** The section's own last clause concedes it: the sidebar path exists "backend-driven, immune to host system prompt overrides". If drift persists once the rule is one of three lines rather than one of fourteen sections, the answer is mechanical — the sidebar, or a `no-model`-style gate — not more prose. Do not treat the reduction as the fix for that.
 - **Three places restate the plan format independently** — `SparkContextExporter.ts:201`, `TaskViewerProvider.ts:6538`, and the block itself. Removing one leaves two that will drift.
@@ -116,8 +118,8 @@ Yes — two decisions.
 1. **The resident body becomes:**
 
    ```
-   - Plans reach the board on their own: a `.md` file written to
-     `.switchboard/plans/` is imported by a filesystem watcher. Committing is
+   - Plans reach the board on their own: a `.md` file written to a designated
+     plans directory is imported automatically by a watcher. Committing is
      irrelevant — untracked files import too. Never import a plan yourself.
    - Memo capture mode: while active, append each user message verbatim — do not
      analyse, plan, or write code. Begin every reply with `[MEMO CAPTURE ACTIVE]`.
@@ -126,7 +128,7 @@ Yes — two decisions.
    ```
 
 2. **Delete the preamble.** With the Antigravity content gone it translates nothing.
-3. **Relocate the card-move rule** into `agentPromptBuilder`'s per-role composition: present for coder, intern, reviewer, tester; absent for lead and orchestrator. Phrased to close the motive — transitions happen automatically — not merely to forbid SQL.
+3. **Relocate the card-move rule** into `agentPromptBuilder`'s per-role composition: present for planner, coder, intern, reviewer and tester; absent for lead and orchestrator. Phrased to close the motive — transitions happen automatically — not merely to forbid SQL.
 4. **`buildManagedInner` takes a per-host body**, not just a per-host preamble.
 5. **Close the "start memo capture" gap** in the `switchboard-memo` skill description, since the registry that documented it is being removed from this host's body.
 6. **Regenerate** and confirm the emitted size.
@@ -148,7 +150,8 @@ None. Regenerated from source on sync.
 - **Size gate:** assert the emitted block is under the threshold, so it cannot silently regrow. This is the test that stops the next individually-justified addition undoing the cut.
 - **No dead references:** grep the emitted block for `send_message`, `view_file`, `IsArtifact`, `// turbo`, `persona adoption`, and any `.agents/` or `.switchboard/` path. All must be absent.
 - **No hidden-capability advertising:** assert the block names no skill whose manifest `invocation` is `no-model`.
-- **Card-move rule placement:** compose prompts for all six roles; assert the rule is present for coder, intern, reviewer, tester and absent for lead and orchestrator.
+- **Card-move rule placement:** compose prompts for all seven roles; assert the rule is present for planner, coder, intern, reviewer and tester, and absent for lead and orchestrator.
+- **Import rule names no path:** assert the line describes a "designated plans directory" and contains no filesystem path, so it stays true under `switchboard.planScanner.customSources`.
 - **Planner default unaffected:** `minimal-prompt.test.js` passes in full — the relocation must not reach the planner's one-line default.
 - **Memo suppression survives:** compose a capture-mode turn and assert the suppression and the marker requirement are both present in the resident block.
 - **Import rule states the git-independence:** assert the line says committing is irrelevant, not merely that import is automatic. The common wrong assumption is that a commit is required, so the negation is the load-bearing half — and `isGitOpActive`'s 15-second suppression means a commit can actually delay import.
@@ -158,5 +161,4 @@ None. Regenerated from source on sync.
 ## Outstanding Questions
 
 - **[user]** Does Antigravity self-discover skills and support slash commands? Decides whether the per-host split is needed or both bodies collapse to ~320 chars.
-- Does `planner` move cards? It is in `CODE_TOUCHING_ROLES` but the card-move rule may need to include it, which changes the role set in change 3.
 - Do agents still drift out of capture mode once the rule is one of two lines? If so the answer is mechanical, not textual, and this plan does not deliver it.
