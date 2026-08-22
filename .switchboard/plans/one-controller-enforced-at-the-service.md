@@ -63,7 +63,13 @@ Neither ends anything. `#strip-orchestrator` is the only button in the rail whos
 
 **What stop actually does, verified:** it disarms the session and archives it, and **deliberately leaves the terminal alive**. `TaskViewerProvider.ts:11668-11670` states why: *"This intentionally differs from stopOrchestratorFromKanban (which leaves the terminal alive because a running agent might have uncommitted context)."* Only `/handoff` closes the seat, and only because the persona has just posted its report so *"there is nothing in-flight to lose."*
 
-That is a **session** end, not a terminal kill — which is precisely why it reads wrong as an unlabelled toggle and reads fine as a labelled control. So stop moves to a labelled control in the Mission Control panel ("End controller session"), where the words can say what it does. No confirmation dialog is available (project rule, and `confirm()` is inert in a webview), so the label is the whole protection — and a nav-rail icon cannot carry one.
+That is a **session** end, not a terminal kill — which is precisely why it reads wrong as an unlabelled toggle and reads fine as a labelled control. No confirmation dialog is available (project rule, and `confirm()` is inert in a webview), so the label is the whole protection, and a nav-rail icon cannot carry one.
+
+**Controls specific to the controller belong in the controller's own frame — and that pattern is already shipped.** The terminals panel keeps a `.sidebar-ops` block of labelled full-width buttons, and it *swaps scope*: `document.body.classList.add('is-team-scoped')` (`terminals.js:778`, `:10555`) hides the general-purpose buttons via CSS (`terminals.html:2129-2137`), while `renderSidebarList` reveals the team-specific ones keyed on `teamScopeId` — `#btn-team-orders`, `#btn-team-automations`, `#btn-team-clear`, `#btn-team-close`, `#btn-team-restart`, `#btn-team-ack`, `#btn-team-add`.
+
+So the controller gets the same treatment: an `is-controller-scoped` body class and `btn-controller-*` buttons in that same ops block, shown when the panel is scoped to the controller. Not bespoke panel chrome invented for this plan — the existing slot, one more scope.
+
+**The destructive-button precedent is already there too:** `#btn-team-close` reads **STOP ALL TERMINALS**, titled *"End every member process immediately"* — labelled, immediate, no confirm gate, exactly per project rule. An end-session button for the controller is the same shape as a control that already ships, which is the strongest argument that this is the right slot: nothing new has to be justified.
 
 **And that control is required, not optional — because `/handoff` is not an exit.** It exists and is fully wired (route `LocalApiServer.ts:6157`, handler `:4639`, implementation `handoffOrchestrationSession` at `TaskViewerProvider.ts:11585`, with a contract test suite asserting the persona documents `## The handoff sequence`). But read what it does: it is *"hand off orchestration to a coding lead and exit"* — a **graduation**, permitted only when the pipeline can run without the controller. It refuses with 409 in five cases:
 
@@ -108,7 +114,7 @@ So handoff cannot end an armed session, a session with no lead, or a session wit
 
 ## Dependencies
 
-- **Precondition for** `mission-control-panel-ui-specification.md` and `feature_plan_20260808220200_shell-right-agent-dock-terminal.md` — both add surfaces that touch the controller, and neither should ship while the invariant is client-side.
+- **Constrains** `mission-control-panel-ui-specification.md`: its "Stop mission" and global controls should land in the scoped `.sidebar-ops` block rather than as new panel chrome, for the same reason. Also a **precondition for** it and `feature_plan_20260808220200_shell-right-agent-dock-terminal.md` — both add surfaces that touch the controller, and neither should ship while the invariant is client-side.
 - Independent of the missions and automation work.
 
 ## Adversarial Synthesis
@@ -130,7 +136,7 @@ So handoff cannot end an armed session, a session with no lead, or a session wit
 2c. **Source the global fact from somewhere global** — `globalState` or the service's in-process registry, not `workspaceState`, which cannot answer it.
 3. **Reclaim, do not refuse, when the named terminal is dead** — a stale name must not lock the role out.
 4. **Demote the client flag** to a UI affordance (disable the button while a start is pending); it is no longer the guard.
-4a. **Add a labelled stop to the Mission Control panel** ("End controller session"). This lands **before or with** 4b — `/handoff` refuses armed, lead-less and empty-queue sessions, so the rail toggle is today's only general exit.
+4a. **Put the controller's controls in the controller's own scope**, reusing the `.sidebar-ops` pattern: an `is-controller-scoped` body class and `btn-controller-*` buttons, mirroring `is-team-scoped` / `btn-team-*`. The end-session button goes here, shaped like `#btn-team-close`. This lands **before or with** 4b — `/handoff` refuses armed, lead-less and empty-queue sessions, so the rail toggle is today's only general exit.
 4b. **Make the rail button navigational.** Dimmed → start; lit → reveal, matching every other button in the rail.
 5. **Report pre-existing duplicates** rather than removing them — scrollback may matter.
 6. **Verify the standalone creation path** routes through the same `create()`.
@@ -156,6 +162,7 @@ None. Existing duplicates are reported, not deleted.
 - **Stop-then-start re-seats, never duplicates:** press stop, assert the terminal survives (per `:11668`), then call start from a *different* surface and assert the same terminal is re-seated with no `orchestrator-2`. This is the realistic duplicate path and the one a naive "is there a live seat?" check would miss, because after stop there is no seat but there is a terminal.
 - **Global, not per workspace:** with two control-plane roots open, start from each; assert one controller total. Asserting per-root uniqueness would pass while violating the requirement.
 - **The rail button never stops:** press it while lit and assert it navigates — no `/orchestration/stop` call from any rail path. This is the behaviour change, so it needs the test that would fail today.
+- **Controller scope swaps the ops block, and unscopes cleanly:** enter controller scope and assert the general-purpose buttons hide and `btn-controller-*` show; leave and assert the reverse. The team-scoped path has the same failure mode — a scope that hides but never restores — so this mirrors an assertion that already earns its place.
 - **The panel can end any session handoff refuses:** arm a session, then assert `/handoff` 409s while the panel's stop succeeds. This is the pair that proves the exit exists — testing stop alone would pass even if handoff were the only route.
 - **An adopted controller blocks creation:** adopt an ordinary terminal into the seat, then call start; assert no new terminal. A role scan alone passes this test wrongly, because the adopted terminal's role is not `orchestrator`.
 - **The PM key is the same singleton:** create a `project_manager` seat, then start the controller; assert one, not two. Two separate set entries would fail this while looking correct.
