@@ -18,7 +18,12 @@ A section-by-section pass found that almost none of it can act. The content fall
 
 **4. Advertising capability the agent does not have.** Two rows of the skills table name `kanban_operations` and `worktree-cleanup`, both `invocation: 'no-model'` — deliberately hidden from the model by the mirror manifest. The architecture prose also directs the agent to `kanban_operations` for manual card moves. This is worse than redundant: it invites an agent to claim a capability, then fail.
 
-**5. Unactionable reference.** The 31-protocol name list carries no descriptions, so it cannot route a choice; protocols arrive by directive anyway. The architecture diagram is orientation. "Skill Files Location" describes directory layout an agent never needs — and was wrong in six places until corrected.
+**5. Unactionable *and false*.** The Available Skills section is 1,943 chars, of which the protocol material is ~996: a 735-char list of 31 protocol names, a 143-char "Usage" line, and a 118-char "Skill Files Location" line. Three faults, escalating:
+- **Self-refuting.** The list's own parenthetical says protocols are "not discoverable — delivered by path reference". A bare name list with no descriptions cannot route a choice, and by its own admission is not how protocols arrive. It is a catalogue of things it tells you that you cannot look up.
+- **Factually wrong.** Both the "Usage" line and "Skill Files Location" assert protocols live at `.agents/protocols/<name>/SKILL.md`. That is false for `refine_feature`, which is a bare `.agents/protocols/refine_feature.md` — so the block instructs an agent to construct a path that does not exist for one of its 33 entries. This is not bloat; it is a resident instruction that is wrong, which is the one category that cannot be left in place on a size argument alone.
+- **Already stale by construction.** The list is a hand-maintained mirror of a directory. It was wrong in six places until corrected earlier in this programme, and `refine_feature` shows the shape claim drifting too.
+
+The architecture diagram is orientation and goes for the ordinary reason.
 
 **6. Restatement.** Execution Rules restates Rule #1 and pre-flight step 3. Pre-flight step 1 ("scan for commands") and step 5 ("otherwise respond normally") are self-evident. Rule #1 itself is enforced by the harness: a slash command arrives already expanded, so an agent cannot fail to follow a workflow it was handed.
 
@@ -101,7 +106,10 @@ Yes — two decisions.
 
 - **Requires** `replace-agent-project-pinning-with-a-sticky-ui-setting.md` for the 2,785-char pinning section, which that plan removes at source.
 - **Protects** the global-database plan: pre-flight step 4 hardcodes `.switchboard/workspace-id` as the DB-path source, which that plan invalidates. Cutting it removes a silent-staleness coupling between the two.
-- Otherwise independent.
+- **Overlaps `protocols-as-db-rows-not-scaffolded-files.md` on the same ~996 chars, and neither plan said so until now.** That plan's Complex/Risky list requires that "nothing outside the extension may name a protocol by path" and calls for a test asserting no protocol path appears in `CLAUDE.md`. This plan deletes those same lines for a different reason. Consequences of leaving the overlap unstated:
+  - If **this** plan ships first, the protocols plan's `CLAUDE.md` assertion is already satisfied — its test is still worth keeping as a regression guard, but it is not the discovery it reads as.
+  - If **the protocols plan** ships first, it removes chars this plan still counts, so the 14,826 baseline and the under-800 size gate both go stale and the gate could pass or fail for reasons unrelated to this work.
+  - Either way the size gate must be computed from the block as emitted at merge time, not from a number recorded in this plan. Whichever lands second re-measures rather than trusting the figure written here.
 
 ## Adversarial Synthesis
 
