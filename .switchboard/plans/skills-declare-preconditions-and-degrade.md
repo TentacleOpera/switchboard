@@ -31,7 +31,21 @@ An earlier revision of this plan proposed adding a `## Preconditions` section to
 
 So the change for this skill is: **endpoints become the documented method; SQL is demoted to a clearly-labelled fallback for the no-API case, or removed entirely.** A precondition then describes when the *fallback* applies, which is the narrow thing preconditions are good at.
 
-This is a rewrite of a shipped skill rather than an addition to it, and it raises this plan's complexity. The other three skills are unchanged — they keep the precondition-and-degrade treatment described below.
+### The endpoint contract already exists — this is a reachability fix, not new authoring
+
+`.agents/protocols/switchboard-orchestration/SKILL.md` is titled **"Switchboard Orchestration HTTP Surface"**, documents **22** `GET`/`POST /kanban` calls, and opens with precisely the rule this plan wants enforced:
+
+> "Switchboard's LocalApiServer runs inside the VS Code extension and is the **sole writer** of `kanban.db`. **You never touch the DB directly — you call these endpoints.** The board is the source of truth; the UI is just one view of it."
+
+It also already separates concerns the right way: *"This skill is the invocation authority (endpoints, verbs, payload fields)"*, deferring behaviour contracts to `switchboard-contracts`.
+
+**Two things keep it from reaching a team agent:**
+1. **It is a protocol, not a skill** — `.agents/protocols/` is path-delivered and undiscoverable, so nothing finds it without a directive handing over the path. Its own scope line addresses *"a fleet coding/review agent working inside an orchestration worktree, or an external orchestrator"* — not a team member on the local board.
+2. **The discoverable kanban skill is the SQL one.** `query-kanban` is `invocation: 'no-user'`, so it is what a model-driven team agent actually finds. The endpoint authority is invisible to it; the SQL skill is one hop away.
+
+**Historical cause, and it was not a deletion.** Git history shows `query-kanban-plans/SKILL.md`, `query_kanban_plans.md`, `query_switchboard_kanban.md` and `query_archive/SKILL.md` removed from `.agents/skills/`, alongside `clickup-api`, `linear-api` and `notion-api`. No endpoint-based kanban skill was ever deleted — **both inputs to today's `query-kanban` were SQL skills**, and the merge preserved SQL as the method. What the reorganisation did was move *every* API reference (`clickup-api`, `linear-api`, `notion-api`, and the orchestration HTTP surface) into `protocols/`, making all of it undiscoverable in one move, while the SQL skill stayed discoverable. Nobody removed the endpoint guidance; the move made it unreachable and left the SQL guidance reachable.
+
+**So the rewrite sources from `switchboard-orchestration/SKILL.md` rather than being written fresh** — and the endpoint list must have **one authority**, not two that drift. Prefer pointing at it, or lifting only the team-relevant reads out of it, over restating the endpoints in a second file. That makes this cheaper than a from-scratch rewrite, which is why the complexity below is 3 rather than higher.
 
 **Discovery-as-a-phase is the wrong shape.** An up-front "work out what you can reach" step costs tokens on every session, must enumerate channels it cannot know about, and produces a claim that is stale the moment auth expires. Discovery at point of use costs nothing until the capability is wanted and is always accurate. The pattern already exists in the codebase; it just is not applied uniformly.
 
@@ -49,7 +63,7 @@ Skills were written against the environment their author had. `manage-features` 
 
 ## Metadata
 
-**Complexity:** 4
+**Complexity:** 3
 **Tags:** docs, reliability, refactor, cli
 
 ## User Review Required
@@ -66,7 +80,8 @@ No. This adds a stated precondition and a fallback instruction to skills that la
 
 ### Complex / Risky
 
-- **Rewriting `query-kanban` around the endpoints is the bulk of this plan.** Every query template in it is SQL and each needs an endpoint equivalent, or an honest statement that no endpoint covers it — which is itself a finding worth surfacing, since a query with no endpoint equivalent is either a gap in the API or a query teams should not be running. Do not translate mechanically: check each against the five read endpoints first.
+- **Rewriting `query-kanban` around the endpoints is the bulk of this plan.** Every query template in it is SQL and each needs an endpoint equivalent, or an honest statement that no endpoint covers it — which is itself a finding worth surfacing, since a query with no endpoint equivalent is either a gap in the API or a query teams should not be running. Do not translate mechanically: check each against the five read endpoints first, and against the 22 documented in `switchboard-orchestration/SKILL.md`.
+- **Decide how `query-kanban` relates to the existing authority, because both options have a cost.** Pointing at `switchboard-orchestration/SKILL.md` keeps one authority but hands a team agent a protocol whose own scope line addresses fleet and external agents — so that line needs widening, or the pointer reads as out of scope. Lifting the team-relevant reads into `query-kanban` reads cleanly but creates a second place the endpoint list can drift. Recommending the pointer plus a widened scope line: drift is the worse failure, and this programme has already produced two contradictory copies of one instruction.
 - **The description matters more than the body.** An agent decides whether to load a skill from its one-line description. `query-kanban`'s currently promises "direct SQL access to kanban.db" with no qualifier, so an agent in a DB-less session loads it on the strength of that. The description must lead with the endpoint method, not merely gain a precondition clause.
 - **"Say so" must be specific about what to say.** A fallback that reads "otherwise explain you cannot" invites an agent to declare the system broken. The instruction should name the likely reason — no local database in a cloud or tracker-only session — so the agent reports a configuration fact rather than a fault.
 - **Do not encourage improvisation as the fallback.** `query-kanban` exists partly because hand-written SQL silently returns nothing (column labels differ from stored IDs). Its no-API path must not read "query the DB another way" — and note the label/ID trap is an argument *for* the endpoints, which return records rather than requiring the caller to know the mapping.
