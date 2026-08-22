@@ -2,13 +2,65 @@
 
 ## Goal
 
-Give `src/webview/shell.html` a **right-hand dock** that hosts one live agent terminal, mirroring the right-sidebar agent-chat placement users know from Antigravity, Devin Desktop, Cursor and Copilot Chat. The dock:
+Give `src/webview/shell.html` a **right-hand Mission Control dock** that hosts the orchestrator's terminal, mirroring the right-sidebar agent-chat placement users know from Antigravity, Devin Desktop, Cursor and Copilot Chat. The dock:
 
 - lives beside `#content` (never on top of it — no overlay, no floating window),
 - is toggled from the left rail's bottom cluster and remembers its open/closed state and width,
 - hosts a real PTY seat rendered by the existing `/terminals?solo=<name>` page,
-- **auto-creates that seat on first open** using a user-configured role, so the dock is a one-click "open my agent" rather than "go find a terminal you already made",
-- lets the user change which agent role the dock starts, from a picker in the dock's own header.
+- **is bound to the orchestrator seat** — it shows whatever terminal `autobanState.orchestratorSeat.terminalName` names, and nothing else,
+- **never creates or starts that seat.** With no orchestrator seated, the dock shows an empty state pointing at the existing start control.
+
+### The dock's own UI — supersedes the markup in Proposed Changes
+
+The markup in section 1a below is the **original role-configurable** dock and contradicts this rewrite in three places. Where they disagree, this section wins:
+
+| Element in 1a | Fate |
+|---|---|
+| `#dock-role-btn` ("Choose which agent this dock starts") | **removed** — no role to choose |
+| `#dock-role-menu` | **removed** with it |
+| `#dock-start` (empty-state start button) | **kept** — it starts Mission Control; see below |
+| `#dock-title` | keeps the **seat name**, or "Mission Control" when unseated |
+| `#dock-close`, `#dock-splitter`, `#dock-frame` | unchanged — close, resize, and the `?solo=` iframe |
+
+**Header:** the seat's terminal name, a liveness indicator, a close button. Nothing else. The liveness indicator is not decoration — `orchestratorSeat` is adopted and can name a terminal that has exited, and the edge case below requires the dock to follow adopt/re-adopt/clear. A dead pane with a live-looking header reads as a broken terminal rather than an absent persona.
+
+**A link to the Mission Control panel** belongs here too: the dock is the persona's terminal, the panel is what it is working on. Pairing them is the whole point of the name.
+
+**Empty state: a pointer to the existing rail button, plus an intro link.**
+
+**Correction:** `shell.js:271` already provides `#strip-orchestrator` — a rail button that starts and stops the persona, lights with live state, guards double-start (two fast clicks would otherwise spawn `orchestrator-2`), and falls back to clipboard launcher text when no agent is configured. So the dock needs no start control of its own, and adding one would reintroduce the double-start race that button already handles. The empty state names that button and explains what it does.
+
+The reasoning below stands on why an *explicit* start is safe — it just turns out the explicit start already exists.
+
+An earlier revision of this section made the empty state a pointer to the Mission Control panel and argued the dock should never start anything. **Withdrawn.** Two use cases beat it, and the safety argument behind it was mis-aimed:
+
+- **Session restart with in-flight work.** Work continues across sessions; the controller does not. Making every restart a trip to another panel is friction on the most common path, and the dock is exactly where its absence is noticed.
+- **First run.** A new user looking at the board has no idea where to begin, and the controller is a good front door — its empty state can carry the intro-docs link.
+
+**Why a button here is safe, where auto-start was not.** The persona gates itself: `switchboard-orchestrator/SKILL.md:148` is *"Resume, or interview?"* and `:206` is *"Propose a goal, then stop"* — *"propose one short statement of what you intend to accomplish… Then **stop and wait.** Nothing runs until the user answers."* So starting it commits to nothing; it starts and asks. The danger was launching as a **side effect of opening a dock** — no human intent anywhere. An explicit click is intent, and the pre-flight is a second gate. My "you cannot see what it would pick up" objection does not hold against a persona that tells you what it intends and waits.
+
+And two controls are fine when they do the *identical* thing. The drift pattern this programme keeps hitting is two instructions saying **different** things about one action (the seat and head queue orders); a dock button and a panel button invoking one start path are not that. Keep both: the dock for reach, the panel for when you are already there. One implementation, two entry points.
+
+**Activation, and what is still unspecified.** The dock is toggled from the rail's bottom cluster and persists its open/closed state and width, and it **starts closed** — creation is explicit-click-only, never on shell load. Two gaps:
+
+- **The first-run default is not specified.** "Remembers its state" says nothing about having no state to remember. Open-on-first-run serves the intro case; closed-by-default avoids taking ~648px from the board for users who would never want it. **Recommending closed, with the rail toggle visibly present** — the intro then lives where every user can reach it, for the reason below.
+- **The dock is capability-gated, so it cannot be the only first-run surface.** Below `DOCK_VIABLE_MIN = 980` the toggle renders `disabled` (`48 + 4 + 648 + 280 = 980` is the narrowest viewport fitting both dock and board, and the clamp deliberately makes the dock the loser rather than squeezing the board to 200px), and it renders nothing at all when `node-pty` is absent (`frames.has('terminals')`). So a new user in a narrow or split window, or on an install without `node-pty`, never sees it. **The intro must therefore also exist in the Mission Control panel**, which has no width or pty gate. The dock's empty state is a convenience copy of it, not its home.
+
+**And the terminal itself needs a second home for the same reason.** Below 980px the controller is otherwise reachable only via the full-screen terminals panel or a solo pop-out — the mode switch this dock exists to remove. `mission-control-panel-ui-specification.md` therefore carries a **persistent controller strip** hosting the same `?solo=<seat>` frame: inside the panel there is no board to coexist with, so the 648px terminal floor is met easily at laptop widths. Deliberately panel chrome rather than a peer tab — a terminal in a hidden tab never receives the `panelVisibility` message that releases its shared-pty size vote and its WebGL context, because tab switches do not pass through `selectPanel`. That plan carries the full reasoning. That makes this dock an honest convenience for wide monitors rather than a capability-gated front door.
+
+**Two rail affordances for Mission Control, deliberately.** The UI spec adds a fighter-jet panel icon; this plan adds a bottom-cluster dock toggle. That is defensible — the panel is missions and schedules, the dock is the persona's terminal — but it should be a decision rather than an accident, and the two must not look like duplicates of each other in the rail.
+
+**The intro link is the resident docs URL, not `AGENTS.md`.** `AGENTS.md` is being emptied to a handful of rules by `shrink-the-injected-agent-protocol-block.md`, so it is no longer an intro. The surviving pointer is the docs line — `https://switchboard.dev/docs` — and it should come from the single constant `consolidate-the-docs-url-in-the-extension.md` establishes, not a second literal here.
+
+### Scope change from the original plan: Mission Control, not a general agent dock
+
+This plan was written as a *role-configurable* dock — auto-create a seat on first open using a persisted role, with a picker in the dock header. It is rewritten as a single-purpose surface bound to the orchestrator. What that removes and why:
+
+- **No role picker, no persisted role, no new Setup verb pair.** The whole of former section 4 (`getAgentDockRole` / `setAgentDockRole`, a `package.json` configuration property, and a `npm run catalog:generate` pass) goes. That was the largest piece of backend work in the plan and it exists only to answer "which role does this dock start", a question a bound dock does not ask.
+- **No auto-create on first open** — a safety property rather than a simplification. An explicit Start button is a different thing and is kept (see the UI section). Auto-creating an orchestrator seat means *opening a dock launches the orchestrator persona* — and `switchboard-manage-console-skill.md` records exactly that failure from the other direction: invoking the persona as a human *"grouped loose plans into a feature and fired dispatch with no confirmation"*. A UI affordance whose side effect is starting unattended automation is the same defect with a smaller trigger. Opening the dock displays; a deliberate click starts. The AUTOMATION tab's Start orchestrator goes with that tab, so the dock and the Mission Control panel become the two entry points to one start path.
+- **The PM-delivery synergy argument no longer applies.** The original plan's strongest case for defaulting the dock to `project_manager` was that `_tryFleetDeliveryForRole('project_manager', …)` would then deliver the sibling plan's `MANAGE` button into it for free. That argument dies with the role config, and the sibling subtask must not silently depend on this dock hosting a PM seat.
+
+**Naming.** "Mission Control" is the right label only if missions land (`staging-streams-parallel-dispatch-and-worktrees.md`) — and it becomes the fourth name in this area after *orchestrator*, *orchestration* and the proposed *operator*. `rename-the-orchestrator-to-the-operator.md` counts 1,067 occurrences across 55 files; if the persona is renamed at all, that plan should absorb this label rather than two renames landing separately. **Pick the word once, there.**
 
 ### Problem
 
@@ -55,20 +107,24 @@ This is not a regression — the shell was **designed** as `rail + single conten
 
 - **Solo mode is a complete single-terminal page.** `?solo=<name>` pins one pane, force-sets `currentLayout='1'`, hides the sidebar and toolbar, and shows a `#solo-status` element for the not-yet-connected / not-found states (`terminals.js:71-78`, `:422-430`, `:636-641`; `terminals.html`'s `#solo-status`). The dock reuses it verbatim — no new terminal renderer.
 - **The pty gateway is genuinely multi-client.** `reconcileTerminalSize` takes the MIN of every *rendering* client's viewport and ignores `rendered:false` frames (`src/standalone/terminalWsGateway.ts:983-1012`), so a dock and the Terminals panel can both attach to the same seat without one destroying the other.
-- **Role → CLI is already resolved server-side.** `PtyFleetService.create()` injects the role's configured startup command after `SHELL_READINESS_DELAY_MS` (`src/standalone/ptyFleetService.ts:140-237`), and `ptyVisibleRoles` returns `{visibleAgents, hasCommand}` (`terminals.js:3575-3591`). The dock picker is a thin reuse of what `onNewTerminalClicked` already builds (`terminals.js:3597-3651`).
+- **The orchestrator seat is already durable, named state.** `autobanState.orchestratorSeat` carries a `terminalName` (`TaskViewerProvider.ts:1722`, `:6373`, `:11307`), and `:6362` already treats `orchestratorSeat || orchestratorArmed` as the "orchestrator present" signal. So the dock has a name to solo on and a presence check to gate its empty state — both existing, neither new.
 - **The manifest already gates on pty availability**, fail-closed: `terminals: ptyReady` in standalone (`bootstrap.ts:617`) and `terminals: ptyHostReady()` in the extension's browser cockpit (`TaskViewerProvider.ts:2402`), with `terminalsEnabled = availability?.terminals === true` (`headlessPanelHtml.ts:502`). The dock reads the same manifest entry the rail does, so it disappears on a node-pty-less install with no new probe.
 - **The dock frame themes itself on load with no code.** `resolveInitialTheme()` inherits the theme class from the same-origin parent body when the host injected none (`terminals.js:337-354`). The dock iframe is inside the shell, so its first paint is already correct; only the **live** toggle needs the fan-out fix in edge case 10.
-- **The dock seat becomes the PM delivery target for free.** `_tryFleetDeliveryForRole('project_manager', …)` selects by role, so once the dock's `project_manager` seat is live, the sibling plan's `MANAGE` button delivers into it. That synergy is the strongest argument for the chosen default role — see Dependencies.
+- **Binding to a seat rather than a role sidesteps the adoption question.** `orchestratorSeat` is *adopted* (`:11307`, `:11520`), not created by the dock, so the dock never competes with the adoption path: it renders whatever is currently adopted and follows a re-adoption. A role-based dock would have had to decide what happens when a second terminal of the same role appears.
 
 ## Metadata
 
-- **Complexity:** 7
+- **Complexity:** 5
 - **Tags:** frontend, ui, ux, feature, backend
 - **Project:** Browser Switchboard
 
 ## User Review Required
 
-None.
+- **First-run default: closed or open?** Recommending closed, because the dock is width- and pty-gated and so cannot be relied on as the intro surface anyway.
+- **Two rail affordances** — fighter-jet panel icon plus dock toggle. Confirm both, and that they read as distinct things.
+- **Two start entry points, one implementation.** The dock's empty state and the Mission Control panel both start the persona, replacing the AUTOMATION tab's control. Confirm they share one code path — the risk is not two buttons, it is two behaviours.
+- **Confirm the dock is orchestrator-only.** The parent feature's stated goal is that *"every agent surface in Switchboard is reachable from where the operator is standing"*, with this dock as the general front door. Binding it to one persona narrows that deliberately — a decision about the feature's intent, not just this subtask.
+- **The label depends on the rename.** See Naming above: settle the persona's word in `rename-the-orchestrator-to-the-operator.md` rather than introducing a fourth name here.
 
 ## Complexity Audit
 
@@ -82,7 +138,9 @@ None.
 - **Anchor arithmetic in the rail.** `applyBottomAnchor()` hands `margin-top:auto` to exactly ONE member of the bottom cluster and neutralises `#strip-terminals` inline when something precedes it; two auto margins split the free space and park the cluster mid-rail (`shell.js:255-272`, and the warning at `shell.html:182-192`). The dock toggle is a new bottom-cluster member and MUST be inserted into that reconciliation, not appended blind.
 - **Seat lifecycle.** Adopt-if-present-else-create, keyed by a stable dock seat name, with the fleet-relay as the only source of truth about whether the seat is still alive. Getting this wrong yields either duplicate seats on every reload or a dock permanently pointed at a dead terminal. The de-duplication behaviour is **not** what a first reading suggests — see edge case 4.
 - **Cross-frame plumbing.** The dock iframe is a *second* `/terminals` page. It will post `terminalFleetState` to `window.parent` exactly like the main one, so `shell.js`'s relay handler must not let the dock's (identical) snapshot fight the panel's.
-- **Persisting the role choice server-side.** New verb pair + a `package.json` configuration property + a catalog regeneration (`npm run catalog:generate` — `verbAllowlist.ts` is auto-generated and must never be hand-edited).
+- ~~Persisting the role choice server-side~~ — removed with the role picker. No new verb, no `package.json` property, no catalog regeneration.
+- **The empty state is the first-run surface, so it carries real weight.** It is what a new user sees before anything is configured: a Start button and one intro link. That argues for it being legible rather than minimal — but it must not grow into an onboarding panel, because the dock is narrow and the panel exists for depth.
+- **Reacting to a seat change while the dock is open.** The dock must follow `orchestratorSeat` when it is adopted, re-adopted or cleared, not read it once on open. A dock pinned to a stale terminal name shows a dead pane that looks like a broken terminal rather than an absent orchestrator.
 - **Column width is a product constraint, not a cosmetic one.** A PTY does not reflow like a chat pane. The dock's minimum and default widths decide whether the agent CLI inside it is usable at all — see edge case 13, which supersedes the plan's original numbers.
 
 ## Edge-Case & Dependency Audit
@@ -103,7 +161,7 @@ None.
    > while (this.terminals.has(name)) { counter++; name = `${role}-${counter}`; }
    > ```
    > — `ptyFleetService.ts:141-146`. On collision the requested `friendlyName` is **discarded entirely** and the name falls back to the *role* series. A second `dock-coder` request yields `coder-2`, not `dock-coder-2`. Worse: `handle.onExit` sets `status = 'exited'` but does **not** delete the entry from `this.terminals` (`:196-204`; only `kill()` deletes, `:282-290`), so the very first restart after the dock agent exits normally already collides — the dock's second seat is named `project_manager-2`. The `dock-` prefix therefore cannot be relied on as an identifier, and the original verification step "fleet strip shows exactly one `dock-*` entry" would fail on the second run.
-   > **Replaced with:** Two changes. (a) Creation stays explicit-click-only — clicking the dock's "Start &lt;Role&gt;" button in the empty state, never implicitly on shell load — so two shell tabs cannot both auto-create. (b) The dock **never keys on the seat name pattern**. It persists the `friendlyName` the server actually returned (`data.terminal.friendlyName`) and treats that string as opaque. The requested name stays `dock-<role>` because it is a good default label for the operator, not because anything reads it back. Before creating, the dock also offers to adopt: if a live seat with the persisted name exists, mount it; otherwise show the start button.
+   > **Replaced with:** Two changes. (a) Creation stays explicit-click-only — clicking the dock's "Start Mission Control" button in the empty state, never implicitly on shell load — so two shell tabs cannot both auto-create. (b) The dock **never keys on the seat name pattern**. It persists the `friendlyName` the server actually returned (`data.terminal.friendlyName`) and treats that string as opaque. The requested name stays `dock-<role>` because it is a good default label for the operator, not because anything reads it back. Before creating, the dock also offers to adopt: if a live seat with the persisted name exists, mount it; otherwise show the start button.
 
 5. **Role has no CLI configured.** `injectStartupCommand` returns silently when `commands[role]` is empty (`ptyFleetService.ts:227-229`) — the seat is a plain shell. `ptyVisibleRoles` already returns `hasCommand` per role (`terminals.js:3584-3586`); the picker must label a CLI-less role the way `onNewTerminalClicked` does (`terminals.js:3630-3632`) rather than pretending an agent will appear.
 
@@ -175,6 +233,7 @@ None.
 ## Proposed Changes
 
 ### 1a. `src/webview/shell.html` — dock markup + CSS
+> **Superseded in part.** The role picker (`#dock-role-btn`, `#dock-role-menu`) and the empty-state start button (`#dock-start`) below are from the original role-configurable design. Build the header and empty state per "The dock's own UI" above; the splitter, frame, close button and CSS carry over unchanged.
 
 Add the dock as a **third flex child**, after `#content`:
 
@@ -596,7 +655,11 @@ and guard inside `postFleetStateToShell`, immediately after the existing pop-out
 
 One guard inside the function covers all seven call sites (`:602`, `:616`, `:833`, `:1783`, `:1869`, `:5073`, and the fleet poll). Everything else in solo mode is unchanged — the dock is an ordinary solo page.
 
-### 4. Persist the dock role — new Setup verb pair
+### 4. ~~Persist the dock role~~ — REMOVED
+
+This section is deleted with the role picker. Its content (a `getAgentDockRole` / `setAgentDockRole` verb pair, a `package.json` configuration property, and a catalog regeneration) is retained below only so a reader can see what was dropped and why — **do not implement it.**
+
+#### Dropped: persist the dock role — new Setup verb pair
 
 **`src/services/SetupPanelProvider.ts`**, modelled on the `getProtocolTarget` / `setProtocolTarget` pair (`:764-780`) rather than the boolean `persistPanels` pair — same string-with-default shape:
 
