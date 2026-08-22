@@ -85,6 +85,17 @@ So handoff cannot end an armed session, a session with no lead, or a session wit
 
 **The guard still needs the disarmed-but-alive state**, wherever stop lives. After a stop there is a terminal but no seat: neither "no terminal" nor "live controller". A start in that state must re-seat the existing terminal, because the name is taken and the collision loop would otherwise increment. This is the likeliest duplicate path in practice — stop, then start from any surface — and a naive "is there a live seat?" check misses it exactly.
 
+### Existing tests this breaks — checked, and it is two, not zero
+
+**Nothing relies on a second controller.** Swept `src/test/` (228 files) and `src/services/__tests__/`: zero references to `orchestrator-2`, `ORCHESTRATOR_TERMINAL_NAME`, or `role: 'orchestrator'` in any fixture, and no multi-root harness that spawns one per root (`multi-parent-terminals-contract.test.js` runs terminals in two repo cwds but never a controller). The collision-loop fixtures that do exist are all pool roles — `lead-1-coder-2`, `lead-1-coder-3` — which this plan deliberately leaves alone. So the global singleton costs no fixture.
+
+**But two tests in `shell-terminal-strip.test.js` assert the behaviour this plan changes**, and they read source text via `block(shellJs, …)`, so they fail loudly rather than rot silently:
+
+1. **`:756` — *"lit-click posts /orchestration/stop and dimmed-click posts /orchestration/start"*.** It asserts `fetch('/orchestration/stop')` appears in the lit path. Change 4b removes exactly that, so the test fails by design. Rewrite rather than delete: the new assertion is that the lit path navigates and posts **no** stop. Its comment also needs replacing — *"The two click paths are the shell rail's only orchestrator controls"* stops being true the moment the scoped ops block exists, and that sentence is precisely where a future reader would go to learn the rule.
+2. **`:778` — *"the dimmed-click has an in-flight guard against double-click"*.** It asserts `orchestrationStartInFlight` exists, that `if (orchestrationStartInFlight) { return; }` makes a second click a silent no-op, and that it clears via `.finally`. Change 4 demotes that flag from guard to UI affordance, so these assertions must move with it. Its comment restates the very race this plan's Problem Analysis quotes — *"the agent adopts the seat seconds or minutes after the terminal is created"* — so it should end up pointing at the service guard instead of the client flag. Leaving it as-is would leave the codebase asserting that the client flag is the protection, after it stopped being.
+
+Both are behaviour-change fallout rather than surprises, but they belong in the plan: a coder who sees two red tests in a file they did not touch will otherwise assume they broke something.
+
 ## Complexity Audit
 
 ### Routine
@@ -104,7 +115,7 @@ So handoff cannot end an armed session, a session with no lead, or a session wit
 
 ## Edge-Case & Dependency Audit
 
-**Migration.** No stored state. Existing `orchestrator-2` terminals are reported rather than removed.
+**Migration.** No stored state. Existing `orchestrator-2` terminals are reported rather than removed. No test fixture creates one, so nothing in CI has to be migrated — only the two rail tests rewritten.
 
 **Security.** Neutral. No new surface; a refusal path is added.
 
@@ -140,6 +151,7 @@ So handoff cannot end an armed session, a session with no lead, or a session wit
 4b. **Make the rail button navigational.** Dimmed → start; lit → reveal, matching every other button in the rail.
 5. **Report pre-existing duplicates** rather than removing them — scrollback may matter.
 6. **Verify the standalone creation path** routes through the same `create()`.
+7. **Rewrite the two rail tests** at `shell-terminal-strip.test.js:756` and `:778`, comments included — they currently assert the toggle and the client flag are the design.
 
 ### Migration
 
@@ -172,4 +184,4 @@ None. Existing duplicates are reported, not deleted.
 
 ## Outstanding Questions
 
-- Does anything today rely on creating a second controller — a test fixture, or a harness that spawns one per root? A global singleton would break such a fixture, and it is better to find it now than in CI.
+None. The last open one — whether anything relies on creating a second controller — is answered under *Existing tests this breaks* above: nothing does, but two rail tests must be rewritten with the behaviour change.
