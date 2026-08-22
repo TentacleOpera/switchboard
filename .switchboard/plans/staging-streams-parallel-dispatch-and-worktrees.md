@@ -47,6 +47,18 @@ The analysis was built to answer the safe question — "which of these can I fir
 
 ## User Review Required
 
+### A mission is the staging queue, named — nothing existing changes
+
+The framing that matters: **a mission with one sequential stream is exactly today's staging queue.** Missions generalise the queue rather than replacing it, and no current behaviour is removed.
+
+- **Auto-created on first drop.** Dragging a card into the STAGING column creates a mission if none is open, gives it a **generated codename**, and adds the card. The user never has to author a mission to get today's behaviour.
+- **Default rules are today's rules.** A fresh mission is sequential, in `queue_position` order, dispatched by `queue/next` exactly as now. Streams are an *optional elaboration* the Analyze pass adds; a mission that was never analysed has one implicit stream and behaves identically to the present queue.
+- **Launch uses the mission's own rules** — sequential by default, streams if analysed.
+- **The new capability is preparation.** Missions can be created in advance and added to progressively, so several are teed up before any is launched. That is the whole product change; everything else is the existing pipeline wearing a name.
+- **The orchestrator is one author, not the author.** It can write a mission (with its stream map) as before, but the ordinary path is a user dropping cards into STAGING.
+
+No codename generator exists in the codebase today (checked: no `codename`/`codeName`, no adjective-noun word lists), so that is a small new piece. It wants to be stable once assigned and legible in a report — the operator will name missions in its handoff summaries.
+
 ### The carrier is a mission card, not a run parameter
 
 The map lives on a **mission card**: a board card the analysis writes, holding the streams and their order, which **launches the run when advanced**. That replaces two earlier designs — a per-run parameter store, and an inbox instruction to set it — and dissolves the questions both raised:
@@ -69,7 +81,7 @@ So a mission card **references without owning**: members keep their own `feature
 - **Dragging a card onto a mission card adds it to the mission and removes it from the board.** Membership is containment, mirroring how feature subtasks roll up rather than appearing as loose column cards — the same rule `dispatch-analysis` already relies on (*"a subtask is never a standalone candidate … the user sees it rolled up under the feature"*). The mission card then shows its members and their streams.
 - **Consequence for the drag interception below:** two drag semantics now exist on a mission card — dragging *the mission* opens the panel, dragging *a plan onto it* adds a member. Both must be distinguishable before the optimistic path, or a mis-drop either launches nothing or silently swallows a card.
 
-**Automation becomes mission-scoped**, which is a large enough change to be its own plan: `retire-open-ended-automation-for-mission-scoped-runs.md`.
+**Automation becomes mission-scoped** — the schedule survives untouched, only its target becomes a mission's finite membership. Its own plan: `scope-automation-to-missions.md`.
 
 ### Missions get their own panel; the board move is navigation, not launch
 
@@ -199,6 +211,9 @@ Additive nullable column. A plan with no stage behaves as today.
 - **Missions are STAGING-only:** assert a mission card cannot be created in, or moved to, any other column.
 - **Membership removes from the board:** drop a plan onto a mission card; assert it becomes a member and no longer renders as a loose column card. Then assert the reverse — removing it from the mission returns it to its column rather than orphaning it.
 - **The two drags are distinguishable:** assert dragging the mission opens the panel and dragging a plan onto it adds a member, with no path where a mis-drop both moves the mission and swallows the card.
+- **An unanalysed mission behaves exactly as today's queue:** create a mission by dropping cards into STAGING, never run Analyze, launch it; assert the dispatch sequence is byte-identical to the current staging-queue behaviour. This is the test that proves missions generalise rather than replace, and its failure means the change is not backward-compatible however good the map is.
+- **Auto-create on first drop:** drop a card into STAGING with no mission open; assert one mission is created with a codename and the card is a member. Drop a second card; assert it joins the same mission rather than creating another.
+- **Codenames are stable and unique:** assert a mission's codename does not change across reloads and two missions never collide.
 - **Mission card is not a feature:** assert it does not set `feature_id` on its members, does not cascade on move, and is not counted in feature complexity derivation.
 - **Sandboxed creation path:** create a mission card by writing only a plan file, with no API call; assert it imports and is launchable. This is the tier that makes the design work for a sandboxed client, and it is the one nobody will test by hand.
 - **Advice degrades to a question:** with no map, assert the opening proposal says so and offers to run Analyze, rather than silently omitting the subject. With a map, assert it states stream count and depth. There is no mode to assert, which is the point — advice has no dead-control failure mode.

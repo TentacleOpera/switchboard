@@ -1,8 +1,8 @@
-# Retire open-ended automation in favour of mission-scoped runs
+# Scope automation to missions: keep the schedule, bound its target
 
 ## Goal
 
-Replace every unbounded automation surface — a queue-schedule clock, an orchestrator wake interval, and per-column auto-advance — with runs scoped to a mission's finite membership, so automation always has an end state and nothing runs against work the user did not put in a mission.
+Keep the queue schedule and the orchestrator wake exactly as they are, and change only **what they act on**: a mission's finite membership instead of whatever happens to be sitting in a column. Automation gains an end state without losing a trigger.
 
 ### Problem Analysis
 
@@ -13,7 +13,9 @@ Replace every unbounded automation surface — a queue-schedule clock, an orches
 | `enabled` (`autobanState`) | queue schedule — a clock | none; runs until switched off |
 | `orchestratorArmed` + `orchestrationConfig.intervalMinutes` | orchestrator wake interval | none; wakes until disarmed |
 
-**Correction to an earlier revision of this plan: `autobanEnabled` is not a third surface and must not be touched.** It gates no automation. All 25 references are declarations plus one consumer, and the consumer is presentational: `autobanColumns` (`kanban.html:6164`, `:10299`) filters columns by the flag and feeds `badgeData` (`:10826`, `:10868`) plus a `sourceIdx` for badge ordering. Nothing dispatches or schedules on it. Its distribution — true on `CREATED`, `PLAN REVIEWED`, `LEAD CODED`, `CODER CODED`, `INTERN CODED`; false on `RESEARCHER`, `STAGING`, `CODE REVIEWED`, `TICKET UPDATER`, `COMPLETED` — reads as "columns that have a next automated step", a display property marking pipeline participation rather than a switch. The earlier revision inferred a behaviour from the flag's name; removing it would break column badges and retire nothing.
+**Correction to an earlier revision: this plan retires nothing.** It was first written as a removal of both triggers, on a misreading of "automation queues become mission launches" as "delete open-ended automation". Scheduling survives untouched. The unboundedness never lived in the *trigger* — a clock is fine — it lived in the **target**: "whatever is in the column when it fires". Point the same trigger at a mission and it is bounded, because a mission's membership is explicit and finite. That is a far smaller change than a retirement, and it removes nothing users rely on.
+
+**Second correction: `autobanEnabled` is not an automation surface and must not be touched.** It gates no automation. All 25 references are declarations plus one consumer, and the consumer is presentational: `autobanColumns` (`kanban.html:6164`, `:10299`) filters columns by the flag and feeds `badgeData` (`:10826`, `:10868`) plus a `sourceIdx` for badge ordering. Nothing dispatches or schedules on it. Its distribution — true on `CREATED`, `PLAN REVIEWED`, `LEAD CODED`, `CODER CODED`, `INTERN CODED`; false on `RESEARCHER`, `STAGING`, `CODE REVIEWED`, `TICKET UPDATER`, `COMPLETED` — reads as "columns that have a next automated step", a display property marking pipeline participation rather than a switch. The earlier revision inferred a behaviour from the flag's name; removing it would break column badges and retire nothing.
 
 A clock and a wake have no notion of "done". They act on whatever is in the column when they fire, so the work set is defined by timing rather than by intent. That is the root of the surprise the project has already recorded: `switchboard-manage-console-skill.md` describes invoking the orchestrator as a human and having it *"grouped loose plans into a feature and fired dispatch with no confirmation"* — correct for the machine caller, wrong for a person, and possible only because the trigger was open-ended.
 
@@ -27,12 +29,12 @@ Each automation surface was added to remove a manual step — press a button les
 
 ## Metadata
 
-**Complexity:** 4
+**Complexity:** 3
 **Tags:** backend, reliability, ui, devops
 
 ## User Review Required
 
-- **This removes shipped functionality from ~4,000 installs.** Anyone running a queue schedule or an armed orchestrator loses it and must build a mission instead. That is the intent — "no open-ended automation" — but it is a product decision, not a refactor, and it needs your explicit confirmation before anything is deleted.
+- **The one behaviour change on an armed install:** a fired trigger with no mission does nothing, where today it would act on the column. Nobody loses a feature, but an armed schedule goes quiet until a mission exists. Confirm that is the intended feel, and whether it warrants a one-time notice.
 - **What replaces a genuinely recurring need?** A nightly sweep of new plans is a real want and a mission is one-shot. Options: a scheduled *mission creation* (the schedule builds a mission and stops, leaving the launch to a person), or nothing. The first keeps the bound; recommending it if any recurrence survives at all.
 
 ## Complexity Audit
@@ -52,7 +54,7 @@ Each automation surface was added to remove a manual step — press a button les
 
 ## Edge-Case & Dependency Audit
 
-**Migration.** Forced-off, one-time notice, explicit re-arm impossible (there is nothing to re-arm — the replacement is a mission). Follow `retiredAutomationModeNotice` exactly: detect the retired state on load, force the clock off, surface the notice once. Never carry a running clock across the upgrade.
+**Migration.** Much lighter than a retirement. A user with a schedule armed keeps it armed; on the first fire after upgrade there may be no mission yet, so the trigger no-ops instead of sweeping the column. That is a behaviour change on an armed install and wants a one-time notice explaining that automation now runs missions — but nothing is forced off and nothing needs re-arming. Note the contrast with `automationMode`'s retirement (`autobanState.ts:141-146`), which *did* force clocks off; that precedent applies to removals, and this is not one.
 
 **Security.** Net positive: fewer unattended paths that dispatch work without a person in the loop.
 
@@ -78,12 +80,13 @@ Each automation surface was added to remove a manual step — press a button les
 
 ## Proposed Changes
 
-1. **Retire `enabled`** (queue-schedule clock) and its UI.
-2. **Retire `orchestratorArmed` / `orchestrationConfig.intervalMinutes`**, and update `switchboard-orchestrator/SKILL.md` to drop `armed` as a session state.
-3. **Forced-off migration with a one-time notice**, following `retiredAutomationModeNotice` (`autobanState.ts:135-137`). Never auto-convert a running clock into a mission.
-4. **Keep `armQueueWatch`** — bounded, reactive, one nudge then escalate.
-5. **Leave `ScheduledJobsService` standing jobs alone**, and say so where a reader would otherwise assume otherwise.
-6. **Restate the AUTOMATION tab** around mission-scoped runs so the remaining surface is legible.
+1. **Keep `enabled`** (queue schedule) and its UI. Its target becomes the open mission rather than the column contents.
+2. **Keep `orchestratorArmed` / `orchestrationConfig.intervalMinutes`** and the protocol's `armed` session state. The wake assesses missions rather than columns.
+3. **A fired trigger with no mission is a no-op, not a sweep.** Today a clock acts on whatever is in the column; after this, no mission means nothing to do. That single change is what makes automation bounded, and it is the whole plan.
+4. **Keep `armQueueWatch`** — bounded and reactive already: one nudge then escalate.
+5. **Leave `ScheduledJobsService` standing jobs alone** — user-authored, different axis, and they will surface in any search for scheduled things.
+6. **Do not touch `autobanEnabled`** (see correction above).
+7. **AUTOMATION tab wording** states that automation runs missions, so the bound is visible rather than implied.
 
 ### Migration
 
@@ -100,8 +103,9 @@ Detect on load, force off, notice once. No silent conversion.
 
 ### Automated Tests
 
-- **No clock remains:** assert no interval or wake schedules a dispatch. The invariant the whole plan rests on, and the one a partial deletion would leave silently violated.
-- **Forced off, not converted:** seed a state with `enabled` and `orchestratorArmed` set; assert both land off, a notice is surfaced exactly once, and **no mission was created**. The second half matters more than the first — an auto-conversion would look like a smooth upgrade while launching unscoped work.
+- **A trigger with no mission is a no-op:** arm the schedule with cards in columns and no mission; assert nothing is dispatched. This is the invariant the whole plan rests on — a sweep here is the unbounded behaviour surviving.
+- **A trigger with a mission acts only within it:** stage a mission plus loose cards elsewhere; assert only mission members are dispatched.
+- **The schedule still works:** assert an armed schedule with an open mission dispatches as it does today. A plan that bounds automation by breaking it has failed.
 - **Standing jobs survive:** seed a `.switchboard/instructions/standing/` job with `schedule: daily`; assert it still runs. The boundary this plan must not cross.
 - **Queue watch survives:** assert an idle lead with staged cards still gets one nudge and one escalation.
 - **Every dispatch has a mission:** assert no automated dispatch path exists that is not reachable from a mission launch.
@@ -110,6 +114,5 @@ Detect on load, force off, notice once. No silent conversion.
 
 ## Outstanding Questions
 
-- **[user]** Confirm removal of shipped automation from ~4,000 installs.
-- **[user]** Does any recurrence survive as *scheduled mission creation* (build a mission, stop, leave the launch to a person)?
+- **[user]** Should a schedule be able to *launch* a mission, or only advance one already launched? Launching on a timer is closer to today's behaviour; advance-only keeps a person on every start.
 - Does anything outside the AUTOMATION tab read `enabled` or `orchestratorArmed` as a general "is automation on" signal? A consumer treating either as a mode flag would silently change behaviour when both disappear.
