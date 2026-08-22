@@ -2,7 +2,7 @@
 
 ## Goal
 
-Reduce the block Switchboard writes into every user's `CLAUDE.md` from ~3,700 tokens to under 100, keeping only the three rules that cannot work anywhere else, and relocating one role-scoped rule into the per-role prompt builder where it belongs.
+Reduce the block Switchboard writes into every user's `CLAUDE.md` from ~3,700 tokens to roughly 130, keeping only the four rules that cannot work anywhere else, and relocating one role-scoped rule into the per-role prompt builder where it belongs.
 
 ### Problem Analysis
 
@@ -28,11 +28,15 @@ A section-by-section pass found that almost none of it can act. The content fall
 
 ### What survives, and why each survives on a different mechanism
 
-Three rules qualify. The useful finding is that each earns its place for a *different* reason, and none of the reasons is "the agent would not otherwise know".
+Four rules qualify. The useful finding is that each earns its place for a *different* reason, and none of the reasons is "the agent would not otherwise know".
 
 **Persistence — memo capture suppression.** Agents asked to capture memos start discussing the issues instead. This is not a discovery failure: the agent read the workflow at entry and knew the rule. It is drift. The user's next message is a substantive problem, and a coding assistant's entire default disposition is to analyse and act; the instruction is several turns back and loses. A file loaded once at mode entry cannot hold this — resident text can, because it is re-presented every turn. The `[MEMO CAPTURE ACTIVE]` marker compounds it: an agent required to emit it every turn re-asserts the mode to itself every turn.
 
 **Motive-closing — the card-move prohibition.** A bare prohibition invites route-shopping: forbid SQL and the agent reaches for `move-card.js`; forbid moves and it wonders how the card will ever advance, then improvises. Stating that transitions happen automatically removes the incentive rather than blocking one route. **But this rule is role-scoped and does not belong in a role-agnostic file** — leads and the orchestrator legitimately move cards, which is why the current text spends most of its length enumerating exceptions. It relocates to `agentPromptBuilder`'s per-role branches.
+
+**Absence of a completion signal — the import rule.** Agents repeatedly ask how plans reach the board: whether they must import them, whether only committed plans count. This is not covered by any other category — the agent writes a file, has no way to know the job is finished, and invents an action to close the gap: a manual import, an unnecessary commit, or telling the user to do something that is not needed. It sits upstream of the card-move rule, removing the anxiety that sends an agent looking for board operations at all.
+
+The facts are checkable and the common assumption is backwards. `GlobalPlanWatcherService` registers a filesystem watcher on `.switchboard/{plans,features}/**/*.md` with no git precondition anywhere, so an untracked file imports exactly like a committed one. And `isGitOpActive` (`PlanIngestionEngine.ts:852`) sets a **15-second suppression window** during git operations — so committing does not trigger import and can briefly *delay* it.
 
 **Silent-failure prevention — the query-kanban redirect.** Not about discovery: `query-kanban` is `invocation: 'no-user'`, so a general agent already has it listed with a description. The gap is that an agent will hand-roll trivial-looking SQL, and the column labels lie. `DEFAULT_KANBAN_COLUMNS` maps `CREATED`→"New", `PLAN REVIEWED`→"Planned", `CODE REVIEWED`→"Reviewed". A user asks about "Planned"; `WHERE kanban_column = 'Planned'` returns zero rows and the agent reports an empty column. Wrong answer, no error. The clause explaining *why not to improvise* is the load-bearing half.
 
@@ -44,7 +48,7 @@ Every section was individually justified — each prevents a real mistake. What 
 
 - Removing capability. Every rule that moves keeps applying; it arrives closer to the work.
 - Touching this repo's own dev rules. They live only in this repo's hand-authored `CLAUDE.md`, are absent from `AGENTS.md`, and correctly never reach users.
-- Deciding the AGENTS.md target. Antigravity may not self-discover skills or support slash commands, so the registry, the skills table and the natural-language trigger may be load-bearing there. That is the per-host split below.
+- Splitting the body per host. Antigravity discovers skills correctly, so the same ~530-char body serves both.
 
 ## Metadata
 
@@ -55,8 +59,8 @@ Every section was individually justified — each prevents a real mistake. What 
 
 Yes — two decisions.
 
-1. **Per-host bodies.** `buildManagedInner` already takes a per-host *preamble*; it should take a per-host *body*. Claude Code needs ~320 chars; Antigravity plausibly needs the Workflow Registry and the skills table, because it may not self-discover and may lack slash commands (the natural-language trigger exists for exactly that: *"host-independent, for chats without slash commands"*). Recommendation: split, and size each host to what it actually needs. Without the split, the floor is whichever host needs more.
-2. **Confirm Antigravity's discovery behaviour.** This is the input to (1) and cannot be tested from this repo. If Antigravity *does* self-discover, both bodies collapse to ~320 and no split is needed.
+1. ~~Per-host bodies.~~ **Resolved: not needed.** Antigravity discovers skills correctly, so the Workflow Registry and skills table are redundant on both hosts and both bodies collapse to the same ~530 chars. `buildManagedInner` keeps its single body and its per-host preamble parameter, which is now unused for CLAUDE.md — the preamble had nothing left to translate once the Antigravity-only content went.
+2. **Confirm the memo natural-language trigger is still needed.** It exists "for chats without slash commands". If both supported hosts have slash commands, "start memo capture" may be removable from the skill description too — but it is cheap to keep and harmless.
 
 ## Complexity Audit
 
@@ -112,6 +116,9 @@ Yes — two decisions.
 1. **The resident body becomes:**
 
    ```
+   - Plans reach the board on their own: a `.md` file written to
+     `.switchboard/plans/` is imported by a filesystem watcher. Committing is
+     irrelevant — untracked files import too. Never import a plan yourself.
    - Memo capture mode: while active, append each user message verbatim — do not
      analyse, plan, or write code. Begin every reply with `[MEMO CAPTURE ACTIVE]`.
    - Kanban questions: use the `query-kanban` skill. Displayed column labels differ
@@ -132,7 +139,7 @@ None. Regenerated from source on sync.
 
 ### Goal Invariants
 
-- The emitted `CLAUDE.md` managed block is **under 500 chars** (currently 14,826).
+- The emitted `CLAUDE.md` managed block is **under 800 chars** (currently 14,826).
 - The block contains no filesystem path, no reference to `send_message`, `view_file`, `IsArtifact`, `skill: "<name>"`, and no skill or protocol name list.
 - No rule removed from the block is absent from the place it moved to.
 
@@ -144,6 +151,7 @@ None. Regenerated from source on sync.
 - **Card-move rule placement:** compose prompts for all six roles; assert the rule is present for coder, intern, reviewer, tester and absent for lead and orchestrator.
 - **Planner default unaffected:** `minimal-prompt.test.js` passes in full — the relocation must not reach the planner's one-line default.
 - **Memo suppression survives:** compose a capture-mode turn and assert the suppression and the marker requirement are both present in the resident block.
+- **Import rule states the git-independence:** assert the line says committing is irrelevant, not merely that import is automatic. The common wrong assumption is that a commit is required, so the negation is the load-bearing half — and `isGitOpActive`'s 15-second suppression means a commit can actually delay import.
 - **Label/ID trap:** assert the `query-kanban` line names the mismatch, not merely the skill. A line that only names the skill does not prevent the failure.
 - **Marker integrity:** regenerate over an existing 14,826-char block and assert exactly one clean marker pair remains, exercising `stripProtocolMarkers`.
 
