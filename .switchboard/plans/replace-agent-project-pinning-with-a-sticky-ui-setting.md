@@ -96,7 +96,7 @@ Yes — two decisions.
 
 **"Agents sometimes should decide the project — they have context the UI doesn't."** They have the user's words, which is the one case worth keeping: if a user says "put this in the Backend project", the agent writing `**Project:** Backend` is right, and parsing stays. What is being removed is the agent transcribing board state, not the agent honouring an instruction.
 
-**"A UI toggle is more work than a prompt line."** It is, once. The prompt line costs ~2,785 resident chars per turn per session per workspace forever, plus three restatements to keep in sync, plus a bespoke memo validation path, plus the class of bug where an agent invents a pin. The toggle is a config key and a button.
+**"A UI toggle is more work than a prompt line."** It is, once. The prompt line costs ~2,785 resident chars per turn per session per workspace forever, plus nine authoring surfaces restating the contract (~11 statements) that must stay in sync, plus two dedicated contract tests pinning its wording, plus a bespoke memo validation path, plus the class of bug where an agent invents a pin. The toggle is a config key and a button.
 
 **"Just delete the prose and keep the directive."** Tempting and half-right — the prose is the expensive part. But the directive is what makes the prose necessary: once an agent is handed a value and told to write it, rules about not mangling it follow. Removing the responsibility removes the rules.
 
@@ -105,8 +105,12 @@ Yes — two decisions.
 1. **`kanban.stickyImportProject` config key**, per workspace, unset by default.
 2. **Board UI**: a pin toggle beside the project filter — "follow active filter" / "pinned to `<project>`" — writing that key, and visible enough that a user can tell why plans are landing where they are.
 3. **`_resolveProjectForInsert` precedence #2** reads the sticky key, falling back to `kanban.activeProjectFilter` when unset. Precedence #1 (explicit pin) and #3 (unassigned) unchanged. Read async, not via `getConfigSync`.
-4. **Delete the PROJECT PIN directive** at `agentPromptBuilder.ts:353` and its restatements at `TaskViewerProvider.ts:6551` and `SparkContextExporter.ts:202`.
-5. **Delete** the Plan Project Pinning section from `AGENTS.md` (governance file — explicit approval required).
+4. **Delete the PROJECT PIN directive and every restatement.** Verified blast radius — nine authoring surfaces, ~11 statements:
+   - `agentPromptBuilder.ts` — `:353` (the directive field), `:1438` and `:1441` (planner rules 5 and 8), `:1457` (the directive text itself)
+   - `TaskViewerProvider.ts:6551` (memo plan template), `SparkContextExporter.ts:202` (Spark context)
+   - `.agents/workflows/switchboard-cloud.md:15` and `:18`, `.agents/workflows/switchboard-memo.md:53`
+   - `.agents/protocols/improve-plan/SKILL.md:45`, `.agents/protocols/improve-feature/SKILL.md:33`
+5. **Delete** the Plan Project Pinning section from `AGENTS.md` and `CLAUDE.md` (governance files — explicit approval required).
 6. **Memo path**: remove the bespoke pin validation at `TaskViewerProvider.ts:15191` and route memo-created plans through the same resolution.
 7. **Retain** `**Project:** <name>` parsing as precedence #1, for existing files and for a user-instructed pin.
 
@@ -134,8 +138,14 @@ Additive and behaviour-preserving until a user pins. `**Project:**` parsing reta
 - **Memo plans:** process a memo entry; assert the resulting plan honours the sticky setting and no bespoke validation path remains.
 - **Block size:** assert the emitted managed block shrank, tying this to the reduction plan's size gate.
 
+**Existing tests this plan must rewrite, not just satisfy.** Two contract tests already pin the current pinning behaviour and will fail by design:
+- `src/test/project-pin-resolve-contract.test.js` (`npm run test:contract:project-pin-resolve`) — resolution precedence
+- `src/test/project-pin-apply-if-empty-contract.test.js` (`npm run test:contract:project-pin-fill`) — apply-if-empty semantics
+
+Two more reference the pinning prose and need updating in the same commit: `src/test/spark-context-exporter-contract.test.js` and `src/test/memo-panel-workspace-binding-contract.test.js`. Rewriting these is the honest signal that the contract changed; silently deleting them is not — the new sticky precedence deserves the same pinning the old one had.
+
 ## Outstanding Questions
 
-- Does `importRemotePlan.ts` assign project itself, or route through `_resolveProjectForInsert`? Determines whether change 3 covers the remote path or needs a second edit.
+- **Resolved — the remote path needs no second edit.** `importRemotePlan.ts:31` passes `project: ''`, but that is only the input: it calls `insertFileDerivedPlan` (`KanbanDatabase.ts:2387`), which invokes `_resolveProjectForInsert` at `:2403`. So remote-imported plans already resolve their project in the DB with no agent involvement — change 3 covers them for free. This is worth naming as precedent rather than scope: the remote path is already the architecture this plan is arguing for, and it has not caused a pinning bug.
+- **Resolved — nine surfaces, not four.** The contract is restated at nine authoring surfaces (~11 statements, listed in change 4) plus two dedicated contract tests. This cuts both ways: it is a larger edit than estimated, and it is much stronger evidence for the plan's thesis — a rule needing eleven synchronised restatements across prompts, workflows, protocols and governance files is not a rule an agent should be carrying at all. The grep-level test stays the guard, since the count is exactly what drifts.
 - Should the sticky project appear in `.switchboard/kanban-board.md` so agents and users can see the current filing target? Leaning yes for diagnosability, but it adds a field to a snapshot other things parse.
-- Is there a fourth restatement of the pinning contract? Three were found; the grep-level test is the guard, but the count is worth confirming before deleting.

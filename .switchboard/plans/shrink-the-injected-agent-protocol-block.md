@@ -158,6 +158,12 @@ None. Regenerated from source on sync.
 - **Label/ID trap:** assert the `query-kanban` line names the mismatch, not merely the skill. A line that only names the skill does not prevent the failure.
 - **Marker integrity:** regenerate over an existing 14,826-char block and assert exactly one clean marker pair remains, exercising `stripProtocolMarkers`.
 
+### CI wiring (verified — easy to miss)
+
+- **`mirror:check` will fail this plan's commit unless `.claude/skills` is regenerated alongside it.** `scripts/check-claude-mirror.js` (CI: `.github/workflows/integration-tests.yml:53`) regenerates `generateClaudeMirror(.agents)` and diffs it against the committed `.claude/skills`, failing on missing, extra **or drifted content**. Because this plan relocates rules into `.agents/` skill and protocol bodies, and `buildSkillMd` copies `parsed.body` and `parsed.description` verbatim, every relocation is a content change the mirror must be regenerated for. Note the narrower true scope: `buildSkillMd` does **not** embed `CLAUDE_PREAMBLE`, so shrinking the preamble alone causes no mirror drift — only edits to `.agents/` sources do.
+- **A new contract test does not run until it is added to CI by hand.** There is exactly one workflow (`integration-tests.yml`) and every contract test is individually enumerated in it — no `test:contract:*` sweeper exists in `scripts/`. The size gate above is the whole point of this plan's durability, so it must land as both a `package.json` script and a workflow step; a `package.json` entry alone is a test that never runs.
+- `buildSkillMd` emits `disable-model-invocation: true` for `invocation: no-model` (`ClaudeCodeMirrorService.ts:252`), which is the mechanism the no-hidden-capability-advertising test above relies on. Assert against the emitted frontmatter, not the manifest field.
+
 ## Outstanding Questions
 
 - **[user]** Does Antigravity self-discover skills and support slash commands? Decides whether the per-host split is needed or both bodies collapse to ~320 chars.
