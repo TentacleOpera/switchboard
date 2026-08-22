@@ -1,85 +1,78 @@
-# Cut the protocol block injected into every user's CLAUDE.md and AGENTS.md by roughly half
+# Cut the injected agent protocol block from 14,826 chars to ~320
 
 ## Goal
 
-Reduce the ~3,537 tokens Switchboard writes into every user's `CLAUDE.md` and `AGENTS.md` to roughly 1,400, by moving action-specific reference material into the protocols and workflows that already load at the moment it is needed, and by cutting guidance that guards against a recoverable mistake.
+Reduce the block Switchboard writes into every user's `CLAUDE.md` from ~3,700 tokens to under 100, keeping only the three rules that cannot work anywhere else, and relocating one role-scoped rule into the per-role prompt builder where it belongs.
 
 ### Problem Analysis
 
-`ClaudeCodeMirrorService.buildManagedInner(sourceContent, preamble)` writes the entire `AGENTS.md` body into a managed block in the user's files — verbatim into `AGENTS.md`, and with a 678-char host-translation preamble into `CLAUDE.md`. Measured payload: **14,148 chars, ~3,537 tokens**, resident on every turn of every session in every Switchboard workspace, inside a file the user also writes their own instructions in.
+`ClaudeCodeMirrorService.buildManagedInner(sourceContent, preamble)` writes the entire `AGENTS.md` body into a managed block in the user's `CLAUDE.md`, prefixed by a 678-char host-translation note. Measured: **14,826 chars, ~3,706 tokens**, resident on every turn of every session in every Switchboard workspace, inside a file the user also writes their own instructions in. It is the most-multiplied text the product ships.
 
-Broken down by section (measured on `AGENTS.md`, the actual injected source):
+A section-by-section pass found that almost none of it can act. The content falls into eight disqualifying categories:
 
-| Section | Chars | Needed resident? |
-| :--- | ---: | :--- |
-| 📌 Plan Project Pinning | 2,785 | **No** — deleted outright by the sticky-project plan |
-| 📚 Available Skills | 1,919 | Partly — see host-duplication note |
-| 📝 Plan Authoring & Problem Analysis Protocol | 1,748 | No — only while authoring a plan |
-| Workflow Registry | 1,279 | **Yes** — routing |
-| 🏗️ Switchboard Global Architecture | 1,182 | No — orientation diagram, not routing |
-| 📌 Memo Capture Mode — Priority Rule | 1,122 | No — only inside memo capture |
-| 📂 Workspace Detection for Plan Creation | 1,013 | No — only while authoring a plan |
-| ⚠️ MANDATORY PRE-FLIGHT CHECK | 913 | **Mostly** — step 4 (~250) is not routing; see below |
-| 🚨 STRICT PROTOCOL ENFORCEMENT | 804 | **Yes** — the framing the registry depends on |
-| Execution Rules | 593 | **Yes** — routing |
-| Code-Level Enforcement | 341 | **Yes** — small, and it is a hard constraint |
+**1. Dead — the tool no longer exists.** `send_message` appears exactly once in all of `src/`: in the preamble bullet telling agents to ignore it. No implementation, no verb, no MCP. Yet Rule #2, Rule #3 and the whole Code-Level Enforcement table document its valid actions and auto-routing behaviour, and Execution Rules #4 threatens that violations "will be rejected by the tool layer" — an enforcement mechanism that was deleted. ~1,150 chars describing a removed MCP, dead in **both** files, not just this one.
 
-**The distinction that matters is resident-routing versus action-reference.** A block injected into a user's instruction file has to be resident because the agent cannot know whether the *next* message triggers a workflow. That argument applies to the registry, the pre-flight check, and the execution rules. It does not apply to anything that only matters *while* an action is underway, because at that moment a protocol or workflow file is already being read.
+**2. Antigravity-only, shipped with a note saying to ignore it.** `view_file` (twice), `IsArtifact: false`, "persona adoption", `// turbo`, `skill: "<name>"` invocation syntax. The 678-char preamble exists solely to translate these; remove them and it has nothing left to translate. It is errata for content that should not be present.
 
-Four sections are action-reference: plan authoring, workspace detection, memo-capture priority, and project pinning. Each has a natural home. Plan authoring and workspace detection belong in `improve-plan` (already read by the planner) and in the cloud and remote workflows (already read on entry). Memo-capture priority belongs in `switchboard-memo.md`, which is by definition open when capture mode is active.
+**3. Already injected by the host.** The Workflow Registry (1,279) and the Available Skills table (1,919) restate what Claude Code supplies from `.claude/skills/` before the block is read — all four workflows and both model-visible skills, with descriptions.
 
-**Step 4 of the pre-flight check is not a routing rule and should not be resident.** The section as a whole earns its place, and step 2 in particular is the only part that *must* be resident: it is a suppression rule — do not auto-trigger on "review this", "delegate this", "quick start" — and suppression cannot live in a file, because there is nothing to load at the moment you decide not to load something. Steps 1, 3 and 5 are the routing skeleton around it.
+**4. Advertising capability the agent does not have.** Two rows of the skills table name `kanban_operations` and `worktree-cleanup`, both `invocation: 'no-model'` — deliberately hidden from the model by the mirror manifest. The architecture prose also directs the agent to `kanban_operations` for manual card moves. This is worse than redundant: it invites an agent to claim a capability, then fail.
 
-Step 4 is different. It reads:
+**5. Unactionable reference.** The 31-protocol name list carries no descriptions, so it cannot route a choice; protocols arrive by directive anyway. The architecture diagram is orientation. "Skill Files Location" describes directory layout an agent never needs — and was wrong in six places until corrected.
 
-> **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `query-kanban` skill (read `.switchboard/workspace-id` for ID and DB path, then query with sqlite3) to instantly identify the target plans.
+**6. Restatement.** Execution Rules restates Rule #1 and pre-flight step 3. Pre-flight step 1 ("scan for commands") and step 5 ("otherwise respond normally") are self-evident. Rule #1 itself is enforced by the harness: a slash command arrives already expanded, so an agent cannot fail to follow a workflow it was handed.
 
-Two problems. First, it is an efficiency hint naming implementation details — the workspace-id file, the DB path, `sqlite3` — which the global-database plan invalidates: once `kanban.db` moves to `~/.switchboard`, "read `.switchboard/workspace-id` for the DB path" is wrong, and wrong silently. Second, `query-kanban` is `invocation: 'no-user'`, so the model already discovers it, and the skill's own text carries the schema reference and query templates. This is a resident duplicate of what arrives on load, and it is the same pattern this plan removes elsewhere: implementation detail held resident for an action that is not happening.
+**7. Action-local.** Plan Authoring (1,748), Workspace Detection (1,013) and the memo mechanics only matter while the action is underway, by which point a protocol or workflow file is loaded.
 
-Cut step 4 to a routing-shaped clause with no paths in it — "column and board-state questions: use the `query-kanban` skill" — and let the skill carry its own mechanics. Roughly 250 of the section's 913 chars.
+**8. Actively harmful.** Pre-flight step 2 — "do not auto-trigger on generic language (review this, delegate this, quick start)" — attaches a do-not-act gloss to three phrases of ordinary English, in a file governing all behaviour, with no scope boundary. Claude Code has its own `/code-review` skill and `Agent` tool. The rule was written when `improve-plan`, `accuracy` and others *were* slash commands and collision was plausible; now all four commands are `/switchboard*`-prefixed and unambiguous. It guards a vanished ambiguity at the cost of suppressing legitimate non-Switchboard work.
 
-**Project pinning is the largest section in the file, and the responsibility it documents should not be the agent's at all.** 2,785 chars — a fifth of the entire payload — instruct an agent on how to transcribe board state into a plan file, where the extension already read that state at prompt-generation time and reads the same config key again as the importer's fallback (`_resolveProjectForInsert` precedence #2, `KanbanDatabase.ts:2242`). A board-level sticky-project toggle removes the transport step and the rules that guard it; see `replace-agent-project-pinning-with-a-sticky-ui-setting.md`. Nothing needs relocating, because nothing needs saying.
+### What survives, and why each survives on a different mechanism
 
-**A duplication worth confirming: the Available Skills table may already be provided by the host.** Claude Code discovers `.claude/skills/*/SKILL.md` and injects each skill's name and description itself — an agent in this repo receives `manage-features` and `query-kanban` in its skill list without reading `AGENTS.md` at all. If Antigravity does not self-discover, the table is load-bearing there and redundant here. Because both hosts receive the same body, each currently carries the other's requirements.
+Three rules qualify. The useful finding is that each earns its place for a *different* reason, and none of the reasons is "the agent would not otherwise know".
+
+**Persistence — memo capture suppression.** Agents asked to capture memos start discussing the issues instead. This is not a discovery failure: the agent read the workflow at entry and knew the rule. It is drift. The user's next message is a substantive problem, and a coding assistant's entire default disposition is to analyse and act; the instruction is several turns back and loses. A file loaded once at mode entry cannot hold this — resident text can, because it is re-presented every turn. The `[MEMO CAPTURE ACTIVE]` marker compounds it: an agent required to emit it every turn re-asserts the mode to itself every turn.
+
+**Motive-closing — the card-move prohibition.** A bare prohibition invites route-shopping: forbid SQL and the agent reaches for `move-card.js`; forbid moves and it wonders how the card will ever advance, then improvises. Stating that transitions happen automatically removes the incentive rather than blocking one route. **But this rule is role-scoped and does not belong in a role-agnostic file** — leads and the orchestrator legitimately move cards, which is why the current text spends most of its length enumerating exceptions. It relocates to `agentPromptBuilder`'s per-role branches.
+
+**Silent-failure prevention — the query-kanban redirect.** Not about discovery: `query-kanban` is `invocation: 'no-user'`, so a general agent already has it listed with a description. The gap is that an agent will hand-roll trivial-looking SQL, and the column labels lie. `DEFAULT_KANBAN_COLUMNS` maps `CREATED`→"New", `PLAN REVIEWED`→"Planned", `CODE REVIEWED`→"Reviewed". A user asks about "Planned"; `WHERE kanban_column = 'Planned'` returns zero rows and the agent reports an empty column. Wrong answer, no error. The clause explaining *why not to improvise* is the load-bearing half.
 
 ### Root Cause
 
-The protocol block grew by accretion, and every addition was individually justified — each rule prevents a real mistake. What was never asked is whether a rule needs to be *resident* to prevent it. Content that could arrive at the moment of use was placed in the always-loaded file because that is where the previous rule went.
+Every section was individually justified — each prevents a real mistake. What was never asked is whether a rule needs to be *resident* to prevent it. Content that could arrive at the moment of use was placed in the always-loaded file because that is where the previous rule went. Compounding it, one shared body serves two hosts, so each carries the other's requirements and the preamble exists to paper over the mismatch.
 
 ### Non-goals
 
-- Reducing capability. Every rule that moves keeps applying; it arrives later rather than never.
-- Changing the marker mechanism or the managed-block upsert. `buildManagedInner` and the `<!-- switchboard:claude-protocol:start/end -->` wrap stay as they are.
-- Splitting the shared body into per-host variants. Recorded as a follow-up, since it would cut further but changes the mirror's contract.
-- Touching this repo's own dev rules ("NEVER add confirmation dialogs", Build, Users & migrations). Those live only in this repo's hand-authored `CLAUDE.md`, are absent from `AGENTS.md`, and correctly never reach users.
+- Removing capability. Every rule that moves keeps applying; it arrives closer to the work.
+- Touching this repo's own dev rules. They live only in this repo's hand-authored `CLAUDE.md`, are absent from `AGENTS.md`, and correctly never reach users.
+- Deciding the AGENTS.md target. Antigravity may not self-discover skills or support slash commands, so the registry, the skills table and the natural-language trigger may be load-bearing there. That is the per-host split below.
 
 ## Metadata
 
 **Complexity:** 5
-**Tags:** docs, refactor, performance, infrastructure
+**Tags:** docs, refactor, performance, infrastructure, reliability
 
 ## User Review Required
 
 Yes — two decisions.
 
-1. ~~How far to cut project pinning.~~ **Resolved: the whole section goes.** `replace-agent-project-pinning-with-a-sticky-ui-setting.md` removes the PROJECT PIN directive entirely in favour of a board-level sticky-project toggle, so there is no directive left for a residual line to reference. All 2,785 chars are deleted rather than reduced. This plan should land after or alongside that one.
-2. **Whether the Available Skills table can go.** It appears redundant for Claude Code, which self-discovers. Needs confirming against Antigravity before removing, and if it is needed there, that is the strongest argument for the per-host split recorded as a follow-up.
+1. **Per-host bodies.** `buildManagedInner` already takes a per-host *preamble*; it should take a per-host *body*. Claude Code needs ~320 chars; Antigravity plausibly needs the Workflow Registry and the skills table, because it may not self-discover and may lack slash commands (the natural-language trigger exists for exactly that: *"host-independent, for chats without slash commands"*). Recommendation: split, and size each host to what it actually needs. Without the split, the floor is whichever host needs more.
+2. **Confirm Antigravity's discovery behaviour.** This is the input to (1) and cannot be tested from this repo. If Antigravity *does* self-discover, both bodies collapse to ~320 and no split is needed.
 
 ## Complexity Audit
 
 ### Routine
 
-- Cutting Plan Project Pinning to a single line.
-- Moving the Memo Capture priority rule into `.agents/workflows/switchboard-memo.md`, which already documents the full protocol.
-- Deleting the Switchboard Global Architecture diagram from the injected block (it is orientation, and `ARCHITECTURE.md` covers the same ground for anyone who wants it).
-- Leaving a one-line pointer in place of each moved section.
+- Rewriting the resident body to the three-line form.
+- Deleting the preamble, which has nothing left to translate.
+- Deleting the sections in categories 1–8 above.
 
 ### Complex / Risky
 
-- **Plan authoring and workspace detection have more than one consumer.** The planner reads `improve-plan`, but plans are also authored by `/switchboard-cloud` (this repo's own cloud sessions), by the remote flow via tracker docs, and by memo processing. Moving the rules into `improve-plan` alone would silently drop them from three paths. Each destination must be enumerated before anything is removed from the resident block, and the tracker-synced context is one of them — which ties this to the outward context sync in the protocols plan.
-- **`AGENTS.md` is a governance file, and editing it changes every user's injected block on next sync.** It needs explicit approval, and the diff should be reviewed as content rather than as a refactor.
-- **A pointer that names a file an agent cannot reach is worse than the text it replaced.** "See `improve-plan/SKILL.md` for pinning rules" is useless to a remote agent with no repo. Pointers must name a destination reachable from the context where the rule applies, which for remote means the tracker-synced context document.
-- **The 55% figure assumes all four sections move cleanly.** If plan authoring has to stay resident because too many paths need it, the achievable cut is closer to 35%. Measure after the consumer enumeration, not before.
+- **`AGENTS.md` is a governance file.** Editing it changes every user's injected block on next sync. Explicit approval required, and the diff should be reviewed as content, not as a refactor.
+- **Relocating the card-move rule needs the role set enumerated correctly.** It goes into the coder, intern, reviewer and tester prompts and must be *absent* from lead and orchestrator, which legitimately move cards. Getting that backwards either blocks legitimate dispatch or leaves the original gap. `CODE_TOUCHING_ROLES` (`agentPromptBuilder.ts:1510`) enumerates planner/lead/coder/intern/reviewer/tester and is the starting point, not the answer — planner does not move cards either.
+- **`minimal-prompt.test.js` constrains the planner default, not the reviewer.** All fourteen of its minimality assertions target `'planner'`; its single reviewer call is a newline check. So per-role additions are permitted, but the planner prompt must stay one line.
+- **The memo suppression may not hold even when prominent.** The section's own last clause concedes it: the sidebar path exists "backend-driven, immune to host system prompt overrides". If drift persists once the rule is one of three lines rather than one of fourteen sections, the answer is mechanical — the sidebar, or a `no-model`-style gate — not more prose. Do not treat the reduction as the fix for that.
+- **Three places restate the plan format independently** — `SparkContextExporter.ts:201`, `TaskViewerProvider.ts:6538`, and the block itself. Removing one leaves two that will drift.
 
 ## Edge-Case & Dependency Audit
 
@@ -87,70 +80,75 @@ Yes — two decisions.
 - None. Content relocation.
 
 **Security**
-- None. Note that shrinking the resident block slightly reduces the surface for prompt-injection via a compromised `AGENTS.md`, but that is incidental.
+- Slightly positive: a smaller resident block is a smaller prompt-injection surface via a compromised `AGENTS.md`.
 
 **Side effects**
-- Users who have hand-edited inside the managed markers will see their edits replaced on next sync — that is existing behaviour, but a larger-than-usual diff makes it more visible. Worth a release note.
-- `SparkContextExporter.ts:201` restates the required-section list independently ("Required sections, in order: `## Goal`, `## Metadata`…"). If the schema moves, that exporter is a second copy that will drift.
-- `TaskViewerProvider.ts:6538` also restates the plan format inline. Same drift risk.
-- Reducing the resident block reduces per-turn token cost for every user on every turn — the benefit is small per turn and large in aggregate.
+- Users who hand-edited inside the managed markers lose those edits on next sync. Existing behaviour, but a 14,500-char deletion makes it conspicuous. Release note.
+- Every user's per-turn token cost drops by ~3,600 tokens. Small per turn, large in aggregate.
+- The natural-language trigger "start memo capture" is not in the `switchboard-memo` skill description, which mentions only the exit command. If the registry is removed from this host's body, that gap should be closed in the skill description rather than left implicit.
 
 **Migration**
-- The managed block is regenerated from `AGENTS.md` on every sync, so no user-data migration. Existing blocks are replaced by the shorter one automatically.
-- Nothing is deleted from the repo: moved content lands in a protocol or workflow file.
+- The managed block is regenerated from source on every sync, so no user-data migration. Shorter output replaces longer automatically.
+- Nothing is deleted from the repo: relocated rules land in the per-role prompt builder.
 
 ## Dependencies
 
-- **Protects against** the global-database plan: pre-flight step 4 hardcodes `.switchboard/workspace-id` as the DB-path source, which that plan invalidates. Cutting it here removes a silent-staleness dependency between the two.
-- **Requires** `replace-agent-project-pinning-with-a-sticky-ui-setting.md` for the largest single reduction (2,785 chars). That plan can ship independently; this one's size gate assumes it has.
-- **Interacts with** the protocols-as-rows plan: the tracker-synced context document is one of the destinations for relocated plan-authoring rules, and that plan is what establishes the sync as a delivery tier.
-- **Independent of** the storage programme otherwise. Can ship on its own.
+- **Requires** `replace-agent-project-pinning-with-a-sticky-ui-setting.md` for the 2,785-char pinning section, which that plan removes at source.
+- **Protects** the global-database plan: pre-flight step 4 hardcodes `.switchboard/workspace-id` as the DB-path source, which that plan invalidates. Cutting it removes a silent-staleness coupling between the two.
+- Otherwise independent.
 
 ## Adversarial Synthesis
 
-**"Every one of these rules exists because an agent got it wrong."** True, and none is being deleted except the bulk of project pinning — where the mistake is recoverable by reassignment and the importer already refuses bad pins. The rest arrive at the moment of use instead of being resident, which is strictly better for compliance too: a rule read immediately before the action it governs is more likely to be followed than one read 40 turns earlier.
+**"Every rule exists because an agent got it wrong."** True, and the three that survive are the three where resident text is the mechanism that fixes it. The rest fail for reasons the block cannot address: a rule an agent ignores 3,500 tokens up the context is not more governed than one that arrives with the action. Proximity and persistence are different problems, and most of this block was solving neither.
 
-**"Moving rules into protocol files means agents that skip the protocol skip the rules."** The real risk, and the reason the consumer enumeration is a gate rather than a step. But note the resident block already fails this way: an agent that ignores a rule 3,500 tokens up the context is not meaningfully more governed than one that never loaded it. Proximity to the action is the more reliable mechanism.
+**"Compliance will get worse."** The opposite is more likely for the survivors. If agents still move cards and still drift out of capture mode with 14,826 chars present, the current text is not working — so "keep it" is not the safe option. One prohibition among three lines is dramatically more salient than one among fourteen sections. And if prominence does not fix it, that is diagnostic: the rule is being disregarded rather than missed, which points at enforcement.
 
-**"3,500 tokens is not much."** Per turn, no. Across every turn of every session in every workspace for every user, it is the single most-multiplied text Switchboard ships. And roughly half of it is being carried for actions that are not currently happening.
+**"3,700 tokens is not much."** Per turn, no. Across every turn of every session in every workspace for every user, it is the single most-multiplied text the product ships — and by this analysis roughly 98% of it cannot act.
 
-**"Just tell users to trim it themselves."** They cannot — it is inside managed markers and regenerated on every sync. The only party who can shrink it is Switchboard.
+**"This is a lot of deletion on one person's reading."** Which is why the categories are stated with evidence rather than judgement: `send_message` has one occurrence in `src/`, the `no-model` rows are in the mirror manifest, the label/ID mismatch is in `DEFAULT_KANBAN_COLUMNS`, and the host-discovery duplication is observable in any Claude Code session's skill list. Each is checkable in under a minute.
 
 ## Proposed Changes
 
-1. **`AGENTS.md`: Plan Project Pinning deleted in full** — owned by `replace-agent-project-pinning-with-a-sticky-ui-setting.md`, which removes the directive the section exists to explain. Nothing relocates; the responsibility leaves the agent entirely.
-2. **Memo Capture priority rule → `.agents/workflows/switchboard-memo.md`**, replaced by one line in the registry noting that capture mode overrides default behaviour while active.
-3. **Plan Authoring & Problem Analysis + Workspace Detection → `improve-plan/SKILL.md`**, plus every other plan-authoring entry point enumerated first (`switchboard-cloud.md`, the remote flow's tracker context, memo processing).
-4. **Pre-flight step 4 reduced to a routing clause** — name the skill, drop the paths and the `sqlite3` mechanic. The skill is `no-user` so the model already discovers it, and its own text carries the schema and templates. This also removes a line the global-database plan would otherwise silently falsify.
-5. **Switchboard Global Architecture diagram removed** from the injected block; `ARCHITECTURE.md` retains it.
-6. **Available Skills table**: confirm host self-discovery on Antigravity; remove if redundant, otherwise keep and note it as the case for a per-host split.
-7. **Regenerate** the managed block and confirm the emitted size.
+1. **The resident body becomes:**
+
+   ```
+   - Memo capture mode: while active, append each user message verbatim — do not
+     analyse, plan, or write code. Begin every reply with `[MEMO CAPTURE ACTIVE]`.
+   - Kanban questions: use the `query-kanban` skill. Displayed column labels differ
+     from the stored IDs, so hand-written SQL silently returns nothing.
+   ```
+
+2. **Delete the preamble.** With the Antigravity content gone it translates nothing.
+3. **Relocate the card-move rule** into `agentPromptBuilder`'s per-role composition: present for coder, intern, reviewer, tester; absent for lead and orchestrator. Phrased to close the motive — transitions happen automatically — not merely to forbid SQL.
+4. **`buildManagedInner` takes a per-host body**, not just a per-host preamble.
+5. **Close the "start memo capture" gap** in the `switchboard-memo` skill description, since the registry that documented it is being removed from this host's body.
+6. **Regenerate** and confirm the emitted size.
 
 ### Migration
 
-None. The block is regenerated from `AGENTS.md` on sync; shorter output replaces longer automatically.
+None. Regenerated from source on sync.
 
 ## Verification Plan
 
 ### Goal Invariants
 
-- The managed block emitted by `buildManagedInner` is **under 6,000 chars** (currently 14,148), and the `CLAUDE.md` variant under 6,700 including the preamble.
-- Every rule removed from the resident block is present in at least one file that is loaded before the action it governs, for **every** enumerated entry point — not just one.
-- No pointer in the resident block names a path unreachable from a context where that rule applies.
+- The emitted `CLAUDE.md` managed block is **under 500 chars** (currently 14,826).
+- The block contains no filesystem path, no reference to `send_message`, `view_file`, `IsArtifact`, `skill: "<name>"`, and no skill or protocol name list.
+- No rule removed from the block is absent from the place it moved to.
 
 ### Automated Tests
 
-- **Size gate:** assert the emitted managed block is under the threshold, so the block cannot silently regrow. This is the test that keeps the reduction from being undone by the next individually-justified addition.
-- **Coverage:** for each relocated rule, assert it appears in every enumerated authoring path — `improve-plan`, `switchboard-cloud.md`, the tracker-synced context template, memo processing.
-- **No dangling pointers:** assert every path named in the resident block resolves in a bare clone.
-- **No filesystem paths in the pre-flight check:** assert the section names no path, so the global-database plan's relocation of `kanban.db` cannot falsify it. This is the specific way step 4 would have rotted.
-- **Column questions still route:** ask a column-state question and assert the agent reaches `query-kanban`, with the skill supplying the DB mechanics rather than the resident block.
-- **Marker integrity:** regenerate over an existing longer block and assert exactly one clean marker pair remains, exercising `stripProtocolMarkers`.
-- **Plan authoring still works:** author a plan via `/switchboard-cloud` and via the planner path; assert both produce the required sections and a correct project pin from a directive.
-- **Duplicate schema copies:** assert `SparkContextExporter.ts:201` and `TaskViewerProvider.ts:6538` either reference the single source or are updated in lockstep — they are independent restatements today.
+- **Size gate:** assert the emitted block is under the threshold, so it cannot silently regrow. This is the test that stops the next individually-justified addition undoing the cut.
+- **No dead references:** grep the emitted block for `send_message`, `view_file`, `IsArtifact`, `// turbo`, `persona adoption`, and any `.agents/` or `.switchboard/` path. All must be absent.
+- **No hidden-capability advertising:** assert the block names no skill whose manifest `invocation` is `no-model`.
+- **Card-move rule placement:** compose prompts for all six roles; assert the rule is present for coder, intern, reviewer, tester and absent for lead and orchestrator.
+- **Planner default unaffected:** `minimal-prompt.test.js` passes in full — the relocation must not reach the planner's one-line default.
+- **Memo suppression survives:** compose a capture-mode turn and assert the suppression and the marker requirement are both present in the resident block.
+- **Label/ID trap:** assert the `query-kanban` line names the mismatch, not merely the skill. A line that only names the skill does not prevent the failure.
+- **Marker integrity:** regenerate over an existing 14,826-char block and assert exactly one clean marker pair remains, exercising `stripProtocolMarkers`.
 
 ## Outstanding Questions
 
-- **[user]** Does Antigravity self-discover skills, or does it need the Available Skills table? Determines whether ~1,900 chars can go, and whether the per-host split is worth doing.
-- How many distinct plan-authoring entry points exist? The consumer enumeration is the gate on the largest relocation, and the honest answer is that I have identified four and am not confident that is all of them.
-- Should the resident block carry a version or size stamp so growth is visible in review rather than only in a test?
+- **[user]** Does Antigravity self-discover skills and support slash commands? Decides whether the per-host split is needed or both bodies collapse to ~320 chars.
+- Does `planner` move cards? It is in `CODE_TOUCHING_ROLES` but the card-move rule may need to include it, which changes the role set in change 3.
+- Do agents still drift out of capture mode once the rule is one of two lines? If so the answer is mechanical, not textual, and this plan does not deliver it.
