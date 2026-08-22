@@ -23,7 +23,7 @@ The `data-view` projection was the cheap way to get an Agents panel into the rai
 
 ## Metadata
 
-**Complexity:** 6
+**Complexity:** 5
 **Tags:** frontend, refactor, ui, performance
 
 ## User Review Required
@@ -41,7 +41,11 @@ The `data-view` projection was the cheap way to get an Agents panel into the rai
 
 ### Complex / Risky
 
-- **The script is the whole difficulty, and it must be measured before it is split.** ~9,500 lines and 489 function/arrow definitions serve both the board and the three tabs, inline and unmodularised. Step one is an inventory: for each handler the three panes reference, does it touch board-only state, tab-only state, or both? That inventory decides what becomes a shared module and what moves. Estimating it now would be a guess; the plan's first deliverable is the measurement, not the split.
+- **The script is smaller than the file size suggests — measured, not estimated.** Of 9,501 script lines, **275 reference any of the 142 ids in the three panes (2.9%)**, and those lines fall inside **50 functions**. Better still, the code is *already namespaced by tab*: 47 distinct identifiers carry an `agentsTab*` (17), `teamsTab*` (28) or `promptsTab*` (2) prefix — `agentsTabCollectConfig`, `agentsTabSaveConfig`, `teamsTabShowGroupForm`, `teamsTabHandleIconFile`, `initPromptsTabListeners`. Ownership was drawn by whoever wrote them; this plan is mostly moving code that already declares which tab it belongs to.
+
+  The genuinely shared set is small and identifiable: `closeModal`, `flashCopyBtn`, `removeGlow`, `handleRoleChange`, `applyRemoteControlButtonState`, `openFeatureCreateModal`. Those are the module candidates. Everything with a tab prefix moves wholesale.
+
+  So the honest sizing is: ~677 lines of contiguous markup, ~50 functions of which most are pre-namespaced, and roughly six shared helpers to extract. That is a substantial afternoon's work with a clear boundary, not an open-ended refactor of a 13k-line file — and the earlier framing of this as an unmeasured unknown was wrong.
 - **Shared helpers must be extracted, not copied.** During dual-run the same behaviour exists in two files. If it is copy-pasted, the two diverge silently and the retirement plan later deletes the *stale* copy or the *fresh* one with no way to tell. Anything used by both must become a module both import — that is what makes the week of dual-run safe rather than a fork.
 - **The webview and HTTP hosts take different paths to the same file.** `KanbanProvider._getHtml(webview, 'agent-control')` (`:13591`) builds the extension-host webview with `injectInitialWebviewState` and a CSP/nonce; `_handleServePanelById` (`LocalApiServer.ts:1089`) serves the headless host through `getPanelHtml`, honouring the manifest's `enabled` flag. Both must render the new file, and the webview path must keep its state injection. A file that works in the browser and not in the panel (or vice versa) is the likely first defect.
 - **`_handleMessage(msg, source?: 'agent-control')` (`:8960`) is the message contract** and must keep working unchanged from the new file. The new panel is not a new backend — it posts the same messages. Any message the three tabs send today must be enumerated and re-verified from the new file, because a silently-unhandled message in a webview fails without an error.
@@ -76,7 +80,7 @@ The `data-view` projection was the cheap way to get an Agents panel into the rai
 
 ## Proposed Changes
 
-1. **Inventory the script first.** For every handler the three panes reference, classify state as board-only, tab-only, or shared. This is the deliverable that sizes the rest; nothing else starts until it exists.
+1. **Confirm the measured boundary** (already taken, see Complexity Audit): 275 script lines across 50 functions touch the three panes' 142 ids; 47 identifiers are already tab-prefixed. Verify the six shared helpers named there are the complete shared set before moving anything — the measurement bounds the work, it does not prove exhaustiveness.
 2. **Create `src/webview/agent-control.html` + `agent-control.js`**, following the seven-panel companion convention rather than the inline-script exception.
 3. **Move the ~677 lines of pane markup** (`:3187`–`:3864`) into the new file, keeping ids and `data-tab` values identical so the message contract and any tests keyed on them still match.
 4. **Extract shared helpers into modules** imported by both files. No copy-paste of anything used by both.
@@ -115,5 +119,5 @@ None. Panel id, route, label and icon unchanged; `/agent-control` keeps working.
 ## Outstanding Questions
 
 - **[user]** Confirm extracted shared modules over copy-paste (see User Review Required).
-- How much of the ~9,500-line script is genuinely shared? Unknown until step 1, and it is the only real unknown in the plan — if it turns out to be small, the complexity drops materially.
+- **Measured: 2.9% of script lines, 50 functions, ~6 genuinely shared helpers.** The residual question is only whether those six are the complete shared set, or whether a seventh is reached indirectly (a helper calling a helper). Cheap to settle by following the call graph out one level from the six before moving code.
 - Does `setup.html` share any helper with these three panes? If so it becomes a third consumer of the extracted modules, which is fine but should be known before the split rather than discovered during it.
