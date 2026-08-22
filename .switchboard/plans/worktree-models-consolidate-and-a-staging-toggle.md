@@ -30,19 +30,28 @@ worktrees(id, branch NOT NULL UNIQUE, path, feature_id, created_at,
 
 **3. Manual per-feature worktrees ignore dependencies.** Two features worked in parallel worktrees off the same base branch cannot see each other's changes, and nothing in the system knows one depends on the other. That is the actual danger, and it is why "turn on worktrees" is safe for one feature at a time and unsafe as a parallel default.
 
+### Scope: this plan is the model consolidation only
+
+Parallel feature worktrees, dependency ordering and the operator's role in it have moved to `staging-streams-parallel-dispatch-and-worktrees.md`. That split happened because the STAGING queue turns out to already support parallel consumers — the in-flight refusal is per *team*, not per queue, so N leads drain one ordered list concurrently — which makes parallelism a dispatch-and-ordering problem rather than a worktree-model one. What remains here:
+
+- Narrow `#btn-create-worktree` to project/workspace scope.
+- Add the feature toggle in STAGING, replacing the button's feature scope.
+- Retire the dead per-subtask resolution.
+
+**And the toggle's justification is checkout isolation, not parallelism.** An earlier revision framed it as a step toward parallel worktrees; that was wrong. For one feature at a time the value is that your main checkout stays usable while a team works (the case `worktree_suppress_main_terminals` exists for), and that abandoning a bad feature is `git worktree remove --force` rather than untangling their changes from yours. Framed as a parallelism enabler it invites turning it on for a benefit it does not deliver while paying costs it does — a merge step, a second directory, and the absent-from-a-fresh-checkout class (`api-server-port.txt`, `kanban.db`) that `teams-reach-state-through-endpoints-not-host-files.md` addresses. For a user who supervises rather than works alongside, `'none'` remains the better default.
+
 ### Root Cause
 
 Each model was added for a real case — per-plan for an agent that wanted isolation, per-feature for a shared integration branch, per-project for a long-lived tree — and none was ever reconciled against the others. The strip button then accumulated scopes because it was the only worktree control on the board.
 
 ## Metadata
 
-**Complexity:** 5
+**Complexity:** 3
 **Tags:** ui, frontend, backend, devops, reliability
 
 ## User Review Required
 
 - **What does the STAGING toggle write?** Either `feature_worktree_mode` (reusing the existing key, so board setting and toggle are one state) or a new staging-scoped key. **This is a contract question, not a preference:** `worktree-strategy-control-contract.test.js` pins that the control "offers exactly the two modes the verb arm accepts" and that *nothing but the user writes the strategy*. Reusing the key keeps one source of truth; a second key needs its own reason.
-- **Dependencies: `base_branch` stacking, or a grouping field?** Decision framed below; both are already partly provisioned.
 - **Where does a feature worktree get merged?** Narrowing the strip button to projects removes the only UI entry point for feature-worktree merging (its merge mode). That has to land somewhere before the narrowing ships.
 
 ## Complexity Audit
@@ -64,12 +73,7 @@ Each model was added for a real case — per-plan for an agent that wanted isola
 
 ## Edge-Case & Dependency Audit
 
-**The dependency decision.** Two mechanisms, both partly provisioned:
-
-- **`base_branch` stacking** — the column exists. A dependent feature's worktree branches off its predecessor rather than the default branch. Expresses *ordering*, which is what a dependency is. Cheap, and no schema change.
-- **A grouping field** — expresses "these plans and features are one unit". Handles the case ordering cannot: a set that must land together atomically. Needs a new column and a UI to set it.
-
-They are not exclusive. Recommending `base_branch` first because it is provisioned and models the common case, with a grouping field only if an atomic-set requirement turns out to be real. **The operator's role in either is detection: it reads the graph and reports a violation. It does not set strategy, reorder work, or cut branches.**
+**Dependencies and parallelism** are out of scope — see `staging-streams-parallel-dispatch-and-worktrees.md`.
 
 **Migration.** Features with worktrees provisioned at creation time keep them. The toggle applies to work staged after it ships. No worktree is destroyed by this plan.
 
@@ -100,9 +104,7 @@ They are not exclusive. Recommending `base_branch` first because it is provision
 2. **Provision at staging, not at feature creation** — the toggle's value is read when work is staged, so it applies to work as it goes out.
 3. **Narrow `#btn-create-worktree`** to project/workspace scope: tooltip, handler, enablement. Merge mode narrows with it.
 4. **Rehome feature-worktree merging** to whichever surface the User Review decision names, solved jointly with the queue design's merge-back gap.
-5. **Adopt `base_branch` for dependency ordering**; leave a grouping field unbuilt pending a real atomic-set case.
-6. **Operator detects and reports** dependency violations. It never writes strategy, reorders work, or cuts branches.
-7. **Delete the dead `subtask_plan_id` resolution branch**; leave the column.
+5. **Delete the dead `subtask_plan_id` resolution branch**; leave the column.
 
 ### Migration
 
@@ -124,7 +126,6 @@ Existing feature worktrees are untouched. The toggle governs newly staged work. 
 - **Toggle reflects broadcast, not click:** assert the control's state comes from the broadcast, the property the existing contract pins for the board control and the reason it was written.
 - **Button scope narrowed:** assert `#btn-create-worktree` provisions only project/workspace worktrees, and that a selected feature does not change its behaviour.
 - **Provisioning moment:** stage work with the toggle on and assert a worktree is cut then; stage with it off and assert none is. Then assert a feature created *before* the toggle existed is neither orphaned nor double-provisioned.
-- **`base_branch` honoured:** assert a dependent feature's worktree is created from its predecessor's branch. Without this the dependency mechanism is a column nobody reads.
 - **Operator cannot configure:** assert no operator path writes the strategy key or creates a worktree — the negative test that keeps the deleted forcing machinery from returning by another route.
 - **Merge path exists:** assert feature-worktree merging is reachable from its new home. The narrowing must not leave merging with no entry point.
 
@@ -137,5 +138,4 @@ Existing feature worktrees are untouched. The toggle governs newly staged work. 
 
 - **[user]** Which key does the STAGING toggle write?
 - **[user]** Where does feature-worktree merging live after the narrowing?
-- **[user]** `base_branch` alone, or a grouping field too?
 - Is `useWorktreesPerPlan` still wanted? It is the fourth model, agent-owned, configured in a per-role prompt add-on rather than on the board — so it is invisible next to the other two and cannot be reconciled with them. Not touched by this plan, but it is the remaining overlap.
