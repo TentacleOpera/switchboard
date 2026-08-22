@@ -3492,6 +3492,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // notification + autoban dispatch as a plan-file mtime advance.
             onWorkingStateCleared: (record, wsRoot) => {
                 this.broadcastAgentCompleted(record, wsRoot);
+                // Refresh the board too. On the retired file-watcher path the
+                // clear and the board refresh were the SAME tick — the watcher
+                // cleared working state and then fired `planDiscovered` for the
+                // edited file, which is what KanbanProvider re-renders on. The
+                // API path clears the DB with nothing watching the file, so
+                // without this the row goes clean while the card keeps showing a
+                // lit activity light until some unrelated event refreshes.
+                // `refreshIfShowing` is a no-op when the panel is closed.
+                this._kanbanProvider?.refreshIfShowing(wsRoot);
             },
             onTurnEndNotify: (info) => {
                 this.notifyTurnEnd(info);

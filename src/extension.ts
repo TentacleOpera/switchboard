@@ -1082,7 +1082,10 @@ export async function activate(context: vscode.ExtensionContext) {
     // Host parity for the browser Terminals panel's completion toast: the standalone
     // bootstrap wires the same engine seam to LocalApiServer.broadcastWs. Wired here
     // (not in the watcher) because the fleet + api server both live on the provider.
-    // Fires only on the gated dispatched_at non-null→null transition.
+    // NOTE: this engine seam is dormant — the mtime-based clear that used to fire it
+    // is retired. The live producer is POST /kanban/queue/done, wired as the
+    // LocalApiServer `onWorkingStateCleared` option in TaskViewerProvider. Kept
+    // registered for host parity and for any future engine-side completion clear.
     globalPlanWatcher.getEngine().setOnWorkingStateCleared((record, wsRoot) => {
         taskViewerProvider.broadcastAgentCompleted(record, wsRoot);
     });

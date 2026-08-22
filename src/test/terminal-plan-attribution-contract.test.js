@@ -12,6 +12,7 @@ const ptyHostTs = fs.readFileSync(path.join(__dirname, '../standalone/ptyHost.ts
 const taskViewerTs = fs.readFileSync(path.join(__dirname, '../services/TaskViewerProvider.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
 const planIngestionTs = fs.readFileSync(path.join(__dirname, '../services/PlanIngestionEngine.ts'), 'utf8');
+const localApiServerTs = fs.readFileSync(path.join(__dirname, '../services/LocalApiServer.ts'), 'utf8');
 const kanbanProviderTs = fs.readFileSync(path.join(__dirname, '../services/KanbanProvider.ts'), 'utf8');
 const verbSchemasTs = fs.readFileSync(path.join(__dirname, '../services/verbSchemas.ts'), 'utf8');
 const verbAllowlistTs = fs.readFileSync(path.join(__dirname, '../generated/verbAllowlist.ts'), 'utf8');
@@ -280,21 +281,25 @@ test('terminals.js drop handler POSTs attributePastedPrompt', () => {
     assert.ok(wiring.includes('fetchTerminalList()'), 'drop attribution must refetch the terminal list');
 });
 
-test('the turn-end silence branch resolves the plan root with matchWorktreePath, not worktree_id alone', () => {
-    // The sibling subtask established that plans.worktree_id has no live writer, so a
-    // root resolved only from it collapses to the main checkout — and the completion
-    // arm is ONLY load-bearing for worktree dispatches (the plan watcher wins every
-    // other race). Keying on worktree_id alone therefore reads every worktree
-    // completion as blocked while every unit test stays green. Silent and total.
+test('the turn-end silence branch marks blocked only — mtime-based completion is retired', () => {
+    // mtime-based completion detection is GONE from both sweep and watcher: the
+    // agent edits its plan file mid-work (partial reports, notes), so a file-time
+    // advance can never distinguish finished from working, and the old
+    // discriminator fired turn-end on the first mid-work save. POST
+    // /kanban/queue/done is the explicit signal now. This test pins the removal:
+    // a re-added stat/worktree-root discriminator would silently restore the
+    // false positive, and no behavioural unit test covers the sweep's file I/O.
     const branch = planIngestionTs.substring(
         planIngestionTs.indexOf('if (silentTerminals.length > 0)'),
         planIngestionTs.indexOf('const cleared = await db.clearStaleWorkingState(')
     );
     assert.ok(branch.length > 0, 'the silence branch must exist');
-    assert.ok(branch.includes('matchWorktreePath('), 'the mtime discriminator must resolve the worktree via matchWorktreePath');
-    assert.ok(branch.includes('fs.promises.stat('), 'the discriminator must stat the plan file, never read updated_at');
+    assert.ok(!branch.includes('fs.promises.stat('), 'the sweep must not stat plan files — mtime is not completion evidence');
+    assert.ok(!branch.includes('matchWorktreePath('), 'no worktree-root resolution remains: nothing in the sweep reads plan files');
+    assert.ok(!branch.includes('clearWorkingState('), 'the sweep must not clear working state — only clearStaleWorkingState (the timeout) may');
     assert.ok(!branch.includes('updated_at') && !branch.includes('updatedAt'), 'updated_at advances AFTER this sweep — it can never detect a completion');
     assert.ok(branch.includes('if (!record.blockedAt)'), 'setBlockedState must be gated once per turn, not re-stamped per tick');
+    assert.ok(branch.includes("outcome: 'blocked'"), 'blocked is the only outcome the sweep may report');
 });
 
 test('the silence branch cannot fire on a missing lastDataAt', () => {
@@ -313,31 +318,39 @@ test('the silence branch cannot fire on a missing lastDataAt', () => {
 // completion report, and NOTHING woke the head. Two independent gates had to fall
 // for that, and both are asserted here.
 
-test('the plan-file edit clear fires the turn-end notifier on the same transitioned gate', () => {
-    // Gate two of the 2026-08-16 blind spot. `clearWorkingState` on the watcher's
-    // import NULLs dispatched_at milliseconds after the coder writes its report —
-    // ~90s BEFORE the seat is silent enough to be swept — so the sweep's `completed`
-    // arm is unreachable for any plan file this watcher imports. The completion
-    // transition is observed HERE; if the notifier does not fire here, registration
-    // alone reproduces the observed failure verbatim with a green suite.
+test('the completed turn-end notifier fires from the queue/done API path, not the plan-file edit', () => {
+    // Gate two of the 2026-08-16 blind spot ("a coder finished and NOTHING woke
+    // the head") still has to hold — it just moved. The plan-file edit must NOT
+    // clear or notify any more (that was the mid-work false positive), and
+    // POST /kanban/queue/done must carry the guarantee instead: same
+    // `transitioned` single-fire gate, outcome 'completed', a composed body, and
+    // ONLY for a 'finished' report — a 'failed' report is a release plus the
+    // escalation ladder, never a completion the lead should accept.
     const clearPath = planIngestionTs.substring(
         planIngestionTs.indexOf('if (updatedRecord.dispatchedAt) {'),
         planIngestionTs.indexOf('plan = updatedRecord;')
     );
-    assert.ok(clearPath.length > 0, 'the plan-file edit clear path must exist');
-    assert.ok(clearPath.includes('this._turnEndNotifier('), 'the file-edit clear must fire the turn-end notifier');
-    assert.ok(
-        /transitioned && this\._turnEndNotifier && clearedRecord\.dispatchedTerminal/.test(clearPath),
-        'the notifier must hang off the SAME `transitioned` boolean as the broadcast (re-deriving it re-opens the double-fire) and skip an empty dispatchedTerminal'
+    assert.ok(clearPath.length > 0, 'the plan-file edit path must still exist (it logs)');
+    assert.ok(!clearPath.includes('clearWorkingState('), 'a plan-file edit must NOT clear working state — mid-work edits are not completions');
+    assert.ok(!clearPath.includes('this._turnEndNotifier('), 'a plan-file edit must NOT fire the turn-end notifier');
+
+    const donePath = localApiServerTs.substring(
+        localApiServerTs.indexOf('private _runQueueDone('),
+        localApiServerTs.indexOf('// ── Pop the next card')
     );
-    assert.ok(
-        clearPath.includes("outcome: 'completed'"),
-        'a plan-file mtime advance is a completed turn, never blocked'
-    );
-    assert.ok(
-        clearPath.includes('seatName: clearedRecord.dispatchedTerminal'),
-        'seatName must come from the CLEARED record — updatedRecord.dispatchedAt is nulled in place before this point'
-    );
+    assert.ok(donePath.length > 0, '_runQueueDone must exist');
+    assert.ok(/if \(!transitioned\) \{/.test(donePath), 'the API path must gate on the clearWorkingState transition (the single-fire contract)');
+    assert.ok(/if \(outcome === 'finished'\) \{/.test(donePath), "the completion callbacks must be gated on outcome === 'finished' — a failed report is not a completion");
+    assert.ok(donePath.includes('onTurnEndNotify({'), 'the API path must fire the turn-end notifier');
+    assert.ok(donePath.includes("outcome: 'completed'"), 'a queue/done report is a completed turn, never blocked');
+    assert.ok(donePath.includes('composeCompletedTurnEndBody('), 'the API path must compose the same evidence body as the retired watcher path');
+    assert.ok(donePath.includes('onWorkingStateCleared('), 'the API path must fire the completion broadcast too');
+    // Both hosts must wire the option, or the seam is registration-only —
+    // exactly the shape of the 2026-08-16 failure.
+    assert.ok(/onTurnEndNotify:/.test(taskViewerTs), 'TaskViewerProvider must wire onTurnEndNotify on the LocalApiServer options');
+    assert.ok(/onTurnEndNotify:/.test(bootstrapTs), 'bootstrap.ts must wire onTurnEndNotify on the LocalApiServer options');
+    assert.ok(/onWorkingStateCleared:/.test(taskViewerTs), 'TaskViewerProvider must wire onWorkingStateCleared on the LocalApiServer options');
+    assert.ok(/onWorkingStateCleared:/.test(bootstrapTs), 'bootstrap.ts must wire onWorkingStateCleared on the LocalApiServer options');
 });
 
 test('the self-recipient skip is scoped to parent resolution in BOTH hosts', () => {
@@ -541,12 +554,18 @@ test('composeCompletedTurnEndBody flattens and truncates topic to 80 chars with 
     assert.ok(lines[0].includes('— "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA BBBBBBBBBBBBBBBBBBBBBBBBBBBBB…" (column In Progress, feature f1).'));
 });
 
-test('both completed turnEndNotifier call sites in PlanIngestionEngine pass a body', () => {
-    const matches = planIngestionTs.match(/_turnEndNotifier\(\{[^}]*outcome:\s*'completed'[^}]*\}\)/g) || [];
-    assert.strictEqual(matches.length, 2, 'both completed notifier calls must exist');
-    for (const m of matches) {
-        assert.ok(m.includes('body'), `completed notifier call must pass body: ${m}`);
-    }
+test('the completed notifier call site lives in LocalApiServer and passes a body', () => {
+    // The two PlanIngestionEngine call sites (watcher clear + sweep completion
+    // arm) went with mtime-based detection. The engine may only report 'blocked'
+    // and 'stalled' now; the single 'completed' producer is the queue/done API
+    // path, and it must still pass the composed evidence body (a bare notice
+    // names no plan, no duration and no topic — the head cannot act on it).
+    const enginePleted = planIngestionTs.match(/_turnEndNotifier\(\{[^}]*outcome:\s*'completed'[^}]*\}\)/g) || [];
+    assert.strictEqual(enginePleted.length, 0,
+        'PlanIngestionEngine must not report completed — mtime-based completion is retired');
+    const apiCompleted = localApiServerTs.match(/onTurnEndNotify\(\{[\s\S]{0,300}?outcome:\s*'completed'[\s\S]{0,200}?\}\)/g) || [];
+    assert.strictEqual(apiCompleted.length, 1, 'exactly one completed notifier call site: _runQueueDone');
+    assert.ok(apiCompleted[0].includes('body'), `completed notifier call must pass body: ${apiCompleted[0]}`);
 });
 
 test('both hosts honour info.body for completed turn-end notices', () => {

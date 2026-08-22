@@ -704,9 +704,13 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     ingestionEngine.onPlanDiscovered((_root, _filePath) => {
         try { void pushFullState(); } catch (e) { console.error('[bootstrap] ingestion-driven pushFullState failed:', e); }
     });
-    // Completion push. Fires ONLY from the plan-file-edit clear site in
-    // PlanIngestionEngine — never from the stale-state timeout sweep, because a timeout
-    // is an abandonment, not a completion. Fire-and-forget by contract: a panel that was
+    // Completion push. Fires from the explicit-completion clear site — POST
+    // /kanban/queue/done (`LocalApiServer._runQueueDone`, wired below as
+    // `onWorkingStateCleared`) — and never from the stale-state timeout sweep,
+    // because a timeout is an abandonment, not a completion. The engine's
+    // `setOnWorkingStateCleared` seam below is kept wired for host parity, but
+    // the mtime-based clear site that used to drive it is retired, so the API
+    // path is the live producer. Fire-and-forget by contract: a panel that was
     // closed when the agent finished simply misses it (same ephemeral semantics as the
     // board's activity light), so failures here are logged and swallowed.
     // Extracted so any future second completion signal reuses the SAME broadcast
@@ -2408,6 +2412,13 @@ Each plan file must include:
         // delivery path shared with the engine's setTurnEndNotifier.
         onWorkingStateCleared: (record: any, _wsRoot: string) => {
             broadcastAgentCompletedForRecord(record);
+            // Refresh the headless board too — the extension host's twin calls
+            // `refreshIfShowing` here for the same reason. On the retired
+            // file-watcher path the clear and the `planDiscovered` push were the
+            // same tick; the API path clears the DB with nothing watching the
+            // file, so without this the card keeps its lit activity light until
+            // an unrelated event pushes state.
+            try { void pushFullState(); } catch (e) { console.error('[bootstrap] queue/done pushFullState failed:', e); }
         },
         onTurnEndNotify: (info: any) => {
             handleTurnEndNotify(info);

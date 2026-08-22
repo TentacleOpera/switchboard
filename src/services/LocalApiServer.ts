@@ -2247,23 +2247,38 @@ export class LocalApiServer {
                     // notifier leaves the broadcast intact and vice versa. The
                     // record is the pre-clear `held` read (still has
                     // dispatchedAt, dispatchedTerminal, etc.).
-                    if (this._options.onWorkingStateCleared) {
-                        try { this._options.onWorkingStateCleared(held, workspaceRoot); } catch (e) {
-                            console.warn('[LocalApiServer] onWorkingStateCleared callback failed:', e);
+                    //
+                    // GATED ON `outcome === 'finished'`. A `failed` report is a
+                    // release, NOT a completion: the standing orders tell a seat
+                    // that cannot finish to call this same endpoint with
+                    // {"outcome":"failed"}, and the escalation ladder below is
+                    // what handles it (re-stage to a stronger seat, or park +
+                    // notifyOperator). Firing the completion callbacks on a
+                    // failure would tell the lead "seat X finished its turn on
+                    // <plan>" and write a `kind: finished` orchestrator report
+                    // for work that failed — the lead would accept and advance a
+                    // card nobody completed. `completed` is the only outcome the
+                    // TurnEndInfo contract has for this path, so the fix is the
+                    // gate, not a third outcome value.
+                    if (outcome === 'finished') {
+                        if (this._options.onWorkingStateCleared) {
+                            try { this._options.onWorkingStateCleared(held, workspaceRoot); } catch (e) {
+                                console.warn('[LocalApiServer] onWorkingStateCleared callback failed:', e);
+                            }
                         }
-                    }
-                    if (this._options.onTurnEndNotify) {
-                        try {
-                            const body = composeCompletedTurnEndBody(held, from, held.planFile, Date.now());
-                            this._options.onTurnEndNotify({
-                                seatName: from,
-                                planFile: held.planFile,
-                                outcome: 'completed',
-                                workspaceRoot,
-                                body,
-                            });
-                        } catch (e) {
-                            console.warn('[LocalApiServer] onTurnEndNotify callback failed:', e);
+                        if (this._options.onTurnEndNotify) {
+                            try {
+                                const body = composeCompletedTurnEndBody(held, from, held.planFile, Date.now());
+                                this._options.onTurnEndNotify({
+                                    seatName: from,
+                                    planFile: held.planFile,
+                                    outcome: 'completed',
+                                    workspaceRoot,
+                                    body,
+                                });
+                            } catch (e) {
+                                console.warn('[LocalApiServer] onTurnEndNotify callback failed:', e);
+                            }
                         }
                     }
 
@@ -2449,7 +2464,17 @@ export class LocalApiServer {
                     // queue and an idle team. A successful pop already armed
                     // (onDispatch) inside _runQueuePop; an empty queue has
                     // nothing staged to watch (do NOT arm — test #10).
-                    if (pop && (pop.status < 200 || pop.status >= 300) && this._options.armQueueWatch) {
+                    // NOT armed on the team-in-flight refusal (`inFlight` on the
+                    // pop payload). That 409 means the team still holds a card in
+                    // a coding column — it is not an idle team behind a staged
+                    // queue, which is the only state this watch exists to nudge.
+                    // It is also the NORMAL pop result for a head-paced team
+                    // member reporting done (its own just-released card is still
+                    // resting in its coding column), and arming REBINDS the
+                    // workspace watch's `headTerminal` to the finishing seat —
+                    // so a coder posting done would silently redirect every later
+                    // queue-stall nudge from the lead to itself.
+                    if (pop && (pop.status < 200 || pop.status >= 300) && !pop.payload?.inFlight && this._options.armQueueWatch) {
                         try { await this._options.armQueueWatch(workspaceRoot, from, { onDispatch: false }); }
                         catch (armErr) { console.warn('[LocalApiServer] armQueueWatch (release) failed:', armErr); }
                     }

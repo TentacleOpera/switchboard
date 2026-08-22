@@ -214,6 +214,17 @@ export class PlanIngestionEngine {
 
     private _regenerateFeatureFile?: (workspaceRoot: string, featureId: string) => Promise<void>;
 
+    /**
+     * Completion-broadcast seam. **DORMANT in this module**: the only producer
+     * was the mtime-based clear (the plan-file watcher and the silence sweep),
+     * retired when POST /kanban/queue/done became the explicit completion
+     * signal. Both hosts still register a callback here (extension.ts,
+     * bootstrap.ts) and both now receive the live event from
+     * `LocalApiServer._runQueueDone`'s `onWorkingStateCleared` option instead.
+     * The seam is kept so any future engine-side clear (one that is a real
+     * completion, not the abandonment timeout) has somewhere to land — do NOT
+     * read the registration as evidence that the engine still fires it.
+     */
     private _onWorkingStateCleared?: (record: KanbanPlanRecord, workspaceRoot: string) => void;
 
     public setOnWorkingStateCleared(cb: (record: KanbanPlanRecord, workspaceRoot: string) => void): void {
@@ -221,10 +232,12 @@ export class PlanIngestionEngine {
     }
 
     /**
-     * Turn-end notification seam. Fired once per turn boundary alongside the
-     * existing single-fire gates (the `transitioned` boolean for the completed
-     * arm, `!record.blockedAt` for the blocked arm) so a host can tell the agent
-     * waiting on a seat that the seat has gone quiet. The engine passes only what
+     * Turn-end notification seam. Fired once per turn boundary behind a
+     * single-fire gate — `!record.blockedAt` for the blocked arm, the per-watch
+     * nudge state for the stalled arm — so a host can tell the agent waiting on
+     * a seat that the seat has gone quiet. The `completed` arm does NOT fire
+     * from here any more: it moved to `LocalApiServer._runQueueDone` with the
+     * mtime-based clear's retirement, gated on the same `transitioned` boolean. The engine passes only what
      * it knows — the seat name, the plan file, the outcome and the workspace
      * root — and stays host-agnostic: recipient resolution (parentInstanceId →
      * live terminal, orchestrator fallback) and delivery (ptySendPrompt) belong

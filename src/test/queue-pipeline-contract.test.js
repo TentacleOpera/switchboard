@@ -86,7 +86,7 @@ function makeServer(board, opts = {}) {
         getFleetOrdersDatabase: opts.getFleetOrdersDatabase,
         onWorkingStateCleared: opts.onWorkingStateCleared,
         onTurnEndNotify: opts.onTurnEndNotify,
-        armQueueWatch: async () => { /* recorded separately where it matters */ },
+        armQueueWatch: opts.armQueueWatch || (async () => { /* recorded separately where it matters */ }),
     });
     // Stub the dispatch machinery: this contract is about SELECTION and
     // REFUSAL, not about what performKanbanDispatch does with the card.
@@ -350,6 +350,74 @@ async function run() {
         assert.strictEqual(out.payload.cleared, false, 'a no-transition report must report cleared: false');
         assert.deepStrictEqual(clearedCalls, [], 'onWorkingStateCleared must NOT fire on a no-transition (duplicate) report');
         assert.deepStrictEqual(notifyCalls, [], 'onTurnEndNotify must NOT fire on a no-transition (duplicate) report');
+    });
+
+    await check('_runQueueDone does NOT fire the completion callbacks on outcome: failed', async () => {
+        // A `failed` report releases the latch and runs the escalation ladder —
+        // it is NOT a completion. Firing the callbacks would tell the lead the
+        // seat "finished its turn" and mirror a `kind: finished` orchestrator
+        // report for work that failed, so the lead accepts and advances a card
+        // nobody completed. The standing orders explicitly instruct a seat that
+        // cannot finish to call THIS endpoint with {"outcome":"failed"}, so this
+        // path is reached by design, not by malformed input.
+        const held = card('held-failed', 'CODER CODED', {
+            dispatchedAt: '2026-08-20T00:00:00Z',
+            dispatchedTerminal: 'Coder 1',
+            routedTo: 'coder',
+            planFile: '/tmp/held-failed.md',
+            workspaceId: 'ws1',
+        });
+        const board = [held, card('next-failed', 'STAGING', { queuePosition: 2 })];
+        const clearedCalls = [];
+        const notifyCalls = [];
+        const { server } = makeServer(board, {
+            resolveTeamMembers: async () => null,
+            getRegisteredTerminals: () => ['Coder 1'],
+            onWorkingStateCleared: () => { clearedCalls.push('fired'); },
+            onTurnEndNotify: (info) => { notifyCalls.push(info); },
+            db: {
+                clearWorkingState: async () => { held.dispatchedAt = null; return true; },
+                getPlanByPlanId: async (planId) => board.find(p => p.planId === planId),
+                updateColumnByPlanFile: async () => { held.kanbanColumn = 'STAGING'; return true; },
+                setQueuePositions: async () => true,
+            },
+        });
+        await server.reportQueueDone({ workspaceRoot: WS, from: 'Coder 1', outcome: 'failed', planId: 'held-failed' });
+        assert.deepStrictEqual(notifyCalls, [], 'onTurnEndNotify must NOT report a failure as outcome completed');
+        assert.deepStrictEqual(clearedCalls, [], 'onWorkingStateCleared must NOT fire for a failed report');
+    });
+
+    await check('a team-in-flight 409 on the release pop does NOT arm the queue watch', async () => {
+        // The release-arm exists for "popped nothing because the DISPATCH
+        // failed → staged queue, idle team". A team-in-flight 409 is the
+        // opposite: the team still holds a card in a coding column. It is also
+        // the normal pop result for a head-paced team member reporting done,
+        // and arming REBINDS the workspace watch's headTerminal to the
+        // finishing seat — redirecting later queue-stall nudges from the lead
+        // to a coder.
+        const held = card('held-inflight', 'CODER CODED', {
+            dispatchedAt: '2026-08-20T00:00:00Z',
+            dispatchedTerminal: 'Coder 1',
+            planFile: '/tmp/held-inflight.md',
+            workspaceId: 'ws1',
+        });
+        const board = [held, card('next-inflight', 'STAGING', { queuePosition: 2 })];
+        const arms = [];
+        const { server } = makeServer(board, {
+            resolveTeamMembers: async () => ['Lead 1', 'Coder 1'],
+            resolveTeamPacing: async () => 'head',
+            armQueueWatch: async (wsRoot, headTerminal, o) => { arms.push({ wsRoot, headTerminal, o }); },
+            db: {
+                // The card stays in its coding column with dispatched_terminal
+                // set — clearWorkingState only NULLs dispatched_at.
+                clearWorkingState: async () => { held.dispatchedAt = null; return true; },
+            },
+        });
+        const out = await server.reportQueueDone({ workspaceRoot: WS, from: 'Coder 1', planId: 'held-inflight' });
+        assert.strictEqual(out.status, 409, 'the in-flight refusal status is passed through');
+        assert.ok(out.payload.inFlight, 'the in-flight refusal names the held card');
+        assert.strictEqual(out.payload.released, 'held-inflight', 'the release still happened');
+        assert.deepStrictEqual(arms, [], 'an in-flight team must not arm (or rebind) the queue watch');
     });
 
     await check('the global completion order is installed in the fleet orders database and stays idempotent', async () => {
