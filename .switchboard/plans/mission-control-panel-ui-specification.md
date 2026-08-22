@@ -56,21 +56,38 @@ Both tabs use **sidebar list + detail**, the pattern `tickets.html` already impl
 
 ---
 
-## A third tab: Control — the guaranteed terminal access
+## Guaranteed terminal access — as panel chrome, not a third tab
 
 The Mission Control **dock** (`feature_plan_20260808220200_shell-right-agent-dock-terminal.md`) is gated at `DOCK_VIABLE_MIN = 980`, because `48 + 4 + 648 + 280` is the narrowest viewport that fits a legible terminal *beside* the board. Below that the toggle is disabled, and on a `node-pty`-less install the dock does not exist at all. So on a laptop, or in a split window, the controller is reachable only through the full-screen terminals panel or a solo pop-out — the mode switch the dock was built to remove.
 
 **The panel has no such constraint, because there is no board to preserve inside it.** The content area is the viewport minus the 48px rail, so at 1280px it is ~1232px — comfortably past the 648px a terminal needs. The dock's floor is about *coexistence*, not legibility.
 
-So: a **Control** tab hosting the same `?solo=<seat>` frame the dock uses. Same mechanism, second host.
+So the panel hosts the same `?solo=<seat>` frame the dock uses. **But not as a peer tab** — as a persistent strip the tabs sit beside, the same relationship the dock has to the board, one level in.
 
-That settles the access story cleanly:
+### Why not a tab: a terminal in a hidden tab keeps resources it must release
+
+A terminal is not a view. It holds two things a hidden surface must give back, and **the only carrier for giving them back is a message the shell sends on panel switch** — which a tab switch is not.
+
+`shell.js:147-152` posts `panelVisibility` to every frame from `selectPanel`, and `terminals.js:1229-1270` is the arm that acts on it. Its comment states why the message has to exist at all: *"This document then stops being rendered, so its ResizeObservers no longer run — the container observer above cannot see this transition in either direction… The shell is the only thing that knows, so the shell has to say so."* It adds that two prior plans of this same feature *"reached OPPOSITE research conclusions about whether an in-iframe ResizeObserver sees the parent's `display:none`"*, so the release deliberately does not bet on the observer.
+
+What rides that carrier:
+
+1. **The shared pty size vote.** The pty is shared across clients and each client's reported size *clamps* it. `releaseSizeVote`'s comment: *"`client.reportedSize` is sticky server-side: fitAndReportSize returns early when the box is 0x0, so a client that goes hidden simply stops sending and its final size clamps the pty until the socket closes. That is why switching the shell to another panel did not release the cockpit's hold on a popped-out terminal."*
+2. **The WebGL renderer context**, via `armRendererRelease`, against a per-document context ceiling. *"The release machinery's headline case is 'a panel switched away from keeps every context it took'."*
+
+Tabs inside a panel are the panel's own `display:none` toggles. They never pass through `selectPanel`, so a terminal in a hidden tab gets **neither** message. Switch from Control to Missions and the controller's pty stays clamped to whatever the tab last measured — for every *other* viewer of that same terminal: the dock, a pop-out, the terminals panel. That is the exact bug quoted above, reintroduced one level down, and its symptom appears on a surface the user was not touching.
+
+**As panel chrome the problem does not arise.** A strip outside the tabbed content area is hidden only when the whole panel is, which `selectPanel` already covers, correctly and for free. No new relay, no new failure mode, and it matches what the dock is *for*: the controller sits alongside the work, not in a tab that competes with it for the same rectangle.
+
+That settles the access story:
 
 | Width | Path |
 |---|---|
 | ≥ 980px | dock beside the board — the point of the dock |
-| < 980px, or split window | **Control tab** — full width, no mode switch away from Mission Control |
+| < 980px, or split window | **the panel's controller strip** — no mode switch away from Mission Control |
 | no `node-pty` | neither; both absent by the same manifest gate |
+
+**If it ships as a tab anyway**, the panel must relay a `panelVisibility`-equivalent into the embedded frame on every tab switch, reusing that same arm rather than a new one. That is the minimum, not a nicety — and it is worth noting the failure is silent and remote, so it will not show up in testing the tab itself.
 
 It also makes the dock honestly optional: a convenience for wide monitors rather than the only front door, which is what a capability-gated front door would be. And it gives the first-run intro a home that every user can reach — the reason the dock's empty state is a copy rather than the canonical surface.
 
@@ -262,7 +279,9 @@ None of its own; the retired-mode notice surfaces on first open of this panel.
 - **Retired-mode notice appears once:** open the panel with a stored legacy mode; assert one notice, and none on reopen.
 - **External has no local effect:** select external, copy the prompt; assert no config write and no scheduler change.
 - **Log is honest about currency:** assert the log view states its as-of time rather than implying live updates.
-- **Control tab works below the dock floor:** at a 900px viewport, assert the dock toggle is disabled *and* the Control tab hosts a live terminal. This is the pair that proves narrow windows are served; asserting only the disabled toggle passes while leaving a laptop with no access.
+- **The controller strip works below the dock floor:** at a 900px viewport, assert the dock toggle is disabled *and* the panel's strip hosts a live terminal. This is the pair that proves narrow windows are served; asserting only the disabled toggle passes while leaving a laptop with no access.
+- **A tab switch never hides the controller:** switch between Missions and Schedules and assert the strip stays rendered. This is the assertion that fails if someone re-implements it as a tab.
+- **The size vote survives a tab switch:** with the controller open in the panel *and* in a pop-out, switch tabs and assert the pop-out's pty dimensions are unchanged. This is the remote symptom — asserting only that the panel looks right passes while the other surface is clamped.
 
 ### Manual Verification
 
