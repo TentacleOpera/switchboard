@@ -43,7 +43,7 @@ Both tabs use **sidebar list + detail**, the pattern `tickets.html` already impl
 | **Type** | `mission` (unsupervised) or `operation` (supervised) |
 | **Status** | not started · in flight · aborted · completed |
 | **Team** | assign one or more teams |
-| **Max parallel worktrees** | default `0`. A **mission** may not exceed `1`; an **operation** may go higher |
+| **Max extra worktrees** | how many **additional** worktrees this mission may create. Default `0` = work in whatever tree the mission starts in. A **mission** may not exceed `1`; an **operation** may go higher |
 | **Features and plans** | add and remove members |
 | **Sequencing** | shows the order; **defaults to sequential when no stream map exists** |
 | **Log** | events so far |
@@ -52,7 +52,9 @@ Both tabs use **sidebar list + detail**, the pattern `tickets.html` already impl
 
 **Ready is a flag, not a status.** The status set is not-started/in-flight/aborted/completed, so readiness is orthogonal: it marks a mission as eligible for pickup, and **a scheduler or Mission Control must not take an unready mission**. That is the safety property that makes "build missions in advance" usable — a half-assembled mission sitting in the list cannot be grabbed.
 
-**The worktree cap is a real constraint, not a default.** `mission ≤ 1` is what keeps unsupervised runs from fanning out into parallel trees with no one watching; `operation > 1` is allowed because a supervised run has someone to resolve conflicts. The cap must be enforced where the run starts, not only in the form — a mission whose type is changed after launch must not silently gain parallelism.
+**The field counts *extra* worktrees, and the name matters.** "Max parallel worktrees" reads as a total and invites `1` to mean "one tree", which is the mission's starting tree and therefore no isolation at all. **Max extra worktrees** with `0` meaning "stay in the tree the mission started in" is unambiguous, and it makes the default honest: most missions add nothing.
+
+**The cap is a real constraint, not a default.** `mission ≤ 1 extra` keeps unsupervised runs from fanning out into parallel trees with no one watching; an operation may go higher because a supervised run has someone to resolve conflicts. Enforce it where the run starts, not only in the form — a mission whose type is changed after launch must not silently gain parallelism.
 
 ---
 
@@ -77,7 +79,7 @@ Both tabs use **sidebar list + detail**, the pattern `tickets.html` already impl
 - improve docs
 - update readme
 - send plans to Jules
-- start rest mission
+- start a ready mission
 - research (requires a research terminal)
 - git pull/push
 - custom
@@ -91,7 +93,23 @@ Both tabs use **sidebar list + detail**, the pattern `tickets.html` already impl
 | produces an artifact (research, intent reviews) | **artifacts folder** |
 | is *not* a board action | **target terminal** (changeable) and the **prompt**, editable |
 
-**Planner actions are unattended by construction**, so their prompt must carry three instructions: write any research questions into the plan; note on the plan if user questions blocked completion; and send that plan back to CREATED. A scheduled planner with no one to ask is otherwise a planner that either stalls or invents an answer.
+### Most actions are prompts, not features
+
+**The action list is largely prompt templates, not new subsystems.** Each non-board action is: a **wording** this plan supplies, a **target terminal** the user picks, and whatever conditional fields its class declares. So "which of these exist today" is the wrong question — the deliverable is the set of wordings, and the dispatch path already exists.
+
+That reframes the work: the schedules tab needs a prompt template per action, each editable before send, rather than thirteen features. It also sets where the difficulty actually is — the wordings must be good enough to run **unattended**, since nobody is reading the reply.
+
+### The unattended standing order
+
+Every planner-class action carries a standing order stating the terms of an unattended run. Three clauses:
+
+1. **This is an unattended task; user questions will not be answered.**
+2. **If user answers are required to proceed:** move the plan back to `CREATED` with the open questions listed on it.
+3. **If research is required but no researcher is available:** move the plan back to `CREATED` with a note that the planning workflow is complete but needs uncertainty resolved.
+
+The distinction between 2 and 3 is worth preserving rather than collapsing into "blocked": the first is *incomplete pending a decision*, the second is *complete pending evidence*. A plan returned for the second reason does not need re-planning, and a single "blocked" state would send it through planning again.
+
+This is a standing order attached to the prompt, not new machinery — the same mechanism `teamWiring.ts` already uses to append durable instructions. Whether an equivalent already exists is the one open item below.
 
 ### External
 
@@ -103,15 +121,13 @@ Same action dropdown **with the board actions removed**, plus a **Copy prompt** 
 
 ## Metadata
 
-**Complexity:** 8
+**Complexity:** 6
 **Tags:** ui, frontend, ux, feature, backend
 
 ## User Review Required
 
-- **"start rest mission" is ambiguous** — "start *next* mission", or start the remaining/unstarted ones? These differ: one takes the next ready mission, the other could launch several. Not guessing.
-- **What does `max parallel worktrees: 0` mean?** No worktree at all (work in the main checkout), or "unset, use the board default"? `0` reads as none, but the default for a mission that may go to `1` might sensibly be `1`.
-- **"batch advance to planning team" depends on unwritten work** — noted as *"requires setup, dependent on an uncoded plan I haven't done yet"*. It should ship disabled with a reason rather than as a live option that fails, per the dead-control rule (`worktree-strategy-control-contract.test.js`: "a third radio ahead of its provisioning is a dead control").
-- **Thirteen actions is the largest surface here.** Several map to existing features (process memo, research, send to Jules, phone a friend); others do not obviously exist yet (improve docs, update readme, review code vs intent). Worth marking which are wiring versus new work before this is built, because the dropdown will otherwise ship with options that do nothing.
+- **Batch advance to planning team ships enabled.** Its dependency is being coded before this panel ships, so the dead-control concern does not apply. An earlier revision of this plan recommended shipping it disabled — withdrawn.
+- **The prompt wordings are the real deliverable** for the non-board actions, and they need review. Each must work with nobody reading the reply.
 - **Does the missions tab own mission *creation* from the board?** `staging-streams-parallel-dispatch-and-worktrees.md` has a mission auto-created by dropping a card into STAGING. This panel adds a New mission button. Both should be fine, but the panel must show a board-created mission identically to a panel-created one.
 
 ## Complexity Audit
@@ -168,10 +184,10 @@ Same action dropdown **with the board actions removed**, plus a **Copy prompt** 
 4. **Missions tab** per the table above; **ready as a flag**, status **derived**.
 5. **Enforce the worktree cap at launch**, not only in the form.
 6. **Schedules tab** per the spec; action classes carried as data.
-7. **Planner prompts carry the unattended instructions** (research questions into the plan; note blockers; return to CREATED).
+7. **Planner prompts carry the unattended standing order** — unattended terms, return-to-`CREATED` on required answers, return-to-`CREATED` with a completion note when research is unavailable.
 8. **External type** drops board actions and offers Copy prompt; no local side effects.
 9. **Logs** renders the markdown log with a link and a clear as-of.
-10. **Actions with unbuilt dependencies ship disabled with a reason**, never as live options that fail.
+10. **Supply a prompt wording per non-board action**, editable before send, with a target terminal. These are templates, not features.
 
 ### Migration
 
@@ -193,7 +209,8 @@ None of its own; the retired-mode notice surfaces on first open of this panel.
 - **Worktree cap enforced at launch:** set a mission to `3`, launch, assert refusal; change type to `operation`, assert it proceeds. Then set `3` on an operation, launch, and *change type to mission mid-run* — assert no silent gain of parallelism.
 - **Field matrix from data:** for each action, assert the rendered fields equal the classes it declares. A matrix test, not a render test — the failure is a mis-declared class, not bad markup.
 - **Status is derived:** kill a run mid-flight; assert the mission does not remain `in flight`.
-- **Disabled actions state a reason:** assert any action with an unmet dependency renders disabled *with* an explanation, never enabled.
+- **Every non-board action has a wording and a terminal:** assert each renders a non-empty editable prompt and a terminal selector. An action that dispatches an empty prompt is the failure mode of a template-driven list.
+- **Planner actions carry the unattended order:** assert the composed prompt for every planner-class action contains all three clauses. Missing clause 3 is the quiet one — the plan completes, the uncertainty is never surfaced, and the work looks done.
 - **Rail order and no shell edit:** assert the manifest yields the target order and `shell.js` is unchanged.
 - **AUTOMATION tab gone:** assert `kanban.html` has no `automation` tab button, no `automation-tab-content`, and no `automation-panel-root`, and that no code references them.
 - **Retired-mode notice appears once:** open the panel with a stored legacy mode; assert one notice, and none on reopen.
@@ -207,8 +224,6 @@ None of its own; the retired-mode notice surfaces on first open of this panel.
 
 ## Outstanding Questions
 
-- **[user]** "start rest mission" — next, or remaining?
-- **[user]** `max parallel worktrees: 0` — none, or unset?
-- **[user]** Which of the thirteen actions exist today and which are new work?
-- **[user]** Is there an existing plan for the unattended-planner instructions (research questions into the plan, blocked-completion note, return to CREATED)? Searched and did not find one — it may be under wording I did not match, and duplicating it would be worse than reusing it.
+- **Does an unattended standing order already exist?** It would live among the standing-orders, automation or team plans. Searched and did not match one; the three clauses above are small enough to write fresh, but reusing an existing order is better than adding a second with the same intent — this programme has already produced two contradictory orders once.
+- Do the returned-to-`CREATED` plans need a marker distinguishing the two return reasons, so a later pass can tell "needs a decision" from "needs evidence" without re-reading the prose?
 - Does the missions sidebar group by status, or is the status view switch a filter over one flat list? The controls imply a filter; a grouped list would make the switch redundant.
