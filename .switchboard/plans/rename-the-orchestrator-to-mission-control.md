@@ -35,7 +35,9 @@ The persona was named for the ambition — coordinate multiple teams — and the
 
 ## User Review Required
 
-- **Decided: Mission Control.** An earlier revision proposed *operator* and flagged a collision: the protocol already uses "the operator" for the human (`:244`, *"the operator wants to walk away"*), so renaming the persona to operator would make its own justifying sentences ambiguous. **Mission Control names the station, not the person** — the human stays the operator, the persona becomes the surface they watch. The collision disappears rather than being worked around.
+- **Decided: Mission Control**, on branding and contract fit. An earlier revision proposed *operator* and leaned on a supposed collision with "the operator" as the human. **That argument was overweighted and is withdrawn.** Measured: 296 occurrences of "operator" in `src/`, but "operator" is not a role (absent from `agentConfig.ts` and every role list), has no UI label, and appears just **8 times** in agent-facing `.agents/` text — three protocol files. The rest are comments meaning the human (*"waiting on the operator"*, *"the order the operator is working on them"*, *"no operator-created team"*). There was no real collision to avoid, so it should not have been a premise.
+
+  The real case is the one that stands on its own: Mission Control names the **station** rather than a person, and it matches the contract the product already illustrates.
 
   It is also the branded fit. The product's second homepage illustration is `agent-fleet-air-combat-detailed.svg` — a radar scope with tagged interceptors (CLAUDE, DEVIN, GEMINI, OLLAMA) pinging around the central Switchboard saucer, amid range rings and distant contacts, under the heading *"Your terminals, on autopilot."* That is an air-traffic scope: you watch tagged aircraft on a field, you do not fly them. Which is the persona's contract exactly — and the protocol's own line, *"a resident orchestrator over a one-at-a-time pipeline is a manager watching a manager"* (`:244`), is a sentence about a radar operator.
 
@@ -104,7 +106,8 @@ v1: `RETIRED_WORKFLOW_PATH_MAP` entries for renamed protocol paths. v2 adds dual
 ### Automated Tests
 
 - **Every protocol path resolves:** assert each `.agents/protocols/...` string literal in `src/` names an existing file. This catches the silent dispatch-time failure that a filename rename causes, and it is the single most valuable test here.
-- **No persona-as-orchestrator in user-facing text:** assert UI labels and protocol prose are clean, with an explicit allowlist for occurrences that mean the human or the generic word — the allowlist being the honest record of where the word legitimately survives. Note "the operator" meaning the *human* must survive untouched, and a rename pass that also rewrites those is the likeliest over-reach.
+- **No persona-as-orchestrator in user-facing text:** assert UI labels and protocol prose are clean, with an explicit allowlist for occurrences that mean the human or the generic word — the allowlist being the honest record of where the word legitimately survives.
+- **Two agent-facing `OPERATOR` strings survive verbatim:** `terminals.js:11201` (`OPERATOR INSTRUCTION:`) and `:11670` (`[OPERATOR NOTICE] Standing orders updated for team.`). Both are prefixes telling an agent a message came from the human, they are correct as written, and they are the only non-comment uses of the word. A grep for `operator` surfaces all 296 occurrences, so these two are the ones a mechanical pass is likeliest to damage.
 - **Retired paths map:** assert old protocol paths resolve through `RETIRED_WORKFLOW_PATH_MAP`, and that the three pre-existing generations still do.
 - **(v2) Dual-read:** assert a stored `orchestratorArmed` and a populated `.switchboard/orchestrator/reports/` are both still honoured after the rename. Without this, a rename silently orphans queued reports.
 - **(v2) Route aliases:** assert `/orchestration/*` still responds.
@@ -112,4 +115,4 @@ v1: `RETIRED_WORKFLOW_PATH_MAP` entries for renamed protocol paths. v2 adds dual
 ## Outstanding Questions
 
 - **[user]** v1 only (prose, labels, protocol files), or v2 as well (config keys, paths, routes)?
-- How many of the 1,067 occurrences mean the human or the generic word rather than the persona? That count decides whether the mechanical pass is an afternoon or a week, and it is worth taking before committing to v2.
+- How many of the 1,067 `orchestrator`/`orchestration` occurrences mean the persona rather than the generic word? That count decides whether the mechanical pass is an afternoon or a week, and it is worth taking before committing to v2. (The parallel question for "operator" is settled: 296 occurrences, none a role or label, 8 agent-facing, 2 non-comment strings that stay.)
