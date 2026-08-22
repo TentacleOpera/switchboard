@@ -1,8 +1,18 @@
-# Flatten protocols out of the skill shape: `<name>/SKILL.md` → `<name>.md`
+# Flatten the 30 non-user-facing protocols out of the skill shape
 
 ## Goal
 
-Stop 32 non-discoverable protocol files from occupying the `<name>/SKILL.md` convention that exists solely for host skill discovery, by flattening them to `.agents/protocols/<name>.md` — the shape `refine_feature.md` already uses correctly.
+Stop 30 non-discoverable protocol files from occupying the `<name>/SKILL.md` convention that exists solely for host skill discovery, by flattening them to `.agents/protocols/<name>.md` — the shape `refine_feature.md` already uses correctly. `improve-plan` and `improve-feature` are explicitly **excluded**; see Scope below.
+
+### Scope: why `improve-plan` and `improve-feature` keep their directory shape
+
+An earlier revision of this plan covered all 32 and offered the reader a choice between this plan and `protocols-as-db-rows-not-scaffolded-files.md`. That framing was wrong on both counts — the two plans are not alternatives, and the scope is not 32.
+
+The rows plan establishes that these two are **the default values of a user-editable path field**: `kanban.html:3464` exposes `workflowFilePath` as a text input defaulting to `.agents/protocols/improve-plan/SKILL.md`, with a `Validate` button beside it, presented as an equal to third-party paths like `.claude/get-shit-done/agents/gsd-planner.md`. `plannerFeatureWorkflowFilePath` (`:3568`) is the same for features.
+
+That makes their path part of a user-facing contract surface, not an internal detail. Flattening them would change a string a user sees in a settings field, invalidate a manually-typed value, and require a settings migration — for zero benefit, since the shape argument in this plan is about files nothing discovers *and nothing exposes*. These two are exposed. They stay as `<name>/SKILL.md`.
+
+This is also why the two plans do not conflict: the rows plan keeps exactly these two committed as files and converts the other 31 to rows. The shape question therefore divides along the same line the rows plan already draws — the 30 with no user-facing surface, plus `refine_feature` which is already flat.
 
 ### Problem Analysis
 
@@ -32,28 +42,28 @@ These 32 were then reclassified as protocols and moved to `.agents/protocols/`, 
 
 ## Metadata
 
-**Complexity:** 5
+**Complexity:** 4
 **Tags:** refactor, docs, reliability
 
 ## User Review Required
 
-- **This plan and `protocols-as-db-rows-not-scaffolded-files.md` partially overlap and should not both be built.** That plan deletes these files entirely, moving their bodies into `control_plane` rows. Flattening 32 files and then deleting all 32 is wasted work. Choose one:
-  - **Rows deferred or uncertain** → do this. It is cheap, self-contained, and makes the directory legible now.
-  - **Rows imminent** → skip this, and carry one sentence into that plan's seeding step: the crawl handles both shapes, and no file is reshaped to suit it.
-  The recommendation is to decide this before either is scheduled, not to sequence them.
+- **Cancel this plan if the rows plan is scheduled — do not sequence them.** The two are not alternatives in scope (see Scope above) but they are alternatives in *work*: the expensive part of this plan is rewriting the reference sites, and the rows plan rewrites the same sites again to `resolveProtocol(name)` calls. Doing both means doing that twice. The file moves are near-free `git mv`s; the references are the cost. So:
+  - **Rows scheduled** → cancel this. Carry two sentences into the rows plan: the seeding crawl reads both shapes, and no source file is reshaped to suit it.
+  - **Rows shelved or uncertain** → build this. It is the standalone form of the same correction, and after it the survivors' shape is settled by the Scope section above rather than left open.
+  This is a scheduling consequence of one decision you already own — whether the rows plan is in the storage programme's near queue — not a second decision.
 - Confirm the two frontmatter blocks (`archive`, `design-system-builder`) should be dropped rather than preserved (see Proposed Changes item 3).
 
 ## Complexity Audit
 
 ### Routine
 
-- 32 `git mv .agents/protocols/<name>/SKILL.md .agents/protocols/<name>.md` operations, then removing the emptied directories.
+- 30 `git mv .agents/protocols/<name>/SKILL.md .agents/protocols/<name>.md` operations, then removing the emptied directories. `improve-plan/` and `improve-feature/` are untouched; `refine_feature.md` is already flat.
 - Rewriting the reference sites, which are concentrated: `agentPromptBuilder.ts` (29), `tickets.js` (14), `PlanningPanelProvider.ts` (9), `TaskViewerProvider.ts` (8), `KanbanProvider.ts` (7), `externalAgentPrompts.ts` (4), `SparkContextExporter.ts` (2), plus single sites in `planning.js`, `sharedDefaults.js`, `bootstrap.ts`, `DesignPanelProvider.ts`.
 
 ### Complex / Risky
 
 - **~178 references across 30 files, and 14 of those files are tests.** `planner-workflow-path-migration.test.js` (16), `minimal-prompt.test.js` (15), `agentPromptBuilder.test.ts` (7), `prompt-split-guidance-sync.test.js` (4), `orchestrator-tick-and-reports-contract.test.js` (4), `spark-context-exporter-contract.test.js` (4), `vsix-packaging-contract.test.js` (4), `kanban-default-prompt-previews.test.js` (3), and six more. Several byte-pin emitted prompt text, so they fail as designed and must be updated deliberately rather than mass-replaced.
-- **Persisted user config names these paths, and this is the migration.** `DEFAULT_PLANNER_WORKFLOW` and `DEFAULT_FEATURE_PLANNER_WORKFLOW` are config *defaults*, so a user's stored `planner.workflowPath` may hold `.agents/protocols/improve-plan/SKILL.md` literally. `RETIRED_WORKFLOW_PATH_MAP` (`agentPromptBuilder.ts:1470-1489`) already carries three generations of this exact problem — `.agents/workflows/*.md`, `.agents/skills/*/SKILL.md`, and the `.switchboard/protocols/` detour — and needs a fourth. Note it maps only the four user-reachable protocols (`improve-plan`, `improve-feature`, `accuracy`, `switchboard-orchestrator`), not all 32, so the migration is four entries, not thirty-two.
+- **Persisted user config names two of the moved paths.** `RETIRED_WORKFLOW_PATH_MAP` (`agentPromptBuilder.ts:1470-1489`) maps four protocols reachable from `planner.workflowPath`: `improve-plan`, `improve-feature`, `accuracy`, `switchboard-orchestrator`. The first two are out of scope here, so this plan adds **two** entries, for `accuracy` and `switchboard-orchestrator` — a user may have either persisted from when they were workflow paths. Excluding the user-facing pair is what shrinks this from a settings-migration problem to a two-line map append; the map already carries three generations of the same problem and the new entries follow that pattern exactly.
 - **Four protocol bodies cross-reference other protocols by path** — `switchboard-contracts/SKILL.md` (4 references), `terminal-coder-dispatch/SKILL.md` (2), `switchboard-orchestrator/SKILL.md`, `switchboard-orchestration/SKILL.md`. These are content, not code: a stale path here hands an agent a file that does not exist and fails silently, with the agent either reporting a missing file or proceeding without the instructions.
 - **13 protocols are delivered by clipboard** from `tickets.js`, where the body is inlined rather than pathed. Those 14 references are to source locations for building the prompt, so they change, but the emitted text should not — verify the emitted clipboard payload is byte-identical where it does not name a path.
 - **`git mv` for all 32** to preserve history. A copy-and-delete loses provenance on files that carry design rationale in their comments.
@@ -75,7 +85,7 @@ These 32 were then reclassified as protocols and moved to `.agents/protocols/`, 
 
 - **Requires** `shrink-the-injected-agent-protocol-block.md` to land first, for the reason above.
 - **Reduced by** `remove-dead-agent-singular-fallback-paths.md`: nine reference sites are deleted there rather than rewritten here.
-- **Conflicts with** `protocols-as-db-rows-not-scaffolded-files.md` — see User Review Required. Build one, not both.
+- **Subsumed by** `protocols-as-db-rows-not-scaffolded-files.md` on work, not scope: that plan rewrites the same reference sites to resolver calls, so running both rewrites them twice. It also settles the survivors' shape the same way this plan does — the two files it keeps committed are the two this plan excludes. Cancel this if that one is scheduled; see User Review Required.
 
 ## Adversarial Synthesis
 
@@ -89,10 +99,10 @@ These 32 were then reclassified as protocols and moved to `.agents/protocols/`, 
 
 ## Proposed Changes
 
-1. **`git mv` all 32** `.agents/protocols/<name>/SKILL.md` → `.agents/protocols/<name>.md`; remove the emptied directories. `refine_feature.md` is already correct and is not touched.
+1. **`git mv` the 30** in-scope `.agents/protocols/<name>/SKILL.md` → `.agents/protocols/<name>.md`; remove the emptied directories. `improve-plan/` and `improve-feature/` are excluded per Scope; `refine_feature.md` is already correct.
 2. **Rewrite the reference sites** across the ten source files and fourteen test files, plus the four protocol bodies that cross-reference other protocols by path.
 3. **Drop the two inert frontmatter blocks** from `archive` and `design-system-builder`, keeping their bodies. `refine_feature.md` keeps its frontmatter, which is genuinely used as the dispatch description.
-4. **Add four `RETIRED_WORKFLOW_PATH_MAP` entries** mapping `.agents/protocols/<name>/SKILL.md` → `.agents/protocols/<name>.md` for `improve-plan`, `improve-feature`, `accuracy`, `switchboard-orchestrator`.
+4. **Add two `RETIRED_WORKFLOW_PATH_MAP` entries** mapping `.agents/protocols/<name>/SKILL.md` → `.agents/protocols/<name>.md` for `accuracy` and `switchboard-orchestrator`. No entry for `improve-plan`/`improve-feature` — they are not moved.
 5. **Preserve local edits**: for each moved file, if the old path's content differs from the bundled version, write `<name>/SKILL.md.migrated.bak` rather than deleting.
 6. **Record the convention** in one place — flat `.md` under `.agents/protocols/` means path-delivered and undiscoverable; `<name>/SKILL.md` under `.agents/skills/` means host-discoverable. Not in the injected block, which is being emptied.
 
@@ -104,7 +114,7 @@ Four retired-path entries plus `.migrated.bak` preservation for locally-edited f
 
 ### Goal Invariants
 
-- `.agents/protocols/` contains 33 flat `.md` files and zero subdirectories.
+- `.agents/protocols/` contains 31 flat `.md` files and exactly two subdirectories: `improve-plan/` and `improve-feature/`. Asserting the two survivors *positively* matters as much as asserting the flatness — a later cleanup reading the invariant as "flatten everything" would break the user-facing default paths.
 - No occurrence of `protocols/<anything>/SKILL.md` remains in `src/`, `scripts/`, or any `.agents/` body.
 - Every protocol named by any consumer resolves to an existing file.
 
@@ -127,6 +137,6 @@ Four retired-path entries plus `.migrated.bak` preservation for locally-edited f
 
 ## Outstanding Questions
 
-- **[user]** Build this, or the rows plan? They overlap and both should not ship.
+- **[user]** Is the rows plan in the storage programme's near queue? That single answer decides whether this plan is built or cancelled — no separate decision needed, and the scope question it used to carry is now settled in Scope above.
 - Do any of the 33 protocols reference a *sibling* by relative path rather than workspace-relative? A relative reference survives a flatten differently from an absolute one, and the four known cross-references need reading before the move, not after.
 - **Resolved — no `_lib` depth hazard.** `_lib` is referenced in at least 10 protocol bodies (the ClickUp/Linear/Notion proxies, `get-tickets`, `generate-diagram`), but every reference is **workspace-root-anchored, not file-relative**: `source "$CUR/.agents/skills/_lib/sb_api_call.sh"`, and in one case `source "$(git rev-parse --show-toplevel)/.agents/skills/_lib/sb_api_call.sh"`. Depth-independent, so flattening cannot break them. The audit plan's warning applied to the original conversion because that move changed which directory the file sat in relative to `_lib`; anchoring to the root is what makes this move safe, and it is worth asserting so a future body written with a relative path is caught.
