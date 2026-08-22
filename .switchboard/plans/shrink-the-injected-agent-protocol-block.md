@@ -1,8 +1,24 @@
-# Cut the injected agent protocol block from 14,826 chars to ~320
+# Cut the injected agent protocol block from 14,826 chars to ~650
 
 ## Goal
 
-Reduce the block Switchboard writes into every user's `CLAUDE.md` from ~3,700 tokens to roughly 130, keeping only the four rules that cannot work anywhere else, and relocating one role-scoped rule into the per-role prompt builder where it belongs.
+Reduce the block Switchboard writes into every user's `CLAUDE.md` from ~3,700 tokens to ~160, keeping only the four rules that cannot work anywhere else, and relocating one role-scoped rule into the per-role prompt builder where it belongs.
+
+### Size accounting — one authoritative figure
+
+Earlier revisions of this plan carried four different targets (~320 in the title, ~130 tokens here, ~530 in Non-goals, under 800 in the gate). Only one of those was measured against the actual proposed text. Measured now, from the body in Proposed Changes item 1:
+
+| | chars | tokens |
+|---|---|---|
+| Resident body (the three surviving rules) | **528** | ~132 |
+| Markers + `CLAUDE_PROTOCOL_HEADER` | 122 | ~30 |
+| **Emitted managed block** | **~650** | **~160** |
+| Current emitted block | 14,826 | ~3,706 |
+| Reduction | **95.6%** | |
+
+The gate is **under 800 chars** on the emitted block: ~650 plus ~23% headroom, so a genuine wording fix does not fail CI but a new section does. Any future figure quoted for this plan is derived from that table, not from prose.
+
+**Why 528 and not the ~320 the title used to claim.** The earlier figure predated the section-by-section review, during which three rules had their *explanatory* halves reinstated: the `query-kanban` label trap, the reason memo suppression exists at all, and the commit-is-irrelevant half of the import rule. Those clauses are the load-bearing parts — a bare prohibition without its reason is what invites route-shopping — and they cost roughly 200 chars. The growth was correct; leaving the old number in the title was not.
 
 ### Problem Analysis
 
@@ -55,7 +71,7 @@ Every section was individually justified — each prevents a real mistake. What 
 
 - Removing capability. Every rule that moves keeps applying; it arrives closer to the work.
 - Touching this repo's own dev rules. They live only in this repo's hand-authored `CLAUDE.md`, are absent from `AGENTS.md`, and correctly never reach users.
-- Splitting the body per host. Antigravity discovers skills correctly, so the same ~530-char body serves both.
+- Splitting the body per host. Antigravity discovers skills correctly, so the same 528-char body serves both.
 
 ## Metadata
 
@@ -149,7 +165,7 @@ None. Regenerated from source on sync.
 
 ### Goal Invariants
 
-- The emitted `CLAUDE.md` managed block is **under 800 chars** (currently 14,826).
+- The emitted `CLAUDE.md` managed block is **under 800 chars** (currently 14,826) — see the size-accounting table in the Goal for the derivation. Assert against the emitted block including markers and header, not the body alone; the two differ by 122 chars and quoting the wrong one is how this plan previously ended up with four conflicting targets.
 - The block contains no filesystem path, no reference to `send_message`, `view_file`, `IsArtifact`, `skill: "<name>"`, and no skill or protocol name list.
 - No rule removed from the block is absent from the place it moved to.
 
