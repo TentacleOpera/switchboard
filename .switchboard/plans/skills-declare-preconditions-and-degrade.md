@@ -45,7 +45,33 @@ It also already separates concerns the right way: *"This skill is the invocation
 
 **Historical cause, and it was not a deletion.** Git history shows `query-kanban-plans/SKILL.md`, `query_kanban_plans.md`, `query_switchboard_kanban.md` and `query_archive/SKILL.md` removed from `.agents/skills/`, alongside `clickup-api`, `linear-api` and `notion-api`. No endpoint-based kanban skill was ever deleted — **both inputs to today's `query-kanban` were SQL skills**, and the merge preserved SQL as the method. What the reorganisation did was move *every* API reference (`clickup-api`, `linear-api`, `notion-api`, and the orchestration HTTP surface) into `protocols/`, making all of it undiscoverable in one move, while the SQL skill stayed discoverable. Nobody removed the endpoint guidance; the move made it unreachable and left the SQL guidance reachable.
 
-**So the rewrite sources from `switchboard-orchestration/SKILL.md` rather than being written fresh** — and the endpoint list must have **one authority**, not two that drift. Prefer pointing at it, or lifting only the team-relevant reads out of it, over restating the endpoints in a second file. That makes this cheaper than a from-scratch rewrite, which is why the complexity below is 3 rather than higher.
+**So the rewrite sources from `switchboard-orchestration/SKILL.md` rather than being written fresh.** That makes this cheaper than a from-scratch rewrite, which is why the complexity below is 3 rather than higher.
+
+### But the protocol is itself a partial, hand-maintained list — point it at the generated one
+
+An earlier revision of this plan recommended `query-kanban` point at the protocol and called that "one authority". That is one *hop*, not one authority: the protocol is a hand-written subset that can drift from what the server actually serves. Measured:
+
+| | `switchboard-orchestration/SKILL.md` | `GET /catalog` |
+|---|---|---|
+| Endpoints | 22, hand-written prose | **87**, generated from source |
+| Drift protection | none | `catalog:check` in CI (`integration-tests.yml:26`) |
+| Payload shapes | **yes** — its own text claims "endpoints, verbs, payload fields" | **no** — entries are only `{path, method, prefix}` |
+
+The protocol documents **22 of 87** endpoints and contains **zero** references to `/catalog`. Meanwhile `LocalApiServer.ts:547-548` describes the catalog as the layer that exists so "external clients discover every verb/endpoint/payload at runtime" — the discoverability job the protocol is currently doing by hand, worse.
+
+**The gap that stops this being a straight swap:** the catalog has no request shapes. Its `apiEndpoints` entries carry `path`, `method` and `prefix` and nothing else; the 561 `verbPayloads` are *webview message* payloads, not HTTP bodies. So `POST /kanban/move` appears in the catalog with no indication that it takes `{planId or sessionId, targetColumn, workspaceRoot?}`, nor that column IDs must be canonical uppercase and it 400s on unknown ones (`switchboard-orchestration/SKILL.md:125`). That contract lives only in the protocol, and it is the half an agent needs to make a correct call.
+
+**So the corrected chain is:**
+1. **`GET /catalog` is the endpoint inventory.** The protocol points at it and stops being a partial list — killing drift on the 22 and exposing the other 65.
+2. **The protocol owns the payload contracts** for the calls agents are meant to make, since nothing else has them.
+3. **`query-kanban` points at the protocol.** One hop, and the authority underneath is now anchored to a generated list rather than a hand-maintained one.
+
+### Noted for later: extend the catalog to capture request shapes
+
+The end state is that payload contracts are generated too, and the protocol becomes narrative rather than reference. `scripts/generate-protocol-catalog.js` already parses provider `switch` blocks by brace-depth tracking to extract `case` arms; capturing HTTP request shapes means parsing the handler bodies for their destructured fields, which is a bigger change than the pointer above and should not be bundled into it. Two things to know if it is taken up:
+
+- It flags any endpoint whose shape cannot be determined statically, the way the existing generator already flags non-literal `type` fields into `catalog.manualReview` (6 today). That mechanism is the precedent to reuse.
+- It does **not** conflict with `protocols-as-db-rows-not-scaffolded-files.md`, which records the catalog as out of scope for the protocol-file move. That plan's point is that "protocol" in `protocol-catalog.json` means the webview message protocol, not protocol `SKILL.md` files. Extending the catalog's HTTP coverage is orthogonal to both.
 
 **Discovery-as-a-phase is the wrong shape.** An up-front "work out what you can reach" step costs tokens on every session, must enumerate channels it cannot know about, and produces a claim that is stale the moment auth expires. Discovery at point of use costs nothing until the capability is wanted and is always accurate. The pattern already exists in the codebase; it just is not applied uniformly.
 
@@ -81,7 +107,8 @@ No. This adds a stated precondition and a fallback instruction to skills that la
 ### Complex / Risky
 
 - **Rewriting `query-kanban` around the endpoints is the bulk of this plan.** Every query template in it is SQL and each needs an endpoint equivalent, or an honest statement that no endpoint covers it — which is itself a finding worth surfacing, since a query with no endpoint equivalent is either a gap in the API or a query teams should not be running. Do not translate mechanically: check each against the five read endpoints first, and against the 22 documented in `switchboard-orchestration/SKILL.md`.
-- **Decide how `query-kanban` relates to the existing authority, because both options have a cost.** Pointing at `switchboard-orchestration/SKILL.md` keeps one authority but hands a team agent a protocol whose own scope line addresses fleet and external agents — so that line needs widening, or the pointer reads as out of scope. Lifting the team-relevant reads into `query-kanban` reads cleanly but creates a second place the endpoint list can drift. Recommending the pointer plus a widened scope line: drift is the worse failure, and this programme has already produced two contradictory copies of one instruction.
+- **`query-kanban` points at the protocol, and the protocol's scope line must be widened.** Its own text addresses *"a fleet coding/review agent working inside an orchestration worktree, or an external orchestrator"* — a team member is neither, so an unwidened pointer reads as out of scope. Lifting the reads into `query-kanban` instead was considered and rejected: it creates a second endpoint list that can drift, and this programme has already produced two contradictory copies of one instruction in the standing orders.
+- **Pointing the protocol at `/catalog` is a small edit with a verification catch.** The protocol's 22 endpoints must each still exist in the catalog's 87 — if any does not, the protocol has already drifted and that is a finding, not a merge conflict to paper over. Assert the subset relation rather than assuming it.
 - **The description matters more than the body.** An agent decides whether to load a skill from its one-line description. `query-kanban`'s currently promises "direct SQL access to kanban.db" with no qualifier, so an agent in a DB-less session loads it on the strength of that. The description must lead with the endpoint method, not merely gain a precondition clause.
 - **"Say so" must be specific about what to say.** A fallback that reads "otherwise explain you cannot" invites an agent to declare the system broken. The instruction should name the likely reason — no local database in a cloud or tracker-only session — so the agent reports a configuration fact rather than a fault.
 - **Do not encourage improvisation as the fallback.** `query-kanban` exists partly because hand-written SQL silently returns nothing (column labels differ from stored IDs). Its no-API path must not read "query the DB another way" — and note the label/ID trap is an argument *for* the endpoints, which return records rather than requiring the caller to know the mapping.
