@@ -36,7 +36,7 @@ Each installer was added by the feature that needed it, and each wrote the full 
 
 ## User Review Required
 
-- **The axes are the design.** Proposed: reviewer-seat presence, work kind (feature / plan), pacing mode (head / seat), orchestrator presence. Confirm that set — each axis added is a multiplier on what must be verified, and each omitted is a superset an agent must reason about.
+- **The axes are the design.** Proposed: reviewer-seat presence, work kind (feature / plan), pacing mode (head / seat), orchestrator presence, and — added from `mission-control-panel-ui-specification.md` — **attended vs unattended**. That fifth axis carries the unattended order specified there: unattended terms, return to `CREATED` with open questions when user answers are required, and return to `CREATED` with a completion note when research is needed but no researcher exists. It has no existing implementation, so this plan is its home if it lands first. Confirm that set — each axis added is a multiplier on what must be verified, and each omitted is a superset an agent must reason about.
 - **Fragment granularity.** Proposed: one fragment per *obligation* (report completion, advance a feature, request the next item, commit), each carrying its own preconditions. Finer than that becomes hard to read as emitted text.
 
 ## Complexity Audit

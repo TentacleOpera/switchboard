@@ -109,7 +109,9 @@ Every planner-class action carries a standing order stating the terms of an unat
 
 The distinction between 2 and 3 is worth preserving rather than collapsing into "blocked": the first is *incomplete pending a decision*, the second is *complete pending evidence*. A plan returned for the second reason does not need re-planning, and a single "blocked" state would send it through planning again.
 
-This is a standing order attached to the prompt, not new machinery — the same mechanism `teamWiring.ts` already uses to append durable instructions. Whether an equivalent already exists is the one open item below.
+This is a standing order attached to the prompt, not new machinery — the same mechanism `teamWiring.ts` already uses to append durable instructions. **Confirmed: no equivalent exists, so this plan owns the wording.**
+
+**Structurally it belongs in the orders library.** `compose-standing-orders-from-a-library.md` composes orders along four axes — reviewer-seat presence, work kind, pacing mode, orchestrator presence. This is a **fifth: attended vs unattended.** The order applies when the action is planner-class *and* nobody is reading the reply, which is precisely a situational fragment rather than a body installed per team. If that plan lands first, this order is a fragment in it; if this panel lands first, the order lives here and moves later. Either way it should not become a second monolithic body — that is the failure that plan exists to fix.
 
 ### External
 
@@ -162,6 +164,7 @@ Same action dropdown **with the board actions removed**, plus a **Copy prompt** 
 
 - **Requires** `the-automation-model-four-things-not-a-mode-axis.md` — this is that model's UI.
 - **Requires** `staging-streams-parallel-dispatch-and-worktrees.md` for missions, stream maps and the sequencing view.
+- **Feeds** `compose-standing-orders-from-a-library.md` a fifth composition axis: attended vs unattended. The unattended order specified here is a fragment on that axis, not a new monolithic body.
 - **Supersedes the `missions.html` panel** proposed inside the streams plan — same panel, specified here.
 - **Interacts with** `extract-agent-control-into-its-own-panel-file.md`: both touch the rail and the manifest. Sequence them.
 - **Precedent:** `tickets.html` for layout, the companion-`.js` convention for structure.
@@ -224,6 +227,5 @@ None of its own; the retired-mode notice surfaces on first open of this panel.
 
 ## Outstanding Questions
 
-- **Does an unattended standing order already exist?** It would live among the standing-orders, automation or team plans. Searched and did not match one; the three clauses above are small enough to write fresh, but reusing an existing order is better than adding a second with the same intent — this programme has already produced two contradictory orders once.
 - Do the returned-to-`CREATED` plans need a marker distinguishing the two return reasons, so a later pass can tell "needs a decision" from "needs evidence" without re-reading the prose?
 - Does the missions sidebar group by status, or is the status view switch a filter over one flat list? The controls imply a filter; a grouped list would make the switch redundant.
