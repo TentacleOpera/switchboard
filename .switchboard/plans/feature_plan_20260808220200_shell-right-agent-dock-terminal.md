@@ -18,7 +18,7 @@ The markup in section 1a below is the **original role-configurable** dock and co
 |---|---|
 | `#dock-role-btn` ("Choose which agent this dock starts") | **removed** — no role to choose |
 | `#dock-role-menu` | **removed** with it |
-| `#dock-start` (empty-state start button) | **replaced by a pointer** — see below |
+| `#dock-start` (empty-state start button) | **kept** — it starts Mission Control; see below |
 | `#dock-title` | keeps the **seat name**, or "Mission Control" when unseated |
 | `#dock-close`, `#dock-splitter`, `#dock-frame` | unchanged — close, resize, and the `?solo=` iframe |
 
@@ -26,20 +26,25 @@ The markup in section 1a below is the **original role-configurable** dock and co
 
 **A link to the Mission Control panel** belongs here too: the dock is the persona's terminal, the panel is what it is working on. Pairing them is the whole point of the name.
 
-**Empty state — and this is a gap the rewrite created.** The earlier revision said the dock "displays; the existing start control starts." That control is the AUTOMATION tab's **Start orchestrator** — and `the-automation-model-four-things-not-a-mode-axis.md` deletes that tab. So there is no existing control to defer to once that lands.
+**Empty state: a Start Mission Control button, plus an intro link.**
 
-Resolution: **starting moves to the Mission Control panel**, alongside the missions the persona would work on, and the dock's empty state is a **pointer to it** rather than a button. Two reasons beyond tidiness:
-- The original safety argument was against launching as a *side effect of opening a dock*. An explicit button is not that — but a narrow dock is a poor place to start an unattended persona, because you cannot see what it would pick up. The panel can show that.
-- It keeps one start path. Two controls for launching the same persona is how the queue-order contradiction happened.
+An earlier revision of this section made the empty state a pointer to the Mission Control panel and argued the dock should never start anything. **Withdrawn.** Two use cases beat it, and the safety argument behind it was mis-aimed:
 
-**So the dock never starts anything.** It shows a seat, or it shows where to make one.
+- **Session restart with in-flight work.** Work continues across sessions; the controller does not. Making every restart a trip to another panel is friction on the most common path, and the dock is exactly where its absence is noticed.
+- **First run.** A new user looking at the board has no idea where to begin, and the controller is a good front door — its empty state can carry the intro-docs link.
+
+**Why a button here is safe, where auto-start was not.** The persona gates itself: `switchboard-orchestrator/SKILL.md:148` is *"Resume, or interview?"* and `:206` is *"Propose a goal, then stop"* — *"propose one short statement of what you intend to accomplish… Then **stop and wait.** Nothing runs until the user answers."* So starting it commits to nothing; it starts and asks. The danger was launching as a **side effect of opening a dock** — no human intent anywhere. An explicit click is intent, and the pre-flight is a second gate. My "you cannot see what it would pick up" objection does not hold against a persona that tells you what it intends and waits.
+
+And two controls are fine when they do the *identical* thing. The drift pattern this programme keeps hitting is two instructions saying **different** things about one action (the seat and head queue orders); a dock button and a panel button invoking one start path are not that. Keep both: the dock for reach, the panel for when you are already there. One implementation, two entry points.
+
+**The intro link is the resident docs URL, not `AGENTS.md`.** `AGENTS.md` is being emptied to a handful of rules by `shrink-the-injected-agent-protocol-block.md`, so it is no longer an intro. The surviving pointer is the docs line — `https://switchboard.dev/docs` — and it should come from the single constant `consolidate-the-docs-url-in-the-extension.md` establishes, not a second literal here.
 
 ### Scope change from the original plan: Mission Control, not a general agent dock
 
 This plan was written as a *role-configurable* dock — auto-create a seat on first open using a persisted role, with a picker in the dock header. It is rewritten as a single-purpose surface bound to the orchestrator. What that removes and why:
 
 - **No role picker, no persisted role, no new Setup verb pair.** The whole of former section 4 (`getAgentDockRole` / `setAgentDockRole`, a `package.json` configuration property, and a `npm run catalog:generate` pass) goes. That was the largest piece of backend work in the plan and it exists only to answer "which role does this dock start", a question a bound dock does not ask.
-- **No auto-create on first open, and no start button at all** — a safety property rather than a simplification. Auto-creating an orchestrator seat means *opening a dock launches the orchestrator persona* — and `switchboard-manage-console-skill.md` records exactly that failure from the other direction: invoking the persona as a human *"grouped loose plans into a feature and fired dispatch with no confirmation"*. A UI affordance whose side effect is starting unattended automation is the same defect with a smaller trigger. The dock displays; the Mission Control panel starts (see the UI section above — the control this originally deferred to is in a tab being deleted).
+- **No auto-create on first open** — a safety property rather than a simplification. An explicit Start button is a different thing and is kept (see the UI section). Auto-creating an orchestrator seat means *opening a dock launches the orchestrator persona* — and `switchboard-manage-console-skill.md` records exactly that failure from the other direction: invoking the persona as a human *"grouped loose plans into a feature and fired dispatch with no confirmation"*. A UI affordance whose side effect is starting unattended automation is the same defect with a smaller trigger. Opening the dock displays; a deliberate click starts. The AUTOMATION tab's Start orchestrator goes with that tab, so the dock and the Mission Control panel become the two entry points to one start path.
 - **The PM-delivery synergy argument no longer applies.** The original plan's strongest case for defaulting the dock to `project_manager` was that `_tryFleetDeliveryForRole('project_manager', …)` would then deliver the sibling plan's `MANAGE` button into it for free. That argument dies with the role config, and the sibling subtask must not silently depend on this dock hosting a PM seat.
 
 **Naming.** "Mission Control" is the right label only if missions land (`staging-streams-parallel-dispatch-and-worktrees.md`) — and it becomes the fourth name in this area after *orchestrator*, *orchestration* and the proposed *operator*. `rename-the-orchestrator-to-the-operator.md` counts 1,067 occurrences across 55 files; if the persona is renamed at all, that plan should absorb this label rather than two renames landing separately. **Pick the word once, there.**
@@ -102,7 +107,7 @@ This is not a regression — the shell was **designed** as `rail + single conten
 
 ## User Review Required
 
-- **Confirm starting moves to the Mission Control panel.** The dock's empty state points there rather than offering a button, and the AUTOMATION tab's Start orchestrator goes with that tab. If you would rather keep a start button in the dock, that is a one-line change here — but then two controls launch the same persona.
+- **Two start entry points, one implementation.** The dock's empty state and the Mission Control panel both start the persona, replacing the AUTOMATION tab's control. Confirm they share one code path — the risk is not two buttons, it is two behaviours.
 - **Confirm the dock is orchestrator-only.** The parent feature's stated goal is that *"every agent surface in Switchboard is reachable from where the operator is standing"*, with this dock as the general front door. Binding it to one persona narrows that deliberately — a decision about the feature's intent, not just this subtask.
 - **The label depends on the rename.** See Naming above: settle the persona's word in `rename-the-orchestrator-to-the-operator.md` rather than introducing a fourth name here.
 
@@ -119,6 +124,7 @@ This is not a regression — the shell was **designed** as `rail + single conten
 - **Seat lifecycle.** Adopt-if-present-else-create, keyed by a stable dock seat name, with the fleet-relay as the only source of truth about whether the seat is still alive. Getting this wrong yields either duplicate seats on every reload or a dock permanently pointed at a dead terminal. The de-duplication behaviour is **not** what a first reading suggests — see edge case 4.
 - **Cross-frame plumbing.** The dock iframe is a *second* `/terminals` page. It will post `terminalFleetState` to `window.parent` exactly like the main one, so `shell.js`'s relay handler must not let the dock's (identical) snapshot fight the panel's.
 - ~~Persisting the role choice server-side~~ — removed with the role picker. No new verb, no `package.json` property, no catalog regeneration.
+- **The empty state is the first-run surface, so it carries real weight.** It is what a new user sees before anything is configured: a Start button and one intro link. That argues for it being legible rather than minimal — but it must not grow into an onboarding panel, because the dock is narrow and the panel exists for depth.
 - **Reacting to a seat change while the dock is open.** The dock must follow `orchestratorSeat` when it is adopted, re-adopted or cleared, not read it once on open. A dock pinned to a stale terminal name shows a dead pane that looks like a broken terminal rather than an absent orchestrator.
 - **Column width is a product constraint, not a cosmetic one.** A PTY does not reflow like a chat pane. The dock's minimum and default widths decide whether the agent CLI inside it is usable at all — see edge case 13, which supersedes the plan's original numbers.
 
