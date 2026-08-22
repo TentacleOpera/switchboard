@@ -92,11 +92,20 @@ Yes — one decision.
 
 ## Proposed Changes
 
-1. **Connections-tab generator section** — renders the composed text with a Copy button, modelled on `renderAgentApiModal` in `tickets.js`.
-2. **Compose from live config**: active tracker, board/project mapping, context-sync state — each rendered as a check with a fallback, never as an assertion.
-3. **Three-field entries** (channel, how to verify, fallback) for channels the extension cannot see, persisted to the `config` table.
-4. **Scope the output** to channels Switchboard does not ship, so it does not duplicate per-skill preconditions.
-5. **Never include credentials**, and do not template executable commands.
+**Correction to an earlier draft of this plan: the generator already exists.** This is an extension of `SparkContextExporter.ts` (268 lines), already wired to the **"Re-generate Spark Context Skill"** button in the Connections tab (`connections.html:507`), whose stated purpose is a single file the user uploads or pastes into Gemini Spark or Claude Cowork as persistent context (`:127-128`). An earlier draft proposed building a new Connections-tab generator modelled on `renderAgentApiModal` in `tickets.js`. That was wrong: it would have built a second generator beside a shipped one, in the same tab, for the same job.
+
+1. **Extend `SparkContextExporter`, do not add a surface.** The paste-into-a-cloud-interface mechanic is shipped; this plan adds a section to what it emits.
+2. **The one-directional gap is the whole finding.** Everything the exporter emits today is **write-back**: write a plan file (`:198-205`), write a claim marker to the instruction inbox (`:210-215`), write a standing job (`:216-220`), write a declared board-move file (`:221-228`), write a run log (`:229`). There is not one line telling a remote agent how to **read** current state. That is exactly the reported symptom — agents asking how plans come to exist on the board, or whether they must import them. The exporter taught them to write and never to read.
+3. **Reuse the omit-list mechanism rather than inventing a scheme.** `:135-151` already curates AGENTS.md by *naming what is unavailable* — "Do **not** attempt to follow these even if a copied prompt refers to them" — then lists included sections. That is the precondition-and-degrade pattern already working at document level. Read-state channels belong in the same loop: each one named with how to verify it and what to do when it is absent.
+4. **This kills the "wait for a second channel" gate.** That gate assumed a generator with nothing configured emits nothing useful. The exporter's own design refutes it: naming an absence is its most valuable output, because it stops an agent acting on a copied prompt that assumes a capability. Zero configured read-channels is a *useful* emission — "you cannot read board state from here; the plan file is the only channel" — not an empty one.
+5. **Channel configuration is not blocked and never was.** Remote Control (Linear / Notion / ClickUp) is configured in the same Connections tab (`connections.html:319`); custom plan-source globs are configured in Setup (`setup.html:2920`, `:2981-3002` → `switchboard.planScanner.customSources`). The gap is that neither surface presents these as "channels a remote agent can reach", not that a user cannot set them.
+6. **Three-field user entries** (channel, how to verify, fallback) for channels the extension cannot see, persisted to the `config` table and rendered into the same section.
+7. **Scope the output** to channels Switchboard does not ship, so it does not duplicate per-skill preconditions.
+8. **Never include credentials**, and do not template executable commands. Note the exporter already respects this — it emits conventions and paths, never tokens.
+
+### Ordering consequence
+
+The recommendation to ship `skills-declare-preconditions-and-degrade.md` first and hold this one is **withdrawn**. That ordering priced this plan as a new surface. As an edit to an existing exporter it is comparable in size, it unblocks nothing, and it addresses a symptom that is already being reported.
 
 ### Migration
 
@@ -122,5 +131,5 @@ None.
 
 ## Outstanding Questions
 
-- **[user]** Does the cloud interface's add-skill box impose a size or format constraint the generator should respect?
+- **[user]** Does the cloud interface's add-skill box impose a size or format constraint the generator should respect? Sharper now that the target is a file the exporter already emits whole: the question is whether the existing Spark output is already near a paste limit, since this plan adds to it rather than emitting separately.
 - Should the generator offer a shorter variant for pasting into a single prompt rather than an add-skill slot? The two destinations have different length tolerances.
