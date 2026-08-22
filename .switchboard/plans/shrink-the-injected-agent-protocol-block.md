@@ -1,8 +1,8 @@
-# Cut the injected agent protocol block from 14,826 chars to ~650
+# Cut the injected agent protocol block from 14,826 chars to ~740
 
 ## Goal
 
-Reduce the block Switchboard writes into every user's `CLAUDE.md` from ~3,700 tokens to ~160, keeping only the four rules that cannot work anywhere else, and relocating one role-scoped rule into the per-role prompt builder where it belongs.
+Reduce the block Switchboard writes into every user's `CLAUDE.md` from ~3,700 tokens to ~195, keeping only the four rules that cannot work anywhere else, and relocating one role-scoped rule into the per-role prompt builder where it belongs.
 
 ### Size accounting — one authoritative figure
 
@@ -10,13 +10,19 @@ Earlier revisions of this plan carried four different targets (~320 in the title
 
 | | chars | tokens |
 |---|---|---|
-| Resident body (the three surviving rules) | **528** | ~132 |
+| Resident body — three rules | 528 | ~132 |
+| Docs pointer (fourth rule) | 124 | ~31 |
+| **Resident body total** | **652** | ~163 |
 | Markers + `CLAUDE_PROTOCOL_HEADER` | 122 | ~30 |
-| **Emitted managed block** | **~650** | **~160** |
+| **Emitted managed block** | **~774** | **~194** |
 | Current emitted block | 14,826 | ~3,706 |
-| Reduction | **95.6%** | |
+| Reduction | **94.8%** | |
 
-The gate is **under 800 chars** on the emitted block: ~650 plus ~23% headroom, so a genuine wording fix does not fail CI but a new section does. Any future figure quoted for this plan is derived from that table, not from prose.
+**The gate needs adjusting, and this is why it is stated here rather than discovered in CI.** At 774 the previous under-800 gate leaves 26 chars of headroom — not enough to rephrase a rule, so the gate would start failing on edits it was designed to permit. Two fixes, both already established as safe elsewhere in this plan:
+- **Drop the emitted `CLAUDE_PROTOCOL_HEADER`** (−34). It stays in code as the legacy-markerless *detector* (`extension.ts:3927`) but need not be written into new blocks. → 740.
+- **Shorten the markers** to `<!--sb:start-->` / `<!--sb:end-->` (−54), with a migration recognising both pairs so existing files are rewritten rather than duplicated. → 686 with the header also gone.
+
+Adopt the header removal at minimum, keeping the gate at **under 800** with ~60 chars of headroom. Any future figure quoted for this plan is derived from this table, not from prose.
 
 **Why 528 and not the ~320 the title used to claim.** The earlier figure predated the section-by-section review, during which three rules had their *explanatory* halves reinstated: the `query-kanban` label trap, the reason memo suppression exists at all, and the commit-is-irrelevant half of the import rule. Those clauses are the load-bearing parts — a bare prohibition without its reason is what invites route-shopping — and they cost roughly 200 chars. The growth was correct; leaving the old number in the title was not.
 
@@ -71,7 +77,7 @@ Every section was individually justified — each prevents a real mistake. What 
 
 - Removing capability. Every rule that moves keeps applying; it arrives closer to the work.
 - Touching this repo's own dev rules. They live only in this repo's hand-authored `CLAUDE.md`, are absent from `AGENTS.md`, and correctly never reach users.
-- Splitting the body per host. Antigravity discovers skills correctly, so the same 528-char body serves both.
+- Splitting the body per host. Antigravity discovers skills correctly, so the same 652-char body serves both.
 
 ## Metadata
 
@@ -121,6 +127,7 @@ Yes — two decisions.
 ## Dependencies
 
 - **Requires** `replace-agent-project-pinning-with-a-sticky-ui-setting.md` for the 2,785-char pinning section, which that plan removes at source.
+- **Requires** `move-the-docs-site-to-switchboard-dev.md` before the docs pointer can ship. The other three rules do not depend on it, so if the domain slips, ship three rules and add the fourth later — do not hold the whole reduction, and do not ship the pointer early against the old URL.
 - **Protects** the global-database plan: pre-flight step 4 hardcodes `.switchboard/workspace-id` as the DB-path source, which that plan invalidates. Cutting it removes a silent-staleness coupling between the two.
 - **Overlaps `protocols-as-db-rows-not-scaffolded-files.md` on the same ~996 chars, and neither plan said so until now.** That plan's Complex/Risky list requires that "nothing outside the extension may name a protocol by path" and calls for a test asserting no protocol path appears in `CLAUDE.md`. This plan deletes those same lines for a different reason. Consequences of leaving the overlap unstated:
   - If **this** plan ships first, the protocols plan's `CLAUDE.md` assertion is already satisfied — its test is still worth keeping as a regression guard, but it is not the discovery it reads as.
@@ -149,7 +156,15 @@ Yes — two decisions.
      analyse, plan, or write code. Begin every reply with `[MEMO CAPTURE ACTIVE]`.
    - Kanban questions: use the `query-kanban` skill. Displayed column labels differ
      from the stored IDs, so hand-written SQL silently returns nothing.
+   - How Switchboard works: the docs are at https://switchboard.dev/docs. If you
+     cannot reach them, say so rather than guessing.
    ```
+
+   **The fourth rule earns residency on the same test as the others, by a fifth mechanism: no trigger to attach to.** A user asks how some part of Switchboard works out of nowhere — mid-task, in a fresh session, with no workflow entered and no skill invoked. There is no action underway for a how-to file to arrive with, which is the condition that makes a rule resident rather than delivered. It is structurally the same argument as the `query-kanban` line: not a discovery failure, but the absence of any other channel that could carry it at the moment it is needed.
+
+   Two constraints on it, both easy to get wrong because the line itself is trivial:
+   - **It ships only once the URL is live.** `switchboard.dev` does not exist yet — the site is served from `tentacleopera.github.io` with base `/switchboard-site/` (`astro.config.mjs:5-6`). A resident pointer to a 404 is worse than no pointer: the agent fetches, fails, and either reports the product's docs as broken or answers from guesswork. On ~4,000 installs that is a self-inflicted support problem. See `move-the-docs-site-to-switchboard-dev.md`, which is a hard prerequisite.
+   - **It must degrade, not assume a fetch.** Many sessions have no network or no fetch tool at all. The "say so rather than guessing" clause is the load-bearing half — without it the line silently converts an unavailable capability into a fabricated answer. Same pattern as `skills-declare-preconditions-and-degrade.md`.
 
 2. **Delete the preamble.** With the Antigravity content gone it translates nothing.
 3. **Relocate the card-move rule** into `agentPromptBuilder`'s per-role composition: present for planner, coder, intern, reviewer and tester; absent for lead and orchestrator. Phrased to close the motive — transitions happen automatically — not merely to forbid SQL.
