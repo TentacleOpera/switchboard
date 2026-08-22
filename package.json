@@ -600,7 +600,7 @@
           "default": 90000,
           "minimum": 30000,
           "maximum": 600000,
-          "description": "How long (ms) a dispatched PTY-fleet seat must be silent before the activity-light sweep treats the turn as ended. Default 90s. Only applies to PTY-fleet seats; native vscode.Terminal seats degrade to the blind timeout. Silence with a plan-file mtime advance is read as completion; silence without one is read as blocked. Effective threshold is max(livenessWindowMs, turnEndSilenceMs) because a seat inside the liveness window is spared before this test is reached.",
+          "description": "How long (ms) a dispatched PTY-fleet seat must be silent before the activity-light sweep treats the turn as ended. Default 90s. Only applies to PTY-fleet seats; native vscode.Terminal seats degrade to the blind timeout. Completion is signalled explicitly by the agent (POST /kanban/queue/done), so silence past this threshold is read as blocked — and only on the second consecutive silent sweep, so a late completion POST is not reported as a stall. Effective threshold is max(livenessWindowMs, turnEndSilenceMs) because a seat inside the liveness window is spared before this test is reached.",
           "scope": "resource"
         },
         "switchboard.activityLight.blockedTimeoutMs": {
@@ -608,7 +608,7 @@
           "default": 14400000,
           "minimum": 600000,
           "maximum": 86400000,
-          "description": "How long (ms) a card stays visibly 'Waiting on you' after the agent goes quiet without a plan-file change. Default 4 hours. This is a wait on a human, not a machine, so it is deliberately much longer than timeoutMs. The card clears earlier if output resumes, the terminal exits, or the card is re-dispatched.",
+          "description": "How long (ms) a card stays visibly 'Waiting on you' after the agent goes quiet without reporting done. Default 4 hours. This is a wait on a human, not a machine, so it is deliberately much longer than timeoutMs. The card clears earlier if output resumes, the terminal exits, or the card is re-dispatched.",
           "scope": "resource"
         },
         "switchboard.boardStateExport": {

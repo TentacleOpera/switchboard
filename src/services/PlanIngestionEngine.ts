@@ -173,6 +173,37 @@ export class PlanIngestionEngine {
 
     private _scanInterval?: NodeJS.Timeout;
     private _scanIntervalMs = 10000; // 10 seconds default
+
+    /**
+     * Seats observed silent-and-still-dispatched on the PREVIOUS sweep tick,
+     * keyed `${workspaceId}\0${terminalName}` → the card they held.
+     *
+     * The blocked arm needs one tick of grace. Silence is measured on PTY
+     * OUTPUT, not on progress, and completion is now an explicit POST
+     * /kanban/queue/done — so a seat that finished, wrote its report and spent
+     * >`turnEndSilenceMs` quiet before its POST lands (a long verification run,
+     * a slow turn, a retried POST) would be stamped blocked and its lead told it
+     * "has gone quiet ... without reporting done" for work that is finished. The
+     * mtime arm used to make that impossible: it classified the same seat
+     * `completed` and the two arms were mutually exclusive. Removing it removed
+     * the guarantee, not just the arm.
+     *
+     * So: the first silent tick only RECORDS the seat here; the second
+     * consecutive one stamps. A POST landing in the gap NULLs `dispatched_at`,
+     * the seat drops out of `getActiveDispatchedByTerminal`, and the candidate
+     * is never promoted. The cost is that a genuine block is reported one scan
+     * interval (~10s) later than before — negligible against a 90s silence
+     * threshold, and the safe direction: this can only delay a notice, never
+     * fabricate one.
+     *
+     * In-memory by design. A restart re-starts the two-tick observation, which
+     * delays a blocked notice rather than inventing one. Entries are matched on
+     * the card key so a NEW dispatch to the same seat re-arms instead of
+     * inheriting the previous turn's candidacy, and a stale entry (older than a
+     * few scan intervals — the seat produced output again in between) re-arms
+     * too, which is what prunes the map without a sweep of its own.
+     */
+    private _blockedCandidates = new Map<string, { cardKey: string; observedAtMs: number }>();
     private _lastScanTime = new Map<string, number>();
     private _scanInProgress = false;
     private _recentRenames = new Set<string>();
@@ -583,6 +614,28 @@ export class PlanIngestionEngine {
                                     // now only marks silent seats blocked (the `!record.blockedAt`
                                     // arm below) and the timeout fallback (clearStaleWorkingState).
                                     if (!record.blockedAt) {
+                                        // ── One-tick grace ──────────────────
+                                        // See `_blockedCandidates`: the first
+                                        // silent tick only records the seat, so
+                                        // a POST landing in the gap (this card
+                                        // leaves the query the moment
+                                        // dispatched_at is NULLed) never draws a
+                                        // false "gone quiet" notice. A different
+                                        // card, or an entry stale enough that the
+                                        // seat must have produced output in
+                                        // between, re-arms rather than promotes.
+                                        const candidateKey = `${wsId}\0${terminalName}`;
+                                        const cardKey = String(record.planId || record.planFile);
+                                        const prior = this._blockedCandidates.get(candidateKey);
+                                        const graceWindowMs = this._scanIntervalMs * 3;
+                                        if (!prior || prior.cardKey !== cardKey || nowMs - prior.observedAtMs > graceWindowMs) {
+                                            this._blockedCandidates.set(candidateKey, { cardKey, observedAtMs: nowMs });
+                                            this._host.logger.appendLine(
+                                                `[GlobalPlanWatcher] Turn-end (silence) candidate for ${terminalName} — holding one tick for a late POST /kanban/queue/done: ${record.planFile}`
+                                            );
+                                            continue;
+                                        }
+                                        this._blockedCandidates.delete(candidateKey);
                                         await db.setBlockedState(record.planFile, wsId, livenessIso);
                                         this._host.logger.appendLine(
                                             `[GlobalPlanWatcher] Turn-end (silence) marked blocked for ${terminalName}: ${record.planFile}`
@@ -2180,6 +2233,7 @@ export class PlanIngestionEngine {
             clearInterval(this._scanInterval);
             this._scanInterval = undefined;
         }
+        this._blockedCandidates.clear();
 
         for (const watcher of this._watchers.values()) {
             try { watcher.dispose(); } catch {}

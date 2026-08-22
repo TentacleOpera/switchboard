@@ -2201,7 +2201,7 @@ Each plan file must include:
                 ? `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${planFile}'.`
                 : info.outcome === 'stalled'
                     ? `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`
-                    : `[switchboard:turn-end] Seat '${seatName}' has gone quiet on '${planFile}' without writing a completion report — it may be waiting on input.`);
+                    : `[switchboard:turn-end] Seat '${seatName}' has gone quiet on '${planFile}' without reporting done — it may be waiting on input.`);
             // Fire-and-forget mirror to the reports directory — a non-pty
             // orchestrator reads the same notice as a file. Never awaited
             // ahead of the pty send, never able to suppress it. `finished`

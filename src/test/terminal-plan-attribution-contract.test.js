@@ -302,6 +302,25 @@ test('the turn-end silence branch marks blocked only — mtime-based completion 
     assert.ok(branch.includes("outcome: 'blocked'"), 'blocked is the only outcome the sweep may report');
 });
 
+test('the blocked stamp holds one tick so a late completion POST is not reported as a stall', () => {
+    // Silence is measured on PTY OUTPUT, not progress, and completion is now an
+    // explicit POST. A seat that finished and went >turnEndSilenceMs quiet before
+    // its POST lands (long verification run, slow turn, retried POST) would
+    // otherwise be stamped blocked and its lead told it went quiet — for work
+    // that is done. The retired mtime arm made that impossible by classifying the
+    // same seat 'completed'; the one-tick grace is what replaces that guarantee.
+    const branch = planIngestionTs.substring(
+        planIngestionTs.indexOf('if (silentTerminals.length > 0)'),
+        planIngestionTs.indexOf('const cleared = await db.clearStaleWorkingState(')
+    );
+    assert.ok(branch.includes('this._blockedCandidates.get(candidateKey)'), 'the blocked arm must consult the previous tick before stamping');
+    assert.ok(/this\._blockedCandidates\.set\(candidateKey[\s\S]{0,500}?continue;/.test(branch),
+        'the FIRST silent tick must record the candidate and continue — stamping on first observation is the false-notice bug');
+    assert.ok(branch.includes('this._blockedCandidates.delete(candidateKey)'), 'a promoted candidate must be dropped so the map cannot grow or re-stamp');
+    assert.ok(branch.includes("prior.cardKey !== cardKey"), 'a NEW dispatch to the same seat must re-arm, not inherit the previous turn candidacy');
+    assert.ok(/private _blockedCandidates = new Map</.test(planIngestionTs), 'the candidate map must be in-memory state on the engine');
+});
+
 test('the silence branch cannot fire on a missing lastDataAt', () => {
     const loop = planIngestionTs.substring(
         planIngestionTs.indexOf('const silentTerminals: string[] = [];'),
