@@ -25,6 +25,17 @@ Cross-team leakage from that shared queue is already guarded: `:1605` refuses ra
 
 A maximum-independent-set answer is a *subset*: it says what can start now and is invalid the moment anything finishes. A **stage map** is a plan of execution: stage 1 runs concurrently, stage 2 follows, and it stays valid until the inputs change — a plan added, edited, removed, or its file set altered. Never on completion. That is the difference between re-running Analyze after every card and running it once.
 
+### Streams are the operator's existing "lanes" — no new concept needed
+
+The orchestrator protocol already has this vocabulary, which makes exposing the map an extension rather than an addition:
+
+- **`## Handoff, or arm?` (`:240-250`)** lists three session models — seat-routed queue, handoff (default for one team), arm (multi-team exception). A persisted stream map makes a fourth coherent: **stream-parallel**, one team per stream, each stream sequenced. Today "arm" is the only multi-team model and its stated trigger is *"Multiple teams across worktrees or separate repos requiring persistent coordination"* — precisely what a stream map supplies the structure for.
+- **`### One dispatch per lane per wake` (`:329-332`)** — *"A wake may feed both lanes, never the same lane twice. Assess both, act on what is free, and stop."* Lanes already exist as the unit of parallel progress. A stream **is** a lane, with the difference that its order is persisted rather than inferred per wake.
+- **`### Propose a goal, then stop` (`:206-211`)** is the first message: *"propose one short statement of what you intend to accomplish this session and the scope you will work within. The user may alter it — narrow it to a subset of plans, exclude a feature, **cap it at one lane**."* So the opening proposal already offers lane capping. Offering the stream map there — how many streams exist, how deep each is, and stream-parallel as an option — fits the existing shape exactly.
+- **`### Obey the worktree setting; never write it` (`:354-357`)** already states the constraint, and names what stream-parallel changes: *"The default is `none` — one checkout, one team at a time."*
+
+This is why `stream_id` matters over a bare stage number: the operator's report, its lane assignment and its violation detection all need to name *which chain*.
+
 ### Root Cause
 
 The analysis was built to answer the safe question — "which of these can I fire simultaneously right now" — because that is all a single-consumer queue could use. Once the queue could feed N teams, the same graph could have answered the larger question, but the output shape was never revisited. The graph it builds is most of the work: file overlap is *undirected* (same stream), a declared dependency is *directed* (order within a stream).
@@ -36,8 +47,9 @@ The analysis was built to answer the safe question — "which of these can I fir
 
 ## User Review Required
 
-- **A stage column is the recommendation, not `base_branch`.** `queue_position` is documented as "a 1-based sort key" assigned append-from-`MAX+1` (`KanbanDatabase.ts:508-516`) — a total order that never ties by construction, so encoding stages as equal positions would overload a sort key with grouping semantics nothing reads. And `base_branch` expresses *one* predecessor, which cannot express "these four run together, then those two." So: a stage (or stream + sequence) column carries the map, `queue_position` remains the tiebreak within a stage, and `base_branch` becomes **derived** — a stage-2 worktree cuts from stage 1's merged result. This reverses an earlier recommendation of `base_branch` as the encoding.
-- **How much does the operator do?** Recommended: it detects and reports a stage violation and nothing else. It must not write worktree strategy — `worktree-strategy-control-contract.test.js` pins that only the user does, because `applyOversightWorktreeTopology` used to force `per-feature` on arm and a crash left the forced value in place.
+- **Decided: stream id + sequence**, not a single stage number. Records the chain identity as well as the order, which is what the operator's detection and reporting need — "stream 3 is blocked at step 2" is answerable; "stage 2 is blocked" is not.
+- **A stream/sequence pair is the recommendation, not `base_branch`.** `queue_position` is documented as "a 1-based sort key" assigned append-from-`MAX+1` (`KanbanDatabase.ts:508-516`) — a total order that never ties by construction, so encoding stages as equal positions would overload a sort key with grouping semantics nothing reads. And `base_branch` expresses *one* predecessor, which cannot express "these four run together, then those two." So: `stream_id` + `stream_seq` columns carry the map, `queue_position` remains the tiebreak among cards at the same sequence, and `base_branch` becomes **derived** — a card at sequence *n* cuts from the merged result of sequence *n-1* in its own stream. This reverses an earlier recommendation of `base_branch` as the encoding.
+- **How much does the operator do?** Recommended: it reads the map, offers stream-parallel as a session model in its opening proposal, and reports violations. It must not write worktree strategy — `worktree-strategy-control-contract.test.js` pins that only the user does, because `applyOversightWorktreeTopology` used to force `per-feature` on arm and a crash left the forced value in place. The protocol already states the read-only rule itself (`switchboard-orchestrator/SKILL.md:354-357`, "Obey the worktree setting; never write it").
 - Confirm Analyze should appear on **both** Planned and STAGING headers.
 
 ## Complexity Audit
@@ -93,7 +105,9 @@ The analysis was built to answer the safe question — "which of these can I fir
 5. **`queue/next` gates on stage**: refuse a card whose stage predecessors are incomplete, with its own test.
 6. **Derive `base_branch`** from the stage: a later stage's worktree cuts from the previous stage's merged result.
 7. **Analyze control in the STAGING header** as well as Planned.
-8. **Operator detects and reports** stage violations. It never writes strategy, reorders work, or cuts branches.
+8. **Expose the map to the operator**: a read path returning streams, their depth, and each card's `stream_id` / `stream_seq`.
+9. **Offer stream-parallel in the opening proposal** — add it as a fourth session model in `## Handoff, or arm?` and surface the stream count and depth in `### Propose a goal, then stop`, where lane capping is already offered.
+10. **Operator detects and reports** stream violations. It never writes strategy, reorders work, or cuts branches.
 
 ### Migration
 
@@ -118,7 +132,9 @@ Additive nullable column. A plan with no stage behaves as today.
 - **Staleness detected:** edit a plan's file set after analysis; assert the map is reported stale rather than followed. The easiest requirement to omit and the one whose absence silently reintroduces conflicts.
 - **Dependency cycle reported:** declare A→B→A; assert an input error, not an arbitrary order.
 - **Features stay whole:** a feature with subtasks gets one stage on the feature card and none on subtasks; assert no subtask is staged independently.
-- **Nullable column is inert:** with no map, the queue behaves byte-identically to today.
+- **Nullable columns are inert:** with no map, the queue behaves byte-identically to today.
+- **Operator offers the option only when a map exists:** assert the opening proposal names stream-parallel when a valid map is present and omits it when absent. A session model offered with nothing to run it on is the dead-control failure the strategy contract already names.
+- **Operator writes nothing:** assert no operator path writes `stream_id`, `stream_seq` or the worktree strategy — the negative test that keeps the deleted forcing machinery from returning by another route.
 
 ### Manual Verification
 
@@ -127,7 +143,7 @@ Additive nullable column. A plan with no stage behaves as today.
 
 ## Outstanding Questions
 
-- **[user]** Stage column, or stream id + sequence? A single stage number is simpler; stream+sequence makes "which chain is this" directly queryable, which the operator's detection would want.
 - **[user]** Analyze on both headers confirmed?
+- Should the operator be able to *choose* a stream to run when several are free, or always take the shallowest/deepest first? The protocol's "assess both, act on what is free" is silent on preference, and with N streams a rule beats an ad-hoc choice.
 - What content signal makes the staleness check reliable — plan-file mtime, a hash of the declared file sets, or the plan set alone? mtime is cheap and noisy; a hash is accurate and needs the analysis to record more.
 - Does anything today read `queue_position` in a way that assumes uniqueness? The migration comment calls it a 1-based sort key; if a consumer assumes no gaps or no ties, adding a stage dimension beside it needs that consumer checked.
