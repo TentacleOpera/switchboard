@@ -63,6 +63,14 @@ The map lives on a **mission card**: a board card the analysis writes, holding t
 
 So a mission card **references without owning**: members keep their own `feature_id` (or none) and are linked by `stream_id`. No nesting, no cascade, no derived complexity.
 
+### Missions live only in STAGING, and membership is a containment gesture
+
+- **A mission card exists only in STAGING.** No other column may hold one. That answers where it sits and removes the "beside its own members" oddity, because members stop being separate board cards once they join.
+- **Dragging a card onto a mission card adds it to the mission and removes it from the board.** Membership is containment, mirroring how feature subtasks roll up rather than appearing as loose column cards — the same rule `dispatch-analysis` already relies on (*"a subtask is never a standalone candidate … the user sees it rolled up under the feature"*). The mission card then shows its members and their streams.
+- **Consequence for the drag interception below:** two drag semantics now exist on a mission card — dragging *the mission* opens the panel, dragging *a plan onto it* adds a member. Both must be distinguishable before the optimistic path, or a mis-drop either launches nothing or silently swallows a card.
+
+**Automation becomes mission-scoped**, which is a large enough change to be its own plan: `retire-open-ended-automation-for-mission-scoped-runs.md`.
+
 ### Missions get their own panel; the board move is navigation, not launch
 
 The mission card's home is a **`missions` panel** (`missions.html` + `missions.js`). The card appears on the board, but **moving it switches to the panel** — it does not launch, and it does not move. The card only takes its new column when **Launch mission** is pressed in the panel.
@@ -188,6 +196,9 @@ Additive nullable column. A plan with no stage behaves as today.
 - **Launch is idempotent:** press Launch twice; assert one set of teams, one set of worktrees, one dispatch per stream.
 - **A board move launches nothing and persists nothing:** drag a mission card to another column; assert the panel opens, the card's stored column is unchanged, and no team was seated. Then assert the same for a drag that is abandoned — the failure mode the optimistic window makes possible.
 - **Panel registered in both hosts:** assert `/missions` serves the panel over HTTP and the rail renders its icon from the manifest, with no `shell.html` edit.
+- **Missions are STAGING-only:** assert a mission card cannot be created in, or moved to, any other column.
+- **Membership removes from the board:** drop a plan onto a mission card; assert it becomes a member and no longer renders as a loose column card. Then assert the reverse — removing it from the mission returns it to its column rather than orphaning it.
+- **The two drags are distinguishable:** assert dragging the mission opens the panel and dragging a plan onto it adds a member, with no path where a mis-drop both moves the mission and swallows the card.
 - **Mission card is not a feature:** assert it does not set `feature_id` on its members, does not cascade on move, and is not counted in feature complexity derivation.
 - **Sandboxed creation path:** create a mission card by writing only a plan file, with no API call; assert it imports and is launchable. This is the tier that makes the design work for a sandboxed client, and it is the one nobody will test by hand.
 - **Advice degrades to a question:** with no map, assert the opening proposal says so and offers to run Analyze, rather than silently omitting the subject. With a map, assert it states stream count and depth. There is no mode to assert, which is the point — advice has no dead-control failure mode.
@@ -203,7 +214,6 @@ Additive nullable column. A plan with no stage behaves as today.
 ## Outstanding Questions
 
 - **[user]** Analyze on both headers confirmed?
-- **[user]** Which column does a mission card sit in before launch, and where does it land after? Its members sit in STAGING; a mission card beside them may read oddly.
 - Does the panel list *all* mission cards or only the selected one? A list makes past missions inspectable — useful for the staleness question — but the board card is the entry point, so a detail view may be the whole panel.
 - With several streams free and the user having approved parallel work, does the operator still pick per wake, or does the user name the streams up front? The protocol's *"assess both, act on what is free"* was written for two lanes; at five it is ambiguous. Naming them up front keeps the choice with the user and needs no rule.
 - What content signal makes the staleness check reliable — plan-file mtime, a hash of the declared file sets, or the plan set alone? mtime is cheap and noisy; a hash is accurate and needs the analysis to record more.
