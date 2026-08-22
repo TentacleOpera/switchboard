@@ -1,130 +1,126 @@
-# Let the user declare their own state channels, emitted as a discoverable skill
+# Generate channel-declaration text in the Connections tab for the user to paste into a cloud agent
 
 ## Goal
 
-Give the user a place to describe the routes to Switchboard state that only they know about — a separate git plans repo, a wiki, a tracker they have wired up — and emit it as a skill any agent discovers. Phrased as checks to run, never as an inventory of what exists.
+Add a text generator to the Connections tab that produces a ready-to-paste description of this workspace's routes to Switchboard state. The user copies it and pastes it into their cloud interface's add-skill box. No file emission, no mirroring, no committed artefact.
 
 ### Problem Analysis
 
-Shipped skills can declare their own preconditions (see `skills-declare-preconditions-and-degrade.md`). What no shipped skill can know is the channels a particular user has built: plans committed to a dedicated repo, a wiki holding board state, a Linear or Notion workspace wired to this board, a synced project-context document. An agent with a clone and nothing else has no way to learn any of that exists.
+A cloud agent has no window into the local machine. It cannot read extension settings, cannot see which trackers are configured, and cannot know about channels the user built — a separate git plans repo, a wiki, a Linear or Notion workspace wired to this board. The user knows all of it and has no way to hand it over.
 
-**Both halves of the mechanism already exist and need no building.**
+**The transport already exists and is proven.** `tickets.js` builds `AGENT_API_CAPABILITIES` entries from live provider config, renders them with a "Copy prompt" button, and does `navigator.clipboard.writeText(filledPrompt)` — the extension's involvement ends at the clipboard, and the user pastes into whatever agent they like. That is exactly the right shape here, and for the same reason: a copied block is the only channel that crosses from a local extension to a session running elsewhere.
 
-`AgentSkillExporter.exportCustomAgent(agent, resolvedRoot)` already takes user-authored configuration and writes it as a skill file under `.agents/skills/`, called from `TaskViewerProvider.ts:12744` on creation and `removeExportedSkill` on delete. So "user configures something in the UI, it becomes a skill" is a shipped pattern.
+**Generation from live config is the point.** The Connections tab already knows what is configured — which tracker, which board mapping, whether context sync is on. So the text can be produced accurately at the moment the user asks for it, rather than the user writing prose from memory. That removes the authoring burden and most of the inaccuracy.
 
-And `ClaudeCodeMirrorService` does not only walk its static `MIRROR_MANIFEST` — at line 301 it *"Dynamically scan[s] for generated agent skills under `.agents/skills/`"* with a `readdirSync` at 305, so anything the exporter writes is forwarded to `.claude/skills/` and discovered by Claude Code. Verified against the live tree: `.claude/skills/` holds all eight mirrored entries.
+**But generated-from-config still is not the same as reachable.** In the session that produced this plan, Linear was configured locally and unavailable to the agent — it needed an OAuth flow the session could not run. So even accurate generation must emit *checks with fallbacks*, not an inventory:
 
-So this plan is an authoring surface plus content rules, not new plumbing.
+> Linear may be reachable via MCP for this board's project. Verify by listing issues; if the call fails or requires authorisation, fall back to the plan files in the repo.
 
-**The content rule is the whole risk, and there is direct evidence for it.** In the session that produced this plan, Linear MCP was configured and unavailable — it required an OAuth flow the session could not run. A note asserting "you have Linear MCP" would have sent the agent down a dead path with confidence. Every entry must therefore be a *check with a fallback*, not a claim:
+not:
 
-> Plans may also live in `<repo>`. Verify with `<command>`. If unavailable, fall back to the local plans directory.
+> This board syncs with Linear.
 
-rather than:
+That is the difference between text that degrades gracefully and text that misleads confidently. It is the fifth instance in this codebase of the same hazard — after six stale protocol paths, a pre-flight check naming a DB path a pending plan invalidates, an import rule naming a configurable directory, and a skills table advertising two `no-model` skills.
 
-> Plans live in `<repo>`.
-
-This is the same defect this codebase has already been bitten by four times: a hardcoded fact in agent-facing text that drifts. Six stale `.switchboard/protocols/` paths, a pre-flight check naming a DB path that a pending plan invalidates, an import rule naming a configurable directory, and a skills table advertising two `no-model` skills. A user-authored channels note is the fifth opportunity, and the only defence is the phrasing.
+**Staleness is handled by the transport rather than by machinery.** Because the text is pasted deliberately by the user at a moment they choose, going stale is visible and fixable: regenerate, re-paste. A committed file would age silently. This is the same property that makes the Agent API modal's clipboard prompts safe.
 
 ### Root Cause
 
-Channel configuration lives in the extension's settings, where agents cannot read it, and the only agent-facing description of how to reach state is a shipped block that by definition cannot know about anything the user built.
+Channel configuration lives where agents cannot read it, and the only agent-facing description of how to reach state ships with the extension and therefore cannot know anything the user built.
 
 ### Non-goals
 
-- Auto-detecting channels. A generated manifest only exists if the extension ran, which fails in exactly the cloud case that motivates this, and is stale the moment auth expires.
-- A discovery phase. Covered as a non-goal in the paired plan; discovery belongs at point of use.
-- Resident text in `CLAUDE.md` / `AGENTS.md`. This is a skill, discovered when relevant.
-- Validating the user's claims. The extension cannot check whether their wiki is reachable from a future cloud session.
+- Emitting a skill file, mirroring it, or committing it. An earlier draft of this plan proposed exactly that, reusing `AgentSkillExporter` and the mirror's dynamic `.agents/skills/` scan. It works, but it is unnecessary machinery for a clipboard problem and it reintroduces a silently-ageing artefact in the repo.
+- Auto-detecting reachability. The extension cannot know whether a future cloud session will authenticate to Linear.
+- Resident text in `CLAUDE.md` / `AGENTS.md`.
+- Replacing per-skill preconditions. Shipped capabilities declare their own (see the paired plan); this covers only what Switchboard does not ship.
 
 ## Metadata
 
-**Complexity:** 4
-**Tags:** ui, ux, feature, docs, infrastructure
+**Complexity:** 3
+**Tags:** ui, ux, feature, docs
 
 ## User Review Required
 
-Yes — two decisions.
+Yes — one decision.
 
-1. **Is a second channel configuration actually in use?** The system's author currently runs one channel — a clone — with Linear configured but unauthed. If no user runs multiple channels yet, this is speculative and `skills-declare-preconditions-and-degrade.md` delivers most of the value alone. Recommendation: ship the paired plan first, and this when a second configuration exists. Building an authoring surface nobody fills is worse than not having one, because an empty skill still occupies a slot in every agent's skill list.
-2. **Authoring surface placement.** Connections tab (where channels are configured) or Setup? Recommendation: Connections — it is where a user thinks about routes to state, and `ConnectionsPanelProvider` is a thin forwarder so the verb lands in Setup or Planning anyway.
+**How much does the generator infer versus ask?** Options: (a) generate entirely from config — tracker, board mapping, context-sync state — with no free text; (b) generate that, plus an optional free-text area for channels the extension cannot see (a plans repo, a wiki); (c) free text only. Recommendation: **(b)**. (a) misses the channels that motivate the feature, since a git plans repo is not a Switchboard setting. (c) throws away the accuracy the extension can supply for free. The free-text portion should be a three-field entry — channel, how to verify, fallback — so the output stays check-shaped rather than becoming claims.
 
 ## Complexity Audit
 
 ### Routine
 
-- A textarea in the Connections tab, persisted to the `config` table.
-- Emitting it via the existing `AgentSkillExporter` write path.
-- Deleting the emitted file when the content is cleared, mirroring `removeExportedSkill`.
+- A Connections-tab section rendering the generated text with a "Copy" button, modelled on `renderAgentApiModal` in `tickets.js`.
+- Composing the text from existing config reads: active tracker, board/project mapping, context-sync state.
+- A three-field repeatable entry for user-supplied channels, persisted to the `config` table.
 
 ### Complex / Risky
 
-- **An empty or stale skill is worse than none.** It occupies a slot in every agent's discovered skill list, costing description tokens on every session, and a stale entry actively misleads. Emit nothing when the content is empty, and give the file a `Last updated` stamp so an agent can weigh it — the same staleness header the tracker-synced project context already carries.
-- **The phrasing rule cannot be enforced, only prompted.** A user will write "plans are in the platform repo" because that is how people write. The authoring UI has to lead them into check-and-fallback form — a template with the three fields pre-labelled (channel, how to verify, fallback) rather than a free textarea. A free textarea will produce claims.
-- **Untrusted content becoming agent instructions.** This is user-authored text emitted into a file agents read as guidance. It is the user's own machine and their own words, so the risk is low, but it must be inert prose — a channel description, never a directive an agent executes. Do not template shell commands the agent will run unreviewed.
-- **It must not duplicate what shipped skills now declare.** With the paired plan landed, `query-kanban` states its own database requirement. If a user also writes "the kanban DB is at …", there are two sources. The template should scope itself to channels Switchboard does not ship.
+- **The check-and-fallback phrasing is the deliverable.** A free textarea produces claims, because that is how people write. The generated portions must be templated into check form, and the user-supplied portions must be structurally forced into it by the three-field shape. If the output can express "X is available", the plan has failed.
+- **Do not template shell commands the agent runs unreviewed.** The verification step should describe what to try, not paste an executable line, since the destination is an arbitrary agent in an unknown environment.
+- **Private endpoints on a clipboard.** A generated block may name a private repo, a workspace URL, or a board id. That is fine going to the user's own agent, but the UI should not encourage pasting it anywhere public, and it must never include tokens — `sb_api_call` works because the extension injects credentials host-side, so no secret needs to travel.
+- **It must not restate what shipped skills declare.** With the paired plan landed, `query-kanban` states its own database requirement. The generator should scope itself to channels Switchboard does not ship, or an agent gets two sources for one fact.
 
 ## Edge-Case & Dependency Audit
 
 **Race conditions**
-- Editing while a sync regenerates the mirror: the exporter writes then the mirror scans, so a partial write could be mirrored. Write to a temp file and rename, matching the atomicity used elsewhere.
+- None. Generation is a read plus a clipboard write.
 
 **Security**
-- User-authored content in an agent-read file. Keep it descriptive; no executable templates.
-- If a channel description names a private endpoint or repo, it is now in a file that may be committed. `.agents/skills/` is currently tracked, so the emitted file would be too — worth defaulting it to ignored, or warning at authoring time.
+- No credentials in the output, ever. The generated text describes routes; the extension holds tokens.
+- The output is user-controlled text destined for an agent, so keep it descriptive. No directives, no executable templates.
 
 **Side effects**
-- Adds one entry to every agent's discovered skill list in that workspace, with its description injected per session. Keep the description to one clause.
-- The paired plan's precondition work reduces how much this needs to say.
+- None on the local session. The pasted text costs tokens only in the cloud session the user chose to paste it into, which is the correct place for that cost to land.
+- Nothing enters the repo, so nothing ages silently and nothing needs gitignoring.
 
 **Migration**
-- Additive. Absent content means no emitted file and no behaviour change.
+- Additive. Nothing configured means nothing generated.
 
 ## Dependencies
 
-- **Reuses** `AgentSkillExporter`'s write path and `ClaudeCodeMirrorService`'s dynamic `.agents/skills/` scan (line 301). Neither needs extending.
-- **Should follow** `skills-declare-preconditions-and-degrade.md`, which handles shipped capabilities and shrinks what this must cover.
+- **Reuses** the clipboard-prompt pattern in `tickets.js` (`renderAgentApiModal`, `navigator.clipboard.writeText`). No new transport.
+- **Should follow** `skills-declare-preconditions-and-degrade.md`, which handles shipped capabilities and shrinks what the generator must cover.
 
 ## Adversarial Synthesis
 
-**"The user already knows their setup — why tell the agent?"** Because the agent is the one that has to work in it, and in a cloud session it has no window into extension settings. The asymmetry is the whole problem: the user knows and cannot act, the agent can act and does not know.
+**"Why not just emit a skill file?"** That was the previous draft and the machinery exists — `AgentSkillExporter` writes user config as a skill, and `ClaudeCodeMirrorService:301` dynamically scans `.agents/skills/` so it reaches `.claude/skills/`. It works, and it is the wrong trade: it puts a silently-ageing artefact in the repo to solve a problem the clipboard solves with no artefact at all. The file also only helps agents that have the clone, whereas a pasted block reaches any agent anywhere.
 
-**"This will rot like everything else."** Almost certainly, which is why the phrasing is the deliverable rather than the textarea. A note written as checks degrades gracefully — a check that fails routes the agent to the fallback. A note written as claims degrades into confident wrongness. Four instances of the latter have already been found in this codebase's agent-facing text.
+**"The user will not bother pasting it."** Possibly, and that is a real limit — this only helps sessions where the user chose to hand over context. But the alternative designs help nobody: a committed file reaches only clone-holders, and a manifest requires the extension to have run. Deliberate handover is the honest ceiling for a local-to-remote channel.
 
-**"Ship it and see."** The counter is the empty-skill cost: an unfilled entry is not neutral, it consumes description tokens in every session in that workspace and implies a capability that is not there. Better to wait for a real second configuration, which is why decision (1) exists.
+**"Generated text will go stale."** It will, and visibly: the user pasted it, so the user knows to regenerate. That is strictly better than a committed file whose age nobody notices, which is the failure mode this codebase has hit four times already.
 
 ## Proposed Changes
 
-1. **Connections-tab authoring surface** — a repeatable three-field entry (channel, how to verify, fallback when unavailable) rather than a free textarea, so the output is check-shaped by construction.
-2. **Persist to the `config` table**, per workspace.
-3. **Emit via `AgentSkillExporter`'s existing write path** to `.agents/skills/`, atomically, with a `Last updated` stamp. Emit nothing when empty; delete on clear.
-4. **Rely on the existing dynamic mirror scan** (`ClaudeCodeMirrorService.ts:301`) to reach `.claude/skills/`. No manifest change.
-5. **Scope the template** to channels Switchboard does not ship, so it does not restate what shipped skills declare.
-6. **Default the emitted file to gitignored**, or warn if a channel description looks like a private endpoint.
+1. **Connections-tab generator section** — renders the composed text with a Copy button, modelled on `renderAgentApiModal` in `tickets.js`.
+2. **Compose from live config**: active tracker, board/project mapping, context-sync state — each rendered as a check with a fallback, never as an assertion.
+3. **Three-field entries** (channel, how to verify, fallback) for channels the extension cannot see, persisted to the `config` table.
+4. **Scope the output** to channels Switchboard does not ship, so it does not duplicate per-skill preconditions.
+5. **Never include credentials**, and do not template executable commands.
 
 ### Migration
 
-None. Additive; no content means no file.
+None.
 
 ## Verification Plan
 
 ### Goal Invariants
 
-- With no channels declared, no skill file is emitted and no entry appears in any agent's skill list.
-- Every emitted entry contains a verification step and a fallback; none is a bare claim.
-- The emitted file contains no executable template an agent would run unreviewed.
+- The generated text contains no credential, token, or API key.
+- Every entry in the output contains a verification step and a fallback; no entry asserts availability.
+- Nothing is written to the repository — the feature's only output is a clipboard payload.
 
 ### Automated Tests
 
-- **Empty means absent:** clear the content; assert the file is deleted and the mirror drops it from `.claude/skills/`.
-- **Mirror reach:** declare a channel; assert the emitted file appears in `.agents/skills/` **and** is mirrored to `.claude/skills/` by the dynamic scan, without touching `MIRROR_MANIFEST`.
-- **Check-shape enforcement:** assert an entry cannot be saved without a verification step and a fallback.
-- **Staleness stamp:** assert every emitted file carries a `Last updated` date.
-- **Atomicity:** write during a mirror scan 50 times; assert the mirrored file is never partial.
-- **No duplication:** assert the template's guidance excludes channels shipped skills already declare.
-- **Cloud reachability:** in a bare clone with the emitted file committed, assert an agent discovers it and follows a failing check to its stated fallback rather than reporting a fault.
+- **No secrets:** compose the text with a tracker configured and a token present; assert the output contains neither the token nor any `switchboard.apiToken` value.
+- **Check-shape:** assert every generated and user-supplied entry contains a verification clause and a fallback clause. A generator run that can produce a bare assertion fails.
+- **No repo writes:** assert the feature creates no file under `.agents/`, `.switchboard/`, or `.claude/`.
+- **Empty means empty:** with no tracker configured and no user entries, assert the section offers nothing to copy rather than an empty template.
+- **No duplication:** assert the output names no capability that a shipped skill already declares a precondition for.
+- **Clipboard path:** assert the Copy button writes the composed text and gives feedback, matching the Agent API modal's behaviour.
+- **Paste usability:** take a generated block into a bare clone with no extension and no tracker auth, and assert an agent following a failing check reaches the stated fallback rather than reporting a fault.
 
 ## Outstanding Questions
 
-- **[user]** Does any user, including you, currently run more than one state channel? If not, this is speculative and the paired plan should ship alone. Proceeding on the assumption that it should be written now and scheduled later.
-- Should the emitted file be committed or ignored by default? Committed makes it available to cloud agents from the clone — which is the main use case — but puts channel descriptions in git.
+- **[user]** Does the cloud interface's add-skill box impose a size or format constraint the generator should respect?
+- Should the generator offer a shorter variant for pasting into a single prompt rather than an add-skill slot? The two destinations have different length tolerances.
