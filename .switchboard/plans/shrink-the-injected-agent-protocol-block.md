@@ -127,7 +127,7 @@ Yes — two decisions.
 ## Dependencies
 
 - **Requires** `replace-agent-project-pinning-with-a-sticky-ui-setting.md` for the 2,785-char pinning section, which that plan removes at source.
-- **Requires** `move-the-docs-site-to-switchboard-dev.md` before the docs pointer can ship. The other three rules do not depend on it, so if the domain slips, ship three rules and add the fourth later — do not hold the whole reduction, and do not ship the pointer early against the old URL.
+- **Requires** `move-the-docs-site-to-switchboard-dev.md` before the docs pointer can ship. The domain is registered before this reaches users, so the slip contingency an earlier revision described (ship three rules, add the fourth later) is unnecessary — but the ordering still holds: never emit the pointer before the URL serves.
 - **Protects** the global-database plan: pre-flight step 4 hardcodes `.switchboard/workspace-id` as the DB-path source, which that plan invalidates. Cutting it removes a silent-staleness coupling between the two.
 - **Overlaps `protocols-as-db-rows-not-scaffolded-files.md` on the same ~996 chars, and neither plan said so until now.** That plan's Complex/Risky list requires that "nothing outside the extension may name a protocol by path" and calls for a test asserting no protocol path appears in `CLAUDE.md`. This plan deletes those same lines for a different reason. Consequences of leaving the overlap unstated:
   - If **this** plan ships first, the protocols plan's `CLAUDE.md` assertion is already satisfied — its test is still worth keeping as a regression guard, but it is not the discovery it reads as.

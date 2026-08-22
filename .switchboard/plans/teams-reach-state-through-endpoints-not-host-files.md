@@ -31,7 +31,7 @@ Each instruction was written where its author's cwd was the main workspace root,
 
 ## User Review Required
 
-- **Does SQL survive at all as a documented fallback?** Options: remove the SQL path from team-facing guidance entirely, or keep it labelled for the no-API case. Recommending removal for *team* agents specifically — a team always has a running extension by definition, so the fallback describes a state that cannot occur for them. The `query-kanban` rewrite itself is scoped in `skills-declare-preconditions-and-degrade.md`.
+- **Settled: teams do not use SQL.** No labelled fallback, no escape hatch — a team always has a running extension, so the fallback described a state that cannot occur for them. The contract is unconditional: team agents reach state through endpoints. The `query-kanban` rewrite itself is scoped in `skills-declare-preconditions-and-degrade.md`.
 - Confirm the contract's wording, since it becomes the thing new orders are checked against.
 
 ## Complexity Audit
@@ -106,6 +106,5 @@ Installed orders rewritten in place; a constant-only change reaches nobody.
 
 ## Outstanding Questions
 
-- **[user]** Does SQL survive as a labelled fallback for team agents, or go entirely?
 - Is there any board read a team legitimately needs that no endpoint serves? If so it is an API gap and should be recorded as one rather than met with SQL.
 - Does the standalone host inject the port the same way? The drive prefix is in `KanbanProvider`; if the standalone path composes prompts differently, the port-line assertion needs to cover both hosts.

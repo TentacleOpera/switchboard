@@ -2,6 +2,11 @@
 
 ## Goal
 
+> **MERGED into `protocols-as-db-rows-not-scaffolded-files.md` — do not build separately.** The two ship together, and together they overlap almost entirely: the 30 files this plan would `git mv` are the same ones the rows plan converts to DB rows, so flattening them is work on files that cease to exist. The reference rewrite — the expensive half — happens once, in the rows plan, to resolver calls rather than to flat paths.
+>
+> What survives from here is already recorded in the rows plan: the two committed survivors keep `<name>/SKILL.md` deliberately (their paths are user-editable field defaults), the seeding crawl reads both shapes because `refine_feature.md` is flat, and no source file is reshaped to suit the crawl. Retained for the measurements — 2.9% of script lines, 47 tab-namespaced identifiers, the root-anchored `_lib` finding, packaging safety via `!.agents/**`.
+
+
 Stop 30 non-discoverable protocol files from occupying the `<name>/SKILL.md` convention that exists solely for host skill discovery, by flattening them to `.agents/protocols/<name>.md` — the shape `refine_feature.md` already uses correctly. `improve-plan` and `improve-feature` are explicitly **excluded**; see Scope below.
 
 ### Scope: why `improve-plan` and `improve-feature` keep their directory shape

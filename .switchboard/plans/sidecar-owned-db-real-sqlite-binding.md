@@ -2,6 +2,17 @@
 
 ## Goal
 
+> **Binding decided: `better-sqlite3`.** Recorded here because it was the plan's open question.
+>
+> **`node:sqlite` cannot serve the extension host.** It needs Node 22.5+ *in the runtime that opens the database*. The extension host runs VS Code's bundled Node, not the user's — at `engines.vscode: ^1.93.0` that is Node 20, where the module does not exist. `engines.node: >=22.0.0` governs only the standalone host, and even there the declared floor sits *below* 22.5, so some users inside the supported range would lack it.
+>
+> **The original objection to `better-sqlite3` — native-module compatibility — is already solved in this repo.** `node-pty` ships as a native module today: `.vscodeignore` carries a hand-curated allowlist for it (with an explicit warning that a blanket `!node_modules/node-pty/**` is wrong), and `ptyHost.ts:39` degrades gracefully when it cannot load. So the packaging pattern, the ignore-file discipline and the unavailable-module path all exist to copy rather than invent. Note `node-pty` is pinned to an exact version (`1.1.0`), not a range — pin the sqlite binding the same way.
+>
+> Two further points in its favour: it behaves identically in both hosts, and it is synchronous, which the three remaining sync methods (`dispose`, `getConfigSync`, `getProjectConfigJsonSync`) still need.
+>
+> The residual risk is prebuilds per platform and ABI — the same cost `node-pty` already pays. If the sidecar runs as a separate plain-Node process rather than inside Electron, that cost drops further, since the build target is stock Node rather than an Electron ABI.
+
+
 Make one process the sole owner of `kanban.db`, and have it use a real SQLite binding (page-level writes, WAL) instead of `sql.js` (whole-database-in-memory, whole-file export on every write). Every other client — the VS Code extension host, the browser host, agent CLIs — reaches the DB through the existing `LocalApiServer` HTTP surface rather than opening its own image.
 
 This is the prerequisite for the global-single-database work. It must land first.
