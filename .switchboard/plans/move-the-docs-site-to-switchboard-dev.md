@@ -26,13 +26,14 @@ Every docs URL therefore carries both the account name and the repo name. Two co
 
 ## Metadata
 
-**Complexity:** 5
+**Complexity:** 4
 **Tags:** docs, infrastructure, devops
 
 ## User Review Required
 
-- **DNS and domain ownership are yours, not this plan's.** The plan covers repo changes: `astro.config.mjs`, a `CNAME`, `robots.txt`, and the 233 literals. Registering `switchboard.dev`, pointing DNS at GitHub Pages, and enabling the custom domain in repo settings are manual steps outside the diff.
-- Decide whether the old URL must keep working. GitHub Pages redirects a project path to a configured custom domain automatically, but confirm before relying on it — three shipped extension versions name the old URL and older installs will keep requesting it.
+- **Confirmed scope: same site, same hosting, custom domain only.** Nothing about the build, the content structure, or the deployment changes. `switchboard.dev` points at the existing GitHub Pages deployment of this repo. That settles what were three open questions in an earlier revision.
+- **DNS and domain ownership are yours, not this plan's.** The plan covers repo changes: `astro.config.mjs`, `public/CNAME`, `robots.txt`, and the 233 literals. Registering the domain, adding DNS records, and enabling the custom domain in repo settings are manual steps outside the diff. For an apex domain that means A/AAAA records to GitHub's Pages IPs (or an ALIAS/ANAME if the registrar supports it); a `www` host would be a CNAME to `tentacleopera.github.io`.
+- **`deploy.yml` needs no change** — verified: it is `withastro/action@v6` with `path: .` and does not pin a base or artifact path. The base lives only in `astro.config.mjs`.
 
 ## Complexity Audit
 
@@ -47,12 +48,12 @@ Every docs URL therefore carries both the account name and the repo name. Two co
 - **233 hardcoded `/switchboard-site/` literals.** A blind find-and-replace to `/` is wrong in at least two ways: it would rewrite prose mentions of the repo name (the repo is still called `switchboard-site`), and any `//`-producing replacement yields a protocol-relative URL that resolves to a different host entirely. Replace `/switchboard-site/` → `/` only in link position, and enumerate the prose exclusions rather than trusting a regex.
 - **`base: '/'` changes what `BASE_URL` expands to**, so the 46 interpolated usages silently start producing correct output while the 233 literals silently start producing 404s. Both look the same in source. The only reliable check is crawling the built output, not reading the diff.
 - **A 404 after this migration is invisible without a link checker.** The site has no link-checking gate today. Adding one is in scope for this plan, because otherwise the verification is "someone clicked around".
-- **`deploy.yml` may pin the base path** or publish to a path-prefixed artifact. Read it before changing config; a mismatch produces a site that builds green and serves nothing.
+- **The site root already exists**, so no new landing page is needed: `src/pages/index.astro` serves `/`, and `src/pages/docs/index.astro` serves `/docs`. With `base: '/'` the resident instruction's `switchboard.dev/docs` resolves without any content change — which is what makes this a config-and-links migration rather than a restructure.
 - **The extension names the old URL in three places** (`setup.html:2223`, `TaskViewerProvider.ts:14809`, `SetupPanelProvider.ts:1470`). Those are handled by `consolidate-the-docs-url-in-the-extension.md`, not here, but the two must not ship far apart: the extension pointing at a dead domain is the same failure as the docs pointing at a dead path.
 
 ## Edge-Case & Dependency Audit
 
-**Migration.** Published extension versions carry the old URL and cannot be updated retroactively, so the old path must keep resolving — via the Pages custom-domain redirect if it is reliable, or by leaving the project-pages deployment in place alongside the new domain for a transition period. This is the shipped-state rule applied to a URL: the address was released, so it must keep working.
+**Migration.** Published extension versions carry the old URL and cannot be updated retroactively, so the old path must keep resolving. Configuring a custom domain on a project Pages site makes GitHub redirect `tentacleopera.github.io/switchboard-site/*` to the custom domain automatically, so this is handled by the platform rather than by code — but it is the one assumption in this plan whose failure is invisible from the repo, so verify it against the live site before the extension is pointed at the new domain. This is the shipped-state rule applied to a URL: the address was released, so it must keep working.
 
 **Security.** A custom domain needs HTTPS enforced in Pages settings; verify the certificate provisions before announcing the URL. Do not leave the domain resolving over plain HTTP, and do not name it in agent instructions until TLS is live.
 
@@ -79,7 +80,7 @@ Every docs URL therefore carries both the account name and the repo name. Two co
 2. **Add `public/CNAME`** containing `switchboard.dev`.
 3. **`public/robots.txt`** → sitemap at `https://switchboard.dev/sitemap-index.xml`.
 4. **Rewrite the 233 `/switchboard-site/` literals** in link position to `/`, enumerating and excluding prose references to the repo name.
-5. **Read and, if needed, update `deploy.yml`** so the build publishes for a custom domain rather than a path prefix.
+5. **No `deploy.yml` change** — recorded as a deliberate no-op so a reviewer does not go looking. `withastro/action@v6` with `path: .` reads the base from `astro.config.mjs`.
 6. **Add a link-checking gate** over the built output, failing on any internal 404. This is the change that makes items 1–4 verifiable rather than hopeful, and it also catches the pre-existing breakage found earlier: the bare directory `/docs/getting-started/` has no index page — no docs section does — so that URL 404s today.
 7. **Keep the old URL resolving** for the transition, per Migration.
 
@@ -111,6 +112,7 @@ The old project-pages URL must keep resolving because three shipped extension ve
 
 ## Outstanding Questions
 
-- **[user]** Is `switchboard.dev` registered, and will it point at GitHub Pages or somewhere else? If hosting changes too, items 1, 2 and 5 change shape.
-- **[user]** Should the docs live at the apex (`switchboard.dev/docs`) alongside a marketing home page, or should the site root be the docs? The resident instruction in the shrink plan names `/docs`, so this decides that string.
-- Does `deploy.yml` hardcode the base path or the artifact path? Read before editing config.
+- **Resolved — same site, same Pages hosting, custom domain only.** Items 1–4 are unaffected; item 5 is a confirmed no-op.
+- **Resolved — the structure already fits.** `src/pages/index.astro` serves the root and `src/pages/docs/index.astro` serves `/docs`, so with `base: '/'` the string `https://switchboard.dev/docs` in the shrink plan's resident rule is correct as written. No content restructure, and no second decision about where docs live.
+- **[user]** Is `switchboard.dev` registered yet? This is the only remaining gate on the whole chain — the extension consolidation and the resident docs line both wait on the domain serving over HTTPS.
+- Does the Pages old-path redirect actually fire once the custom domain is set? Documented behaviour, but the migration argument above rests on it and it can only be checked live.
