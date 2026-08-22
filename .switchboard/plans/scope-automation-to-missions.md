@@ -86,7 +86,7 @@ Each automation surface was added to remove a manual step — press a button les
 4. **Keep `armQueueWatch`** — bounded and reactive already: one nudge then escalate.
 5. **Leave `ScheduledJobsService` standing jobs alone** — user-authored, different axis, and they will surface in any search for scheduled things.
 6. **Do not touch `autobanEnabled`** (see correction above).
-7. **AUTOMATION tab wording** states that automation runs missions, so the bound is visible rather than implied.
+7. **Retire the AUTOMATION tab's mode machinery, not just its wording.** Enumerated from `createAutobanPanel` (`kanban.html:11568`), missions supersede all of it: the `DRAIN` / `WATCH` / `ON DONE` / `AGENT-MANAGED` modes, `COLUMN RULES`, `QUEUE POP`, `MAX BATCH SIZE`, `COMPLEXITY`, `STARTS WITH` and `WAKE EVERY` — every one answers "how do we pick and pace work out of columns", which a mission answers with explicit membership and a stream map. What remains after that is only the scheduler, which moves to its own panel (`scheduled-jobs-get-their-own-panel.md`). So the tab does not get reworded; it empties, and should then go.
 
 ### Migration
 
