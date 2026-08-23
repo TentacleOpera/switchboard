@@ -41,9 +41,10 @@ Remote authoring was built when the only reachable remote surfaces were SaaS tra
 
 ## User Review Required
 
-Yes — three decisions, and the first is the substantive one.
+Yes — two decisions. The one that used to be first is now answered.
 
-1. **Can a store-authored plan trigger execution, as a Linear-authored one can?** The existing model says a remote surface may drive the board. An earlier revision recommended gating this behind an opt-in because a store token seemed coarser than a tracker login. **That has now resolved in the safer direction:** Turso documents table+action token scoping (`-p <table>:<actions>`, `tursodatabase/turso-docs` `sdk/authorization.mdx`), so an authoring credential can be minted as `-p all:data_read -p <queue>:data_add` — able to read the board and insert queue rows, and *unable* to write board tables at all. Recommendation: **scope the credential and drop the application-level gate.** An agent holding such a token cannot set an execution-trigger state because the database refuses the write — enforcement by the store beats enforcement by our own opt-in. Keep the gate only if the scoping cannot be verified empirically, or if self-hosted sqld turns out not to honour the same claims (see Outstanding Questions).
+**Answered: yes, exactly as a Linear-authored plan can, with no extra gate for this transport.** Two earlier revisions got this wrong in opposite directions — the first added an application-level opt-in because a store token looked coarser than a tracker login; the second removed it because Turso's table+action scoping could make the database refuse the write. Both reasoned from the credential. The control that actually holds is the **review gate** in `the-remote-command-vocabulary-is-closed.md`: transport-neutral, keyed on a column's role, and it stops any trigger path dispatching an unreviewed plan regardless of what wrote it or what credential it held. Credential scoping is defence-in-depth over that, not a substitute for it — and it is unavailable on self-hosted sqld anyway.
+The residual, once the review gate holds, is that a store-authored surface could advance an *already reviewed* plan at a moment nobody intended. That is precisely the posture already accepted for the shipped Linear path — dispatching reviewed work at the wrong time, bad and bounded and recoverable. Same posture, so this transport gets no special gate.
 2. **Where do the two Linear gates get opened?** `remote-content-pull-all-providers.md` already opens them for Notion and ClickUp. Recommendation: **land this after that plan**, so the store kind is the fourth through a door already widened rather than the reason for widening it.
 3. **Filename convention.** Recommendation: follow `linear_import_${id}.md` with a store-kind prefix. It sidesteps title sanitisation entirely, which is why the Linear path does it.
 
@@ -103,7 +104,7 @@ Key risks: a coarse store credential makes "may author" inseparable from "may ed
 2. **The queue table** in the shared tier, with an explicit `workspace_id` and an idempotency key.
 3. **Reuse** `_pollDescriptions`' cursor, hashing, empty-body and size guards, and the `*_import_${id}.md` filename convention — no new sanitiser, no new materialiser.
 4. **Lease-gated polling** so exactly one host materialises.
-5. **Execution-triggering as a separate opt-in** for this kind, pending the token-scoping answer.
+5. **No transport-specific execution gate.** Triggering is governed by the transport-neutral review gate; adding an opt-in here would duplicate it for one provider kind and leave the equivalent path open for the others.
 6. **Panel surface** for pending, materialised and failed rows.
 7. **Authoring guidance** for cloud agents restating the plan-sizing and project-pin protocols.
 
@@ -119,8 +120,8 @@ Additive and opt-in; inert without a configured store target. No existing remote
 - **Project pin:** valid pin, unknown pin, workspace name, literal `<project>`. Assert the resolve-only backstop leaves the last three unassigned rather than minting projects.
 - **Idempotency:** same key twice → one plan. Kill between file write and row marking, restart → one plan.
 - **Lease:** two hosts, one row, exactly one materialisation. Holder offline → row waits, shown waiting, materialises once on return.
-- **Scoped-credential enforcement:** using a token minted `-p all:data_read -p <queue>:data_add`, assert queue inserts succeed and every write to `plans`, `features` and `projects` is rejected by the database — so a store-authored plan cannot reach an execution-triggering state even with no application gate present.
-- **Unscoped-credential detection:** with a full-access token configured, assert the panel reports the credential as unscoped rather than presenting it as equivalent to a scoped one.
+- **Review gate governs triggering, not the credential:** with a full-access store credential and no transport-specific gate, assert a store-authored plan cannot be dispatched until it reaches a reviewed column, and that it then behaves exactly as a Linear-authored one does. Assert the same with a scoped credential, to confirm the outcome does not depend on scoping.
+- **Scoped credential is optional hardening, where available:** on a Turso target, a token minted `-p all:data_read -p <queue>:data_add` should still permit queue inserts and be refused on `plans`/`features`/`projects`. Assert this as defence-in-depth, and assert nothing in the product requires it — a self-hosted sqld target cannot offer it and must work identically.
 - **Boundary rule:** assert no plan or feature body is written to `plans`/`features` by this path.
 - **Parity:** author the same plan via Linear and via the store. Assert the resulting files and board rows are equivalent apart from provenance.
 
