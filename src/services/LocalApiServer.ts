@@ -11,11 +11,16 @@ import type { NotionFetchService } from './NotionFetchService';
 import { importPlanFiles } from './PlanFileImporter';
 import {
     STANDING_ORDERS_CONFIG_KEY,
+    STANDING_ORDER_DEFINITIONS_CONFIG_KEY,
     StandingOrder,
+    StandingOrderDefinition,
     StandingOrderScope,
     validateInstruction,
     mutateStandingOrders,
+    mutateStandingOrderDefinitions,
+    syncDefinitionToAssignments,
     makeStandingOrder,
+    makeStandingOrderDefinition,
 } from './standingOrders';
 import { plausibleOriginTerminal, describeStandingOrderMigrations, TERMINALS_GROUPS_KEY, applyTeamQueueOrders, teamHeadName, installGlobalQueueDoneOrder } from './teamWiring';
 import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
@@ -3851,8 +3856,14 @@ export class LocalApiServer {
                 ...(notes.get(o?.id) || {}),
             }));
 
+            // Definitions library — returned alongside orders so the webview
+            // can render the library UI and show which assignments link to
+            // which definitions in a single GET.
+            const rawDefs = await db.getConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
+            const definitions = Array.isArray(rawDefs) ? rawDefs : [];
+
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, available: true, orders }));
+            res.end(JSON.stringify({ success: true, available: true, orders, definitions }));
         } catch (err) {
             console.warn('[LocalApiServer] Failed to read standing orders:', err);
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -4352,9 +4363,21 @@ export class LocalApiServer {
     }
 
     /**
-     * POST /terminals/standing-orders — add or delete a standing order.
-     * Body: `{ action: 'add'|'delete', parent, child, instruction?, scope?, teamId? }`.
-     * For `global`/`team` scope, `parent`/`child` are not required; `team` requires `teamId`.
+     * POST /terminals/standing-orders — add, update, or delete a standing order,
+     * or manage the definitions library.
+     *
+     * Order actions: `{ action: 'add'|'update'|'delete', ... }`.
+     * `add` accepts an optional `definitionId` to link the new assignment to a
+     * library definition.
+     *
+     * Definition actions:
+     *  - `addDefinition` `{ name, instruction }` — create a definition.
+     *  - `updateDefinition` `{ id, name?, instruction? }` — update a definition;
+     *    when `instruction` changes, eagerly syncs all linked assignments.
+     *  - `deleteDefinition` `{ id }` — delete a definition and unlink all
+     *    assignments (instruction copy stays on each).
+     *  - `listDefinitions` — return all definitions.
+     *
      * Validation is server-side.
      */
     private async _handleStandingOrdersWrite(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -4380,9 +4403,10 @@ export class LocalApiServer {
         }
 
         const action = String(body?.action || '').trim();
-        if (action !== 'add' && action !== 'update' && action !== 'delete') {
+        const validActions = ['add', 'update', 'delete', 'addDefinition', 'updateDefinition', 'deleteDefinition', 'listDefinitions'];
+        if (!validActions.includes(action)) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: "action must be 'add', 'update', or 'delete'" }));
+            res.end(JSON.stringify({ success: false, error: "action must be 'add', 'update', 'delete', 'addDefinition', 'updateDefinition', 'deleteDefinition', or 'listDefinitions'" }));
             return;
         }
 
@@ -4436,8 +4460,9 @@ export class LocalApiServer {
                 }
 
                 let added: StandingOrder | undefined;
+                const definitionId = typeof body?.definitionId === 'string' ? body.definitionId.trim() : '';
                 await mutateStandingOrders(db, async (orders) => {
-                    added = makeStandingOrder(parent, child, instruction, scope, teamId || undefined, role || undefined);
+                    added = makeStandingOrder(parent, child, instruction, scope, teamId || undefined, role || undefined, definitionId || undefined);
                     return [...orders, added];
                 });
 
@@ -4489,20 +4514,154 @@ export class LocalApiServer {
                 return;
             }
 
-            // delete
-            const id = typeof body?.id === 'string' ? body.id.trim() : '';
-            if (!id) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'id is required for delete' }));
+            if (action === 'delete') {
+                const id = typeof body?.id === 'string' ? body.id.trim() : '';
+                if (!id) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'id is required for delete' }));
+                    return;
+                }
+
+                await mutateStandingOrders(db, async (orders) => {
+                    return orders.filter(o => o.id !== id);
+                });
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true }));
                 return;
             }
 
-            await mutateStandingOrders(db, async (orders) => {
-                return orders.filter(o => o.id !== id);
-            });
+            // ── Definition CRUD ────────────────────────────────────────
 
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true }));
+            if (action === 'listDefinitions') {
+                const rawDefs = await db.getConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
+                const definitions = Array.isArray(rawDefs) ? rawDefs : [];
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, definitions }));
+                return;
+            }
+
+            if (action === 'addDefinition') {
+                const name = typeof body?.name === 'string' ? body.name.trim() : '';
+                const instruction = typeof body?.instruction === 'string' ? body.instruction : '';
+                if (!name) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'name is required for addDefinition' }));
+                    return;
+                }
+                const instructionErr = validateInstruction(instruction);
+                if (instructionErr) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: instructionErr }));
+                    return;
+                }
+                let created: StandingOrderDefinition | undefined;
+                await mutateStandingOrderDefinitions(db, async (defs) => {
+                    created = makeStandingOrderDefinition(name, instruction);
+                    return [...defs, created];
+                });
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, definition: created }));
+                return;
+            }
+
+            if (action === 'updateDefinition') {
+                const defId = typeof body?.id === 'string' ? body.id.trim() : '';
+                if (!defId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'id is required for updateDefinition' }));
+                    return;
+                }
+                const newName = typeof body?.name === 'string' ? body.name.trim() : undefined;
+                const newInstruction = typeof body?.instruction === 'string' ? body.instruction : undefined;
+                if (newInstruction !== undefined) {
+                    // Empty instruction on a definition is rejected — route to
+                    // deleteDefinition instead. An empty instruction would sync
+                    // blank text to every linked assignment.
+                    const instructionErr = validateInstruction(newInstruction);
+                    if (instructionErr) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: instructionErr }));
+                        return;
+                    }
+                }
+
+                let updated: StandingOrderDefinition | undefined;
+                let found = false;
+                let instructionChanged = false;
+                let finalInstruction = '';
+                await mutateStandingOrderDefinitions(db, async (defs) => {
+                    return defs.map(d => {
+                        if (d.id !== defId) { return d; }
+                        found = true;
+                        const nextInstruction = newInstruction !== undefined ? newInstruction : d.instruction;
+                        if (nextInstruction !== d.instruction) {
+                            instructionChanged = true;
+                            finalInstruction = nextInstruction;
+                        }
+                        updated = {
+                            ...d,
+                            ...(newName !== undefined ? { name: newName } : {}),
+                            ...(newInstruction !== undefined ? { instruction: newInstruction } : {}),
+                        };
+                        return updated;
+                    });
+                });
+
+                if (!found) {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Definition with id '${defId}' not found` }));
+                    return;
+                }
+
+                // Eager sync: update the instruction on every assignment
+                // referencing this definition. The two writes (definition +
+                // assignments) serialize through the shared _writeChain but
+                // are not atomic — the lazy re-sync in
+                // loadEffectiveStandingOrders is the crash recovery path.
+                if (instructionChanged) {
+                    try {
+                        await syncDefinitionToAssignments(db, defId, finalInstruction);
+                    } catch (syncErr) {
+                        console.warn('[LocalApiServer] syncDefinitionToAssignments failed (lazy re-sync will recover):', syncErr);
+                    }
+                }
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, definition: updated }));
+                return;
+            }
+
+            if (action === 'deleteDefinition') {
+                const defId = typeof body?.id === 'string' ? body.id.trim() : '';
+                if (!defId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'id is required for deleteDefinition' }));
+                    return;
+                }
+                // Remove the definition and unlink all assignments (set
+                // definitionId to undefined on each). The instruction copy
+                // stays on the assignment — the order still works, it just
+                // no longer tracks a definition. No confirm gate (per
+                // CLAUDE.md).
+                await mutateStandingOrderDefinitions(db, async (defs) => {
+                    return defs.filter(d => d.id !== defId);
+                });
+                await mutateStandingOrders(db, async (orders) => {
+                    let changed = false;
+                    const next = orders.map(o => {
+                        if (!o || o.definitionId !== defId) { return o; }
+                        changed = true;
+                        const { definitionId: _drop, ...rest } = o;
+                        void _drop;
+                        return rest as StandingOrder;
+                    });
+                    return changed ? next : orders;
+                });
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true }));
+                return;
+            }
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             const status = (err as any)?.statusCode === 400 ? 400 : 500;

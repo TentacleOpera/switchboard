@@ -978,6 +978,7 @@
     "test:contract:terminal-groups-headrole": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-groups-headrole-contract.test.js",
     "test:contract:link-presets-mirror": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/link-presets-mirror-contract.test.js",
     "test:contract:stage-marker-commit": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/stage-marker-commit-contract.test.js",
+    "test:contract:standing-orders-definitions": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-definitions-contract.test.js",
     "test:contract:minimal-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/minimal-prompt.test.js",
     "test:contract:unattended-batch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/unattended-batch-improvement-contract.test.js",
     "test:contract:orchestrator-tick": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/orchestrator-tick-and-reports-contract.test.js",

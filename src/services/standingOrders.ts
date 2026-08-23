@@ -12,9 +12,33 @@ export interface StandingOrder {
     teamId?: string;
     /** The role name this order applies to (e.g. 'planner', 'coder', 'reviewer', 'lead'). Used only when `scope === 'role'`. */
     role?: string;
+    /**
+     * Optional link to a {@link StandingOrderDefinition} in the definitions
+     * library. When present, the `instruction` field is a denormalized copy
+     * kept in sync by {@link syncDefinitionToAssignments} (eager, on
+     * definition edit) and {@link reSyncAssignmentsToDefinitions} (lazy, on
+     * read). Old builds that don't know about `definitionId` see the
+     * `instruction` copy and work as before.
+     */
+    definitionId?: string;
+}
+
+/**
+ * A reusable standing-order definition — the library entry. The
+ * `instruction` is the canonical text; each {@link StandingOrder} that
+ * references it via `definitionId` carries a denormalized copy of that
+ * text, synced when the definition is edited. Stored at
+ * {@link STANDING_ORDER_DEFINITIONS_CONFIG_KEY}.
+ */
+export interface StandingOrderDefinition {
+    id: string;
+    name: string;
+    instruction: string;
+    createdAt: number;
 }
 
 export const STANDING_ORDERS_CONFIG_KEY = 'terminals.standingOrders';
+export const STANDING_ORDER_DEFINITIONS_CONFIG_KEY = 'terminals.standingOrderDefinitions';
 export const STANDING_ORDERS_MARKER = '=== STANDING ORDERS ===';
 
 /**
@@ -57,6 +81,137 @@ export async function mutateStandingOrders(
     });
     _writeChain = p.catch(() => {});
     await p;
+}
+
+/**
+ * Run a read-mutate-write of the standing-order-DEFINITIONS config key
+ * through the SAME module-level promise chain as
+ * {@link mutateStandingOrders}. Concurrent definition edits and assignment
+ * syncs serialize, so they cannot clobber each other — but the two
+ * config keys are written in separate read-mutate-write cycles, so a
+ * crash between a definition write and the subsequent assignment sync is
+ * NOT atomic. The lazy re-sync
+ * ({@link reSyncAssignmentsToDefinitions}) is the recovery path.
+ */
+export async function mutateStandingOrderDefinitions(
+    db: any,
+    mutator: (defs: StandingOrderDefinition[]) => Promise<StandingOrderDefinition[]>
+): Promise<void> {
+    const p = _writeChain.then(async () => {
+        const defs = await db.getConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
+        const next = await mutator(defs);
+        await db.setConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, next);
+    });
+    _writeChain = p.catch(() => {});
+    await p;
+}
+
+/**
+ * Eager sync: update the `instruction` field on every assignment whose
+ * `definitionId` matches `definitionId`. Called immediately after a
+ * definition's instruction is edited. The two writes (definition +
+ * assignments) serialize through the shared {@link _writeChain} but are
+ * not atomic — {@link reSyncAssignmentsToDefinitions} is the crash
+ * recovery path.
+ */
+export async function syncDefinitionToAssignments(
+    db: any,
+    definitionId: string,
+    instruction: string
+): Promise<void> {
+    await mutateStandingOrders(db, async (orders) => {
+        let changed = false;
+        const next = orders.map(o => {
+            if (!o || o.definitionId !== definitionId) { return o; }
+            if (o.instruction === instruction) { return o; }
+            changed = true;
+            return { ...o, instruction };
+        });
+        return changed ? next : orders;
+    });
+}
+
+/**
+ * Lazy re-sync (crash recovery): a PURE function that, for each order
+ * with a `definitionId`, checks if its `instruction` matches the
+ * definition's `instruction`. If not, updates the order's `instruction`.
+ * Returns the corrected array, or the INPUT array BY REFERENCE when
+ * nothing changed — the same identity-check pattern as
+ * {@link migrateTeamPairOrders}, so the caller can avoid a write on every
+ * prompt. Called lazily in `loadEffectiveStandingOrders`.
+ *
+ * When a definition has been deleted (no match in `definitions`), the
+ * order's `instruction` copy is left as-is — the order still works, it
+ * just no longer tracks a definition.
+ */
+export function reSyncAssignmentsToDefinitions(
+    definitions: StandingOrderDefinition[],
+    orders: StandingOrder[]
+): StandingOrder[] {
+    if (!Array.isArray(orders) || orders.length === 0) { return orders; }
+    if (!Array.isArray(definitions) || definitions.length === 0) { return orders; }
+    const byId = new Map<string, StandingOrderDefinition>();
+    for (const d of definitions) {
+        if (d && d.id) { byId.set(d.id, d); }
+    }
+    let changed = false;
+    const next = orders.map(o => {
+        if (!o || !o.definitionId) { return o; }
+        const def = byId.get(o.definitionId);
+        if (!def) { return o; }
+        if (o.instruction === def.instruction) { return o; }
+        changed = true;
+        return { ...o, instruction: def.instruction };
+    });
+    return changed ? next : orders;
+}
+
+/**
+ * Assemble a new standing-order definition after client-side validation.
+ */
+export function makeStandingOrderDefinition(
+    name: string,
+    instruction: string,
+    createdAt?: number
+): StandingOrderDefinition {
+    return {
+        id: crypto.randomUUID(),
+        name,
+        instruction,
+        createdAt: createdAt || Date.now(),
+    };
+}
+
+/**
+ * Idempotently ensure a definition exists for `instruction` text. If a
+ * definition with the same `instruction` already exists, return its id
+ * (deduplication by instruction text). Otherwise create one and persist
+ * it via {@link mutateStandingOrderDefinitions}. Returns the definition
+ * id. Used by `wireSpawnedTeam` to create definitions for team/head
+ * prompts without duplicating on re-spawn.
+ */
+export async function ensureStandingOrderDefinition(
+    db: any,
+    instruction: string,
+    name?: string,
+    createdAt?: number
+): Promise<string> {
+    let resultId: string | undefined;
+    await mutateStandingOrderDefinitions(db, async (defs) => {
+        const existing = defs.find(d => d && d.instruction === instruction);
+        if (existing) {
+            resultId = existing.id;
+            return defs;
+        }
+        const def = makeStandingOrderDefinition(
+            name || instruction.slice(0, 60),
+            instruction,
+            createdAt
+        );
+        resultId = def.id;
+        return [...defs, def];
+    });
+    return resultId!;
 }
 
 /** Replace parent and child names that match the renamed terminal. */
@@ -373,7 +528,8 @@ export function makeStandingOrder(
     instruction: string,
     scope?: StandingOrderScope,
     teamId?: string,
-    role?: string
+    role?: string,
+    definitionId?: string
 ): StandingOrder {
     return {
         id: crypto.randomUUID(),
@@ -384,6 +540,7 @@ export function makeStandingOrder(
         ...(scope ? { scope } : {}),
         ...(teamId ? { teamId } : {}),
         ...(role ? { role } : {}),
+        ...(definitionId ? { definitionId } : {}),
     };
 }
 

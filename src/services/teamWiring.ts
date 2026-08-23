@@ -1,8 +1,14 @@
 import {
     mutateStandingOrders,
+    mutateStandingOrderDefinitions,
     makeStandingOrder,
+    makeStandingOrderDefinition,
+    ensureStandingOrderDefinition,
+    reSyncAssignmentsToDefinitions,
     StandingOrder,
+    StandingOrderDefinition,
     STANDING_ORDERS_CONFIG_KEY,
+    STANDING_ORDER_DEFINITIONS_CONFIG_KEY,
 } from './standingOrders';
 import { resolvePreset, resolvePresetMeta, DEFAULT_MEMBER_RELATIONSHIP } from './linkPresets';
 import { GIT_SAFETY_DIRECTIVE } from './agentPromptBuilder';
@@ -2048,6 +2054,68 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     // Team-scoped orders are keyed on (scope, teamId) for idempotency — a
     // re-run after partial failure skips a team order that already exists.
     // Pair-scoped orders keep the (parent, child) key.
+    //
+    // Under the definitions library model, the team prompt and head prompt
+    // become definitions (created via ensureStandingOrderDefinition, which
+    // deduplicates by instruction text); the orders become assignments
+    // referencing them via `definitionId`. The `instruction` copy stays on
+    // the assignment so the delivery path (selectOrders / renderOrder) and
+    // old builds are unchanged. Each team gets its own definitions (the team
+    // prompt includes the head name and team ID interpolated, making it
+    // unique per team). When a team is deleted, its definitions orphan in
+    // the library — the operator can delete them from the UI. This is an
+    // accepted limitation.
+
+    // Compute the head instruction text BEFORE creating the definition.
+    // The firstCoder resolution depends only on children/members/childNames,
+    // not on the persisted orders, so it is safe to compute here.
+    let headInstruction: string | undefined;
+    if (!opts.externalHead) {
+        let firstCoder = children.find(c => c?.role === 'coder')?.friendlyName || '';
+        if (!firstCoder && members && Array.isArray(members)) {
+            let childIdx = 0;
+            for (const def of members) {
+                const count = Math.max(1, Math.min(def.count || 1, 8));
+                for (let i = 0; i < count && childIdx < childNames.length; i++) {
+                    const memberName = childNames[childIdx++];
+                    if (def.role === 'coder' && !firstCoder) {
+                        firstCoder = memberName;
+                    }
+                }
+            }
+        }
+        const headPromptText = (opts.headPrompt || '').trim();
+        if (headPromptText) {
+            let replacedText = headPromptText.replace(/\{head\}/g, headName);
+            if (firstCoder) {
+                replacedText = replacedText.replace(/\{coder\}/g, firstCoder);
+            } else if (headPromptText.includes('{coder}')) {
+                // No coder child was found for this team, but the
+                // head prompt references {coder}. The placeholder
+                // survives into the installed standing order, so
+                // the head would ptySendPrompt a terminal literally
+                // named "{coder}" every round and fail silently.
+                console.warn(`[teamWiring] team-head standing order for teamId=${groupId} (head=${headName}) contains {coder} placeholder but no coder child was found; placeholder left unsubstituted.`);
+            }
+            headInstruction = replacedText;
+        }
+    }
+
+    // Create definitions for the team prompt and head prompt (idempotent by
+    // instruction text — a re-spawn finds the existing definition and reuses
+    // its id). Failures here are non-fatal: the assignment is still written
+    // with the instruction copy; it just lacks a definitionId link.
+    let teamDefId: string | undefined;
+    let headDefId: string | undefined;
+    try {
+        teamDefId = await ensureStandingOrderDefinition(db, teamPromptInstruction);
+        if (headInstruction) {
+            headDefId = await ensureStandingOrderDefinition(db, headInstruction);
+        }
+    } catch (defErr: any) {
+        console.warn(`[teamWiring] ensureStandingOrderDefinition failed for team ${groupId}:`, defErr?.message || defErr);
+    }
+
     try {
         await mutateStandingOrders(db, async (orders) => {
             const next = [...orders];
@@ -2065,6 +2133,8 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                     teamPromptInstruction,
                     'team',
                     groupId,
+                    undefined,          // role
+                    teamDefId,          // definitionId
                 ));
             }
 
@@ -2073,44 +2143,19 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
             // of wireSpawnedTeam skips it rather than duplicating.
             // Same mutator as the team order above — do not split this into a second
             // mutateStandingOrders call; that reopens a read-modify-write window.
-            if (!opts.externalHead) {
-                let firstCoder = children.find(c => c?.role === 'coder')?.friendlyName || '';
-                if (!firstCoder && members && Array.isArray(members)) {
-                    let childIdx = 0;
-                    for (const def of members) {
-                        const count = Math.max(1, Math.min(def.count || 1, 8));
-                        for (let i = 0; i < count && childIdx < childNames.length; i++) {
-                            const memberName = childNames[childIdx++];
-                            if (def.role === 'coder' && !firstCoder) {
-                                firstCoder = memberName;
-                            }
-                        }
-                    }
-                }
-                const headPromptText = (opts.headPrompt || '').trim();
-                if (headPromptText) {
-                    const headExists = next.some((o: StandingOrder) =>
-                        o.scope === 'team-head' && o.teamId === groupId);
-                    if (!headExists) {
-                        let replacedText = headPromptText.replace(/\{head\}/g, headName);
-                        if (firstCoder) {
-                            replacedText = replacedText.replace(/\{coder\}/g, firstCoder);
-                        } else if (headPromptText.includes('{coder}')) {
-                            // No coder child was found for this team, but the
-                            // head prompt references {coder}. The placeholder
-                            // survives into the installed standing order, so
-                            // the head would ptySendPrompt a terminal literally
-                            // named "{coder}" every round and fail silently.
-                            console.warn(`[teamWiring] team-head standing order for teamId=${groupId} (head=${headName}) contains {coder} placeholder but no coder child was found; placeholder left unsubstituted.`);
-                        }
-                        next.push(makeStandingOrder(
-                            headName,   // parent = head (the delivery target for this scope)
-                            '',         // child = '' — old-build safety, see selectOrders
-                            replacedText,
-                            'team-head',
-                            groupId,
-                        ));
-                    }
+            if (!opts.externalHead && headInstruction) {
+                const headExists = next.some((o: StandingOrder) =>
+                    o.scope === 'team-head' && o.teamId === groupId);
+                if (!headExists) {
+                    next.push(makeStandingOrder(
+                        headName,   // parent = head (the delivery target for this scope)
+                        '',         // child = '' — old-build safety, see selectOrders
+                        headInstruction,
+                        'team-head',
+                        groupId,
+                        undefined,  // role
+                        headDefId,  // definitionId
+                    ));
                 }
             }
 
@@ -2678,26 +2723,172 @@ async function backupOnce(db: any, raw: StandingOrder[]): Promise<void> {
 }
 
 /**
+ * Migrate existing orders into the definitions library. For each order with
+ * an `instruction` but no `definitionId`, find or create a definition with
+ * the same instruction text (deduplication), then stamp `definitionId` on
+ * the order. Persists both the new definitions
+ * (via {@link mutateStandingOrderDefinitions}) and the stamped orders (via
+ * {@link mutateStandingOrders}).
+ *
+ * **Gate:** `orders.some(o => !o.definitionId && o.instruction)` — if every
+ * order already has a `definitionId` (or no instruction), returns the input
+ * BY REFERENCE (no write). This preserves the identity short-circuit that
+ * prevents a write on every prompt.
+ *
+ * **Self-healing:** the two writes (definitions + orders) are not atomic —
+ * they serialize through the shared `_writeChain`. If the process crashes
+ * between them, definitions are written but orders are not stamped. The
+ * next `loadEffectiveStandingOrders` re-runs this function, the gate fails
+ * (orders still lack `definitionId`), finds the existing definitions by
+ * instruction text (deduplication), and stamps `definitionId`.
+ *
+ * Returns the stamped array (or the input by reference when the gate
+ * doesn't fire).
+ */
+async function migrateToDefinitions(db: any, orders: StandingOrder[]): Promise<StandingOrder[]> {
+    if (!Array.isArray(orders) || orders.length === 0) { return orders; }
+    // Gate: any order with instruction but no definitionId?
+    if (!orders.some(o => o && !o.definitionId && o.instruction)) {
+        return orders; // identity short-circuit — no write
+    }
+
+    // Read existing definitions and build an instruction→definition index.
+    const rawDefs = await db.getConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
+    const defs = Array.isArray(rawDefs) ? rawDefs : [];
+    const byInstruction = new Map<string, StandingOrderDefinition>();
+    for (const d of defs) {
+        if (d && d.id && d.instruction) { byInstruction.set(d.instruction, d); }
+    }
+
+    // Find or create a definition for each unique instruction that lacks one.
+    const newDefs: StandingOrderDefinition[] = [];
+    for (const o of orders) {
+        if (!o || o.definitionId || !o.instruction) { continue; }
+        if (byInstruction.has(o.instruction)) { continue; }
+        const def = makeStandingOrderDefinition(
+            o.instruction.slice(0, 60),
+            o.instruction,
+            o.createdAt || Date.now()
+        );
+        byInstruction.set(o.instruction, def);
+        newDefs.push(def);
+    }
+
+    // Persist new definitions (if any were created). If this fails, do NOT
+    // stamp orders — a dangling definitionId (pointing to a definition that
+    // was never persisted) would permanently break the library link, since
+    // the migration gate would pass on the next read (orders already have
+    // definitionId) and reSyncAssignmentsFromDefinitions would find no match
+    // (definition not in DB) and leave the instruction as-is. Returning
+    // orders unstamped lets the next read retry the whole migration.
+    let defsPersisted = true;
+    if (newDefs.length > 0) {
+        try {
+            await mutateStandingOrderDefinitions(db, async (current) => {
+                const existingIds = new Set(
+                    current.filter(d => d && d.id).map(d => d.id)
+                );
+                return [...current, ...newDefs.filter(d => !existingIds.has(d.id))];
+            });
+        } catch (err) {
+            console.warn('[teamWiring] definitions migration: persist definitions failed:', err);
+            defsPersisted = false;
+        }
+    }
+    if (!defsPersisted) {
+        return orders; // identity — next read retries
+    }
+
+    // Stamp orders with definitionId (in-memory) and persist.
+    const stamp = (arr: StandingOrder[]): StandingOrder[] => {
+        let changed = false;
+        const next = arr.map(o => {
+            if (!o || o.definitionId || !o.instruction) { return o; }
+            const def = byInstruction.get(o.instruction);
+            if (!def) { return o; }
+            changed = true;
+            return { ...o, definitionId: def.id };
+        });
+        return changed ? next : arr;
+    };
+
+    const stamped = stamp(orders);
+    if (stamped !== orders) {
+        try {
+            await mutateStandingOrders(db, async (current) => stamp(current));
+        } catch (err) {
+            console.warn('[teamWiring] definitions migration: persist orders failed:', err);
+        }
+    }
+    return stamped;
+}
+
+/**
+ * Lazy re-sync wrapper: reads definitions from the DB, runs the pure
+ * {@link reSyncAssignmentsToDefinitions} transform, and persists the
+ * corrected orders if anything drifted. The crash-recovery path for the
+ * eager sync ({@link syncDefinitionToAssignments}). Returns the input BY
+ * REFERENCE when no order has a `definitionId` or nothing drifted.
+ */
+async function reSyncAssignmentsFromDefinitions(db: any, orders: StandingOrder[]): Promise<StandingOrder[]> {
+    if (!Array.isArray(orders) || orders.length === 0) { return orders; }
+    if (!orders.some(o => o && o.definitionId)) { return orders; }
+    const rawDefs = await db.getConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
+    const defs = Array.isArray(rawDefs) ? rawDefs : [];
+    const resynced = reSyncAssignmentsToDefinitions(defs, orders);
+    if (resynced === orders) { return orders; }
+    try {
+        await mutateStandingOrders(db, async (current) =>
+            reSyncAssignmentsToDefinitions(defs, current)
+        );
+    } catch (err) {
+        console.warn('[teamWiring] definitions re-sync persist failed:', err);
+    }
+    return resynced;
+}
+
+/**
  * The only server-side reader of terminals.standingOrders. Reads, applies the
  * pure transforms, persists the result once if anything changed, and returns the
  * effective set. A failed persist logs and returns the in-memory transform —
  * delivery never depends on the write.
+ *
+ * After the existing pair/coding-team migration, runs the definitions
+ * migration ({@link migrateToDefinitions}) and the lazy re-sync
+ * ({@link reSyncAssignmentsFromDefinitions}). Both are gated to avoid a
+ * write on every prompt when nothing needs to change.
  */
 export async function loadEffectiveStandingOrders(db: any): Promise<StandingOrder[]> {
     if (!db || typeof db.getConfigJson !== 'function') {
         return [];
     }
     const raw = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
-    const effective = migrateCodingTeamOrders(migrateTeamPairOrders(raw));
-    if (effective === raw) { return raw; } // reference short-circuit: nothing matched
-    try {
-        await backupOnce(db, raw);
-        await mutateStandingOrders(db, async (current) =>
-            migrateCodingTeamOrders(migrateTeamPairOrders(current))
-        );
-    } catch (err) {
-        console.warn('[teamWiring] standing-order migration persist failed:', err);
+    let effective = migrateCodingTeamOrders(migrateTeamPairOrders(raw));
+    if (effective !== raw) {
+        try {
+            await backupOnce(db, raw);
+            await mutateStandingOrders(db, async (current) =>
+                migrateCodingTeamOrders(migrateTeamPairOrders(current))
+            );
+        } catch (err) {
+            console.warn('[teamWiring] standing-order migration persist failed:', err);
+        }
     }
+
+    // Definitions migration (lazy, self-healing).
+    try {
+        effective = await migrateToDefinitions(db, effective);
+    } catch (err) {
+        console.warn('[teamWiring] definitions migration failed:', err);
+    }
+
+    // Lazy re-sync (crash recovery for the eager sync).
+    try {
+        effective = await reSyncAssignmentsFromDefinitions(db, effective);
+    } catch (err) {
+        console.warn('[teamWiring] definitions re-sync failed:', err);
+    }
+
     return effective;
 }
 
