@@ -27,7 +27,7 @@ One database per repository, opened by one machine, made the distinction invisib
 ### Non-goals
 
 - Implementing a remote store. This plan defines the tiers; the libSQL and git-carried plans consume them.
-- Splitting into two *files*. The hot/cold plan (`split_kanban_hot_cold_dbs.md`) splits on age; this splits on ownership. They are orthogonal and should not be conflated — a single database can carry a tier column.
+- Splitting on age. That axis belongs to `storage-topology-one-choice-three-stores.md`, which supersedes the hot/cold file split; this plan splits on *ownership*. The two are orthogonal: ownership decides what may travel to a shared store, temperature decides what stays in the working set.
 - Reviving `vector_clock`. Under a serialising store the server orders writes; a vector clock is the wrong mechanism and should be deleted, not populated.
 
 ## Metadata
@@ -90,6 +90,7 @@ Key risks: `plans` is one wide table holding both tiers, so the split turns the 
 1. **`src/services/storageTiers.ts` (new)** — one exported constant naming every table and column's tier, and the projection helpers. The single source the board view, the snapshot publisher, the state backup and the export format all derive from.
 2. **Local-tier tables** keyed by `plan_id` + `device_id`, holding the `dispatched_*` family, `last_liveness_at`, `blocked_at`, and `worktrees`. Never remote, never migrated, re-derivable from the live fleet.
 3. **Rebuild `plans`** without the local columns, in the same pass as the workspace-scoping rebuild. Drop `plan_events.vector_clock`; add `user_id` beside `device_id`.
+3b. **Register imported ticket metadata as shared tier.** `plan_tickets` (`ticket-metadata-as-first-class-board-state.md`) is shared board state and travels with the Board store — a plan imported from Linear must carry its ticket context to every machine and teammate. Today the board holds only `plans.linear_issue_id` / `clickup_task_id` as bare strings while the metadata sits in gitignored files under `.switchboard/tickets/`, so it is neither shared nor durable. The tier constant must name it, or the shared store carries plans whose ticket context is blank for everyone but the importer.
 4. **Convert the cross-tier reads to joins**, after the N+1 batching audit, starting with `getBoardFilteredByProject` and the board projection.
 5. **Make the shared-tier projection explicit** in `BoardSnapshotPublisher` and the state-backup writer by deriving both from `storageTiers.ts`.
 6. **Orphan sweep** for local-tier rows whose shared row is gone.
