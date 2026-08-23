@@ -75,6 +75,12 @@ Yes — four decisions.
 - **The loopback guards are load-bearing and stay.** A contract test should assert the bind address remains unconditional and that no configuration path can change it — the guard against a future well-meaning "just add a `--bind` flag".
 - Secrets on an unattended host cannot be protected by a user session that does not exist. State the reduced guarantee rather than implying desktop parity.
 - A self-hosted remote holds every project the operator works on: `0600` databases, `0700` directories, refuse to run as root.
+- **Recommended deployment shape, and why it changes the risk rather than restating it.** A dedicated host carrying only code collapses most of the blast radius by construction: no documents, no browser profiles, no password manager, and repositories replicated in git remotes, so the worst local outcome is re-cloning. That is a real mitigation and the docs should recommend it plainly rather than hedge. What it does *not* cover is the credentials the host must hold to be useful, and that is where the guidance belongs:
+  - **Push credentials are the sharp edge.** The remote must push or the loop does not close, so it holds something that can write the operator's repositories. A misbehaving agent can force-push, rewrite history or delete branches, and that damage lands on the shared remote, where reimaging the host does not reach it. Recommend a fine-grained token or deploy key scoped to the repositories in play, plus branch protection on default branches. This is the control that makes "the worst case is restoring a repo" true rather than approximately true.
+  - **Third-party secrets accumulate on code hosts** — `.env` files, keys the tests need, registry tokens. A leaked key stays leaked after a reimage, so what is allowed to live there should be a deliberate decision rather than an accretion.
+  - **Exfiltration is irreversible.** The host has outbound network; restoring from backup does not un-copy a private repository. Low likelihood, worth naming once.
+  - Everything else — a trashed working tree, a runaway process, a broken checkout — is as recoverable as the operator expects, and the realistic failure mode is an agent making a mess rather than an attacker.
+- **This argues for remote-board-remote-agents as the recommended default.** The dedicated host is the sacrificial one and the laptop stays a thin client with no agents on it, which is a better posture than remote-board-local-agents, where agents run on the machine that does hold the operator's personal data.
 - Remote execution's boundary is the tunnel's identity — SSH keys, Tailscale ACLs — which is materially stronger than a bearer token on an open port. That is *why* remote agents are acceptable here, and the plan should say so rather than leaving it implicit.
 
 **Side effects**
@@ -128,6 +134,7 @@ No existing install affected; the VSIX is unchanged and stays a first-class clie
 - **Version skew:** old client against newer remote and the reverse. Assert refusal with an actionable message and no migration.
 - **Capability gating:** a remote without `node-pty`. Assert terminal surfaces hide rather than break, matching the manifest's `ptyReady` behaviour.
 - **Service lifecycle:** install, reboot, stop, uninstall. Assert nothing is left running and no data removed.
+- **Credential scope on the remote:** with a push credential scoped to the repositories in play, assert a push to an out-of-scope repository fails and a force-push to a protected default branch is refused. The recommended deployment shape should be verified, not merely suggested.
 
 ## Outstanding Questions
 
