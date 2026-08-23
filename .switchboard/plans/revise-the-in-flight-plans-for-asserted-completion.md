@@ -60,7 +60,7 @@ The three plans were correct against the system as it stood. A premise changed a
 ## Dependencies
 
 - **Requires** `completion-is-asserted-never-inferred.md` to be the accepted design.
-- **Targets** `staging-streams-parallel-dispatch-and-worktrees.md`, `add-a-task-complete-endpoint-for-the-lead.md`, `remove-the-seat-orders-code-reviewed-clause.md`.
+- **Targets** `staging-streams-parallel-dispatch-and-worktrees.md`, `add-a-task-complete-endpoint-for-the-lead.md`, `remove-the-seat-orders-code-reviewed-clause.md`, `the-automation-model-four-things-not-a-mode-axis.md`.
 
 ## Adversarial Synthesis
 
@@ -75,6 +75,7 @@ The three plans were correct against the system as it stood. A premise changed a
 1. **Amend `staging-streams-parallel-dispatch-and-worktrees.md`**: replace the `stream_id`/`stream_seq` encoding with dependency edges evaluated at pop time against the completion fact; keep the discarded-edges defect and the parallel-consumer findings; supersede the `base_branch` argument with a note on why it no longer holds; re-score complexity; record the recommended split of the mission-card and worktree material.
 2. **Amend `add-a-task-complete-endpoint-for-the-lead.md`**: mark it a precondition for the streams work, and extend its scope to own the exclusivity and halt semantics.
 3. **Amend `remove-the-seat-orders-code-reviewed-clause.md`**: frame it as the first application of the category rule and note it lands with it.
+4. **Amend `the-automation-model-four-things-not-a-mode-axis.md`**: its schedule rule is *"time window, source column, selector, target column"* with the selector illustrated as *"advance the oldest card"*. Oldest is wrong when the source column is STAGING, where `queue_position` holds a user-set priority written by `reorderQueue` — a schedule that advances the oldest card out of a hand-ordered queue contradicts the reorder. The `selector` field already exists, so admitting a queue-order value is a refinement rather than the field regrowth its own tripwire guards against. Same defect, same fix, as `batch-moves-to-a-team-send-the-feature-implementation-prompt.md`.
 4. **Check board state for each** before editing, and append rather than replace where implementation has started.
 
 ### Migration
@@ -99,6 +100,7 @@ Not applicable — the deliverable is prose. Verified by review.
 - Confirm each amendment states why the premise changed, not merely what changed.
 - Confirm the streams plan's parallel-consumer and in-flight findings are still present verbatim.
 - Confirm no amended plan's card is in a coding column at edit time; where one is, confirm the amendment was appended.
+- Confirm the automation plan's selector amendment does not read as adding a field, since its own schema test guards against exactly that.
 
 ## Outstanding Questions
 
