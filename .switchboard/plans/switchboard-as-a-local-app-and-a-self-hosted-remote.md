@@ -91,7 +91,7 @@ Yes — four decisions.
 - **Hard prerequisite:** the sidecar plan — without a single owner reachable over HTTP, a second host is a second writer.
 - **Hard prerequisite:** `storage-topology-one-choice-three-stores.md` — decides what a remote holds (Board, Archive if it follows the target, never Runtime).
 - **For remote-board-local-agents only:** the tier split, a store target, and the sync-owner lease. The remote-agents mode needs none of them.
-- **Requires** `agents-reach-the-board-through-the-api-in-every-mode.md` for the mode matrix to be complete for agents, not just for humans.
+- **Requires** `board-read-endpoints-must-survive-the-storage-topology.md` for the mode matrix to be complete for agents, not just for humans.
 
 ## Adversarial Synthesis
 
@@ -103,7 +103,7 @@ Key risks: the first draft's proposal to unbind from loopback would have dismant
 2. **`switchboard remote install|start|stop|status`** writing a `launchd`/`systemd` unit, plus a container image.
 3. **A pairing flow** in the app: detect SSH or Tailscale, establish the tunnel to the remote's loopback, provision the Switchboard credential through it, verify, and remember the peer. One button, no invented trust system.
 4. **A mode picker** over the two axes — where the board lives, where agents run — with the three named modes as presets, local/local as the default, and the mode surfaced in the Database panel. Selecting local/local must require no pairing, no tunnel and no credential.
-4b. **Identical agent board access in every mode.** Agents reach the board through the API, reads included (`agents-reach-the-board-through-the-api-in-every-mode.md`). Today writes already go over HTTP while `query-kanban` opens `kanban.db` with `sqlite3 -readonly`, which has no local file in the thin-client mode. Without that plan the mode matrix has a hole: agents can move cards in all three modes but can only read the board in one.
+4b. **Identical agent board access in every mode.** Agents reach the board through the API, reads included — the migration off SQL is settled in `teams-reach-state-through-endpoints-not-host-files.md` and scoped in `skills-declare-preconditions-and-degrade.md`, and `board-read-endpoints-must-survive-the-storage-topology.md` makes the endpoints correct once there is a window, an Archive and a possibly-remote store. Without that, the mode matrix has a hole: agents can move cards in all three modes but can only read the board in one, and an archived card reads as nonexistent rather than archived.
 5. **Tunnel lifecycle management**: monitor, re-establish, and expose health; a disconnected state distinct from empty on every dependent surface.
 6. **Mode-transition semantics**: a switch changes where new work starts, never moves running terminals; every terminal is labelled with its host.
 7. **A store ownership lock** with a discoverable "another Switchboard owns this store" state.
