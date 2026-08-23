@@ -25,10 +25,11 @@ The completion report was designed as a **signal**, not a record: its stated pur
 **Complexity:** 3
 **Tags:** reliability, agents, backend
 
-## User Review Required
+## Settled Design
 
-- **Does an empty deferred set have to be stated explicitly?** Recommending yes — an explicit "no deferred findings" is the difference between "the reviewer found nothing outstanding" and "the reviewer did not answer the question". Without it, a consumer cannot distinguish a clean pass from a skipped step, which is the same ambiguity the `SKIP_DISCLOSURE_STEP` exists to close elsewhere.
-- **Severity vocabulary:** reuse CRITICAL/MAJOR/NIT verbatim from Stage 1 rather than inventing a second scale. A NIT deferred forever is fine; a CRITICAL deferred is the thing worth surfacing, and that distinction is lost if the section flattens severity.
+- **The empty case is stated, never omitted.** An explicit "no deferred findings" is what separates "the reviewer found nothing outstanding" from "the reviewer did not answer the question". Omission would leave a consumer unable to tell a clean pass from a skipped step — the same ambiguity `SKIP_DISCLOSURE_STEP` exists to close elsewhere.
+- **Severity reuses CRITICAL/MAJOR/NIT verbatim** from Stage 1. A NIT deferred forever is fine; a deferred CRITICAL is the thing worth surfacing, and a second scale would lose that distinction while inviting translation errors between the two.
+- **The tester's "remaining requirement gaps" share this section.** They are the same class of thing under another name, and one concept gets one vocabulary.
 
 ## Complexity Audit
 
@@ -97,4 +98,4 @@ None — additive. Consumers must treat a missing section as unknown, not empty.
 
 ## Outstanding Questions
 
-- **[user]** Do the tester's "remaining requirement gaps" share the deferred-findings section, or sit adjacent to it?
+None.

@@ -36,24 +36,19 @@ Completion was defined as *"the reviewer finished"* rather than *"the acceptance
 **Complexity:** 6
 **Tags:** feature, agents, reliability, backend
 
-## User Review Required
+## Settled Design
 
-- **The planning bound.** A planner at the end of the pipeline that may write plans will otherwise end every feature by generating follow-up work — the automation-forgetting problem inverted into automation-multiplying. Recommending it may write a plan **only** for (a) a finding the reviewer already recorded as deferred, or (b) an intent gap it can name against the plan's `## Goal`. No net-new scope, no opportunistic improvements. That keeps it a closer rather than a second planner.
-- **It must not fix.** Recommending no code-editing capability at all. If it can fix, it will, and the deferred-risk record stops being trustworthy — a resolved finding becomes indistinguishable from one it quietly patched. It is also a second agent editing the same tree while a team may still hold it, which is the file-conflict hazard behind the reviewer's own `CODE REVIEWED` restriction.
-- **`autobanEnabled: false` → `true` is the actual behaviour change.** Everything else is composition. This is the flip that makes cards flow into the stage, and it is the regression risk for ~4,000 installs: every feature suddenly gains a pipeline stage. Recommending it ship behind the existing role visibility so an install that leaves the role hidden is unaffected, which `_isAcceptanceTesterActive` and the `:6988` skip already provide for free.
+- **What it may plan.** Only (a) a finding the reviewer already recorded as deferred, or (b) an intent gap it can name against the plan's `## Goal`. No net-new scope, no opportunistic improvements. Unbounded, a planner at the end of the pipeline ends every feature by generating follow-up work — the automation-forgetting problem inverted into automation-multiplying. Bounded, it is a closer.
+- **It does not edit code.** No code-write capability at all. If it could fix, it would, and a resolved finding would become indistinguishable from one it quietly patched — which destroys the record the stage exists to check. It is also a second agent in a tree a team may still hold, the hazard behind the reviewer's own `CODE REVIEWED` restriction.
+- **`autobanEnabled` flips to `true`.** That is the change that makes cards flow into the stage.
 
-### The design-doc gate is already dead, with a live error message behind it
+### There is nothing to migrate — the role's own default is the opt-in
 
-`_isAcceptanceTesterActive` (`TaskViewerProvider.ts:7045-7048`) is:
+`tester: false` is the default visibility in both defaults sources (`sharedDefaults.js:7`, `GlobalIntegrationConfigService.ts:355`). `_isAcceptanceTesterActive` requires `visibleAgents.tester !== false`, and `KanbanProvider.ts:6988` skips the column outright when it is inactive. So on every install that has not deliberately turned the tester on, flipping `autobanEnabled` changes nothing: no new stage appears, no card moves differently. Turning the role on **is** the opt-in, and it already exists.
 
-```ts
-const visibleAgents = await this.getVisibleAgents(workspaceRoot);
-return visibleAgents.tester !== false && this._isAcceptanceTesterDesignDocConfigured();
-```
+### The stage is the terminal auto step, by design
 
-and `_isAcceptanceTesterDesignDocConfigured()` (`:7034-7036`) is a stub returning `true` unconditionally. So the only live gate is role visibility — activating this stage is cheaper than the call site suggests.
-
-But `_ensureAcceptanceTesterDispatchEligible` (`:7056-7058`) still surfaces *"Acceptance Tester requires a Planning Feature to be enabled and attached in Setup."* That error can never fire. Worth removing with this work: a user who reads it will go looking for a Setup toggle that does not gate anything, and a coder who reads it will assume a PRD is required — which would push them straight back toward the PRD-primary baseline this plan is correcting.
+`_getNextKanbanColumnForSession` is explicit (`TaskViewerProvider.ts:5348-5350`): `CODE REVIEWED` advances to `ACCEPTANCE TESTED` when the tester is active, and `ACCEPTANCE TESTED` returns `null`. Nothing auto-advances past it — reaching COMPLETED is a human or controller move. That is the right shape for a gate: it stops and asks, rather than passing through. It also means the column-order arrays are irrelevant to this path; that switch never consults them.
 
 ## Complexity Audit
 
@@ -64,8 +59,7 @@ But `_ensureAcceptanceTesterDispatchEligible` (`:7056-7058`) still surfaces *"Ac
 
 ### Complex / Risky
 
-- **Keep the column id; change only the label and the role.** `ACCEPTANCE TESTED` shipped in released column sets and is stored in card `kanban_column` values across ~4,000 installs. It also appears in `_isColumnBefore`'s order array (`KanbanProvider.ts:8659`), the `POST_CODE` set (`KanbanDatabase.ts:9388`), the column→role maps (`KanbanProvider.ts:3661`, `:13570`, `TaskViewerProvider.ts:5133`), the next-column resolver (`:5176`, `:5348`), the inactive-column skip (`:6988`) and a test fixture (`KanbanProvider.test.ts:152`). Renaming the id strands every card sitting in it. Relabel and re-role only.
-- **Two order arrays disagree about the tail.** `_isColumnBefore` orders `… CODE REVIEWED, ACCEPTANCE TESTED, COMPLETED, TICKET UPDATER` while the comment at `KanbanProvider.ts:6977-6979` says COMPLETED *"is the pipeline's terminal stage, advanced into from TICKET UPDATER (or ACCEPTANCE TESTED when the updater is hidden)"*. Activating the column makes that tail live for the first time, so the disagreement stops being theoretical — confirm which ordering the advance path actually uses before relying on either.
+- **Keep the column id; change only the label and the role.** `ACCEPTANCE TESTED` shipped in released column sets and is stored in card `kanban_column` values across ~4,000 installs. It also appears in `_isColumnBefore`'s order array (`KanbanProvider.ts:8659`), the `POST_CODE` set (`KanbanDatabase.ts:9388`), the column→role maps (`KanbanProvider.ts:3661`, `:13570`, `TaskViewerProvider.ts:5133`, and `_roleForKanbanColumn` at `:5197`), the next-column resolver (`:5176`, `:5348`), the inactive-column skip (`:6988`) and a test fixture (`KanbanProvider.test.ts:152`). Renaming the id strands every card sitting in it. Relabel and re-role only.
 - **A planner role in a reviewed-stage column is a new combination.** The column is `kind: 'reviewed'` and `dragDropMode: 'cli'`, and role-keyed behaviour elsewhere (git policy via `STAGE_BY_ROLE`, prompt composition, dispatch routing) is written against the roles that occupy each kind today. Re-roling the column exercises paths that have never seen a planner past `CODE REVIEWED`.
 - **Git policy must match "does not fix".** `buildGitPolicyBlock` is composed per role with `STAGE_BY_ROLE[role]`. A stage that writes a plan file but never touches code needs a policy that permits the plan write and prohibits code commits — not the planner's default and not the tester's.
 - **The prompt cannot inherit the tester's baseline.** The intent check must read the plan's `## Goal` as a first-class intent source, with the PRD used when present rather than required. Inheriting `resolveBaseInstructions('tester', …)` unchanged reproduces the documented blind spot.
@@ -73,7 +67,7 @@ But `_ensureAcceptanceTesterDispatchEligible` (`:7056-7058`) still surfaces *"Ac
 
 ## Edge-Case & Dependency Audit
 
-**Migration.** Column id unchanged, so no card migration. `autobanEnabled` flipping from `false` to `true` changes flow for every install where the role is visible — per CLAUDE.md this shipped state must be migrated deliberately, not silently: an install that has never used the tester should not discover a new mandatory stage mid-feature. Prefer defaulting the flip off for existing installs and on for new ones, or gate it on an explicit opt-in the user already expressed by making the role visible.
+**Migration.** None. The column id is unchanged, so no card moves. And because `tester` defaults to invisible, the `autobanEnabled` flip is inert on every install that has not turned the role on — the opt-in the migration rule would ask for already exists as the role's own default.
 
 **Security.** The stage writes plan files. Plan content is agent-written and must render as text, never HTML. It gains no code-write capability, which is a reduction in surface relative to the tester it replaces.
 
@@ -104,9 +98,9 @@ But `_ensureAcceptanceTesterDispatchEligible` (`:7056-7058`) still surfaces *"Ac
 4. **Grant plan-writing, withhold code-editing**, with a git policy block that matches.
 5. **Bound what it may plan** to recorded deferred findings and named intent gaps; no net-new scope.
 6. **Distinguish "no deferred record" from "no deferred findings"** so pre-existing plans do not read as clean.
-7. **Flip `autobanEnabled` deliberately**, defaulting so existing installs do not gain a stage without asking.
+7. **Flip `autobanEnabled` to `true`** on the column. Inert where the role is off, which is the default.
 8. **Delete the unreachable design-doc error** and either implement or remove the `_isAcceptanceTesterDesignDocConfigured` stub.
-9. **Resolve the two order arrays** before relying on the column's advance path.
+9. **Update all four column→role maps**, not the three that are easy to find.
 
 ### Migration
 
@@ -129,7 +123,8 @@ Column id unchanged — no card migration. The `autobanEnabled` flip is the migr
 - **The stage writes no code:** assert no code-file write path is reachable from its role, and that its git policy prohibits code commits while permitting the plan write.
 - **The planning bound holds:** present an unrecorded improvement opportunity; assert no plan is written for it.
 - **Column id is untouched:** assert the stored id remains `ACCEPTANCE TESTED` across the relabel, and that cards seeded in it still resolve. A label-only test passes while a renamed id strands cards.
-- **Role visibility still disables the stage:** hide the role; assert `resolveAutoDispatchColumn` returns null and the `:6988` skip still fires, so an opted-out install is unaffected.
+- **The flip is inert at default settings:** with `tester` at its default (invisible), assert no card advances into the column and the `:6988` skip fires. This is the assertion that proves ~4,000 installs are unaffected, and it fails if the flip is made unconditional.
+- **The stage does not auto-advance:** assert `_getNextKanbanColumnForSession('ACCEPTANCE TESTED')` returns null, so a card waits for a decision rather than sliding to COMPLETED.
 - **The dead error is gone:** assert no code path can emit the Planning Feature message.
 
 ### Manual Verification
@@ -139,6 +134,4 @@ Column id unchanged — no card migration. The `autobanEnabled` flip is the migr
 
 ## Outstanding Questions
 
-- **[user]** Confirm the planning bound: recorded deferred findings plus intent gaps named against the Goal, and nothing else?
-- **[user]** Should the `autobanEnabled` flip default on for new installs only, or stay opt-in for everyone until asked for?
-- Which order array governs the advance out of this column once it is live — `_isColumnBefore`'s, or the TICKET UPDATER carve-out the `:6977` comment describes?
+None.
