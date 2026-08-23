@@ -14,6 +14,7 @@ Ship Switchboard as something you launch rather than something you open an IDE t
 
 **The mode choice is the actual product decision, and it is currently unexpressible.** Two axes — where the Board store lives, and where agents run — give four combinations, and the two worth naming pull in different directions:
 
+- **Local board, local agents.** Today's shape, and the zero-configuration default. One machine owns everything; nothing is paired; no tunnel exists. This is a named mode, not an unnamed baseline — it must stay reachable with no setup, and no part of the pairing surface may be a precondition for it.
 - **Remote board, local agents.** The board and its sync live on the always-on machine; PTYs and teams run on the laptop you are sitting at. Your board survives the laptop sleeping; your agents use the hardware in front of you, with your local checkouts.
 - **Remote board, remote agents.** The always-on machine does everything; the laptop is a thin client onto its shell. Agents keep working while the laptop is shut.
 
@@ -42,7 +43,7 @@ Yes — four decisions.
 
 1. **App shell.** A full desktop wrapper (Electron/Tauri) versus a tray/menubar launcher supervising the standalone host and opening the shell in the default browser. Recommendation: **tray launcher** — a fraction of the work, no second browser engine, keeps the shell as the one UI, and delivers the taskbar presence the requirement asks for.
 2. **Tunnel transport.** Recommendation: **support both SSH and Tailscale, detect what is present, and never implement our own tunnel.** SSH is universal and already works; Tailscale is what most people actually want for a machine that moves between networks. Both terminate on the remote's loopback, so both inherit every existing guard.
-3. **Which mode ships first.** Recommendation: **remote-board-remote-agents**, because it needs none of the storage programme — it is packaging plus a tunnel plus a thin client. Remote-board-local-agents follows once the store target and sync lease land.
+3. **Which mode ships first.** Recommendation: **local-board-local-agents is not "shipped", it is preserved** — it works today and the test that matters is that none of this work regresses it. Of the two new modes, **remote-board-remote-agents** first, because it needs none of the storage programme: packaging plus a tunnel plus a thin client. Remote-board-local-agents follows once the store target and sync lease land.
 4. **Does the app manage tunnel lifecycle, or just document and detect it?** Recommendation: **manage it** — establish, monitor, re-establish, and show its state. A mode picker that silently depends on a tunnel the operator maintains by hand is the discoverability failure this plan exists to fix, one layer up.
 
 ## Complexity Audit
@@ -90,6 +91,7 @@ Yes — four decisions.
 - **Hard prerequisite:** the sidecar plan — without a single owner reachable over HTTP, a second host is a second writer.
 - **Hard prerequisite:** `storage-topology-one-choice-three-stores.md` — decides what a remote holds (Board, Archive if it follows the target, never Runtime).
 - **For remote-board-local-agents only:** the tier split, a store target, and the sync-owner lease. The remote-agents mode needs none of them.
+- **Requires** `agents-reach-the-board-through-the-api-in-every-mode.md` for the mode matrix to be complete for agents, not just for humans.
 
 ## Adversarial Synthesis
 
@@ -100,7 +102,8 @@ Key risks: the first draft's proposal to unbind from loopback would have dismant
 1. **A tray/menubar launcher** per platform supervising the standalone host, showing state, opening the shell.
 2. **`switchboard remote install|start|stop|status`** writing a `launchd`/`systemd` unit, plus a container image.
 3. **A pairing flow** in the app: detect SSH or Tailscale, establish the tunnel to the remote's loopback, provision the Switchboard credential through it, verify, and remember the peer. One button, no invented trust system.
-4. **A mode picker** over the two axes — where the board lives, where agents run — with the two named modes as presets and the mode surfaced in the Database panel.
+4. **A mode picker** over the two axes — where the board lives, where agents run — with the three named modes as presets, local/local as the default, and the mode surfaced in the Database panel. Selecting local/local must require no pairing, no tunnel and no credential.
+4b. **Identical agent board access in every mode.** Agents reach the board through the API, reads included (`agents-reach-the-board-through-the-api-in-every-mode.md`). Today writes already go over HTTP while `query-kanban` opens `kanban.db` with `sqlite3 -readonly`, which has no local file in the thin-client mode. Without that plan the mode matrix has a hole: agents can move cards in all three modes but can only read the board in one.
 5. **Tunnel lifecycle management**: monitor, re-establish, and expose health; a disconnected state distinct from empty on every dependent surface.
 6. **Mode-transition semantics**: a switch changes where new work starts, never moves running terminals; every terminal is labelled with its host.
 7. **A store ownership lock** with a discoverable "another Switchboard owns this store" state.
@@ -115,7 +118,8 @@ No existing install affected; the VSIX is unchanged and stays a first-class clie
 
 - **Loopback invariance:** assert the bind address is unconditional, that no flag, setting or env var changes it, and that the four guards plus the WS-upgrade predicate are intact. This is the regression test for this plan's own first draft.
 - **Pairing:** from a clean pair of machines, complete pairing in the app and assert a working board over the tunnel — with no credential having crossed an unauthenticated channel.
-- **Both modes end-to-end:** remote board + remote agents (laptop as thin client, agents surviving laptop shutdown); remote board + local agents (PTYs local, board remote, zero remote writes for liveness).
+- **All three modes end-to-end:** local board + local agents on a machine that has never been paired, with no tunnel, no credential and no configuration — the regression test for this whole programme; remote board + remote agents (laptop as thin client, agents surviving laptop shutdown); remote board + local agents (PTYs local, board remote, zero remote writes for liveness).
+- **Agent parity across modes:** run the same agent board read and the same card move in all three modes; assert identical results in each.
 - **Reboot survival:** reboot the remote. Assert the service returns, the durable token still authenticates, and paired clients reconnect without re-pairing.
 - **Tunnel loss:** sever the tunnel mid-dispatch. Assert the client shows disconnected rather than empty, the remote continues, and reconnect neither duplicates the dispatch nor loses its acknowledgement.
 - **Mode switch:** switch modes with live terminals on both machines. Assert no terminal is lost, each is labelled with its host, and only new work follows the new mode.
