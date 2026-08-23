@@ -14,6 +14,12 @@ Give users two ways to express execution order on the board — a **priority sta
 - The schedule rule in `the-automation-model-four-things-not-a-mode-axis.md` is illustrated as *"advance the oldest card from column A to column B"*.
 - `batch-moves-to-a-team-send-the-feature-implementation-prompt.md` caps a batch at five and, outside STAGING, has nothing but age to choose them by.
 
+**And oldest-first was never an ordering decision — it is a guard against picking up work already in progress.** That reframes it entirely: age was standing in for "not currently being worked on", which is a *filter*, not a *sort*.
+
+The filter already exists where it matters. The queue candidate predicate tests `!p.dispatchedAt` directly (`LocalApiServer.ts:1879`, and again at `:2326`), so the queue path already excludes dispatched cards by fact rather than by inference. Oldest-first adds nothing to that exclusion — which is exactly why it stops making sense once you look at it as ordering: it is a proxy for a condition that is separately and correctly tested.
+
+**So the sort is free, provided every consumer actually applies the filter.** That is the one thing to verify per consumer before changing its sort: a consumer that leaned on age as its *only* protection against grabbing in-flight work would start doing so the moment the sort became user intent. The queue path is covered; `_distributePlannerDispatch` and the schedule selector need checking individually rather than assumed.
+
 A user who drags cards in CREATED or PLAN REVIEWED to put important work first is not overridden — **their intent was never recorded**. The board shows one order and the system acts on another, and nothing reports the discrepancy.
 
 **And STAGING is not a priority mechanism.** It is where missions live. Treating "stage it" as "prioritise it" conflates a membership decision with an ordering one: a user who wants a card done first should not have to enrol it in a mission to say so, and a mission's internal sequence is not a place to park unrelated urgent work.
@@ -31,10 +37,11 @@ Board position was built as state, not as intent. A column records *where* work 
 
 ## Settled Design
 
-- **A priority star on cards.** One click on, one click off, no confirmation gate (project rule). It overrides other ordering.
+- **A priority star on cards — single level.** One click on, one click off, no confirmation gate (project rule). It overrides other ordering. No ranked tiers.
 - **Drag-to-reorder in every column**, persisted, so the visible arrangement is the execution arrangement.
 - **STAGING keeps `queue_position`.** It is the mission queue's order and the streams work builds on it; a drag inside STAGING already writes it. The new order field covers every *other* column, so no column ever has two competing orders.
-- **Precedence, in one place:** starred first → then the column's manual order (`queue_position` in STAGING, the new field elsewhere) → then oldest, as the final fallback for cards never arranged.
+- **Precedence, in one place:** starred first → then the column's manual order (`queue_position` in STAGING, the new field elsewhere) → then age, as a stable tiebreak for cards never arranged, not as a guard.
+- **In-progress exclusion stays a filter, never a sort.** `!dispatchedAt` is the test; age is not a substitute for it and must not be relied on as one.
 
 ## Complexity Audit
 
@@ -47,6 +54,7 @@ Board position was built as state, not as intent. A column records *where* work 
 
 - **`queue_position` must not be generalised to carry this.** It is cleared when a card leaves STAGING, and the streams work makes it the tiebreak among cards at the same stream sequence — so it already carries queue semantics. Reusing it for board-wide visual order would make one integer mean both "mission queue slot" and "where the user dragged it", which is the overload the streams plan already argues against for stage encoding. A separate field, with the STAGING/non-STAGING split above, keeps each number meaning one thing.
 - **A star that overrides a dependency is a correctness bug, not a preference.** In STAGING, mission streams sequence work so a card cuts from its predecessor's result. A starred card jumping ahead of an incomplete predecessor produces exactly the conflict the stage map exists to prevent. The star must yield to dependency order — or be refused there with a stated reason — and it must never silently reorder a stream.
+- **Each consumer's in-progress filter must be confirmed before its sort changes.** Age is currently doing double duty in some places, and the two duties come apart here: the queue path tests `!p.dispatchedAt` explicitly, but a consumer that never added that test has been protected only by the accident that in-flight cards are older. Changing its sort first and its filter second is a window in which automation picks up work already underway.
 - **Precedence has to live in one resolver, not in each consumer.** There are already at least three independent "oldest-first" implementations. Adding two more inputs to each is how they drift; the first symptom is two surfaces disagreeing about which card is next, which is very hard to diagnose from the board.
 - **Order on column move.** A card dragged between columns needs a position in its new column. The STAGING handler already computes an insertion index from the drop position, and that behaviour should carry over rather than every cross-column move appending to the end — otherwise dragging a card to the top of a column silently puts it last.
 - **A mixed drag is a known trap here.** The existing handler documents that a mixed selection *"previously took the reorder branch and silently discarded the unstaged cards — no message, no error, nothing staged."* Widening the gate to all columns multiplies the mixed cases, so the same losslessness requirement applies to every column pair, not just into STAGING.
@@ -112,6 +120,7 @@ Two additive columns; existing cards read as unstarred and unarranged, and NULL 
 - **The star yields to stage order:** star a stage-2 card whose stage-1 predecessor is incomplete; assert it is not dispatched ahead of it, and that the refusal states why.
 - **Mixed drags stay lossless in every column pair:** drag a mixed selection between two non-STAGING columns; assert nothing is silently dropped — the documented failure this widening could reintroduce.
 - **Unarranged and unstarred is unchanged:** assert a board where nobody has starred or dragged behaves exactly as today, ordering by age with NULLs last.
+- **In-progress work is never picked, whatever the order says:** star and hand-place a card that is already dispatched; assert no consumer selects it. This is the assertion that replaces oldest-first's real job, and it must pass for every consumer — a star is a strong enough override to expose any consumer whose only guard was age.
 - **Cross-column drop position is honoured:** drag a card to the top of another column; assert it lands first, not last.
 
 ### Manual Verification
@@ -120,4 +129,4 @@ Two additive columns; existing cards read as unstarred and unarranged, and NULL 
 
 ## Outstanding Questions
 
-- **[user]** Should the star be a single level, or ranked (e.g. one gold card that always wins, plus ordinary stars)? A single level is simpler and recommended; ranking only earns its place if starring everything turns out to be the common failure.
+None.
