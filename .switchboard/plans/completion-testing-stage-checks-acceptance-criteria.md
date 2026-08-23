@@ -40,11 +40,34 @@ Completion was defined as *"the reviewer finished"* rather than *"the acceptance
 
 - **What it may plan.** Only (a) a finding the reviewer already recorded as deferred, or (b) an intent gap it can name against the plan's `## Goal`. No net-new scope, no opportunistic improvements. Unbounded, a planner at the end of the pipeline ends every feature by generating follow-up work — the automation-forgetting problem inverted into automation-multiplying. Bounded, it is a closer.
 - **It does not edit code.** No code-write capability at all. If it could fix, it would, and a resolved finding would become indistinguishable from one it quietly patched — which destroys the record the stage exists to check. It is also a second agent in a tree a team may still hold, the hazard behind the reviewer's own `CODE REVIEWED` restriction.
-- **`autobanEnabled` flips to `true`.** That is the change that makes cards flow into the stage.
+- **`autobanEnabled` flips to `true`**, behind a column-participation switch that is off for existing installs. That switch, not role visibility, is what makes cards flow into the stage.
 
-### There is nothing to migrate — the role's own default is the opt-in
+### Making the role core splits one gate into two — and reinstates a migration
 
-`tester: false` is the default visibility in both defaults sources (`sharedDefaults.js:7`, `GlobalIntegrationConfigService.ts:355`). `_isAcceptanceTesterActive` requires `visibleAgents.tester !== false`, and `KanbanProvider.ts:6988` skips the column outright when it is inactive. So on every install that has not deliberately turned the tester on, flipping `autobanEnabled` changes nothing: no new stage appears, no card moves differently. Turning the role on **is** the opt-in, and it already exists.
+`tester` is currently the **first row under `<!-- OPTIONAL -->`** in the agents tab (`kanban.html:3227`, under `<div class="agents-group-label">Optional</div>`), unchecked, and `tester: false` in both defaults sources (`sharedDefaults.js:7`, `GlobalIntegrationConfigService.ts:355`). Promoting it to core means moving the row into the `<!-- CORE -->` block above that label, marking it `checked`, and flipping both defaults to `true`.
+
+**That invalidates the earlier reading of this plan, which said there was nothing to migrate.** That claim rested entirely on the role defaulting to invisible: `_isAcceptanceTesterActive` is `visibleAgents.tester !== false`, so with `tester: false` the `autobanEnabled` flip was inert everywhere. Default the role visible and the same flip activates a new pipeline stage on every install at once — cards start flowing into a column that has never held any. That is exactly the shipped-state change CLAUDE.md requires be migrated deliberately.
+
+**The resolution is that `_isAcceptanceTesterActive` conflates two separate questions.** "Is this a first-class role I can start and put on a team?" and "does the pipeline have a completion-testing stage?" are not the same question, and one boolean answering both is why promoting the role has pipeline consequences at all. Split it:
+
+- **Role visibility** → core, default on. It appears in the agents tab, the role picker, and team membership like any other core role.
+- **Column participation** → its own switch, default off for existing installs. The stage is opt-in, and turning it on is a deliberate act.
+
+That gives both intents without the coupling: the tester becomes a normal, reachable role immediately, and nobody's pipeline grows a stage they did not ask for.
+
+### The reviewer/tester structure exists at the pair level, not as a team
+
+Both relationships already ship in `MEMBER_RELATIONSHIP_PRESETS` (`kanban.html:4877-4884`): `reviewer` and `tester` sit alongside `reports-to-head`, `researcher`, `handoff` and `second-opinion`. Each has a link-preset template — the tester's (`linkPresets.ts:77-85`) is `direction: 'head-receives'`:
+
+> *"{child} is your tester. When a change is ready to verify, hand {child} what you changed and what the expected behaviour is — it cannot see your conversation, so state both explicitly — and let it run the checks. Treat a failure it reports as your work to fix, not its."*
+
+And `teamWiring.ts:1785-1787` confirms the wiring: *"Pair-scoped orders: `head-receives` relationship presets (researcher, reviewer, tester, handoff, second-opinion) still emit one pair row each, installed ON the head ABOUT the member."*
+
+So a team can already carry both a reviewer and a tester member. **What does not exist is a seeded team pairing them.** The only seed is `SEEDED_AGENT_GROUP` — a member-less `Lead team` headed on `lead` (`teamWiring.ts:613-618`), deliberately empty because *"a team with no members does nothing… which is what allows it to ship into the auto-start feature without a staged rollout."* The old `Coding team` did carry a reviewer member, and its migration converted that member's relationship from `'reviewer'` to `'reports-to-head'` (`:966-970`).
+
+That migration history is the constraint on seeding a new one. `OLD_SEEDED_AGENT_GROUP` exists solely because a seed with members *"would spawn three unrequested coder agent CLIs per lead — the release gate this migration exists to close"* (`:620-629`). A seeded reviewer+tester team would spawn two unrequested CLIs per lead on exactly the same mechanism. So it ships as an **offered definition the user starts**, never as a pre-seeded row with members.
+
+**One naming collision to keep straight.** The pair-level tester and the column-level tester are different jobs on one role name: the pair tester runs checks *at the head's request* and hands failures back as the head's work; the column tester *gates the finish* and writes a plan. They compose (same skill, different trigger) but their standing orders must not be installed on the same seat unqualified — the seat/head contradiction in `remove-the-seat-orders-code-reviewed-clause.md` is what that failure looks like.
 
 ### The stage is the terminal auto step, by design
 
@@ -67,7 +90,7 @@ Completion was defined as *"the reviewer finished"* rather than *"the acceptance
 
 ## Edge-Case & Dependency Audit
 
-**Migration.** None. The column id is unchanged, so no card moves. And because `tester` defaults to invisible, the `autobanEnabled` flip is inert on every install that has not turned the role on — the opt-in the migration rule would ask for already exists as the role's own default.
+**Migration.** The column id is unchanged, so no card moves. The real migrated state is the role's default visibility going from `false` to `true`: that is what previously made the `autobanEnabled` flip inert, so promoting the role to core requires the column-participation switch to carry the opt-in instead. Existing installs get the role visible and the stage off; new installs can have both on.
 
 **Security.** The stage writes plan files. Plan content is agent-written and must render as text, never HTML. It gains no code-write capability, which is a reduction in surface relative to the tester it replaces.
 
@@ -98,7 +121,10 @@ Completion was defined as *"the reviewer finished"* rather than *"the acceptance
 4. **Grant plan-writing, withhold code-editing**, with a git policy block that matches.
 5. **Bound what it may plan** to recorded deferred findings and named intent gaps; no net-new scope.
 6. **Distinguish "no deferred record" from "no deferred findings"** so pre-existing plans do not read as clean.
-7. **Flip `autobanEnabled` to `true`** on the column. Inert where the role is off, which is the default.
+7. **Flip `autobanEnabled` to `true`** on the column, gated by a new column-participation switch — off for existing installs, on for new ones.
+7a. **Split `_isAcceptanceTesterActive`** into role visibility and column participation. One boolean answering both is why promoting the role has pipeline consequences.
+7b. **Promote the role to core**: move its row out of the Optional block in the agents tab, mark it `checked`, and set `tester: true` in both defaults sources.
+7c. **Offer a reviewer+tester team definition** the user starts — never a pre-seeded row with members, which is the exact release gate `OLD_SEEDED_AGENT_GROUP` exists to document.
 8. **Delete the unreachable design-doc error** and either implement or remove the `_isAcceptanceTesterDesignDocConfigured` stub.
 9. **Update all four column→role maps**, not the three that are easy to find.
 
@@ -123,7 +149,9 @@ Column id unchanged — no card migration. The `autobanEnabled` flip is the migr
 - **The stage writes no code:** assert no code-file write path is reachable from its role, and that its git policy prohibits code commits while permitting the plan write.
 - **The planning bound holds:** present an unrecorded improvement opportunity; assert no plan is written for it.
 - **Column id is untouched:** assert the stored id remains `ACCEPTANCE TESTED` across the relabel, and that cards seeded in it still resolve. A label-only test passes while a renamed id strands cards.
-- **The flip is inert at default settings:** with `tester` at its default (invisible), assert no card advances into the column and the `:6988` skip fires. This is the assertion that proves ~4,000 installs are unaffected, and it fails if the flip is made unconditional.
+- **A visible role does not activate the stage:** with `tester` visible (its new default) and column participation off, assert no card advances into the column. This is the assertion that proves ~4,000 installs are unaffected, and it is the one that fails if the two gates stay conflated.
+- **The core promotion is complete:** assert the role is `checked` in the agents tab, outside the Optional group, and `true` in both defaults sources. A test on one defaults file passes while the other still says `false`.
+- **No team seed spawns a CLI:** assert the reviewer+tester definition is offered rather than seeded with members, and that `SEEDED_AGENT_GROUP` still has none. This is the release gate the old Coding-team migration exists to hold.
 - **The stage does not auto-advance:** assert `_getNextKanbanColumnForSession('ACCEPTANCE TESTED')` returns null, so a card waits for a decision rather than sliding to COMPLETED.
 - **The dead error is gone:** assert no code path can emit the Planning Feature message.
 
