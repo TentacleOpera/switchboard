@@ -43,7 +43,7 @@ Remote authoring was built when the only reachable remote surfaces were SaaS tra
 
 Yes — three decisions, and the first is the substantive one.
 
-1. **Can a store-authored plan trigger execution, as a Linear-authored one can?** The existing model says a remote surface may drive the board. A store token, though, may sit with an agent platform rather than in a workspace the operator logs into, and it is a shared credential with no per-writer identity. Recommendation: **allow authoring, gate execution-triggering behind a separate opt-in** for this provider kind specifically — not because injection is new, but because the credential's blast radius is wider and less legible than a tracker login. If the scoped-token question below resolves well, revisit.
+1. **Can a store-authored plan trigger execution, as a Linear-authored one can?** The existing model says a remote surface may drive the board. An earlier revision recommended gating this behind an opt-in because a store token seemed coarser than a tracker login. **That has now resolved in the safer direction:** Turso documents table+action token scoping (`-p <table>:<actions>`, `tursodatabase/turso-docs` `sdk/authorization.mdx`), so an authoring credential can be minted as `-p all:data_read -p <queue>:data_add` — able to read the board and insert queue rows, and *unable* to write board tables at all. Recommendation: **scope the credential and drop the application-level gate.** An agent holding such a token cannot set an execution-trigger state because the database refuses the write — enforcement by the store beats enforcement by our own opt-in. Keep the gate only if the scoping cannot be verified empirically, or if self-hosted sqld turns out not to honour the same claims (see Outstanding Questions).
 2. **Where do the two Linear gates get opened?** `remote-content-pull-all-providers.md` already opens them for Notion and ClickUp. Recommendation: **land this after that plan**, so the store kind is the fourth through a door already widened rather than the reason for widening it.
 3. **Filename convention.** Recommendation: follow `linear_import_${id}.md` with a store-kind prefix. It sidesteps title sanitisation entirely, which is why the Linear path does it.
 
@@ -62,7 +62,7 @@ Yes — three decisions, and the first is the substantive one.
 - **`workspace_id` must be explicit.** `CLAUDE.md`'s workspace-detection tree keys on an active editor a cloud agent does not have. An unresolvable value parks the row as an error; guessing puts a plan on the wrong project's board.
 - **Who polls.** With several hosts against one shared store, the store-kind poll must be lease-held (`sync-owner-lease-and-write-attribution.md`) or two hosts materialise one row twice.
 - **Idempotency across a crash** between file write and row marking. The Linear path keys the filename on the provider id, so a retry rewrites the same path rather than creating a duplicate — inherit that property rather than inventing one.
-- **The credential is the trust boundary, and it is coarse.** A store token can write anything in the store, so "may author a plan" is not separable from "may edit the board" unless libSQL supports table-scoped tokens. That is the open question with the largest effect on this plan's safety posture.
+- **The credential is the trust boundary, and it can be made narrow — if the scoping is verified.** Turso documents table+action scoping, so "may author a plan" *is* separable from "may edit the board". That makes this design substantially safer than a default token, and it moves the load-bearing work from an application gate to correct token minting: the operator must actually mint a scoped token, and the product should say so wherever it asks for one. A default full-access token silently reinstates the coarse boundary, so the panel should distinguish a scoped credential from an unscoped one rather than treating any working token as equivalent.
 
 ## Edge-Case & Dependency Audit
 
@@ -119,13 +119,15 @@ Additive and opt-in; inert without a configured store target. No existing remote
 - **Project pin:** valid pin, unknown pin, workspace name, literal `<project>`. Assert the resolve-only backstop leaves the last three unassigned rather than minting projects.
 - **Idempotency:** same key twice → one plan. Kill between file write and row marking, restart → one plan.
 - **Lease:** two hosts, one row, exactly one materialisation. Holder offline → row waits, shown waiting, materialises once on return.
-- **Execution gate:** with the opt-in off, assert a store-authored plan cannot reach an execution-triggering state remotely; with it on, assert it behaves as the Linear path does.
+- **Scoped-credential enforcement:** using a token minted `-p all:data_read -p <queue>:data_add`, assert queue inserts succeed and every write to `plans`, `features` and `projects` is rejected by the database — so a store-authored plan cannot reach an execution-triggering state even with no application gate present.
+- **Unscoped-credential detection:** with a full-access token configured, assert the panel reports the credential as unscoped rather than presenting it as equivalent to a scoped one.
 - **Boundary rule:** assert no plan or feature body is written to `plans`/`features` by this path.
 - **Parity:** author the same plan via Linear and via the store. Assert the resulting files and board rows are equivalent apart from provenance.
 
 ## Outstanding Questions
 
-- Does libSQL/Turso support a token scoped to a single table's writes? This is the highest-leverage unknown in the plan: it decides whether a cloud agent's credential reaches a draft queue or the whole board, and therefore whether decision 1 can be relaxed.
+- **Resolved:** Turso supports table+action token scoping (`-p <table>:<actions>`), so a cloud agent's credential can reach the queue and not the board. Confirm empirically before relying on it — mint the token and assert the forbidden write is rejected.
+- **Still open:** does self-hosted sqld honour the same claims? If not, the self-hosted target cannot match Turso on least-privilege here, and the application-level gate has to stay for that target only — which would be the first capability difference between the two.
 - Should a store-authored plan carry a visible provenance marker, so a reviewer knows what wrote it without consulting the queue?
 - Once a Switchboard MCP exists, does a self-hosted remote use this queue or call the API directly and skip it?
 - Do the other provider kinds want the same execution-trigger opt-in, or is the coarse-credential concern genuinely specific to a store token?
