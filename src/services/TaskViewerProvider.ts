@@ -1192,6 +1192,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * into — the order lists in the UI and never appends to a prompt.
      */
     private _apiServerWorkspaceRoot?: string;
+
+    /**
+     * The LATCHED fleet root that owns the standing-orders store — the same root
+     * handed to LocalApiServer as `getFleetOrdersDatabase`. Every standing-orders
+     * reader and writer must resolve against this, NOT the board's active
+     * workspace selection: in a multi-root window they are different directories,
+     * and an editor held to the board root lists orders that are not in force and
+     * writes orders that are never delivered. Exposed because KanbanProvider's
+     * standing-orders verbs are a seventh writer of that store and need the same
+     * root the HTTP routes get. See standing-orders-fleet-root-contract.test.js.
+     */
+    public getFleetOrdersRoot(): string {
+        return this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '';
+    }
     /**
      * Instance handle on `_startLocalApiServer`'s `updateMirrorRegistry` closure.
      * `runtime.terminals` is the shared registry every other surface reads for PTY

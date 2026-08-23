@@ -15,12 +15,19 @@
  */
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const {
     loadEffectiveStandingOrders,
     wireSpawnedTeam,
-    STANDING_ORDERS_CONFIG_KEY,
 } = require('../../out/services/teamWiring');
 const {
+    // NOT from teamWiring — it imports the key but does not re-export it, so
+    // reading it from there yields `undefined` and every test writes its
+    // fixture under the key "undefined" while the product reads
+    // 'terminals.standingOrders'. That made six tests fail and two more pass
+    // vacuously (empty arrays satisfy for-of assertions).
+    STANDING_ORDERS_CONFIG_KEY,
     STANDING_ORDER_DEFINITIONS_CONFIG_KEY,
     syncDefinitionToAssignments,
     reSyncAssignmentsToDefinitions,
@@ -350,6 +357,77 @@ test('loadEffectiveStandingOrders: no spurious write when all orders already hav
     const afterStore = JSON.stringify(db._store[STANDING_ORDERS_CONFIG_KEY]);
     assert.strictEqual(afterStore, beforeStore,
         'orders must not be rewritten when nothing needs migration or re-sync');
+});
+
+// ── 10. An assignment edit must DETACH from its definition ─────────────
+
+// After migration EVERY order carries a definitionId, and the lazy re-sync runs
+// on every loadEffectiveStandingOrders — i.e. on every prompt dispatch. The team
+// cockpit editor (terminals.js) and the Standing Orders tab both edit the
+// `instruction` on the ASSIGNMENT. If that edit leaves the link in place, the
+// re-sync reads it as crash drift and rewrites the operator's text back to the
+// definition's. That is silent data loss on a shipped editing surface, so both
+// update writers must drop `definitionId`.
+
+test('an edited assignment that KEEPS its definitionId is reverted by the re-sync', async () => {
+    const db = makeInMemoryDb();
+    const defId = 'def-linked';
+    const definitionText = 'Definition text';
+    await db.setConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, [
+        { id: defId, name: 'Test', instruction: definitionText, createdAt: Date.now() },
+    ]);
+    // The bug shape: the operator's edit landed on the assignment, link intact.
+    await db.setConfigJson(STANDING_ORDERS_CONFIG_KEY, [
+        makeOrder('a', 'Operator edited this', 'global', undefined, defId),
+    ]);
+
+    const effective = await loadEffectiveStandingOrders(db);
+    assert.strictEqual(effective[0].instruction, definitionText,
+        'this documents WHY the writers must detach: a linked assignment is re-synced');
+});
+
+test('an edited assignment that DROPPED its definitionId keeps the operator text', async () => {
+    const db = makeInMemoryDb();
+    const defId = 'def-detached';
+    const definitionText = 'Definition text';
+    const operatorText = 'Operator edited this';
+    await db.setConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, [
+        { id: defId, name: 'Test', instruction: definitionText, createdAt: Date.now() },
+    ]);
+    // What the update writers must produce: no definitionId.
+    await db.setConfigJson(STANDING_ORDERS_CONFIG_KEY, [
+        makeOrder('a', operatorText, 'global'),
+    ]);
+
+    const effective = await loadEffectiveStandingOrders(db);
+    assert.strictEqual(effective[0].instruction, operatorText,
+        'a detached assignment must never be rewritten by the re-sync');
+    // Re-stamped against a definition matching the NEW text, not the old one.
+    assert.ok(effective[0].definitionId, 'the next read re-links it to the library');
+    assert.notStrictEqual(effective[0].definitionId, defId,
+        'and NOT back to the definition it was detached from');
+});
+
+test('both assignment-update writers detach the row from its definition', () => {
+    const sites = [
+        ['LocalApiServer.ts', path.join(__dirname, '..', 'services', 'LocalApiServer.ts'),
+            "if (o.id === id) {"],
+        ['KanbanProvider.ts', path.join(__dirname, '..', 'services', 'KanbanProvider.ts'),
+            "if (o.id === id) {"],
+    ];
+    for (const [label, file, marker] of sites) {
+        const src = fs.readFileSync(file, 'utf8');
+        const i = src.indexOf('let updated: StandingOrder | undefined;');
+        assert.ok(i > 0, `${label}: standing-order update block not found`);
+        const j = src.indexOf(marker, i);
+        assert.ok(j > 0, `${label}: update mutator not found`);
+        const body = src.slice(j, j + 1600);
+        assert.ok(
+            /const \{ definitionId: _detach, \.\.\.rest \} = o;/.test(body),
+            `${label}: the assignment update must drop definitionId — leaving the link `
+            + `lets reSyncAssignmentsToDefinitions revert the operator's edit on the next read`
+        );
+    }
 });
 
 // ── Run ────────────────────────────────────────────────────────────────

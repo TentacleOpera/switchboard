@@ -41,6 +41,9 @@ const AGENT_GROUP_SRC = fs.readFileSync(
 const BOOTSTRAP_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'standalone', 'bootstrap.ts'), 'utf8'
 );
+const KANBAN_PROVIDER_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'services', 'KanbanProvider.ts'), 'utf8'
+);
 
 let passed = 0;
 let failed = 0;
@@ -283,6 +286,46 @@ test('_resolveFleetOrdersDb falls back to _resolveDbForRoot when no accessor is 
         /return await this\._resolveDbForRoot\(\);/.test(body),
         'must fall back to _resolveDbForRoot() — the standalone host and headless harnesses '
         + 'supply no accessor and must keep working unchanged'
+    );
+});
+
+// The Standing Orders tab in the Agent Control panel is the SEVENTH writer of
+// the orders store, and it reaches the store through kanban verbs rather than
+// the HTTP routes (the kanban webview's CSP is `connect-src 'none'`). The verb
+// handlers live in KanbanProvider, whose ordinary root resolver
+// (`_resolveWorkspaceRoot`) follows the BOARD'S ACTIVE WORKSPACE SELECTION —
+// exactly the root this contract exists to keep standing orders away from. On
+// that resolver the tab lists orders that are not in force and writes orders no
+// delivery chokepoint reads, and, as everywhere else on this path, a single-root
+// CI workspace cannot see the difference.
+test('the kanban standing-orders verbs resolve the FLEET root, not the board root', () => {
+    for (const verb of ['getStandingOrders', 'addStandingOrder', 'updateStandingOrder', 'deleteStandingOrder']) {
+        const body = methodBody(KANBAN_PROVIDER_SRC, `case '${verb}': {`, 1400);
+        assert.ok(
+            /const workspaceRoot = this\._resolveStandingOrdersRoot\(msg\.workspaceRoot\);/.test(body),
+            `case '${verb}' must resolve its root via _resolveStandingOrdersRoot(), not _resolveWorkspaceRoot()`
+        );
+    }
+});
+
+test('_resolveStandingOrdersRoot prefers the latched fleet root', () => {
+    const body = methodBody(KANBAN_PROVIDER_SRC, 'private _resolveStandingOrdersRoot(', 700);
+    assert.ok(
+        /this\._taskViewerProvider\?\.getFleetOrdersRoot\(\)/.test(body),
+        'must consult TaskViewerProvider.getFleetOrdersRoot() first'
+    );
+    assert.ok(
+        /return this\._resolveWorkspaceRoot\(workspaceRoot\);/.test(body),
+        'must fall back to the board root only when no TaskViewerProvider is wired '
+        + '(headless / test harness: one root)'
+    );
+});
+
+test('getFleetOrdersRoot reads the latched field', () => {
+    const body = methodBody(TASK_VIEWER_SRC, 'public getFleetOrdersRoot(): string {', 300);
+    assert.ok(
+        /return this\._apiServerWorkspaceRoot \|\| this\._getWorkspaceRoot\(\) \|\| '';/.test(body),
+        'getFleetOrdersRoot must return the latched field first'
     );
 });
 

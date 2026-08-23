@@ -6770,10 +6770,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const staleBadge = o.stale ? '<span style="color: var(--accent-red, #f48771); font-size: 10px; margin-left: 6px; border:1px solid currentColor; padding:0 4px; border-radius:3px;">stale</span>' : '';
             const droppedBadge = o.dropped ? '<span style="color: var(--accent-red, #f48771); font-size: 10px; margin-left: 6px; border:1px solid currentColor; padding:0 4px; border-radius:3px;">dropped</span>' : '';
             const badge = '<span style="font-size: 10px; font-weight: bold; letter-spacing: 0.5px; color: var(--text-secondary, #999);">' + standingOrdersTabScopeBadge(o) + '</span>' + staleBadge + droppedBadge;
+            // NO inline onclick= — the kanban webview's CSP is
+            // `script-src 'nonce-...' <cspSource>` with no 'unsafe-inline', so an
+            // inline handler attribute is blocked and the button does literally
+            // nothing (the same silent-no-op class as window.confirm() here).
+            // Actions ride data-so-action and are dispatched by the delegated
+            // listener wired in standingOrdersTabWireEvents().
+            const oid = standingOrdersTabEscapeHtml(o.id);
             const editBtn = isPair
                 ? '<span style="font-size: 10px; color: var(--text-secondary, #999);">Edit in Link-up modal</span>'
-                : '<button class="secondary-btn" style="height:22px; line-height:20px; padding:0 8px; margin:0;" onclick="standingOrdersTabToggleEdit(\'' + standingOrdersTabEscapeHtml(o.id) + '\')">EDIT</button>';
-            const deleteBtn = '<button class="secondary-btn" style="height:22px; line-height:20px; padding:0 8px; margin:0; color: var(--accent-red, #f48771);" onclick="standingOrdersTabDelete(\'' + standingOrdersTabEscapeHtml(o.id) + '\')">DELETE</button>';
+                : '<button class="secondary-btn" style="height:22px; line-height:20px; padding:0 8px; margin:0;" data-so-action="toggle-edit" data-so-id="' + oid + '">EDIT</button>';
+            const deleteBtn = '<button class="secondary-btn" style="height:22px; line-height:20px; padding:0 8px; margin:0; color: var(--accent-red, #f48771);" data-so-action="delete" data-so-id="' + oid + '">DELETE</button>';
             const effectiveLine = effective ? '<div style="font-size: 11px; color: var(--text-secondary, #999); margin-top: 4px;">Effective: ' + effective + '</div>' : '';
             const editForm = isPair ? '' : standingOrdersTabRenderEditForm(o);
             return '<div style="border:1px solid var(--panel-border, #444); padding:10px; margin-bottom:8px; border-radius:4px;">'
@@ -6793,8 +6800,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 + '<textarea id="standing-orders-edit-instruction-' + id + '" class="modal-textarea" rows="3">' + standingOrdersTabEscapeHtml(o.instruction || '') + '</textarea>'
                 + '<div id="standing-orders-edit-error-' + id + '" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 4px;"></div>'
                 + '<div class="flex gap-2" style="margin-top: 6px;">'
-                + '<button class="action-btn" style="height:24px; line-height:22px; padding:0 10px;" onclick="standingOrdersTabSaveEdit(\'' + id + '\')">SAVE</button>'
-                + '<button class="secondary-btn" style="height:24px; line-height:22px; padding:0 10px;" onclick="standingOrdersTabToggleEdit(\'' + id + '\')">CANCEL</button>'
+                + '<button class="action-btn" style="height:24px; line-height:22px; padding:0 10px;" data-so-action="save-edit" data-so-id="' + id + '">SAVE</button>'
+                + '<button class="secondary-btn" style="height:24px; line-height:22px; padding:0 10px;" data-so-action="toggle-edit" data-so-id="' + id + '">CANCEL</button>'
                 + '</div></div>';
         }
 
@@ -6901,6 +6908,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (cancelBtn) { cancelBtn.addEventListener('click', standingOrdersTabHideAddForm); }
             const submitBtn = document.getElementById('standing-orders-add-submit');
             if (submitBtn) { submitBtn.addEventListener('click', standingOrdersTabSubmitAdd); }
+            // Row actions are delegated: the list is re-rendered wholesale on every
+            // refresh, so per-button listeners would be re-attached (or lost) each
+            // time, and inline onclick= is CSP-blocked in this webview.
+            const listEl = document.getElementById('standing-orders-list');
+            if (listEl) {
+                listEl.addEventListener('click', function (ev) {
+                    const btn = ev.target && ev.target.closest ? ev.target.closest('[data-so-action]') : null;
+                    if (!btn || !listEl.contains(btn)) { return; }
+                    const soId = btn.getAttribute('data-so-id') || '';
+                    switch (btn.getAttribute('data-so-action')) {
+                        case 'toggle-edit': standingOrdersTabToggleEdit(soId); break;
+                        case 'save-edit': standingOrdersTabSaveEdit(soId); break;
+                        case 'delete': standingOrdersTabDelete(soId); break;
+                    }
+                });
+            }
         }
         standingOrdersTabWireEvents();
 
@@ -11045,6 +11068,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'customAgents': {
                   agentsTabCustomAgents = msg.customAgents || [];
                   lastCustomAgents = agentsTabCustomAgents;
+                  // Same for the Standing Orders tab's role selector.
+                  standingOrdersTabPopulateRoleSelect();
                   agentsTabRenderCustomAgentList();
                   updateCustomAgentsDropdown();
                   break;
@@ -11074,6 +11099,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'agentGroups': {
                   agentsTabAgentGroups = msg.groups || [];
+                  // Standing Orders tab's team selector reads agentsTabAgentGroups;
+                  // repopulate now that it is filled (the tab's hydration arm fires
+                  // before this response arrives).
+                  standingOrdersTabPopulateTeamSelect();
+                  standingOrdersTabRender();
                   teamsTabRenderAgentGroups();
                   teamsTabRenderGallery();
                   agentsTabRenderCustomAgentList();

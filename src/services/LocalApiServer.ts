@@ -4493,10 +4493,23 @@ export class LocalApiServer {
                     return orders.map(o => {
                         if (o.id === id) {
                             found = true;
+                            // Editing an assignment DETACHES it from its library
+                            // definition. reSyncAssignmentsToDefinitions (run on every
+                            // loadEffectiveStandingOrders) rewrites any assignment whose
+                            // instruction differs from its definition's — leaving
+                            // `definitionId` in place would silently revert this edit on
+                            // the next prompt dispatch. That is the path the team cockpit
+                            // editor takes for both the team and team-head orders, which
+                            // wireSpawnedTeam now stamps with a definitionId. Same
+                            // semantics as deleteDefinition: unlink, keep the instruction
+                            // copy; the next read re-stamps it against a definition
+                            // matching the NEW text.
+                            const { definitionId: _detach, ...rest } = o;
+                            void _detach;
                             updated = {
-                                ...o,
+                                ...rest,
                                 instruction,
-                            };
+                            } as StandingOrder;
                             return updated;
                         }
                         return o;

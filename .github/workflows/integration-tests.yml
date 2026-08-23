@@ -188,6 +188,15 @@ jobs:
       - name: Standing-orders fleet root (latch + both writers + editor routes agree)
         run: npm run test:contract:standing-orders-fleet-root
 
+      # The definitions library denormalizes each definition's instruction onto every
+      # assignment that references it, so the delivery path (selectOrders/renderOrder)
+      # never learns about definitions. That only holds while the sync holds: an
+      # un-migrated order, a drifted copy, or a duplicated definition all render
+      # something the operator did not write, and none of it is visible from the
+      # delivery side. Behavioural, against the transpiled functions in out/.
+      - name: Standing-orders definitions library (migration, sync, dedup, crash recovery)
+        run: npm run test:contract:standing-orders-definitions
+
       # A seat safeguard configured on a terminal must ride EVERY prompt that seat
       # receives, not only board-composed ones. The failure this pins is silent by
       # construction: a lead relays a subtask over ptySendPrompt, the coder's
