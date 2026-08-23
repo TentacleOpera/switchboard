@@ -21,6 +21,18 @@ And under `driveMode` the authorization line changes to *"begin dispatching subt
 
 **Its inputs do not require a feature to exist.** `featureMode` reads only `featureTopic`, `featureTopics` and `subtaskCount` — a label and a count, both derivable from the selection. Nothing in the flag needs a feature row, a `feature_id`, or subtask links.
 
+**But the directive asserts a cohesion a batch does not have, and that is the one thing `featureMode` gets wrong.** `resolveFeatureOrchestrationDirective` (`:1327-1329`) emits a unit clause:
+
+> *"All subtasks are part of a single delivery unit — do not treat them as independent tickets."*
+
+and, with several topics, *"The subtasks of each feature are a single delivery unit — do not treat them as independent tickets, and do not interleave work across features."*
+
+For a batch that is precisely backwards. The plans may be completely unrelated — that is the normal case for an ad-hoc selection — and telling the lead not to treat them as independent tickets misdescribes the work. So `featureMode` supplies the reframe that is wanted (allocate, not execute) bundled with an assertion that is false.
+
+**And what a batch actually lacks is the dependency advice a feature carries.** A feature's subtasks declare their dependencies in their own plan files — which is why `dispatch-analysis` can treat a feature as indivisible by *unioning both file sets and dependencies across its subtasks*. A batch has no such declaration and no feature file to carry it, so nothing tells the lead which of the five may run together. It must work that out from the plans themselves before dispatching, or it will hand two seats plans that edit the same file.
+
+**That is what the cap of five is for.** It bounds the length of the conflict analysis the lead has to do unaided, not the amount of work it is asked to hold.
+
 **And the routing inputs are already on the loose plans.** `_withRecommendedRole` (`LocalApiServer.ts:4796-4809`) stamps `recommendedRole` on plan rows from *each row's own complexity*, not from feature membership — *"Resolved by the board… never by an agent reading the plan file's `Recommendation:` line"* — with a documented fallback when complexity is unknown: *"the head prompt's documented fallback ('dispatch to a coder and say why') covers absence, and a guessed role would be worse than none."*
 
 So the lead can already route five loose plans correctly. It is simply being told to do the wrong thing with them.
@@ -38,7 +50,9 @@ Batch dispatch chooses its prompt by plan *count*, not by what the recipient is.
 
 - **No feature is created.** No row, no subtask links, no entry in the features list.
 - **`featureMode` is set on the dispatch** when the batch target is a team head, with `subtaskCount` = the number of plans sent.
-- **Cap of five plans.** A larger selection sends five; the remainder are left where they are and the user is told which went and which did not.
+- **A batch variant of the unit clause.** The feature clause asserts a single delivery unit; the batch clause says the opposite — these plans are independent and may be unrelated — and requires a conflict pass before anything runs in parallel.
+- **The topic label is generic.** "Batch send", or equivalent. No synthesised theme.
+- **Cap of five plans**, to bound the lead's conflict analysis. A larger selection sends five; the remainder are left where they are and the user is told which went and which did not.
 - **`BATCH_EXECUTION_RULES` disappears by consequence**, not by a second edit — `:1718` already drops it under `featureMode`.
 
 ## Complexity Audit
@@ -53,7 +67,8 @@ Batch dispatch chooses its prompt by plan *count*, not by what the recipient is.
 
 - **The gate must be "team head", and the codebase already warns why.** The comment at `:1721-1726` explains that `driveMode` is gated on `featureMode` *"anyway"* because `buildKanbanBatchPrompt` is exported and called outside the board path, and *"an unpaired flag would otherwise tell a plain single-plan coder to dispatch subtasks to seats it has none of."* Setting `featureMode` on a batch to a standalone seat reproduces exactly that. The gate is the whole safety property of this change.
 - **`featureMode` also redirects the planner's workflow file.** `:1731-1734`: `isFeatureTarget = options?.featureMode === true || plans.some(p => p.isFeature)` selects `plannerFeatureWorkflowPath || DEFAULT_FEATURE_PLANNER_WORKFLOW`. So the flag must not leak onto planner batches, or a batch plan-review silently switches which workflow the planner follows. Gate on a coding-role team head, not on "the target belongs to a team".
-- **The topic label is sent to the lead as the work's purpose, so it must not invent a theme.** `resolveFeatureOrchestrationDirective` embeds `featureTopic` in the directive. Five unrelated plans have no shared topic, and synthesising a plausible one ("authentication improvements") tells the lead something untrue about intent, which is worse than a plainly generic label. Name it as an ad-hoc batch and let the plan list carry the content.
+- **The unit clause must be replaced, not just the label.** Making the topic generic stops the *name* lying, but `:1327-1329` still says *"do not treat them as independent tickets"* — the substantive false claim. A batch clause has to state the opposite and add what a feature file would otherwise have supplied: check the plans for file overlap and declared dependencies, sequence the ones that collide, parallelise the rest. Without that the lead either serialises everything (losing the point) or dispatches conflicting plans concurrently.
+- **The cap is an analysis bound, so it is not freely raisable.** Five is chosen because the lead does the conflict pass unaided, with no dependency map and no feature file. Raising it lengthens that pass and makes it likelier to be done badly — the failure being silent, since a missed overlap looks like ordinary work until two seats fight over a file.
 - **The remainder above the cap must be visibly not-sent.** Moving five and silently leaving seven looks like a partial failure. Whatever the surface reports, it has to name both sets — this is the only user-facing behaviour in the change.
 - **`subtaskCount` is used in the directive's wording**, so it must be the number actually sent (five), not the number selected (twelve), or the lead is told to expect work it never receives.
 
@@ -78,6 +93,8 @@ Batch dispatch chooses its prompt by plan *count*, not by what the recipient is.
 
 **"Just remove `BATCH_EXECUTION_RULES` for team targets."** That gets halfway: the lead stops being told to execute, but is not told to allocate, and loses the orchestration directive. `featureMode` is the existing, tested composition of all of it — subtracting one block by hand reimplements part of a flag that already exists.
 
+**"Use `featureMode` unchanged — the directive is close enough."** It is not: it tells the lead the plans are one delivery unit and not independent tickets, which for an ad-hoc selection is false, and it supplies no substitute for the dependency advice a feature file carries. Close enough here means the lead is confidently misinformed about both cohesion and conflicts.
+
 **"Round-robin the plans across the team's seats from the board instead."** That bypasses the head, which is the only thing on a team that knows which seat suits which plan, and leaves seats holding work the lead never dispatched and cannot report on.
 
 **"Five is arbitrary."** It is a deliberate cap on how much one lead is asked to hold at once. What matters is that the overflow is reported rather than dropped silently.
@@ -86,7 +103,8 @@ Batch dispatch chooses its prompt by plan *count*, not by what the recipient is.
 
 1. **Branch batch dispatch on the resolved target being a coding-role team head.**
 2. **Set `featureMode` on that path**, with `subtaskCount` equal to the number of plans actually sent.
-3. **Use a plainly ad-hoc topic label** — no synthesised theme.
+3. **Use a generic topic label** — "Batch send" or equivalent, never a synthesised theme.
+3a. **Add a batch variant of the unit clause**: the plans are independent and possibly unrelated; check for file overlap and declared dependencies; sequence what collides and parallelise the rest.
 4. **Cap the sent set at five**, leaving the remainder in place.
 5. **Report both sets** — sent and not sent — to the user.
 6. **Change nothing on the non-team and planner paths.**
@@ -110,6 +128,8 @@ None.
 - **No feature is created:** assert no feature row, no `feature_id` on any card, and no subtask links after a team batch move. A prompt-only test would pass an implementation that quietly created one.
 - **The flag does not leak to standalone seats:** assert a batch to a non-team seat still renders `BATCH_EXECUTION_RULES` and no feature framing. This is the codebase's own documented hazard — *"tell a plain single-plan coder to dispatch subtasks to seats it has none of."*
 - **The flag does not leak to the planner:** assert a batch plan-review still resolves the non-feature planner workflow path, since `featureMode` would otherwise redirect it via `isFeatureTarget`.
+- **No false cohesion:** assert the batch prompt does **not** contain "single delivery unit" or "do not treat them as independent tickets", and does carry the conflict-pass instruction. A test that only checks the intro passes while the directive still misdescribes the work.
+- **The feature path keeps its unit clause:** assert a real feature dispatch still asserts a single delivery unit. The batch variant must not leak back into feature mode.
 - **Cap and remainder:** select twelve; assert five are sent, seven are untouched, `subtaskCount` is five, and both sets are named in what the user sees.
 - **Routing still comes from the board:** assert each sent plan carries `recommendedRole` from its own complexity, and that unknown complexity yields no role rather than a guess.
 - **Planner fan-out unaffected:** assert the planner path still round-robins.
