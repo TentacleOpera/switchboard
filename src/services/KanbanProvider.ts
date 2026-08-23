@@ -32,7 +32,8 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, applySeatPacingOrders, mutateTerminalGroups } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, applySeatPacingOrders, mutateTerminalGroups, describeStandingOrderMigrations } from './teamWiring';
+import { mutateStandingOrders, makeStandingOrder, validateInstruction, STANDING_ORDERS_CONFIG_KEY, type StandingOrder, type StandingOrderScope } from './standingOrders';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
 import { createVscodeHostSeams, type HostSeams } from './hostSeams';
@@ -12806,6 +12807,166 @@ ${FOCUS_DIRECTIVE}`;
                 } catch (e: any) {
                     this.postMessage({ type: 'iconPalette', icons: [] });
                     return { success: false, icons: [], error: e?.message || 'Failed to read icon palette' };
+                }
+            }
+            case 'getStandingOrders': {
+                // The kanban webview cannot fetch GET /terminals/standing-orders
+                // directly (VS Code webview CSP `connect-src 'none'` + no auth
+                // cookie), so the Standing Orders tab requests the list via this
+                // verb — the same proxy pattern as `getIconPalette`. Shares the
+                // standing-orders config key and `describeStandingOrderMigrations`
+                // with the HTTP endpoint so both hosts agree on staleness.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this.postMessage({ type: 'standingOrders', available: false, orders: [] });
+                    return { type: 'standingOrders', success: false, available: false, orders: [] };
+                }
+                try {
+                    const db = this._getKanbanDb(workspaceRoot);
+                    const raw = await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
+                    const rawArray = Array.isArray(raw) ? raw : [];
+                    // Derived from the pure transforms, keyed by the row's ON-DISK
+                    // id — no minted ids leak into the response (same contract as
+                    // `_handleStandingOrdersList` in LocalApiServer).
+                    const notes = describeStandingOrderMigrations(rawArray);
+                    const orders = rawArray.map(o => ({
+                        ...o,
+                        // Default absent `scope` to `pair` on read so the client
+                        // always sees an explicit scope field.
+                        scope: (o.scope || 'pair') as StandingOrderScope,
+                        ...(notes.get(o?.id) || {}),
+                    }));
+                    this.postMessage({ type: 'standingOrders', available: true, orders });
+                    return { type: 'standingOrders', success: true, available: true, orders };
+                } catch (e: any) {
+                    this.postMessage({ type: 'standingOrders', available: false, orders: [] });
+                    return { type: 'standingOrders', success: false, available: false, orders: [], error: e?.message || 'Failed to read standing orders' };
+                }
+            }
+            case 'addStandingOrder': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this.postMessage({ type: 'standingOrderAdded', success: false, error: 'No workspace root resolved' });
+                    return { type: 'standingOrderAdded', success: false, error: 'No workspace root resolved' };
+                }
+                try {
+                    const parent = typeof msg.parent === 'string' ? msg.parent.trim() : '';
+                    const child = typeof msg.child === 'string' ? msg.child.trim() : '';
+                    const instruction = typeof msg.instruction === 'string' ? msg.instruction : '';
+                    const scope = (typeof msg.scope === 'string' ? msg.scope : 'pair') as StandingOrderScope;
+                    const teamId = typeof msg.teamId === 'string' ? msg.teamId.trim() : '';
+                    const role = typeof msg.role === 'string' ? msg.role.trim() : '';
+
+                    if (!['global', 'team', 'pair', 'team-head', 'role'].includes(scope)) {
+                        this.postMessage({ type: 'standingOrderAdded', success: false, error: "scope must be 'global', 'team', 'pair', 'team-head', or 'role'" });
+                        return { type: 'standingOrderAdded', success: false, error: "scope must be 'global', 'team', 'pair', 'team-head', or 'role'" };
+                    }
+                    if (scope === 'pair') {
+                        if (!parent || !child) {
+                            this.postMessage({ type: 'standingOrderAdded', success: false, error: 'parent and child are required for pair scope' });
+                            return { type: 'standingOrderAdded', success: false, error: 'parent and child are required for pair scope' };
+                        }
+                        if (parent === child) {
+                            this.postMessage({ type: 'standingOrderAdded', success: false, error: 'parent and child must be different terminals' });
+                            return { type: 'standingOrderAdded', success: false, error: 'parent and child must be different terminals' };
+                        }
+                    }
+                    if ((scope === 'team' || scope === 'team-head') && !teamId) {
+                        this.postMessage({ type: 'standingOrderAdded', success: false, error: `teamId is required for ${scope} scope` });
+                        return { type: 'standingOrderAdded', success: false, error: `teamId is required for ${scope} scope` };
+                    }
+                    if (scope === 'role' && !role) {
+                        this.postMessage({ type: 'standingOrderAdded', success: false, error: 'role is required for role scope' });
+                        return { type: 'standingOrderAdded', success: false, error: 'role is required for role scope' };
+                    }
+
+                    const instructionErr = validateInstruction(instruction);
+                    if (instructionErr) {
+                        this.postMessage({ type: 'standingOrderAdded', success: false, error: instructionErr });
+                        return { type: 'standingOrderAdded', success: false, error: instructionErr };
+                    }
+
+                    const db = this._getKanbanDb(workspaceRoot);
+                    let added: StandingOrder | undefined;
+                    await mutateStandingOrders(db, async (orders) => {
+                        added = makeStandingOrder(parent, child, instruction, scope, teamId || undefined, role || undefined);
+                        return [...orders, added];
+                    });
+
+                    this.postMessage({ type: 'standingOrderAdded', success: true, order: added });
+                    return { type: 'standingOrderAdded', success: true, order: added };
+                } catch (e: any) {
+                    this.postMessage({ type: 'standingOrderAdded', success: false, error: e?.message || 'Failed to add standing order' });
+                    return { type: 'standingOrderAdded', success: false, error: e?.message || 'Failed to add standing order' };
+                }
+            }
+            case 'updateStandingOrder': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this.postMessage({ type: 'standingOrderUpdated', success: false, error: 'No workspace root resolved' });
+                    return { type: 'standingOrderUpdated', success: false, error: 'No workspace root resolved' };
+                }
+                const id = typeof msg.id === 'string' ? msg.id.trim() : '';
+                if (!id) {
+                    this.postMessage({ type: 'standingOrderUpdated', success: false, error: 'id is required for update' });
+                    return { type: 'standingOrderUpdated', success: false, error: 'id is required for update' };
+                }
+                try {
+                    const instruction = typeof msg.instruction === 'string' ? msg.instruction : '';
+                    const instructionErr = validateInstruction(instruction);
+                    if (instructionErr) {
+                        this.postMessage({ type: 'standingOrderUpdated', success: false, error: instructionErr });
+                        return { type: 'standingOrderUpdated', success: false, error: instructionErr };
+                    }
+
+                    const db = this._getKanbanDb(workspaceRoot);
+                    let updated: StandingOrder | undefined;
+                    let found = false;
+                    await mutateStandingOrders(db, async (orders) => {
+                        return orders.map(o => {
+                            if (o.id === id) {
+                                found = true;
+                                updated = { ...o, instruction };
+                                return updated;
+                            }
+                            return o;
+                        });
+                    });
+
+                    if (!found) {
+                        this.postMessage({ type: 'standingOrderUpdated', success: false, error: `Standing order with id '${id}' not found` });
+                        return { type: 'standingOrderUpdated', success: false, error: `Standing order with id '${id}' not found` };
+                    }
+
+                    this.postMessage({ type: 'standingOrderUpdated', success: true, order: updated });
+                    return { type: 'standingOrderUpdated', success: true, order: updated };
+                } catch (e: any) {
+                    this.postMessage({ type: 'standingOrderUpdated', success: false, error: e?.message || 'Failed to update standing order' });
+                    return { type: 'standingOrderUpdated', success: false, error: e?.message || 'Failed to update standing order' };
+                }
+            }
+            case 'deleteStandingOrder': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this.postMessage({ type: 'standingOrderDeleted', success: false, error: 'No workspace root resolved' });
+                    return { type: 'standingOrderDeleted', success: false, error: 'No workspace root resolved' };
+                }
+                const id = typeof msg.id === 'string' ? msg.id.trim() : '';
+                if (!id) {
+                    this.postMessage({ type: 'standingOrderDeleted', success: false, error: 'id is required for delete' });
+                    return { type: 'standingOrderDeleted', success: false, error: 'id is required for delete' };
+                }
+                try {
+                    const db = this._getKanbanDb(workspaceRoot);
+                    await mutateStandingOrders(db, async (orders) => {
+                        return orders.filter(o => o.id !== id);
+                    });
+
+                    this.postMessage({ type: 'standingOrderDeleted', success: true, id });
+                    return { type: 'standingOrderDeleted', success: true, id };
+                } catch (e: any) {
+                    this.postMessage({ type: 'standingOrderDeleted', success: false, error: e?.message || 'Failed to delete standing order' });
+                    return { type: 'standingOrderDeleted', success: false, error: e?.message || 'Failed to delete standing order' };
                 }
             }
             case 'saveAgentGroup': {

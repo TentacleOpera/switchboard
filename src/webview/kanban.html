@@ -2910,12 +2910,21 @@
    Hide every tab except AGENTS/TEAMS/PROMPTS. Allow-listed so a future tab
    added to the bar is hidden by default rather than silently appearing.
    Absent attribute ⇒ neither rule matches and the board is unaffected. */
-body[data-view="agent-control"] .shared-tab-btn:not([data-tab="agents"]):not([data-tab="teams"]):not([data-tab="prompts"]) { display: none; }
+body[data-view="agent-control"] .shared-tab-btn:not([data-tab="agents"]):not([data-tab="teams"]):not([data-tab="prompts"]):not([data-tab="standing-orders"]) { display: none; }
 body[data-view="agent-control"] #kanban-tab-content,
 body[data-view="agent-control"] #automation-tab-content,
 body[data-view="agent-control"] #worktrees-tab-content,
 body[data-view="agent-control"] #uat-tab-content,
 body[data-view="agent-control"] #setup-tab-content { display: none !important; }
+/* The Standing Orders tab is Agent-Control-only. Hide its button + content on
+   the board (no data-view attribute); the allow-list above reveals the button
+   inside the Agent Control view. Content is already hidden by .shared-tab-content
+   unless .active, but this belt-and-braces rule keeps it off the board even if a
+   stray .active class lands on it. */
+.shared-tab-btn[data-tab="standing-orders"] { display: none !important; }
+#standing-orders-tab-content { display: none !important; }
+body[data-view="agent-control"] .shared-tab-btn[data-tab="standing-orders"] { display: inline-block !important; }
+body[data-view="agent-control"] #standing-orders-tab-content.shared-tab-content.active { display: flex !important; }
 
 /* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). kanban.html has its
    own inline copy of these tab styles, so the override must live here too. */
@@ -2940,6 +2949,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn" data-tab="agents">AGENTS</button>
         <button class="shared-tab-btn" data-tab="teams">TEAMS</button>
         <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
+        <button class="shared-tab-btn" data-tab="standing-orders">STANDING ORDERS</button>
         <button class="shared-tab-btn" data-tab="automation">AUTOMATION</button>
         <button class="shared-tab-btn" data-tab="worktrees">WORKTREES</button>
 
@@ -3693,6 +3703,66 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
             <textarea id="promptPreview"></textarea>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Standing Orders Tab Content (Agent Control view only; hidden on the board
+         by the CSS allow-list + the default .shared-tab-content inactive rule). -->
+    <div id="standing-orders-tab-content" class="shared-tab-content">
+      <div class="prompts-tab" style="max-width: 900px; margin: 0 auto;">
+
+        <!-- Effect note — one line, matching the team cockpit editor's pattern. -->
+        <div class="db-subsection">
+          <div class="section-desc" style="margin:0 0 8px 0;">
+            Changes apply to future prompts only. Running agents do not re-read them.
+          </div>
+        </div>
+
+        <!-- Scope filter + Add button -->
+        <div class="db-subsection">
+          <div class="subsection-header"><span>Standing Orders</span></div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+            <label for="standing-orders-scope-filter">Scope:</label>
+            <select id="standing-orders-scope-filter" style="flex:1; min-width:160px; max-width:240px;">
+              <option value="all" selected>All</option>
+              <option value="global">Global</option>
+              <option value="role">Role</option>
+              <option value="team">Team</option>
+              <option value="team-head">Team-Head</option>
+              <option value="pair">Pair</option>
+            </select>
+            <button id="standing-orders-add-btn" class="action-btn" style="height:26px; line-height:24px; padding:0 12px; margin:0;">+ ADD ORDER</button>
+          </div>
+
+          <!-- Availability gate (shown when available === false) -->
+          <div id="standing-orders-unavailable" style="display:none; color: var(--accent-red); font-size: 12px; margin-bottom: 8px;">
+            Standing orders require a Kanban database. Open Setup to configure one.
+          </div>
+
+          <!-- Inline add form (toggled by the Add button) -->
+          <div id="standing-orders-add-form" style="display:none; border:1px solid var(--panel-border, #444); padding:10px; margin-bottom:12px; border-radius:4px;">
+            <div id="standing-orders-add-scope-note" style="font-size:11px; color: var(--text-secondary, #999); margin-bottom:6px;"></div>
+            <div id="standing-orders-add-role-row" style="display:none; margin-bottom:6px;">
+              <label class="modal-label" for="standing-orders-add-role">Role</label>
+              <select id="standing-orders-add-role" class="modal-input"></select>
+            </div>
+            <div id="standing-orders-add-team-row" style="display:none; margin-bottom:6px;">
+              <label class="modal-label" for="standing-orders-add-team">Team</label>
+              <select id="standing-orders-add-team" class="modal-input"></select>
+            </div>
+            <label class="modal-label" for="standing-orders-add-instruction">Instruction</label>
+            <textarea id="standing-orders-add-instruction" class="modal-textarea" rows="3" placeholder="The instruction appended to every matching prompt..."></textarea>
+            <div id="standing-orders-add-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 4px;"></div>
+            <div class="flex gap-2" style="margin-top: 8px;">
+              <button id="standing-orders-add-submit" class="action-btn">SAVE</button>
+              <button id="standing-orders-add-cancel" class="secondary-btn">CANCEL</button>
+            </div>
+          </div>
+
+          <!-- Order list -->
+          <div id="standing-orders-list"></div>
+          <div id="standing-orders-empty" style="display:none; color: var(--text-secondary, #999); font-size: 12px; padding: 12px 0;">No standing orders in this scope.</div>
         </div>
       </div>
     </div>
@@ -6519,6 +6589,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   if (promptsTab) promptsTab.scrollTop = 0;
                 }
 
+                // Hydrate STANDING ORDERS tab when activated — fetch the order
+                // list and the team/role selector data. Reuses the agentGroups
+                // and customAgents payloads already requested by other tabs.
+                if (tabName === 'standing-orders') {
+                  postKanbanMessage({ type: 'getStandingOrders' });
+                  postKanbanMessage({ type: 'getAgentGroups' });
+                  postKanbanMessage({ type: 'getCustomAgents' });
+                  standingOrdersTabPopulateRoleSelect();
+                  standingOrdersTabPopulateTeamSelect();
+                  standingOrdersTabRender();
+                }
+
                 // Hydrate WORKTREES tab when activated
                 if (tabName === 'worktrees') {
                   loadWorktreeConfig();
@@ -6543,7 +6625,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // calls below sit well after the sb-initial-state seed block, preserving
         // the panel-revival-retention contract ordering.
         const AGENT_CONTROL_VIEW = document.body.dataset.view === 'agent-control';
-        const AGENT_CONTROL_TABS = ['agents', 'teams', 'prompts'];
+        const AGENT_CONTROL_TABS = ['agents', 'teams', 'prompts', 'standing-orders'];
         let _agentControlPendingRole = null;
 
         function agentControlGet() {
@@ -6581,6 +6663,246 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (_acTargetBtn) { _acTargetBtn.classList.add('active'); }
             if (_acTargetContent) { _acTargetContent.classList.add('active'); }
         }
+
+        // ── STANDING ORDERS TAB ──────────────────────────────────────────────
+        // State + rendering for the Standing Orders tab (Agent Control view).
+        // All data flows through kanban verbs — the webview CSP forbids direct
+        // HTTP fetches. `pair` orders are list + delete only (add/edit stays in
+        // the Link-up modal, which has the terminal-pairing selectors this view
+        // lacks). No confirm gate on delete (per CLAUDE.md).
+        const standingOrdersTabState = { available: false, orders: [] };
+
+        function standingOrdersTabEscapeHtml(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function standingOrdersTabCurrentScope() {
+            const sel = document.getElementById('standing-orders-scope-filter');
+            return sel ? sel.value : 'all';
+        }
+
+        function standingOrdersTabTeamName(teamId) {
+            const groups = (typeof agentsTabAgentGroups !== 'undefined' && Array.isArray(agentsTabAgentGroups)) ? agentsTabAgentGroups : [];
+            const g = groups.find(x => x && x.id === teamId);
+            return g ? g.name : null;
+        }
+
+        function standingOrdersTabScopeBadge(o) {
+            const scope = o.scope || 'pair';
+            if (scope === 'global') { return 'GLOBAL'; }
+            if (scope === 'role') { return 'ROLE: ' + standingOrdersTabEscapeHtml(o.role || '?'); }
+            if (scope === 'team' || scope === 'team-head') {
+                const name = standingOrdersTabTeamName(o.teamId);
+                const label = scope === 'team-head' ? 'TEAM-HEAD' : 'TEAM';
+                if (name) { return label + ': ' + standingOrdersTabEscapeHtml(name); }
+                return label + ': ' + standingOrdersTabEscapeHtml(o.teamId || '?') + ' (team not found)';
+            }
+            // pair
+            return 'PAIR: ' + standingOrdersTabEscapeHtml(o.parent || '?') + ' → ' + standingOrdersTabEscapeHtml(o.child || '?');
+        }
+
+        function standingOrdersTabPopulateRoleSelect() {
+            const sel = document.getElementById('standing-orders-add-role');
+            if (!sel) { return; }
+            // Reuse the Prompts tab's built-in role list + custom agents.
+            const builtins = ['planner', 'lead', 'coder', 'intern', 'reviewer', 'tester', 'analyst', 'researcher', 'ticket_updater', 'jules'];
+            const custom = (typeof lastCustomAgents !== 'undefined' && Array.isArray(lastCustomAgents)) ? lastCustomAgents : [];
+            let html = '';
+            for (const r of builtins) {
+                html += '<option value="' + standingOrdersTabEscapeHtml(r) + '">' + standingOrdersTabEscapeHtml(r) + '</option>';
+            }
+            if (custom.length) {
+                html += '<optgroup label="Custom Agents">';
+                for (const c of custom) {
+                    const v = c.id || c.name || '';
+                    html += '<option value="' + standingOrdersTabEscapeHtml(v) + '">' + standingOrdersTabEscapeHtml(c.name || v) + '</option>';
+                }
+                html += '</optgroup>';
+            }
+            sel.innerHTML = html;
+        }
+
+        function standingOrdersTabPopulateTeamSelect() {
+            const sel = document.getElementById('standing-orders-add-team');
+            if (!sel) { return; }
+            const groups = (typeof agentsTabAgentGroups !== 'undefined' && Array.isArray(agentsTabAgentGroups)) ? agentsTabAgentGroups : [];
+            if (!groups.length) {
+                sel.innerHTML = '<option value="">No teams available</option>';
+                sel.disabled = true;
+            } else {
+                sel.disabled = false;
+                sel.innerHTML = groups.map(g => '<option value="' + standingOrdersTabEscapeHtml(g.id) + '">' + standingOrdersTabEscapeHtml(g.name || g.id) + '</option>').join('');
+            }
+        }
+
+        function standingOrdersTabFilteredOrders() {
+            const scope = standingOrdersTabCurrentScope();
+            const orders = standingOrdersTabState.orders || [];
+            if (scope === 'all') { return orders; }
+            return orders.filter(o => (o.scope || 'pair') === scope);
+        }
+
+        function standingOrdersTabRender() {
+            const listEl = document.getElementById('standing-orders-list');
+            const emptyEl = document.getElementById('standing-orders-empty');
+            const unavailEl = document.getElementById('standing-orders-unavailable');
+            const addBtn = document.getElementById('standing-orders-add-btn');
+            if (!listEl) { return; }
+
+            // Availability gate
+            if (unavailEl) { unavailEl.style.display = standingOrdersTabState.available ? 'none' : 'block'; }
+            if (addBtn) { addBtn.disabled = !standingOrdersTabState.available; }
+
+            const filtered = standingOrdersTabFilteredOrders();
+            if (emptyEl) { emptyEl.style.display = filtered.length ? 'none' : 'block'; }
+
+            listEl.innerHTML = filtered.map(o => standingOrdersTabRenderRow(o)).join('');
+        }
+
+        function standingOrdersTabRenderRow(o) {
+            const scope = o.scope || 'pair';
+            const isPair = scope === 'pair';
+            const instruction = standingOrdersTabEscapeHtml(o.instruction || '');
+            const effective = o.effectiveInstruction && o.effectiveInstruction !== o.instruction
+                ? standingOrdersTabEscapeHtml(o.effectiveInstruction) : null;
+            const staleBadge = o.stale ? '<span style="color: var(--accent-red, #f48771); font-size: 10px; margin-left: 6px; border:1px solid currentColor; padding:0 4px; border-radius:3px;">stale</span>' : '';
+            const droppedBadge = o.dropped ? '<span style="color: var(--accent-red, #f48771); font-size: 10px; margin-left: 6px; border:1px solid currentColor; padding:0 4px; border-radius:3px;">dropped</span>' : '';
+            const badge = '<span style="font-size: 10px; font-weight: bold; letter-spacing: 0.5px; color: var(--text-secondary, #999);">' + standingOrdersTabScopeBadge(o) + '</span>' + staleBadge + droppedBadge;
+            const editBtn = isPair
+                ? '<span style="font-size: 10px; color: var(--text-secondary, #999);">Edit in Link-up modal</span>'
+                : '<button class="secondary-btn" style="height:22px; line-height:20px; padding:0 8px; margin:0;" onclick="standingOrdersTabToggleEdit(\'' + standingOrdersTabEscapeHtml(o.id) + '\')">EDIT</button>';
+            const deleteBtn = '<button class="secondary-btn" style="height:22px; line-height:20px; padding:0 8px; margin:0; color: var(--accent-red, #f48771);" onclick="standingOrdersTabDelete(\'' + standingOrdersTabEscapeHtml(o.id) + '\')">DELETE</button>';
+            const effectiveLine = effective ? '<div style="font-size: 11px; color: var(--text-secondary, #999); margin-top: 4px;">Effective: ' + effective + '</div>' : '';
+            const editForm = isPair ? '' : standingOrdersTabRenderEditForm(o);
+            return '<div style="border:1px solid var(--panel-border, #444); padding:10px; margin-bottom:8px; border-radius:4px;">'
+                + '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap; margin-bottom:6px;">'
+                + '<div>' + badge + '</div>'
+                + '<div style="display:flex; gap:6px; align-items:center;">' + editBtn + deleteBtn + '</div>'
+                + '</div>'
+                + '<div style="font-size: 12px; white-space:pre-wrap; word-break:break-word;">' + instruction + '</div>'
+                + effectiveLine
+                + editForm
+                + '</div>';
+        }
+
+        function standingOrdersTabRenderEditForm(o) {
+            const id = standingOrdersTabEscapeHtml(o.id);
+            return '<div id="standing-orders-edit-' + id + '" style="display:none; margin-top:8px; border-top:1px solid var(--panel-border, #444); padding-top:8px;">'
+                + '<textarea id="standing-orders-edit-instruction-' + id + '" class="modal-textarea" rows="3">' + standingOrdersTabEscapeHtml(o.instruction || '') + '</textarea>'
+                + '<div id="standing-orders-edit-error-' + id + '" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 4px;"></div>'
+                + '<div class="flex gap-2" style="margin-top: 6px;">'
+                + '<button class="action-btn" style="height:24px; line-height:22px; padding:0 10px;" onclick="standingOrdersTabSaveEdit(\'' + id + '\')">SAVE</button>'
+                + '<button class="secondary-btn" style="height:24px; line-height:22px; padding:0 10px;" onclick="standingOrdersTabToggleEdit(\'' + id + '\')">CANCEL</button>'
+                + '</div></div>';
+        }
+
+        function standingOrdersTabToggleEdit(id) {
+            const form = document.getElementById('standing-orders-edit-' + id);
+            if (form) { form.style.display = form.style.display === 'none' ? 'block' : 'none'; }
+        }
+
+        function standingOrdersTabSaveEdit(id) {
+            const ta = document.getElementById('standing-orders-edit-instruction-' + id);
+            const errEl = document.getElementById('standing-orders-edit-error-' + id);
+            const instruction = ta ? ta.value : '';
+            // Empty instruction = delete (matches the team cockpit editor convention).
+            if (!instruction.trim()) {
+                standingOrdersTabDelete(id);
+                return;
+            }
+            if (errEl) { errEl.textContent = ''; }
+            postKanbanMessage({ type: 'updateStandingOrder', id: id, instruction: instruction });
+        }
+
+        function standingOrdersTabDelete(id) {
+            // No confirm gate — per CLAUDE.md, delete buttons delete immediately.
+            postKanbanMessage({ type: 'deleteStandingOrder', id: id });
+        }
+
+        function standingOrdersTabShowAddForm() {
+            if (!standingOrdersTabState.available) { return; }
+            const scope = standingOrdersTabCurrentScope();
+            const form = document.getElementById('standing-orders-add-form');
+            const note = document.getElementById('standing-orders-add-scope-note');
+            const roleRow = document.getElementById('standing-orders-add-role-row');
+            const teamRow = document.getElementById('standing-orders-add-team-row');
+            const err = document.getElementById('standing-orders-add-error');
+            if (!form) { return; }
+
+            // pair scope: add stays in the Link-up modal.
+            if (scope === 'pair') {
+                if (note) { note.textContent = 'Add pair orders via the Link-up modal.'; }
+                if (roleRow) { roleRow.style.display = 'none'; }
+                if (teamRow) { teamRow.style.display = 'none'; }
+                form.style.display = 'block';
+                const submit = document.getElementById('standing-orders-add-submit');
+                if (submit) { submit.disabled = true; }
+                return;
+            }
+            // "all" scope: default to global when adding from the All view.
+            const addScope = scope === 'all' ? 'global' : scope;
+            if (note) { note.textContent = 'Adding a ' + addScope.toUpperCase() + ' order.'; }
+            if (roleRow) { roleRow.style.display = addScope === 'role' ? 'block' : 'none'; }
+            if (teamRow) { teamRow.style.display = (addScope === 'team' || addScope === 'team-head') ? 'block' : 'none'; }
+            if (err) { err.textContent = ''; }
+            const submit = document.getElementById('standing-orders-add-submit');
+            if (submit) { submit.disabled = false; }
+            form.style.display = 'block';
+            form.dataset.scope = addScope;
+        }
+
+        function standingOrdersTabHideAddForm() {
+            const form = document.getElementById('standing-orders-add-form');
+            if (form) { form.style.display = 'none'; }
+            const ta = document.getElementById('standing-orders-add-instruction');
+            if (ta) { ta.value = ''; }
+            const err = document.getElementById('standing-orders-add-error');
+            if (err) { err.textContent = ''; }
+        }
+
+        function standingOrdersTabSubmitAdd() {
+            const form = document.getElementById('standing-orders-add-form');
+            if (!form) { return; }
+            const scope = form.dataset.scope || 'global';
+            const ta = document.getElementById('standing-orders-add-instruction');
+            const instruction = ta ? ta.value : '';
+            const err = document.getElementById('standing-orders-add-error');
+            if (err) { err.textContent = ''; }
+            if (!instruction.trim()) {
+                if (err) { err.textContent = 'Instruction is required'; }
+                return;
+            }
+            const payload = { type: 'addStandingOrder', scope: scope, instruction: instruction };
+            if (scope === 'role') {
+                const roleSel = document.getElementById('standing-orders-add-role');
+                payload.role = roleSel ? roleSel.value : '';
+                if (!payload.role) { if (err) { err.textContent = 'Role is required'; } return; }
+            }
+            if (scope === 'team' || scope === 'team-head') {
+                const teamSel = document.getElementById('standing-orders-add-team');
+                payload.teamId = teamSel ? teamSel.value : '';
+                if (!payload.teamId) { if (err) { err.textContent = 'Team is required'; } return; }
+            }
+            postKanbanMessage(payload);
+        }
+
+        // Wire up the tab's DOM events once (idempotent — guarded by a flag).
+        let _standingOrdersTabWired = false;
+        function standingOrdersTabWireEvents() {
+            if (_standingOrdersTabWired) { return; }
+            _standingOrdersTabWired = true;
+            const filter = document.getElementById('standing-orders-scope-filter');
+            if (filter) { filter.addEventListener('change', standingOrdersTabRender); }
+            const addBtn = document.getElementById('standing-orders-add-btn');
+            if (addBtn) { addBtn.addEventListener('click', standingOrdersTabShowAddForm); }
+            const cancelBtn = document.getElementById('standing-orders-add-cancel');
+            if (cancelBtn) { cancelBtn.addEventListener('click', standingOrdersTabHideAddForm); }
+            const submitBtn = document.getElementById('standing-orders-add-submit');
+            if (submitBtn) { submitBtn.addEventListener('click', standingOrdersTabSubmitAdd); }
+        }
+        standingOrdersTabWireEvents();
 
         // Initialize the initially active tab
         const initialTabBtn = document.querySelector('.shared-tab-btn.active');
@@ -10764,6 +11086,35 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   _iconPaletteCache = Array.isArray(msg.icons) ? msg.icons : [];
                   _iconPaletteRequested = true;
                   teamsTabRenderGallery();
+                  break;
+                }
+                case 'standingOrders': {
+                  standingOrdersTabState.available = !!msg.available;
+                  standingOrdersTabState.orders = Array.isArray(msg.orders) ? msg.orders : [];
+                  standingOrdersTabRender();
+                  break;
+                }
+                case 'standingOrderAdded': {
+                  if (msg.success) {
+                    standingOrdersTabHideAddForm();
+                    postKanbanMessage({ type: 'getStandingOrders' });
+                  } else {
+                    const err = document.getElementById('standing-orders-add-error');
+                    if (err) { err.textContent = msg.error || 'Failed to add standing order'; }
+                  }
+                  break;
+                }
+                case 'standingOrderUpdated': {
+                  if (msg.success) {
+                    postKanbanMessage({ type: 'getStandingOrders' });
+                  } else {
+                    const err = document.getElementById('standing-orders-edit-error-' + (msg.id || ''));
+                    if (err) { err.textContent = msg.error || 'Failed to update standing order'; }
+                  }
+                  break;
+                }
+                case 'standingOrderDeleted': {
+                  postKanbanMessage({ type: 'getStandingOrders' });
                   break;
                 }
                 case 'saveAgentGroupResult': {
