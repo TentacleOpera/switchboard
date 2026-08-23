@@ -63,9 +63,9 @@ What actually exists at the pair level is a **relationship preset**, not a role:
 
 **That preset is needless complexity and should be removed.** A head that wants tests run can run them itself or hand the work to a coder — both are things it already does, and neither needs a dedicated relationship, a template, or a seat. Keeping it also invites exactly the confusion above: a "Tester" in the relationship dropdown reads as a second tester role sitting beside the Acceptance Tester, when it is only a way of talking to an ordinary member.
 
-Removing it is cheap and low-risk: **no shipped team definition uses `relationship: 'tester'`** (the only seed is the member-less `Lead team`, and the retired `Coding team` carried a *reviewer* member, not a tester). Three declaration sites go, and `teamWiring.ts:1785-1787` loses one name from its head-receives list.
+**It takes a clean break — no migration, no compat shim.** The preset has never been in a public release, so CLAUDE.md's dividing line puts it in the "unreleased dev work" half. Nothing shipped uses `relationship: 'tester'` either (the only seed is the member-less `Lead team`; the retired `Coding team` carried a *reviewer* member). So this is a straight deletion of three declaration sites, plus one name out of the head-receives list at `teamWiring.ts:1785-1787`.
 
-**But users may have selected it, so it migrates rather than disappearing.** Per CLAUDE.md this preset shipped, so an existing member carrying `relationship: 'tester'` must not be dropped — convert it to `reports-to-head`. There is an exact precedent to copy: the old Coding-team migration converts a member with `relationship === 'reviewer'` to `'reports-to-head'` (`teamWiring.ts:966-970`), preserving every other key on the group and on each member, and matching by exact value so an operator-edited group is left alone.
+Deliberately **not** modelled on the old `'reviewer'` → `'reports-to-head'` conversion at `teamWiring.ts:966-970`. That migration exists because the Coding team *did* ship; copying its shape here would add a converter for state no user can have, and a no-op migration in the codebase reads to the next person as evidence the preset was released.
 
 ### The reviewer + acceptance-tester team is the structure worth having
 
@@ -94,7 +94,7 @@ It ships as a definition the user starts, **never as a pre-seeded row with membe
 
 ## Edge-Case & Dependency Audit
 
-**Migration.** Two items. The column id is unchanged, so no card moves. The real migrated state is the role's default visibility going from `false` to `true`: that is what previously made the `autobanEnabled` flip inert, so promoting the role to core requires the column-participation switch to carry the opt-in instead. Existing installs get the role visible and the stage off; new installs can have both on. And removing the pair-level `tester` relationship preset requires converting any member that carries it to `reports-to-head`, by the exact-value precedent at `teamWiring.ts:966-970`.
+**Migration.** One item. The column id is unchanged, so no card moves. The real migrated state is the role's default visibility going from `false` to `true`: that is what previously made the `autobanEnabled` flip inert, so promoting the role to core requires the column-participation switch to carry the opt-in instead. Existing installs get the role visible and the stage off; new installs can have both on. The pair-level `tester` preset needs nothing — it never reached a public release, so it takes a clean break.
 
 **Security.** The stage writes plan files. Plan content is agent-written and must render as text, never HTML. It gains no code-write capability, which is a reduction in surface relative to the tester it replaces.
 
@@ -128,7 +128,7 @@ It ships as a definition the user starts, **never as a pre-seeded row with membe
 7. **Flip `autobanEnabled` to `true`** on the column, gated by a new column-participation switch — off for existing installs, on for new ones.
 7a. **Split `_isAcceptanceTesterActive`** into role visibility and column participation. One boolean answering both is why promoting the role has pipeline consequences.
 7b. **Promote the role to core**: move its row out of the Optional block in the agents tab, mark it `checked`, and set `tester: true` in both defaults sources.
-7c. **Remove the pair-level `tester` relationship preset** from all three declaration sites and from the head-receives list, migrating any member carrying it to `reports-to-head` by the `:966-970` precedent.
+7c. **Delete the pair-level `tester` relationship preset** from all three declaration sites and from the head-receives list. Clean break — never publicly released, so no converter.
 7d. **Offer a reviewer + Acceptance Tester team definition** the user starts — never a pre-seeded row with members, which is the exact release gate `OLD_SEEDED_AGENT_GROUP` exists to document.
 8. **Delete the unreachable design-doc error** and either implement or remove the `_isAcceptanceTesterDesignDocConfigured` stub.
 9. **Update all four column→role maps**, not the three that are easy to find.
@@ -157,7 +157,6 @@ Column id unchanged — no card migration. The `autobanEnabled` flip is the migr
 - **A visible role does not activate the stage:** with `tester` visible (its new default) and column participation off, assert no card advances into the column. This is the assertion that proves ~4,000 installs are unaffected, and it is the one that fails if the two gates stay conflated.
 - **The core promotion is complete:** assert the role is `checked` in the agents tab, outside the Optional group, and `true` in both defaults sources. A test on one defaults file passes while the other still says `false`.
 - **No team seed spawns a CLI:** assert the reviewer + Acceptance Tester definition is offered rather than seeded with members, and that `SEEDED_AGENT_GROUP` still has none. This is the release gate the old Coding-team migration exists to hold.
-- **A stored `tester` relationship survives its preset's removal:** seed a team member with `relationship: 'tester'`, run the migration, assert it becomes `reports-to-head` with every other key on the group and the member preserved. Deleting the preset without this drops a user's team wiring silently.
 - **The preset is gone from every site:** assert no `tester` entry remains in `MEMBER_RELATIONSHIP_PRESETS` in either `kanban.html` or `terminals.js`, nor in `linkPresets.ts`. Two of the three are duplicates, so a single-site test passes while the dropdown still offers it.
 - **The stage does not auto-advance:** assert `_getNextKanbanColumnForSession('ACCEPTANCE TESTED')` returns null, so a card waits for a decision rather than sliding to COMPLETED.
 - **The dead error is gone:** assert no code path can emit the Planning Feature message.
