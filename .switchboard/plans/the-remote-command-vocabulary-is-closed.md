@@ -30,7 +30,13 @@ So the division of labour is exact, and both halves are required:
 - **Typed switches** stop the remote surface authoring the *prompt*.
 - **The review gate** (decision 2) stops it authoring *what the prompt is built from*.
 
-Neither is sufficient. A closed vocabulary over remotely-authored content is a text channel with extra steps.
+Neither is sufficient. A closed vocabulary over unreviewed content is a text channel with extra steps.
+
+**Correction — the gate is about review, not about remoteness.** An earlier revision of this section framed remotely-authored plans as the hazard. That does not hold up. A plan is markdown, not code, and the agents that consume it already read ticket bodies, PR and review comments and fetched web pages, so a plan body adds almost nothing to the injection surface. More to the point, the realistic scenario is not a malicious author — it is *the operator's own agent, having read a poisoned ticket, writing a plan nobody intended*. A **local** agent reading that same ticket produces the identical outcome; a `/switchboard-cloud` session authoring plans is exactly this case. Nothing in the risk is remote-specific.
+
+So the invariant is transport-neutral: **an agent-authored plan is reviewed before it is dispatched**, whatever wrote it and wherever that ran. That is already what the column workflow does, which means the gate is not a new restriction on remote work — it is the existing workflow stated as an invariant so a trigger mechanism cannot route around it.
+
+What *is* remote-specific is narrower and does not change the rule: the credential is likelier to be misplaced than local machine access, no human is necessarily present at the moment of authoring, and provenance is less visible. Those argue for a visible provenance marker on agent-authored cards and for applying the gate uniformly — not for treating remote authoring as suspect. Remote authoring is a shipped capability and a wanted one; it is not the thing being defended against.
 
 **Three further properties the switch table needs:**
 
@@ -66,7 +72,7 @@ Yes — three decisions.
 
 1. **Is the vocabulary closed, or closed-by-default?** Recommendation: **closed**, and expressed as the typed switch table above rather than as a documented convention. Not a setting, not an advanced toggle — a schema that cannot carry an instruction, plus a contract test, so widening it requires changing a table definition and arguing with a comment. A toggle is a feature request away from being on by default in someone's fork.
 1b. **Does the SaaS transport keep its text channel?** The switch table makes the store transport stricter than Linear/Notion, whose descriptions are pulled into plan bodies. Recommendation: **leave the SaaS text channel as-is and rely on the review gate for it** — removing it would break the shipped remote-authoring workflow — but record that the two transports have different tightness, so nobody assumes the switch table's guarantees apply to Linear.
-2. **Does a remote trigger require the plan to be in a reviewed column?** Recommendation: **yes.** The invariant is that executed work was reviewed, so a remote move into an execution-triggering column should be refused for a plan that never passed review. This is the control that survives even if the vocabulary is later widened, so it is worth having independently.
+2. **Does a trigger require the plan to be in a reviewed column?** Recommendation: **yes, and for every trigger path rather than only remote ones.** The invariant is that executed work was reviewed; the origin of the plan is irrelevant, since a local agent reading a poisoned ticket authors the same plan a remote one does. So a move into an execution-triggering column is refused for any plan that never passed review, whoever initiated it. This is the control that survives even if the vocabulary is later widened, and scoping it to remote triggers only would leave the identical local hole open.
 3. **Credential separation.** Recommendation: **an agent that reads untrusted external content must not hold the credential that can trigger execution.** Two credentials, two trust zones — an authoring/read token for content-consuming agents, and a triggering credential the operator holds. This is the mitigation that actually breaks the confused-deputy chain; the vocabulary boundary limits the damage, separation prevents the chain.
 
 ## Complexity Audit
@@ -82,7 +88,7 @@ Yes — three decisions.
 - **The boundary has to be enforced where commands enter, not where they execute.** There are several entry points — the provider poll, the store queue, the API — and a check at the dispatch site would be the wrong place: by then the instruction has already been accepted as legitimate. The enforcement belongs at the parse of what a remote surface said, and it should be one function so it cannot be forgotten at a fourth entry point.
 - **"Reviewed" is a column, and columns are configurable.** A precondition naming a column by string breaks the moment someone renames one, and fails open if written carelessly. It needs to key on the column's role rather than its label, and fail closed when the role cannot be resolved.
 - **The acknowledgement is a security surface, not just UX.** Once dispatch posts a receipt, that receipt is the operator's audit trail for what a remote surface caused. It must record which credential initiated and which plan was dispatched, and it must be posted even when the dispatch is *refused* — a refusal nobody can see is indistinguishable from a trigger that silently did not fire.
-- **Injection reaches the trigger through content, not only through commands.** Even with a closed vocabulary, a remote surface can author a plan *and* move cards. An agent could author a malicious plan and then move it — which is why decision 2 matters: the review gate is what stands between "can author" and "can execute what it authored". Without it, a closed vocabulary is not sufficient.
+- **Injection reaches the trigger through content, not only through commands, and not only remotely.** Even with a closed vocabulary, a surface that can author a plan *and* move cards can author then trigger. That is why decision 2 matters — the review gate is what stands between "can author" and "can execute what it authored". The gate must be transport-neutral: an agent authoring locally from a poisoned ticket is the same exposure, so gating only remote triggers leaves the equivalent local path open while looking as though the class is handled. That appearance is worse than not gating at all.
 - **The threat model must be written down for the right reader.** This is a published extension with ~4,000 installs, most of them single operators who will never think about any of this. The default posture has to be safe without configuration, and the risky composition should be difficult to assemble by accident rather than merely documented.
 
 ## Edge-Case & Dependency Audit
@@ -120,7 +126,8 @@ Key risks: a free-text instruction channel collapses authoring and triggering in
 
 1. **State the vocabulary** — a remote surface may author content and move a card. Nothing else. Documented in `switchboard-remote.md` and the remote protocols, with the reasoning, not just the rule.
 2. **One enforcement point** at the parse of remote intent, covering every transport (provider poll, store queue, API), so a fourth entry point cannot bypass it.
-3. **A reviewed-column precondition** on remotely-initiated dispatch, keyed on column role rather than label, failing closed when the role cannot be resolved.
+3. **A reviewed-column precondition** on dispatch from any trigger path — not remote-only — keyed on column role rather than label, failing closed when the role cannot be resolved.
+3b. **A visible provenance marker** on agent-authored cards, so a reviewer sees what wrote a plan without consulting a queue or a comment history. This is the mitigation for the genuinely remote-specific part (no human present at authoring time, less visible origin), and it serves local agent authoring equally.
 4. **Dispatch and refusal receipts** via `postManagedComment`, naming the initiating credential and the plan — the operator's audit trail for what a remote surface caused.
 5. **Credential separation guidance**: the triggering credential is not the one given to agents that read tickets, pages, PR comments or the web. Stated wherever a credential is configured.
 6. **A typed switch table and an append-only logs table** for the store transport: request rows consumed exactly once, versioned switch definitions, unknown switches dropped with a logged refusal, and no text column through which an instruction could be expressed.
@@ -147,6 +154,6 @@ The receipt is additive. The review precondition may refuse a trigger that previ
 
 ## Outstanding Questions
 
-- Should the review gate also apply to *locally* initiated dispatch of a remotely-authored plan? It is the same provenance question one step later, and the answer decides whether provenance needs to be visible on the card.
+- **Resolved:** the gate applies to every trigger path and does not key on the plan's origin — the risk is not remote-specific, since a local agent reading the same poisoned ticket authors the same plan. Provenance should still be visible on the card, for review quality rather than for gating.
 - Is there a legitimate remote verb beyond authoring and moving — pausing the fleet, cancelling a dispatch — that is a *control* rather than an *instruction*? Cancellation in particular is safe in a way execution is not, and refusing it may be over-tight.
 - For self-hosted sqld, if table+action scoping is unavailable, does credential separation have to be enforced entirely in the application, and is that acceptable?
