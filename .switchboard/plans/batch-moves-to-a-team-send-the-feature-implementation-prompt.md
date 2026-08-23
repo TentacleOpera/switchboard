@@ -71,7 +71,9 @@ Batch dispatch chooses its prompt by plan *count*, not by what the recipient is.
 - **The cap is not freely raisable, and it is load-bearing twice over.** It bounds the conflict pass the lead does unaided, with no dependency map and no feature file — and it bounds the lead's context, which carries five plan files, the conflict analysis and its own dispatch bookkeeping simultaneously. Raising it degrades both at once, and both fail silently: a missed overlap looks like ordinary work until two seats fight over a file, and a context-saturated lead misroutes without reporting that it was overloaded.
 - **The cap must be disclosed before the click, not reported after it.** `Move All` onto a team with twelve cards sends five and leaves seven, and a user who learns that from a toast has already been surprised. The count belongs in the control itself — a label reading *"SEND 5 OF 12"* is honest at the moment of decision, where *"sent 5, skipped 7"* afterwards is an explanation for something already done. The precedent is the planner fan-out control, whose whole point is *"no visible toggle, no label saying what will happen"* being the defect it fixes; repeating that omission here recreates it. Post-action reporting is still needed, but it is the second line of defence, not the first.
 - **Which five must be deterministic and stated.** The plan is silent on ordering today, and "the first five" is meaningless without one — especially for `Move All`, where the user hand-picked nothing. Board order, oldest-first, matching `_distributePlannerDispatch`'s existing sort, so the same selection always sends the same five and the label can name them truthfully.
-- **`MAX BATCH SIZE` already exists and means something else.** The autoban panel carries a `MAX BATCH SIZE:` control (`kanban.html:12029`) governing how much an automated column sweep takes per pass. A second, differently-named cap on a manual move is a user reasonably expecting them to be the same number. Either reuse that knob for this path or name this one distinctly enough that nobody tunes one expecting the other to follow.
+- **This cap belongs on the manual dispatch path, never on a schedule rule — and there is a test that will catch getting it wrong.** The autoban panel's `MAX BATCH SIZE` (`kanban.html:12029`) is being retired with that panel, and `the-automation-model-four-things-not-a-mode-axis.md` does not carry it forward: a schedule is *"a small recurring rule — time window, source column, selector, target column. No agent, no role, no batch size"* (`:87`), and it warns that *"the moment a rule needs a role, a batch size or a complexity band, it has become the thing being deleted. Resist that in the schema, not in the UI"* (`:53`). It even ships a tripwire — a schema test asserting the rule admits *"no role, batch size or complexity field"*, *"because the regrowth would arrive as a new field"* (`:112`).
+
+  So there is no competing control to align with, which frees the naming. But a coder who implements this cap as configuration will reach for the schedule schema and trip that test, correctly, without understanding why. The cap is a property of a manual batch move — the number of plans one lead is handed by a human click — and it has nothing to do with automated sweeps. Keep it out of the schedule schema entirely.
 - **`subtaskCount` is used in the directive's wording**, so it must be the number actually sent (five), not the number selected (twelve), or the lead is told to expect work it never receives.
 
 ## Edge-Case & Dependency Audit
@@ -86,6 +88,7 @@ Batch dispatch chooses its prompt by plan *count*, not by what the recipient is.
 
 ## Dependencies
 
+- **Constrained by** `the-automation-model-four-things-not-a-mode-axis.md`: the retired `MAX BATCH SIZE` is deliberately not carried forward, so this cap must live on the manual dispatch path and never enter the schedule rule schema.
 - **Sibling of** `feature_plan_20260820220404_created-column-batch-move-planner-fanout-toggle.md` — the same surface for the planner role, which fans out across a flat pool rather than handing a set to a head. Worth aligning the wording of the two controls, but neither blocks the other.
 - Independent of the completion-signal, review-team and worktree work.
 
@@ -137,6 +140,7 @@ None.
 - **The same selection sends the same five:** run an identical twelve-plan selection twice; assert the same five go, in board order oldest-first.
 - **Routing still comes from the board:** assert each sent plan carries `recommendedRole` from its own complexity, and that unknown complexity yields no role rather than a guess.
 - **Planner fan-out unaffected:** assert the planner path still round-robins.
+- **The cap is not schedule config:** assert no batch-size field is added to the schedule rule schema, so the automation plan's regrowth tripwire still passes.
 
 ### Manual Verification
 
