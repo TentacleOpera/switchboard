@@ -69,7 +69,9 @@ Batch dispatch chooses its prompt by plan *count*, not by what the recipient is.
 - **`featureMode` also redirects the planner's workflow file.** `:1731-1734`: `isFeatureTarget = options?.featureMode === true || plans.some(p => p.isFeature)` selects `plannerFeatureWorkflowPath || DEFAULT_FEATURE_PLANNER_WORKFLOW`. So the flag must not leak onto planner batches, or a batch plan-review silently switches which workflow the planner follows. Gate on a coding-role team head, not on "the target belongs to a team".
 - **The unit clause must be replaced, not just the label.** Making the topic generic stops the *name* lying, but `:1327-1329` still says *"do not treat them as independent tickets"* — the substantive false claim. A batch clause has to state the opposite and add what a feature file would otherwise have supplied: check the plans for file overlap and declared dependencies, sequence the ones that collide, parallelise the rest. Without that the lead either serialises everything (losing the point) or dispatches conflicting plans concurrently.
 - **The cap is not freely raisable, and it is load-bearing twice over.** It bounds the conflict pass the lead does unaided, with no dependency map and no feature file — and it bounds the lead's context, which carries five plan files, the conflict analysis and its own dispatch bookkeeping simultaneously. Raising it degrades both at once, and both fail silently: a missed overlap looks like ordinary work until two seats fight over a file, and a context-saturated lead misroutes without reporting that it was overloaded.
-- **The remainder above the cap must be visibly not-sent.** Moving five and silently leaving seven looks like a partial failure. Whatever the surface reports, it has to name both sets — this is the only user-facing behaviour in the change.
+- **The cap must be disclosed before the click, not reported after it.** `Move All` onto a team with twelve cards sends five and leaves seven, and a user who learns that from a toast has already been surprised. The count belongs in the control itself — a label reading *"SEND 5 OF 12"* is honest at the moment of decision, where *"sent 5, skipped 7"* afterwards is an explanation for something already done. The precedent is the planner fan-out control, whose whole point is *"no visible toggle, no label saying what will happen"* being the defect it fixes; repeating that omission here recreates it. Post-action reporting is still needed, but it is the second line of defence, not the first.
+- **Which five must be deterministic and stated.** The plan is silent on ordering today, and "the first five" is meaningless without one — especially for `Move All`, where the user hand-picked nothing. Board order, oldest-first, matching `_distributePlannerDispatch`'s existing sort, so the same selection always sends the same five and the label can name them truthfully.
+- **`MAX BATCH SIZE` already exists and means something else.** The autoban panel carries a `MAX BATCH SIZE:` control (`kanban.html:12029`) governing how much an automated column sweep takes per pass. A second, differently-named cap on a manual move is a user reasonably expecting them to be the same number. Either reuse that knob for this path or name this one distinctly enough that nobody tunes one expecting the other to follow.
 - **`subtaskCount` is used in the directive's wording**, so it must be the number actually sent (five), not the number selected (twelve), or the lead is told to expect work it never receives.
 
 ## Edge-Case & Dependency Audit
@@ -105,8 +107,8 @@ Batch dispatch chooses its prompt by plan *count*, not by what the recipient is.
 2. **Set `featureMode` on that path**, with `subtaskCount` equal to the number of plans actually sent.
 3. **Use a generic topic label** — "Batch send" or equivalent, never a synthesised theme.
 3a. **Add a batch variant of the unit clause**: the plans are independent and possibly unrelated; check for file overlap and declared dependencies; sequence what collides and parallelise the rest.
-4. **Cap the sent set at five**, leaving the remainder in place.
-5. **Report both sets** — sent and not sent — to the user.
+4. **Cap the sent set at five**, selected in board order oldest-first, leaving the remainder in place.
+5. **Disclose the cap in the control before the click** — a label carrying the sent-of-selected count — and report both sets after.
 6. **Change nothing on the non-team and planner paths.**
 
 ### Migration
@@ -130,7 +132,9 @@ None.
 - **The flag does not leak to the planner:** assert a batch plan-review still resolves the non-feature planner workflow path, since `featureMode` would otherwise redirect it via `isFeatureTarget`.
 - **No false cohesion:** assert the batch prompt does **not** contain "single delivery unit" or "do not treat them as independent tickets", and does carry the conflict-pass instruction. A test that only checks the intro passes while the directive still misdescribes the work.
 - **The feature path keeps its unit clause:** assert a real feature dispatch still asserts a single delivery unit. The batch variant must not leak back into feature mode.
-- **Cap and remainder:** select twelve; assert five are sent, seven are untouched, `subtaskCount` is five, and both sets are named in what the user sees.
+- **Cap and remainder:** select twelve; assert five are sent, seven are untouched, and `subtaskCount` is five.
+- **The count is visible before the click:** with twelve selected on a team target, assert the control renders the sent-of-selected count. A test that only checks the post-action report passes the exact surprise this is meant to prevent.
+- **The same selection sends the same five:** run an identical twelve-plan selection twice; assert the same five go, in board order oldest-first.
 - **Routing still comes from the board:** assert each sent plan carries `recommendedRole` from its own complexity, and that unknown complexity yields no role rather than a guess.
 - **Planner fan-out unaffected:** assert the planner path still round-robins.
 
