@@ -111,6 +111,6 @@ One transaction per install: create local tables, copy the local columns out of 
 
 ## Outstanding Questions
 
-- Does the plan scanner's sweep write on every tick or only on content change? Unresolved by reading, and it decides whether the scanner is a shared-tier write source at all. Must be measured before the remote-store plans quote a write budget.
+- **Resolved: the scanner is change-gated, so it is not a meaningful shared-tier write source.** `_rescanAntigravityPlanSourcesImpl` skips before writing when a candidate is already known and unmodified: `if ((existingEntry || hasDbRow) && !isRecent) { continue; }`, with `isRecent` computed from `birthtimeMs`/`mtimeMs` against a cutoff of the previous rescan. Steady state with no file changes produces zero row writes from the sweep. It does perform a `db.hasPlan()` **read** per candidate per 10s tick, which is free locally or against an embedded replica and a per-candidate round trip against a remote-only connection — recorded in the libSQL plan as a further argument for replica-only.
 - Should the local tier be a separate database file rather than separate tables, so a corrupt local tier can be discarded without touching shared state?
 - `projects` is shared, but project *filters* are per-operator UI state. Are they local-tier, or not board state at all?
