@@ -18,6 +18,8 @@ What the rejection correctly kills is Postgres. It does not reach libSQL, and th
 
 **Why a remote and not just a hot local DB.** The remote's job is **arbitration and durability**, not query serving. A shared store is authoritative because it *orders* writes: two machines write, the server serialises, and the loser can tell it lost. That property is what a backup, a mirror, or a Notion database cannot supply at any price — and it is the only reason to accept a network dependency at all.
 
+**And one capability is Turso's alone, for now.** Turso has an MCP server, so a cloud agent — a claude.ai session, a hosted runner, anything whose host loads an MCP — can write to the store directly, with no git credentials and no local machine. A self-hosted sqld cannot match that without a Switchboard MCP that does not exist, or an exposed API a cloud agent cannot tunnel to. The obvious use of it, authoring plans straight into the database, is forbidden by the programme's boundary rule; `plan-inbox-cloud-agents-author-without-git.md` supplies the mechanism that keeps the capability and the rule. Note the parity gap it implies: a Switchboard MCP would let self-hosted remotes do the same, and is worth building for that reason.
+
 ### Root Cause
 
 Board state was designed as single-machine state, so the only distribution channels ever built were one-directional exports. Every multi-machine capability since has been an approximation layered on a channel that cannot carry writes.
