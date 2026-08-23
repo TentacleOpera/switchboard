@@ -133,6 +133,7 @@ Yes — two decisions.
   - If **this** plan ships first, the protocols plan's `CLAUDE.md` assertion is already satisfied — its test is still worth keeping as a regression guard, but it is not the discovery it reads as.
   - If **the protocols plan** ships first, it removes chars this plan still counts, so the 14,826 baseline and the under-800 size gate both go stale and the gate could pass or fail for reasons unrelated to this work.
   - Either way the size gate must be computed from the block as emitted at merge time, not from a number recorded in this plan. Whichever lands second re-measures rather than trusting the figure written here.
+- **Pairs with `skills-declare-preconditions-and-degrade.md` on the `query-kanban` resident rule.** This plan's resident block tells agents to use the `query-kanban` skill and warns that "hand-written SQL silently returns nothing" because displayed column labels differ from stored IDs. The preconditions plan inverts `query-kanban` to use HTTP endpoints as the primary method, demoting SQL to a fallback. If the preconditions plan lands first, the resident rule is accurate from the start (the label/ID trap still exists for anyone who improvises, but the skill no longer teaches SQL as primary). If this plan lands first, the rule's SQL-specific framing needs a one-line generalization when the preconditions plan lands. Preferred ordering: preconditions before or alongside this plan.
 
 ## Adversarial Synthesis
 

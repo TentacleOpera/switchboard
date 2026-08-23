@@ -83,11 +83,7 @@ No. Both fixes are behaviour-preserving corrections to documented-intent code pa
 
 ## Adversarial Synthesis
 
-**"The engine swap makes this unnecessary."** It makes candidate ❷ unnecessary. Candidate ❶ is a wrong-row UPDATE driven by id resolution; it is entirely independent of how rows are persisted, and shipping the engine swap while believing it fixed the clobber would leave an open bug with a closed investigation.
-
-**"It self-heals in 15 minutes — is it worth fixing?"** The self-heal is the plan watcher re-importing and re-asserting the flag through the guarded upsert. It works because feature identity is recoverable from the committed file. Anything set by direct UPDATE that is *not* re-derivable from a file has no such safety net, and the same `updateFeatureStatus` path writes `feature_id` too — so the observable symptom is the benign case of a mechanism that can also lose non-recoverable state.
-
-**"Just remove the `|| st.sessionId` fallback."** Possibly correct, but unverified: if some subtask path only carries a session id, removing it breaks feature creation for that path. Resolving the two namespaces explicitly and logging which arm fires establishes the fact before the deletion.
+Key risks: `updateFeatureStatus` accepts ids from two different namespaces (`planId || sessionId`) and resolves without asserting the resolved row is the one the caller meant — the wrong-row UPDATE survives any storage engine change; making `linkOk` load-bearing surfaces previously silent failures (may look like new bugs on first release); and strict instance identity across 158 acquisition sites may surface call sites quietly relying on a fresh image. Mitigations: resolve `planId` and `sessionId` through separate explicit lookups and log when the session-id arm fires; keep the `:10181` re-assertion that currently masks the bug intermittently; and check each acquisition site rather than assuming.
 
 ## Proposed Changes
 

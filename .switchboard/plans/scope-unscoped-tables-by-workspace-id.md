@@ -85,11 +85,7 @@ Yes — one decision. For `worktrees`, the fix could be `UNIQUE(branch, workspac
 
 ## Adversarial Synthesis
 
-**"Nine ALTERs and three rebuilds is a lot of migration risk for a schema nobody complained about."** True that nobody complained — because the one-DB-per-workspace invariant hid it. The risk is real and is the reason this is its own plan rather than a step inside the consolidation: it ships independently, can be verified independently, and if it goes wrong it goes wrong on its own.
-
-**"Just add workspace_id to everything and skip the UNIQUE rebuilds."** Does not work. `worktrees.branch UNIQUE` is enforced by the database; adding a column beside it changes nothing. The insert still fails when the second project has a `main` branch.
-
-**"Enforce uniqueness in application code instead of rebuilding."** Trades a one-time migration risk for a permanent correctness risk, in a codebase that has already been bitten twice by exactly this (the `is_feature` clobber and the `db-pointer`/guard race both come from moving an invariant out of the storage layer into inference).
+Key risks: three UNIQUE/PRIMARY KEY constraint changes require table rebuilds (SQLite cannot DROP CONSTRAINT) — an interrupted rebuild must be recoverable; `kanban_meta.key PRIMARY KEY` → `PRIMARY KEY (key, workspace_id)` changes row identity, so every "get meta by key" reader becomes "by key and workspace" (missing one gives a cross-project read); and any INSERT omitting `workspace_id` after the change writes an unattributable row no scoped reader will ever see. Mitigations: wrap each rebuild in a transaction, enumerate columns from `PRAGMA table_info` at runtime to preserve unknown/legacy columns; make `workspace_id` NOT NULL on rebuilt tables so omission throws at insert; and a schema-invariant test asserting every table except `linear_issue_links` carries `workspace_id`.
 
 ## Proposed Changes
 

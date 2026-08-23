@@ -18,15 +18,15 @@ worktrees(id, branch NOT NULL UNIQUE, path, feature_id, created_at,
 |---|---|---|---|---|
 | `feature_worktree_mode: 'none'` | none | — | board setting | live |
 | `feature_worktree_mode: 'per-feature'` | one per feature, shared by all subtasks | **host** provisions and removes | board setting | live |
-| `useWorktreesPerPlan` | one per plan | **agent** creates its own | per-role prompt add-on | live |
+| `useWorktreesPerPlan` | one per plan | **agent** creates its own | per-role prompt add-on (PROMPTS tab, `sharedDefaults.js:145`) | live |
 | `project` column | per project | host | strip button | live |
-| `subtask_plan_id` | per subtask | — | — | **write-dead** — the code calls these "legacy per-subtask rows, now write-dead", and a resolution branch still reads them |
+| `subtask_plan_id` | per subtask | — | — | **write-dead** — the code calls these "legacy per-subtask rows, now write-dead" (`KanbanProvider.ts:14360-14361`), and a resolution branch still reads them (`KanbanProvider.ts:13374-13392`) |
 
 **The two problems this plan fixes:**
 
-**1. One button means two things, and sometimes a third.** `kanban.html:2969` is `#btn-create-worktree`, tooltip: *"Create a worktree for the selected feature, or for the active project / workspace"*. Its scope is whatever happens to be selected. It also has a **merge mode** — the same control becomes a merge action when a worktree already exists for the context (`:8262`, `:8288`, `:8314`, guarded at `:10199-10203` on both the class and a worktree-id match). A control whose scope depends on selection and whose verb flips between create and merge is the "fiddly" this plan removes.
+**1. One button means two things, and sometimes a third.** `kanban.html:2979` is `#btn-create-worktree`, tooltip: *"Create a worktree for the selected feature, or for the active project / workspace"*. Its scope is whatever happens to be selected. It also has a **merge mode** — the same control becomes a merge action when a worktree already exists for the context (`updateCreateWorktreeButton` at `:8609`, feature merge mode at `:8636-8657`, project merge mode at `:8666-8677`, guarded at `:10541-10574` on both the class and a worktree-id match). A control whose scope depends on selection and whose verb flips between create and merge is the "fiddly" this plan removes.
 
-**2. Per-feature mode resolves at the wrong moment.** It is read **only at feature-creation time** — `KanbanProvider.ts:14654-14660` states it: *"Mode is read ONLY at feature-creation time; a later toggle is inert for already-created features."* So enabling the mode does nothing for work already planned, and the setting is invisible at the moment it matters. STAGING is that moment: `STAGEABLE_COLUMNS = ['CREATED', 'BACKLOG', 'PLAN REVIEWED', 'STAGING']` (`kanban.html:6152`), and STAGING is *"a queue, not a"* dispatch column (`:7122`) — work sits there immediately before going out.
+**2. Per-feature mode resolves at the wrong moment.** It is read **only at feature-creation time** — `KanbanProvider.ts:14865-14871` states it: *"Mode is read ONLY at feature-creation time; a later toggle is inert for already-created features."* So enabling the mode does nothing for work already planned, and the setting is invisible at the moment it matters. STAGING is that moment: `STAGEABLE_COLUMNS = ['CREATED', 'BACKLOG', 'PLAN REVIEWED', 'STAGING']` (`kanban.html:6227`), and STAGING is *"a queue, not a"* dispatch column (`kanban.html:7479`) — work sits there immediately before going out.
 
 **3. Manual per-feature worktrees ignore dependencies.** Two features worked in parallel worktrees off the same base branch cannot see each other's changes, and nothing in the system knows one depends on the other. That is the actual danger, and it is why "turn on worktrees" is safe for one feature at a time and unsafe as a parallel default.
 
@@ -52,28 +52,33 @@ Each model was added for a real case — per-plan for an agent that wanted isola
 ## User Review Required
 
 - **What does the STAGING toggle write?** Either `feature_worktree_mode` (reusing the existing key, so board setting and toggle are one state) or a new staging-scoped key. **This is a contract question, not a preference:** `worktree-strategy-control-contract.test.js` pins that the control "offers exactly the two modes the verb arm accepts" and that *nothing but the user writes the strategy*. Reusing the key keeps one source of truth; a second key needs its own reason.
-- **Settled: worktree management has three homes, not one.**
-  1. **The kanban WORKTREES tab** — the canonical surface, and it already exists: tab button at `kanban.html:2944` (`data-tab="worktrees"`), pane at `:3864`, hydrated on activation at `:6510`. Merging belongs here as a listed action per worktree, which is also what makes narrowing the strip button safe — the capability moves to a surface that lists worktrees rather than inferring one from selection.
-  2. **The Mission Control panel**, for a worktree that is part of a mission — where the mission's own membership defines the set, so a stage's merge is visible next to the stage it belongs to.
-  3. **The controller agent**, which can merge as an action like any other. This is what covers the unattended path: a stream that completes with nobody watching still gets merged.
-  Note the three are not alternatives — the same operation reached three ways, which is the existing pattern (`/kanban/move` is the API path a human's click takes). One endpoint, three callers.
+- **Settled: worktree management has two existing homes, plus one API route to build.**
+  1. **The kanban WORKTREES tab** — the canonical surface, and it already exists: tab button at `kanban.html:2954` (`data-tab="worktrees"`), pane at `:3935`, hydrated on activation at `:6604-6608` (`renderWorktreesTab` at `:13052`). **A per-worktree "Merge prompt" button already exists here** (`kanban.html:13166-13174`), calling the same `copyWorktreeMergePrompt` helper the strip button uses. Merging is already rehomed to this surface — the strip button's merge mode is a *second* caller of the same endpoint, not the only one. Narrowing the strip button is therefore safe: the capability already has a home that lists worktrees rather than inferring one from selection.
+  2. **The controller agent**, which can merge as an action like any other. This is what covers the unattended path: a stream that completes with nobody watching still gets merged. **This route does not yet exist** — `LocalApiServer.ts` has `/worktree/cleanup` (line 6413) but no `/worktree/merge` endpoint. The `copyWorktreeMergePrompt` verb is in the allowlist (`generated/verbAllowlist.ts`) and handled by `KanbanProvider.ts:13360`, but it is not exposed as an HTTP route. Building this route is in scope.
+
+  > **Superseded:** Three homes: the WORKTREES tab, the Mission Control panel, and the controller agent.
+  > **Reason:** "Mission Control panel" does not exist in this codebase — zero matches across all `.ts` and `.html` files. The plan built an architectural decision on a phantom surface. The WORKTREES tab already has the merge button; the controller-agent route needs to be built.
+  > **Replaced with:** Two existing callers (WORKTREES tab + strip button) over one endpoint (`copyWorktreeMergePrompt`), plus one new HTTP route (`/worktree/merge` in `LocalApiServer.ts`) for the controller agent. The strip button's merge mode is removed by the narrowing, leaving the WORKTREES tab and the API route as the two remaining callers.
+
+  Note the two are not alternatives — the same operation reached two ways, which is the existing pattern (`/kanban/move` is the API path a human's click takes). One endpoint, two callers after narrowing.
 
 ## Complexity Audit
 
 ### Routine
 
-- A toggle in the STAGING column header writing the chosen config key.
+- A toggle in the STAGING column header writing the chosen config key, reflecting broadcast state.
 - Narrowing `#btn-create-worktree`'s tooltip, handler and enablement to project/workspace scope.
 - Moving feature-worktree provisioning from feature creation to staging.
 
 ### Complex / Risky
 
 - **Do not add a third strategy mode.** The contract test states it directly: *"A third radio ahead of its provisioning is a dead control (PRD contract #6)."* The STAGING toggle is a **second surface for the existing two modes**, not a new one.
-- **Do not let anything but the user write the strategy.** The same contract exists because `applyOversightWorktreeTopology` used to force `per-feature` on arm and restore it on disarm, and a crash left the forced value in place with the user's real one stashed under `orchestration_prior_feature_worktree_mode`. That machinery was deleted deliberately, and the stash key survives in exactly one place: a one-shot drain that consumes the key. **So the operator must never set worktree strategy** — it may detect and report a dependency violation, nothing more. Any design where the operator "ensures dependencies are respected" by changing configuration recreates the exact defect the contract was written to prevent.
-- **Merge mode is live state the split must preserve.** Feature-worktree merging currently has no home other than the strip button's merge mode, so the WORKTREES-tab action must land before the narrowing does, or the capability disappears between commits. Per the decision above it rehomes to three callers over one endpoint. This is also the same merge-back gap the per-feature-worktree queue design has, which today has no mechanism at all — one endpoint serves both.
-- **Moving provisioning from creation to staging changes when a branch is cut.** A worktree cut at staging is based on the default branch as it is *then*, not as it was at feature creation — usually better, and a behaviour change to state explicitly. Features already created under the old timing have worktrees; the transition must not orphan or double-provision them.
-- **`subtask_plan_id` is write-dead but still read.** A resolution branch consults it ("legacy per-subtask rows, now write-dead"). Retiring it is in scope only as a deletion of dead resolution; do not repurpose the column.
-- **`branch TEXT NOT NULL UNIQUE` is workspace-unscoped in the current schema**, though the V24/V25 migrations used `UNIQUE(branch, workspace_id)`. Two workspaces cutting the same branch name collide. Owned by `scope-unscoped-tables-by-workspace-id.md`; noted because parallel worktrees make collisions more likely, not less.
+- **Do not let anything but the user write the strategy.** The same contract exists because `applyOversightWorktreeTopology` used to force `per-feature` on arm and restore it on disarm, and a crash left the forced value in place with the user's real one stashed under `orchestration_prior_feature_worktree_mode`. That machinery was deleted deliberately, and the stash key survives in exactly one place: a one-shot drain that consumes the key (`KanbanProvider.ts:2507-2516`). **So the operator must never set worktree strategy** — it may detect and report a dependency violation, nothing more. Any design where the operator "ensures dependencies are respected" by changing configuration recreates the exact defect the contract was written to prevent.
+- **Merge mode is live state the split must preserve.** Feature-worktree merging currently has two callers: the strip button's merge mode (`kanban.html:8645-8650`) and the WORKTREES tab's per-worktree "Merge prompt" button (`kanban.html:13166-13174`), both calling `copyWorktreeMergePrompt`. The narrowing removes the strip-button caller. The WORKTREES tab caller already exists and survives, so the capability does not disappear between commits. The controller-agent API route (`/worktree/merge` in `LocalApiServer.ts`) is new work that extends the same endpoint to an HTTP caller.
+- **Moving provisioning from creation to staging changes when a branch is cut.** A worktree cut at staging is based on the default branch as it is *then*, not as it was at feature creation — usually better, and a behaviour change to state explicitly. Features already created under the old timing have worktrees; the transition must not orphan or double-provision them. **The provisioning move is the load-bearing change:** `_ensureFeatureIntegrationWorktree` (`KanbanProvider.ts:13947`) must be called from `stageForQueue` (`KanbanProvider.ts:8236`) instead of `createFeatureFromPlanIds` (`KanbanProvider.ts:14871`). Without this move, the toggle is a dead control that appears to work — the UI invariant passes but no worktree is cut at staging time.
+- **The contract test count assertion must be updated.** `worktree-strategy-control-contract.test.js:160-166` asserts `normalizeFeatureWorktreeMode` is called in exactly 2 places (the `_sendWorktreeConfig` broadcast at `KanbanProvider.ts:14153` and the creation-time snapshot at `:14871`). Adding a STAGING-time read in `stageForQueue` adds a third call. The test's `normalized === 2` assertion must change to `3`, and the test's comment must document the third read site. Failing to update this test blocks the build.
+- **`subtask_plan_id` is write-dead but still read — and the read affects merge routing.** The resolution branch at `KanbanProvider.ts:13374-13392` consults `subtask_plan_id` to route a subtask worktree's merge into its feature integration branch instead of main. Retiring the resolution branch means legacy rows with `subtask_plan_id` set (possible across ~4,000 installs) fall through to the default merge path — merge into main directly. The plan must state this behaviour change explicitly: legacy subtask worktrees merge into main, not their (possibly gone) integration branch. Do not repurpose the column.
+- **`branch TEXT NOT NULL UNIQUE` is workspace-unscoped in the current schema** (`KanbanDatabase.ts:253`), though the V24/V25 migrations used `UNIQUE(branch, workspace_id)` (`:753`, `:767`). Two workspaces cutting the same branch name collide. Owned by `scope-unscoped-tables-by-workspace-id.md`; noted because parallel worktrees make collisions more likely, not less.
 
 ## Edge-Case & Dependency Audit
 
@@ -81,7 +86,7 @@ Each model was added for a real case — per-plan for an agent that wanted isola
 
 **Migration.** Features with worktrees provisioned at creation time keep them. The toggle applies to work staged after it ships. No worktree is destroyed by this plan.
 
-**Security.** None. No new path resolution, no new endpoint.
+**Security.** None. No new path resolution. The new `/worktree/merge` HTTP route reuses the existing `copyWorktreeMergePrompt` verb handler — no new auth surface beyond what `LocalApiServer` already enforces.
 
 **Side effects.** Narrowing the strip button changes a shipped affordance. Users who create feature worktrees from it will find the toggle instead — worth a release note.
 
@@ -94,21 +99,70 @@ Each model was added for a real case — per-plan for an agent that wanted isola
 
 ## Adversarial Synthesis
 
-**"Four models is flexibility, not a problem."** Flexibility a user cannot see is not flexibility: two of the four are configured in places unrelated to each other (a board setting and a per-role prompt add-on), one is dead, and the button that exposes them guesses scope from selection. The reduction is to two the user can name.
-
-**"Keep the strip button for features too — it works."** It works and it is ambiguous, and its merge mode makes the ambiguity consequential: the same click creates or merges depending on hidden state. Narrowing it to one scope makes merge mode unambiguous as a side effect.
-
-**"Have the operator turn worktrees on when it detects parallel work."** This is the one option the codebase forbids by contract, for a reason it learned the hard way. Detection yes; configuration no.
-
-**"Solve dependencies properly with a real dependency graph."** Possibly eventually, but `base_branch` already models ordering and costs nothing. A graph with no consumer is a schema change in search of a feature.
+Key risks: (1) the provisioning move is underspecified — without naming `stageForQueue` as the target and `_ensureFeatureIntegrationWorktree` as the function that moves, the toggle is a dead control that passes UI invariants but cuts no branch; (2) "Mission Control panel" was a phantom surface — the merge rehoming has two existing callers, not three, and the controller-agent route must be built; (3) the contract test's `normalizeFeatureWorktreeMode` count assertion (currently 2) will break when a third read site is added; (4) deleting the `subtask_plan_id` resolution branch changes merge routing for legacy rows from integration-branch to main. Mitigations: name the exact code paths in Proposed Changes, correct the phantom-surface decision, update the test count, and state the legacy merge behaviour change explicitly.
 
 ## Proposed Changes
 
-1. **STAGING column toggle** — "worktrees on/off" for features, writing the existing strategy key (pending the User Review decision), reflecting broadcast state rather than a local click assumption.
-2. **Provision at staging, not at feature creation** — the toggle's value is read when work is staged, so it applies to work as it goes out.
-3. **Narrow `#btn-create-worktree`** to project/workspace scope: tooltip, handler, enablement. Merge mode narrows with it.
-4. **Rehome feature-worktree merging** as one endpoint with three callers: a per-worktree action on the kanban WORKTREES tab, the same action in the Mission Control panel for mission-owned worktrees, and an agent-reachable route for the controller. This is also the queue design's and the streams design's missing merge-back — one mechanism, not three.
-5. **Delete the dead `subtask_plan_id` resolution branch**; leave the column.
+### 1. STAGING column toggle — `src/webview/kanban.html`
+
+**Context:** The STAGING column header already renders custom controls (`kanban.html:8057-8060`: staging view info, add-coder-terminal, Run queue). The toggle is a fourth control in that area.
+
+**Logic:** A radio or checkbox labeled "Worktrees" in the `stagingViewControls` block (`:8057`), writing the existing `feature_worktree_mode` key (pending the User Review decision). Checked state derives from the `worktreeConfig` broadcast (`config.featureWorktreeMode`), never from a local click assumption — the same property the existing WORKTREES tab radio pins (`:13352`). On change, posts `setFeatureWorktreeMode` with `mode` and `workspaceRoot`, the same verb the WORKTREES tab radio uses (`:13372-13376`).
+
+**Implementation:**
+- Add the toggle HTML to the `stagingViewControls` template string at `:8057`.
+- Read `config.featureWorktreeMode` from `lastWorktreeConfig` (the broadcast variable, set by the `worktreeConfig` handler at `:10500`).
+- Post `setFeatureWorktreeMode` on change — reuse the existing verb arm at `KanbanProvider.ts:13320`.
+
+**Edge Cases:** The toggle and the WORKTREES tab radio write the same key. Both must reflect broadcast state on every render so a rejected write settles back. No confirm gate (project rule + `confirm()` is a no-op in webviews).
+
+### 2. Provision at staging, not at feature creation — `src/services/KanbanProvider.ts`
+
+**Context:** Currently `_ensureFeatureIntegrationWorktree` (`:13947`) is called from `createFeatureFromPlanIds` (`:14871`) when `featureWorktreeModeSnapshot === 'per-feature'`. The staging entry point is `stageForQueue` (`:8236`), which currently does queue-position assignment, board refresh, and queue-watch arming — no worktree provisioning.
+
+**Logic:** Move the provisioning read from `createFeatureFromPlanIds` to `stageForQueue`. When a feature is staged, read `feature_worktree_mode` (via `normalizeFeatureWorktreeMode`); if `'per-feature'`, call `_ensureFeatureIntegrationWorktree` for the feature. Remove the provisioning call from `createFeatureFromPlanIds` (keep the mode snapshot read removal clean — the snapshot was there to prevent mid-creation mode-toggle splits, which is no longer relevant when provisioning doesn't happen at creation).
+
+**Implementation:**
+- In `stageForQueue` (`:8236`), after `appendQueuePositions` and before the board refresh: resolve which staged plans are feature cards, read `feature_worktree_mode`, and call `_ensureFeatureIntegrationWorktree` for each feature that doesn't already have a worktree.
+- In `createFeatureFromPlanIds` (`:14865-14874`): remove the `featureWorktreeModeSnapshot` read and the `_ensureFeatureIntegrationWorktree` call. Features are created without worktrees; worktrees are cut when they're staged.
+- **Contract test update:** `worktree-strategy-control-contract.test.js:160-166` asserts `normalizeFeatureWorktreeMode` appears exactly 2 times in `KanbanProvider.ts`. The staging-time read adds a third. Update the assertion from `2` to `3` and add a comment documenting the third site (`stageForQueue` provisioning read).
+
+**Edge Cases:** Features already created under the old timing have worktrees provisioned at creation. `stageForQueue` must check for an existing worktree before provisioning (the `_ensureFeatureIntegrationWorktree` function is already idempotent — it checks `getWorktrees()` first at `:13958`). No double-provisioning. A feature created before the toggle existed is neither orphaned nor double-provisioned — it keeps its existing worktree, and staging is a no-op for it.
+
+### 3. Narrow `#btn-create-worktree` — `src/webview/kanban.html`
+
+**Context:** The button at `:2979` currently handles three scopes: nothing selected → project/workspace (`:6456-6472`), one feature selected → feature (`:6473-6484`), one project selected → project. The `updateCreateWorktreeButton` function (`:8609`) sets merge mode for both feature (`:8636-8657`) and project (`:8666-8677`) worktrees.
+
+**Logic:** Remove the feature scope from both the click handler and `updateCreateWorktreeButton`. When a feature is selected, the button is disabled with a tooltip pointing to the STAGING toggle. Merge mode narrows to project/workspace only.
+
+**Implementation:**
+- Click handler (`:6433-6490`): remove the `size === 1 && val.isFeature` branch (`:6473-6484`). When a feature is selected, fall through to the disabled state.
+- `updateCreateWorktreeButton` (`:8609`): remove the feature merge-mode branch (`:8636-8657`). When a feature is selected, set disabled with tooltip "Feature worktrees are controlled by the STAGING toggle".
+- Tooltip on the button element (`:2979`): change to "Create a worktree for the active project / workspace".
+- `mergePromptReady` handler (`:10567-10594`): the strip-button path is now project-only. No change needed — it's guarded by `merge-mode` class + worktree-id match, which only project worktrees will set.
+
+**Edge Cases:** The `createWorktreeForFeature` verb arm (`KanbanProvider.ts:13217`) remains in the allowlist and handler — it's the API path for programmatic feature worktree creation. The narrowing is UI-only; the verb is not deleted (the controller agent or future code may still call it).
+
+### 4. Controller-agent merge route — `src/services/LocalApiServer.ts`
+
+**Context:** `LocalApiServer.ts` has `/worktree/cleanup` (`:6413`) but no merge endpoint. The `copyWorktreeMergePrompt` verb (`KanbanProvider.ts:13360`) generates a merge prompt for a worktree but is only callable from the webview.
+
+**Logic:** Add a `POST /worktree/merge` route that accepts `{ worktreeId, workspaceRoot }` and delegates to the same `copyWorktreeMergePrompt` handler. The response is the merge prompt string, which the controller agent can execute or relay.
+
+**Implementation:**
+- Add the route handler in `LocalApiServer.ts`, modeled on `/worktree/cleanup` (`:6413`).
+- The route calls through to `KanbanProvider`'s `copyWorktreeMergePrompt` verb arm (or a shared helper extracted from it).
+- Auth: reuse the existing `LocalApiServer` token validation.
+
+**Edge Cases:** The merge prompt is a text instruction, not an automatic merge — the agent must execute it. This matches the existing pattern: the WORKTREES tab button copies the prompt to clipboard; the API route returns it as a string.
+
+### 5. Delete the dead `subtask_plan_id` resolution branch — `src/services/KanbanProvider.ts`
+
+**Context:** The resolution branch at `:13374-13392` reads `subtask_plan_id` to route subtask worktree merges into the feature integration branch. The branch is "write-dead" — no new rows carry `subtask_plan_id` (the comment at `:14360-14361` confirms: "per-subtask/high-low modes were removed; legacy rows are harmless").
+
+**Logic:** Delete the `if ((wtRow.subtask_plan_id && wtRow.feature_id) || (wtRow.tier && wtRow.feature_id))` branch (`:13374-13385`) and the `else if (wtRow.feature_id && !wtRow.subtask_plan_id && !wtRow.tier)` branch (`:13386-13392`) from `copyWorktreeMergePrompt`. All worktree merges fall through to the default path: merge into the main checkout at the default branch. Leave the column in the schema — existing rows are harmless NULL or legacy values.
+
+**Edge Cases:** Legacy rows with `subtask_plan_id` set (possible across ~4,000 installs) will now merge into main instead of their (possibly gone) integration branch. This is a stated behaviour change: the integration branch for per-subtask worktrees no longer exists as a concept, so merging into main is the correct fallback. The `_cleanupWorktree` function (`:14042-14068`) has a similar resolution branch — delete it too, so cleanup also falls through to the plain/project path.
 
 ### Migration
 
@@ -132,15 +186,15 @@ Existing feature worktrees are untouched. The toggle governs newly staged work. 
 - **Provisioning moment:** stage work with the toggle on and assert a worktree is cut then; stage with it off and assert none is. Then assert a feature created *before* the toggle existed is neither orphaned nor double-provisioned.
 - **Operator cannot configure:** assert no operator path writes the strategy key or creates a worktree — the negative test that keeps the deleted forcing machinery from returning by another route.
 - **Merge path exists:** assert feature-worktree merging is reachable from its new home. The narrowing must not leave merging with no entry point.
+- **Normaliser count updated:** assert `normalizeFeatureWorktreeMode` is called from exactly 3 sites in `KanbanProvider.ts` (broadcast, staging-time provisioning read, and the drain). Update the existing `normalized === 2` assertion to `3`.
 
 ### Manual Verification
 
 - Toggle worktrees in STAGING, stage a feature, confirm the worktree is cut and the team lands in it.
 - Confirm the strip button no longer offers a feature worktree, and still creates and merges a project one.
-- Confirm a feature worktree can be merged from the WORKTREES tab, from the Mission Control panel when it belongs to a mission, and by the controller — all three reaching the same endpoint, so a fix to one is a fix to all.
+- Confirm a feature worktree can be merged from the WORKTREES tab and by the controller via the API route — both reaching the same endpoint, so a fix to one is a fix to all.
 
 ## Outstanding Questions
 
-- **[user]** Which key does the STAGING toggle write?
-- **[user]** Where does feature-worktree merging live after the narrowing?
+- **[user]** Which key does the STAGING toggle write? — proceeding on the assumption that it reuses `feature_worktree_mode` (one source of truth, both surfaces stay in sync via broadcast).
 - Is `useWorktreesPerPlan` still wanted? It is the fourth model, agent-owned, configured in a per-role prompt add-on rather than on the board — so it is invisible next to the other two and cannot be reconciled with them. Not touched by this plan, but it is the remaining overlap.

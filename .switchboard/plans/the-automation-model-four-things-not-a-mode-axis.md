@@ -35,8 +35,8 @@ The exclusive axis came first, when automation *was* one behaviour with variants
 ## User Review Required
 
 - **This supersedes two earlier plans of mine** — `scope-automation-to-missions.md` and `scheduled-jobs-get-their-own-panel.md`. Both approached this piecemeal (bound the triggers; move the scheduler out) and together they reproduced the complexity they were meant to remove. Mark both superseded rather than building alongside.
-- **Where do schedules live?** They are the one part with real state (last run, next run, history). Their own shell panel, or a section of the missions panel? Recommending their own panel: a schedule is not a mission and putting it there would repeat the mistake of housing unlike things together.
-- **How expressive is a schedule rule?** The example — *"pull the oldest from CODED and advance to CODE REVIEWED"* — is a window, a source column, a selector (oldest) and a target column. Keeping it to exactly that is what makes it fire-and-forget; every added clause moves it toward the mode axis being deleted.
+- **Schedules live in the Mission Control panel** as a tab, per `mission-control-panel-ui-specification.md`. The AUTOMATION tab is deleted — its contents move into Mission Control. Settled.
+- **The schedule selector is "oldest" only.** Any custom logic is a mission, not a schedule. Keeping the selector to exactly "oldest" is what makes a schedule fire-and-forget; every added selector moves it toward the mode axis being deleted.
 
 ## Complexity Audit
 
@@ -70,6 +70,8 @@ The exclusive axis came first, when automation *was* one behaviour with variants
 - **Requires** `staging-streams-parallel-dispatch-and-worktrees.md` for the two Mission Control flavours only.
 - **Follows the precedent of** the `automationMode` retirement for its migration shape.
 - The external prompt generator is the same pattern as the Connections-tab generators and `user-declared-state-channels-as-a-skill.md`: compose text host-side, copy, no execution.
+- **Cross-reference:** `mission-control-panel-ui-specification.md` proposes schedules as a tab in the Mission Control panel (not a separate shell panel), answering this plan's Outstanding Question about where schedules live. That is a proposal from a sibling subtask, not a decision — the user question stands, but the panel spec is the current recommended answer.
+- **Recurring-jobs resume needs its own notice.** Cutting the External/recurring-jobs pause means a user who deliberately paused jobs by selecting External will find them running on upgrade. This is a separate behaviour change from the mode-retirement forced-off notice — the mode notice says "your selection is retired"; the jobs notice says "your scheduler is running again." Both appear once; neither substitutes for the other.
 
 ## Adversarial Synthesis
 
@@ -122,7 +124,4 @@ Stored mode selections are forced off with a notice. Recurring jobs paused by an
 
 ## Outstanding Questions
 
-- **[user]** Do schedules get their own shell panel, or a section elsewhere?
-- **[user]** Is the schedule selector always "oldest", or is newest/highest-complexity wanted? Each option added is pressure toward the axis being removed.
-- **[user]** Does the AUTOMATION tab survive at all once it is schedules plus two buttons plus a copy button?
 - What does a schedule do when its action cannot apply — no card in the source column, or the target column hidden? Silent no-op is right for fire-and-forget, but it should be visible in a run log rather than invisible.

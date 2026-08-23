@@ -4,6 +4,8 @@ description: 'Storage layer overhaul: real engine, one global store, durable per
 
 # Storage layer overhaul: real engine, one global store, durable persistence
 
+**Complexity:** 10
+
 ## Goal
 
 Replace the storage foundation underneath the Switchboard board. Today `kanban.db` is a `sql.js` image held entirely in RAM, rewritten in full on every write, living inside the repository, with one database per workspace. That single set of choices is the shared root cause of five separate problems: silent whole-database clobber between concurrent in-memory images, a 500 MB resident budget plus an LRU eviction subsystem and six enumerated leak mechanisms for a metadata-only schema, an entire location-guard/`db-pointer`/workspace-mapping apparatus that exists only to answer "which database does this folder use?", no coherent story for long-term persistence across projects, and ~900K of extension-shipped control-plane content committed into every repository Switchboard touches.
@@ -26,15 +28,15 @@ Deliberately **not** a networked database of any kind. The measured dialect coup
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Move the database behind a single sidecar owner and replace sql.js with a real SQLite binding](../plans/sidecar-owned-db-real-sqlite-binding.md)
-- [ ] [Scope the ten unscoped tables by workspace_id and fix three colliding unique constraints](../plans/scope-unscoped-tables-by-workspace-id.md)
-- [ ] [Enforce one database instance per path and fix the is_feature clobber](../plans/single-instance-enforcement-and-is-feature-clobber.md)
-- [ ] [Durable board backups and per-project export/import for the global database](../plans/board-backup-and-per-project-export.md)
-- [ ] [Consolidate to one global database in ~/.switchboard and retire the location guard, db-pointer and mapping subsystem](../plans/single-global-database-in-home-store.md)
-- [ ] [Retention and archive policy for a global database that never gets deleted](../plans/retention-and-archive-for-unbounded-growth.md)
-- [ ] [Retire the Google Drive, Dropbox and iCloud database-path presets](../plans/retire-cloud-file-sync-db-path-presets.md)
-- [ ] [Get the control-plane scaffold out of the repository](../plans/control-plane-scaffold-out-of-the-repo.md)
-- [ ] [Protocols become database rows injected into prompts, not files scaffolded into every repo](../plans/protocols-as-db-rows-not-scaffolded-files.md)
+- [ ] [Durable board backups and per-project export/import for the global database](../plans/board-backup-and-per-project-export.md) — **PLAN REVIEWED**
+- [ ] [Get the control-plane scaffold out of the repository](../plans/control-plane-scaffold-out-of-the-repo.md) — **PLAN REVIEWED**
+- [ ] [Protocols become database rows injected into prompts, not files scaffolded into every repo](../plans/protocols-as-db-rows-not-scaffolded-files.md) — **PLAN REVIEWED**
+- [ ] [Retire the Google Drive, Dropbox and iCloud database-path presets](../plans/retire-cloud-file-sync-db-path-presets.md) — **PLAN REVIEWED**
+- [ ] [Retention and archive policy for a global database that never gets deleted](../plans/retention-and-archive-for-unbounded-growth.md) — **PLAN REVIEWED**
+- [ ] [Scope the ten unscoped tables by workspace_id and fix three colliding unique constraints](../plans/scope-unscoped-tables-by-workspace-id.md) — **PLAN REVIEWED**
+- [ ] [Move the database behind a single sidecar owner and replace sql.js with a real SQLite binding](../plans/sidecar-owned-db-real-sqlite-binding.md) — **PLAN REVIEWED**
+- [ ] [Consolidate to one global database in ~/.switchboard and retire the location guard, db-pointer and mapping subsystem](../plans/single-global-database-in-home-store.md) — **PLAN REVIEWED**
+- [ ] [Enforce one database instance per path and fix the is_feature clobber](../plans/single-instance-enforcement-and-is-feature-clobber.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

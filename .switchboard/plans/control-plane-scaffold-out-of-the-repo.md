@@ -129,13 +129,7 @@ Yes — two decisions:
 
 ## Adversarial Synthesis
 
-**"900K is nothing — this is not worth a plan."** The byte count is not the complaint. Sixty files of identical machine-generated content committed into every repository is noise in every diff, a merge conflict surface on every extension upgrade, and a thing every contributor has to learn to ignore. And the plans directory being legitimately committed is what has kept the scaffold from being questioned — they share a parent, so the whole directory reads as "user content".
-
-**"Put it all in the database and be done."** Cannot be done, and the reason is worth being precise about: agent hosts enumerate the filesystem rather than calling an API. `api-server-port.txt` — 33 references — is the sharpest illustration, since it exists specifically so a process that cannot yet talk to you can find out how. The achievable goal is out of the repo, not off the disk.
-
-**"Regeneration will break someone's customised protocol."** The most likely way this gets reverted, which is why override preservation is a review gate rather than an implementation detail, and why the third state ("locally modified, shipped version differs") has to be visible instead of silently resolved.
-
-**"The instructions/ queue should move in this plan too."** Tempting — it is the clearest misuse of the filesystem in the directory — but it changes work-claiming semantics under running agents. Scoped out deliberately, and noted so it is not lost.
+Key risks: regeneration must not clobber local edits (preserve too eagerly and a stale local copy shadows a shipped fix; preserve too little and you destroy a user's customisation); agent hosts read these files at session start, so async regeneration risks a session seeing a missing or half-written skill tree; and seven JSON config files have ~40+ call sites each needing inventory and per-key workspace-vs-machine-global decisions. Mitigations: hash-compare policy with a third "locally modified, shipped version differs" state surfaced in the UI; atomic temp-tree-plus-rename before the workspace is announced ready; and follow the `stateConfigBridge.ts` precedent that already did this for `state.json`.
 
 ## Proposed Changes
 

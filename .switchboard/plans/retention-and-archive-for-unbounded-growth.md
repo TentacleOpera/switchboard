@@ -86,11 +86,7 @@ Yes — the policy itself is a product decision, not a technical one:
 
 ## Adversarial Synthesis
 
-**"The database is metadata-only and tiny — this is premature."** Correct today, and the reason this is last in the program rather than first. But the four append-only tables grow per *transition*, not per plan, and one global DB with long-term persistence accumulates every transition of every project forever. The honest position is: ship measurement now, ship policy when the numbers justify it. That is what this plan does, and it is why the reporting surface is the first deliverable rather than the rotation job.
-
-**"Just let it grow — disks are large."** Size is not the binding constraint; query cost and backup cost are. Every board query pays for every retained row, and every backup copies the whole file. A 2 GB hot database makes hourly backups expensive and the "everything I'm working on" cross-project view slow.
-
-**"Archiving hides data users expect to find."** Which is exactly why archived data stays queryable behind an opt-in toggle rather than disappearing, and why entity rows never age out on time alone. Nothing is deleted.
+Key risks: rotation must be transactional across two databases (SQLite to DuckDB — crash between copy and delete duplicates, crash between delete and commit loses); `plan_events` is referenced by plan history views, so aging events out silently truncates visible history; and dormant-workspace archival must be reversible and lossless across all ~19 scoped tables with id remapping in both directions. Mitigations: copy-verify-then-delete-in-a-transaction with delete keyed on verified row ids; ship the reporting surface first and rotation disabled for one release; and reuse the export/import id-remapping machinery rather than writing a third implementation.
 
 ## Proposed Changes
 

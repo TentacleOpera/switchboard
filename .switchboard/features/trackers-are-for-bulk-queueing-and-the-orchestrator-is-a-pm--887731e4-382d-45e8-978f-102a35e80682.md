@@ -44,4 +44,3 @@ The other two are independent and can run in parallel with any of the above:
 
 **One decision left open, not scoped here:** `DEFAULT_REMOTE_CONFIG.mode` is `'ingest'`, so a newly configured tracker gives per-card dispatch rather than the bulk-queue model this feature assumes. Flipping it changes behaviour for existing remote-control users, so the safe form is defaulting only for newly configured trackers and never rewriting an existing stored config. Worth its own plan.
 
-

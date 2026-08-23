@@ -67,15 +67,13 @@ Not an aesthetic preference. The global-database and backup plans both rest on "
 
 ## User Review Required
 
-Yes — two decisions:
+Yes — one decision remains open (the binding choice is settled — see the Goal callout above):
 
-1. **Binding choice.** Two candidates: `node:sqlite` (built into Node — no native module at all) and `better-sqlite3` (synchronous, closest to the existing call shapes, but node-gyp prebuilds per ABI).
+1. **Binding choice — DECIDED: `better-sqlite3`.** See the Goal section callout for the full reasoning. The original recommendation of `node:sqlite` was superseded because the extension host runs VS Code's bundled Node 20 (at `engines.vscode: ^1.93.0`), where the module does not exist, and `engines.node: >=22.0.0` sits below the 22.5 floor `node:sqlite` requires even for the standalone host.
 
-   **Recommendation: `node:sqlite`.** It is the only option with *no native dependency*, so there is no per-platform prebuild that can be missing at install time. That matters more here than anywhere else in the codebase: `node-pty` is already a native dependency, but it is guarded by `isPtyAvailable()` and its absence degrades to "no terminals". **A missing database binding has no graceful degradation — it means no product.** So the platform-coverage bar for this dependency is strictly higher than anything shipped natively so far, and eliminating the native module outright beats managing a matrix.
-
-   Cost: a Node >= 22.5 floor for the sidecar (`engines.node` is already `>=22.0.0`), and the API was experimental through 22.x before stabilising in 24.
-
-   **Fallback if that floor is unacceptable:** `better-sqlite3`, accepting a *complete* prebuild matrix — Windows x64 and ARM64, macOS x64 and arm64, Linux glibc and musl — with no `isPtyAvailable`-style escape hatch to hide a gap.
+   > **Superseded:** Recommendation: `node:sqlite` — the only option with no native dependency, eliminating the per-platform prebuild matrix.
+   > **Reason:** `node:sqlite` requires Node >= 22.5 in the runtime that opens the database. The extension host runs VS Code's bundled Node 20, and even the standalone host's declared floor (`engines.node: >=22.0.0`) sits below 22.5, so some users in the supported range would lack it. A missing database binding has no graceful degradation.
+   > **Replaced with:** `better-sqlite3`, accepting a complete prebuild matrix (Windows x64/ARM64, macOS x64/arm64, Linux glibc/musl). The native-module packaging pattern already exists in this repo for `node-pty` (`.vscodeignore` allowlist, `isPtyAvailable()` degradation path). Pin to an exact version as `node-pty` does (`1.1.0`). If the sidecar runs as a separate plain-Node process rather than inside Electron, the build target is stock Node rather than an Electron ABI, reducing the prebuild surface.
 
 2. **Extension-host fallback.** When the sidecar is not running, does the extension host (a) start it, (b) degrade to read-only from a snapshot, or (c) fall back to opening sql.js directly? Recommendation: (a), with (b) as the failure path. (c) reintroduces the two-image clobber and should be rejected.
 
@@ -136,15 +134,11 @@ Yes — two decisions:
 
 ## Adversarial Synthesis
 
-**"The DB is small — why does the engine matter?"** Because the costs are structural, not volumetric: the 500 MB budget, the eviction sweep, and six enumerated leak mechanisms all exist for a metadata-only schema. Small data does not make export-the-world cheap; it makes it absurd.
-
-**"This is a big change for a rare bug."** The clobber is not rare enough to have avoided a dedicated investigation doc, and the blank-board failure has a permanent workaround shim in the schema layer. More importantly, the global-DB plan makes concurrent writes the normal case rather than the exception, and under whole-file export that turns a per-workspace annoyance into total loss.
-
-**"Just enforce one instance and keep sql.js."** That fixes the clobber and nothing else: memory stays O(database), the 3x write spike stays, the eviction subsystem stays, and the global-DB plan stays unsafe. Worth doing as a stopgap (separate plan), not as the answer.
+Key risks: the ~780 sql.js cursor-rewrite touchpoints are the dominant cost and are unavoidable with either binding candidate; `_dataVersion` bump omissions cause silently stale boards across ~780 sites; async conversion of sync call sites in `postMessage` arms could break the verb-return-contract gate; and the sidecar lifecycle (start, health-check, crash-restart, version-match) is a new operational surface. Mitigations: a sql.js-shaped cursor shim to make the migration nearly mechanical (temporary, not permanent); bump `_dataVersion` inside the driver's `run`/`transaction` wrapper rather than at call sites; only three sync methods touch `_db` directly (`dispose`, `getConfigSync`, `getProjectConfigJsonSync`), and one is already documented as best-effort; and the sidecar must refuse to serve an extension whose schema head is newer than its own.
 
 ## Proposed Changes
 
-1. **`src/services/sqliteDriver.ts` (new).** A thin driver interface — `run`, `get`, `all`, `prepare`, `transaction`, `close`, `lastInsertRowid` — with a `node:sqlite` implementation. Bumps `_dataVersion` on every mutating call. A thin interface rather than a full repository abstraction — it exists to keep the ~780 sql.js touchpoints funnelling through one place, not to support alternative backends.
+1. **`src/services/sqliteDriver.ts` (new).** A thin driver interface — `run`, `get`, `all`, `prepare`, `transaction`, `close`, `lastInsertRowid` — with a `better-sqlite3` implementation. Bumps `_dataVersion` on every mutating call. A thin interface rather than a full repository abstraction — it exists to keep the ~780 sql.js touchpoints funnelling through one place, not to support alternative backends.
 2. **`src/services/KanbanDatabase.ts`.** Replace the sql.js handle with the driver. Delete `_doPersist`, `_persist` debounce, `flushPersist`, `_dirty`, `_persistDebounceTimer`, `_loadedMtime`, `_reloadIfStale`, and the whole eviction/budget subsystem. Set WAL pragmas at open.
 3. **`src/standalone/bootstrap.ts`.** The sidecar becomes the sole DB owner; construct the driver here.
 4. **`src/services/LocalApiServer.ts`.** Expose the DB verbs the extension host now needs, validated through `verbSchemas.ts`.

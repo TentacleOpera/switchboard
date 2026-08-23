@@ -81,11 +81,7 @@ Yes — two decisions:
 
 ## Adversarial Synthesis
 
-**"The DB is derived — just re-ingest the markdown."** Partly true and worth relying on as a floor, but it loses precisely the state users care about most: where every card sits on the board, what is dispatched, what is blocked, and every worktree. Re-ingestion deliberately refuses to move cards between columns, so a rebuild silently resets workflow position. Backups exist for that delta.
-
-**"Just tell users to back up ~/.switchboard themselves."** A file copy of a live WAL database is not a valid backup, so this advice actively produces corrupt backups that appear to have worked. If the product owns the aggregation, it owns the recovery.
-
-**"Export is scope creep — git already moves projects."** Git moves the plans. It does not move column position, dispatch state, or worktrees, and after consolidation none of that is in the repo at all. Export is what makes consolidation not a regression in portability.
+Key risks: backup must use SQLite's Online Backup API (not file copy — a WAL-mode database copied live produces a torn file); restore is a whole-database swap that replaces every project (sidecar must be sole holder, current DB backed up first, all clients told to reload); and per-project export must remap AUTOINCREMENT integer ids across ~19 tables consistently (same old-id-to-new-id problem as the N-to-1 merge). Mitigations: reuse `dbMerge.ts`'s remap machinery for export/import; verify each backup with `PRAGMA integrity_check` before counting toward retention; and refuse backup destinations inside git work trees or sync folders.
 
 ## Proposed Changes
 

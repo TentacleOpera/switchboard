@@ -96,11 +96,7 @@ Yes — three decisions:
 
 ## Adversarial Synthesis
 
-**"One database is a single point of failure."** Correct, and that is the real cost. It is answered by the prerequisites, not by avoidance: WAL plus real transactions removes the whole-file-clobber failure mode, and backup-plus-export makes recovery a supported operation instead of a rescue. Note also the mitigating asymmetry — the DB is substantially a *derived* index over committed markdown (`PlanIngestionEngine` reconstructs rows from `.md` on import; `**Feature:**` and `**Project:**` links ride in the frontmatter), so identity and relationships survive a total loss. What does not survive is workflow state: column position (the comment at `:874` is explicit that "a file re-import must never yank a card out of its column"), `dispatched_at`, `blocked_at`, worktrees, config. That set is what the migration and the backups must protect.
-
-**"Keep per-workspace DBs, just move them to ~/.switchboard/<id>/."** Genuinely viable and much cheaper — it fixes the location problem, kills the guard and `db-pointer`, and avoids the merge entirely. It does not give cross-project views, does not remove the multi-instance handle management, and does not match the target topology for a future shared backend. The choice is scope, not correctness; recorded here so it is a decision rather than an omission.
-
-**"The merge is too risky for 4,000 installs."** Which is why it is incremental and repeatable rather than a one-shot upgrade step: each source merges when discovered, archived not deleted, and a source that cannot reach head is reported and left alone. A user whose old project never gets reopened is never at risk.
+Key risks: the N-to-1 merge is the hardest single piece — every install may hold several workspace DBs at different schema versions, AUTOINCREMENT id collisions are guaranteed (not possible), and `workspace_id` collisions can occur (copied repos); every VS Code window now writes the same file, making multi-writer the default case (safe only with the real-binding plan already landed); and blast radius inverts (one corrupt DB costs all projects). Mitigations: migrate each source to head individually before merge, with explicit old-id-to-new-id remap and reference rewrite; incremental and repeatable discovery (merge when an old project is opened); archive sources as `.migrated.bak`, never unlink; and the backup plan is a hard prerequisite because of the blast-radius inversion.
 
 ## Proposed Changes
 

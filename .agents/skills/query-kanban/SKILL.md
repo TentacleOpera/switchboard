@@ -65,7 +65,7 @@ WHERE workspace_id = '<workspace_id>'
 ORDER BY updated_at DESC;
 ```
 
-**Valid columns:** CREATED, BACKLOG, PLAN REVIEWED, CONTEXT GATHERER, STAGING, LEAD CODED, CODER CODED, CODE REVIEWED, CODED, COMPLETED
+**Valid columns:** CREATED, BACKLOG, PLAN REVIEWED, CONTEXT GATHERER, LEAD CODED, CODER CODED, CODE REVIEWED, CODED, COMPLETED
 
 ### ⚠️ Users say the BOARD LABEL, not the stored column id — translate silently
 
@@ -79,7 +79,7 @@ back at them. That is a bug in your response, not a correction.
 | **New** | `CREATED` |
 | **Backlog** | `BACKLOG` *(display mode of `CREATED`)* |
 | **Planned** | `PLAN REVIEWED` |
-| **Staging** | `STAGING` |
+| **Dispatch** | `DISPATCH` *(display mode of `PLAN REVIEWED`)* |
 | **Researcher** | `RESEARCHER` |
 | **Lead Coder** | `LEAD CODED` |
 | **Coder** | `CODER CODED` |

@@ -14,7 +14,7 @@ Stop asking agents to carry the project assignment. Add a board-level "sticky pr
 > 2. Active project at row-creation time (`kanban.activeProjectFilter` config), read ONLY on fresh INSERT — fallback when no pin.
 > 3. Unassigned.
 
-So the flow is: the extension reads `kanban.activeProjectFilter` at prompt-generation time → injects it as a PROJECT PIN directive (`agentPromptBuilder.ts:353`, restated at `TaskViewerProvider.ts:6551` and `SparkContextExporter.ts:202`) → the agent writes `**Project:** <name>` into the plan file → the plan watcher parses it back out → it lands as precedence #1. Meanwhile precedence #2 reads **the same config key** at `:2242`.
+So the flow is: the extension reads `kanban.activeProjectFilter` at prompt-generation time → injects it as a PROJECT PIN directive (`agentPromptBuilder.ts:353`, restated at `TaskViewerProvider.ts:6670` and `SparkContextExporter.ts:202`) → the agent writes `**Project:** <name>` into the plan file → the plan watcher parses it back out → it lands as precedence #1. Meanwhile precedence #2 reads **the same config key** at `:2242`.
 
 The agent's only contribution is carrying a value from one read of `kanban.activeProjectFilter` to another read of `kanban.activeProjectFilter`. The 2,785-char section in `AGENTS.md` exists to stop it corrupting the value in transit — don't pin the workspace name, don't emit a `<project>` placeholder, don't read the config yourself, say nothing when you omit the line. That is a large, permanently-resident instruction set guarding a data-transport step that need not exist.
 
@@ -56,21 +56,21 @@ Yes — two decisions.
 - A `kanban.stickyImportProject` config key.
 - A pin/lock toggle beside the board's project filter, writing that key.
 - `_resolveProjectForInsert` precedence #2 changed from "read `kanban.activeProjectFilter`" to "read `kanban.stickyImportProject`, falling back to `kanban.activeProjectFilter` when unset".
-- Deleting the PROJECT PIN directive emission from `agentPromptBuilder.ts:353` and its restatements at `TaskViewerProvider.ts:6551` and `SparkContextExporter.ts:202`.
+- Deleting the PROJECT PIN directive emission from `agentPromptBuilder.ts:2400` and `TaskViewerProvider.ts:6683`, and the restatements at `TaskViewerProvider.ts:6670` and `SparkContextExporter.ts:202`.
 - Deleting the Plan Project Pinning section from `AGENTS.md`.
 
 ### Complex / Risky
 
 - **`AGENTS.md` is a governance file and needs explicit approval.** Deleting 2,785 chars changes every user's injected block on next sync.
-- **Three independent restatements of the pinning rule will drift if only some are removed.** `agentPromptBuilder` emits the directive, `TaskViewerProvider:6551` restates the metadata contract for a different prompt path, and `SparkContextExporter:202` restates it again for the Spark export. All three must go together, and a grep-level test should assert no fourth copy exists.
-- **The memo path has its own pin handling.** `TaskViewerProvider.ts:15191` logs *"dropping PROJECT PIN '<x>': not a project in <workspace>"* — so memo processing validates pins independently. That code becomes dead or changes meaning; check whether memo-created plans should honour the sticky setting (they should) and remove the bespoke validation.
+- **Three independent restatements of the pinning rule will drift if only some are removed.** `agentPromptBuilder` emits the directive, `TaskViewerProvider:6670` restates the metadata contract for a different prompt path, and `SparkContextExporter:202` restates it again for the Spark export. All three must go together, and a grep-level test should assert no fourth copy exists.
+- **The memo path has its own pin handling.** `TaskViewerProvider.ts:15347` logs *"dropping PROJECT PIN '<x>': not a project in <workspace>"* — so memo processing validates pins independently. That code becomes dead or changes meaning; check whether memo-created plans should honour the sticky setting (they should) and remove the bespoke validation.
 - **The importer must keep honouring an explicit pin.** Existing plan files carry `**Project:** <name>`, and the sticky setting must not override them — precedence #1 stays #1. Getting this backwards would silently re-file every previously-pinned plan on re-import.
 - **Remote and tracker-created plans.** A plan created as a Linear issue or Notion page has no `**Project:**` line and no local prompt, so today it lands via precedence #2. Under this change it lands via the sticky setting, which is the desired behaviour — but confirm `importRemotePlan.ts` routes through `_resolveProjectForInsert` rather than assigning project itself.
 
 ## Edge-Case & Dependency Audit
 
 **Race conditions**
-- The sticky value is read at import time, after `dbReady`, so it does not inherit the `getConfigSync` activation race that the current fallback has. Assert the read is async.
+- The sticky value is read at import time, after `dbReady`, so it does not inherit the `getConfigSync` activation race that the current fallback has. The async `getConfig` method already exists at `KanbanDatabase.ts:5485` — use it, not `getConfigSync` (`:5541`).
 - The user changing the sticky project while an import is in flight: last-write-wins on a single value is acceptable here, since the outcome is recoverable by reassignment.
 
 **Security**
@@ -80,6 +80,7 @@ Yes — two decisions.
 - Removing the directive shortens every dispatched planner prompt, independent of the injected-block reduction.
 - The sticky setting is a new piece of board state that the `.switchboard/kanban-board.md` snapshot may want to show, so a user can see why plans are landing where they are.
 - `kanban.activeProjectFilter` keeps its display role; only its import-fallback role is superseded.
+- `.claude/skills/` mirrors (`switchboard-cloud`, `switchboard-memo`) are stale on existing installs until the next activation regenerates them from the edited `.agents/workflows/` sources. This is the standard mirror lifecycle — no special migration needed, but the grep-level test must not assert against `.claude/skills/` content.
 
 **Migration**
 - Additive config key, defaulting to unset, which preserves exactly today's behaviour (fall back to the active filter). No user-visible change until someone pins.
@@ -92,27 +93,50 @@ Yes — two decisions.
 
 ## Adversarial Synthesis
 
-**"The directive exists to solve a real race — removing it reintroduces the bug."** It solves the race by freezing a value at prompt-generation time. A sticky setting has no race to freeze: the value changes only on user action. The frozen snapshot is a workaround for reading live board state; the fix is not to read live board state.
-
-**"Agents sometimes should decide the project — they have context the UI doesn't."** They have the user's words, which is the one case worth keeping: if a user says "put this in the Backend project", the agent writing `**Project:** Backend` is right, and parsing stays. What is being removed is the agent transcribing board state, not the agent honouring an instruction.
-
-**"A UI toggle is more work than a prompt line."** It is, once. The prompt line costs ~2,785 resident chars per turn per session per workspace forever, plus nine authoring surfaces restating the contract (~11 statements) that must stay in sync, plus two dedicated contract tests pinning its wording, plus a bespoke memo validation path, plus the class of bug where an agent invents a pin. The toggle is a config key and a button.
-
-**"Just delete the prose and keep the directive."** Tempting and half-right — the prose is the expensive part. But the directive is what makes the prose necessary: once an agent is handed a value and told to write it, rules about not mangling it follow. Removing the responsibility removes the rules.
+Key risks: (1) incomplete directive removal — the blast radius is 12 source surfaces across code, workflows, protocols, and governance files, and a missed emission site silently leaves the directive in one prompt path; the grep-level test is the guard. (2) Precedence inversion — if the sticky key accidentally outranks an explicit `**Project:**` pin, every previously-pinned plan silently re-files on re-import; the contract test asserting "explicit pin wins over sticky" is load-bearing. (3) The `manifestProject` field must become vestigial, not deleted — two `KanbanProvider` callers thread it, and deleting the field breaks compilation. Mitigations: enumerated blast radius with emission call sites, vestigial-field precedent (`destinationColumn`), and the retained `**Project:**` parsing as precedence #1.
 
 ## Proposed Changes
 
-1. **`kanban.stickyImportProject` config key**, per workspace, unset by default.
-2. **Board UI**: a pin toggle beside the project filter — "follow active filter" / "pinned to `<project>`" — writing that key, and visible enough that a user can tell why plans are landing where they are.
-3. **`_resolveProjectForInsert` precedence #2** reads the sticky key, falling back to `kanban.activeProjectFilter` when unset. Precedence #1 (explicit pin) and #3 (unassigned) unchanged. Read async, not via `getConfigSync`.
-4. **Delete the PROJECT PIN directive and every restatement.** Verified blast radius — nine authoring surfaces, ~11 statements:
-   - `agentPromptBuilder.ts` — `:353` (the directive field), `:1438` and `:1441` (planner rules 5 and 8), `:1457` (the directive text itself)
-   - `TaskViewerProvider.ts:6551` (memo plan template), `SparkContextExporter.ts:202` (Spark context)
-   - `.agents/workflows/switchboard-cloud.md:15` and `:18`, `.agents/workflows/switchboard-memo.md:53`
-   - `.agents/protocols/improve-plan/SKILL.md:45`, `.agents/protocols/improve-feature/SKILL.md:33`
-5. **Delete** the Plan Project Pinning section from `AGENTS.md` and `CLAUDE.md` (governance files — explicit approval required).
-6. **Memo path**: remove the bespoke pin validation at `TaskViewerProvider.ts:15191` and route memo-created plans through the same resolution.
-7. **Retain** `**Project:** <name>` parsing as precedence #1, for existing files and for a user-instructed pin.
+1. **`kanban.stickyImportProject` config key**, per workspace, unset by default. Written via `KanbanDatabase.setConfig` (async, same method `setProjectFilter` uses at `KanbanProvider.ts:8037`).
+2. **Board UI**: a pin/lock toggle beside the project filter dropdown in `kanban.html` (beside `#kanban-project-filter`). Two states: "follow active filter" (unset) / "pinned to `<project>`". The toggle sends a new `setStickyImportProject` message via `postKanbanMessage`, handled in `KanbanProvider.handleServiceVerb` (alongside the existing `setProjectFilter` handler at `:9471`), which calls `setConfig('kanban.stickyImportProject', value)`. The board pushes the current sticky state to the webview in the refresh data cluster (like `projectFilter` at `kanban.html:10121`) so the toggle stays synced. The toggle must be visible enough that a user can tell why plans are landing where they are — a lock icon on the filter dropdown with a tooltip is the minimum.
+3. **`_resolveProjectForInsert` precedence #2** reads the sticky key via async `getConfig` (`KanbanDatabase.ts:5485`), falling back to `kanban.activeProjectFilter` when unset. Precedence #1 (explicit pin) and #3 (unassigned) unchanged. Only `:2242` changes — the other `getConfigSync` calls at `:3863` (project deletion reset) and `:9259` (mirror serialization) are unrelated and stay sync.
+4. **Delete the PROJECT PIN directive and every restatement.**
+
+   > **Superseded:** nine authoring surfaces, ~11 statements.
+   > **Reason:** Code investigation found two additional emission call sites and one import the original count missed. The actual blast radius is larger.
+   > **Replaced with:** the enumerated list below — 12 source surfaces across code, workflows, protocols, and governance files.
+
+   **Code — emission sites (the calls that produce the directive text):**
+   - `agentPromptBuilder.ts:2400-2401` — `if (options?.manifestProject) { projectPinBlock = PROJECT_LINE_DIRECTIVE(...) }` — the main prompt builder emission
+   - `TaskViewerProvider.ts:6683` — `prompt += '\n\n' + PROJECT_LINE_DIRECTIVE(projectName)` — the memo prompt builder emission (missed in the original count)
+   - `TaskViewerProvider.ts:83` — the `PROJECT_LINE_DIRECTIVE` import (must be removed when the function is deleted)
+
+   **Code — directive definition and planner rules:**
+   - `agentPromptBuilder.ts:353-354` — the `manifestProject` field declaration
+   - `agentPromptBuilder.ts:1438` — planner rule 5 (mentions `**Project:**` per PROJECT PIN directive)
+   - `agentPromptBuilder.ts:1441` — planner rule 8 (Project Pinning rule)
+   - `agentPromptBuilder.ts:1456-1457` — the `PROJECT_LINE_DIRECTIVE` function itself
+
+   **Code — metadata template restatements:**
+   - `TaskViewerProvider.ts:6670` — memo plan template metadata line referencing the PROJECT PIN directive
+   - `SparkContextExporter.ts:202` — Spark context project-pinning convention
+
+   **Workflows and protocols (content files, not code):**
+   - `.agents/workflows/switchboard-cloud.md:15` and `:18` — plan artifact rule 5 and Project Pinning rule 8
+   - `.agents/workflows/switchboard-memo.md:53` — memo plan creation step referencing PROJECT PIN directive
+   - `.agents/protocols/improve-plan/SKILL.md:45` — Project Pinning subsection
+   - `.agents/protocols/improve-feature/SKILL.md:33` — Project Pinning subsection
+
+   **Derived mirrors (regenerate automatically — do NOT edit by hand):**
+   - `.claude/skills/switchboard-cloud/SKILL.md` and `.claude/skills/switchboard-memo/SKILL.md` are generated from the `.agents/workflows/` sources by `ClaudeCodeMirrorService` (`src/services/ClaudeCodeMirrorService.ts`) at activation. Editing the `.agents/` sources suffices; the mirrors regenerate on next activation. The grep-level test must scope to `.agents/` + `src/`, not `.claude/skills/` (which is derived and stale until regeneration).
+
+5. **Make `manifestProject` vestigial, not deleted.** The `manifestProject` field on the prompt-builder options (`agentPromptBuilder.ts:354`) is threaded from two caller sites: `KanbanProvider.ts:1491` and `KanbanProvider.ts:10998`. Deleting the field would break these callers (TypeScript compile error). Instead, follow the precedent of `destinationColumn` (`:355`, already vestigial with a doc-comment saying so): retain the field, stop emitting the directive (change 4 removes the emission at `:2400`), and update the doc-comment to say "Vestigial — formerly drove the PROJECT PIN directive, which was removed. Retained for caller compatibility." The two `KanbanProvider` callers continue passing `resolvedProject` harmlessly; a later cleanup can remove the threading. `resolveAuthoringProject` itself is NOT deleted — it still serves dispatch scoping (`analysisScope`), feature creation (`KanbanProvider.ts:14759`), and the memo/clipboard/Spark paths that need the active project for non-directive purposes.
+
+6. **Delete** the Plan Project Pinning section from `AGENTS.md` and `CLAUDE.md` (governance files — explicit approval required). The AGENTS.md section is ~2,831 chars; the CLAUDE.md section is ~2,606 chars (measured, not estimated).
+
+7. **Memo path**: the bespoke pin validation at `TaskViewerProvider.ts:15336-15349` resolves the project name to pass to the memo planner prompt, which appends it as a `PROJECT_LINE_DIRECTIVE` (`:6683`). With the directive deleted (change 4), the memo prompt no longer needs a `projectName`, so the entire `:15336-15349` resolution block becomes dead code — remove it and drop the `projectName` parameter from `_buildMemoPlannerPrompt`. The memo plan template line at `:6670` currently says "include `**Project:**` ONLY if a PROJECT PIN directive is present below" — replace with: "include `**Project:** <name>` ONLY if the user explicitly named a project in the memo entry. Otherwise omit the line." This preserves the user-instructed pin without referencing the deleted directive. Memo-created plans (the `.md` files the agent writes) already honour the sticky setting via change 3: they land through the file watcher → `insertFileDerivedPlan` → `_resolveProjectForInsert`, which consults the sticky key. No bespoke memo-side resolution is needed.
+
+8. **Retain** `**Project:** <name>` parsing as precedence #1, for existing files and for a user-instructed pin.
 
 ### Migration
 
@@ -133,10 +157,10 @@ Additive and behaviour-preserving until a user pins. `**Project:**` parsing reta
 - **Unset preserves today's behaviour:** sticky unset, active filter B, import; assert B.
 - **Resolve-only intact:** sticky set to a non-existent project; assert the plan lands unassigned and no `projects` row is created.
 - **No activation race:** import during DB load; assert resolution waits for `dbReady` rather than reading a null sync value.
-- **Directive removal is complete:** grep-level assertion that no prompt-generating path emits "PROJECT PIN", covering the add-on matrix — the three known sites are in different prompt paths and a default-config test would miss at least one.
+- **Directive removal is complete:** two grep assertions: (a) no `PROJECT_LINE_DIRECTIVE` symbol remains anywhere in `src/` (function, import, call — all gone); (b) no "PROJECT PIN" string in `src/services/` prompt-generating code. Scope the content-file grep to `.agents/` + `AGENTS.md` + `CLAUDE.md` — NOT `.claude/skills/` (derived mirrors, stale until regeneration) and NOT `src/test/` or `.github/workflows/` (test names legitimately reference the old contract). The two emission call sites (`agentPromptBuilder.ts:2400` and `TaskViewerProvider.ts:6683`) are in different prompt paths; a default-config test would miss at least one.
 - **Remote plans:** import a plan created as a Linear issue with no project line; assert it honours the sticky setting, confirming `importRemotePlan.ts` routes through `_resolveProjectForInsert`.
-- **Memo plans:** process a memo entry; assert the resulting plan honours the sticky setting and no bespoke validation path remains.
-- **Block size:** assert the emitted managed block shrank, tying this to the reduction plan's size gate.
+- **Memo plans:** process a memo entry; assert the resulting plan honours the sticky setting, no bespoke validation path remains, and `_buildMemoPlannerPrompt` no longer takes a `projectName` parameter.
+- **Block size:** assert the emitted managed block shrank by ~2,831 chars (AGENTS.md) and ~2,606 chars (CLAUDE.md), tying this to the reduction plan's size gate.
 
 **Existing tests this plan must rewrite, not just satisfy.** Two contract tests already pin the current pinning behaviour and will fail by design:
 - `src/test/project-pin-resolve-contract.test.js` (`npm run test:contract:project-pin-resolve`) — resolution precedence
@@ -147,5 +171,9 @@ Two more reference the pinning prose and need updating in the same commit: `src/
 ## Outstanding Questions
 
 - **Resolved — the remote path needs no second edit.** `importRemotePlan.ts:31` passes `project: ''`, but that is only the input: it calls `insertFileDerivedPlan` (`KanbanDatabase.ts:2387`), which invokes `_resolveProjectForInsert` at `:2403`. So remote-imported plans already resolve their project in the DB with no agent involvement — change 3 covers them for free. This is worth naming as precedent rather than scope: the remote path is already the architecture this plan is arguing for, and it has not caused a pinning bug.
-- **Resolved — nine surfaces, not four.** The contract is restated at nine authoring surfaces (~11 statements, listed in change 4) plus two dedicated contract tests. This cuts both ways: it is a larger edit than estimated, and it is much stronger evidence for the plan's thesis — a rule needing eleven synchronised restatements across prompts, workflows, protocols and governance files is not a rule an agent should be carrying at all. The grep-level test stays the guard, since the count is exactly what drifts.
-- Should the sticky project appear in `.switchboard/kanban-board.md` so agents and users can see the current filing target? Leaning yes for diagnosability, but it adds a field to a snapshot other things parse.
+- **Resolved — 12 source surfaces, not nine.** The contract is restated at 12 source surfaces (listed in change 4) plus two dedicated contract tests. Code investigation found two emission call sites the original count missed (`agentPromptBuilder.ts:2400` and `TaskViewerProvider.ts:6683`) plus the import at `TaskViewerProvider.ts:83`. This cuts both ways: it is a larger edit than estimated, and it is much stronger evidence for the plan's thesis — a rule needing twelve synchronised restatements across code, prompts, workflows, protocols and governance files is not a rule an agent should be carrying at all. The grep-level test stays the guard, since the count is exactly what drifts.
+- Should the sticky project appear in `.switchboard/kanban-board.md` so agents and users can see the current filing target? Leaning yes for diagnosability, but it adds a field to a snapshot other things parse. Proceeding on the assumption that it should NOT be added in this plan — the snapshot is read by agents and parsed by tooling, and a new field risks breaking consumers. The board UI toggle (change 2) is the user-facing surface; the snapshot can be extended in a follow-up if diagnosability is needed.
+
+## Recommendation
+
+**Send to Coder.** Complexity 5 (mixed: routine config key + UI toggle, moderate multi-file directive sweep across 12 surfaces). The directive removal is mechanical but wide — the grep-level test and the two rewritten contract tests are the guardrails. The sticky-setting logic is a single precedence change in one method.

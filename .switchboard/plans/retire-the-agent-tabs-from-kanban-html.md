@@ -17,14 +17,15 @@ This is the second half of the extraction. Once `extract-agent-control-into-its-
 | `kanban.html:2909-2918` | the whole `Agent Control view (opt-in…)` CSS block |
 | `kanban.html:2940-2942` | the three tab buttons |
 | `kanban.html:3187-3864` | the three content panes (~677 lines) |
-| `kanban.html:6526`, `:6533` | the `AGENT_CONTROL_VIEW` opt-in constant and its comment |
-| `kanban.html:6563-6567` | the Agent-Control initial-tab resolver |
-| `KanbanProvider.ts:13633` | the `viewAttr` / `data-view` injection |
-| `KanbanProvider.ts:13591` | the `viewMarker?: 'agent-control'` parameter, if no other caller needs it |
+| `kanban.html:6526`, `:6545` | the `AGENT_CONTROL_VIEW` opt-in constant and its comment |
+| `kanban.html:6566`–`:6567` | the Agent-Control initial-tab resolver |
+| `KanbanProvider.ts:13657` | the `viewAttr` / `data-view` injection |
+| `KanbanProvider.ts:13615` | the `viewMarker?: 'agent-control'` parameter, if no other caller needs it |
+| `headlessPanelHtml.ts:228`–`:231` | `getAgentControlHtml`'s `getBoardHtml` + `injectBodyAttributes('data-view="agent-control"')` call — the headless-side projection. The extraction plan rewrites this function body to serve `agent-control.html` directly (with `injectBodyAttributes` for `data-panel` / `data-initial-workspace-root` / `data-host-capabilities`, matching the pattern of `getProjectHtml`, `getPlanningHtml`, etc.). After extraction, the `data-view="agent-control"` injection is gone. **Verify** it is gone; the `injectBodyAttributes` and `getBoardHtml` imports stay — 9+ other panel functions use them. |
 
 Plus whatever the extraction's shared modules made redundant on the board side.
 
-**What stays.** `_handleMessage(msg, source?: 'agent-control')` (`KanbanProvider.ts:8960-8963`) stays — the new panel still identifies itself as that source. The manifest entry, route, icon and label stay, because they were always panel identity rather than projection machinery. `_agentControlPanel` and its full-state push (`:1407-1429`) stay: it is the panel's webview, not the projection.
+**What stays.** `_handleMessage(msg, source?: 'agent-control')` (`KanbanProvider.ts:8963`) stays — the new panel still identifies itself as that source. The manifest entry, route, icon and label stay, because they were always panel identity rather than projection machinery. `_agentControlPanel` and its full-state push (`:1407-1429`) stay: it is the panel's webview, not the projection.
 
 ### Root Cause
 
@@ -78,13 +79,15 @@ Nothing here is a mistake to fix; it is scaffolding that has served its purpose.
 
 **"A week is arbitrary."** It is, and a defect resetting it matters more than the number. The point is that the gate is evidence-based rather than "it looked fine".
 
+**Risk Summary:** Key risks: (1) `getAgentControlHtml` (`headlessPanelHtml.ts:228`) — the extraction plan rewrites its body; the retirement plan verifies the `data-view` injection is gone but must NOT remove `injectBodyAttributes` or `getBoardHtml` imports (9+ other panel functions use them); (2) line numbers have drifted ~20–30 lines from the original plan — the table and Proposed Changes now reference current line numbers; (3) `viewMarker` parameter removal at `:13615` must check every caller of `_getHtml` before signature change. Mitigations: the deletion table and Proposed Changes #5 now distinguish "verify" from "delete" for `getAgentControlHtml`; line numbers updated to current code.
+
 ## Proposed Changes
 
 1. **Confirm the gate:** a week of the new panel in real use with no attributed defect. If one appeared and was fixed, the week restarts.
 2. **Delete the projection CSS** — `kanban.html:2909-2918`, the filter and the five hide rules.
 3. **Delete the three tab buttons** (`:2940-2942`) and the three content panes (`:3187-3864`).
-4. **Delete `AGENT_CONTROL_VIEW`** (`:6526`, `:6533`) and the Agent-Control initial-tab resolver (`:6563-6567`).
-5. **Remove the `viewAttr` injection** (`KanbanProvider.ts:13633`) and the `viewMarker` parameter (`:13591`) **only after checking every caller**.
+4. **Delete `AGENT_CONTROL_VIEW`** (`:6526`, `:6545`) and the Agent-Control initial-tab resolver (`:6566`–`:6567`).
+5. **Remove the `viewAttr` injection** (`KanbanProvider.ts:13657`) and the `viewMarker` parameter (`:13615`) **only after checking every caller**. Also **verify** `getAgentControlHtml` (`headlessPanelHtml.ts:228`–`:231`) no longer contains the `data-view="agent-control"` injection — the extraction plan should have already replaced it with the standard panel pattern (`injectBodyAttributes` for `data-panel` / `data-initial-workspace-root` / `data-host-capabilities`). The `injectBodyAttributes` and `getBoardHtml` imports stay; 9+ other panel functions use them.
 6. **Keep** the message-source branch (`:8960-8963`), `_agentControlPanel` and its full-state push (`:1407-1429`), and the manifest entry — all panel identity, not projection.
 7. **Delete projection-specific tests** rather than skipping them, and sweep for modules whose last board-side consumer just went.
 

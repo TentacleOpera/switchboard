@@ -20,7 +20,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 | `/switchboard-remote` | **`switchboard-remote.md`** | Remote Switchboard control — drive plans via Linear or Notion when the local machine is off. |
 | `/switchboard-memo`, "start memo capture" | **`switchboard-memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/switchboard-memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
 
-These four are the ONLY user-typeable workflow commands. Internal, extension-dispatched workflows are no longer slash commands: `improve-plan`, `improve-feature`, `accuracy`, and `switchboard-orchestrator` (shared logic, injected after a runtime-specific runsheet) live as protocols under `.agents/protocols/<name>/SKILL.md`, read by the extension by path (the orchestrator persona is system-launched from the AUTOMATION tab's Start orchestrator; never invoke it ad hoc).
+These four are the ONLY user-typeable workflow commands. Internal, extension-dispatched workflows are no longer slash commands: `improve-plan`, `improve-feature`, `accuracy`, and `switchboard-orchestrator` (shared logic, injected after a runtime-specific runsheet) live as protocols under `.switchboard/protocols/<name>/SKILL.md`, read by the extension by path (the orchestrator persona is system-launched from the AUTOMATION tab's Start orchestrator; never invoke it ad hoc).
 
 
 ### ⚠️ MANDATORY PRE-FLIGHT CHECK
@@ -59,7 +59,7 @@ Sending to non-existent recipients is always rejected (even when auto-routed).
 User ──► Switchboard Console (/switchboard) or cloud plan-brake (switchboard-cloud.md)
               │  Plans captured in .switchboard/plans/
               │
-              ├──► improve-plan protocol (.agents/protocols/improve-plan/SKILL.md, extension-dispatched)
+              ├──► improve-plan protocol (.switchboard/protocols/improve-plan/SKILL.md, extension-dispatched)
               │                    Deep planning with optional dependency checks and adversarial review
               └──► Kanban Board    Plans moved through workflow stages (Created → Coded → Reviewed → Done)
 
@@ -80,11 +80,11 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `kanban_operations` | Move cards via move-card.js, create features via create-feature.js — MANUAL FALLBACK ONLY, use only when user explicitly requests a card move |
 | `worktree-cleanup` | Clean up worktrees after merge via LocalApiServer |
 
-**Protocols** (not discoverable — delivered by path reference): improve-plan, improve-feature, accuracy, terminal-coder-dispatch, dispatch-analysis, advise_research, switchboard-orchestrator(-external/-internal), switchboard-orchestration, switchboard-contracts, complexity-scoring, deep-planning, web-research, tuning, constitution-builder, external-team-lead, improve-remote-plan, design-system-builder, refine_feature, archive, clickup-api, clickup-fetch, clickup-create-task, clickup-modify-task, clickup-attach, clickup-create-subpage, clickup-move-task, linear-api, linear-move-issue, notion-api, get-tickets, generate-diagram. These live at `.agents/protocols/<name>/SKILL.md` and are read by path when a directive tells you to.
+**Protocols** (not discoverable — delivered by path reference): improve-plan, improve-feature, accuracy, terminal-coder-dispatch, dispatch-analysis, advise_research, switchboard-orchestrator(-external/-internal), switchboard-orchestration, switchboard-contracts, complexity-scoring, deep-planning, web-research, tuning, constitution-builder, external-team-lead, improve-remote-plan, design-system-builder, refine_feature, archive, clickup-api, clickup-fetch, clickup-create-task, clickup-modify-task, clickup-attach, clickup-create-subpage, clickup-move-task, linear-api, linear-move-issue, notion-api, get-tickets, generate-diagram. These live at `.switchboard/protocols/<name>/SKILL.md` and are read by path when a directive tells you to.
 
-**Usage**: Invoke discoverable skills with `skill: "<name>"`. Protocols are read by path (e.g. `read .agents/protocols/improve-plan/SKILL.md`).
+**Usage**: Invoke discoverable skills with `skill: "<name>"`. Protocols are read by path (e.g. `read .switchboard/protocols/improve-plan/SKILL.md`).
 
-**Skill Files Location**: `.agents/skills/` (discoverable skills) and `.agents/protocols/` (path-delivered protocols).
+**Skill Files Location**: `.agents/skills/` (discoverable skills) and `.switchboard/protocols/` (path-delivered protocols).
 
 ### 📌 Memo Capture Mode — Priority Rule
 
@@ -93,7 +93,7 @@ See `.agents/workflows/switchboard-memo.md` for the full protocol.
 
 ### 📝 Plan Authoring & Problem Analysis Protocol
 
-When creating or improving any implementation plan (including via the extension-dispatched `improve-plan` protocol at `.agents/protocols/improve-plan/SKILL.md`):
+When creating or improving any implementation plan (including via the extension-dispatched `improve-plan` protocol at `.switchboard/protocols/improve-plan/SKILL.md`):
 - You MUST explicitly document the core problems, background context, and root cause analysis.
 - This details should be placed directly inside or immediately below the `## Goal` section to ensure the plan remains self-contained without violating workflow section requirements.
 - The `improve-plan` required section schema must never be used as a reason to drop the problem analysis.

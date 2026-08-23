@@ -74,11 +74,7 @@ Yes — one decision. For users currently pointed at a synced folder: migrate th
 
 ## Adversarial Synthesis
 
-**"Users chose this; removing it takes away a feature they rely on."** They chose an outcome (their board on more than one machine) and were given a mechanism that cannot produce it safely. The honest framing for the release note is that the presets are being replaced by two things that actually work — the global store for one machine, and a real remote database with a local replica for several. Removing a feature that silently destroys data is not a regression.
-
-**"Just warn instead of removing."** A warning on a mechanism with no safe operating mode is an invitation to lose data with informed consent. The presets are product-constructed paths, so their removal is unambiguous and complete; the heuristic warning is reserved for custom paths, where the product cannot be certain.
-
-**"Remove them only once there is a replacement."** There already is one: the global store is a safe destination, and per-project export covers moving a project between machines. Meanwhile the presets are actively producing the blank-board failure, so waiting has a running cost.
+Key risks: detecting a synced destination reliably is heuristic and locale-dependent (localised folder names won't match); a synced DB may be shared by two machines that have diverged (no merge story, and inventing one is out of scope); and the migration must verify integrity before adopting a synced file (it may be partially synced, locked, or already corrupt). Mitigations: hard removal only for product-constructed presets (unambiguous), warning-plus-override for custom paths; verify `PRAGMA integrity_check` before adoption, preserve untouched on failure; and each machine migrates the copy it can see, with a divergence report naming both locations.
 
 ## Proposed Changes
 

@@ -18,26 +18,20 @@ plans, running passes — belongs to the **board** (open it in a browser) and th
 ## Step 1 — ensure a board is running
 
 A port file is not liveness. `.switchboard/api-server-port.txt` survives a crashed
-extension, and **every workspace's port file holds the same port** — so treat
-**only a 200** from `GET /health` as "a board is running". But it cuts both ways: a
-sandboxed shell with loopback blocked also gets a non-200 from a board that *is* up,
-and spawning a second server there overwrites the port file and hijacks the live
-session. A port file is therefore grounds to **not launch**; only its absence
-licenses a launch.
+extension, and **every workspace's port file holds the same port**, so its presence
+proves nothing about *this* workspace. Read the port, call `GET /health`, and treat
+**only a 200** as "a board is running".
 
 ```bash
 ROOT="$PWD"
 PORT_FILE="$ROOT/.switchboard/api-server-port.txt"
 
-PORT=""
-HEALTH="000"
 if [ -f "$PORT_FILE" ]; then
   PORT=$(tr -d '[:space:]' < "$PORT_FILE")
-  # Non-numeric == corruption, not a board: fall through to the launch path.
-  case "$PORT" in ''|*[!0-9]*) PORT="" ;; esac
-fi
-if [ -n "$PORT" ]; then
   HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/health" 2>/dev/null)
+else
+  HEALTH="000"
+  PORT=""
 fi
 
 if [ "$HEALTH" = "200" ]; then
@@ -73,16 +67,12 @@ else
     fi
   done
   if [ "$HEALTH" != "200" ]; then
-    if [ -f "$PORT_FILE" ]; then
-      echo "Port file written but health unconfirmable here (loopback likely blocked). Continue to Step 2."
-    else
-      echo "Switchboard did not come up within 10s. Check npx output above."
-    fi
+    echo "Switchboard did not come up within 10s. Check npx output above."
   fi
 fi
 ```
 
-- **No file, or a corrupt (non-numeric) one** → launch (no board was ever started).
+- **No file** → launch (no board was ever started, or was cleaned up on shutdown).
 - **Non-200 with port file** → fail safe: do not launch (sandbox may block loopback curl, or port file is stale). Use existing port and warn user.
 - **200** → use the existing board. A running VS Code extension already serves it;
   a second instance must not be started.
@@ -95,29 +85,22 @@ fi
 run the pre-flight here, in this conversation.
 
 ```bash
-# Re-derive the path. Each block may run in a fresh shell, so $ROOT from Step 1 is
-# not guaranteed to survive — an empty $ROOT silently builds an unusable BASE.
-PORT=$(tr -d '[:space:]' < "$PWD/.switchboard/api-server-port.txt")
+PORT=$(cat "$ROOT/.switchboard/api-server-port.txt")
 BASE="http://127.0.0.1:$PORT"
 
-# Both vars come from the seat env. SWITCHBOARD_TERMINAL is set for Switchboard-managed
-# fleet seats only — send it empty rather than guessing. SWITCHBOARD_API_TOKEN is set
-# whenever the board minted a token (always in standalone); without the header adopt
-# 401s there. An empty value is safe: no token configured means loopback trust.
-curl -s -X POST "$BASE/orchestration/adopt" \
-  -H "Authorization: Bearer ${SWITCHBOARD_API_TOKEN:-}" \
-  -H "Content-Type: application/json" \
+# SWITCHBOARD_TERMINAL is set for Switchboard-managed fleet seats. Unset elsewhere —
+# send it empty rather than guessing a name.
+curl -s -X POST "$BASE/orchestration/adopt" -H "Content-Type: application/json" \
   -d "{\"terminalName\": \"${SWITCHBOARD_TERMINAL:-}\"}"
 ```
 
-The response carries `prompt` — the pre-flight instruction, with the orchestrator
-protocol (`.agents/protocols/switchboard-orchestrator/SKILL.md`) already embedded, so
-there is nothing to go and read. **Follow it in this session**: run the pre-flight,
+The response carries `prompt` — the pre-flight instruction. **Follow it in this
+session**: read `.agents/skills/switchboard-orchestrator/SKILL.md`, run the pre-flight,
 report what you find, propose a goal, and wait for the user to answer *here*.
 
 `POST /orchestration/adopt` **does not arm** and seats no terminal. On the user's
 confirmation, write `.switchboard/orchestrator/session.md` and call
-`POST /orchestration/confirm` with the same headers — the only call that arms.
+`POST /orchestration/confirm` — that is the only call that arms.
 
 If the response carries a `note`, relay it in one line: it means live turn-end notices
 will arrive in `.switchboard/orchestrator/reports/` rather than as prompts in this

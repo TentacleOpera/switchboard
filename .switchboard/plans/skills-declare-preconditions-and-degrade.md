@@ -53,16 +53,16 @@ An earlier revision of this plan recommended `query-kanban` point at the protoco
 
 | | `switchboard-orchestration/SKILL.md` | `GET /catalog` |
 |---|---|---|
-| Endpoints | 22, hand-written prose | **87**, generated from source |
+| Endpoints | 31, hand-written prose (was 22 when this plan was drafted — the drift is itself the argument) | **87**, generated from source |
 | Drift protection | none | `catalog:check` in CI (`integration-tests.yml:26`) |
 | Payload shapes | **yes** — its own text claims "endpoints, verbs, payload fields" | **no** — entries are only `{path, method, prefix}` |
 
-The protocol documents **22 of 87** endpoints and contains **zero** references to `/catalog`. Meanwhile `LocalApiServer.ts:547-548` describes the catalog as the layer that exists so "external clients discover every verb/endpoint/payload at runtime" — the discoverability job the protocol is currently doing by hand, worse.
+The protocol documents **31 of 87** endpoints and contains **zero** references to `/catalog`. Meanwhile `LocalApiServer.ts:547-548` describes the catalog as the layer that exists so "external clients discover every verb/endpoint/payload at runtime" — the discoverability job the protocol is currently doing by hand, worse.
 
-**The gap that stops this being a straight swap:** the catalog has no request shapes. Its `apiEndpoints` entries carry `path`, `method` and `prefix` and nothing else; the 561 `verbPayloads` are *webview message* payloads, not HTTP bodies. So `POST /kanban/move` appears in the catalog with no indication that it takes `{planId or sessionId, targetColumn, workspaceRoot?}`, nor that column IDs must be canonical uppercase and it 400s on unknown ones (`switchboard-orchestration/SKILL.md:125`). That contract lives only in the protocol, and it is the half an agent needs to make a correct call.
+**The gap that stops this being a straight swap:** the catalog has no request shapes. Its `apiEndpoints` entries carry `path`, `method` and `prefix` and nothing else; the 563 `verbPayloads` are *webview message* payloads, not HTTP bodies. So `POST /kanban/move` appears in the catalog with no indication that it takes `{planId or sessionId, targetColumn, workspaceRoot?}`, nor that column IDs must be canonical uppercase and it 400s on unknown ones (`switchboard-orchestration/SKILL.md:125`). That contract lives only in the protocol, and it is the half an agent needs to make a correct call.
 
 **So the corrected chain is:**
-1. **`GET /catalog` is the endpoint inventory.** The protocol points at it and stops being a partial list — killing drift on the 22 and exposing the other 65.
+1. **`GET /catalog` is the endpoint inventory.** The protocol points at it and stops being a partial list — killing drift on the 31 and exposing the other 56.
 2. **The protocol owns the payload contracts** for the calls agents are meant to make, since nothing else has them.
 3. **`query-kanban` points at the protocol.** One hop, and the authority underneath is now anchored to a generated list rather than a hand-maintained one.
 
@@ -132,6 +132,7 @@ No. This adds a stated precondition and a fallback instruction to skills that la
 
 - Independent.
 - **Pairs with** `user-declared-state-channels-as-a-skill.md`, which covers the channels no shipped skill can know about. This plan handles shipped capabilities; that one handles user-specific ones.
+- **Pairs with** `shrink-the-injected-agent-protocol-block.md` on the `query-kanban` resident rule. That plan's resident block tells agents to use the `query-kanban` skill and warns about hand-written SQL returning nothing. This plan inverts `query-kanban` to use endpoints as the primary method. Preferred ordering: this plan lands before or alongside the shrink plan, so the resident rule is accurate from the start. If the shrink plan lands first, its SQL-specific warning needs a one-line generalization when this plan lands.
 
 ## Adversarial Synthesis
 
@@ -169,7 +170,3 @@ None.
 - **Probe reuse:** assert only one LocalApiServer health-check implementation exists across the skills.
 - **Behavioural, cloud session:** in a clone with no `api-server-port.txt` and no `kanban.db`, load `query-kanban` and assert the correct outcome is to report the database as unreachable rather than to attempt a query.
 - **Behavioural, local session:** with the board running, assert every skill still works exactly as before — the preconditions are additive.
-
-## Outstanding Questions
-
-- None. The pattern exists in `manage-features`; this applies it to the three skills that lack it.

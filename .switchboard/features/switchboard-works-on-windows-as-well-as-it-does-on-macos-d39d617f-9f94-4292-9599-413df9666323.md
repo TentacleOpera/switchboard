@@ -1,6 +1,6 @@
 # Switchboard works on Windows as well as it does on macOS
 
-**Complexity:** 4
+**Complexity:** 5
 
 ## Goal
 

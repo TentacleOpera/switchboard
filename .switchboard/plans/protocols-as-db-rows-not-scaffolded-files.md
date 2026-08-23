@@ -65,21 +65,17 @@ So the constraint that normally forces control-plane content onto disk — agent
 
 ### `improve-remote-plan` is deleted, not migrated
 
-It is unexecutable, and the contradiction is between the protocol and the workflow that points at it.
+It is unexecutable: its own Prerequisites contradict its own When-to-Use.
 
-`.agents/workflows/switchboard-remote.md:25` instructs: *"To improve a plan: use `/improve-remote-plan` (not `/improve-plan`)."* But section 7 of that same workflow states the operating premise flatly:
-
-> "You have **no repo access** — no GitHub, no git, no file system."
-
-And `improve-remote-plan`'s own Prerequisites require exactly those things:
+`improve-remote-plan`'s Prerequisites require:
 
 ```bash
 source "$(git rev-parse --show-toplevel)/.agents/skills/_lib/sb_api_call.sh"
 ```
 
-plus a reachable LocalApiServer. Its "When to Use" compounds this by naming a scenario — "a remote session with no local machine running" — that its own Prerequisites forbid. **There is no configuration in which the pointing workflow and the pointed-at protocol are both satisfiable.**
+plus a reachable LocalApiServer. Its "When to Use" names a scenario — "a remote session (Claude Code web, claude.ai) with no local machine running" — that its own Prerequisites forbid. **There is no configuration in which the protocol's prerequisites and its use case are both satisfiable.**
 
-The replacement already exists in the same workflow. Sections 8 onward instruct the agent to author the plan directly into the Notion page body or Linear issue body via MCP, then set the column — which is the flow that actually works, because it needs only MCP. So line 25 is not merely broken, it is redundant with the document's own instructions.
+The workflow that formerly pointed at it (`.agents/workflows/switchboard-remote.md`) has already been updated — line 25 now instructs the agent to "author the improved content directly into the Notion page body or Linear issue description via MCP, then set the column", and no reference to `/improve-remote-plan` survives in the file. So the replacement is already in place; only the orphaned protocol file remains.
 
 Two further reasons not to keep it:
 
@@ -93,7 +89,7 @@ Protocols were modelled as skills because they were authored as skills and lived
 ### Non-goals
 
 - Moving `.agents/skills/` — the four discoverable skills stay files, because hosts glob for them: `manage-features` (`invocation: 'default'`), `query-kanban` (`no-user`), `kanban-operations` and `worktree-cleanup` (both `no-model`). **Verified: none of the four contains a single reference to a protocol path**, so this plan cannot break them.
-- Moving `.agents/workflows/` (the four user-typeable slash commands) or `.agents/skills/_lib/`. Both stay committed: workflows are the bootstrap entry surface, and `_lib/sb_api_call.sh` is sourced from the repo by `improve-remote-plan`.
+- Moving `.agents/workflows/` (the four user-typeable slash commands) or `.agents/skills/_lib/`. Both stay committed: workflows are the bootstrap entry surface, and `_lib/sb_api_call.sh` is sourced from the repo by protocols in the `sb_api_call` family.
 - Changing protocol *content*.
 - Re-litigating the token-cost goal; it is already achieved and must stay achieved.
 - Broadening what remote mode can do. Removing `improve-remote-plan` narrows it to create-author-and-status via MCP, which is what the workflow's own sections 8+ already describe. If that narrowing is unwanted, the answer is an MCP-only improvement path, not reviving a protocol that needs the repo.
@@ -117,7 +113,7 @@ An earlier revision used `ClaudeCodeMirrorService.ts:64-71`'s "extension-dispatc
 | the tracker by MCP, with no repo and no extension | **synced outward as a tracker document** — the existing context-sync path | the authoring instructions a `switchboard-remote` agent needs |
 | nothing but a clone | **committed file** | `improve-plan`, `improve-feature` |
 
-**The middle tier is the piece that makes this work and it is cheap.** Any agent already using `sb_api_call` has a channel to the extension, so it can fetch a protocol body the same way it fetches everything else. That is what lets `improve-remote-plan` be a row despite being the "remote" protocol — it *requires* the LocalApiServer by its own Prerequisites, so the channel is guaranteed.
+**The middle tier is the piece that makes this work and it is cheap.** Any agent already using `sb_api_call` has a channel to the extension, so it can fetch a protocol body the same way it fetches everything else. This is what makes the `GET /protocol/<name>` tier viable for every protocol that requires the LocalApiServer by its own Prerequisites — the channel is guaranteed.
 
 **The third tier already exists and is already running — it is not new infrastructure.** `src/services/remote/notionRemoteConfig.ts:20` describes the *"Switchboard Project Context"* page as the "Dev Docs + PRDs + constitution mirror", with a `contextPageId` slot per provider and a `src/services/remote/` provider layer (`LinearRemoteProvider`, `NotionRemoteProvider`, `ClickUpRemoteProvider`). Switchboard already pushes governance documents outward so a repo-less agent can read them by MCP. Adding the plan-authoring instructions to that sync is one more document on an existing channel.
 
@@ -139,7 +135,7 @@ Note `improve-plan` and `improve-feature` appear in two tiers: clipboard-offered
 
 ### Routine
 
-- Adding `delivery` (`inline` | `materialize`) and `body` to the `control_plane` table introduced by the scaffold plan.
+- Adding `delivery` (`inline` | `materialize`) and `override_body` to the `control_plane` table introduced by the scaffold plan (which already defines `body`, `version`, `content_hash`).
 - Seeding the 32 protocols from the extension bundle at activation, keyed by name and version.
 - A resolver — `resolveProtocol(name)` — returning either the body or a materialised absolute path, for `row`-class protocols only.
 - Materialising into `~/.switchboard/cache/protocols/<name>/SKILL.md` on demand, with the content hash as the cache key.
@@ -183,21 +179,11 @@ Note `improve-plan` and `improve-feature` appear in two tiers: clipboard-offered
 
 ## Adversarial Synthesis
 
-**"The reviewer was right and this re-opens a settled question."** The reviewer was right about the blocker and wrong about the remedy's scope. Both facts hold. The shipping problem was real and would have broken every user install; the remedy silently changed what the plan was for. This plan keeps the reviewer's finding — `.switchboard/` cannot ship, so nothing goes there — and satisfies the original intent by removing the file rather than relocating it.
-
-**"Files are simpler than rows for something an agent has to read."** True for skills, where a host globs and there is no alternative. False for protocols, where the extension already reads the file itself in the injection case, and hands over an arbitrary path in the directive case. The file is an implementation detail of a delivery mechanism that never depended on it.
-
-**"Inlining 40KB into every dispatch is worse than a 424K directory."** Correct, which is why delivery is a per-protocol column rather than a policy, and why `materialize` is the default. The directory cost is paid per repository forever; an inline cost is paid per dispatch for the protocols where it is cheap.
-
-**"Materialising to the home directory just moves the directory."** It moves it out of every repository into one machine-local cache, keyed by content hash, prunable, and never committed. That is the whole ask, and it applies only where the extension dispatches — on the user's own machine, where that cache is guaranteed to exist.
-
-**"Remote agents will lose access to protocols."** Two of them genuinely would, which is why two stay committed. A cloud session working from a clone has no extension, no clipboard and no proxy, and `CLAUDE.md` points it at `improve-plan`'s section schema as the authority for plan structure — so that body must be readable unaided. Everything else is reachable by one of the other two tiers: clipboard-inlined, or fetched over `GET /protocol/<name>` by any agent that can already reach the LocalApiServer. The failure mode to guard is a protocol *moving* between tiers without its references moving with it, which is what the prose test pins.
-
-**"Two committed files is an arbitrary carve-out."** It is required, not chosen. They are the defaults of a user-editable path field whose documented purpose is accepting third-party methodology files (GSD, Superpowers). The extension cannot inline or materialise a path a user typed, so the field's contract requires real files — and its own default cannot be the one entry that is not one. This is permanent, not a step toward zero.
+Key risks: the 140 reference sites across 26 files (including 4 webview files and 12 test files) are the dominant cost — an earlier revision counted 60 across 9 by searching only `*.ts`, missing every clipboard-prompt site and every test; the nine add-on-gated `*_DIRECTIVE` constants fire only under specific add-on combinations, so a default-configuration parity test silently skips most of them; and local overrides must survive migration (hash-compare, preserve as override rows, never discard). Mitigations: model `resolveProtocol` on the existing `manage-features` reachability check; sweep the add-on matrix rather than a default config; and extend `RETIRED_WORKFLOW_PATH_MAP` so persisted user config pointing at historical paths keeps resolving.
 
 ## Proposed Changes
 
-1. **`control_plane` table gains `body`, `delivery`, `version`, `content_hash`, and a nullable `override_body`** — extending the scaffold plan's schema rather than adding a second table.
+1. **`control_plane` table gains `delivery` (`inline` | `materialize`) and `override_body` (nullable)** — extending the scaffold plan's schema rather than adding a second table. The scaffold plan already defines `name`, `kind`, `version`, `content_hash`, `body`, and a nullable per-workspace override; this plan adds only the `delivery` column and renames the override column to `override_body` for clarity. No duplicate column definitions.
 2. **Bundle seeding**: the 32 protocols are compiled into the extension and upserted at activation by name and version, with hash comparison so an override row is never overwritten.
 3. **`resolveProtocol(name)`** — the single resolution point for all 32. Returns the body for `inline` or an absolute materialised path for `materialize`, and validates any emitted path against the cache root. No host argument: protocols are only ever resolved by the extension, which only runs where the store exists.
 4. **140 call sites across 26 files** rewritten to call the resolver instead of constructing `path.join('.agents', 'protocols', …)`. The webview sites become inlined bodies rather than paths, since the extension cannot know where a copied prompt is pasted.
@@ -207,7 +193,7 @@ Note `improve-plan` and `improve-feature` appear in two tiers: clipboard-offered
 6. **Materialisation cache** at `~/.switchboard/cache/protocols/<content-hash>/SKILL.md`, atomic write, idle pruning.
 7. **Plan-authoring instructions added to the outward context sync**, alongside the Dev Docs / PRD / constitution mirror already carried to the "Switchboard Project Context" document. This is the delivery path for repo-less remote agents and reuses `src/services/remote/`'s provider layer rather than adding a mechanism. Subject to the same rule as the context mirror itself: regenerated on every sync, never edited on the tracker.
 8. **`improve-remote-plan` deleted**, not migrated to a row. Its `.agents/protocols/improve-remote-plan/` directory goes, along with every reference.
-9. **`.agents/workflows/switchboard-remote.md:25` rewritten** to point at the workflow's own sections 8+ (author into the page/issue body via MCP, then set the column) instead of the deleted protocol. **This is a workflow file — propose the wording and obtain explicit approval before editing it.**
+9. **`.agents/workflows/switchboard-remote.md` — already updated.** Line 25 already instructs the agent to "author the improved content directly into the Notion page body or Linear issue description via MCP, then set the column", and no reference to `/improve-remote-plan` survives in the file. No change needed; verify only that no stale reference was reintroduced.
 10. **`.agents/protocols/` deleted** from the repo and from the seeding crawl; `.switchboard-bundled.json` protocol entries dropped in favour of the version column.
 11. **`protocol-catalog.json` is unrelated to this plan — no change.** Recorded here because a previous revision of this plan claimed the opposite. It is a name collision: "protocol" in that filename means the **webview↔extension message protocol**, not a Switchboard protocol `SKILL.md`. The file indexes 538 message verbs, 561 payload shapes, 626 handler `case` arms across six providers, 640 `postMessage` push sites, and 87 HTTP endpoints — generated by `scripts/generate-protocol-catalog.js`, which scans provider `switch` blocks and webview `postMessage` sites. Nothing in it references `.agents/protocols/`. Moving protocol bodies into DB rows does not touch it, and it must not be edited by this plan.
 
@@ -230,7 +216,7 @@ Import from all three historical locations, hash-compare, preserve mismatches as
 - **Tracker tier:** assert the plan-authoring instructions appear in the synced "Switchboard Project Context" document for each configured provider, carry the same `Synced at` staleness header as the rest of the mirror, and are regenerated (not merged) on the next sync.
 - **`improve-remote-plan` is gone:** assert the directory does not exist, no `control_plane` row is seeded for it, and no reference survives in `src/`, `.agents/`, `CLAUDE.md` or `AGENTS.md`.
 - **`switchboard-remote.md` self-consistency:** assert the workflow names no protocol or path that its own section 7 premise ("no repo access — no git, no file system") makes unreachable. This is the general form of the bug, so it catches the next one.
-- **API tier:** `GET /protocol/<name>` returns the body for every row-class protocol, rejects an unknown name, and rejects a name containing traversal characters. Assert `improve-remote-plan` is fetchable this way, since its own Prerequisites guarantee the channel.
+- **API tier:** `GET /protocol/<name>` returns the body for every row-class protocol, rejects an unknown name, and rejects a name containing traversal characters. Assert `improve-remote-plan` is NOT fetchable (it is deleted, not a row) and returns a clear "not found" rejection.
 - **The extension point still works:** with both fields at their defaults, assert `Validate` succeeds and a planner dispatch resolves each file. Then set each field to a third-party path (a GSD-style and a Superpowers-style file), assert `Validate` succeeds and the dispatch emits that path unchanged. Then set a nonexistent path and assert `Validate` fails cleanly. This is the contract that forbids row delivery for these two.
 - **Persisted config:** a user who saved `.agents/protocols/improve-plan/SKILL.md` before this change must still resolve after it — automatic once the files stay, but assert it rather than assuming, and keep the `RETIRED_WORKFLOW_PATH_MAP` entries for the older locations.
 - **Third-party parity:** set `workflowFilePath` to a GSD path, a Superpowers path, and the Switchboard default in turn; assert `Validate` behaves identically for all three and that dispatch resolves each the same way. No entry may be special-cased.
@@ -239,7 +225,7 @@ Import from all three historical locations, hash-compare, preserve mismatches as
 - **Weaker-guarantee-wins:** assert `improve-plan` and `improve-feature` resolve as `inline`, since they are both clipboard-offered and extension-dispatched.
 - **No unreachable protocol path in agent-read prose:** assert the only protocol paths appearing in `CLAUDE.md`, `AGENTS.md`, `.agents/workflows/*.md` or the remote-flow documents are the two committed ones, and that every such path resolves in a bare clone. No `.switchboard/protocols/` path may appear at all. This test fails today — `CLAUDE.md` carries five stale `.switchboard/protocols/` paths — and must pass after.
 - **Workflows still bootstrap:** assert the four `.agents/workflows/*.md` files remain committed and readable in a fresh clone with no extension, since they are the entry surface that makes row-delivered protocols reachable.
-- **`_lib` survives:** assert `.agents/skills/_lib/sb_api_call.sh` is still committed and resolvable via `git rev-parse --show-toplevel`, as `improve-remote-plan` requires.
+- **`_lib` survives:** assert `.agents/skills/_lib/sb_api_call.sh` is still committed and resolvable via `git rev-parse --show-toplevel`, as other protocols in the `sb_api_call` family require.
 - **Prompt-shape parity across the add-on matrix:** for each of the nine protocol-carrying `*_DIRECTIVE` constants in `agentPromptBuilder.ts`, force the add-on combination that fires it and assert the emitted prompt resolves the right protocol, against a recorded baseline. A default-configuration run is not sufficient — `COMPLEXITY_SCORING_DIRECTIVE` fires by default while `TICKET_UPDATE_DIRECTIVE` does not, so a single-config test covers neither reliably.
 - **Exhaustiveness guard:** assert every `.agents/protocols/` string in `src/` is reachable from at least one test. A protocol path nobody exercises is the failure mode this plan is most likely to ship.
 - **Override preservation:** hand-edit a protocol at each of the three historical locations, migrate, assert the edit survives as an override row, the file is archived as `.migrated.bak`, and the override wins at resolution.

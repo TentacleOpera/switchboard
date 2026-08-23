@@ -21,11 +21,13 @@ This plan is the UI half. It assumes the model and specifies where each part liv
 
 **This supersedes the start controls earlier revisions proposed** — one in this panel, one in the dock's empty state. Neither is needed: the rail button exists, has the right semantics, is already stateful, and already solves the double-start race that a naive second control would reintroduce.
 
+**Reconciliation with `one-controller-enforced-at-the-service.md`:** that plan changes the rail button's lit-click from **stop** to **reveal** (select the Mission Control panel or focus the controller terminal), making it navigational like every other button in the rail. The stop control moves to a labelled `btn-controller-*` button in the scoped `.sidebar-ops` block. This plan defers to that change — the affordance table below reflects the post-reconciliation semantics, not the current stop-on-lit-click behaviour. The double-click guard also moves: the one-controller plan demotes the client-side `orchestrationStartInFlight` flag from guard to UI affordance, because the service-layer singleton check at `create()` becomes the real guard.
+
 **And it fixes an affordance count that was heading for three.** With the fighter-jet panel icon plus the dock toggle plus this button, Mission Control would have had three rail entries, one duplicating another's function. The intended set is two, each doing a distinct thing:
 
 | Rail affordance | Does |
 |---|---|
-| `#strip-orchestrator` (existing, restyled to the fighter-jet/Mission Control identity) | **start / stop** the persona, with live state |
+| `#strip-orchestrator` (existing, restyled to the fighter-jet/Mission Control identity) | **start (dimmed) / reveal (lit)** the persona, with live state — navigational, per `one-controller-enforced-at-the-service.md`; stop moves to the scoped ops block |
 | Mission Control panel icon | opens the panel — missions, schedules, Control |
 | ~~dock toggle~~ | folded into the dock plan's own bottom-cluster toggle, which shows/hides a pane rather than starting anything |
 
@@ -86,6 +88,8 @@ That settles the access story:
 | ≥ 980px | dock beside the board — the point of the dock |
 | < 980px, or split window | **the panel's controller strip** — no mode switch away from Mission Control |
 | no `node-pty` | neither; both absent by the same manifest gate |
+
+**The strip hosts the controller's scoped controls, not just its terminal.** `one-controller-enforced-at-the-service.md` puts the controller's labelled controls (`btn-controller-*` — stop, restart, ack) in a scoped `.sidebar-ops` block, mirroring the team-scoped pattern in the terminals panel. When the controller is viewed in the Mission Control panel's strip rather than the terminals panel, the same scoped ops must appear alongside it — otherwise the strip is a terminal with no exit, and the one-controller plan's sequencing rule (panel stop ships before the rail button's change of meaning) is violated. The strip is a viewing context for the same terminal, so the `is-controller-scoped` body class and `btn-controller-*` buttons apply here too, not only in `terminals.html`.
 
 **If it ships as a tab anyway**, the panel must relay a `panelVisibility`-equivalent into the embedded frame on every tab switch, reusing that same arm rather than a new one. That is the minimum, not a nicety — and it is worth noting the failure is silent and remote, so it will not show up in testing the tab itself.
 
@@ -290,5 +294,4 @@ None of its own; the retired-mode notice surfaces on first open of this panel.
 
 ## Outstanding Questions
 
-- Do the returned-to-`CREATED` plans need a marker distinguishing the two return reasons, so a later pass can tell "needs a decision" from "needs evidence" without re-reading the prose?
-- Does the missions sidebar group by status, or is the status view switch a filter over one flat list? The controls imply a filter; a grouped list would make the switch redundant.
+None. The returned-to-`CREATED` distinction (needs a decision vs needs evidence) is handled by the plan file's own prose and the run log — no UI marker. The missions sidebar is a flat list with a status filter, not grouped.

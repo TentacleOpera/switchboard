@@ -6,35 +6,39 @@ Delete the clause in `TEAM_QUEUE_DONE_ORDER_BODY` that tells any seat to move a 
 
 ### Problem Analysis
 
-Two standing orders are installed on the same team and contradict each other. Both are live today.
+Two instructions are installed on the same team and contradict each other. Both are live today.
 
-**The seat order** — `TEAM_QUEUE_DONE_ORDER_BODY` (`teamWiring.ts:322-325`), installed by `applyTeamQueueOrders` at **both** `team` scope (members) and `team-head` scope (the head seat):
+**The seat order** — `TEAM_QUEUE_DONE_ORDER_BODY` (`teamWiring.ts:343-355`), a standing order installed by `applyTeamQueueOrders` at **both** `team` scope (members, `teamWiring.ts:411-417`) and `team-head` scope (the head seat, `teamWiring.ts:419-425`):
 
 > "Before posting, check `GET /kanban/plans?featureId=<your feature id>` — if all subtasks are in `LEAD CODED`, POST `/kanban/dispatch` with `{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED",…}` instead of posting to `queue/done`. The feature is complete — hand it to review."
 
-**The head order** — (`teamWiring.ts:757-770`):
+**The head's headPrompt** — `NEW_CODING_HEAD_PROMPT` (`teamWiring.ts:879-921`), the team group's `headPrompt` field delivered as the head's system prompt (not a standing order — a different delivery mechanism that also reaches the head):
 
 > "Check your team roster … for a seat with role `reviewer`. If your team has a reviewer seat, make one call: POST `/kanban/dispatch` … **If your team has NO reviewer seat, do NOT move the card to `CODE REVIEWED` — that is not your role.** Post a finished report … and stop. The card stays where it is."
 
-The head holds both, because `applyTeamQueueOrders` installs the seat body at `team-head` scope too (`:378-393`).
+The head holds both, because `applyTeamQueueOrders` installs the seat body at `team-head` scope too (`teamWiring.ts:419-425`).
+
+> **Superseded:** The head order — (`teamWiring.ts:757-770`): a standing order installed on the head.
+> **Reason:** `teamWiring.ts:757-770` is `PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT` — a frozen snapshot that the codebase says "NEVER edit." The live head prompt is `NEW_CODING_HEAD_PROMPT` at `:879-921`. Furthermore, the head's reviewer-check rule is a **headPrompt** (the team group's `headPrompt` field, delivered as the head's system prompt via `wireSpawnedTeam`), not a standing order. Standing orders are installed via `mutateStandingOrders` and rendered by `selectOrders`; headPrompts are installed via the group config and rendered by the team-prompt builder. The contradiction is between one standing order and one headPrompt, not two standing orders.
+> **Replaced with:** The head's headPrompt — `NEW_CODING_HEAD_PROMPT` (`teamWiring.ts:879-921`), the team group's `headPrompt` field delivered as the head's system prompt. Both the standing order and the headPrompt reach the head, but through different mechanisms.
 
 **Why the seat version is the dangerous one, and why it is likelier to be obeyed:**
 
-- **No roster check.** It never asks whether a reviewer seat exists. The head order's whole point is that condition.
+- **No roster check.** It never asks whether a reviewer seat exists. The headPrompt's whole point is that condition.
 - **It is cheaper to satisfy.** One board read versus a roster lookup plus a conditional. Given two instructions, the one requiring less work is the one an agent acts on.
 - **It authorises the exact hazard the head rule prevents.** Moving the feature to `CODE REVIEWED` with no reviewer on the team hands the work to an off-team reviewer, which then edits the same files while the team pulls its next queue item and codes concurrently. File conflicts, from two agents legitimately following their instructions.
 
-**And its premise is wrong regardless.** Cards move to a coding column on coding *start* — `LocalApiServer.ts:1682-1684` relies on exactly that ("cards move on coding *start* and never on finish") to explain why the in-flight refusal is skipped under seat pacing. So "all subtasks are in `LEAD CODED`" means *every subtask has been started at lead tier*, which the clause then labels "The feature is complete". It names an assignment state as an attestation.
+**And its premise is wrong regardless.** Cards move to a coding column on coding *start* — `LocalApiServer.ts:1703` relies on exactly that ("cards move on coding *start* and never on finish") to explain why the in-flight refusal is skipped under seat pacing. So "all subtasks are in `LEAD CODED`" means *every subtask has been started at lead tier*, which the clause then labels "The feature is complete". It names an assignment state as an attestation.
 
-**Nothing depends on it.** Server-side, completion is already a report: `LocalApiServer.ts:4119-4122` relays `[queue/done] ${from} reports its dispatched task complete` to the head, then clears and dispatches the next item. No board-state inference anywhere in the handler. The clause is guidance layered on top of a report-based design, contradicting it.
+**Nothing depends on it.** Server-side, completion is already a report: `LocalApiServer.ts:4117-4128` relays `[queue/done] ${from} reports its dispatched task complete` to the head, then clears and dispatches the next item. No board-state inference anywhere in the handler. The clause is guidance layered on top of a report-based design, contradicting it.
 
 ### Root Cause
 
-The clause was written to solve a real problem — how does a *feature* (as opposed to a subtask) get advanced when its last subtask finishes? — and solved it with the information a seat had to hand: the board. The head order later solved the same problem correctly, with the roster check and the reviewer-seat condition. The seat version was never removed, so both shipped.
+The clause was written to solve a real problem — how does a *feature* (as opposed to a subtask) get advanced when its last subtask finishes? — and solved it with the information a seat had to hand: the board. The headPrompt later solved the same problem correctly, with the roster check and the reviewer-seat condition. The seat version was never removed, so both shipped.
 
 ## Metadata
 
-**Complexity:** 2
+**Complexity:** 3
 **Tags:** bugfix, reliability, backend
 
 ## User Review Required
@@ -45,50 +49,92 @@ The clause was written to solve a real problem — how does a *feature* (as oppo
 
 ### Routine
 
-- Removing the final sentences of `TEAM_QUEUE_DONE_ORDER_BODY` (`teamWiring.ts:322-325`), keeping the `queue/done` instruction that precedes them.
-- Updating any test that byte-pins that body.
+- Removing the hand-to-review clause from `TEAM_QUEUE_DONE_ORDER_BODY` (`teamWiring.ts:351-354` — the four lines starting with `'Before posting, check GET /kanban/plans?featureId='`), keeping the `queue/done` instruction that precedes them (`:344-350`).
+- Updating the doc comment above the function (`teamWiring.ts:336-341`) which describes the clause as "the existing feature-completion path."
 
 ### Complex / Risky
 
-- **Existing installed orders are stale until rewritten.** Orders live in DB config (`terminals.standingOrders`); changing the constant does not change what is already installed. The repo already has a known-failure plan for this exact class — `a-stale-standing-order-can-still-reach-a-live-agent.md`, cited at `teamWiring.ts:342-343`. So the change needs a rewrite pass over installed orders, in the manner of `rewriteStandingOrdersForRename` (`standingOrders.ts:63`), not just a new constant. This is the whole risk: a constant edit alone ships nothing to a live team.
-- **The deterministic ids make reinstall the easy path.** `applyTeamQueueOrders` keys on `TEAM_QUEUE_ORDER_ID_PREFIX + groupId + ':' + scope` and skips an order that exists. Either the rewrite updates bodies in place, or the install path must detect an old body and replace it — otherwise a team keeps the old text indefinitely.
+- **Existing installed orders are stale until rewritten.** Orders live in DB config (`terminals.standingOrders`); changing the constant does not change what is already installed. The repo already has a known-failure plan for this exact class — `a-stale-standing-order-can-still-reach-a-live-agent.md`, cited at `teamWiring.ts:370-372`. The fix needs a read-path migration recogniser, not just a new constant. This is the whole risk: a constant edit alone ships nothing to a live team.
+- **The deterministic IDs make the recogniser precise.** `applyTeamQueueOrders` keys on `TEAM_QUEUE_ORDER_ID_PREFIX + groupId + ':' + scope` (`teamWiring.ts:407-408`, prefix at `:362`). The recogniser matches by ID prefix (`team-queue-done:`) AND clause fragment — more precise than the headPrompt recognisers, which match by fragment alone.
+- **The `groupId` is recoverable from `o.teamId`.** `applyTeamQueueOrders` passes `groupId` as the `teamId` parameter to `makeStandingOrder` (`teamWiring.ts:413`). So the host recogniser can call `TEAM_QUEUE_DONE_ORDER_BODY(o.teamId)` to generate the clean new body. The client mirror can truncate the instruction at the clause start fragment, since the clause is always the trailing portion.
 - **Do not remove the whole order.** The `queue/done` instruction in the same body is load-bearing: it is the completion-driven dispatch signal. Only the hand-to-review clause goes.
-- **The head order stays exactly as it is.** It already encodes the correct rule. This plan does not touch it, and should not be an occasion to "tidy" it.
+- **The headPrompt stays exactly as it is.** It already encodes the correct rule. This plan does not touch it, and should not be an occasion to "tidy" it.
+- **Client mirror required.** Every existing migration fragment in the codebase notes "Two copies only: this one and the `terminals.js` mirror." The client mirror `migrateCodingTeamOrdersClient` (`terminals.js:10897`) must also get the new recogniser, or the Teams tab UI shows stale text while agents receive the corrected order.
 
 ## Edge-Case & Dependency Audit
 
-**Migration.** Required, and it is the substance of the change: installed orders carrying the old body must be rewritten. Per this project's rules the state shipped, so it migrates rather than being left.
+**Migration.** Required, and it is the substance of the change: installed orders carrying the old body must be rewritten. Per this project's rules the state shipped, so it migrates rather than being left. The migration follows the established read-path pattern (see Proposed Changes).
 
 **Security.** None. Removing an instruction that authorises a board mutation narrows what agents are told they may do.
 
-**Side effects.** A feature whose last subtask finishes will no longer be advanced by a seat. For a reviewer-seat team the head order advances it. For a no-reviewer-seat team it correctly stays put — which is why the endpoint plan should land first.
+**Side effects.** A feature whose last subtask finishes will no longer be advanced by a seat. For a reviewer-seat team the headPrompt advances it. For a no-reviewer-seat team it correctly stays put — which is why the endpoint plan should land first.
 
 **Ordering.** After (or with) the task-complete endpoint.
+
+**Dependencies & Conflicts.** None at the code level. The migration recogniser is a new branch in an existing pure transform; it does not conflict with any other recogniser because it matches by ID prefix, which is unique to `applyTeamQueueOrders`-installed orders.
 
 ## Dependencies
 
 - **Should follow** `add-a-task-complete-endpoint-for-the-lead.md`.
 - **Subsumed by** `compose-standing-orders-from-a-library.md` if that ships first — a composed order set would not emit this clause to a team without a reviewer seat. Shipping this deletion separately is worth it because it is a two-line fix for a live hazard and the library is a larger build.
+- **Also subsumed by** `context-aware-completion-reporting.md` if that ships first — it replaces the entire `TEAM_QUEUE_DONE_ORDER_BODY` with a context-aware order. Same calculus: this is a smaller, faster fix for a live hazard.
 
 ## Adversarial Synthesis
 
-**"Fix the clause instead — add the roster check."** Then two orders say the same thing in two places and both must be maintained. The head order already says it correctly; a second copy is how this happened.
-
-**"Without it, who advances the feature?"** The head, per its own order, when a reviewer seat exists. When one does not, nobody should — that is the point. The gap is the *completion signal*, which the endpoint plan fills, not the card move.
-
-**"It has presumably worked in practice."** It fires only when every subtask has been started at lead tier, so on a mixed-complexity feature it never fires at all — which is why the hazard is latent rather than constant. A latent authorisation to cause file conflicts is still worth deleting.
+Key risks: (1) the clause fragment must be unique to the seat order — verified: "The feature is complete — hand it to review" is distinct from both `NEW_CODING_HEAD_PROMPT` ("triggers review by dispatching") and `OLD_HEADPROMPT_FRAGMENT` ("hand it to review yourself"). (2) The migration must be idempotent — the new body lacks the fragment, so the recogniser doesn't re-match. (3) The client mirror must stay in sync or the UI diverges from delivery. Mitigations: match by ID prefix AND clause fragment; return input by reference when nothing matches; mirror in `migrateCodingTeamOrdersClient`.
 
 ## Proposed Changes
 
-1. **Delete the hand-to-review clause** from `TEAM_QUEUE_DONE_ORDER_BODY` (`teamWiring.ts:322-325`); keep the `queue/done` instruction.
-2. **Rewrite installed orders** carrying the old body, following `rewriteStandingOrdersForRename`'s pattern (`standingOrders.ts:63`).
-3. **Make the install path replace an outdated body** rather than skipping on id match.
-4. **Leave the head order untouched.**
-5. **Update tests** that pin the old body.
+### `src/services/teamWiring.ts`
+
+**1. Delete the hand-to-review clause from `TEAM_QUEUE_DONE_ORDER_BODY`** (`teamWiring.ts:351-354`).
+
+Remove these four lines from the function body (`:343-355`):
+```
++ 'Before posting, check GET /kanban/plans?featureId=<your feature id> — if all subtasks '
++ 'are in LEAD CODED, POST /kanban/dispatch with '
++ '{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED","from":"<your terminal name>"} '
++ 'instead of posting to queue/done. The feature is complete — hand it to review.';
+```
+Keep the preceding `queue/done` instruction (`:344-350`). The function should end after the fallback line: `'If the POST fails, report to your head directly via ptySendPrompt as a fallback.'`.
+
+**2. Update the doc comment** (`teamWiring.ts:336-341`) that describes the feature-completion check as "the existing feature-completion path from `agentGroupInstantiation.ts`." Remove or rewrite the paragraph that documents the clause — the clause is gone.
+
+**3. Add a read-path migration recogniser.**
+
+> **Superseded:** Rewrite installed orders carrying the old body, following `rewriteStandingOrdersForRename`'s pattern (`standingOrders.ts:63`); and make the install path replace an outdated body rather than skipping on id match.
+> **Reason:** `rewriteStandingOrdersForRename` (at `standingOrders.ts:218`, not `:63`) is a name-based rename, not a body-text migration. The codebase already has a lazy read-path migration pipeline — `loadEffectiveStandingOrders` (`teamWiring.ts:2861`) runs `migrateCodingTeamOrders(migrateTeamPairOrders(raw))` on every read, persists once, and backs up pre-migration state. Every previous headPrompt migration (`OLD_HEADPROMPT_FRAGMENT`, `BUGGY_HEADPROMPT_FRAGMENT`, `PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT`, `PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT`) uses this pattern. The install-path change is redundant — the read-path migration catches stale bodies on the next prompt regardless of whether `applyTeamQueueOrders` re-runs. No existing migration changes the install path.
+> **Replaced with:** Add a recogniser to `migrateCodingTeamOrders` (or a new pure transform composed into `loadEffectiveStandingOrders` at `:2866`) that matches seat orders by deterministic ID prefix (`team-queue-done:`, constant `TEAM_QUEUE_ORDER_ID_PREFIX` at `teamWiring.ts:362`) AND clause fragment, and replaces the instruction with `TEAM_QUEUE_DONE_ORDER_BODY(o.teamId)`. No install-path change.
+
+The recogniser:
+- **Match condition:** `o.id` starts with `TEAM_QUEUE_ORDER_ID_PREFIX` AND `o.instruction` contains the clause fragment `'The feature is complete — hand it to review'` (unique to the old seat order body — verified against all `CODE REVIEWED` occurrences in `teamWiring.ts`).
+- **Replacement:** `{ ...o, instruction: TEAM_QUEUE_DONE_ORDER_BODY(o.teamId!) }` — regenerates the clean body from the order's `teamId` field (which IS the `groupId` passed to `makeStandingOrder` at install time).
+- **Idempotency:** The new body lacks the clause fragment, so the recogniser does not re-match on a subsequent read.
+- **Identity short-circuit:** Return the input array by reference when nothing matches, preserving `loadEffectiveStandingOrders`' "did anything change?" identity test (`teamWiring.ts:2867`).
+- **Scope:** Both `team` and `team-head` scopes carry the same body; the ID-prefix match covers both.
+
+### `src/webview/terminals.js`
+
+**4. Mirror the recogniser in `migrateCodingTeamOrdersClient`** (`terminals.js:10897`).
+
+The client mirror cannot import `TEAM_QUEUE_DONE_ORDER_BODY`, so it truncates the instruction at the clause start fragment instead of regenerating:
+- **Match condition:** same — `o.id` starts with `'team-queue-done:'` AND `o.instruction` contains `'The feature is complete — hand it to review'`.
+- **Replacement:** truncate `o.instruction` at the index of `'Before posting, check GET /kanban/plans?featureId='` (the clause start), keeping everything before it. The `queue/done` instruction that precedes the clause is preserved.
+- **Idempotency:** the truncated instruction lacks the fragment, so the recogniser does not re-match.
+
+This follows the "two copies" pattern every existing migration fragment uses. The client mirror is for Teams tab UI display; authoritative agent delivery goes through the server-side `loadEffectiveStandingOrders` path.
+
+### Tests
+
+**5. Write new tests** (no existing test pins `TEAM_QUEUE_DONE_ORDER_BODY`).
+
+> **Superseded:** Updating any test that byte-pins that body.
+> **Reason:** No test pins `TEAM_QUEUE_DONE_ORDER_BODY`. `queue-pipeline-contract.test.js:684-685` checks `applyTeamQueueOrders` exists and the `team-queue-done:` prefix is present (structural, not body-pinning). `stage-marker-commit-contract.test.js:404-421` pins `NEW_CODING_HEAD_PROMPT` literals (the head prompt, not the seat order). There is nothing to update; new tests are needed.
+> **Replaced with:** Write new tests asserting the clause is gone, the `queue/done` instruction remains, and the migration recogniser rewrites installed orders.
 
 ### Migration
 
-Installed orders in `terminals.standingOrders` are rewritten in place. Without this the constant change reaches nobody.
+Installed orders in `terminals.standingOrders` are rewritten by the read-path migration on the next `loadEffectiveStandingOrders` call, which persists once and backs up the pre-migration state (`teamWiring.ts:2867-2876`). Without this the constant change reaches nobody.
 
 ## Verification Plan
 
@@ -96,17 +142,20 @@ Installed orders in `terminals.standingOrders` are rewritten in place. Without t
 
 - No standing order body instructs a non-head seat to move a card to `CODE REVIEWED`.
 - The `queue/done` instruction still reaches every seat.
-- The head order is byte-identical to before.
-- A team with the old body installed has it rewritten.
+- The headPrompt (`NEW_CODING_HEAD_PROMPT`) is byte-identical to before.
+- A team with the old body installed has it rewritten by the read-path migration.
 
 ### Automated Tests
 
-- **Clause gone from the constant:** assert `TEAM_QUEUE_DONE_ORDER_BODY` contains no `CODE REVIEWED`, and still contains its `queue/done` instruction. Both halves — deleting too much is the likelier slip.
-- **Installed orders rewritten:** seed a workspace with the old body installed at `team` and `team-head` scope, run the migration, assert both are updated. This is the test that distinguishes a shipped fix from an edited constant, and its absence is exactly the known failure the repo already documents.
-- **Reinstall does not resurrect it:** run `applyTeamQueueOrders` after migration; assert the old text does not return via the id-match skip.
-- **Head order unchanged:** byte-compare it, so this change cannot quietly alter the rule it defers to.
-- **No seat can advance a feature:** with orders installed, assert no non-head scope carries an instruction to move a card.
+- **Clause gone from the constant:** assert `TEAM_QUEUE_DONE_ORDER_BODY('test-team')` contains no `CODE REVIEWED`, and still contains its `queue/done` instruction (`POST /terminals/teams/test-team/queue/done`). Both halves — deleting too much is the likelier slip.
+- **Migration recogniser rewrites installed orders:** seed a standing-orders array with the old body installed at `team` and `team-head` scope (using `TEAM_QUEUE_ORDER_ID_PREFIX + 'test-team:team'` and `:team-head` IDs), run the migration transform, assert both instructions are updated to the new body (no `CODE REVIEWED`, still has `queue/done`). This is the test that distinguishes a shipped fix from an edited constant, and its absence is exactly the known failure the repo already documents.
+- **Migration is idempotent:** run the migration transform on an array with the NEW body already installed; assert it returns the input by reference (no re-match, no write).
+- **Migration leaves unrelated orders untouched:** seed an operator-authored ad-hoc order that happens to contain "hand it to review" but does NOT have a `team-queue-done:` ID prefix; assert it is not modified.
+- **Reinstall does not resurrect it:** run `applyTeamQueueOrders` after migration; assert the old text does not return via the id-match skip (the install path still skips on id match, and the constant no longer contains the clause, so a fresh install also lacks it).
+- **HeadPrompt unchanged:** byte-compare `NEW_CODING_HEAD_PROMPT` before and after, so this change cannot quietly alter the rule it defers to.
+- **Client mirror matches host behaviour:** seed the same old-body array through `migrateCodingTeamOrdersClient` and assert the clause is stripped from both scopes.
+- **No seat can advance a feature:** with orders installed, assert no non-head scope carries an instruction to move a card to `CODE REVIEWED`.
 
 ## Outstanding Questions
 
-- Are there other installed bodies naming `CODE REVIEWED` at a non-head scope? The two known are the `team`/`team-head` pair from one installer; a sweep of all order bodies would confirm the deletion is complete rather than just correct where it was found.
+- **[user]** Are there other installed bodies naming `CODE REVIEWED` at a non-head scope? The two known are the `team`/`team-head` pair from one installer; a sweep of all order bodies would confirm the deletion is complete rather than just correct where it was found. — proceeding on the assumption that the `team-queue-done:` ID prefix is unique to `applyTeamQueueOrders` and no other installer emits a `CODE REVIEWED` instruction at `team` or `team-head` scope.
