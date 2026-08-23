@@ -267,6 +267,17 @@ jobs:
       - name: Minimal prompt shape (directive spacing, no triple newlines)
         run: npm run test:contract:minimal-prompt
 
+      # The CLAUDE.md managed block is the most-multiplied text the product ships
+      # (~4,000 installs, resident every turn). This is the durability gate for the
+      # shrink-the-injected-agent-protocol-block plan: it pins the block under the
+      # size gate, free of dead references (send_message/view_file/the protocol
+      # catalogue), free of hidden-capability advertising (no-model skills), and
+      # pins the relocated card-move rule's per-role placement. Without it the next
+      # individually-justified addition silently undoes the cut. Loads compiled
+      # modules from out/ — must stay AFTER "Compile test outputs".
+      - name: CLAUDE.md protocol block size + content contract
+        run: npm run test:contract:claude-protocol-block
+
       # PtyFleetService.rename mutates handle.name IN PLACE, so the gateway's onData
       # closure switches to the new name while every name-keyed map is still filed
       # under the old one — a renamed terminal with no scrollback ring at all (blank

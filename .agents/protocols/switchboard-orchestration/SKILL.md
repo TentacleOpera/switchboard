@@ -1,12 +1,20 @@
 # Skill: Switchboard Orchestration HTTP Surface
 
 This is the **complete** HTTP contract for driving Switchboard from outside the VS Code webview —
-whether you are a **fleet coding/review agent** working inside an orchestration worktree, or an
-**external orchestrator** (Cursor / Zed / Claude Code / Antigravity) driving the whole board.
+whether you are a **fleet coding/review agent** working inside an orchestration worktree, an
+**external orchestrator** (Cursor / Zed / Claude Code / Antigravity) driving the whole board, or a
+**team member** (a discoverable-skill agent) reading the local board.
 
 Switchboard's LocalApiServer runs inside the VS Code extension and is the **sole writer** of
 `kanban.db`. You never touch the DB directly — you call these endpoints. The board is the source
 of truth; the UI is just one view of it.
+
+> **Endpoint inventory.** The hand-written list below is a subset for the calls agents most often
+> make. The **authoritative, generated inventory is `GET /catalog`** — it lists every verb,
+> endpoint, and prefix the server actually serves (drift-checked in CI via `catalog:check`), so it
+> can never lag behind the server the way a hand-maintained list can. When you need a call this
+> document does not cover, hit `GET /catalog` first; the payload contract for any call below still
+> lives here, since the catalog carries only `{path, method, prefix}` and not request shapes.
 
 > **Behavior vs. invocation.** This skill is the *invocation* authority (endpoints, verbs,
 > payload fields). For *behavior* contracts — how the system behaves (cards move on coding

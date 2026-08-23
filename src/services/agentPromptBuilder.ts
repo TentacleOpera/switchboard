@@ -1510,8 +1510,25 @@ export function normalizeRetiredWorkflowPath(p: string): string {
 const CODE_TOUCHING_ROLES = new Set(['planner', 'lead', 'coder', 'intern', 'reviewer', 'tester']);
 
 /**
+ * Card-move prohibition — relocated here from the resident CLAUDE.md/AGENTS.md
+ * block because it is role-scoped: leads and the orchestrator legitimately move
+ * cards (the orchestrator via move-card.js / POST /kanban/move, a lead when
+ * dispatching), so a role-agnostic resident rule spent most of its length
+ * enumerating exceptions. Phrased to close the motive — transitions happen
+ * automatically — rather than merely forbidding one route (forbid SQL and the
+ * agent reaches for move-card.js; forbid moves and it improvises a board edit).
+ * Present for the five execution seats that must never move a card; absent for
+ * lead and orchestrator (which are not routed through assembleSuffix anyway —
+ * the orchestrator is launched by path, and lead's branch still calls
+ * assembleSuffix but is excluded from CARD_MOVE_ROLES).
+ */
+const CARD_MOVE_RULE = `KANBAN COLUMN TRANSITIONS: the system moves cards automatically as work progresses — never move a card yourself (no SQL, no move-card.js, no manual board edit). Moving a card yourself races the system and can drop or duplicate it.`;
+const CARD_MOVE_ROLES = new Set(['planner', 'coder', 'intern', 'reviewer', 'tester']);
+
+/**
  * Shared suffix-block assembler. Canonicalises inclusion rules so they can't
- * drift per-branch. `gitBlock` is included only for code-touching roles.
+ * drift per-branch. `gitBlock` is included only for code-touching roles;
+ * `cardMoveBlock` only for the five execution seats that must never move a card.
  */
 function assembleSuffix(role: string, parts: {
     dispatchContextPrefix?: string;
@@ -1525,6 +1542,7 @@ function assembleSuffix(role: string, parts: {
         parts.dispatchContextPrefix,
         parts.focusBlock,
         CODE_TOUCHING_ROLES.has(role) ? parts.gitBlock : '',
+        CARD_MOVE_ROLES.has(role) ? CARD_MOVE_RULE : '',
         parts.antigravityBlock,
         parts.skipBlock,
         parts.subagentBlock

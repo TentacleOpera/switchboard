@@ -170,3 +170,9 @@ None.
 - **Probe reuse:** assert only one LocalApiServer health-check implementation exists across the skills.
 - **Behavioural, cloud session:** in a clone with no `api-server-port.txt` and no `kanban.db`, load `query-kanban` and assert the correct outcome is to report the database as unreachable rather than to attempt a query.
 - **Behavioural, local session:** with the board running, assert every skill still works exactly as before — the preconditions are additive.
+
+---
+
+## Completion Report
+
+Inverted `query-kanban` to use the LocalApiServer read endpoints as its primary method, demoting direct SQL to a clearly-labelled fallback for the no-API case, and added a `## Preconditions` section that names the local-database requirement and instructs the agent to report the board as unreachable (not broken) in cloud/tracker-only sessions without hand-writing SQL. Widened the `switchboard-orchestration` protocol's scope line to include team members and pointed it at `GET /catalog` as the generated endpoint inventory (subset relation verified against `LocalApiServer.ts` routing — no drift). Added `## Preconditions` to `kanban_operations` (naming the LocalApiServer dependency and which verbs lack a direct-DB fallback) and extended `worktree-cleanup`'s `## Prerequisites` with the manage-features probe and an absent-server instruction. Updated all four `MIRROR_MANIFEST` descriptions in `ClaudeCodeMirrorService.ts`, with `query-kanban`'s now leading with the endpoint method. Files changed: `.agents/skills/query-kanban/SKILL.md`, `.agents/skills/kanban_operations/SKILL.md`, `.agents/skills/worktree-cleanup/SKILL.md`, `.agents/protocols/switchboard-orchestration/SKILL.md`, `src/services/ClaudeCodeMirrorService.ts`. No issues encountered; compilation and tests skipped per task directives.

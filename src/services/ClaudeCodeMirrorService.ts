@@ -73,20 +73,23 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // group-into-features, rearrange-feature. Discoverable skill with four sections.
     {
         source: 'skills/manage-features', name: 'manage-features', invocation: 'default', allowedTools: 'Bash',
-        descriptionFallback: 'Create, group, and rearrange Switchboard features — Create (remote file write), Create from Plans (create-feature.js), Group (scan/cluster/propose), Rearrange (split/move/merge subtasks without rewriting content).'
+        descriptionFallback: 'Create, group, and rearrange Switchboard features — Create (remote file write, no extension needed), Create from Plans (create-feature.js, requires the extension running), Group (scan/cluster/propose), Rearrange (split/move/merge subtasks without rewriting content).'
     },
     // query-kanban — merged from query-switchboard-kanban + query-kanban-plans.
+    // Primary method is the LocalApiServer read endpoints; SQL is a fallback for
+    // the no-API case. Description leads with the endpoint method so a DB-less
+    // session does not load it expecting direct SQL.
     {
         source: 'skills/query-kanban', name: 'query-kanban', invocation: 'no-user', allowedTools: 'Bash',
-        descriptionFallback: 'Query kanban state using direct SQL access to kanban.db (read-only). Includes schema reference, column label mapping, and ready-made query templates.'
+        descriptionFallback: 'Read kanban board state via LocalApiServer read endpoints (primary) or local kanban.db SQL (fallback). Requires the extension running or a local kanban.db; unavailable in cloud or tracker-only sessions.'
     },
     {
         source: 'skills/kanban_operations', name: 'kanban-operations', invocation: 'no-model', allowedTools: 'Bash',
-        descriptionFallback: 'Move kanban cards and query kanban state via direct database access.'
+        descriptionFallback: 'Move kanban cards and query kanban state via scripts — most verbs require the Switchboard extension (LocalApiServer) running; move-card.js has a direct-DB fallback.'
     },
     {
         source: 'skills/worktree-cleanup', name: 'worktree-cleanup', invocation: 'no-model', allowedTools: 'Bash',
-        descriptionFallback: 'Mark a worktree merged and clean it up (kind-aware) via LocalApiServer'
+        descriptionFallback: 'Mark a worktree merged and clean it up (kind-aware) via LocalApiServer — requires the Switchboard extension running (no direct-DB fallback).'
     },
 ];
 
@@ -114,17 +117,39 @@ export const CLAUDE_BLOCK_START = '<!-- switchboard:claude-protocol:start -->';
 export const CLAUDE_BLOCK_END = '<!-- switchboard:claude-protocol:end -->';
 
 /**
- * Claude-Code preamble injected at the TOP of the CLAUDE.md managed block.
- * Starts with CLAUDE_PROTOCOL_HEADER so the per-target legacy-markerless check
- * keys on this (NOT the AGENTS header that lives inside the copied source body).
+ * Resident protocol body written into every user's CLAUDE.md managed block.
+ *
+ * This is the shrunken form of the formerly 14,826-char block: only the rules
+ * that must be resident (re-presented every turn) survive. Everything else
+ * either arrives at the moment of use (workflow/protocol files, the host's own
+ * skill discovery) or was dead (send_message, view_file, the protocol catalogue).
+ * `CLAUDE_PROTOCOL_HEADER` is NOT emitted into new blocks — it stays exported
+ * only as the legacy-markerless detector key (extension.ts ensureClaudeProtocol
+ * passes it as `header`); dropping it from the emitted block keeps the size gate
+ * under 800 with headroom for the docs pointer below.
+ *
+ * The card-move rule is deliberately absent here: it is role-scoped (leads and
+ * the orchestrator legitimately move cards) and lives in agentPromptBuilder's
+ * per-role suffix instead.
  */
-export const CLAUDE_PREAMBLE = `${CLAUDE_PROTOCOL_HEADER}
+export const CLAUDE_PROTOCOL_BODY = `- Plans reach the board on their own: a \`.md\` file written to a designated
+  plans directory is imported automatically by a watcher. Committing is
+  irrelevant — untracked files import too. Never import a plan yourself.
+- Memo capture mode: while active, append each user message verbatim — do not
+  analyse, plan, or write code. Begin every reply with \`[MEMO CAPTURE ACTIVE]\`.
+- Kanban questions: use the \`query-kanban\` skill. Displayed column labels differ
+  from the stored IDs, so hand-written SQL silently returns nothing.`;
 
-> **Claude Code note.** The Switchboard protocol below was authored for the Antigravity host. In Claude Code:
-> - \`view_file <path>\` → use the **Read** tool.
-> - \`send_message\` and role-routing (reviewer, lead, etc.) are **Antigravity-only** — ignore them here.
-> - To run a workflow, invoke its native slash command (e.g. \`/switchboard\`, \`/switchboard-cloud\`, \`/switchboard-remote\`, \`/switchboard-memo\`) or read the skill at \`.claude/skills/<name>/SKILL.md\`.
-> - The ClickUp / Linear / kanban skills shell out via \`.agents/skills/_lib/sb_api_call.sh\` and work as-is, provided the Switchboard extension (and its API server) is running.`;
+/**
+ * Fourth resident rule — a docs pointer. GATED: do NOT include it in
+ * CLAUDE_PROTOCOL_BODY until https://switchboard.dev/docs actually serves
+ * (depends on move-the-docs-site-to-switchboard-dev.md). A resident pointer to
+ * a 404 is worse than no pointer — the agent fetches, fails, and either reports
+ * the product's docs as broken or answers from guesswork. When the URL is live,
+ * append this line to CLAUDE_PROTOCOL_BODY (it stays under the 800-char gate).
+ */
+export const DOCS_POINTER_RULE = `- How Switchboard works: the docs are at https://switchboard.dev/docs. If you
+  cannot reach them, say so rather than guessing.`;
 
 /**
  * Strip any managed-block boundary markers (`<!-- switchboard:agents-protocol:start/end -->`)
@@ -143,11 +168,19 @@ function stripProtocolMarkers(content: string): string {
 
 /**
  * Build the inner content (between markers) of a managed protocol block.
- * When a preamble is supplied (CLAUDE.md), it is prepended above the bundled
- * source body; otherwise the source body is used verbatim (AGENTS.md).
+ *
+ * - `bodyOverride` (CLAUDE.md): the resident body is a compact, host-specific
+ *   constant (`CLAUDE_PROTOCOL_BODY`) rather than the bundled AGENTS.md source.
+ *   The AGENTS.md source stays the single source of truth for the AGENTS.md
+ *   target and for SparkContextExporter's section curation, which depends on
+ *   the full section structure still being present there.
+ * - `preamble`: retained for API stability; no caller passes it now that the
+ *   CLAUDE.md block carries no host-translation preamble. When supplied it is
+ *   prepended above the body.
+ * - No override (AGENTS.md): the bundled source body is used verbatim.
  */
-export function buildManagedInner(sourceContent: string, preamble?: string): string {
-    const body = stripProtocolMarkers(sourceContent).trim();
+export function buildManagedInner(sourceContent: string, preamble?: string, bodyOverride?: string): string {
+    const body = stripProtocolMarkers(bodyOverride ?? sourceContent).trim();
     if (preamble && preamble.trim().length > 0) {
         return `${preamble.trimEnd()}\n\n---\n\n${body}`;
     }

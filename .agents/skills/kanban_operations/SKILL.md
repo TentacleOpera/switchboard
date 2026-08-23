@@ -4,6 +4,17 @@
 
 Move cards and query kanban state by running the provided scripts.
 
+## Preconditions
+
+| Need | How to check | What to do when absent |
+| :--- | :--- | :--- |
+| **LocalApiServer** (preferred for every verb) | `.switchboard/api-server-port.txt` exists **and** `GET http://127.0.0.1:<port>/health` responds `ok` | `move-card.js` falls back to a direct-DB write (no tracker sync — recovery only). **Every other verb** (`create-feature.js`, `assign-to-feature.js`, `remove-from-feature.js`, `delete-feature.js`, `split-feature.js`, `reconcile-features.js`) has **no direct-DB fallback** and fails with a clear message — tell the user the Switchboard extension is not running and the operation is unavailable until it is. Do not attempt the operation by hand-editing `kanban.db`. |
+
+Probe exactly as `manage-features` does: check the port file, then health-check
+it. A stale port file or a failed health check means the server is down — treat
+it the same as absent. `get-state.js` is read-only and needs only a local
+`kanban.db`, not the server.
+
 ## Resolving Plan IDs (do this FIRST — offline, no script)
 
 Every op below is keyed on a **`planId`** (a UUID), but you should not need UUIDs for most ops. Resolve a plan the cheap way when needed, or use the path/slug-addressed APIs below so the server resolves it:

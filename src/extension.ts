@@ -26,7 +26,7 @@ import {
     CLAUDE_PROTOCOL_HEADER,
     CLAUDE_BLOCK_START,
     CLAUDE_BLOCK_END,
-    CLAUDE_PREAMBLE,
+    CLAUDE_PROTOCOL_BODY,
     buildManagedInner,
     generateClaudeMirror,
 } from './services/ClaudeCodeMirrorService';
@@ -3839,8 +3839,16 @@ interface ProtocolFileOptions {
     blockEnd: string;
     /** Header line used by the legacy-markerless heuristic — MUST be unique per target. */
     header: string;
-    /** Optional preamble injected ABOVE the bundled source inside the managed block (CLAUDE.md). */
+    /** Optional preamble injected ABOVE the bundled source inside the managed block. Retained for API stability; no caller passes it now. */
     preamble?: string;
+    /**
+     * Per-host resident body. When set (CLAUDE.md), the emitted block uses this
+     * compact body instead of the bundled AGENTS.md source — the source stays
+     * intact for the AGENTS.md target and for SparkContextExporter curation.
+     * Also serves as the create-discriminator: a target with a bodyOverride is
+     * always created as a managed block (never markerless).
+     */
+    bodyOverride?: string;
 }
 
 /**
@@ -3858,11 +3866,14 @@ async function ensureProtocolFile(
     extensionUri: vscode.Uri,
     opts: ProtocolFileOptions
 ): Promise<{ status: AgentsProtocolStatus; reason: string }> {
-    const { targetFileName, blockStart, blockEnd, header, preamble } = opts;
+    const { targetFileName, blockStart, blockEnd, header, preamble, bodyOverride } = opts;
     const sourceUri = vscode.Uri.joinPath(extensionUri, 'AGENTS.md');
     const targetUri = vscode.Uri.joinPath(workspaceUri, targetFileName);
 
-    // Read bundled source (always AGENTS.md — the single protocol source of truth)
+    // Read bundled source (always AGENTS.md — the single protocol source of truth).
+    // For CLAUDE.md (bodyOverride set) the source is still read so the legacy
+    // markerless/header detection path has content to reason about, but the
+    // emitted body is the compact CLAUDE_PROTOCOL_BODY, not this source.
     let sourceContent: string;
     try {
         const sourceBytes = await vscode.workspace.fs.readFile(sourceUri);
@@ -3871,8 +3882,8 @@ async function ensureProtocolFile(
         return { status: 'failed', reason: `Bundled AGENTS.md source is missing or unreadable: ${getErrorMessage(error)}` };
     }
 
-    // Build managed inner content (+ optional preamble) and the marker-wrapped block.
-    const managedInner = buildManagedInner(sourceContent, preamble);
+    // Build managed inner content (+ optional preamble + optional per-host body) and the marker-wrapped block.
+    const managedInner = buildManagedInner(sourceContent, preamble, bodyOverride);
     const managedBlock = `${blockStart}\n${managedInner}\n${blockEnd}`;
     const sourceForCreate = `${sourceContent.trimEnd()}\n`;
 
@@ -3889,11 +3900,12 @@ async function ensureProtocolFile(
     }
 
     if (targetContent === null) {
-        // Create new file. CLAUDE.md (preamble present) MUST be created as the
-        // managed block: a markerless create would let the legacy branch wipe the
-        // preamble on the next run. AGENTS.md keeps the historical markerless
-        // create (it self-heals to a managed block on the next pass).
-        const createBody = preamble ? `${managedBlock}\n` : sourceForCreate;
+        // Create new file. CLAUDE.md (bodyOverride set) MUST be created as the
+        // managed block: a markerless create would emit the bundled AGENTS.md
+        // source instead of the compact resident body, and the legacy branch
+        // would wipe it on the next run. AGENTS.md keeps the historical
+        // markerless create (it self-heals to a managed block on the next pass).
+        const createBody = (preamble || bodyOverride) ? `${managedBlock}\n` : sourceForCreate;
         try {
             await vscode.workspace.fs.writeFile(targetUri, Buffer.from(createBody, 'utf8'));
             return { status: 'created', reason: `${targetFileName} created from bundled source` };
@@ -3993,7 +4005,7 @@ async function ensureAgentsProtocol(
     });
 }
 
-/** Thin wrapper: scaffold the CLAUDE.md managed block (Claude Code host) with the Claude preamble. */
+/** Thin wrapper: scaffold the CLAUDE.md managed block (Claude Code host) with the compact resident body. */
 async function ensureClaudeProtocol(
     workspaceUri: vscode.Uri,
     extensionUri: vscode.Uri
@@ -4002,8 +4014,10 @@ async function ensureClaudeProtocol(
         targetFileName: 'CLAUDE.md',
         blockStart: CLAUDE_BLOCK_START,
         blockEnd: CLAUDE_BLOCK_END,
+        // CLAUDE_PROTOCOL_HEADER is the legacy-markerless detector key only —
+        // it is NOT emitted into new blocks (see CLAUDE_PROTOCOL_BODY doc).
         header: CLAUDE_PROTOCOL_HEADER,
-        preamble: CLAUDE_PREAMBLE,
+        bodyOverride: CLAUDE_PROTOCOL_BODY,
     });
 }
 
