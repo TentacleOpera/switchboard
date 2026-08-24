@@ -249,6 +249,11 @@
 
         /* ── Retired-mode notice ────────────────────────────────────────── */
         .mc-notice { padding: 8px 12px; background: color-mix(in srgb, var(--accent-orange) 12%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--accent-orange) 40%, transparent); color: var(--accent-orange); font-size: 11px; display: flex; align-items: center; gap: 8px; }
+        /* `hidden` is a UA `display: none`, and the author `display: flex` above beats
+           it — so without this rule the banner renders UNCONDITIONALLY and every
+           `hidden = true` toggle is inert. Same trap for any future display-setting
+           class on an element that starts hidden. */
+        .mc-notice[hidden] { display: none; }
         .mc-notice-dismiss { margin-left: auto; cursor: pointer; color: var(--text-secondary); font-size: 14px; line-height: 1; background: transparent; border: none; }
         .mc-notice-dismiss:hover { color: var(--text-primary); }
 
