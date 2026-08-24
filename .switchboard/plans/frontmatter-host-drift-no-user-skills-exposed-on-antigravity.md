@@ -1,5 +1,42 @@
 # Two skills deliberately hidden from Claude Code's slash menu are still exposed to Antigravity's discovery — strip their source frontmatter
 
+> **OBSOLETE — do not dispatch.** The audit below is built on a manifest and a
+> skills tree that no longer exist. `move-protocols-out-of-skill-discovery.md`
+> (since delivered) emptied skill discovery into `.agents/protocols/`, which
+> dissolved this whole drift class rather than fixing its two instances.
+>
+> Measured against the working tree on 2026-08-24:
+>
+> | This plan asserts | Actual now |
+> | :--- | :--- |
+> | "The manifest has exactly 47 entries" | **8** |
+> | "43 of 47 carry a `descriptionFallback`" | **7 of 8** |
+> | "36 of the 39 skill directories ship no frontmatter" | **4** skill dirs (+`_lib`), and **all 4** ship none |
+> | "exactly 1 of the 39 skill directories may carry frontmatter (`design-system-builder`)" | `design-system-builder` is a **protocol**; zero skill dirs carry frontmatter |
+> | "24 flat `.md` files must be untouched" | **0** flat files remain |
+> | Fix target `terminal-coder-dispatch` | now `.agents/protocols/terminal-coder-dispatch/SKILL.md` |
+> | Fix target `rearrange-feature` | **gone from both** trees |
+> | Outstanding `[user]` question on `refine-feature` | moot — now `.agents/protocols/refine_feature.md` |
+>
+> **Both fix targets are no longer skills**, so there is nothing to strip and the
+> "verified zero-diff" property cannot be reproduced. Dispatching this would send
+> a coder hunting files that are not there.
+>
+> **What survives is the backstop it filed as a nice-to-have**, carved out as
+> `mirror-check-asserts-invocation-frontmatter-invariant.md`: an assertion in the
+> already-CI-wired `scripts/check-claude-mirror.js` that a gated `invocation`
+> implies no source frontmatter. That is cheap over 8 entries and it is the only
+> part of this plan that stops the class recurring rather than clearing one case
+> of it.
+>
+> **What is still worth reading here:** the two-mechanism model in *Problem
+> Analysis* — Claude Code reads `invocation` in `MIRROR_MANIFEST`, Antigravity
+> reads source frontmatter, and *absence of frontmatter is the deliberate
+> convention* for a non-door. That is unchanged, correct, and the reason a
+> frontmatter-less `.agents/skills/kanban_operations/SKILL.md` is right rather
+> than broken.
+
+
 ## Goal
 
 Delete the frontmatter blocks from `.agents/skills/terminal-coder-dispatch/SKILL.md` and `.agents/skills/rearrange-feature/SKILL.md`, and align the stale `descriptionFallback` for `design-system-builder` in `MIRROR_MANIFEST`. This makes the two hosts agree on which skills are user-facing, and it is a **verified zero-diff change** — the generated `.claude/skills/` mirror is byte-identical before and after, so `mirror:check` stays green and nothing needs regenerating.
