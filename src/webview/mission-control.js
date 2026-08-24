@@ -438,15 +438,6 @@
         vscode.postMessage({ type: 'mcControllerAck' });
     });
 
-    /* ── Retired-mode notice ─────────────────────────────────────────── */
-    const noticeDismiss = document.getElementById('mc-notice-dismiss');
-    if (noticeDismiss) noticeDismiss.addEventListener('click', () => {
-        noticeDismissed = true;
-        const notice = document.getElementById('mc-retired-notice');
-        if (notice) notice.hidden = true;
-        vscode.postMessage({ type: 'mcDismissRetiredNotice' });
-    });
-
     /* ── Global controls ─────────────────────────────────────────────── */
     const statusFilterEl = document.getElementById('mc-status-filter');
     if (statusFilterEl) statusFilterEl.addEventListener('change', () => {
@@ -527,18 +518,13 @@
             case 'mcControllerSeat':
                 setControllerSeat(msg.seat);
                 break;
-            case 'mcRetiredNotice':
-                { const notice = document.getElementById('mc-retired-notice'); if (notice) notice.hidden = !msg.show; }
-                break;
             case 'autobanStateSync':
             case 'updateAutobanConfig':
                 // The autoban state rides the wsHub broadcast rail to every panel
                 // (surface `common`), on connect AND on change. Reading it here is
-                // what makes the retired-mode notice and the controller strip work
-                // without a bespoke host handler: `mcRetiredNotice` / `mcControllerSeat`
-                // have no sender, and the AUTOMATION tab that used to render these
-                // notices was deleted — so without this the notices had NO surface at
-                // all and the strip could never appear.
+                // what makes the controller strip work without a bespoke host
+                // handler: `mcControllerSeat` has no sender, so without this the
+                // strip could never appear.
                 applyAutobanState(msg.state);
                 break;
             case 'switchboardThemeChanged':
@@ -570,7 +556,6 @@
         }
     });
 
-    let noticeDismissed = false;
     let lastAutobanState = null;
     let lastTerminalStatuses = {};
 
@@ -629,33 +614,17 @@
         }
     }
 
-    /* ── Autoban state → notices + controller seat ───────────────────── */
-    /** Renders the one-time migration notices and the controller strip from the
-     *  broadcast autoban state. Tolerates a partial/absent state (the connect-time
-     *  resync omits it entirely until the sidebar has relayed one). */
+    /* ── Autoban state → controller seat ─────────────────────────────── */
+    /** Derives the controller strip from the broadcast autoban state. Tolerates a
+     *  partial/absent state (the connect-time resync omits it entirely until the
+     *  sidebar has relayed one).
+     *
+     *  This deliberately renders NO migration notice. `retiredAutomationModeNotice`,
+     *  `recurringJobsResumedNotice` and `droppedCustomJobsNotice` stay as backend
+     *  state, and no surface displays them. */
     function applyAutobanState(state) {
         if (!state || typeof state !== 'object') return;
         lastAutobanState = state;
-        const notices = [state.retiredAutomationModeNotice, state.recurringJobsResumedNotice]
-            .filter(t => typeof t === 'string' && t.trim());
-        // droppedCustomJobsNotice also lost its only render site with the AUTOMATION
-        // tab. It belongs beside the jobs it is about, not in the migration banner.
-        const dropped = document.getElementById('mc-dropped-jobs-notice');
-        if (dropped) {
-            const text = typeof state.droppedCustomJobsNotice === 'string' ? state.droppedCustomJobsNotice.trim() : '';
-            dropped.textContent = text;
-            dropped.hidden = !text;
-        }
-        const noticeEl = document.getElementById('mc-retired-notice');
-        if (noticeEl) {
-            if (notices.length && !noticeDismissed) {
-                const textEl = noticeEl.querySelector('span');
-                if (textEl) textEl.textContent = notices.join(' ');
-                noticeEl.hidden = false;
-            } else if (!notices.length) {
-                noticeEl.hidden = true;
-            }
-        }
         // The seat record names the terminal an agent adopted in place; when absent,
         // fall back to a live terminal carrying a controller role. These are the same
         // two sources the service-layer singleton guard consults, for the same reason:
@@ -697,7 +666,7 @@
 
     /* ── Init ────────────────────────────────────────────────────────── */
     // Request initial state. The host (extension webview or browser transport)
-    // replies with mcMissions / mcSchedules / mcControllerSeat / mcRetiredNotice.
+    // replies with mcMissions / mcSchedules / mcControllerSeat.
     vscode.postMessage({ type: 'mcInit', workspaceRoot: WS_ROOT });
     // The two survivor recurring jobs. getSchedulerConfig is an existing, allowlisted
     // verb whose reply is `updateSchedulerConfig`; the host also pushes it on change.

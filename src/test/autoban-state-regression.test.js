@@ -918,12 +918,23 @@ async function run() {
         /if \(!found\) \{[\s\S]{0,400}?source: sv\.source/.test(missionControlJs),
         'the survivor checkbox must create the job record when none exists — nothing else can, now that + ADD JOB is deleted'
     );
-    // The dropped-custom-jobs notice is wired — in the panel now, beside the jobs it
-    // is about. Its only prior render site was inside the deleted AUTOMATION tab
-    // builder, so asserting kanban.html here would keep passing on an unreachable one.
+    // No UI notice, anywhere. The three migration notices stay as BACKEND state
+    // (asserted above) and no surface renders them: not the board, not the Mission
+    // Control panel, not a host notification. This is a standing product decision —
+    // pin it, because every pass that finds a notice field with no reader is tempted
+    // to give it one.
+    for (const [label, src] of [['kanban.html', kanbanHtml], ['mission-control.html', missionControlHtml]]) {
+        for (const field of ['retiredAutomationModeNotice', 'recurringJobsResumedNotice', 'droppedCustomJobsNotice']) {
+            assert.ok(!src.includes(field), `${label} must not render ${field} — no UI notice`);
+        }
+    }
+    for (const field of ['retiredAutomationModeNotice', 'recurringJobsResumedNotice', 'droppedCustomJobsNotice']) {
+        assert.ok(!new RegExp(`(textContent|innerHTML)[^\\n]*${field}`).test(missionControlJs),
+            `mission-control.js must not render ${field} — no UI notice`);
+    }
     assert.ok(
-        missionControlJs.includes('droppedCustomJobsNotice'),
-        'the dropped-custom-jobs notice must be wired in the Mission Control panel'
+        !/showInformationMessage\([^)]*(retiredAutomationModeNotice|recurringJobsResumedNotice|droppedCustomJobsNotice)/.test(providerSource),
+        'TaskViewerProvider must not surface a migration notice as a host notification — no UI notice'
     );
 
     // --- Three exclusive modes: the OVERSIGHT AGENT block is gone, three radios replace the select ---

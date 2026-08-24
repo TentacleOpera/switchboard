@@ -1591,40 +1591,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             void this._context.workspaceState.update('recurringJobsResumed.noticed', true);
         }
 
-        // Surface both notices through the host, once. The webview channel below
-        // (_getAutobanBroadcastState carries them to the Mission Control panel) is
-        // the detailed surface; this is the backstop, and it is required rather than
-        // belt-and-braces: the ONLY render site these notices had was inside the
-        // AUTOMATION tab's panel builder, which was deleted in the same change that
-        // introduced them. A migration notice whose surface is a panel the user has
-        // never opened is a notice that is discovered, not announced — and both of
-        // these report a behaviour change the user did not ask for (a schedule forced
-        // off; recurring jobs resumed).
-        this._surfaceRetiredAutomationNotices();
-
         // Ensure pair programming defaults to OFF on load regardless of previous session state
         this._autobanState.pairProgrammingMode = 'off';
 
     }
 
-    /**
-     * Show the two one-time automation-migration notices as host notifications.
-     *
-     * Fire-and-forget: the workspaceState latches above have already been written,
-     * so this runs at most once per install per notice regardless of what the user
-     * does with the dialog. Guarded on the notice strings being present, which the
-     * normaliser only sets on the activation that detects the retired state.
-     */
-    private _surfaceRetiredAutomationNotices(): void {
-        try {
-            if (this._retiredAutomationModeNotice) {
-                this._seams().ui.showInformationMessage(this._retiredAutomationModeNotice);
-            }
-            if (this._recurringJobsResumedNotice) {
-                this._seams().ui.showInformationMessage(this._recurringJobsResumedNotice);
-            }
-        } catch { /* a notification failure must never block activation */ }
-    }
 
     /**
      * Host-facing wiring that must NOT run as a side effect of `new`.
