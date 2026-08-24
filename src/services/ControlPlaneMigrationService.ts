@@ -14,7 +14,7 @@ import {
     buildManagedInner,
     CLAUDE_BLOCK_START,
     CLAUDE_BLOCK_END,
-    CLAUDE_PROTOCOL_BODY,
+    RESIDENT_PROTOCOL_BODY,
 } from './ClaudeCodeMirrorService';
 
 const execFileAsync = promisify(cp.execFile);
@@ -733,7 +733,7 @@ export class ControlPlaneMigrationService {
                     const claudeFile = path.join(parentDir, 'CLAUDE.md');
                     if (!fs.existsSync(claudeFile)) {
                         const source = await fs.promises.readFile(bundledAgentsFile, 'utf8');
-                        const inner = buildManagedInner(source, undefined, CLAUDE_PROTOCOL_BODY);
+                        const inner = buildManagedInner(source, undefined, RESIDENT_PROTOCOL_BODY);
                         const block = `${CLAUDE_BLOCK_START}\n${inner}\n${CLAUDE_BLOCK_END}\n`;
                         await fs.promises.writeFile(claudeFile, block, 'utf8');
                     }

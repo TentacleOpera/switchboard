@@ -23,12 +23,14 @@
  */
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 
 const {
     buildManagedInner,
     CLAUDE_BLOCK_START,
     CLAUDE_BLOCK_END,
-    CLAUDE_PROTOCOL_BODY,
+    RESIDENT_PROTOCOL_BODY,
     DOCS_POINTER_RULE,
 } = require('../../out/services/ClaudeCodeMirrorService.js');
 const { buildKanbanBatchPrompt } = require('../../out/services/agentPromptBuilder.js');
@@ -47,7 +49,7 @@ Some body that must not leak into the CLAUDE.md block.
 function emittedClaudeBlock() {
     // Mirrors ensureProtocolFile's construction: markers wrap buildManagedInner
     // with the CLAUDE per-host body override and no preamble.
-    const inner = buildManagedInner(SOURCE_WITH_MARKERS, undefined, CLAUDE_PROTOCOL_BODY);
+    const inner = buildManagedInner(SOURCE_WITH_MARKERS, undefined, RESIDENT_PROTOCOL_BODY);
     return `${CLAUDE_BLOCK_START}\n${inner}\n${CLAUDE_BLOCK_END}`;
 }
 
@@ -62,13 +64,13 @@ test('emitted CLAUDE.md block is under the size gate', () => {
     const block = emittedClaudeBlock();
     assert.ok(block.length < SIZE_GATE,
         `emitted block is ${block.length} chars, gate is ${SIZE_GATE}. ` +
-        `Body alone: ${CLAUDE_PROTOCOL_BODY.length}; markers: ${CLAUDE_BLOCK_START.length + CLAUDE_BLOCK_END.length}.`);
+        `Body alone: ${RESIDENT_PROTOCOL_BODY.length}; markers: ${CLAUDE_BLOCK_START.length + CLAUDE_BLOCK_END.length}.`);
 });
 
 test('size gate has headroom for the gated docs pointer', () => {
     // DOCS_POINTER_RULE is not yet emitted (URL not live). When it ships, the
     // body grows by ~its length; the gate must still hold.
-    const futureBody = `${CLAUDE_PROTOCOL_BODY}\n${DOCS_POINTER_RULE}`;
+    const futureBody = `${RESIDENT_PROTOCOL_BODY}\n${DOCS_POINTER_RULE}`;
     const futureInner = buildManagedInner(SOURCE_WITH_MARKERS, undefined, futureBody);
     const futureBlock = `${CLAUDE_BLOCK_START}\n${futureInner}\n${CLAUDE_BLOCK_END}`;
     assert.ok(futureBlock.length < SIZE_GATE,
@@ -110,8 +112,8 @@ test('no hidden-capability advertising (no-model skills absent)', () => {
 });
 
 test('import rule names no filesystem path', () => {
-    const body = CLAUDE_PROTOCOL_BODY;
-    // Whitespace-tolerant: CLAUDE_PROTOCOL_BODY is hard-wrapped, so the phrase
+    const body = RESIDENT_PROTOCOL_BODY;
+    // Whitespace-tolerant: RESIDENT_PROTOCOL_BODY is hard-wrapped, so the phrase
     // spans a newline + indent ("designated\n  plans directory"). A literal-space
     // regex here made this gate fail on the very body it was written to pin.
     assert.ok(/designated\s+plans\s+directory/i.test(body),
@@ -121,13 +123,13 @@ test('import rule names no filesystem path', () => {
 });
 
 test('import rule states the git-independence', () => {
-    const body = CLAUDE_PROTOCOL_BODY;
+    const body = RESIDENT_PROTOCOL_BODY;
     assert.ok(/irrelevant/i.test(body) && /untracked/i.test(body),
         'import rule must say committing is irrelevant and untracked files import too — the common wrong assumption is that a commit is required');
 });
 
 test('memo suppression and marker survive', () => {
-    const body = CLAUDE_PROTOCOL_BODY;
+    const body = RESIDENT_PROTOCOL_BODY;
     assert.ok(body.includes('[MEMO CAPTURE ACTIVE]'),
         'memo rule must require the [MEMO CAPTURE ACTIVE] marker every turn');
     assert.ok(/verbatim/i.test(body),
@@ -137,7 +139,7 @@ test('memo suppression and marker survive', () => {
 });
 
 test('query-kanban line names the label/ID trap', () => {
-    const body = CLAUDE_PROTOCOL_BODY;
+    const body = RESIDENT_PROTOCOL_BODY;
     assert.ok(/query-kanban/.test(body),
         'resident block must redirect kanban questions to the query-kanban skill');
     // Same whitespace-tolerance rule as the import-rule gate above: the body is
@@ -188,6 +190,70 @@ test('card-move rule is absent for Mission Control (not routed through buildKanb
             `expected Unknown role error for mission-control, got: ${e}`);
     }
     assert.ok(threw, 'buildKanbanBatchPrompt must reject the mission-control role');
+});
+
+// ---------------------------------------------------------------------------
+// AGENTS.md — the other half of the plan. Cutting only CLAUDE.md left every
+// Antigravity user carrying the full ~14,300-char block, so the goal invariants
+// held for one host of two. These gates pin the second host.
+// ---------------------------------------------------------------------------
+
+const AGENTS_BLOCK_START = '<!-- switchboard:agents-protocol:start -->';
+const AGENTS_BLOCK_END = '<!-- switchboard:agents-protocol:end -->';
+const REPO_ROOT = path.join(__dirname, '..', '..');
+
+test('the AGENTS.md target emits the same compact body, under the same gate', () => {
+    // ensureAgentsProtocol passes RESIDENT_PROTOCOL_BODY as bodyOverride, exactly
+    // as ensureClaudeProtocol does. One body, both hosts.
+    const inner = buildManagedInner(SOURCE_WITH_MARKERS, undefined, RESIDENT_PROTOCOL_BODY);
+    const block = `${AGENTS_BLOCK_START}\n${inner}\n${AGENTS_BLOCK_END}`;
+    assert.ok(block.length < SIZE_GATE,
+        `emitted AGENTS.md block is ${block.length} chars, gate is ${SIZE_GATE}`);
+    for (const token of ['send_message', 'view_file', 'IsArtifact', '// turbo', '.agents/', '.switchboard/']) {
+        assert.ok(!block.includes(token),
+            `emitted AGENTS.md block contains dead/host-only reference "${token}"`);
+    }
+});
+
+test('the packaged AGENTS.md has not drifted from the body constant', () => {
+    // AGENTS.md ships in the VSIX and is copied around by the migration service, so
+    // a hand-edit there would ship text the constant does not describe. The emitted
+    // block comes from the constant, so the file must agree with it.
+    const raw = fs.readFileSync(path.join(REPO_ROOT, 'AGENTS.md'), 'utf8');
+    const start = raw.indexOf(AGENTS_BLOCK_START);
+    const end = raw.lastIndexOf(AGENTS_BLOCK_END);
+    assert.ok(start > -1 && end > start, 'packaged AGENTS.md has no well-formed managed block');
+    const body = raw.substring(start + AGENTS_BLOCK_START.length, end).trim();
+    assert.strictEqual(body, RESIDENT_PROTOCOL_BODY.trim(),
+        'packaged AGENTS.md drifted from RESIDENT_PROTOCOL_BODY — update the file, not just the constant');
+});
+
+test('the four action-local sections left the resident block and live in their own source', () => {
+    // Plan Authoring / Workspace Detection / Project Pinning / Memo Capture were
+    // ~6.8 KB of the old block. They are action-local, so they moved to a file the
+    // scaffolder never writes and no prompt ever carries. SparkContextExporter is
+    // the one consumer; if this file goes missing its artifact loses all protocol.
+    const sourcePath = path.join(REPO_ROOT, '.agents', 'plan-authoring-protocol.md');
+    assert.ok(fs.existsSync(sourcePath),
+        '.agents/plan-authoring-protocol.md is missing — the Spark artifact has no protocol body');
+    const source = fs.readFileSync(sourcePath, 'utf8');
+    for (const heading of [
+        '### 📝 Plan Authoring & Problem Analysis Protocol',
+        '### 📂 Workspace Detection for Plan Creation',
+        '### 📌 Plan Project Pinning',
+        '### 📌 Memo Capture Mode — Priority Rule',
+    ]) {
+        assert.ok(source.includes(heading),
+            `relocated source is missing "${heading}" — SparkContextExporter selects by literal title, so a rename drops it silently`);
+    }
+    // ...and they must NOT be back in the resident block.
+    const agentsMd = fs.readFileSync(path.join(REPO_ROOT, 'AGENTS.md'), 'utf8');
+    for (const title of ['Plan Authoring', 'Workspace Detection', 'Plan Project Pinning']) {
+        assert.ok(!agentsMd.includes(title),
+            `"${title}" is back in the resident AGENTS.md block — it is action-local and belongs in plan-authoring-protocol.md`);
+        assert.ok(!RESIDENT_PROTOCOL_BODY.includes(title),
+            `"${title}" is back in RESIDENT_PROTOCOL_BODY`);
+    }
 });
 
 test('planner default base instruction is intact (minimal-prompt regression guard)', () => {

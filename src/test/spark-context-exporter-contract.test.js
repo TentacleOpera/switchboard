@@ -146,22 +146,28 @@ test('AGENTS.md is curated, not dumped verbatim', () => {
 // author assumed. That is how this suite went green over a generator that emitted
 // NO protocol at all: the fixture used `##` for the wanted sections while the real
 // AGENTS.md uses `###`, so an H2-only parser matched the fake and missed the file.
-// This test runs the generator against the REPO'S OWN AGENTS.md, which is the only
-// input that cannot be shaped to fit the implementation.
-test('every wanted section is extracted from the REAL repo AGENTS.md', () => {
-    const realAgents = path.join(__dirname, '..', '..', 'AGENTS.md');
-    assert.ok(fs.existsSync(realAgents), 'repo AGENTS.md not found — this test has no subject');
+// This test runs the generator against the REPO'S OWN protocol source, which is the
+// only input that cannot be shaped to fit the implementation.
+//
+// That source is now `.agents/plan-authoring-protocol.md`, not AGENTS.md: the four
+// wanted sections were moved there when the resident block was shrunk, so AGENTS.md
+// no longer contains them and pointing this test at it would assert nothing.
+test('every wanted section is extracted from the REAL repo protocol source', () => {
+    const realSource = path.join(__dirname, '..', '..', '.agents', 'plan-authoring-protocol.md');
+    assert.ok(fs.existsSync(realSource),
+        '.agents/plan-authoring-protocol.md not found — this test has no subject, and the Spark artifact has no protocol body');
 
     const tmp = mkTmp();
     fs.mkdirSync(path.join(tmp, '.switchboard'), { recursive: true });
-    fs.copyFileSync(realAgents, path.join(tmp, 'AGENTS.md'));
+    fs.mkdirSync(path.join(tmp, '.agents'), { recursive: true });
+    fs.copyFileSync(realSource, path.join(tmp, '.agents', 'plan-authoring-protocol.md'));
 
     const res = generateSparkContext(tmp, '1.0.0');
     const content = fs.readFileSync(res.path, 'utf8');
 
     const included = (content.match(/### Included AGENTS\.md sections\n\n([\s\S]*?)\n\n/) || [])[1] || '';
     assert.ok(included.trim().length > 0,
-        'the Included list is EMPTY against the real AGENTS.md — the artifact carries no protocol, ' +
+        'the Included list is EMPTY against the real protocol source — the artifact carries no protocol, ' +
         'which is worse than the verbatim dump it replaced and is invisible to every other assertion here');
 
     for (const wanted of [
@@ -170,7 +176,7 @@ test('every wanted section is extracted from the REAL repo AGENTS.md', () => {
         'Plan Project Pinning',
         'Memo Capture Mode'
     ]) {
-        assert.ok(included.includes(wanted), `'${wanted}' was not selected from the real AGENTS.md`);
+        assert.ok(included.includes(wanted), `'${wanted}' was not selected from the real protocol source`);
     }
 
     // Body, not just the manifest: the protocol text itself has to be present, since

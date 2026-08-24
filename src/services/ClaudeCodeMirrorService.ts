@@ -40,10 +40,10 @@ interface MirrorEntry {
 // --- Four front doors (2026-07-12 refactor): switchboard, switchboard-cloud,
 // switchboard-remote, switchboard-memo — identical surface on Antigravity and
 // Claude Code. Internal extension-dispatched workflows (improve-plan,
-// improve-feature, accuracy, switchboard-orchestrator) live as stripped skills
+// improve-feature, accuracy, switchboard-mission-control) live as stripped skills
 // under .agents/skills/ (no frontmatter → invisible to Antigravity's discovery;
 // no-user here → hidden from CC's slash menu, model-loadable by path).
-// switchboard-orchestrator is NOT in the manifest — the engine launches it by path.
+// switchboard-mission-control is NOT in the manifest — the engine launches it by path.
 const MIRROR_MANIFEST: MirrorEntry[] = [
     // --- Four front doors (default: slash + model-auto) ---
     // /switchboard — local management console (absorbs the former switchboard-manage
@@ -62,7 +62,7 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
 
     // --- Internal extension-dispatched skills (no-user: hidden from slash, model-loadable) ---
     // improve-plan, improve-feature, accuracy, terminal-coder-dispatch, dispatch-analysis,
-    // advise_research, switchboard-orchestrator(-external/-internal), switchboard-orchestration,
+    // advise_research, switchboard-mission-control(-external/-internal), switchboard-mission-control-http,
     // switchboard-contracts, complexity-scoring, deep-planning, web-research, tuning,
     // constitution-builder, external-team-lead, improve-remote-plan, design-system-builder,
     // refine_feature, archive, and the API proxy skills (clickup-*, linear-*, notion-api,
@@ -117,22 +117,35 @@ export const CLAUDE_BLOCK_START = '<!-- switchboard:claude-protocol:start -->';
 export const CLAUDE_BLOCK_END = '<!-- switchboard:claude-protocol:end -->';
 
 /**
- * Resident protocol body written into every user's CLAUDE.md managed block.
+ * Resident protocol body written into the managed block of BOTH protocol
+ * targets — `CLAUDE.md` (Claude Code) and `AGENTS.md` (Antigravity).
+ *
+ * One body, both hosts, deliberately: the two used to carry each other's
+ * requirements with a preamble papering over the mismatch, which is the
+ * documented host-drift trap. Antigravity discovers skills correctly, so
+ * nothing here needs a per-host variant. `buildManagedInner` still accepts a
+ * `bodyOverride` per target, but both callers pass this same constant — the
+ * emitted text is guaranteed by code rather than by the packaged `AGENTS.md`,
+ * which a hand-edit could otherwise silently change.
  *
  * This is the shrunken form of the formerly 14,826-char block: only the rules
  * that must be resident (re-presented every turn) survive. Everything else
  * either arrives at the moment of use (workflow/protocol files, the host's own
  * skill discovery) or was dead (send_message, view_file, the protocol catalogue).
+ * The four action-local sections an external-surface export still needs —
+ * Plan Authoring, Workspace Detection, Project Pinning, Memo Capture — moved to
+ * `.agents/plan-authoring-protocol.md`, which SparkContextExporter reads and
+ * which is never scaffolded into a managed block or injected into a prompt.
  * `CLAUDE_PROTOCOL_HEADER` is NOT emitted into new blocks — it stays exported
  * only as the legacy-markerless detector key (extension.ts ensureClaudeProtocol
  * passes it as `header`); dropping it from the emitted block keeps the size gate
  * under 800 with headroom for the docs pointer below.
  *
  * The card-move rule is deliberately absent here: it is role-scoped (leads and
- * the orchestrator legitimately move cards) and lives in agentPromptBuilder's
+ * Mission Control legitimately move cards) and lives in agentPromptBuilder's
  * per-role suffix instead.
  */
-export const CLAUDE_PROTOCOL_BODY = `- Plans reach the board on their own: a \`.md\` file written to a designated
+export const RESIDENT_PROTOCOL_BODY = `- Plans reach the board on their own: a \`.md\` file written to a designated
   plans directory is imported automatically by a watcher. Committing is
   irrelevant — untracked files import too. Never import a plan yourself.
 - Memo capture mode: while active, append each user message verbatim — do not
@@ -142,11 +155,11 @@ export const CLAUDE_PROTOCOL_BODY = `- Plans reach the board on their own: a \`.
 
 /**
  * Fourth resident rule — a docs pointer. GATED: do NOT include it in
- * CLAUDE_PROTOCOL_BODY until https://switchboard.dev/docs actually serves
+ * RESIDENT_PROTOCOL_BODY until https://switchboard.dev/docs actually serves
  * (depends on move-the-docs-site-to-switchboard-dev.md). A resident pointer to
  * a 404 is worse than no pointer — the agent fetches, fails, and either reports
  * the product's docs as broken or answers from guesswork. When the URL is live,
- * append this line to CLAUDE_PROTOCOL_BODY (it stays under the 800-char gate).
+ * append this line to RESIDENT_PROTOCOL_BODY (it stays under the 800-char gate).
  */
 export const DOCS_POINTER_RULE = `- How Switchboard works: the docs are at https://switchboard.dev/docs. If you
   cannot reach them, say so rather than guessing.`;
@@ -170,7 +183,7 @@ function stripProtocolMarkers(content: string): string {
  * Build the inner content (between markers) of a managed protocol block.
  *
  * - `bodyOverride` (CLAUDE.md): the resident body is a compact, host-specific
- *   constant (`CLAUDE_PROTOCOL_BODY`) rather than the bundled AGENTS.md source.
+ *   constant (`RESIDENT_PROTOCOL_BODY`) rather than the bundled AGENTS.md source.
  *   The AGENTS.md source stays the single source of truth for the AGENTS.md
  *   target and for SparkContextExporter's section curation, which depends on
  *   the full section structure still being present there.

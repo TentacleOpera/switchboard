@@ -26,7 +26,7 @@ import {
     CLAUDE_PROTOCOL_HEADER,
     CLAUDE_BLOCK_START,
     CLAUDE_BLOCK_END,
-    CLAUDE_PROTOCOL_BODY,
+    RESIDENT_PROTOCOL_BODY,
     buildManagedInner,
     generateClaudeMirror,
 } from './services/ClaudeCodeMirrorService';
@@ -1146,7 +1146,7 @@ export async function activate(context: vscode.ExtensionContext) {
     taskViewerProvider.setPlanIngestionEngine(globalPlanWatcher.getEngine());
     // Turn-end notification seam: when a dispatched seat goes quiet (turn end),
     // tell the agent waiting on it — its head (parentInstanceId) or the
-    // orchestrator. Same idiom as the two seams above: a host-injected callback
+    // Mission Control. Same idiom as the two seams above: a host-injected callback
     // on the shared engine, wired here so the safeguard is NOT extension-only.
     // The engine emits only { seatName, planFile, outcome, workspaceRoot };
     // recipient resolution + delivery happen in the provider, which owns the
@@ -1349,7 +1349,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(openMemoDisposable);
 
     const startOrchestratorDisposable = vscode.commands.registerCommand('switchboard.startOrchestrator', async () => {
-        await taskViewerProvider!.startOrchestratorFromKanban(undefined, undefined);
+        await taskViewerProvider!.startMissionControlFromKanban(undefined, undefined);
     });
     context.subscriptions.push(startOrchestratorDisposable);
 
@@ -3873,7 +3873,7 @@ async function ensureProtocolFile(
     // Read bundled source (always AGENTS.md — the single protocol source of truth).
     // For CLAUDE.md (bodyOverride set) the source is still read so the legacy
     // markerless/header detection path has content to reason about, but the
-    // emitted body is the compact CLAUDE_PROTOCOL_BODY, not this source.
+    // emitted body is the compact RESIDENT_PROTOCOL_BODY, not this source.
     let sourceContent: string;
     try {
         const sourceBytes = await vscode.workspace.fs.readFile(sourceUri);
@@ -4002,6 +4002,11 @@ async function ensureAgentsProtocol(
         blockStart: AGENTS_BLOCK_START,
         blockEnd: AGENTS_BLOCK_END,
         header: AGENTS_PROTOCOL_HEADER,
+        // Same compact body as CLAUDE.md. Antigravity discovers skills correctly,
+        // so there is nothing host-specific left to carry — and leaving this
+        // target on the bundled source is what kept ~14,300 chars resident for
+        // every Antigravity user after CLAUDE.md was already cut.
+        bodyOverride: RESIDENT_PROTOCOL_BODY,
     });
 }
 
@@ -4015,9 +4020,9 @@ async function ensureClaudeProtocol(
         blockStart: CLAUDE_BLOCK_START,
         blockEnd: CLAUDE_BLOCK_END,
         // CLAUDE_PROTOCOL_HEADER is the legacy-markerless detector key only —
-        // it is NOT emitted into new blocks (see CLAUDE_PROTOCOL_BODY doc).
+        // it is NOT emitted into new blocks (see RESIDENT_PROTOCOL_BODY doc).
         header: CLAUDE_PROTOCOL_HEADER,
-        bodyOverride: CLAUDE_PROTOCOL_BODY,
+        bodyOverride: RESIDENT_PROTOCOL_BODY,
     });
 }
 

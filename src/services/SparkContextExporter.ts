@@ -127,8 +127,25 @@ export function generateSparkContext(workspaceRoot: string, extensionVersion: st
     content += `> [!IMPORTANT]\n`;
     content += `> Upload this single file to Gemini Spark or Claude Cowork as persistent context. When Switchboard updates, re-generate and re-upload this file.\n\n`;
 
-    // 1. Curated AGENTS.md protocol sections
-    const agentsSource = resolveSourceFile(workspaceRoot, ['AGENTS.md', path.join('.agent', 'AGENTS.md')]);
+    // 1. Curated plan-authoring protocol sections.
+    //
+    // Primary source is `.agents/plan-authoring-protocol.md`. These four sections
+    // used to live inside the AGENTS.md managed block, which made them resident in
+    // every agent's context on every turn; they are action-local, so the shrink
+    // plan cut them from the resident block and moved them here — this exporter is
+    // the one consumer that genuinely needs them, because a shell-less external
+    // surface has no way to load them at the moment of use.
+    //
+    // AGENTS.md stays in the candidate list as a fallback, and it is load-bearing:
+    // a workspace scaffolded by an older release still has the fat AGENTS.md and no
+    // `plan-authoring-protocol.md` until the control-plane re-seeds. Without this
+    // the artifact would silently lose its entire protocol body on those installs.
+    const agentsSource = resolveSourceFile(workspaceRoot, [
+        path.join('.agents', 'plan-authoring-protocol.md'),
+        path.join('.agent', 'plan-authoring-protocol.md'),
+        'AGENTS.md',
+        path.join('.agent', 'AGENTS.md'),
+    ]);
     if (agentsSource) {
         const { body, included, omitted } = curateAgentsMd(agentsSource.content);
 
@@ -245,7 +262,7 @@ export function generateSparkContext(workspaceRoot: string, extensionVersion: st
     content += `- You cannot run \`.agents/skills/kanban_operations/*.js\` or any other Switchboard utility script.\n`;
     content += `- You cannot make HTTP calls to Switchboard's LocalApiServer (\`POST /connections/verb/...\`, etc.).\n`;
     content += `- You cannot directly move cards, change board columns, or mutate board state.\n`;
-    content += `- You cannot dispatch a Switchboard coding, review, orchestrator or terminal agent. You MAY dispatch your own research or coding sub-agents, but they are not Switchboard agents and cannot access the board.\n\n`;
+    content += `- You cannot dispatch a Switchboard coding, review, Mission Control or terminal agent. You MAY dispatch your own research or coding sub-agents, but they are not Switchboard agents and cannot access the board.\n\n`;
     content += `### What to do instead\n`;
     content += `- To move a card when explicitly instructed, write a declared board-moves file to \`.switchboard/instructions/moves/\` and let the user apply it.\n`;
     content += `- To perform research, dispatch your own research sub-agent and fold the findings into \`## Uncertain Assumptions\`.\n`;
