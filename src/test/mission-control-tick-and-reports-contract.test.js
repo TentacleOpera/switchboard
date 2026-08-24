@@ -554,7 +554,7 @@ async function run() {
             'the report directive must state it is in addition to the completion POST (POST /kanban/queue/done) — read as a replacement it breaks completion detection for every card'
         );
         assert.ok(
-            !/CODING_COMPLETION_REPORT_DIRECTIVE\s*=\s*`[^`]*ORCHESTRATOR REPORT/.test(builder),
+            !/CODING_COMPLETION_REPORT_DIRECTIVE\s*=\s*`[^`]*MISSION CONTROL REPORT/.test(builder),
             'the report directive was folded into the completion directive, whose exact text is load-bearing for completion detection'
         );
     });

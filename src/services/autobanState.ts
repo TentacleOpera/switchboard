@@ -163,7 +163,7 @@ export function normalizeMissionRunConfig(config: unknown): MissionRunConfig | n
 
 export type AutobanConfigState = {
     enabled: boolean;
-    /** Orchestrator switch — independent of the schedule. Both can be on. */
+    /** Mission Control switch — independent of the schedule. Both can be on. */
     missionControlArmed?: boolean;
     /** Mission Control seat when adopted in place via POST /mission-control/adopt. */
     missionControlSeat?: MissionControlSeat;
@@ -373,14 +373,42 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
     // every state written after that carries the flag and is left alone. This
     // is the inversion the plan calls for — under the old shape an unrecognised
     // value meant "keep ticking the board", and there is no board tick left.
+    // ── Renamed-key compat read ────────────────────────────────────────────
+    // The orchestrator→Mission Control rename changed four PERSISTED keys in
+    // `workspaceState['autoban.state']`: orchestratorArmed, orchestratorSeat,
+    // orchestrationConfig and (as a legacy-only probe) orchestrationConfig.enabled.
+    // The rename plan assumed there was no persisted state to migrate; there is,
+    // on every install that has ever opened the Automation panel.
+    //
+    // This coalescing MUST happen before the retired-mode discriminator below,
+    // and it is the load-bearing half of this block. That discriminator fires on
+    // "has an automationMode but no armed flag" — and `automationMode` is ALWAYS
+    // written by this normaliser. So without the coalesce, every install that had
+    // already completed the two-switch collapse reads as pre-collapse on the
+    // first launch after the rename: `enabled` forced false (a working schedule
+    // silently disarmed) plus a "your automation mode is retired" notice nobody
+    // earned. Reading the old key first makes the upgrade a no-op, which is what
+    // it should be.
+    const legacyState = (state ?? {}) as any;
+    const rawArmed = state?.missionControlArmed !== undefined
+        ? state.missionControlArmed
+        : legacyState.orchestratorArmed;
+    const rawSeat = legacyState.missionControlSeat ?? legacyState.orchestratorSeat;
+    const rawMissionControlConfig = legacyState.missionControlConfig ?? legacyState.orchestrationConfig;
+
     const rawAutomationMode = typeof state?.automationMode === 'string' ? state.automationMode : undefined;
     const isRetiredMode = rawAutomationMode !== undefined
-        && state?.missionControlArmed === undefined;
+        && rawArmed === undefined;
 
     // Derive the two switches from the legacy mode if the new flags are absent.
-    const legacyMode = normalizeAutomationMode(state?.automationMode, (state as any)?.missionControlConfig?.enabled);
-    const missionControlArmed = state?.missionControlArmed === true
-        || (state?.missionControlArmed === undefined && legacyMode === 'agent-managed' && state?.enabled === true);
+    // The second argument is a LEGACY-ONLY probe: `.enabled` was never a field on
+    // MissionControlConfig/OrchestrationConfig, it only ever appeared on the
+    // persisted `orchestrationConfig` blob of old installs. The rename sweep
+    // renamed it, which killed the internal→agent-managed mapping it exists for;
+    // reading the coalesced value restores it.
+    const legacyMode = normalizeAutomationMode(state?.automationMode, rawMissionControlConfig?.enabled);
+    const missionControlArmed = rawArmed === true
+        || (rawArmed === undefined && legacyMode === 'agent-managed' && state?.enabled === true);
     // `enabled` is the schedule switch. If the new flag is absent, derive from
     // the legacy mode: scheduled → enabled, agent-managed/external → disabled.
     // A retired mode ALWAYS forces enabled: false — the guard that prevents
@@ -395,7 +423,7 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
     // TaskViewerProvider latches the DISPLAY behind a workspaceState flag so it
     // shows on exactly one activation — the same pattern as migratedBoardBatchNotice.
     const retiredAutomationModeNotice = isRetiredMode
-        ? `Automation mode '${rawAutomationMode}'${RETIRED_AUTOMATION_MODES.has(rawAutomationMode!) ? '' : ' (unrecognised)'} is retired — the schedule and Mission Control are now independent switches. The schedule has been turned off so nothing dispatches from a queue you did not stage; re-arm it explicitly from the Automation panel to resume.`
+        ? `Automation mode '${rawAutomationMode}'${RETIRED_AUTOMATION_MODES.has(rawAutomationMode!) ? '' : ' (unrecognised)'} is retired — the schedule and Mission Control are now independent switches. The schedule has been turned off so nothing dispatches from a queue you did not stage; re-arm it explicitly from the Mission Control panel to resume.`
         : undefined;
 
     const recurringJobsResumedNotice = (isRetiredMode && rawAutomationMode === 'external')
@@ -406,7 +434,17 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
     // them. Deleted fields (triggerMode, runSheet) are stripped so they do not
     // leak back into the persisted state. The normalized fields below override
     // anything from the input.
-    const { triggerMode: _strippedTriggerMode, runSheet: _strippedRunSheet, ...preservedUnknownKeys } = (state ?? {}) as any;
+    // The four renamed keys are stripped alongside them: their values were
+    // imported into the new names above (import before deleting), so leaving the
+    // originals in would persist a stale duplicate that drifts from the live one.
+    const {
+        triggerMode: _strippedTriggerMode,
+        runSheet: _strippedRunSheet,
+        orchestratorArmed: _strippedOrchestratorArmed,
+        orchestratorSeat: _strippedOrchestratorSeat,
+        orchestrationConfig: _strippedOrchestrationConfig,
+        ...preservedUnknownKeys
+    } = (state ?? {}) as any;
 
     return {
         ...preservedUnknownKeys,
@@ -442,7 +480,7 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         aggressivePairProgramming: state?.aggressivePairProgramming === true,
         automationMode: legacyMode,
         singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig),
-        missionControlConfig: normalizeMissionControlConfig(state?.missionControlConfig),
+        missionControlConfig: normalizeMissionControlConfig(rawMissionControlConfig),
         missionControlSeat: (function (s: any) {
             if (!s || typeof s !== 'object') return undefined;
             const adoptedAt = typeof s.adoptedAt === 'string' ? s.adoptedAt : '';
@@ -450,7 +488,7 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
             const terminalName = typeof s.terminalName === 'string' && s.terminalName.trim()
                 ? s.terminalName.trim() : undefined;
             return { terminalName, adoptedAt };
-        })((state as any)?.missionControlSeat),
+        })(rawSeat),
         migratedBoardBatchNotice: typeof state?.migratedBoardBatchNotice === 'string' ? state.migratedBoardBatchNotice : undefined,
         droppedCustomJobsNotice: typeof state?.droppedCustomJobsNotice === 'string' ? state.droppedCustomJobsNotice : undefined,
         retiredAutomationModeNotice,

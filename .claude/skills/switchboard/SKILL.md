@@ -1,6 +1,6 @@
 ---
 name: switchboard
-description: Start the Switchboard board and the orchestration agent — a two-step launcher
+description: Start the Switchboard board and Mission Control — a two-step launcher
 allowed-tools: Bash, Read, Write, Glob, Grep
 ---
 
@@ -9,7 +9,7 @@ allowed-tools: Bash, Read, Write, Glob, Grep
 `/switchboard` does two things:
 
 1. **Start `npx switchboard` if it is not already running.**
-2. **Start the orchestration agent.**
+2. **Start Mission Control.**
 
 Everything else — browsing the board, moving cards, managing features, improving
 plans, running passes — belongs to the **board** (open it in a browser) and the
@@ -81,9 +81,9 @@ fi
 
 ---
 
-## Step 2 — become the orchestrator
+## Step 2 — become Mission Control
 
-**You are the orchestrator. Not a terminal you start — this one.** Adopt the seat and
+**You are Mission Control. Not a terminal you start — this one.** Adopt the seat and
 run the pre-flight here, in this conversation.
 
 ```bash
@@ -92,31 +92,31 @@ BASE="http://127.0.0.1:$PORT"
 
 # SWITCHBOARD_TERMINAL is set for Switchboard-managed fleet seats. Unset elsewhere —
 # send it empty rather than guessing a name.
-curl -s -X POST "$BASE/orchestration/adopt" -H "Content-Type: application/json" \
+curl -s -X POST "$BASE/mission-control/adopt" -H "Content-Type: application/json" \
   -d "{\"terminalName\": \"${SWITCHBOARD_TERMINAL:-}\"}"
 ```
 
 The response carries `prompt` — the pre-flight instruction. **Follow it in this
-session**: read `.agents/skills/switchboard-orchestrator/SKILL.md`, run the pre-flight,
+session**: read `.agents/protocols/switchboard-mission-control/SKILL.md`, run the pre-flight,
 report what you find, propose a goal, and wait for the user to answer *here*.
 
-`POST /orchestration/adopt` **does not arm** and seats no terminal. On the user's
-confirmation, write `.switchboard/orchestrator/session.md` and call
-`POST /orchestration/confirm` — that is the only call that arms.
+`POST /mission-control/adopt` **does not arm** and seats no terminal. On the user's
+confirmation, write `.switchboard/mission-control/session.md` and call
+`POST /mission-control/confirm` — that is the only call that arms.
 
 If the response carries a `note`, relay it in one line: it means live turn-end notices
-will arrive in `.switchboard/orchestrator/reports/` rather than as prompts in this
+will arrive in `.switchboard/mission-control/reports/` rather than as prompts in this
 terminal. Read that directory on each pass.
 
-Never call `POST /orchestration/start` from here — that door creates a *separate*
-Orchestrator terminal, which is the opposite of what `/switchboard` is for.
+Never call `POST /mission-control/start` from here — that door creates a *separate*
+Mission Control terminal, which is the opposite of what `/switchboard` is for.
 
 ---
 
 ## Everything else
 
 - **Board** — open the browser board. It is the console.
-- **HTTP surface** — the `switchboard-orchestration` skill documents every endpoint,
+- **HTTP surface** — the `switchboard-mission-control-http` protocol documents every endpoint,
   verb, and payload field. Read it for the complete contract.
 - **Behavior contracts** — the `switchboard-contracts` skill answers how the system
   behaves (cards move on coding start, completion = plan-file mtime advance, etc.).

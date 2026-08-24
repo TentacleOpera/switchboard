@@ -1732,7 +1732,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 error: err instanceof Error ? err.message : String(err)
                             };
                         }
-                        directivesAttached = ['COMPLETION REPORT', 'ORCHESTRATOR REPORT'];
+                        directivesAttached = ['COMPLETION REPORT', 'MISSION CONTROL REPORT'];
                     }
                     try {
                         const deliveryDefaults = getPromptDeliveryOptions();

@@ -16,7 +16,7 @@ import {
     resolveTeamStanding,
     renderStandaloneOrdersBlock,
 } from './standingOrders';
-import { writeMissionControlReport, writeInstruction, bootstrapInstructionsDirectory, ingestJobActivity } from './ScheduledJobsService';
+import { writeMissionControlReport, writeInstruction, bootstrapInstructionsDirectory, ingestJobActivity, migrateLegacyOrchestratorDir } from './ScheduledJobsService';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConstitutionPath } from './constitutionUtils';
@@ -643,7 +643,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 const missionControlActive = this.isOversightAgentRunning();
                 payload = { ...payload, data: ensureDispatchProtocolDirectives(payload.data, missionControlActive) };
                 directivesAttached = missionControlActive
-                    ? ['COMPLETION REPORT', 'ORCHESTRATOR REPORT']
+                    ? ['COMPLETION REPORT', 'MISSION CONTROL REPORT']
                     : ['COMPLETION REPORT'];
             }
 
@@ -1591,9 +1591,39 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             void this._context.workspaceState.update('recurringJobsResumed.noticed', true);
         }
 
+        // Surface both notices through the host, once. The webview channel below
+        // (_getAutobanBroadcastState carries them to the Mission Control panel) is
+        // the detailed surface; this is the backstop, and it is required rather than
+        // belt-and-braces: the ONLY render site these notices had was inside the
+        // AUTOMATION tab's panel builder, which was deleted in the same change that
+        // introduced them. A migration notice whose surface is a panel the user has
+        // never opened is a notice that is discovered, not announced — and both of
+        // these report a behaviour change the user did not ask for (a schedule forced
+        // off; recurring jobs resumed).
+        this._surfaceRetiredAutomationNotices();
+
         // Ensure pair programming defaults to OFF on load regardless of previous session state
         this._autobanState.pairProgrammingMode = 'off';
 
+    }
+
+    /**
+     * Show the two one-time automation-migration notices as host notifications.
+     *
+     * Fire-and-forget: the workspaceState latches above have already been written,
+     * so this runs at most once per install per notice regardless of what the user
+     * does with the dialog. Guarded on the notice strings being present, which the
+     * normaliser only sets on the activation that detects the retired state.
+     */
+    private _surfaceRetiredAutomationNotices(): void {
+        try {
+            if (this._retiredAutomationModeNotice) {
+                this._seams().ui.showInformationMessage(this._retiredAutomationModeNotice);
+            }
+            if (this._recurringJobsResumedNotice) {
+                this._seams().ui.showInformationMessage(this._recurringJobsResumedNotice);
+            }
+        } catch { /* a notification failure must never block activation */ }
     }
 
     /**
@@ -3115,6 +3145,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     }, 5000);
                     if (typeof timer.unref === 'function') { timer.unref(); }
                 });
+                // Seed the freshly spawned child with the CURRENT seat. The other
+                // three push sites fire on a seat CHANGE (adopt / stop / handoff), and
+                // a live session changes nothing — so after a window reload with a seat
+                // already adopted the child would hold `controllerSeat = null` for the
+                // rest of the session, and the singleton guard would be blind in
+                // exactly the restart case. Best-effort, same as the change pushes.
+                if (this._ptyHostPort) { this._pushControllerSeatToPtyHost(); }
             }
         }
         const ptyHostReady = () => ptyReady && !!this._ptyHostChild && !!this._ptyHostPort;
@@ -11451,6 +11488,11 @@ Each plan file must include:
             this._seams().ui.showErrorMessage('No workspace folder found. Cannot start Mission Control.');
             return;
         }
+        // Adopt any pre-rename `.switchboard/orchestrator/` tree before the
+        // session paths below are read or written. The rename moved this
+        // directory with no migration; a workspace that ran the orchestrator
+        // still holds its session file, inbox and unclaimed reports there.
+        migrateLegacyOrchestratorDir(root);
 
         // A session already adopted the role in place (POST /mission-control/adopt). The
         // button must not spawn a second terminal alongside it — deliver to the adopted
@@ -11617,7 +11659,7 @@ Each plan file must include:
             // Silent failure here means Mission Control terminal sits idle forever and the
             // board reports a run that never started. Surface it instead.
             this._seams().ui.showErrorMessage(
-                `Orchestrator kickoff could not be delivered to '${MISSION_CONTROL_TERMINAL_NAME}'. The run did not start.`
+                `Mission Control kickoff could not be delivered to '${MISSION_CONTROL_TERMINAL_NAME}'. The run did not start.`
             );
             this.postMessage({ type: 'missionControlStartResult', success: false, error: 'kickoff prompt not delivered' });
             return;

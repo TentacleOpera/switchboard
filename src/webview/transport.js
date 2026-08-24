@@ -466,6 +466,13 @@
                 document.head.appendChild(style);
             }
 
+            // automation: the toolbar cluster only. The three kanban selectors that
+            // used to be here — [data-tab="automation"], #automation-tab-content,
+            // #automation-panel-root — named markup that no longer exists: the tab
+            // moved to the Mission Control PANEL. A panel is gated by the manifest
+            // (`getPanelsManifest` → PanelAvailability.missionControl), not by a CSS
+            // rule in a sibling document, so re-pointing these at panel internals
+            // would be a hand-listed selector set over a surface this file cannot see.
             if (caps.automation === false) {
                 document.body.classList.add('host-automation-false');
                 const style = document.createElement('style');
@@ -480,10 +487,7 @@
 .host-automation-false #btn-build-via-planner,
 .host-automation-false #btn-update-via-planner,
 .host-automation-false #btn-build-system,
-.host-automation-false #btn-build-prd-via-planner,
-.host-automation-false [data-tab="automation"],
-.host-automation-false #automation-tab-content,
-.host-automation-false #automation-panel-root {
+.host-automation-false #btn-build-prd-via-planner {
     display: none !important;
 }
 `;
@@ -491,13 +495,16 @@
             }
 
             // mission-control / mcpTerminals: the body class is the contract; the selector
-            // lists below are FORWARD-COMPATIBILITY ONLY and currently match nothing in
-            // kanban.html (verified: 0 occurrences of #btn-mission-control, .mission-control-only,
-            // .mcp-monitor-only, #btn-launch-mcp-monitor). Both clusters are built
-            // dynamically inside the automation panel — Mission Control as an automation
-            // MODE (kanban.html:9296, :10796) and the MCP monitor as `mcpConfigPanel`
-            // (:10991) — so what actually hides them today is the `automation === false`
-            // tab gate above. Do NOT "fix" these by adding matching selectors to real
+            // lists below are FORWARD-COMPATIBILITY ONLY and currently match nothing
+            // (verified: 0 occurrences of #btn-mission-control, .mission-control-only,
+            // .mcp-monitor-only, #btn-launch-mcp-monitor).
+            //
+            // NOTE: `mission-control` here is a HOST capability flag that predates the
+            // Mission Control panel, and standalone hardcodes it false. Do NOT reuse it
+            // to gate anything in mission-control.html — the panel's controller strip
+            // did exactly that and became permanently invisible in the browser cockpit.
+            // The panel is gated by `automation` (above) and its terminal strip by
+            // `terminalFleet`. Do NOT "fix" these by adding matching selectors to real
             // controls: the EXTENSION host also declares mcpTerminals:false (see
             // TaskViewerProvider baseHostCapabilities) while its MCP monitor works, so a
             // matching selector would hide a working editor surface. Gate those on a new,

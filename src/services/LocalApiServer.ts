@@ -4827,7 +4827,7 @@ export class LocalApiServer {
                 ? 'Mission Control start failed: ' + (result.error || 'unknown error') + '. No terminal was seated.'
                 : result && result.mode === 'clipboard'
                     ? 'No terminal created — clipboard mode. The /switchboard launcher prompt is returned for the caller to run; no agent was seated. Call POST /mission-control/confirm after the user answers to arm.'
-                    : 'Orchestrator seated and awaiting confirmation — pre-flight interview delivered. Call POST /mission-control/confirm after the user answers to arm.';
+                    : 'Mission Control seated and awaiting confirmation — pre-flight interview delivered. Call POST /mission-control/confirm after the user answers to arm.';
             res.end(JSON.stringify({
                 ...(result || { success: true }),
                 message
@@ -5074,22 +5074,33 @@ export class LocalApiServer {
         await this._handleReadEndpoint(req, res, async () => {
             const root = this._options.workspaceRoot;
             // Prefer session.md (the current session file); fall back to the
-            // legacy session-log.md on installs that still have one. The route
-            // name, response shape (markdown string, '' when absent) are
-            // unchanged — the fallback IS the migration for installs that never
-            // had session.md.
+            // legacy files on installs that still have one. The route name and
+            // response shape (markdown string, '' when absent) are unchanged —
+            // the fallback IS the migration for installs that never had
+            // session.md.
+            //
+            // The legacy candidates live under `.switchboard/orchestrator/`, NOT
+            // under the renamed directory. The orchestrator→Mission Control
+            // sweep rewrote this fallback's own path, which made it unreachable:
+            // a session-log.md only ever existed under the OLD directory name,
+            // so pointing the fallback at the new one meant it could never fire.
+            // A back-compat read must keep naming the past.
             const sessionPath = path.join(root, '.switchboard', 'mission-control', 'session.md');
             try {
                 const content = await fs.readFile(sessionPath, 'utf8');
                 return content;
             } catch { /* fall through to legacy */ }
-            const legacyPath = path.join(root, '.switchboard', 'mission-control', 'session-log.md');
-            try {
-                const content = await fs.readFile(legacyPath, 'utf8');
-                return content;
-            } catch {
-                return '';
+            const legacyCandidates = [
+                path.join(root, '.switchboard', 'orchestrator', 'session.md'),
+                path.join(root, '.switchboard', 'orchestrator', 'session-log.md'),
+                path.join(root, '.switchboard', 'mission-control', 'session-log.md'),
+            ];
+            for (const legacyPath of legacyCandidates) {
+                try {
+                    return await fs.readFile(legacyPath, 'utf8');
+                } catch { /* try the next vintage */ }
             }
+            return '';
         });
     }
 

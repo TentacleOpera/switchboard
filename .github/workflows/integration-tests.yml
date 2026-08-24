@@ -143,7 +143,7 @@ jobs:
       # Browser send-to-terminal dispatch parity: every browser-originated prompt
       # dispatch must thread the apiOriginated surface flag end-to-end so a browser
       # PTY terminal is reachable, the four stray _dispatchExecuteMessage sites
-      # (orchestrator/pair/airlock) must be surface-aware, the four direct-to-
+      # (mission-control/pair/airlock) must be surface-aware, the four direct-to-
       # vscode.Terminal helpers must be fleet-aware and must NOT conjure a VS Code
       # terminal for a browser caller, and every verb a browser panel posts must be
       # reachable on that panel's HTTP route (improvePlan / webviewReady were the
@@ -151,7 +151,7 @@ jobs:
       # silent wrong-fleet dispatches and invisible VS Code toasts, not thrown errors.
       - name: Browser planner dispatch surface contract (apiOriginated threading + clipboard fallback)
         run: npm run test:contract:browser-planner-dispatch-surface
-      - name: Browser stray dispatch surface contract (orchestrator/pair/airlock surface-aware)
+      - name: Browser stray dispatch surface contract (mission-control/pair/airlock surface-aware)
         run: npm run test:contract:browser-stray-dispatch-surface
       - name: Browser direct terminal helpers contract (fleet-aware, no conjured terminals)
         run: npm run test:contract:browser-direct-terminal-helpers
@@ -255,7 +255,7 @@ jobs:
       # trailer block"; and a role outside CODE_TOUCHING_ROLES has its whole gitBlock
       # dropped by assembleSuffix, so it can hold a radio, a default, a resolved
       # strategy and a stage mapping and still emit nothing. The test commits into a
-      # throwaway repo and runs the orchestrator's own query, so the assertion is what
+      # throwaway repo and runs Mission Control's own query, so the assertion is what
       # git actually returns rather than what the prompt appears to say. It also pins
       # the Coding-team migration's exact-value match across kanban.html, teamWiring.ts
       # and the terminals.js mirror — one drifted byte there and the migration silently
@@ -853,7 +853,7 @@ jobs:
       - name: Autoban state + completion-driven dispatch contract
         run: npm run test:contract:autoban-state
 
-      # The ticking orchestrator's deliverables are two rewritten agent personas and
+      # Mission Control's ticking deliverables are two rewritten agent personas and
       # a filesystem channel, and nothing else in CI reads either. Three of the four
       # subtasks named an automated check and none was wired, which is the exact
       # green-while-incomplete hole: a persona is executable specification with no
@@ -869,8 +869,8 @@ jobs:
       # and would otherwise have repeated.
       # Loads the real compiled service from out/, which "Compile test outputs"
       # above has already produced — this step must stay AFTER it.
-      - name: Orchestrator tick + reports channel contract
-        run: npm run test:contract:orchestrator-tick
+      - name: Mission Control tick + reports channel contract
+        run: npm run test:contract:mission-control-tick
 
       # Autoban must stop for the reasons that survived the session-cap deletion —
       # "no valid tickets remain" is now one of only two stop paths, so a regression

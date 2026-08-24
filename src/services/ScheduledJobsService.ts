@@ -172,6 +172,75 @@ export async function claimInboxItem(workspaceRoot: string, filename: string, ag
 }
 
 /**
+ * One-time migration of the pre-rename `.switchboard/orchestrator/` tree to
+ * `.switchboard/mission-control/`.
+ *
+ * The orchestrator→Mission Control rename moved this directory with no
+ * migration, on the plan's premise that the feature "has not shipped" and there
+ * were "no on-disk reports". Both halves were wrong: a live workspace carries
+ * hundreds of `report-*.md` files here, plus `claimed/`, `inbox/` and
+ * `sessions/`. Orphaning them means Mission Control never sees a finished
+ * feature it was waiting on — the report is on disk, in a directory nothing
+ * reads any more.
+ *
+ * Merge semantics, per CLAUDE.md's migration rule (import before deleting,
+ * never unlink): every legacy entry that has no counterpart under the new path
+ * is MOVED across; anything already present under the new name wins and its
+ * legacy twin is left where it is. When the legacy tree ends up empty it is
+ * removed; when entries survive (a genuine collision) the directory is renamed
+ * to `orchestrator.migrated.bak` so it is out of the way but recoverable.
+ *
+ * Idempotent and best-effort: a missing legacy tree is a no-op, and any error
+ * leaves both trees untouched rather than half-moved. Runs at most once per
+ * workspace root per process — the reports bootstrap is on a hot path.
+ */
+const _legacyMissionControlMigrated = new Set<string>();
+
+export function migrateLegacyOrchestratorDir(workspaceRoot: string): void {
+    if (_legacyMissionControlMigrated.has(workspaceRoot)) { return; }
+    _legacyMissionControlMigrated.add(workspaceRoot);
+    try {
+        const sbDir = path.join(workspaceRoot, '.switchboard');
+        const legacyDir = path.join(sbDir, 'orchestrator');
+        if (!fs.existsSync(legacyDir) || !fs.statSync(legacyDir).isDirectory()) { return; }
+        const newDir = path.join(sbDir, 'mission-control');
+        fs.mkdirSync(newDir, { recursive: true });
+        _mergeDirInto(legacyDir, newDir);
+        // Empty after the merge → remove. Otherwise park it under a .bak name so
+        // a collision is recoverable rather than silently shadowed forever.
+        try {
+            if (fs.readdirSync(legacyDir).length === 0) {
+                fs.rmdirSync(legacyDir);
+            } else {
+                const bak = path.join(sbDir, 'orchestrator.migrated.bak');
+                if (!fs.existsSync(bak)) { fs.renameSync(legacyDir, bak); }
+            }
+        } catch { /* leaving the legacy dir in place is safe */ }
+    } catch (err) {
+        console.warn('[ScheduledJobsService] legacy orchestrator dir migration skipped:', err);
+    }
+}
+
+/** Recursive move-if-absent. Directories are descended into so a partially
+ *  populated destination (e.g. a `reports/` that already exists) merges rather
+ *  than being skipped wholesale. */
+function _mergeDirInto(fromDir: string, toDir: string): void {
+    for (const entry of fs.readdirSync(fromDir, { withFileTypes: true })) {
+        const src = path.join(fromDir, entry.name);
+        const dst = path.join(toDir, entry.name);
+        try {
+            if (entry.isDirectory()) {
+                fs.mkdirSync(dst, { recursive: true });
+                _mergeDirInto(src, dst);
+                try { if (fs.readdirSync(src).length === 0) { fs.rmdirSync(src); } } catch { /* keep */ }
+            } else if (!fs.existsSync(dst)) {
+                fs.renameSync(src, dst);
+            }
+        } catch { /* per-entry best effort — one bad file must not abort the rest */ }
+    }
+}
+
+/**
  * Lazily creates `.switchboard/mission-control/reports/claimed/` and returns the
  * reports directory. Returns `null` when `.switchboard` is absent — same lazy
  * guard as `bootstrapInstructionsDirectory` — so a non-Switchboard folder is
@@ -184,6 +253,9 @@ export async function bootstrapMissionControlReportsDirectory(workspaceRoot: str
         // Lazy creation: do not eagerly pollute non-Switchboard workspaces
         return null;
     }
+    // Adopt any pre-rename `.switchboard/orchestrator/` tree before creating the
+    // new one, so unclaimed reports written under the old name are still seen.
+    migrateLegacyOrchestratorDir(workspaceRoot);
     const reportsDir = path.join(sbDir, 'mission-control', 'reports');
     const claimedDir = path.join(reportsDir, 'claimed');
     await fs.promises.mkdir(claimedDir, { recursive: true });

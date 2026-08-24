@@ -56,7 +56,7 @@
       },
       {
         "command": "switchboard.startOrchestrator",
-        "title": "Switchboard: Start Orchestrator"
+        "title": "Switchboard: Start Mission Control"
       },
       {
         "command": "switchboard.importUnclaimedPlans",
@@ -983,7 +983,7 @@
     "test:contract:claude-protocol-block": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/claude-protocol-block-size-contract.test.js",
     "test:contract:skill-preconditions": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/skill-preconditions-contract.test.js",
     "test:contract:unattended-batch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/unattended-batch-improvement-contract.test.js",
-    "test:contract:orchestrator-tick": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/orchestrator-tick-and-reports-contract.test.js",
+    "test:contract:mission-control-tick": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/mission-control-tick-and-reports-contract.test.js",
     "test:contract:queue-pipeline": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/queue-pipeline-contract.test.js",
     "test:contract:external-headed-team": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/external-headed-team-contract.test.js",
     "test:contract:terminal-coder-dispatch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-coder-dispatch-contract.test.js",

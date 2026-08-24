@@ -280,10 +280,21 @@ export class PtyFleetService {
         // Singleton guard — BEFORE the collision loop. The loop below is the
         // right default for pool roles (three coders → coder-2, coder-3), but
         // for a singleton identity a second create must return the existing
-        // live handle rather than minting `<role>-2`. This is the one chokepoint
-        // every path goes through — the rail button, startMissionControlFromKanban,
-        // the standalone host, and any future panel or dock control — so the
-        // invariant holds regardless of which surface issued the call.
+        // live handle rather than minting `<role>-2`.
+        //
+        // SCOPE, stated honestly: this covers every PTY creation path — the rail
+        // button and the panel via POST /mission-control/start on the standalone
+        // host, bootstrap.ts, and any future panel or dock control that creates a
+        // fleet terminal. It does NOT cover the extension host's own controller:
+        // `TaskViewerProvider.startMissionControlFromKanban` creates a VS Code
+        // terminal with `vscode.window.createTerminal`, which never reaches this
+        // method. That path has its own de-duplication (it scans
+        // `_registeredTerminals` and `vscode.window.terminals` first) and is
+        // race-safe by construction — registration is synchronous, with no await
+        // between the lookup and the `_registeredTerminals.set` — but it is a
+        // SECOND enforcement point, not this one. Anyone adding a controller
+        // surface to the extension host must keep that scan, because this guard
+        // will not see it.
         //
         // The check is GLOBAL: never scoped by workspace root. One controller
         // across every control-plane directory, not one per root. See the
@@ -297,6 +308,19 @@ export class PtyFleetService {
         const identity = singletonIdentityForRole(role);
         if (identity) {
             const existing = this._findSingletonHandle(identity);
+            // Report (never remove) any pre-existing duplicate. Anyone who
+            // double-clicked before this guard shipped may hold a
+            // `mission-control-2`; its scrollback can carry unsaved context, so
+            // killing it is wrong and silence is worse — a duplicate announces
+            // itself today only as work delivered to the wrong terminal, because
+            // _tryFleetDeliveryForRole picks whichever it finds first.
+            const duplicates = this.reportSingletonDuplicates(identity);
+            if (duplicates.length > 0) {
+                console.warn(`[PtyFleetService] Pre-existing duplicate ${identity} terminal(s) detected and LEFT RUNNING `
+                    + `(scrollback may hold unsaved context): ${duplicates.join(', ')}. `
+                    + `Role-keyed delivery will pick one of them arbitrarily — close the extras from the terminal UI.`);
+                this.emitter.emit('change', { type: 'singletonDuplicates', identity, names: duplicates } as any);
+            }
             if (existing) {
                 if (existing.status === 'active') {
                     // Live singleton — return it. A second create for the same

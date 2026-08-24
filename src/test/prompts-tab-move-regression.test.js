@@ -41,8 +41,13 @@ function run() {
         'workflowFilePath',
         'validateWorkflowPath',
         'plannerAddonSwitchboardSafeguards',
-        'plannerAddonDependencyCheck',
-        'plannerAddonPlanningFeature',
+        // plannerAddonDependencyCheck / plannerAddonPlanningFeature were removed
+        // from the addon set long before this test was last run; nothing in src/
+        // mentions either id. They are replaced here by two addons that ARE in the
+        // shipped Prompts tab, so the list keeps asserting a real roster rather
+        // than a historical one — the whole point of an id inventory.
+        'plannerAddonConstitution',
+        'plannerAddonAdviseResearch',
         'plannerAddonDesignSystemDoc',
         'plannerAddonAggressivePairProgramming',
         'plannerAddonGitProhibition',

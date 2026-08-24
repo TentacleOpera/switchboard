@@ -284,7 +284,7 @@
 
     /* ── Mission Control rail icon ─────────────────────────────────────────
        A UFO button at the top of #strip-terminals that lights (animated cyan
-       lights) when an Mission Control session is active and dims when inactive.
+       lights) when a Mission Control session is active and dims when inactive.
        Lit click → REVEAL (navigate to the terminals panel and focus the
        controller terminal), matching every other button in the rail — team
        buttons switch the panel to team scope, ungrouped terminal buttons

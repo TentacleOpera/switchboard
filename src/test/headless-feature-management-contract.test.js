@@ -388,6 +388,7 @@ async function main() {
 
     const transportSrc = fs.readFileSync(path.join(repoRoot, 'src', 'webview', 'transport.js'), 'utf8');
     const kanbanHtml = fs.readFileSync(path.join(repoRoot, 'src', 'webview', 'kanban.html'), 'utf8');
+    const headlessPanelSrc = fs.readFileSync(path.join(repoRoot, 'src', 'services', 'headlessPanelHtml.ts'), 'utf8');
     const taskViewerSrc = fs.readFileSync(path.join(repoRoot, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
     const bootstrapSrc = fs.readFileSync(path.join(repoRoot, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
 
@@ -440,11 +441,14 @@ async function main() {
         }
     });
 
-    await test('worktrees / uat / automation gates hide the tab BUTTON and its panel, not just inner controls', () => {
+    await test('worktrees / uat gates hide the tab BUTTON and its panel, not just inner controls', () => {
+        // `automation` is NOT in this list any more. Its tab moved to the Mission
+        // Control panel, so there is no kanban tab button or panel div for the CSS
+        // gate to name — the row below asserts the gate stopped naming them, and the
+        // manifest row asserts where the gate went instead.
         for (const [flag, tab, panelId] of [
             ['worktrees', 'worktrees', 'worktrees-tab-content'],
             ['uat', 'uat', 'uat-tab-content'],
-            ['automation', 'automation', 'automation-tab-content'],
         ]) {
             const gateIdx = transportSrc.indexOf(`caps.${flag} === false`);
             assert.ok(gateIdx > 0, `${flag} branch missing from applyCapabilityGating`);
@@ -455,6 +459,31 @@ async function main() {
             assert.ok(kanbanHtml.includes(`data-tab="${tab}"`) && kanbanHtml.includes(`id="${panelId}"`),
                 `${flag} gate targets markup that does not exist in kanban.html`);
         }
+    });
+
+    await test('the automation gate no longer names the deleted AUTOMATION tab, and the panel is gated by the manifest', () => {
+        // The AUTOMATION tab moved to mission-control.html. A CSS rule in transport.js
+        // cannot gate a separate panel document, so pointing these selectors at panel
+        // internals would be a hand-listed set over markup this file never sees — the
+        // exact drift the row above warns about. The gate keeps the kanban TOOLBAR
+        // cluster; the panel is gated where every other panel's gate lives.
+        const gateIdx = transportSrc.indexOf('caps.automation === false');
+        assert.ok(gateIdx > 0, 'automation branch missing from applyCapabilityGating');
+        const branch = transportSrc.slice(gateIdx, gateIdx + 1600);
+        for (const dead of ['[data-tab="automation"]', '#automation-tab-content', '#automation-panel-root']) {
+            assert.ok(!branch.includes(dead),
+                `automation gate still names ${dead}, which no longer exists in kanban.html`);
+        }
+        assert.ok(branch.includes('#btn-autoban'), 'automation gate must still hide the kanban toolbar cluster');
+        // And the markup really is gone from the board.
+        for (const dead of ['data-tab="automation"', 'id="automation-tab-content"', 'id="automation-panel-root"']) {
+            assert.ok(!kanbanHtml.includes(dead), `kanban.html still contains ${dead}`);
+        }
+        // The panel's gate: PanelAvailability carries it and the manifest reads it.
+        assert.ok(/missionControl\?:\s*boolean/.test(headlessPanelSrc),
+            'PanelAvailability must carry missionControl');
+        assert.ok(headlessPanelSrc.includes("id: 'mission-control'") && headlessPanelSrc.includes('enabled: missionControlEnabled'),
+            'the mission-control manifest entry must be gated by missionControlEnabled, not hardcoded true');
     });
 
     await test('extension host declares all four new Board flags true (fail-closed defaults must not gate the editor)', () => {

@@ -15,10 +15,10 @@ Rename the orchestrator persona to Mission Control and build out the surfaces th
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Mission Control panel: UI specification](../plans/mission-control-panel-ui-specification.md) — **CODER CODED**
-- [ ] [One controller, enforced at the service](../plans/one-controller-enforced-at-the-service.md) — **CODER CODED**
-- [ ] [Rename the orchestrator to Mission Control](../plans/rename-the-orchestrator-to-mission-control.md) — **CODER CODED**
-- [ ] [The automation model: four things, not a mode axis](../plans/the-automation-model-four-things-not-a-mode-axis.md) — **CODER CODED**
+- [ ] [Mission Control panel: UI specification](../plans/mission-control-panel-ui-specification.md) — **CODE REVIEWED**
+- [ ] [One controller, enforced at the service](../plans/one-controller-enforced-at-the-service.md) — **CODE REVIEWED**
+- [ ] [Rename the orchestrator to Mission Control](../plans/rename-the-orchestrator-to-mission-control.md) — **CODE REVIEWED**
+- [ ] [The automation model: four things, not a mode axis](../plans/the-automation-model-four-things-not-a-mode-axis.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -27,3 +27,9 @@ Sequenced, not parallel. **Rename the orchestrator to Mission Control** is first
 
 **Cross-feature note — naming authority.** The pre-existing feature *Trackers are for bulk queueing, and the orchestrator is a PM you consult* has a subtask covering the same ground ("Two orchestrator entry points are dead or inconsistent, and one concept has four names — delete, and settle the vocabulary"). **The newly imported work takes priority: this feature's rename is the authoritative one.** Treat the Trackers subtask's vocabulary half as subordinate to the rename landed here, and do not settle the naming twice.
 
+
+## Review Findings
+
+Reviewed all four subtasks as one delivery unit (they landed together in `87080f98`). Six CRITICALs and eleven MAJORs fixed; per-subtask detail is in each plan file. The four that mattered most: CI was broken (`test:contract:orchestrator-tick` pointed at a renamed-away file and `integration-tests.yml:873` ran it), both copies of the `/switchboard` launcher were never renamed and POSTed to deleted routes, the rename's "nothing shipped" premise was false on two counts (609 on-disk reports orphaned; four persisted `autoban.state` keys renamed with no compat read, which force-disarmed the schedule on every already-migrated install), and the mode axis was orphaned rather than deleted — leaving ~720 lines of live-looking radio machinery plus four mode-keyed branches that hid a running schedule's own controls. Files changed: `src/services/{autobanState,ScheduledJobsService,LocalApiServer,TaskViewerProvider,headlessPanelHtml}.ts`, `src/standalone/{ptyFleetService,bootstrap}.ts`, `src/webview/{kanban.html,mission-control.html,mission-control.js,terminals.js,transport.js,shell.js,implementation.html}`, five test files, `package.json`, `.github/workflows/integration-tests.yml`, and the control plane (`.agents/`, `.claude/`, `CLAUDE.md`). Verification: webpack + `tsc` clean (only pre-existing TS2835), 22 affected contract suites green including a CI gate (`headless-feature-management-contract`) that this delivery had turned red; four suites stay red on defects predating this work (`seat-safeguards` ×2, `browser-stray-dispatch-surface` ×1, `stage-marker-commit` ×2, `browser-panel-verb-routing` ×1 — all verified against `87080f98^`).
+
+**Remaining risks:** the missions and schedules tabs still have no host wiring (blocked on `staging-streams-parallel-dispatch-and-worktrees.md`), the `startOrchestrator`/`stopOrchestrator`/`setAutomationMode` verbs keep their old names, and `prompts-tab-move-regression.test.js` / `planner-workflow-path-migration.test.js` remain uninvoked by CI and red on pre-existing drift.

@@ -209,7 +209,7 @@ curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" $AUTH \
   -d '{"name":"coder-1","data":"<your prompt>","clearBeforePrompt":false,
        "dispatch":{"planFile":".switchboard/plans/<plan-file>","role":"coder"}}'
 # → { "success": true, "attributed": 1, "skipped": 0,
-#     "directivesAttached": ["COMPLETION REPORT", "ORCHESTRATOR REPORT"] }
+#     "directivesAttached": ["COMPLETION REPORT", "MISSION CONTROL REPORT"] }
 ```
 
 Why it matters, beyond saving a call:

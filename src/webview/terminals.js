@@ -1232,7 +1232,7 @@
                 // arrives via the wsHub broadcast rail (like terminalsChanged).
                 reloadTerminalGroups();
             } else if ((message.type === 'autobanStateSync' || message.type === 'updateAutobanConfig') && message.state) {
-                // Orchestrator seat/armed state, relayed to the shell rail so
+                // Mission Control seat/armed state, relayed to the shell rail so
                 // its Mission Control icon can light/dim. Two carriers, same payload shape:
                 // `autobanStateSync` is the live push-on-change (fired by
                 // _postAutobanStateNow in TaskViewerProvider); `updateAutobanConfig`
@@ -1752,8 +1752,13 @@
      * event.origin === location.origin on its end; this side uses the same
      * target origin so a foreign framer cannot spoof the relay. */
     function relayMissionControlStateToShell(state) {
-        if (window.parent === window) { return; } // not embedded
         const seat = state.missionControlSeat || null;
+        // Cache the seat name for enterControllerScope: an ADOPTED controller carries
+        // neither the 'mission-control' role nor the 'Mission Control' name, so a
+        // role-only scan cannot find it. Cached before the embedded-check below so it
+        // is populated in a pop-out too.
+        lastMissionControlSeatName = (seat && seat.terminalName) || null;
+        if (window.parent === window) { return; } // not embedded
         window.parent.postMessage({
             type: 'missionControlState',
             active: !!(state.missionControlSeat || state.missionControlArmed),
@@ -3997,6 +4002,28 @@
         let allTab;
         let addBtn = null;
         const groupTabEls = [];
+
+        if (controllerScopeActive) {
+            // Controller scope needs the same escape hatch team scope has. It hides
+            // every general-purpose sidebar button via the is-controller-scoped CSS,
+            // so without a back affordance the only way out is END SESSION — i.e. the
+            // user must end the Mission Control session to stop looking at it. This is
+            // the "a scope that hides but never restores" failure the plan names.
+            allTab = document.createElement('button');
+            allTab.type = 'button';
+            allTab.className = 'group-tab';
+            allTab.title = 'Return to the full fleet view';
+            const backName = document.createElement('span');
+            backName.textContent = '← All';
+            allTab.appendChild(backName);
+            allTab.addEventListener('click', () => exitControllerScope());
+            tabRow.appendChild(allTab);
+            groupTabStripEl.appendChild(tabRow);
+            // false = no role picker was mounted. The return value is `pickerRendered`,
+            // not "did I draw something" — returning true would set the caller's
+            // pickerRendered flag and suppress the pickerState garbage-collect.
+            return false;
+        }
 
         if (inTeamScope) {
             // "← All" back button — exits team scope, returns to fleet view.
@@ -10694,6 +10721,10 @@
        USED to live on the rail icon lives here now, where it can carry a
        label (the rail icon cannot). */
     let controllerScopeActive = false;
+    /** Last adopted-controller terminal name seen on the autoban broadcast rail.
+     *  See relayMissionControlStateToShell — the role scan alone cannot see an
+     *  adopted seat, which is exactly what the docblock below promises to handle. */
+    let lastMissionControlSeatName = null;
 
     /** Enter controller-scoped mode. Finds the controller terminal (by role
      *  'mission-control' or 'project_manager', or by the adopted seat name) and
@@ -10711,10 +10742,20 @@
         // stop button explicitly since it starts hidden.
         const stopBtn = document.getElementById('btn-controller-stop');
         if (stopBtn) { stopBtn.hidden = false; }
-        // Find and focus the controller terminal in a pane.
-        const controller = fleetList.find(t =>
-            t.role === 'mission-control' || t.role === 'project_manager'
-        );
+        // Find and focus the controller terminal in a pane. The adopted seat is
+        // checked FIRST: an adopted controller carries neither the controller role
+        // nor the canonical name, so a role-only scan silently seats nothing (or the
+        // wrong pane) for the adopt door — the same blind spot the service-layer
+        // singleton guard exists to close.
+        let controller = null;
+        if (lastMissionControlSeatName) {
+            controller = fleetList.find(t => t.friendlyName === lastMissionControlSeatName) || null;
+        }
+        if (!controller) {
+            controller = fleetList.find(t =>
+                t.role === 'mission-control' || t.role === 'project_manager'
+            ) || null;
+        }
         if (controller) {
             // Seat the controller terminal into pane 0 so the operator sees it.
             paneAssignments[0] = controller.friendlyName;
@@ -11939,7 +11980,7 @@
                 .then(res => res.json())
                 .then(result => {
                     if (result.success) {
-                        showPaneToast('Orchestrator session ended');
+                        showPaneToast('Mission Control session ended');
                     } else {
                         showPaneToast('Failed to stop Mission Control: ' + (result.error || 'unknown'));
                     }

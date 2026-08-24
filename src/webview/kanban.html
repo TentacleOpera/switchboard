@@ -3038,8 +3038,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     </div>
 
     <!-- The Automation tab moved to the Mission Control panel (mission-control.html).
-         The renderAutobanPanel() JS guards on getElementById('automation-panel-root')
-         and no-ops when absent, so the legacy render path is dead but harmless. -->
+         The mode-axis panel builder that rendered into #automation-panel-root was
+         DELETED with it — not orphaned. See the "Autoban Config Panel — DELETED"
+         note in the script below for why leaving it unreachable was worse. -->
 
     <!-- The Remote tab (§10) moved to project.html (Project panel). The toolbar
          start/stop toggle below remains; config UI lives in its new home. -->
@@ -6241,8 +6242,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let lastAllCardsSignature = '';
 
         // Board-toolbar interaction guard. Deliberately NOT the autoban panel's
-        // isAutobanPanelInteracting: sharing that flag would let a user browsing the
-        // workspace dropdown also freeze the automation panel's refresh.
+        // the retired automation panel's own interaction guard: a shared flag would
+        // have let a user browsing the workspace dropdown freeze an unrelated refresh.
         let isWorkspaceDropdownInteracting = false;
         let workspaceDropdownInteractionTimer = null;
         let pendingWorkspaceDropdownUpdate = null;   // { explicitRoot } | null
@@ -6941,8 +6942,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             try {
                 const state = vscode.getState() || {};
                 state.collapseCodersEnabled = collapseCodersEnabled;
-                state.currentAutomationMode = currentAutomationMode;
-
+                // The mode selection is gone with the axis — nothing persists one
+                // any more, by design.
                 state.currentWorkspaceRoot = currentWorkspaceRoot;
                 vscode.setState(state);
             } catch (_) {}
@@ -8506,16 +8507,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const resetBtn = document.getElementById('btn-reset-autoban-timer');
             if (resetBtn) {
-                // Reset is a timer reset — only meaningful in Scheduled mode.
-                const showReset = isEnabled && currentAutomationMode === 'scheduled';
-                resetBtn.style.display = showReset ? '' : 'none';
+                // Reset is a timer reset — meaningful whenever the SCHEDULE is on.
+                // It used to also require the retired mode axis to read "scheduled",
+                // which made the schedule's own controls vanish the moment Mission
+                // Control was armed (the synthetic mode resolves to agent-managed
+                // when both switches are on). The axis is gone: the two switches are
+                // independent, so the schedule's controls follow the schedule flag
+                // and nothing else.
+                resetBtn.style.display = isEnabled ? '' : 'none';
             }
 
             const pauseBtn = document.getElementById('btn-pause-autoban-timer');
             if (pauseBtn) {
-                // Pause is a timer pause — only meaningful in Scheduled mode.
-                const showPause = isEnabled && currentAutomationMode === 'scheduled';
-                pauseBtn.style.display = showPause ? '' : 'none';
+                // Pause is a timer pause — follows the schedule flag alone, for the
+                // same reason as Reset above.
+                pauseBtn.style.display = isEnabled ? '' : 'none';
                 const isPaused = !!(autobanConfig && autobanConfig.paused);
                 pauseBtn.classList.toggle('is-paused', isPaused);
                 pauseBtn.classList.toggle('is-active', !isPaused);
@@ -10021,13 +10027,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // a message arrives before the script finishes executing top-to-bottom.
         let lastTerminals = {};
         let lastCustomAgents = [];
-        let isAutobanPanelInteracting = false;
-        let autobanPanelInteractionTimer = null;
 
         let lastSafetySession = null;
         let lastWorktreeConfig = null;
         let selectedWorktreeRepo = '';
-        let currentAutomationMode = 'scheduled';
 
         // Listen for messages from the extension
         window.addEventListener('message', (event) => {
@@ -10667,7 +10670,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         renderBoard(currentCards);
                         updateAllColumnAgents();
                         updateAutobanIndicators();
-                        renderAutobanPanel();
                     }
                     break;
                 case 'uatData':
@@ -10900,14 +10902,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     break;
                 case 'updateAutobanConfig':
                     autobanConfig = msg.state || null;
-                    if (autobanConfig && autobanConfig.automationMode) {
-                        currentAutomationMode = autobanConfig.automationMode;
-                        saveWebviewState();
-                    }
                     updateAutobanIndicators(true);
                     syncAutobanCountdownTimer();
                     updateAutobanButtonState();
-                    renderAutobanPanel();
                     break;
                 case 'updatePairProgrammingMode': {
                     const ppSelect = document.getElementById('pairProgrammingModeSelect');
@@ -11033,32 +11030,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         changed = JSON.stringify(window.__schedulerConfig) !== JSON.stringify(incoming);
                     } catch { /* uncomparable — fall through and re-render */ }
                     window.__schedulerConfig = incoming;
-                    if (changed && currentAutomationMode === 'scheduled') {
-                        renderAutobanPanel(true);
-                    }
+                    // No panel here to re-render any more — the scheduler UI lives in
+                    // the Mission Control panel, which reads this push itself.
+                    void changed;
                     break;
                 }
-                case 'missionControlStartResult': {
-                    // Set the status line AFTER the re-render — renderAutobanPanel
-                    // rewrites automation-status-line from the mode.
-                    renderAutobanPanel(true);
-                    const status = document.getElementById('automation-status-line');
-                    if (status) {
-                        if (!msg.success) {
-                            status.textContent = 'Start failed: ' + (msg.error || 'Mission Control did not start.');
-                            status.style.color = 'var(--accent-red, #d9534f)';
-                        } else {
-                            // Start seats Mission Control; it does NOT arm. `enabled`
-                            // stays false until the agent calls POST /mission-control/confirm,
-                            // so the re-render correctly snaps the toggle back to OFF —
-                            // which, unexplained, reads as a button that did nothing.
-                            // This is the primary success path, not an edge case.
-                            status.textContent = 'Mission Control seated — answer its pre-flight in the terminal. Automation arms when you confirm.';
-                            status.style.color = '';
-                        }
-                    }
-                    break;
-                }
+                // missionControlStartResult is NOT handled here any more. Its only
+                // consumer was #automation-status-line inside the deleted mode-axis
+                // panel; keeping a getElementById on a removed id would have been a
+                // silent no-op dressed as a handler. Start feedback now comes from the
+                // shell rail, which reads the /mission-control/start response directly
+                // (shell.js showStripToast).
                 case 'customAgents': {
                   agentsTabCustomAgents = msg.customAgents || [];
                   lastCustomAgents = agentsTabCustomAgents;
@@ -11235,17 +11217,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     return { text: `${abbrev}: off`, active: false };
                 });
-                let filteredBadgeData = badgeData;
-                if (currentAutomationMode === 'scheduled') {
-                    const sourceCol = 'PLAN REVIEWED';
-                    const sourceIdx = autobanColumns.indexOf(sourceCol);
+                // Badges belong to the SCHEDULE clock, so they follow the schedule
+                // switch. Keying them on the retired mode axis hid them whenever
+                // Mission Control was armed alongside a running schedule — the
+                // residual exclusivity the four-thing model exists to remove.
+                let filteredBadgeData = [];
+                if (autobanConfig.enabled === true) {
+                    const sourceIdx = autobanColumns.indexOf('PLAN REVIEWED');
                     filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-                } else {
-                    // Every non-scheduled mode shows NO run-sheet badges. Listing
-                    // external alone was correct on a two-value axis and became a
-                    // fall-through the moment agent-managed was added — it left a
-                    // countdown badge per column for a clock that does not run.
-                    filteredBadgeData = [];
                 }
                 if (forceRebuild || container.children.length !== filteredBadgeData.length) {
                     container.innerHTML = filteredBadgeData.map(b =>
@@ -11279,15 +11258,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
             });
 
-            // Filter badges by automation mode
-            let filteredBadgeData = badgeData;
-            if (currentAutomationMode === 'scheduled') {
-                const sourceCol = 'PLAN REVIEWED';
-                const sourceIdx = autobanColumns.indexOf(sourceCol);
+            // Badges follow the schedule switch — see the note on the twin above.
+            let filteredBadgeData = [];
+            if (autobanConfig.enabled === true) {
+                const sourceIdx = autobanColumns.indexOf('PLAN REVIEWED');
                 filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-            } else {
-                // Every non-scheduled mode shows NO run-sheet badges — see above.
-                filteredBadgeData = [];
             }
 
             const existingBadges = container.children;
@@ -11961,727 +11936,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         // ─── End Routing Map ──────────────────────────────────────────────────────
 
-        // ─── Autoban Config Panel (ported from sidebar implementation.html) ────────
-        // (lastTerminals, lastCustomAgents, isAutobanPanelInteracting, etc. are forward-declared above the message listener)
-
-               function createAutobanPanel() {
-            const container = document.createElement('div');
-            container.style.cssText = 'padding: 8px; display: flex; flex-direction: column; gap: 12px;';
-
-            if (!autobanConfig) {
-                const placeholder = document.createElement('div');
-                placeholder.style.cssText = 'padding: 20px; text-align: center; color: var(--text-secondary); font-size: 11px;';
-                placeholder.textContent = 'Loading automation state…';
-                container.appendChild(placeholder);
-                return container;
-            }
-
-            const state = autobanConfig;
-            let hasWatchActive = false;
-            if (currentAutomationMode === 'scheduled') {
-                const sc = state.singleColumnConfig;
-                if (sc && sc.enabled && sc.triggerMode === 'watch') {
-                    hasWatchActive = true;
-                }
-            }
-            const autobanSelectStyle = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px;';
-            const autobanNumberInputStyle = 'width:56px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
-            const chipStyle = 'display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border-color); border-radius:999px; padding:1px 6px; font-size:9px; color:var(--text-secondary);';
-            const smallButtonStyle = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-size:9px; padding:3px 6px; border-radius:4px; cursor:pointer;';
-            const guardInteraction = (el) => {
-                const setInteracting = () => {
-                    isAutobanPanelInteracting = true;
-                    if (autobanPanelInteractionTimer) {
-                        clearTimeout(autobanPanelInteractionTimer);
-                    }
-                    // Block re-renders for 2 seconds after the last interaction event
-                    autobanPanelInteractionTimer = setTimeout(() => {
-                        isAutobanPanelInteracting = false;
-                        autobanPanelInteractionTimer = null;
-                    }, 2000);
-                };
-                el.addEventListener('focus', setInteracting);
-                el.addEventListener('change', setInteracting); // also block on value change
-                el.addEventListener('input', setInteracting);  // catch mid-typing on number inputs
-                // Note: blur is intentionally omitted — the timeout handles guard clearance
-            };
-
-            const emitAutobanState = () => {
-                postKanbanMessage({ type: 'updateAutobanConfig', state: { ...state } });
-            };
-
-            // AUTOMATION header — at the very top of the tab
-            const automationHeader = document.createElement('div');
-            automationHeader.className = 'subsection-header';
-            const automationHeaderSpan = document.createElement('span');
-            automationHeaderSpan.textContent = 'CONFIGURE AUTOMATION';
-            automationHeader.appendChild(automationHeaderSpan);
-            container.appendChild(automationHeader);
-
-            // How-to-start hint — the tab's ON/OFF is the start control.
-            const startHint = document.createElement('div');
-            startHint.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-            startHint.textContent = 'Pick a mode below, then use the ON/OFF switch to start the automation.';
-            container.appendChild(startHint);
-
-            // Mode radios. NOTE: the exclusive mode AXIS is deleted in the
-            // engine — `enabled` (queue schedule) and `missionControlArmed` are
-            // two independent switches that may both be on. This selector is
-            // the legacy surface over them: picking a mode sets one switch and
-            // clears the other (setAutomationModeFromKanban), so it can express
-            // three of the four states. Replacing it with two switches plus a
-            // queue-state readout is the automation panel's own follow-up; what
-            // must not survive is a DESCRIPTION of a run sheet that no longer
-            // runs, because that is what a user reads to decide what is armed.
-            const modeRow = document.createElement('div');
-            modeRow.style.cssText = 'display:flex; align-items:center; gap:12px; padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:4px; flex-wrap:wrap;';
-            const modeRadios = [
-                { value: 'agent-managed', label: 'Agent-managed', desc: 'Wake Mission Control every N min to decide the next action.' },
-                { value: 'scheduled', label: 'Scheduled', desc: 'Pop the Dispatch queue every N min: the live coding head gets the next staged card. Mechanical, no agent deciding.' },
-                { value: 'external', label: 'External', desc: 'Switchboard runs no clock. Copy a prompt for your external scheduler.' }
-            ];
-            modeRadios.forEach(m => {
-                const radioRow = document.createElement('label');
-                radioRow.style.cssText = 'display:flex; align-items:center; gap:4px; cursor:pointer;';
-                const radio = document.createElement('input');
-                radio.type = 'radio';
-                radio.name = 'automation-mode';
-                radio.value = m.value;
-                radio.checked = (m.value === currentAutomationMode);
-                guardInteraction(radio);
-                const radioLabel = document.createElement('span');
-                radioLabel.textContent = m.label;
-                radioRow.appendChild(radio);
-                radioRow.appendChild(radioLabel);
-                modeRow.appendChild(radioRow);
-            });
-            container.appendChild(modeRow);
-
-            // Mode description line
-            const modeDescriptions = {
-                'agent-managed': 'Wake Mission Control every N min to decide the next action.',
-                'scheduled': 'Pop the Dispatch queue every N min: the live coding head gets the next staged card. Mechanical, no agent deciding.',
-                'external': 'Switchboard runs no clock. Copy a prompt for your external scheduler.'
-            };
-            const modeHelpText = document.createElement('div');
-            modeHelpText.style.cssText = 'padding:0 8px 8px 8px; font-size:9px; color:var(--text-secondary); line-height:1.4;';
-            modeHelpText.textContent = modeDescriptions[currentAutomationMode] || '';
-            container.appendChild(modeHelpText);
-
-            // ON/OFF toggle — the single armed flag for whichever mode is selected.
-            const onOffRow = document.createElement('div');
-            onOffRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; margin-bottom:8px;';
-            const onOffLabel = document.createElement('span');
-            onOffLabel.style.cssText = 'font-size:10px; color:var(--text-secondary); font-weight:bold;';
-            onOffLabel.textContent = 'AUTOMATION:';
-            const onOffToggle = document.createElement('button');
-            onOffToggle.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:3px 12px; border-radius:4px; cursor:pointer; min-width:50px;';
-            const isArmed = !!(state && state.enabled);
-            onOffToggle.textContent = isArmed ? 'ON' : 'OFF';
-            onOffToggle.classList.toggle('is-active', isArmed);
-            if (isArmed) { onOffToggle.style.background = 'var(--accent-teal)'; onOffToggle.style.color = '#fff'; }
-            onOffToggle.addEventListener('click', () => {
-                const currentlyEnabled = !!(autobanConfig && autobanConfig.enabled);
-                postKanbanMessage({ type: 'toggleAutoban', enabled: !currentlyEnabled });
-            });
-            onOffRow.appendChild(onOffLabel);
-            onOffRow.appendChild(onOffToggle);
-            container.appendChild(onOffRow);
-
-            // Status line — always present, even when nothing has happened.
-            const statusLine = document.createElement('div');
-            statusLine.id = 'automation-status-line';
-            statusLine.style.cssText = 'padding:0 8px; font-size:9px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-            if (isArmed) {
-                statusLine.textContent = currentAutomationMode === 'agent-managed'
-                    ? 'Mission Control is armed and supervising the board.'
-                    : currentAutomationMode === 'scheduled'
-                    ? 'The run sheet is advancing cards on the interval.'
-                    : '';
-            } else if (currentAutomationMode !== 'external') {
-                statusLine.textContent = 'Automation is off. Pick a mode and press ON to start.';
-            }
-            container.appendChild(statusLine);
-
-            const safetyNote = document.createElement('div');
-            const isContinuousMode = currentAutomationMode === 'scheduled';
-            safetyNote.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4; display:' + (isContinuousMode ? 'block' : 'none') + ';';
-            safetyNote.innerHTML = '💡 <strong>Safe Planning:</strong> Automation pulls plans from <strong>oldest to newest</strong>. You can safely run automation while planning, as recently created plans are processed last.';
-            container.appendChild(safetyNote);
-
-            // Radio change handler — posts setAutomationMode and re-renders.
-            modeRow.querySelectorAll('input[name="automation-mode"]').forEach(radio => {
-                radio.addEventListener('change', () => {
-                    const newMode = radio.value;
-                    currentAutomationMode = newMode;
-                    saveWebviewState();
-
-                    postKanbanMessage({ type: 'setAutomationMode', mode: currentAutomationMode, enabled: false, workspaceRoot: getActiveWorkspaceRoot() });
-                    updateAutobanButtonState();
-                    // Mode change is structural — clear the interaction guard so the panel re-renders immediately
-                    isAutobanPanelInteracting = false;
-                    if (autobanPanelInteractionTimer) {
-                        clearTimeout(autobanPanelInteractionTimer);
-                        autobanPanelInteractionTimer = null;
-                    }
-                    renderAutobanPanel();
-                });
-            });
-
-            const getAutobanRuleIdSuffix = (column) => column.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-            const createTriggerModeToggle = (currentValue, onChange) => {
-                const wrapper = document.createElement('div');
-                wrapper.style.cssText = 'display:inline-flex; border:1px solid var(--border-color); border-radius:3px; overflow:hidden; font-size:9px; height:18px; align-items:center; vertical-align:middle;';
-                
-                const drainBtn = document.createElement('button');
-                drainBtn.textContent = 'DRAIN';
-                // data-tooltip, not title: this panel routes every other control through the
-                // #tooltip-overlay (delegated mouseover, max-width 320px, white-space:pre-line),
-                // so a native title here rendered late, unstyled, and inconsistently. Set once
-                // at construction — updateStyles() rewrites style.cssText wholesale.
-                drainBtn.setAttribute('data-tooltip',
-                    'DRAIN (default) — finite batch.\n'
-                    + 'Processes the cards that are in the source column now, then stops on its own '
-                    + 'when the column empties. Use this for an overnight run or any batch that '
-                    + 'should finish and stay finished.');
-                drainBtn.setAttribute('aria-label', 'Drain mode: process the current cards, then stop automatically');
-                
-                const watchBtn = document.createElement('button');
-                watchBtn.textContent = 'WATCH';
-                // Condensed from the Watch warning banner below (which only appears AFTER a
-                // column is already set to Watch). Same facts, shown while deciding.
-                watchBtn.setAttribute('data-tooltip',
-                    'WATCH — runs agents automatically, forever.\n'
-                    + 'Every plan that lands in this column is dispatched to its agent immediately '
-                    + 'and unattended: no batch delay, no review step. Each dispatch is a real agent '
-                    + 'run that spends that agent\'s tokens. While any column is on Watch the engine '
-                    + 'will not auto-stop when the board empties — you stop it manually.\n'
-                    + 'Use for entry columns (CREATED) or remote-control hand-offs. Idling is free; '
-                    + 'the cost is one agent run per arrival.');
-                watchBtn.setAttribute('aria-label',
-                    'Watch mode: dispatch each arriving plan immediately and never auto-stop');
-
-                const doneBtn = document.createElement('button');
-                doneBtn.textContent = 'ON DONE';
-                doneBtn.setAttribute('data-tooltip',
-                    'ON DONE — one card at a time per run-sheet step, no clock.\n'
-                    + 'Each step dispatches its next card only when the previous one reports its turn '
-                    + 'ended, so a step never has two cards in flight (steps still run in parallel with '
-                    + 'each other). Slower than DRAIN and a step sits idle if its agent dies without '
-                    + 'reporting (a stall notice tells you which card).\n'
-                    + 'Use when you want strict one-in-one-out pacing. DRAIN is the default and '
-                    + 'dispatches on the interval regardless.');
-                doneBtn.setAttribute('aria-label',
-                    'On-done mode: dispatch the next card only when the previous one finishes');
-
-                const ACTIVE = 'background:var(--accent-teal); color:#fff; border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%; font-weight:bold;';
-                const IDLE = 'background:transparent; color:var(--text-secondary); border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%;';
-                const updateStyles = (val) => {
-                    drainBtn.style.cssText = val === 'watch' || val === 'completion' ? IDLE : ACTIVE;
-                    watchBtn.style.cssText = val === 'watch' ? ACTIVE : IDLE;
-                    doneBtn.style.cssText = val === 'completion' ? ACTIVE : IDLE;
-                };
-
-                const pick = (val) => (e) => {
-                    e.preventDefault();
-                    updateStyles(val);
-                    onChange(val);
-                };
-                drainBtn.addEventListener('click', pick('drain'));
-                watchBtn.addEventListener('click', pick('watch'));
-                doneBtn.addEventListener('click', pick('completion'));
-
-                updateStyles(currentValue);
-                wrapper.appendChild(drainBtn);
-                wrapper.appendChild(watchBtn);
-                wrapper.appendChild(doneBtn);
-                return wrapper;
-            };
-            const resolveTerminalLiveness = (terminalName) => {
-                const terminal = lastTerminals[terminalName];
-                if (!terminal) {
-                    return { terminal: null, alive: false };
-                }
-                const heartbeatThresholdMs = 60_000;
-                const lastSeenMs = Date.parse(terminal.lastSeen || '');
-                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < heartbeatThresholdMs;
-                const alive = terminal.alive !== undefined ? terminal.alive : (terminal._isLocal || heartbeatAlive);
-                return { terminal, alive: !!alive };
-            };
-            if (currentAutomationMode === 'agent-managed') {
-                // ─── Agent-managed mode panel ──────────────────────────────────
-                // Mission Control is the automation. The tab carries the two things
-                // that define the mode: which CLI starts the agent, and how often
-                // Switchboard wakes it. Pressing ON starts Mission Control terminal
-                // and sends the kickoff prompt.
-                //
-                // The boot command is shown, not edited. Mission Control has no
-                // startup-command slot of its own — startMissionControlFromKanban boots
-                // `lead` and falls back to `coder` — so an editable field here would
-                // mean inventing an `mission-control` role, which this feature explicitly
-                // does not do ("no bespoke Mission Control machinery to expose"). One
-                // owner for the value, the Agents tab; this is the read-only mirror.
-                const amContainer = document.createElement('div');
-                amContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
-                container.appendChild(amContainer);
-
-                const amSection = document.createElement('div');
-                amSection.className = 'db-subsection';
-                amContainer.appendChild(amSection);
-
-                const amHeader = document.createElement('div');
-                amHeader.className = 'subsection-header';
-                const amSpan = document.createElement('span');
-                amSpan.textContent = 'AGENT-MANAGED';
-                amHeader.appendChild(amSpan);
-                amSection.appendChild(amHeader);
-
-                const amDesc = document.createElement('div');
-                amDesc.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                amDesc.textContent = 'Mission Control wakes every N minutes to decide and take the next action — dispatch a card to a team, group loose plans into a feature, or nothing. Judgement lives in the agent.';
-                amSection.appendChild(amDesc);
-
-                // Boot command — mirrors startMissionControlFromKanban's resolution
-                // (`lead`, falling back to `coder`) so the tab names the CLI that
-                // will actually start. Says so honestly when neither is configured:
-                // that is the case where the kickoff cannot be delivered at all.
-                const bootCmd = (lastStartupCommands['lead'] || lastStartupCommands['coder'] || '').trim();
-                const bootRow = document.createElement('div');
-                bootRow.style.cssText = 'display:flex; align-items:baseline; gap:6px; padding:2px 8px 0 8px; font-size:10px; flex-wrap:wrap;';
-                const bootLbl = document.createElement('span');
-                bootLbl.style.cssText = 'color:var(--text-secondary); white-space:nowrap;';
-                bootLbl.textContent = 'STARTS WITH';
-                const bootVal = document.createElement('span');
-                bootVal.id = 'agent-managed-boot-command';
-                if (bootCmd) {
-                    bootVal.textContent = bootCmd;
-                    bootVal.style.cssText = 'font-family:var(--font-mono, monospace); color:var(--text-primary); word-break:break-all;';
-                    bootVal.setAttribute('data-tooltip', 'The Lead CLI (falling back to Coder). Change it on the AGENTS tab.');
-                } else {
-                    bootVal.textContent = 'no Lead or Coder CLI configured — set one on the AGENTS tab';
-                    bootVal.style.cssText = 'color:var(--accent-red, #d9534f);';
-                }
-                bootRow.appendChild(bootLbl);
-                bootRow.appendChild(bootVal);
-                amSection.appendChild(bootRow);
-
-                // Wake interval
-                const orchConfig = state.missionControlConfig || { intervalMinutes: 10 };
-                const wakeRow = document.createElement('div');
-                wakeRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:6px 8px 4px 8px; font-size:10px;';
-                const wakeLbl = document.createElement('span');
-                wakeLbl.style.cssText = 'color:var(--text-secondary); white-space:nowrap;';
-                wakeLbl.textContent = 'WAKE EVERY';
-                const wakeInput = document.createElement('input');
-                wakeInput.type = 'number';
-                wakeInput.min = '1';
-                wakeInput.value = String(orchConfig.intervalMinutes || 10);
-                wakeInput.style.cssText = autobanNumberInputStyle;
-                guardInteraction(wakeInput);
-                wakeInput.addEventListener('change', () => {
-                    const val = Math.max(1, parseInt(wakeInput.value, 10) || 10);
-                    postKanbanMessage({
-                        type: 'setAutomationMode',
-                        mode: 'agent-managed',
-                        enabled: !!(state && state.enabled),
-                        intervalMinutes: val
-                    });
-                });
-                const wakeMinLbl = document.createElement('span');
-                wakeMinLbl.style.cssText = 'color:var(--text-secondary);';
-                wakeMinLbl.textContent = 'min';
-                wakeRow.appendChild(wakeLbl);
-                wakeRow.appendChild(wakeInput);
-                wakeRow.appendChild(wakeMinLbl);
-                amSection.appendChild(wakeRow);
-
-            } else if (currentAutomationMode === 'scheduled') {
-                const singleColumnContainer = document.createElement('div');
-                singleColumnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
-                container.appendChild(singleColumnContainer);
-
-                const singleColumnConfig = state.singleColumnConfig || { enabled: false, intervalMinutes: 10, batchSize: 1, complexityFilter: 'all', triggerMode: 'drain' };
-
-                // --- Column Rules Section ---
-                const columnRulesSectionSc = document.createElement('div');
-                columnRulesSectionSc.className = 'db-subsection';
-                singleColumnContainer.appendChild(columnRulesSectionSc);
-
-                const rulesHeaderSc = document.createElement('div');
-                rulesHeaderSc.className = 'subsection-header';
-                const rulesSpanSc = document.createElement('span');
-                rulesSpanSc.textContent = 'COLUMN RULES';
-                rulesHeaderSc.appendChild(rulesSpanSc);
-                columnRulesSectionSc.appendChild(rulesHeaderSc);
-
-                const timingExplanationSc = document.createElement('div');
-                timingExplanationSc.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                timingExplanationSc.textContent = 'On each interval the schedule pops the dispatch queue: the live coding head (lead first, then coder) receives the next eligible card. A 409 (team in flight) or empty queue stops the loop.';
-                columnRulesSectionSc.appendChild(timingExplanationSc);
-
-                // What the schedule actually does, per tick. The run sheet is
-                // deleted as a decision structure AND as a set of steps — there
-                // is one step now, and rendering the old CREATED→planner /
-                // PLAN REVIEWED→coder pair here would tell the user the board
-                // still feeds a planner lane on a timer. It does not: the
-                // schedule pops STAGING and nothing else.
-                const runSheet = [
-                    { sourceColumn: 'STAGING', headRole: 'coding' }
-                ];
-                runSheet.forEach((step, i) => {
-                    const stepRow = document.createElement('div');
-                    stepRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:3px 8px; font-size:10px; color:var(--text-primary);';
-                    const stepNum = document.createElement('span');
-                    stepNum.style.cssText = 'color:var(--text-secondary); min-width:14px;';
-                    stepNum.textContent = (i + 1) + '.';
-                    const stepLbl = document.createElement('span');
-                    stepLbl.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
-                    stepLbl.textContent = step.sourceColumn + '  →  ' + step.headRole + ' team';
-                    stepRow.appendChild(stepNum);
-                    stepRow.appendChild(stepLbl);
-                    columnRulesSectionSc.appendChild(stepRow);
-                });
-
-                // Cadence row — one clock for the queue pop.
-                const ruleRowSc = document.createElement('div');
-                ruleRowSc.style.cssText = 'display:flex; align-items:center; gap:6px; padding:6px 8px 4px 8px; font-size:10px;';
-
-                const ruleLblSc = document.createElement('span');
-                ruleLblSc.style.cssText = 'color:var(--text-secondary); white-space:nowrap;';
-                ruleLblSc.textContent = 'QUEUE POP';
-
-                const everyLblSc = document.createElement('span');
-                everyLblSc.style.cssText = 'color:var(--text-secondary);';
-                everyLblSc.textContent = 'every';
-
-                const minInputSc = document.createElement('input');
-                minInputSc.type = 'number';
-                // Floor of 1 minute, no ceiling — matches normalizeSingleColumnConfig.
-                // "Once every few hours" is a valid run-sheet cadence.
-                minInputSc.min = '1';
-                minInputSc.value = String(singleColumnConfig.intervalMinutes);
-                minInputSc.style.cssText = autobanNumberInputStyle;
-                guardInteraction(minInputSc);
-                minInputSc.addEventListener('change', () => {
-                    const val = Math.max(1, parseInt(minInputSc.value, 10) || 10);
-                    singleColumnConfig.intervalMinutes = val;
-                    minInputSc.value = String(val);
-                    postKanbanMessage({
-                        type: 'setAutomationMode',
-                        mode: 'scheduled',
-                        enabled: singleColumnConfig.enabled,
-                        intervalMinutes: singleColumnConfig.intervalMinutes,
-                        batchSize: singleColumnConfig.batchSize,
-                        complexityFilter: singleColumnConfig.complexityFilter,
-                        routingMode: state.routingMode || 'dynamic',
-                        triggerMode: singleColumnConfig.triggerMode || 'drain'
-                    });
-                });
-
-                const minLblSc = document.createElement('span');
-                minLblSc.style.cssText = 'color:var(--text-secondary);';
-                minLblSc.textContent = 'min';
-
-                ruleRowSc.appendChild(ruleLblSc);
-                ruleRowSc.appendChild(everyLblSc);
-                ruleRowSc.appendChild(minInputSc);
-                ruleRowSc.appendChild(minLblSc);
-
-                const triggerToggleSc = createTriggerModeToggle(singleColumnConfig.triggerMode || 'drain', (newVal) => {
-                    singleColumnConfig.triggerMode = newVal;
-                    state.singleColumnConfig = { ...singleColumnConfig };
-                    postKanbanMessage({
-                        type: 'setAutomationMode',
-                        mode: 'scheduled',
-                        enabled: singleColumnConfig.enabled,
-                        intervalMinutes: singleColumnConfig.intervalMinutes,
-                        batchSize: singleColumnConfig.batchSize,
-                        complexityFilter: singleColumnConfig.complexityFilter,
-                        routingMode: state.routingMode || 'dynamic',
-                        triggerMode: newVal
-                    });
-                    renderAutobanPanel();
-                });
-                ruleRowSc.appendChild(triggerToggleSc);
-                columnRulesSectionSc.appendChild(ruleRowSc);
-
-                if (hasWatchActive) {
-                    const watchWarningBannerSc = document.createElement('div');
-                    watchWarningBannerSc.style.cssText = 'padding:6px 10px; font-size:9px; color:#d97706; border-left:3px solid #d97706; border-radius:4px; background:color-mix(in srgb, #d97706 8%, transparent); margin:4px 8px; line-height:1.4;';
-                    watchWarningBannerSc.innerHTML = '⚠️ <strong>Watch mode runs agents automatically.</strong> Columns set to <strong>Watch</strong> never stop on their own. Every plan that lands in a watch column is dispatched to its agent <strong>immediately and unattended</strong> — no batch delay, no review step. Each dispatch starts a real agent run in a terminal, which spends that agent\'s tokens doing the work. While any watch column is active, the engine will <strong>not</strong> auto-stop when the board empties, so a stream of incoming plans becomes a stream of automatic agent runs until you stop it manually with the automation button. (Sitting idle costs nothing — the cost is per arrival, one agent run each.) Use <strong>Drain</strong> (default) for a finite batch that should stop when finished; use <strong>Watch</strong> for entry columns like CREATED or for remote-control hand-offs where plans arrive over time.';
-                    columnRulesSectionSc.appendChild(watchWarningBannerSc);
-                }
-
-                // --- Automation rules (controls, no section box) ---
-                const automationRulesSectionSc = document.createElement('div');
-                automationRulesSectionSc.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:0 8px;';
-                singleColumnContainer.appendChild(automationRulesSectionSc);
-
-                // Batch Size Selector
-                const batchRowSc = document.createElement('div');
-                batchRowSc.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary);';
-                const batchLabelSc = document.createElement('span');
-                batchLabelSc.textContent = 'MAX BATCH SIZE:';
-                const batchSelectSc = document.createElement('select');
-                batchSelectSc.style.cssText = autobanSelectStyle;
-                guardInteraction(batchSelectSc);
-                [1, 2, 3, 4, 5].forEach(val => {
-                    const opt = document.createElement('option');
-                    opt.value = String(val);
-                    opt.textContent = String(val);
-                    if (val === singleColumnConfig.batchSize) opt.selected = true;
-                    batchSelectSc.appendChild(opt);
-                });
-                batchSelectSc.addEventListener('change', () => {
-                    singleColumnConfig.batchSize = parseInt(batchSelectSc.value, 10) || 1;
-                    postKanbanMessage({
-                        type: 'setAutomationMode',
-                        mode: 'scheduled',
-                        enabled: singleColumnConfig.enabled,
-                        intervalMinutes: singleColumnConfig.intervalMinutes,
-                        batchSize: singleColumnConfig.batchSize,
-                        complexityFilter: singleColumnConfig.complexityFilter,
-                        routingMode: state.routingMode || 'dynamic'
-                    });
-                });
-                batchRowSc.appendChild(batchLabelSc);
-                batchRowSc.appendChild(batchSelectSc);
-                automationRulesSectionSc.appendChild(batchRowSc);
-
-                // Complexity Selector
-                const complexityRowSc = document.createElement('div');
-                complexityRowSc.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary);';
-                const complexityLabelSc = document.createElement('span');
-                complexityLabelSc.textContent = 'COMPLEXITY:';
-                const complexitySelectSc = document.createElement('select');
-                complexitySelectSc.style.cssText = autobanSelectStyle;
-                guardInteraction(complexitySelectSc);
-                [
-                    { value: 'all', label: 'All' },
-                    { value: 'low_and_below', label: 'Low and below (1-4)' },
-                    { value: 'medium_and_below', label: 'Medium and below (1-6)' },
-                    { value: 'medium_and_above', label: 'Medium and above (5-10)' },
-                    { value: 'high_and_above', label: 'High and above (7-10)' }
-                ].forEach(({ value, label }) => {
-                    const opt = document.createElement('option');
-                    opt.value = value;
-                    opt.textContent = label;
-                    if (value === singleColumnConfig.complexityFilter) opt.selected = true;
-                    complexitySelectSc.appendChild(opt);
-                });
-                complexitySelectSc.title = 'Unknown complexity is treated as High (8). Low and below excludes Unknown.';
-                complexitySelectSc.addEventListener('change', () => {
-                    singleColumnConfig.complexityFilter = complexitySelectSc.value || 'all';
-                    postKanbanMessage({
-                        type: 'setAutomationMode',
-                        mode: 'scheduled',
-                        enabled: singleColumnConfig.enabled,
-                        intervalMinutes: singleColumnConfig.intervalMinutes,
-                        batchSize: singleColumnConfig.batchSize,
-                        complexityFilter: singleColumnConfig.complexityFilter,
-                        routingMode: state.routingMode || 'dynamic'
-                    });
-                });
-                complexityRowSc.appendChild(complexityLabelSc);
-                complexityRowSc.appendChild(complexitySelectSc);
-                automationRulesSectionSc.appendChild(complexityRowSc);
-
-
-                // Clear Before Prompt Toggle (inside automation rules section)
-                const scClearRow = document.createElement('div');
-                scClearRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary);';
-                const scClearLabel = document.createElement('span');
-                scClearLabel.textContent = 'CLEAR TERMINAL BEFORE PROMPT:';
-                scClearLabel.title = '⚠️ Strongly recommended — prevents token waste and agent overload.';
-                const scClearToggle = document.createElement('input');
-                scClearToggle.id = 'sc-clear-terminal-before-prompt-toggle';
-                scClearToggle.type = 'checkbox';
-                scClearToggle.checked = !!clearTerminalBeforePrompt;
-                scClearToggle.addEventListener('change', () => {
-                    clearTerminalBeforePrompt = scClearToggle.checked;
-                    updateClearTerminalBeforePromptUi();
-                    postKanbanMessage({
-                        type: 'toggleClearTerminalBeforePrompt',
-                        enabled: scClearToggle.checked
-                    });
-                });
-                scClearRow.appendChild(scClearLabel);
-                scClearRow.appendChild(scClearToggle);
-                automationRulesSectionSc.appendChild(scClearRow);
-
-                // ─── Surviving recurring jobs (ride the run-sheet clock) ────
-                // Two surviving scheduler jobs as checkboxes. They tick with
-                // the RUN SHEET — no interval of their own, because a second
-                // interval is a second clock. With the run sheet off, neither
-                // runs. No confirm dialog — project rule, and confirm() is a
-                // no-op in a webview.
-                const schedCfg = (window.__schedulerConfig && window.__schedulerConfig.jobs) || [];
-                const fetchPlansJob = schedCfg.find(j => j.source === 'fetch-plans');
-                const reconcileJob = schedCfg.find(j => j.source === 'reconcile');
-                const survivorSources = [
-                    { source: 'fetch-plans', label: 'FETCH CLOUD PLANS', job: fetchPlansJob, hint: 'Pulls plan files from remote branches into .switchboard/plans/. Runs on the run-sheet tick — with the run sheet off, this does not run.' },
-                    { source: 'reconcile', label: 'RECONCILE CLOUD WORK', job: reconcileJob, hint: 'Advances cards whose work was completed off-machine. Runs on the run-sheet tick — with the run sheet off, this does not run.' }
-                ];
-                for (const sv of survivorSources) {
-                    const row = document.createElement('div');
-                    row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary);';
-                    const chk = document.createElement('input');
-                    chk.type = 'checkbox';
-                    chk.checked = !!(sv.job && sv.job.enabled);
-                    chk.title = sv.hint;
-                    guardInteraction(chk);
-                    chk.addEventListener('change', () => {
-                        // Toggle the job's enabled flag and persist via setSchedulerConfig.
-                        // UPSERT, not map: '+ ADD JOB' died with the scheduler surface, so
-                        // the checkbox is the only thing that can create the record. Without
-                        // this, a config with no job of this source (every fresh install)
-                        // persists unchanged and the box snaps back on the next broadcast.
-                        // The id is derived from the source so it is stable and idempotent —
-                        // it keys the in-flight guard and the fetch-plans summary path.
-                        const jobs = (window.__schedulerConfig && window.__schedulerConfig.jobs) || [];
-                        let found = false;
-                        const updated = jobs.map(j => {
-                            if (j.source === sv.source) { found = true; return { ...j, enabled: chk.checked }; }
-                            return j;
-                        });
-                        if (!found) {
-                            updated.push({
-                                id: sv.source,
-                                label: sv.label,
-                                enabled: chk.checked,
-                                source: sv.source,
-                                target: 'local-terminal',
-                                intervalMinutes: 0,   // vestigial — the run sheet is the clock
-                                sourceConfig: {}
-                            });
-                        }
-                        postKanbanMessage({ type: 'setSchedulerConfig', config: { schemaVersion: (window.__schedulerConfig && window.__schedulerConfig.schemaVersion) || 1, jobs: updated } });
-                    });
-                    const lbl = document.createElement('span');
-                    lbl.textContent = sv.label;
-                    lbl.title = sv.hint;
-                    row.appendChild(chk);
-                    row.appendChild(lbl);
-                    automationRulesSectionSc.appendChild(row);
-                }
-
-                // One-time notice for dropped custom scheduler jobs.
-                if (state.droppedCustomJobsNotice) {
-                    const notice = document.createElement('div');
-                    notice.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
-                    notice.textContent = state.droppedCustomJobsNotice;
-                    automationRulesSectionSc.appendChild(notice);
-                }
-
-                // One-time notice for a retired automationMode. The schedule
-                // was forced off — the user must re-arm it explicitly.
-                if (state.retiredAutomationModeNotice) {
-                    const notice = document.createElement('div');
-                    notice.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
-                    notice.textContent = state.retiredAutomationModeNotice;
-                    automationRulesSectionSc.appendChild(notice);
-                }
-
-                // One-time notice for recurring jobs resuming on upgrade from external mode.
-                if (state.recurringJobsResumedNotice) {
-                    const notice = document.createElement('div');
-                    notice.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
-                    notice.textContent = state.recurringJobsResumedNotice;
-                    automationRulesSectionSc.appendChild(notice);
-                }
-
-                // Request the scheduler config from the host so the survivor
-                // checkboxes populate. The host pushes updateSchedulerConfig
-                // on changes, but the first render needs the initial state.
-                if (!window.__schedulerConfig) {
-                    postKanbanMessage({ type: 'getSchedulerConfig' });
-                }
-
-            } else if (currentAutomationMode === 'external') {
-                // ─── External mode panel ──────────────────────────────────────
-                // Switchboard emits a copyable prompt for a tool that runs agent
-                // cron jobs (Antigravity, a Claude scheduled agent). Switchboard
-                // runs no clock and dispatches nothing — the external scheduler
-                // owns recurrence.
-                const extContainer = document.createElement('div');
-                extContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
-                container.appendChild(extContainer);
-
-                const extSection = document.createElement('div');
-                extSection.className = 'db-subsection';
-                extContainer.appendChild(extSection);
-
-                const extHeader = document.createElement('div');
-                extHeader.className = 'subsection-header';
-                const extSpan = document.createElement('span');
-                extSpan.textContent = 'EXTERNAL';
-                extHeader.appendChild(extSpan);
-                extSection.appendChild(extHeader);
-
-                const extDesc = document.createElement('div');
-                extDesc.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                extDesc.textContent = 'Switchboard emits a copyable prompt for a tool that runs agent cron jobs (Antigravity, a Claude scheduled agent). Copy the prompt below and paste it into your scheduled agent. Switchboard runs no clock and dispatches nothing — the external scheduler owns recurrence.';
-                extSection.appendChild(extDesc);
-
-                // Editable line: a short instruction describing what the external
-                // agent should do. Defaults to a generic kickoff phrase.
-                const instructionRow = document.createElement('div');
-                instructionRow.style.cssText = 'padding:0 8px; display:flex; gap:6px; align-items:center;';
-                const instructionInput = document.createElement('input');
-                instructionInput.type = 'text';
-                instructionInput.value = 'Kick off the switchboard automation.';
-                instructionInput.placeholder = 'What should the external agent do?';
-                instructionInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:4px; border-radius:3px;';
-                instructionRow.appendChild(instructionInput);
-                extSection.appendChild(instructionRow);
-
-                // Copy-prompt button: fetches the evergreen run-sheet prompt from
-                // the host and copies it to the clipboard.
-                const copyPromptBtn = document.createElement('button');
-                copyPromptBtn.className = 'strip-btn is-teal';
-                copyPromptBtn.textContent = 'COPY PROMPT';
-                copyPromptBtn.style.cssText = 'font-size:10px; margin:0 8px;';
-                copyPromptBtn.addEventListener('click', () => {
-                    copyPromptBtn.textContent = 'LOADING...'; copyPromptBtn.disabled = true;
-                    postKanbanMessage({ type: 'externalAutomationPrompt', instruction: instructionInput.value, workspaceRoot: getActiveWorkspaceRoot() });
-                });
-                extSection.appendChild(copyPromptBtn);
-
-                // External scheduling info line: external scheduling runs on an
-                // external agent clock and does not pause local recurring jobs.
-                const extInfoNote = document.createElement('div');
-                extInfoNote.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
-                extInfoNote.textContent = 'External scheduling runs on an external agent clock. Generating or copying a prompt does not pause or modify local jobs.';
-                extSection.appendChild(extInfoNote);
-
-                if (state.recurringJobsResumedNotice) {
-                    const resumedNotice = document.createElement('div');
-                    resumedNotice.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
-                    resumedNotice.textContent = state.recurringJobsResumedNotice;
-                    extSection.appendChild(resumedNotice);
-                }
-            }
-
-            return container;
-        }
-
-        function renderAutobanPanel(force = false) {
-            try {
-                const root = document.getElementById('automation-panel-root');
-                if (!root) return;
-                // A timer-driven re-render destroys the hovered element; without this the
-                // overlay stays visible with text for a node that no longer exists.
-                hideTooltip();
-                if (isAutobanPanelInteracting && !force) {
-                    console.log('[kanban] Skipping autoban panel re-render: user interaction guard active');
-                    return;
-                }
-                root.innerHTML = '';
-                root.appendChild(createAutobanPanel());
-            } catch (err) {
-                console.error('[kanban webview] error rendering autoban panel:', err);
-            }
-        }
+        // ─── Autoban Config Panel — DELETED ────────────────────────────────────
+        // The exclusive automation mode axis (DRAIN / WATCH / ON DONE / AGENT-MANAGED
+        // / external) and its radio machinery lived here, together with the panel
+        // builder that rendered them into #automation-panel-root. Both are gone: the
+        // AUTOMATION tab moved to the Mission Control panel (mission-control.html) and
+        // the model is four independent things, not positions on one axis.
+        //
+        // Deleting the builder rather than orphaning it is the point. Leaving it as
+        // unreachable code kept a working-looking mode selector, a setAutomationMode
+        // post, and the only render site for two migration notices in a function that
+        // could never run — which is how a reader concludes the axis still exists.
+        // The notices now surface in the Mission Control panel and, once per install,
+        // as a host notification (see TaskViewerProvider._surfaceRetiredAutomationNotices).
 
         // Terminals and custom agents feed the terminal pool UI. Kanban webview
         // does not own this state; it receives broadcasts from the host.
@@ -12691,26 +11958,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (msg.type === 'terminalStatuses') {
                 lastTerminals = msg.terminals || {};
                 updateAllColumnAgents();
-                renderAutobanPanel();
             } else if (msg.type === 'customAgents') {
                 lastCustomAgents = Array.isArray(msg.customAgents) ? msg.customAgents : [];
                 updateCustomAgentsDropdown();
-                renderAutobanPanel();
             }
         });
 
-        // Render when Automation tab is opened.
-        kanbanTabButtons.forEach(btn => {
-            btn.addEventListener('click', () => {
-                if (btn.dataset.tab === 'automation') {
-                    // Request autoban config if not already loaded
-                    if (!autobanConfig) {
-                        postKanbanMessage({ type: 'getAutobanConfig' });
-                    }
-                    renderAutobanPanel();
-                }
-            });
-        });
+        // The Automation tab-open handler is gone with the tab. autobanConfig still
+        // arrives over updateAutobanConfig / autobanStateSync for the toolbar
+        // indicators, so nothing here has to ask for it.
 
         // ─── End Autoban Config Panel ──────────────────────────────────────────────
 

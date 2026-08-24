@@ -441,6 +441,7 @@
     /* ── Retired-mode notice ─────────────────────────────────────────── */
     const noticeDismiss = document.getElementById('mc-notice-dismiss');
     if (noticeDismiss) noticeDismiss.addEventListener('click', () => {
+        noticeDismissed = true;
         const notice = document.getElementById('mc-retired-notice');
         if (notice) notice.hidden = true;
         vscode.postMessage({ type: 'mcDismissRetiredNotice' });
@@ -529,6 +530,17 @@
             case 'mcRetiredNotice':
                 { const notice = document.getElementById('mc-retired-notice'); if (notice) notice.hidden = !msg.show; }
                 break;
+            case 'autobanStateSync':
+            case 'updateAutobanConfig':
+                // The autoban state rides the wsHub broadcast rail to every panel
+                // (surface `common`), on connect AND on change. Reading it here is
+                // what makes the retired-mode notice and the controller strip work
+                // without a bespoke host handler: `mcRetiredNotice` / `mcControllerSeat`
+                // have no sender, and the AUTOMATION tab that used to render these
+                // notices was deleted — so without this the notices had NO surface at
+                // all and the strip could never appear.
+                applyAutobanState(msg.state);
+                break;
             case 'switchboardThemeChanged':
                 handleThemeChanged(msg.theme);
                 break;
@@ -543,8 +555,124 @@
                 // Cache for the terminal dropdown options.
                 window.__sbFleet = msg.fleet || [];
                 break;
+            case 'updateSchedulerConfig':
+                applySchedulerConfig(msg.config);
+                break;
+            case 'terminalStatuses':
+                // The live terminal roster, keyed by name. Used as the controller
+                // fallback in applyAutobanState: the host can seat a `Mission Control`
+                // terminal WITHOUT writing a seat record (a seat record is only
+                // written by POST /mission-control/adopt), so a seat-only lookup
+                // misses the ordinary Start path entirely.
+                lastTerminalStatuses = (msg.terminals && typeof msg.terminals === 'object') ? msg.terminals : {};
+                applyAutobanState(lastAutobanState);
+                break;
         }
     });
+
+    let noticeDismissed = false;
+    let lastAutobanState = null;
+    let lastTerminalStatuses = {};
+
+    /* ── Recurring jobs (survivors re-homed from the AUTOMATION tab) ──── */
+    /** The two surviving recurring jobs. They ride the SCHEDULE clock — no interval
+     *  of their own, because a second interval is a second clock — so with the
+     *  schedule off neither runs. */
+    const SURVIVOR_JOBS = [
+        { source: 'fetch-plans', label: 'FETCH CLOUD PLANS', checkboxId: 'mc-job-fetch-plans' },
+        { source: 'reconcile',   label: 'RECONCILE CLOUD WORK', checkboxId: 'mc-job-reconcile' },
+    ];
+
+    function applySchedulerConfig(config) {
+        const cfg = (config && typeof config === 'object') ? config : { schemaVersion: 1, jobs: [] };
+        window.__schedulerConfig = cfg;
+        const jobs = Array.isArray(cfg.jobs) ? cfg.jobs : [];
+        for (const sv of SURVIVOR_JOBS) {
+            const el = document.getElementById(sv.checkboxId);
+            if (!el) continue;
+            const job = jobs.find(j => j && j.source === sv.source);
+            el.checked = !!(job && job.enabled);
+        }
+    }
+
+    function wireSurvivorJobs() {
+        for (const sv of SURVIVOR_JOBS) {
+            const el = document.getElementById(sv.checkboxId);
+            if (!el) continue;
+            el.addEventListener('change', () => {
+                // UPSERT, not map. '+ ADD JOB' died with the scheduler surface, so this
+                // checkbox is the only thing that can create the record — a map-only
+                // toggle persists nothing on a config with no job of this source (every
+                // fresh install) and the box snaps back on the next broadcast. The id is
+                // derived from the source so it is stable and idempotent: it keys the
+                // in-flight guard and the fetch-plans summary path.
+                const cfg = window.__schedulerConfig || { schemaVersion: 1, jobs: [] };
+                const jobs = Array.isArray(cfg.jobs) ? cfg.jobs : [];
+                let found = false;
+                const updated = jobs.map(j => {
+                    if (j && j.source === sv.source) { found = true; return { ...j, enabled: el.checked }; }
+                    return j;
+                });
+                if (!found) {
+                    updated.push({
+                        id: sv.source,
+                        label: sv.label,
+                        enabled: el.checked,
+                        source: sv.source,
+                        target: 'local-terminal',
+                        intervalMinutes: 0,   // vestigial — the schedule is the clock
+                        sourceConfig: {}
+                    });
+                }
+                vscode.postMessage({ type: 'setSchedulerConfig', config: { schemaVersion: cfg.schemaVersion || 1, jobs: updated } });
+            });
+        }
+    }
+
+    /* ── Autoban state → notices + controller seat ───────────────────── */
+    /** Renders the one-time migration notices and the controller strip from the
+     *  broadcast autoban state. Tolerates a partial/absent state (the connect-time
+     *  resync omits it entirely until the sidebar has relayed one). */
+    function applyAutobanState(state) {
+        if (!state || typeof state !== 'object') return;
+        lastAutobanState = state;
+        const notices = [state.retiredAutomationModeNotice, state.recurringJobsResumedNotice]
+            .filter(t => typeof t === 'string' && t.trim());
+        // droppedCustomJobsNotice also lost its only render site with the AUTOMATION
+        // tab. It belongs beside the jobs it is about, not in the migration banner.
+        const dropped = document.getElementById('mc-dropped-jobs-notice');
+        if (dropped) {
+            const text = typeof state.droppedCustomJobsNotice === 'string' ? state.droppedCustomJobsNotice.trim() : '';
+            dropped.textContent = text;
+            dropped.hidden = !text;
+        }
+        const noticeEl = document.getElementById('mc-retired-notice');
+        if (noticeEl) {
+            if (notices.length && !noticeDismissed) {
+                const textEl = noticeEl.querySelector('span');
+                if (textEl) textEl.textContent = notices.join(' ');
+                noticeEl.hidden = false;
+            } else if (!notices.length) {
+                noticeEl.hidden = true;
+            }
+        }
+        // The seat record names the terminal an agent adopted in place; when absent,
+        // fall back to a live terminal carrying a controller role. These are the same
+        // two sources the service-layer singleton guard consults, for the same reason:
+        // an adopted controller carries neither the role nor the name, and an ordinary
+        // Start writes the role but no seat record.
+        let seat = state.missionControlSeat && state.missionControlSeat.terminalName;
+        if (!seat) {
+            for (const [name, t] of Object.entries(lastTerminalStatuses)) {
+                if (!t || t.status !== 'active') continue;
+                if (t.role === 'mission-control' || t.role === 'project_manager') {
+                    seat = t.friendlyName || name;
+                    break;
+                }
+            }
+        }
+        if (seat !== controllerSeat) { setControllerSeat(seat || null); }
+    }
 
     /* ── Helpers ─────────────────────────────────────────────────────── */
     function _esc(s) {
@@ -571,8 +699,18 @@
     // Request initial state. The host (extension webview or browser transport)
     // replies with mcMissions / mcSchedules / mcControllerSeat / mcRetiredNotice.
     vscode.postMessage({ type: 'mcInit', workspaceRoot: WS_ROOT });
-    // Gate the controller strip on the mission-control capability (node-pty).
-    if (HOST_CAPS['mission-control'] === false || HOST_CAPS.terminalFleet === false) {
+    // The two survivor recurring jobs. getSchedulerConfig is an existing, allowlisted
+    // verb whose reply is `updateSchedulerConfig`; the host also pushes it on change.
+    wireSurvivorJobs();
+    vscode.postMessage({ type: 'getSchedulerConfig', workspaceRoot: WS_ROOT });
+    // Gate the controller strip on the FLEET capability, which is what hosting a
+    // terminal actually needs (`terminalFleet` tracks node-pty availability in both
+    // hosts). It must NOT be gated on the `mission-control` capability: that flag
+    // predates this panel, its only other consumer is a transport.js CSS rule
+    // matching zero elements, and bootstrap.ts hardcodes it `false` — so gating on
+    // it made the strip permanently invisible in the standalone/browser cockpit,
+    // which is the narrow-viewport host the strip exists to serve.
+    if (HOST_CAPS.terminalFleet === false) {
         const strip = document.getElementById('mc-controller-strip');
         if (strip) strip.classList.add('is-hidden');
     }

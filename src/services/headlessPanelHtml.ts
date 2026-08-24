@@ -537,6 +537,11 @@ export interface PanelAvailability {
     terminals?: boolean;
     tickets?: boolean;
     connections?: boolean;
+    /** Mission Control panel. Replaces the kanban AUTOMATION tab, which used to be
+     *  gated by transport.js's `caps.automation === false` CSS rule. A panel cannot
+     *  be gated that way — the rule lives in a sibling document — so the gate moves
+     *  here, where every other panel's gate already is. */
+    missionControl?: boolean;
 }
 
 export function getPanelsManifest(availability?: PanelAvailability): PanelManifestEntry[] {
@@ -546,10 +551,11 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
     const ticketsEnabled = availability?.tickets !== false;
     const connectionsEnabled = availability?.connections !== false;
     const terminalsEnabled = availability?.terminals === true; // Fail-closed!
+    const missionControlEnabled = availability?.missionControl !== false;
     const iconDir = '/static/icons';
     return [
         { id: 'board', label: 'Board', icon: `${iconDir}/nav-board.svg`, route: '/board', enabled: true },
-        { id: 'mission-control', label: 'Mission Control', icon: `${iconDir}/nav-mission-control.svg`, route: '/mission-control', enabled: true },
+        { id: 'mission-control', label: 'Mission Control', icon: `${iconDir}/nav-mission-control.svg`, route: '/mission-control', enabled: missionControlEnabled },
         { id: 'agent-control', label: 'Agents', icon: `${iconDir}/nav-agent-control.svg`, route: '/agent-control', enabled: true },
         { id: 'terminals', label: 'Terminals', icon: `${iconDir}/nav-terminals.svg`, route: '/terminals', enabled: terminalsEnabled },
         { id: 'project', label: 'Project', icon: `${iconDir}/nav-project.svg`, route: '/project', enabled: true },

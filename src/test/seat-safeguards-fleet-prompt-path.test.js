@@ -1041,10 +1041,10 @@ test('TaskViewerProvider _ptyHostVerb handles dispatch payload and folded attrib
     );
     assert.ok(
         TASK_VIEWER_SRC.includes('directivesAttached = missionControlActive')
-        && TASK_VIEWER_SRC.includes("? ['COMPLETION REPORT', 'ORCHESTRATOR REPORT']")
+        && TASK_VIEWER_SRC.includes("? ['COMPLETION REPORT', 'MISSION CONTROL REPORT']")
         && TASK_VIEWER_SRC.includes(": ['COMPLETION REPORT']"),
         'TaskViewerProvider must record directivesAttached on dispatch, and the record must track the '
-        + 'gate — reporting ORCHESTRATOR REPORT when it was suppressed is a lie the dispatch log carries'
+        + 'gate — reporting MISSION CONTROL REPORT when it was suppressed is a lie the dispatch log carries'
     );
     assert.ok(
         TASK_VIEWER_SRC.includes('attrRes.attributed === 0'),

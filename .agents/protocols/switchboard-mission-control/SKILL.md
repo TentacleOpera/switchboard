@@ -134,7 +134,7 @@ without printing the remainder.
 ## Pre-flight
 
 You arrive in the terminal by one of three doors:
-- The AUTOMATION tab's Start button (`POST /mission-control/start`), which creates or reuses an `Mission Control` terminal and injects the kickoff prompt.
+- The Mission Control panel's Start button (`POST /mission-control/start`), which creates or reuses a `Mission Control` terminal and injects the kickoff prompt.
 - `POST /mission-control/adopt` from the `/switchboard` console, where you adopted the seat in place and received the kickoff prompt directly in the HTTP response.
 - Resuming an existing session.
 

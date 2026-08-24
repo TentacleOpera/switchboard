@@ -241,6 +241,12 @@
         #mc-controller-frame { flex: 1; border: none; background: var(--panel-bg); width: 100%; min-height: 120px; }
         .mc-controller-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px; padding: 16px; text-align: center; }
 
+        /* ── Recurring jobs (re-homed survivors) ────────────────────────── */
+        .mc-recurring { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 6px 12px; border-bottom: 1px solid var(--border-color); font-size: 10px; color: var(--text-secondary); }
+        .mc-recurring-label { letter-spacing: 0.08em; color: var(--text-secondary); opacity: 0.75; }
+        .mc-recurring-item { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+        .mc-recurring-notice { color: var(--accent-teal); line-height: 1.4; }
+
         /* ── Retired-mode notice ────────────────────────────────────────── */
         .mc-notice { padding: 8px 12px; background: color-mix(in srgb, var(--accent-orange) 12%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--accent-orange) 40%, transparent); color: var(--accent-orange); font-size: 11px; display: flex; align-items: center; gap: 8px; }
         .mc-notice-dismiss { margin-left: auto; cursor: pointer; color: var(--text-secondary); font-size: 14px; line-height: 1; background: transparent; border: none; }
@@ -313,6 +319,27 @@
                     <button class="strip-btn is-danger" id="mc-stop-schedule" data-tooltip="Stop the selected schedule" disabled>STOP</button>
                     <button class="strip-btn" id="mc-schedule-logs" data-tooltip="View the schedule log file">LOGS</button>
                 </div>
+                <!-- ── Recurring jobs ──────────────────────────────────────────
+                     The two SURVIVING recurring jobs, re-homed from the deleted
+                     kanban AUTOMATION tab. They are not schedules (no window, no
+                     source/target columns) — they ride the schedule clock, so with
+                     the schedule off neither runs. Kept above the list rather than
+                     inside it for exactly that reason: putting them in the list
+                     would make them look like schedule rows a user can delete.
+                     No confirm dialog (CLAUDE.md), and no interval field: a second
+                     interval is a second clock. -->
+                <div class="mc-recurring" id="mc-recurring-jobs">
+                    <span class="mc-recurring-label">RECURRING JOBS</span>
+                    <label class="mc-recurring-item" id="mc-job-fetch-plans-row">
+                        <input type="checkbox" id="mc-job-fetch-plans">
+                        <span title="Pulls plan files from remote branches into .switchboard/plans/. Runs on the schedule tick — with the schedule off, this does not run.">FETCH CLOUD PLANS</span>
+                    </label>
+                    <label class="mc-recurring-item" id="mc-job-reconcile-row">
+                        <input type="checkbox" id="mc-job-reconcile">
+                        <span title="Advances cards whose work was completed off-machine. Runs on the schedule tick — with the schedule off, this does not run.">RECONCILE CLOUD WORK</span>
+                    </label>
+                    <span class="mc-recurring-notice" id="mc-dropped-jobs-notice" hidden></span>
+                </div>
                 <div class="content-row" id="schedules-content-row">
                     <div class="mc-sidebar" id="schedules-sidebar">
                         <div class="sidebar-toggle-row">
@@ -348,7 +375,7 @@
                 </div>
             </div>
             <div class="mc-controller-body" id="mc-controller-body">
-                <div class="mc-controller-empty" id="mc-controller-empty">No controller terminal running. Use the rail orchestrator button to start Mission Control.</div>
+                <div class="mc-controller-empty" id="mc-controller-empty">No controller terminal running. Use the rail Mission Control button to start it.</div>
                 <iframe id="mc-controller-frame" title="Controller terminal"></iframe>
             </div>
         </div>

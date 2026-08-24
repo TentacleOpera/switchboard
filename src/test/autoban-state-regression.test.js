@@ -892,22 +892,38 @@ async function run() {
         !kanbanHtml.includes("'KANBAN AUTOMATION RULES'"),
         'the KANBAN AUTOMATION RULES section header is deleted — controls remain without the box'
     );
-    // The survivor checkboxes are present.
+    // The survivor checkboxes moved with the AUTOMATION tab: their home is now the
+    // Mission Control panel's Schedules tab. Assert them THERE, and assert they are
+    // gone from the board — a presence check against kanban.html would have passed
+    // for a whole release while the only UI for two recurring jobs sat in a deleted
+    // function no code could reach.
+    const missionControlHtml = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'mission-control.html'), 'utf8');
+    const missionControlJs = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'mission-control.js'), 'utf8');
     assert.ok(
-        kanbanHtml.includes('FETCH CLOUD PLANS') && kanbanHtml.includes('RECONCILE CLOUD WORK'),
-        'the two survivor checkboxes (fetch-plans, reconcile) must be present in the AUTOMATION tab'
+        missionControlHtml.includes('FETCH CLOUD PLANS') && missionControlHtml.includes('RECONCILE CLOUD WORK'),
+        'the two survivor checkboxes (fetch-plans, reconcile) must be present in the Mission Control panel'
+    );
+    assert.ok(
+        !kanbanHtml.includes('FETCH CLOUD PLANS') && !kanbanHtml.includes('RECONCILE CLOUD WORK'),
+        'the survivor checkboxes must NOT remain on the board — two homes is two sources of truth'
+    );
+    assert.ok(
+        /setSchedulerConfig/.test(missionControlJs) && /getSchedulerConfig/.test(missionControlJs),
+        'the panel must read AND write the scheduler config, or the checkboxes are decoration'
     );
     // The checkbox must UPSERT. '+ ADD JOB' died with the scheduler surface, so a
     // map-only toggle persists nothing on a config with no job of that source —
     // which is every fresh install — and the box snaps back on the next broadcast.
     assert.ok(
-        /if \(!found\) \{[\s\S]{0,400}?source: sv\.source/.test(kanbanHtml),
+        /if \(!found\) \{[\s\S]{0,400}?source: sv\.source/.test(missionControlJs),
         'the survivor checkbox must create the job record when none exists — nothing else can, now that + ADD JOB is deleted'
     );
-    // The dropped-custom-jobs notice is wired.
+    // The dropped-custom-jobs notice is wired — in the panel now, beside the jobs it
+    // is about. Its only prior render site was inside the deleted AUTOMATION tab
+    // builder, so asserting kanban.html here would keep passing on an unreachable one.
     assert.ok(
-        kanbanHtml.includes('droppedCustomJobsNotice'),
-        'the dropped-custom-jobs notice must be wired in the AUTOMATION tab UI'
+        missionControlJs.includes('droppedCustomJobsNotice'),
+        'the dropped-custom-jobs notice must be wired in the Mission Control panel'
     );
 
     // --- Three exclusive modes: the OVERSIGHT AGENT block is gone, three radios replace the select ---
@@ -919,52 +935,51 @@ async function run() {
         !kanbanHtml.includes('oversight-agent-toggle'),
         'the oversight-agent-toggle checkbox is deleted — the ON/OFF is the single armed flag'
     );
-    assert.ok(
-        kanbanHtml.includes("'agent-managed'") && kanbanHtml.includes("'scheduled'") && kanbanHtml.includes("'external'"),
-        'the three mode radios (agent-managed, scheduled, external) must be present in the AUTOMATION tab'
+    // --- The mode axis is DELETED, not orphaned ---
+    // These assertions used to require the three radios, the status line, the
+    // external-mode copy and the agent-managed boot-command field to be PRESENT in
+    // kanban.html. That is the axis the four-thing plan exists to remove, so pinning
+    // its presence pinned the defect. It is now asserted absent — from the markup AND
+    // from the script, because the first delivery removed only the container div and
+    // left ~720 lines of radio machinery behind an early `return`, which reads to any
+    // later maintainer as a live mode selector.
+    // Matched in CODE positions only — the file keeps prose explaining what was
+    // removed and why, and a substring check would flag its own tombstone.
+    for (const [label, re] of [
+        ["getElementById('automation-status-line')", /getElementById\(\s*['"]automation-status-line['"]\s*\)/],
+        ["id=\"agent-managed-boot-command\"", /id=["']agent-managed-boot-command["']/],
+        ['currentAutomationMode (read or write)', /currentAutomationMode\s*(===|!==|=[^=]|\.)/],
+        ['createAutobanPanel()', /createAutobanPanel\s*\(/],
+        ['renderAutobanPanel()', /renderAutobanPanel\s*\(/],
+        ["postKanbanMessage({ type: 'setAutomationMode'", /type:\s*['"]setAutomationMode['"]/],
+    ]) {
+        assert.ok(!re.test(kanbanHtml),
+            `kanban.html still carries mode-axis machinery: ${label}`);
+    }
+    // Neither badge filter may key on a mode value any more. Both follow the SCHEDULE
+    // switch, so a schedule keeps its countdown badges while Mission Control is armed
+    // — the residual exclusivity that survived the container's removal.
+    assert.strictEqual(
+        (kanbanHtml.match(/if \(autobanConfig\.enabled === true\) \{\s*\n\s*const sourceIdx/g) || []).length, 2,
+        'both timer-badge filters must key on the schedule switch — one per render path'
     );
-    assert.ok(
-        kanbanHtml.includes('automation-status-line'),
-        'the status line must be present in the AUTOMATION tab — always visible, even when nothing has happened'
-    );
-    // The command-palette entry is registered.
+    // The command-palette entry stays registered under its SHIPPED id (renaming a
+    // command id breaks user keybindings); only the user-visible title is renamed.
     const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
-    assert.ok(
-        packageJson.contributes.commands.some(c => c.command === 'switchboard.startOrchestrator'),
-        'switchboard.startOrchestrator must be present in package.json contributes.commands'
-    );
+    const startCmd = packageJson.contributes.commands.find(c => c.command === 'switchboard.startOrchestrator');
+    assert.ok(startCmd, 'switchboard.startOrchestrator must remain in package.json contributes.commands (shipped id, user keybindings)');
+    assert.ok(!/Orchestrator/.test(startCmd.title),
+        `the command TITLE is user-visible and must not say Orchestrator (got: ${startCmd.title})`);
     const extensionSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'extension.ts'), 'utf8');
     assert.ok(
         extensionSrc.includes("registerCommand('switchboard.startOrchestrator'"),
         'switchboard.startOrchestrator must be registered in extension.ts'
     );
-    // The external-mode description confirms external scheduling does not pause local jobs.
+    // External scheduling pauses nothing local. The copy moved to the panel with the
+    // rest of the external surface.
     assert.ok(
-        kanbanHtml.includes('Generating or copying a prompt does not pause or modify local jobs'),
-        'the external-mode panel must explain that external scheduling does not pause local jobs'
-    );
-    // The run-sheet timer badges are SCHEDULED-only. Both badge filters had an
-    // `else if (mode === 'external')` arm, which on a three-value axis let
-    // agent-managed fall through to the UNFILTERED set — a live countdown badge
-    // per column for a clock that does not run in that mode.
-    assert.ok(
-        !/else if \(currentAutomationMode === 'external'\) \{\s*filteredBadgeData = \[\];/.test(kanbanHtml),
-        "the timer-badge filter must not special-case 'external' — every non-scheduled mode shows no run-sheet badges, and an else-if lets agent-managed fall through to the unfiltered set"
-    );
-    assert.strictEqual(
-        (kanbanHtml.match(/filteredBadgeData = \[\];/g) || []).length, 2,
-        'both timer-badge filters must clear the badge set in their else arm — one per render path'
-    );
-    // Agent-managed carries the two things that define the mode: the wake
-    // interval and the CLI that starts the agent. The boot command is SHOWN,
-    // not edited — Mission Control has no startup-command slot of its own.
-    assert.ok(
-        kanbanHtml.includes('agent-managed-boot-command'),
-        'the agent-managed panel must name the CLI Mission Control boots with — the mode is "a startup command and a wake interval"'
-    );
-    assert.ok(
-        /lastStartupCommands\['lead'\] \|\| lastStartupCommands\['coder'\]/.test(kanbanHtml),
-        "the displayed boot command must mirror startMissionControlFromKanban's own resolution (lead, falling back to coder) — a divergent display lies about what will start"
+        missionControlHtml.includes('External') || missionControlJs.includes('External'),
+        'the external schedule type must exist in the Mission Control panel'
     );
 
     // --- The automation model: four things, not a mode axis ---
