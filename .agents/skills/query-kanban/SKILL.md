@@ -23,8 +23,8 @@ stale the moment the extension restarts).
 When the LocalApiServer is reachable, use these. They return records with
 resolved column labels, so the label↔storage-id trap below does not apply on
 this path. The **full endpoint contract** (verbs, payload fields, response
-envelopes) lives in the `switchboard-orchestration` protocol at
-`.agents/protocols/switchboard-orchestration/SKILL.md` — consult it for any
+envelopes) lives in the `switchboard-mission-control-http` protocol at
+`.agents/protocols/switchboard-mission-control-http/SKILL.md` — consult it for any
 call this table does not cover, and hit `GET /catalog` for the generated
 inventory of every endpoint the server serves.
 

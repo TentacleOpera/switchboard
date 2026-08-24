@@ -1,6 +1,6 @@
 ---
 name: kanban-operations
-description: Move kanban cards and query kanban state via direct database access.
+description: Move kanban cards and query kanban state via scripts — most verbs require the Switchboard extension (LocalApiServer) running; move-card.js has a direct-DB fallback.
 allowed-tools: Bash
 disable-model-invocation: true
 ---

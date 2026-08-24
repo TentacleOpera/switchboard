@@ -13,8 +13,8 @@ Cut what every agent prompt has to carry. The injected protocol block runs to ne
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Cut the injected agent protocol block from 14,826 chars to ~740](../plans/shrink-the-injected-agent-protocol-block.md) — **CODER CODED**
-- [ ] [Every skill declares its preconditions and what to do when they are unmet](../plans/skills-declare-preconditions-and-degrade.md) — **CODER CODED**
+- [ ] [Cut the injected agent protocol block from 14,826 chars to ~740](../plans/shrink-the-injected-agent-protocol-block.md) — **CODE REVIEWED**
+- [ ] [Every skill declares its preconditions and what to do when they are unmet](../plans/skills-declare-preconditions-and-degrade.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -27,3 +27,7 @@ Cut what every agent prompt has to carry. The injected protocol block runs to ne
 
 Both subtasks implemented and reviewed. **Shrink plan:** CLAUDE.md managed block cut from 14,826 chars to 611 chars (94.8% reduction, gate <800). New `CLAUDE_PROTOCOL_BODY` constant with three resident rules (import/watcher, memo suppression, query-kanban label/ID trap); `CLAUDE_PREAMBLE` deleted, `CLAUDE_PROTOCOL_HEADER` kept as legacy detector only. `buildManagedInner` gained per-host `bodyOverride` param. Card-move rule relocated to `agentPromptBuilder.assembleSuffix` (present for planner/coder/intern/reviewer/tester, absent for lead/orchestrator). Docs pointer gated out as `DOCS_POINTER_RULE` (prereq `switchboard.dev` not live). Contract test + CI wiring added. **Preconditions plan:** `query-kanban` inverted to endpoints-primary/SQL-fallback with `## Preconditions`. Protocol scope widened to include team members, pointed at `GET /catalog`. Preconditions added to `kanban_operations` and `worktree-cleanup`. All four `MIRROR_MANIFEST` descriptions updated. Files changed: `src/services/ClaudeCodeMirrorService.ts`, `src/extension.ts`, `src/services/ControlPlaneMigrationService.ts`, `src/services/agentPromptBuilder.ts`, `.agents/skills/query-kanban/SKILL.md`, `.agents/skills/kanban_operations/SKILL.md`, `.agents/skills/worktree-cleanup/SKILL.md`, `.agents/protocols/switchboard-orchestration/SKILL.md`, `.agents/workflows/switchboard-memo.md`, `.claude/skills/` mirror (regenerated), `src/test/claude-protocol-block-size-contract.test.js`, `package.json`, `.github/workflows/integration-tests.yml`. No issues encountered; compilation and tests skipped per run directives.
 
+
+## Review Findings
+
+Both subtasks reviewed together; per-plan detail is in each subtask file. The TypeScript half shipped correctly, but the markdown half of the preconditions subtask had been **entirely reverted in the working tree** by a concurrent stale-tree write — restored from `843bae45`, with the `switchboard-orchestration` → `switchboard-mission-control-http` pointer repaired. Three gates were red and are now green: the shrink plan's own size/content contract (a regex that could not match its hard-wrapped body), `mirror:check` (the commit changed `manage-features`' description without regenerating its mirror), and the total absence of any gate over the preconditions work — closed with a new `test:contract:skill-preconditions` wired into CI. Validation: tsc clean, `mirror:check` green, claude-protocol-block 14/14, skill-preconditions 8/8, minimal-prompt green, reviewer-prompt-behaviour 68/68, spark-context-exporter 9/9. Remaining risk: the AGENTS.md target still emits 14,296 chars, so the goal invariants hold for Claude Code only — blocked on `SparkContextExporter` curating from the workspace `AGENTS.md`.

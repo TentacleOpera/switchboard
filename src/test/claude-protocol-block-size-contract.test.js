@@ -14,7 +14,7 @@
  * The card-move rule was relocated from the resident block into
  * agentPromptBuilder's per-role suffix (it is role-scoped). This test pins the
  * placement: present for the five execution seats, absent for lead, and the
- * orchestrator is not routed through buildKanbanBatchPrompt at all.
+ * Mission Control is not routed through buildKanbanBatchPrompt at all.
  *
  * Requires `npm run compile-tests` to have produced out/services/*.js.
  *
@@ -111,7 +111,10 @@ test('no hidden-capability advertising (no-model skills absent)', () => {
 
 test('import rule names no filesystem path', () => {
     const body = CLAUDE_PROTOCOL_BODY;
-    assert.ok(/designated plans directory/i.test(body),
+    // Whitespace-tolerant: CLAUDE_PROTOCOL_BODY is hard-wrapped, so the phrase
+    // spans a newline + indent ("designated\n  plans directory"). A literal-space
+    // regex here made this gate fail on the very body it was written to pin.
+    assert.ok(/designated\s+plans\s+directory/i.test(body),
         'import rule must describe a "designated plans directory", not a hardcoded path');
     assert.ok(!body.includes('.switchboard/plans/'),
         'import rule hardcodes .switchboard/plans/ — the scanned location is user-configurable via switchboard.planScanner.customSources');
@@ -137,7 +140,9 @@ test('query-kanban line names the label/ID trap', () => {
     const body = CLAUDE_PROTOCOL_BODY;
     assert.ok(/query-kanban/.test(body),
         'resident block must redirect kanban questions to the query-kanban skill');
-    assert.ok(/differ\s+from the stored IDs/i.test(body) && /silently returns nothing/i.test(body),
+    // Same whitespace-tolerance rule as the import-rule gate above: the body is
+    // hard-wrapped, so every multi-word phrase must match across a line break.
+    assert.ok(/differ\s+from\s+the\s+stored\s+IDs/i.test(body) && /silently\s+returns\s+nothing/i.test(body),
         'query-kanban line must name the label/ID mismatch — a line that only names the skill does not prevent the silent-empty-column failure');
 });
 
@@ -170,19 +175,19 @@ test('card-move rule is absent for lead', () => {
         'card-move rule must be absent for lead — leads legitimately move cards when dispatching');
 });
 
-test('card-move rule is absent for orchestrator (not routed through buildKanbanBatchPrompt)', () => {
-    // The orchestrator is launched by path, not via the prompt builder. Asserting
+test('card-move rule is absent for Mission Control (not routed through buildKanbanBatchPrompt)', () => {
+    // Mission Control is launched by path, not via the prompt builder. Asserting
     // it is not a recognized role here is the structural guarantee the rule can
-    // never leak into the orchestrator's prompt.
+    // never leak into Mission Control's prompt.
     let threw = false;
     try {
-        buildKanbanBatchPrompt('orchestrator', [{ topic: 'p', absolutePath: '/abs/p.md' }], {});
+        buildKanbanBatchPrompt('mission-control', [{ topic: 'p', absolutePath: '/abs/p.md' }], {});
     } catch (e) {
         threw = true;
-        assert.ok(/Unknown role 'orchestrator'/.test(String(e)),
-            `expected Unknown role error for orchestrator, got: ${e}`);
+        assert.ok(/Unknown role 'mission-control'/.test(String(e)),
+            `expected Unknown role error for mission-control, got: ${e}`);
     }
-    assert.ok(threw, 'buildKanbanBatchPrompt must reject the orchestrator role');
+    assert.ok(threw, 'buildKanbanBatchPrompt must reject the mission-control role');
 });
 
 test('planner default base instruction is intact (minimal-prompt regression guard)', () => {

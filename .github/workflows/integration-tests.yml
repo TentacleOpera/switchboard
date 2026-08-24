@@ -278,6 +278,17 @@ jobs:
       - name: CLAUDE.md protocol block size + content contract
         run: npm run test:contract:claude-protocol-block
 
+      # Every discoverable skill must state its preconditions and what to do when
+      # they are unmet. This gate exists because the skills-declare-preconditions
+      # plan shipped with six named checks and zero implemented: the whole
+      # query-kanban endpoints-primary rewrite was then silently reverted by a
+      # concurrent stale-tree write while every TypeScript gate stayed green, and
+      # MIRROR_MANIFEST went on advertising an endpoints-primary skill whose body
+      # was pure SQL. Static assertions over .agents/ sources and the .claude/
+      # mirror — no compile step, so it can run anywhere in the job.
+      - name: Skill preconditions + degrade-path contract
+        run: npm run test:contract:skill-preconditions
+
       # PtyFleetService.rename mutates handle.name IN PLACE, so the gateway's onData
       # closure switches to the new name while every name-keyed map is still filed
       # under the old one — a renamed terminal with no scrollback ring at all (blank

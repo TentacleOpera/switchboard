@@ -1,6 +1,6 @@
 ---
 name: query-kanban
-description: Query kanban state using direct SQL access to kanban.db (read-only). Includes schema reference, column label mapping, and ready-made query templates.
+description: Read kanban board state via LocalApiServer read endpoints (primary) or local kanban.db SQL (fallback). Requires the extension running or a local kanban.db; unavailable in cloud or tracker-only sessions.
 allowed-tools: Bash
 user-invokable: false
 ---
@@ -30,8 +30,8 @@ stale the moment the extension restarts).
 When the LocalApiServer is reachable, use these. They return records with
 resolved column labels, so the label↔storage-id trap below does not apply on
 this path. The **full endpoint contract** (verbs, payload fields, response
-envelopes) lives in the `switchboard-orchestration` protocol at
-`.agents/protocols/switchboard-orchestration/SKILL.md` — consult it for any
+envelopes) lives in the `switchboard-mission-control-http` protocol at
+`.agents/protocols/switchboard-mission-control-http/SKILL.md` — consult it for any
 call this table does not cover, and hit `GET /catalog` for the generated
 inventory of every endpoint the server serves.
 
