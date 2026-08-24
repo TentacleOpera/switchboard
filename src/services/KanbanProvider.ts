@@ -3676,7 +3676,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'INTERN CODED': 'intern',
             'PLANNED': 'planner',
             'CODE REVIEWED': 'reviewer',
-            'ACCEPTANCE TESTED': 'tester',
+            'ACCEPTANCE TESTED': 'planner',
         };
         const role = roleFromColumn[targetColumn];
         if (!role) return; // Column not in tracking scope
@@ -6986,7 +6986,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             this._getCustomKanbanColumns(workspaceRoot)
         ]);
         const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-        const acceptanceTesterActive = visibleAgents.tester !== false && this._isAcceptanceTesterDesignDocConfigured();
+        const acceptanceTesterActive = await this._isAcceptanceTesterActive(workspaceRoot);
         const allColumns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
 
         const idx = allColumns.findIndex(c => c.id === normalizedColumn);
@@ -7553,9 +7553,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
     private async _canAssignRole(workspaceRoot: string, role: string): Promise<boolean> {
         const visibleAgents = await this._getVisibleAgents(workspaceRoot);
         if (visibleAgents[role] === false) {
-            return false;
-        }
-        if (role === 'tester' && !this._isAcceptanceTesterDesignDocConfigured()) {
             return false;
         }
         return this._hasAssignedAgent(workspaceRoot, role);
@@ -13797,21 +13794,14 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             case 'INTERN CODED': return 'intern';
             case 'CODED': return 'lead';
             case 'CODE REVIEWED': return 'reviewer';
-            case 'ACCEPTANCE TESTED': return 'tester';
+            case 'ACCEPTANCE TESTED': return 'planner';
             case 'COMPLETED': return null;
             default: return column.startsWith('custom_agent_') ? column : null;
         }
     }
 
-
-
-    private _isAcceptanceTesterDesignDocConfigured(): boolean {
-        return true;
-    }
-
     private async _isAcceptanceTesterActive(workspaceRoot: string): Promise<boolean> {
-        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-        return visibleAgents.tester !== false && this._isAcceptanceTesterDesignDocConfigured();
+        return this._getSetting<boolean>('switchboard.kanban.completionTestingEnabled', false);
     }
 
 

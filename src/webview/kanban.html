@@ -3226,6 +3226,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="agent-description">Executes simple, repetitive code edits and heavily guided tasks at lowest cost.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="reviewer" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer" id="agents-tab-cmd-reviewer" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Evaluates completed implementations against plans, checking for regressions and scope creep.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="tester" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester" id="agents-tab-cmd-tester" placeholder="e.g. agy" style="flex:1;"></div>
+          <div class="agent-description">Judges finished changes against acceptance criteria (deferred risks resolved and intent satisfied) and writes follow-up plans.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="analyst" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst" id="agents-tab-cmd-analyst" placeholder="e.g. qwen" style="flex:1;"></div>
           <div class="agent-description">Researches general-purpose technical queries and outlines plan dependencies.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="project_manager" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Project Manager</label><input type="text" data-role="project_manager" id="agents-tab-cmd-project-manager" placeholder="e.g. claude" style="flex:1;"></div>
@@ -3233,8 +3235,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
           <!-- OPTIONAL -->
           <div class="agents-group-label">Optional</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="tester" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester" id="agents-tab-cmd-tester" placeholder="e.g. agy" style="flex:1;"></div>
-          <div class="agent-description">Validates implemented changes against the Design Doc/PRD, applies fixes for requirement gaps, and logs verification results.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="ticket_updater" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Ticket Updater</label><input type="text" data-role="ticket_updater" id="agents-tab-cmd-ticket-updater" placeholder="e.g. agy" style="flex:1;"></div>
           <div class="agent-description">Synchronizes plan state and comments back to connected project management systems (e.g. ClickUp/Linear).</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Researcher</label><input type="text" data-role="researcher" id="agents-tab-cmd-researcher" placeholder="e.g. claude" style="flex:1;"></div>
@@ -4865,15 +4865,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 name: 'Review',
                 headRole: 'reviewer',
                 members: [
-                    { role: 'coder', count: 1, scope: 'per-team', relationship: 'reports-to-head' }
+                    { role: 'reviewer', count: 3, scope: 'per-team', relationship: 'reports-to-head' }
                 ],
-                purpose: 'Reviews finished features and delegates fixes to its coder.',
+                purpose: 'Reviews a feature across reviewer seats in read-only batches, triages findings, and fixes only what it reviewed.',
                 prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
                     + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
                     + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
-                    + 'When the reviewer sends you fix instructions, implement the fixes in the same worktree, '
-                    + 'run verification checks (typecheck/tests as applicable), commit them, and report back to the '
-                    + 'reviewer naming what you changed and the verification results.\n'
+                    + 'In the review turn, perform a read-only review of your assigned plans, append your findings under ## Review Findings to the plan files, and report back to {child}. Do not modify code during the review turn.\n'
+                    + 'When {child} apportions fixes back to you in the fix turn, implement the fixes for the plans you reviewed, run verification checks, and report back.\n'
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
                     + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
                     + 'commit first, then correct forward. '
@@ -4881,18 +4880,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'other agents may be working the same tree.',
                 headPrompt: 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
                     + 'Never move a card to a new column yourself. '
-                    + 'You are the reviewer on a review team. When work lands in your terminal, review it '
-                    + '(Stage 1: adversarial findings, Stage 2: balanced synthesis). Apply a fully diagnosed fix set under '
-                    + 'approximately 100 lines directly. Delegate larger, broad, or parallelisable sets to your coder at {coder} '
-                    + 'via POST /terminals/verb/ptySendPrompt. For mechanical findings, specify the exact fix. For judgment '
-                    + 'calls, send the diagnosis and reasoning and let the coder choose the fix. Tell the coder to run verification '
-                    + 'checks and include results. After the coder reports back, re-review ONLY the coder\'s git diff. If issues '
-                    + 'remain, send another round. If after 5 rounds the same critical issues persist, report to the originating '
-                    + 'lead that a new plan is needed. When review passes, report to the originating lead that the feature passed '
-                    + 'review, then update the plan file.'
-                    + ' When the work is complete, stage the files you changed by explicit path '
+                    + 'You lead this review team. When a feature lands in your terminal, assign its subtask plans to your '
+                    + 'reviewer seats in batches of up to two per reviewer. The review turn is read-only: reviewers append '
+                    + 'their findings to the plan files and report back. When all reviewers report, triage findings into four '
+                    + 'categories: (1) needs no fixing, (2) fixes needed, (3) follow-ups needed for deferred issues or remaining '
+                    + 'risks, (4) did not meet intent. Apportion categories 2 and 3 back to the reviewer that reviewed them '
+                    + '(file-disjoint where possible). Do not fix categories 1 or 4. Write one markdown artifact to the plans '
+                    + 'folder (.switchboard/plans/) covering deferred items, remaining risks, and intent failures. '
+                    + 'When review and fixes are complete, stage the files you changed by explicit path '
                     + '— never `git add -A` or `git add .`. Then create a single commit with a '
-                    + 'descriptive message.'
+                    + 'descriptive message. '
+                    + 'When the review passes, POST /kanban/queue/next with {"from":"{head}"} against the port in '
+                    + '.switchboard/api-server-port.txt; if it returns a dispatched card, work it; if it returns '
+                    + 'dispatched: null, report that the queue is empty and stop.'
             },
             {
                 name: 'Multi-agent planning',
@@ -4937,6 +4937,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'commit first, then correct forward. '
                     + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
                     + 'other agents may be working the same tree.'
+            },
+            {
+                name: 'Review and Acceptance',
+                headRole: 'reviewer',
+                members: [
+                    { role: 'tester', count: 1, scope: 'per-team', relationship: 'reports-to-head' }
+                ],
+                purpose: 'Post-coding quality gates: reviewer checks implementation against the plan, and Acceptance Tester judges intent and deferred risks.',
+                headPrompt: 'You lead this review and acceptance team. Review implementations against their plans, then coordinate with your Acceptance Tester to judge intent conformance and deferred risks before completing.',
+                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
+                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
+                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
+                    + 'Judge finished changes against acceptance criteria (deferred risks resolved and intent satisfied) and write follow-up plans when criteria are not met.\n'
+                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
+                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
+                    + 'commit first, then correct forward. '
+                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
+                    + 'other agents may be working the same tree.'
             }
         ];
 
@@ -4951,7 +4969,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             { id: 'reports-to-head', label: 'Reports to me' },
             { id: 'researcher', label: 'Researcher' },
             { id: 'reviewer', label: 'Reviewer' },
-            { id: 'tester', label: 'Tester' },
             { id: 'handoff', label: 'Hand off' },
             { id: 'second-opinion', label: 'Second opinion' }
         ];
@@ -6181,7 +6198,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             { id: 'CODER CODED', label: 'Coder', role: 'coder', kind: 'coded', autobanEnabled: true },
             { id: 'INTERN CODED', label: 'Intern', role: 'intern', kind: 'coded', autobanEnabled: true },
             { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', autobanEnabled: false },
-            { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', autobanEnabled: false },
+            { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'planner', autobanEnabled: true },
             { id: 'COMPLETED', label: 'Completed', kind: 'completed', autobanEnabled: false }
         ];
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };

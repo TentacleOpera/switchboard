@@ -71,6 +71,12 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
         - Context, Logic, Implementation, Edge Cases
    9. **## Verification Plan**
       - ### Automated Tests
+      - **### Goal Invariants** *(RECOMMENDED — not required, never a gate)*
+        - Executable assertions that name concrete paths, symbols, or counts — not prose. A vacuous invariant like "assert the feature works" is a schema violation, not compliance.
+        - Each invariant is a single checkable statement: "X exists at path Y", "X is absent from path Y", "count of X equals N", "symbol X in file Y has property Z".
+        - **If the goal is a removal or relocation** (the Goal contains any of: move, relocate, remove, delete, retire, stop, out of, no longer), a **negative invariant is mandatory** — assert the thing is gone from where the goal says it should not be. A negative assertion must be **paired** with a positive one: absent *here*, resolvable *there*. "Assert `.agents/protocols/` is absent" passes if someone deletes the directory without migrating the content; the paired positive "assert the protocols are resolvable at their new location" catches that.
+        - This section gives the reviewer and the acceptance tester something concrete to measure against the plan's *purpose*, not just its steps. It is useful precisely when there is no PRD — the plan's own Goal is the only intent baseline, and the invariants make that intent testable.
+        - **Never a gate.** A plan without `### Goal Invariants` is valid and passes review. This section is recommended, not required — it must not become a board-wide check that rejects third-party plans authored under a different methodology.
    10. **## Outstanding Questions** *(OPTIONAL — include ONLY when something is genuinely unresolved; omit the heading entirely otherwise)*
        ```markdown
        ## Outstanding Questions

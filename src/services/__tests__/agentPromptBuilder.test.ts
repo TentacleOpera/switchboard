@@ -7,9 +7,12 @@ import {
     CODING_COMPLETION_REPORT_DIRECTIVE,
     COMPLETION_STEP_FULL,
     COMPLETION_STEP_COMPACT,
+    DEFERRED_FINDINGS_SECTION_INSTRUCTION,
     MISSION_CONTROL_REPORT_DIRECTIVE,
-    STAGGERED_IMPLEMENTATION_DIRECTIVE
+    STAGGERED_IMPLEMENTATION_DIRECTIVE,
+    SWITCHBOARD_LIVENESS_DIRECTIVE
 } from '../agentPromptBuilder';
+import { buildReconcilePrompt } from '../schedulerPresets';
 
 suite('agentPromptBuilder', () => {
     const makePlans = (count: number) =>
@@ -274,6 +277,87 @@ suite('agentPromptBuilder', () => {
             assert.ok(!MISSION_CONTROL_REPORT_DIRECTIVE.includes('the plan-file completion report'), 'MISSION_CONTROL_REPORT_DIRECTIVE should not say the plan-file completion report');
             assert.ok(STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('POST /kanban/queue/done'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should reference POST /kanban/queue/done');
             assert.ok(!STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('the per-plan completion report (which still goes to each subtask\'s own plan file)'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should not reference per-plan completion report');
+        });
+
+        // Deferred-findings section — gives "what we chose not to fix" a
+        // machine-readable home that survives the card's advance. Both
+        // completion modes carry the section instruction; the empty case is
+        // stated explicitly; the compact budget is scoped to prose only; the
+        // sentinel survives; reconcile is left byte-identical.
+        test('both completion steps carry the deferred-findings section instruction', () => {
+            assert.ok(COMPLETION_STEP_FULL.includes(DEFERRED_FINDINGS_SECTION_INSTRUCTION),
+                'COMPLETION_STEP_FULL must carry the deferred-findings section instruction');
+            assert.ok(COMPLETION_STEP_COMPACT.includes(DEFERRED_FINDINGS_SECTION_INSTRUCTION),
+                'COMPLETION_STEP_COMPACT must carry the deferred-findings section instruction — half of users get compact mode');
+        });
+
+        test('deferred-findings section instruction states the empty case explicitly', () => {
+            assert.ok(DEFERRED_FINDINGS_SECTION_INSTRUCTION.toLowerCase().includes('none'),
+                'Empty case must be stated explicitly ("None"), not omitted — absence means "not answered", never "nothing found"');
+            assert.ok(DEFERRED_FINDINGS_SECTION_INSTRUCTION.includes('do not omit the section'),
+                'Instruction must forbid omitting the section when nothing was deferred');
+        });
+
+        test('deferred-findings section instruction requires severity and file:line per item', () => {
+            assert.ok(DEFERRED_FINDINGS_SECTION_INSTRUCTION.includes('CRITICAL/MAJOR/NIT'),
+                'Each deferred finding must carry a Stage 1 severity (CRITICAL/MAJOR/NIT)');
+            assert.ok(DEFERRED_FINDINGS_SECTION_INSTRUCTION.includes('file:line'),
+                'Each deferred finding must carry a file:line reference');
+        });
+
+        test('compact mode sentence budget is scoped to the Review Findings prose only', () => {
+            assert.ok(COMPLETION_STEP_COMPACT.includes('≤ 5 sentences'),
+                'Compact mode must still state the ≤ 5 sentence budget for the prose summary');
+            assert.ok(COMPLETION_STEP_COMPACT.includes('does NOT bound the deferred-findings list'),
+                'Compact mode must explicitly scope the budget to the prose summary and NOT the deferred-findings list');
+        });
+
+        test('completion-step sentinels survive the deferred-findings addition', () => {
+            for (const directive of [COMPLETION_STEP_FULL, COMPLETION_STEP_COMPACT]) {
+                assert.ok(directive.startsWith('COMPLETION REPORT:'),
+                    `Sentinel must remain at the start of the completion step: ${directive.slice(0, 40)}...`);
+                assert.ok(directive.includes('POST /kanban/queue/done'),
+                    'POST /kanban/queue/done handshake must survive the addition');
+            }
+            // ensureCompletionDirective recognises the composed text (sentinel
+            // present) and does NOT double-append the generic directive.
+            const fullPrompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {});
+            assert.ok(!fullPrompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE),
+                'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended when the base step already carries the sentinel (would be the duplicate)');
+            const compactPrompt = buildKanbanBatchPrompt('reviewer', makePlans(1), { reviewerCompactPlanUpdateEnabled: true });
+            assert.ok(!compactPrompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE),
+                'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended in compact mode when the base step already carries the sentinel');
+        });
+
+        test('reviewer prompt surfaces the deferred-findings section in both modes', () => {
+            const fullPrompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {});
+            assert.ok(fullPrompt.includes('## Deferred Findings'),
+                'Default (full) reviewer prompt must instruct appending a ## Deferred Findings section');
+            const compactPrompt = buildKanbanBatchPrompt('reviewer', makePlans(1), { reviewerCompactPlanUpdateEnabled: true });
+            assert.ok(compactPrompt.includes('## Deferred Findings'),
+                'Compact reviewer prompt must instruct appending a ## Deferred Findings section');
+        });
+
+        test('tester step 5 records remaining requirement gaps in the deferred-findings section', () => {
+            const prompt = buildKanbanBatchPrompt('tester', makePlans(1), {});
+            assert.ok(prompt.includes('## Deferred Findings'),
+                'Tester prompt must direct remaining requirement gaps to the ## Deferred Findings section (one concept, one vocabulary)');
+            assert.ok(!prompt.includes('remaining requirement gaps'),
+                'Tester must no longer use the now-moot "remaining requirement gaps" vocabulary');
+        });
+
+        test('reconcile preset is byte-identical — this change did not edit it', () => {
+            const prompt = buildReconcilePrompt();
+            // The reconcile preset scans for ## Completion Report / ## Review
+            // Findings sections and advances cards. Its wording is load-bearing
+            // and unchanged from the retired scheduler surface — this plan
+            // leaves it untouched (consumption is the next plan's business).
+            assert.ok(prompt.includes('## Completion Report') && prompt.includes('## Review Findings'),
+                'reconcile must still scan for ## Completion Report / ## Review Findings sections');
+            assert.ok(!prompt.includes('## Deferred Findings'),
+                'reconcile must NOT reference ## Deferred Findings — this plan does not teach it to consume the new section');
+            assert.ok(!prompt.includes('deferred'),
+                'reconcile wording must be untouched by the deferred-findings change');
         });
 
         test('skip-tests disclosure absent with no skip flags; present with skipTests or skipCompilation', () => {
@@ -582,6 +666,71 @@ suite('agentPromptBuilder', () => {
             assert.ok(customPrompt.includes('Do NOT create git worktrees for this dispatch.'));
             assert.ok(customPrompt.includes('Work through the subtasks in a sensible order.'));
             assert.ok(!customPrompt.includes('subagent'));
+        });
+    });
+
+    suite('SWITCHBOARD_LIVENESS_DIRECTIVE & apiPort injection', () => {
+        const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst'] as const;
+
+        test('SWITCHBOARD_LIVENESS_DIRECTIVE produces expected instruction string', () => {
+            const directive = SWITCHBOARD_LIVENESS_DIRECTIVE(58312);
+            assert.ok(directive.includes('SWITCHBOARD STATUS: Live (port 58312)'));
+            assert.ok(directive.includes('http://127.0.0.1:58312'));
+            assert.ok(directive.includes('Skip any port-discovery or health-check steps'));
+        });
+
+        test('liveness directive is injected for all 7 roles when apiPort > 0', () => {
+            const plans = makePlans(1);
+            for (const r of roles) {
+                const prompt = buildKanbanBatchPrompt(r as any, plans, { apiPort: 58312 });
+                assert.ok(
+                    prompt.includes('SWITCHBOARD STATUS: Live (port 58312)'),
+                    `role ${r} must receive liveness directive when apiPort > 0`
+                );
+                assert.ok(
+                    prompt.includes('http://127.0.0.1:58312'),
+                    `role ${r} must contain local api server url`
+                );
+            }
+        });
+
+        test('liveness directive is omitted for all 7 roles when apiPort is 0 or undefined', () => {
+            const plans = makePlans(1);
+            for (const r of roles) {
+                const promptWithZero = buildKanbanBatchPrompt(r as any, plans, { apiPort: 0 });
+                assert.ok(
+                    !promptWithZero.includes('SWITCHBOARD STATUS: Live'),
+                    `role ${r} must not receive liveness directive when apiPort is 0`
+                );
+                const promptWithUndef = buildKanbanBatchPrompt(r as any, plans, {});
+                assert.ok(
+                    !promptWithUndef.includes('SWITCHBOARD STATUS: Live'),
+                    `role ${r} must not receive liveness directive when apiPort is undefined`
+                );
+            }
+        });
+
+        test('reviewer delegation uses injected port when apiPort > 0', () => {
+            const plans = makePlans(1);
+            const prompt = buildKanbanBatchPrompt('reviewer', plans, {
+                apiPort: 58312,
+                reviewerDelegationMode: true,
+                reviewerCoderTerminal: 'Coding-coder-1',
+                reviewerOriginLead: 'Coding-lead'
+            });
+            assert.ok(prompt.includes('against http://127.0.0.1:58312'), 'fixStep must use injected port');
+            assert.ok(!prompt.includes('.switchboard/api-server-port.txt'), 'fixStep must not reference port file when port is provided');
+        });
+
+        test('reviewer delegation falls back to port file when apiPort is 0 or undefined', () => {
+            const plans = makePlans(1);
+            const prompt = buildKanbanBatchPrompt('reviewer', plans, {
+                apiPort: 0,
+                reviewerDelegationMode: true,
+                reviewerCoderTerminal: 'Coding-coder-1',
+                reviewerOriginLead: 'Coding-lead'
+            });
+            assert.ok(prompt.includes('against the port in .switchboard/api-server-port.txt'), 'fixStep must fall back to port file when apiPort is 0');
         });
     });
 });

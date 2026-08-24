@@ -169,3 +169,7 @@ Column id unchanged — no card migration. The `autobanEnabled` flip is the migr
 ## Outstanding Questions
 
 None.
+
+## Implementation Summary
+
+Implemented the completion-testing stage by repurposing the `ACCEPTANCE TESTED` column (`id` preserved, relabelled to 'Completion Tested') with `role: 'planner'` and `autobanEnabled: true`. Composed a dedicated completion-testing prompt in `agentPromptBuilder.ts` with two explicit acceptance criteria (deferred risks resolved and intent satisfied) bounded strictly against net-new scope and code edits. Promoted `tester` visibility to core across defaults and webview markup while splitting pipeline participation behind a dedicated switch, removed the obsolete pair-level tester relationship preset across all declarations, and offered the Reviewer + Acceptance Tester team preset.

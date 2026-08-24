@@ -155,7 +155,7 @@ export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
-    { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', order: 350, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
+    { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'planner', order: 350, kind: 'reviewed', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'TICKET UPDATER', label: 'Ticket Updater', role: 'ticket_updater', order: 9000, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt' },
     { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
 ];

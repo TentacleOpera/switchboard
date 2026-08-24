@@ -148,6 +148,18 @@ Two facts shape every decision and override most defaults:
   `dist/extension.js`. Prefer small, bundle-friendly libraries and avoid adding heavy deps for
   marginal gains.
 
+- **[INVARIANT] Reviewer escalation on destination or goal change.** A reviewer may change
+  implementation detail freely — that is exactly what a reviewer should do. But changing *where the
+  work lands* or *reversing the plan's stated goal* is an author decision, not a reviewer decision,
+  however right the reviewer is about the blocker. When a reviewer concludes a plan's destination or
+  stated goal cannot stand, the reviewer must: (1) append a `### Review Deviations` section to the end
+  of the plan file — inert prose for the author, never a directive to a future agent — naming what
+  changed, why the original was a blocker, and what the author needs to decide; (2) return the card to
+  the author's column via `POST /kanban/move` (the sanctioned API path, the same one a human's click
+  takes), never via SQL. This is blocking when the *Goal* or a *Goal Invariant* changes; advisory
+  (record the deviation and proceed) for everything else. The escalation section is a plan-file state,
+  not a modal — no confirmation dialogs, per the no-confirm invariant above.
+
 ---
 
 *Amendments: edit this file in a PR. Invariants change only with explicit owner sign-off; standards

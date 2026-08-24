@@ -149,17 +149,17 @@ suite('KanbanProvider', () => {
             { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
-            { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', order: 350, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
+            { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'planner', order: 350, kind: 'reviewed', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'TICKET UPDATER', label: 'Ticket Updater', role: 'ticket_updater', order: 9000, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt' },
             { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' }
         ];
 
-        const stubDeps = (visibleAgents: Record<string, boolean>, designDocConfigured: boolean) => {
+        const stubDeps = (visibleAgents: Record<string, boolean>, acceptanceTesterActive: boolean) => {
             sandbox.stub(provider as any, '_getCustomAgents').resolves([]);
             sandbox.stub(provider as any, '_getCustomKanbanColumns').resolves([]);
             sandbox.stub(provider as any, '_buildKanbanColumns').returns(defaultColumns);
             sandbox.stub(provider as any, '_getVisibleAgents').resolves(visibleAgents);
-            sandbox.stub(provider as any, '_isAcceptanceTesterDesignDocConfigured').returns(designDocConfigured);
+            sandbox.stub(provider as any, '_isAcceptanceTesterActive').resolves(acceptanceTesterActive);
         };
 
         test('PLAN REVIEWED -> next skips hidden RESEARCHER to LEAD CODED', async () => {
@@ -258,7 +258,7 @@ suite('KanbanProvider', () => {
             sandbox.stub(provider as any, '_getCustomKanbanColumns').resolves([]);
             sandbox.stub(provider as any, '_buildKanbanColumns').returns(columnsWithCustom);
             sandbox.stub(provider as any, '_getVisibleAgents').resolves({ researcher: false, custom_agent_devin: false, tester: false });
-            sandbox.stub(provider as any, '_isAcceptanceTesterDesignDocConfigured').returns(false);
+            sandbox.stub(provider as any, '_isAcceptanceTesterActive').resolves(false);
             const next = await (provider as any)._getNextColumnId('CREATED', workspaceRoot);
             assert.strictEqual(next, 'PLAN REVIEWED');
         });

@@ -238,6 +238,50 @@ check('protocol files referenced by path live under a packaged root', () => {
     );
 });
 
+// ── Must-not-exist assertions ──────────────────────────────────────────────
+// Goal invariants of the form "X no longer ships" need a check that FAILS when
+// the path IS packaged — the mirror image of the must-exist checks above. A
+// negation in .vscodeignore overrides every ignore unconditionally, so a path
+// that should be excluded can silently re-enter the zip; this catches that.
+// Each assertion walks the real directory (if it exists) and fails if any file
+// under it would be packaged. A directory that does not exist trivially passes.
+
+check('.switchboard/ runtime data does NOT ship (user workspace content, not extension content)', () => {
+    const SWITCHBOARD = path.join(REPO_ROOT, '.switchboard');
+    if (!fs.existsSync(SWITCHBOARD)) { return; }
+    const shipped = walkRel(SWITCHBOARD, REPO_ROOT).filter(included);
+    assert.deepStrictEqual(
+        shipped.slice(0, 5), [],
+        `${shipped.length} .switchboard file(s) WOULD be packaged (e.g. ${shipped.slice(0, 3).join(', ')}). `
+        + '.switchboard/ is user runtime data (plans, kanban.db, api-server-port.txt) — it must never ship in the VSIX. '
+        + 'Check for a negation in .vscodeignore that overrides the .switchboard/** ignore.'
+    );
+});
+
+check('src/ source files do NOT ship (compiled bundle is the entry point)', () => {
+    const SRC = path.join(REPO_ROOT, 'src');
+    if (!fs.existsSync(SRC)) { return; }
+    const shipped = walkRel(SRC, REPO_ROOT).filter(included);
+    assert.deepStrictEqual(
+        shipped.slice(0, 5), [],
+        `${shipped.length} src/ file(s) WOULD be packaged (e.g. ${shipped.slice(0, 3).join(', ')}). `
+        + 'src/ is TypeScript source — the compiled dist/extension.js is the entry point, not the source tree. '
+        + 'Check for a negation in .vscodeignore that overrides the src/** ignore.'
+    );
+});
+
+check('test files do NOT ship (dev-only, not runtime)', () => {
+    const TEST = path.join(REPO_ROOT, 'src', 'test');
+    if (!fs.existsSync(TEST)) { return; }
+    const shipped = walkRel(TEST, REPO_ROOT).filter(included);
+    assert.deepStrictEqual(
+        shipped.slice(0, 5), [],
+        `${shipped.length} test file(s) WOULD be packaged (e.g. ${shipped.slice(0, 3).join(', ')}). `
+        + 'Tests are dev-only — they must not ship in the VSIX. '
+        + 'Check for a negation in .vscodeignore that overrides the src/** ignore.'
+    );
+});
+
 if (failures > 0) {
     console.error(`\n${failures} contract check(s) failed.\n`);
     process.exit(1);

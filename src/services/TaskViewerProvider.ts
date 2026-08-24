@@ -5308,7 +5308,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'INTERN CODED': return 'intern';
             case 'CODED': return 'lead';
             case 'CODE REVIEWED': return 'reviewer';
-            case 'ACCEPTANCE TESTED': return 'tester';
+            case 'ACCEPTANCE TESTED': return 'planner';
             case 'RESEARCHER': return 'researcher';
             case 'TICKET UPDATER': return 'ticket_updater';
             case 'COMPLETED': return null;
@@ -5374,7 +5374,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'CODE REVIEWED':
                 return 'reviewer';
             case 'ACCEPTANCE TESTED':
-                return 'tester';
+                return 'planner';
             default:
                 return column.startsWith('custom_agent_') ? column : null;
         }
@@ -7209,10 +7209,6 @@ Each plan file must include:
 - ${expectation}`;
     }
 
-    private _isAcceptanceTesterDesignDocConfigured(): boolean {
-        return true;
-    }
-
     public handleGetDesignSystemDocSetting(): { enabled: boolean; link: string } {
         return {
             enabled: this._isDesignSystemDocEnabled(),
@@ -7221,18 +7217,13 @@ Each plan file must include:
     }
 
     private async _isAcceptanceTesterActive(workspaceRoot?: string): Promise<boolean> {
-        const visibleAgents = await this.getVisibleAgents(workspaceRoot);
-        return visibleAgents.tester !== false && this._isAcceptanceTesterDesignDocConfigured();
+        return this._context.globalState.get<boolean>('switchboard.kanban.completionTestingEnabled', false);
     }
 
     private async _ensureAcceptanceTesterDispatchEligible(workspaceRoot?: string): Promise<boolean> {
         const visibleAgents = await this.getVisibleAgents(workspaceRoot);
         if (visibleAgents.tester === false) {
             this._seams().ui.showErrorMessage('Acceptance Tester is currently disabled in Setup.');
-            return false;
-        }
-        if (!this._isAcceptanceTesterDesignDocConfigured()) {
-            this._seams().ui.showErrorMessage('Acceptance Tester requires a Planning Feature to be enabled and attached in Setup.');
             return false;
         }
         return true;

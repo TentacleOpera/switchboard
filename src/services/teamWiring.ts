@@ -355,6 +355,25 @@ export function TEAM_QUEUE_DONE_ORDER_BODY(groupId: string): string {
 }
 
 /**
+ * Variant of {@link TEAM_QUEUE_DONE_ORDER_BODY} specifically for Review teams.
+ * Omits the "clear your terminal" fragment so reviewers retain their review
+ * context between the judging turn and the apportioned fix turn.
+ */
+export function REVIEW_TEAM_QUEUE_DONE_ORDER_BODY(groupId: string): string {
+    return 'When you finish the task you were dispatched, POST /terminals/teams/'
+        + `${groupId}/queue/done with {"from":"<your terminal name>"} against the port in `
+        + '.switchboard/api-server-port.txt. '
+        + 'The system will relay your completion report to your team lead and dispatch '
+        + 'the next queued item to the lead. '
+        + 'If there are no more items, your terminal stays as-is and the team is done with queued work. '
+        + 'If the POST fails, report to your head directly via ptySendPrompt as a fallback. '
+        + 'Before posting, check GET /kanban/plans?featureId=<your feature id> — if all subtasks '
+        + 'are in LEAD CODED, POST /kanban/dispatch with '
+        + '{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED","from":"<your terminal name>"} '
+        + 'instead of posting to queue/done. The feature is complete — hand it to review.';
+}
+
+/**
  * Deterministic id prefix for the team-queue completion-driven orders, so they
  * can be found and removed without scanning instruction text. One order per
  * scope (`team`, `team-head`) per team — the prefix + groupId + scope is unique.
@@ -386,11 +405,12 @@ export async function applyTeamQueueOrders(opts: {
     headName: string;
     roster: string[];
     enabled: boolean;
+    isReviewTeam?: boolean;
 }): Promise<void> {
-    const { db, groupId, headName, roster, enabled } = opts;
+    const { db, groupId, headName, roster, enabled, isReviewTeam } = opts;
     if (!db || !groupId) return;
     const members = roster.filter(n => typeof n === 'string' && n.length > 0 && n !== headName);
-    const body = TEAM_QUEUE_DONE_ORDER_BODY(groupId);
+    const body = isReviewTeam ? REVIEW_TEAM_QUEUE_DONE_ORDER_BODY(groupId) : TEAM_QUEUE_DONE_ORDER_BODY(groupId);
     await mutateStandingOrders(db, async (orders) => {
         const next = orders.filter((o: StandingOrder) =>
             !(typeof o.id === 'string' && o.id.startsWith(TEAM_QUEUE_ORDER_ID_PREFIX + groupId + ':'))
@@ -645,6 +665,28 @@ export const SEEDED_AGENT_GROUP: any = {
     headRole: 'lead',
     members: [],
 };
+
+/**
+ * The offered Review team definition: a member-less team headed on `reviewer`.
+ *
+ * Offered in the team definitions list / gallery rather than seeded into the
+ * database by default — it appears as a startable team in the agents tab
+ * without auto-spawning unrequested seats.
+ */
+export const OFFERED_REVIEW_TEAM_GROUP: any = {
+    id: 'review-team',
+    name: 'Review team',
+    headRole: 'reviewer',
+    headPrompt: NEW_REVIEW_TEAM_HEAD_PROMPT,
+    members: [],
+};
+
+/**
+ * Team definitions offered to the operator as startable templates (not auto-seeded).
+ */
+export const OFFERED_TEAM_DEFINITIONS: any[] = [
+    OFFERED_REVIEW_TEAM_GROUP,
+];
 
 /**
  * The OLD seed value, preserved verbatim for the migration comparison.
@@ -978,7 +1020,15 @@ export const PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT =
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message.';
 
-export const NEW_REVIEW_TEAM_HEAD_PROMPT =
+/**
+ * The PRE-triage Review team headPrompt — the text before the read-only review
+ * pass and lead triage overhaul. Frozen snapshot of what was on disk on
+ * installs using the delegation/self-fix Review team headPrompt.
+ *
+ * NEVER edit this constant. New prompt wording goes in
+ * NEW_REVIEW_TEAM_HEAD_PROMPT only.
+ */
+export const PRE_TRIAGE_REVIEW_HEAD_PROMPT =
     'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
     + 'Never move a card to a new column yourself. '
     + 'You are the reviewer on a review team. When work lands in your terminal, review it '
@@ -993,6 +1043,23 @@ export const NEW_REVIEW_TEAM_HEAD_PROMPT =
     + ' When the work is complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message.';
+
+export const NEW_REVIEW_TEAM_HEAD_PROMPT =
+    'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
+    + 'Never move a card to a new column yourself. '
+    + 'You lead this review team. When a feature lands in your terminal, assign its subtask plans to your '
+    + 'reviewer seats in batches of up to two per reviewer. The review turn is read-only: reviewers append '
+    + 'their findings to the plan files and report back. When all reviewers report, triage findings into four '
+    + 'categories: (1) needs no fixing, (2) fixes needed, (3) follow-ups needed for deferred issues or remaining '
+    + 'risks, (4) did not meet intent. Apportion categories 2 and 3 back to the reviewer that reviewed them '
+    + '(file-disjoint where possible). Do not fix categories 1 or 4. Write one markdown artifact to the plans '
+    + 'folder (.switchboard/plans/) covering deferred items, remaining risks, and intent failures. '
+    + 'When review and fixes are complete, stage the files you changed by explicit path '
+    + '— never `git add -A` or `git add .`. Then create a single commit with a '
+    + 'descriptive message. '
+    + 'When the review passes, POST /kanban/queue/next with {"from":"{head}"} against the port in '
+    + '.switchboard/api-server-port.txt; if it returns a dispatched card, work it; if it returns '
+    + 'dispatched: null, report that the queue is empty and stop.';
 
 /**
  * The CURRENT (buggy) Coding team headPrompt — the text that the first migration
@@ -1204,6 +1271,17 @@ export function migrateAgentGroups(groups: any[]): any[] | null {
             g = { ...g, headPrompt: NEW_REVIEW_TEAM_HEAD_PROMPT };
             changed = true;
             console.log(`[teamWiring] Migration: added card-movement rule to Review team '${g.id || g.name}'.`);
+        }
+
+        // Step 1g (Review): convert an install that already migrated to the
+        // delegation/self-fix Review headPrompt but before the read-only review
+        // turn and triage overhaul. Exact-value match on
+        // PRE_TRIAGE_REVIEW_HEAD_PROMPT; an operator-edited group does not match
+        // and is left alone.
+        if (isUntouchedPreTriageReviewTeam(g)) {
+            g = { ...g, headPrompt: NEW_REVIEW_TEAM_HEAD_PROMPT };
+            changed = true;
+            console.log(`[teamWiring] Migration: upgraded pre-triage Review team '${g.id || g.name}' — headPrompt → read-only triage and fix apportionment.`);
         }
 
         // Step 2: convert member shape — add scope/relationship defaults.
@@ -1528,6 +1606,22 @@ function isUntouchedPreCardMovementRuleReviewTeam(group: any): boolean {
     if (!group || group.headRole !== 'reviewer') { return false; }
     return typeof group.headPrompt === 'string'
         && group.headPrompt === PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT;
+}
+
+/**
+ * Recognise an install that already migrated to the delegation/self-fix Review team
+ * headPrompt but before the read-only review turn and triage overhaul.
+ *
+ * Exact-value match on `headPrompt === PRE_TRIAGE_REVIEW_HEAD_PROMPT`.
+ * An operator who edited the prompt does not match and is left alone.
+ *
+ * NEVER edit PRE_TRIAGE_REVIEW_HEAD_PROMPT. It is a frozen snapshot.
+ * New prompt wording goes in NEW_REVIEW_TEAM_HEAD_PROMPT only.
+ */
+function isUntouchedPreTriageReviewTeam(group: any): boolean {
+    if (!group || group.headRole !== 'reviewer') { return false; }
+    return typeof group.headPrompt === 'string'
+        && group.headPrompt === PRE_TRIAGE_REVIEW_HEAD_PROMPT;
 }
 
 /**
@@ -1973,7 +2067,7 @@ export interface WireSpawnedTeamResult {
  * of N per-member pair rows.
  *
  * Pair-scoped orders: `head-receives` relationship presets (researcher, reviewer,
- * tester, handoff, second-opinion) still emit one pair row each, installed ON
+ * handoff, second-opinion) still emit one pair row each, installed ON
  * the head ABOUT the member — that framing is correct for them.
  */
 export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<WireSpawnedTeamResult> {

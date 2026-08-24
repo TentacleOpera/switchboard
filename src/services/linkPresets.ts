@@ -74,16 +74,6 @@ export const LINK_PRESETS: ReadonlyArray<LinkPreset> = [
             + 'unit. Address what it raises rather than deferring it.'
     },
     {
-        id: 'tester',
-        label: 'Tester — it verifies my work',
-        direction: 'head-receives',
-        template:
-            '{child} is your tester. When a change is ready to verify, hand {child} what you changed '
-            + 'and what the expected behaviour is — it cannot see your conversation, so state both '
-            + 'explicitly — and let it run the checks. Treat a failure it reports as your work to fix, '
-            + 'not its.'
-    },
-    {
         id: 'handoff',
         label: 'Hand off — give it my context',
         direction: 'head-receives',
