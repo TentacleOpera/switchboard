@@ -240,6 +240,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
     let taskViewerProvider: TaskViewerProvider | null = null;
     const seatBlockCache = new Map<string, string>();
+    // Terminal friendlyName → last dispatched planId. Used by the auto-clear
+    // logic: when a dispatch references a DIFFERENT planId than the terminal's
+    // last dispatched plan, the host sets clearBeforePrompt to true so
+    // deliverPrompt writes /clear before the prompt. In-memory only — on
+    // host restart, terminals are fresh pty processes with no stale context.
+    const lastDispatchedPlanByTerminal = new Map<string, string>();
 
     /**
      * Sole standalone chokepoint for prompt delivery. Every `sendPromptToPty` call
@@ -1553,6 +1559,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
 
                 case 'ptyCloseTerminal': {
                     const ok = ptyFleetService.kill(payload.name);
+                    lastDispatchedPlanByTerminal.delete(payload.name);
                     return { success: ok };
                 }
 
@@ -1633,6 +1640,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         } catch (err) {
                             console.warn('[bootstrap] Standing-orders rename rewrite failed:', err);
                         }
+                        // Rename the last-dispatched-plan map entry (old → new).
+                        const oldPlan = lastDispatchedPlanByTerminal.get(payload.name);
+                        if (oldPlan) {
+                            lastDispatchedPlanByTerminal.delete(payload.name);
+                            lastDispatchedPlanByTerminal.set(payload.alias, oldPlan);
+                        }
                     }
                     return { success: ok };
                 }
@@ -1643,6 +1656,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (handle.agentInstanceId) {
                         seatBlockCache.delete(handle.agentInstanceId);
                     }
+                    lastDispatchedPlanByTerminal.delete(payload.name);
                     if (handle.status === 'active') { await clearPty(handle); }
                     return { success: true };
                 }
@@ -1733,6 +1747,21 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             };
                         }
                         directivesAttached = ['COMPLETION REPORT', 'MISSION CONTROL REPORT'];
+
+                        // Auto-clear on plan change: when the dispatch references
+                        // a different planId than the terminal's last dispatched
+                        // plan, set payload.clearBeforePrompt = true so the
+                        // resolvedClear computation below picks up true. The
+                        // caller's explicit false is intentionally overridden.
+                        // Same-planId resends preserve false (context kept for
+                        // fix prompts).
+                        if (parsed.value.planId) {
+                            const lastPlanId = lastDispatchedPlanByTerminal.get(payload.name);
+                            if (lastPlanId && lastPlanId !== parsed.value.planId) {
+                                payload.clearBeforePrompt = true;
+                            }
+                            lastDispatchedPlanByTerminal.set(payload.name, parsed.value.planId);
+                        }
                     }
                     try {
                         const deliveryDefaults = getPromptDeliveryOptions();
@@ -1767,6 +1796,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
 
                 case 'ptyClearAllTerminals': {
                     seatBlockCache.clear();
+                    lastDispatchedPlanByTerminal.clear();
                     const active = ptyFleetService.listActive();
                     await Promise.all(active.map(t => clearPty(t)));
                     return { success: true, cleared: active.length };

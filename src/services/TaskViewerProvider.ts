@@ -510,6 +510,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         //     unchanged instance id. A suppressed send never re-records, so a
         //     surviving entry keeps a stale name and defeats every later
         //     ptyClearTerminal on that seat. Dropping costs one redundant block.
+        // ptyCloseTerminal is not in the seat-cache-drop list (it kills the
+        // terminal, not clears it), but the last-dispatched-plan entry must be
+        // dropped too — the terminal is gone.
+        if (verb === 'ptyCloseTerminal' && typeof payload?.name === 'string') {
+            this._lastDispatchedPlanByTerminal.delete(payload.name);
+        }
         const seatCacheDropName =
             (verb === 'ptyClearTerminal' || verb === 'ptyRenameTerminal'
                 || (verb === 'ptyWrite' && String(payload?.data ?? '').trim() === '/clear'))
@@ -520,6 +526,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (entry.name === seatCacheDropName) {
                     this._seatBlockCache.delete(id);
                 }
+            }
+            // Last-dispatched-plan map maintenance: drop on clear / write /clear,
+            // rename on ptyRenameTerminal (get before delete, then set new key).
+            if (verb === 'ptyRenameTerminal' && typeof payload?.alias === 'string') {
+                const oldPlan = this._lastDispatchedPlanByTerminal.get(payload.name);
+                this._lastDispatchedPlanByTerminal.delete(payload.name);
+                if (oldPlan) {
+                    this._lastDispatchedPlanByTerminal.set(payload.alias, oldPlan);
+                }
+            } else {
+                this._lastDispatchedPlanByTerminal.delete(payload.name);
             }
             // Restore a coder's callback standing order when it is cleared.
             // A reviewer-callback override may have been installed during
@@ -535,6 +552,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         } else if (verb === 'ptyClearAllTerminals') {
             this._seatBlockCache.clear();
+            this._lastDispatchedPlanByTerminal.clear();
         }
 
         // Append seat-scoped directive block AND standing-orders block at the
@@ -645,6 +663,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 directivesAttached = missionControlActive
                     ? ['COMPLETION REPORT', 'MISSION CONTROL REPORT']
                     : ['COMPLETION REPORT'];
+
+                // Auto-clear on plan change: when the dispatch references a
+                // different planId than the terminal's last dispatched plan,
+                // override clearBeforePrompt to true so sendPromptToPty writes
+                // /clear before the prompt. The caller's explicit false is
+                // intentionally overridden — the host knows the plan changed,
+                // the caller does not. Same-planId resends preserve false
+                // (context kept for fix prompts). The injection block in
+                // handlePtyVerb only acts on clearBeforePrompt === undefined,
+                // so an explicit true set here passes through unchanged.
+                if (planId) {
+                    const lastPlanId = this._lastDispatchedPlanByTerminal.get(payload.name);
+                    if (lastPlanId && lastPlanId !== planId) {
+                        payload = { ...payload, clearBeforePrompt: true };
+                    }
+                    this._lastDispatchedPlanByTerminal.set(payload.name, planId);
+                }
             }
 
             const applySO = payload?.standingOrders !== false;
@@ -1249,6 +1284,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _ptyHiddenTerminalNames: string[] = [];
     private _unattendedPlannerCursor = 0;
     private _seatBlockCache = new Map<string, { name: string; block: string }>();
+    // Terminal friendlyName → last dispatched planId. Used by the auto-clear
+    // logic: when a dispatch references a DIFFERENT planId than the terminal's
+    // last dispatched plan, the host overrides clearBeforePrompt to true so
+    // sendPromptToPty writes /clear before the prompt. In-memory only — on
+    // host restart, terminals are fresh pty processes with no stale context.
+    private _lastDispatchedPlanByTerminal = new Map<string, string>();
 
     /**
      * Liveness snapshot cache (all statuses), refreshed from the same
@@ -10530,6 +10571,10 @@ Each plan file must include:
         if (!clearBeforePrompt) {
             return { cleared: false };
         }
+        // Drop the last-dispatched-plan entry so the next dispatch doesn't
+        // redundantly auto-clear an already-clean terminal (optimization —
+        // a redundant clear is harmless but wastes the settle window).
+        this._lastDispatchedPlanByTerminal.delete(terminalName);
         const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
         const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
 
@@ -22078,7 +22123,25 @@ Each plan file must include:
             return false;
         }
 
-
+        // Team-wide clear: when a card is dispatched to a seat on a registered team,
+        // clear ALL team members' terminals — not just the destination seat. The
+        // destination seat is cleared by the dispatch path's own clearBeforePrompt
+        // logic; this clears the team lead and any other coders so they start fresh
+        // for review/commit of the new work. Fire-and-forget: the clipboard lock in
+        // terminalUtils.ts serializes the actual /clear pastes, and a clear failure
+        // for one member must not block the dispatch. Respects terminal.clearBeforePrompt
+        // (clearTerminalContext returns {cleared:false} when the config is off).
+        try {
+            const roster = await this.resolveTeamMembers(resolvedWorkspaceRoot, targetAgent);
+            if (roster && roster.length > 1) {
+                const others = roster.filter(name => name !== targetAgent);
+                if (others.length > 0) {
+                    void Promise.allSettled(
+                        others.map(name => this.clearTerminalContext(resolvedWorkspaceRoot, name))
+                    );
+                }
+            }
+        } catch { /* best-effort — team resolution failure does not block dispatch */ }
 
         // Focus the terminal for immediate feedback
         // A PTY has no VS Code terminal to reveal; the browser Terminals panel owns its own

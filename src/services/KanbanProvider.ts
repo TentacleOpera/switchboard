@@ -21,7 +21,7 @@ import {
 } from './agentConfig';
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
@@ -75,7 +75,7 @@ import { listIconPalette, validateTeamIcon, type IconPaletteEntry } from './icon
  */
 const ULTRACODE_FEATURE_PREFIX = 'This is a feature with multiple subtasks. Activate your ultracode workflow.';
 const GOAL_FEATURE_PREFIX = '/goal';
-const DRIVE_FEATURE_PREFIX = 'This feature is to be driven through a coder terminal. Read and follow .agents/protocols/terminal-coder-dispatch/SKILL.md.';
+const DRIVE_FEATURE_PREFIX = 'This feature is to be driven through a coder terminal, but no team roster is configured. Implement the subtasks directly.';
 
 /**
  * Schedules a fire-and-forget write of the kanban state section to the plan file.
@@ -5639,7 +5639,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (fs.existsSync(portFilePath)) {
                 const portRaw = fs.readFileSync(portFilePath, 'utf8').trim();
                 if (portRaw && /^\d+$/.test(portRaw)) {
-                    portLine = `Port is ${portRaw}. BASE="http://127.0.0.1:${portRaw}" (also in .switchboard/api-server-port.txt)`;
+                    portLine = `Port is ${portRaw}. BASE="http://127.0.0.1:${portRaw}"`;
                 }
             }
         } catch { /* best-effort */ }
@@ -5651,24 +5651,27 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             return `- ${m.name}${roleLabel} — ${statusLabel}`;
         });
 
-        // Collect subtask entries (ID + file path + title) from the plans array.
-        // Only subtasks — NOT the feature card itself — so the list matches the
-        // feature file's Subtasks section. The lead needs the file path to tell
-        // a coder "Implement the plan at <path>" — a bare planId forces an API
-        // lookup, defeating the point of the enriched prompt.
-        const planEntries = plans
-            .filter(p => p.isSubtask)
-            .map(p => ({ planId: p.planId, absolutePath: p.absolutePath, topic: p.topic }))
-            .filter(e => e.planId);
+        // Extract the feature plan's file path from the plans array (the entry
+        // with isFeature: true). The lead reads this file for plan IDs, file
+        // paths, seat assignments, acceptance criteria, and scope constraints.
+        const featurePlan = plans.find(p => p.isFeature);
+        const featureFileLine = featurePlan?.absolutePath
+            ? `FEATURE FILE: ${featurePlan.absolutePath}. Read it — its Subtasks section has plan IDs and file paths; its Team Dispatch Instructions section has seat assignments, acceptance criteria, and scope constraints for each subtask. This is your single source of truth for dispatch and review.`
+            : 'FEATURE FILE: (not found in prompt). Read the feature plan file for plan IDs, seat assignments, and scope constraints.';
+
+        const portResolved = portLine.startsWith('Port is ');
+        const skipPortDirective = portResolved
+            ? ' Do NOT read .switchboard/api-server-port.txt (the port is above).'
+            : '';
+        const opener = `You are driving this feature through your team seats. Everything you need is below — the port, your team roster, and the FEATURE FILE line are all in this prompt.${skipPortDirective} Do NOT check your own terminal name — you dispatch TO named seats (listed above), and standing orders handle callbacks.`;
 
         const block = [
-            'You are driving this feature through your team seats. Everything you need is below — do not look anything up.',
+            opener,
             '',
             'YOUR TEAM:',
             ...rosterLines,
             '',
             `API: ${portLine}`,
-            'Your terminal name is in $SWITCHBOARD_TERMINAL.',
             'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
             '',
             'STAGING (one call per subtask):',
@@ -5679,22 +5682,26 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'FEATURE WATCH: Armed by the system (stopColumns: CODE REVIEWED). You will be nudged if you go idle with un-accepted subtasks. No action needed.',
             '',
+            featureFileLine,
+            '',
             'RULES:',
             '- Do NOT rewrite or edit plan files. The plan is the source of truth — read it, dispatch based on it, review against it, never modify its content.',
             '- Do NOT query kanban.db directly. The plan IDs are in your prompt; use the API for anything else.',
             '- Do NOT verify work before dispatching. The kanban column is the system\'s record, not a coder\'s claim.',
             '- Clear a terminal only when at rest (completion received AND next work goes elsewhere).',
+            '- The host auto-clears a terminal when a dispatch references a different planId than the terminal\'s last dispatched plan. This is mandatory for correctness — stale context degrades reasoning and induces hallucinated conflicts over multiple subtasks. Manual ptyClearTerminal is for the stand-down case only — a terminal you are putting away without dispatching new work to it. Clear at rest, always — the auto-clear enforces this at the system level; the manual clear enforces it for the stand-down path.',
+            '- clearBeforePrompt stays false on every dispatch — the host overrides it to true automatically when the plan changes. The caller\'s contract is unchanged.',
+            '- Every new plan dispatch gets a fresh context. The previous "same code" exception (keeping context when the next subtask edits the same code) is removed. Context is preserved only for same-plan resends (fix prompts), which carry the same planId.',
+            '- When a seat reports and its next work is a different plan, the host auto-clears on dispatch — no manual action needed. If standing the terminal down without new work, ptyClearTerminal it.',
             '- One subtask per terminal at a time. Use a second terminal for concurrency.',
-            '- Full protocol (escalation ladder, unattended mode, resting terminals, failure modes): .agents/protocols/terminal-coder-dispatch/SKILL.md',
+            '- Every finding cites a plan clause. Quote the section or line the diff violates. A defect you cannot cite is a question report, not a dispatch.',
+            '- Name the defect, never the mechanism. State what is wrong and which plan clause it breaks; do not tell the coder how to fix it. Where the plan itself names a mechanism, quote the plan verbatim.',
+            '- Never issue a git verb (commit, push, branch, merge) to a team seat. The head commits the team\'s work; coders never commit.',
+            '- You are unattended when no human is demonstrably reading. When you cannot tell, assume unattended.',
+            '- Unattended: never convert uncertainty into a stop. Record a question report to .switchboard/orchestrator/reports/ and continue in the same turn — recording is not asking, and does not end your turn.',
+            '- Subtask blocked after escalation: record blocked, leave the card, move to the next subtask.',
+            '- Anything irreversible (destructive git, pushing, deleting data or cards): stop and record. The only unattended action that blocks.',
         ];
-
-        if (planEntries.length > 0) {
-            block.push('', 'SUBTASKS:', ...planEntries.map(e => {
-                const rel = e.absolutePath ? path.relative(workspaceRoot, e.absolutePath) : e.absolutePath;
-                const title = e.topic ? ` (${e.topic})` : '';
-                return `- ${e.planId} → ${rel}${title}`;
-            }));
-        }
 
         return block.join('\n');
     }
@@ -5901,11 +5908,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const customPhoneSuffix = (mergedAddons.phoneAFriend && customApiPort)
                 ? `\n\n${PHONE_A_FRIEND_DIRECTIVE(customApiPort, role, customPhoneAFriendOriginTerminal, customPhoneAFriendDispatchId)}`
                 : '';
+            const customLivenessSuffix = (customApiPort > 0)
+                ? `\n\n${SWITCHBOARD_LIVENESS_DIRECTIVE(customApiPort)}`
+                : '';
             if (primaryPlan?.isFeature && mergedAddons.applyFeatureDirectives === true) {
                 const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive(), plans);
-                return `${prefix}${customBuilt}${customPhoneSuffix}`;
+                return `${prefix}${customBuilt}${customPhoneSuffix}${customLivenessSuffix}`;
             }
-            return `${customBuilt}${customPhoneSuffix}`;
+            return `${customBuilt}${customPhoneSuffix}${customLivenessSuffix}`;
         }
 
         // Dispatch-analysis: a read-only parallelism analysis pass dispatched on the
@@ -14321,7 +14331,8 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             const basename = path.basename(st.planFile);
             const topic = st.topic || basename;
             const column = this._normalizeLegacyKanbanColumn(st.kanbanColumn) || 'CREATED';
-            return `- [ ] [${topic}](../plans/${basename}) — **${column}**`;
+            const planId = st.planId ? ` — ID: ${st.planId}` : '';
+            return `- [ ] [${topic}](../plans/${basename}) — **${column}**${planId}`;
         });
         const subtaskSection = `<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->\n## Subtasks\n${subtaskLines.join('\n') || '- [ ] (no subtasks)'}\n<!-- END SUBTASKS -->`;
         let newContent: string;
