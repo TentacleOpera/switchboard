@@ -14,7 +14,13 @@ Make Switchboard's Linear writes attributable to the agent that made them: a com
 
 **And the objection that would have killed it is answered.** Linear's OAuth supports PKCE: `code_challenge` + `code_challenge_method=S256` on `/oauth/authorize`, `code_verifier` in the token exchange at `api.linear.app/oauth/token`, and `client_secret` omitted for public clients. A distributed extension cannot ship a secret; with PKCE it does not need one.
 
-**But there is prior art that must be understood before repeating it.** `extension.ts:1470-1478` is a live migration: *"Remove dead Stitch OAuth auth mode (shipped in prior releases). Reset any stale 'oauth' authMode to 'apiKey' and delete the dead accessToken secret."* Switchboard shipped an OAuth mode once and withdrew it, migrating users back to API keys. PKCE addresses the client-secret half of why that might have happened; it does not address redirect handling, refresh, or the two-host problem. **Establishing why Stitch OAuth was pulled is a prerequisite, not a curiosity** — if the cause was any of those, it recurs here identically.
+**The prior art is answered, and it changes the shape of this plan.** `extension.ts:1470-1478` migrates a stale `stitch.authMode` from `oauth` back to `apiKey` and deletes the dead token. The reason: **Google's OAuth tokens did not last beyond about two hours, so the operator had to re-authenticate every session** — strictly worse than a persistent key. That was a property of Google's OAuth, not of OAuth as a mechanism, so it does not transfer to Linear automatically. But it identifies the disqualifying condition precisely, and it is sharper than the client-secret question PKCE answers:
+
+> **Does Linear issue a durable refresh token that can be exchanged without user interaction?**
+
+This is disqualifying rather than inconvenient. `RemoteControlService` polls on `pingFrequencySeconds` (default 60) and the extension runs unattended for hours. An auth mode that needs interactive re-authentication on *any* cadence is incompatible with a background poller, and would make `actor=app` worse than the PAT no matter how good the attribution. Answer this before building anything.
+
+**And the operator's point generalises: if the whole benefit is attribution, there is a version that costs nothing.** `postManagedComment` (`LinearSyncService.ts:1444`) already exists with managed markers. A comment body prefixed with the seat — `**Review Lead** — completed …` — tells a human exactly which seat spoke, under the existing persistent key, with no OAuth flow, no callback, no refresh and no re-auth. What it does not give is a distinct author field and a per-lead avatar. That is cosmetic rather than functional, which makes the prefix the sensible first move and `actor=app` an upgrade contingent on the refresh answer.
 
 **The callback plumbing does not exist.** There is no `registerUriHandler` anywhere in the codebase, so the extension has no URI-handler path today. And the two hosts need different strategies: the extension can register a `vscode://` handler, while the standalone host has no such scheme and needs a loopback listener. `LocalApiServer` could host that callback and is loopback-bound — fine when the browser is on the same machine, and *not* fine in the tunnelled or thin-client case where the browser is elsewhere. That asymmetry is the real design work in this plan.
 
@@ -38,7 +44,8 @@ Every integration in this codebase authenticates as the operator, because every 
 
 Yes — four decisions.
 
-1. **Why was Stitch OAuth removed?** Blocking. If the cause was redirect or refresh complexity rather than the client secret, this plan inherits it and should be reconsidered rather than re-attempted. Recommendation: answer this from git history before any implementation.
+1. **Answered, and replaced by a sharper blocking question.** Stitch OAuth was withdrawn because Google's tokens expired in roughly two hours, forcing re-authentication every session — worse than a persistent key. The transferable question is therefore: **does Linear support non-interactive refresh for an unattended client?** Blocking. If it does not, this plan should be dropped in favour of the body-prefix approach below, because an unattended poller cannot depend on interactive auth.
+1b. **Ship the cheap version first.** Recommendation: **prefix the comment body with the seat name now**, under the existing token — it delivers the readable-attribution benefit immediately with no auth change, and it is the fallback if the refresh answer is bad. Treat `actor=app` as a later upgrade that adds a distinct author and avatar, not as the way to get attribution at all.
 2. **Redirect strategy per host.** Recommendation: `vscode://` URI handler for the extension; a short-lived loopback listener for the standalone host, spawned only for the duration of the flow rather than added to `LocalApiServer`'s permanent surface. Explicitly refuse the flow when the browser is not local (tunnelled or thin-client), with a message saying to authorize from the host machine — an OAuth redirect that cannot reach the listener is a hang, and a hang here looks like a broken integration.
 3. **Default posture.** Recommendation: **PAT stays the default; OAuth is opt-in.** The benefit is attribution quality, not capability, and making it the default would gate a nice-to-have behind an onboarding regression for ~4,000 installs.
 4. **Actor naming.** Recommendation: derive `createAsUser` from the seat's role and team (e.g. "Review Lead · fleet-2") rather than a per-lead configured string, so a new team needs no configuration. `displayIconUrl` can reuse the existing brand-icon assets.
@@ -54,7 +61,7 @@ Yes — four decisions.
 ### Complex / Risky
 
 - **Two hosts, two callbacks, and one of them can be remote.** Covered in decision 2; it is the part most likely to ship broken because it works on the developer's machine.
-- **Refresh and revocation.** A PAT never expires; an OAuth token does. Every call site currently assumes a static credential. Refresh must be single-flight and must not turn a transient 401 into a re-auth prompt loop — and a revoked app must fail with a clear "reauthorize" state rather than looking like a Linear outage.
+- **Refresh is the plan's viability condition, not a detail.** A PAT never expires; an OAuth token does, and every call site currently assumes a static credential. Beyond the mechanics — single-flight refresh, no prompt loop on a transient 401, a distinct reauthorize state versus a Linear outage — the question is whether refresh can happen at all without a human. This is exactly what sank the Stitch integration, and an unattended 60-second poller is a harsher test than anything Stitch faced.
 - **Attribution must not silently degrade.** If `createAsUser` is unsupported or the mode is misconfigured, writes will still succeed — as the app, or as the operator. A silent fallback means the operator believes comments are attributed when they are not. Fail loudly on the write path, or surface the actual mode per write.
 - **Mixed history.** Existing cards carry comments authored by the operator; new ones will be authored by leads. Readers will see the seam. Worth stating in the release note rather than leaving people to wonder whether their old comments were rewritten.
 - **`createAsUser` semantics are documented from a single source.** The field's exact behaviour — whether it creates a display-only actor, and how it interacts with mentions and notifications — was reported to this plan's author rather than verified against Linear's API reference. Verify before building the attribution layer on it.
@@ -93,7 +100,8 @@ Key risks: the codebase already shipped and withdrew an OAuth mode, and the caus
 
 ## Proposed Changes
 
-1. **A PKCE OAuth flow** with `actor=app`: challenge/verifier, `state` validation, token exchange without a client secret.
+0. **First, and independent of everything else: prefix managed comment bodies with the seat name.** No auth change, no flow, works today, and it is the fallback if the refresh answer below is bad.
+1. **A PKCE OAuth flow** with `actor=app`, only if non-interactive refresh is confirmed: challenge/verifier, `state` validation, token exchange without a client secret.
 2. **Per-host callback:** `vscode://` URI handler for the extension; a transient loopback listener for the standalone host, closed after exchange; explicit refusal when the browser is not local.
 3. **Per-lead attribution:** `createAsUser` and `displayIconUrl` derived from the seat's role and team, threaded through `postManagedComment` and issue creation.
 4. **Refresh and revocation:** single-flight refresh, a distinct reauthorize-required state, no prompt loops.
@@ -107,7 +115,8 @@ Additive and opt-in. No behaviour changes until an app is authorized, and return
 
 ## Verification Plan
 
-- **Stitch precedent answered:** the plan does not start until decision 1 is resolved in writing.
+- **Body prefix, first and separately:** assert a managed comment names its seat, under the existing token, with no auth change — the deliverable that does not depend on any OAuth answer.
+- **Non-interactive refresh, before any OAuth work:** run an authorized app past its access-token lifetime with no human present. Assert the poller keeps working. If it cannot, the OAuth half of this plan is dropped, not worked around — that is the Stitch failure repeating.
 - **PKCE end to end:** authorize, exchange without a client secret, and assert a working token. Assert the verifier never appears in logs and `state` mismatch is rejected.
 - **Per-lead attribution:** post comments from two different seats; assert Linear shows two distinct actors with the expected names and icons, and that neither appears as the operator.
 - **No seat consumed:** assert workspace seat count is unchanged after authorizing.
@@ -119,6 +128,7 @@ Additive and opt-in. No behaviour changes until an app is authorized, and return
 
 ## Outstanding Questions
 
-- Why was Stitch OAuth withdrawn? Until answered, this plan is a repeat of an experiment that already failed once.
+- **Resolved:** Stitch OAuth was withdrawn because Google tokens expired in ~2 hours, requiring re-authentication every session. A Google property, not an OAuth one — but it defines the blocking question for Linear.
+- What is Linear's access-token lifetime, does it issue refresh tokens, and do those refresh tokens themselves expire? The third part is what actually killed Stitch-style integrations elsewhere.
 - Does `createAsUser` produce a mentionable/notifiable actor, or a display-only label? It changes whether a lead can be @-mentioned in a reply.
 - Should Notion and ClickUp follow if this works, or is Linear's app-actor model unusual enough that the pattern does not transfer?
