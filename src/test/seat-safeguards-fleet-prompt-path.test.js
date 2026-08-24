@@ -643,7 +643,7 @@ test('each of the 5 uncomposed dispatch call sites is enumerated and unmarked', 
     const { uncomposed } = classifyDispatchCallSites();
     assert.strictEqual(
         uncomposed.length, 5,
-        `Expected 5 uncomposed dispatch call sites — dispatchCustomPromptToRole, the orchestrator kickoff, ` +
+        `Expected 5 uncomposed dispatch call sites — dispatchCustomPromptToRole, Mission Control kickoff, ` +
         `the pair-programming send, _tryFleetDeliveryForRole and the Airlock patch hand-off. ` +
         `Found ${uncomposed.length} at lines [${uncomposed.join(', ')}].`
     );
@@ -1006,7 +1006,7 @@ test('BEHAVIOUR: ensureDispatchProtocolDirectives attaches both completion and r
     const raw = 'Please write the code according to the plan.';
     const formatted = ensureDispatchProtocolDirectives(raw);
     assert.ok(formatted.includes('COMPLETION REPORT:'), 'must attach completion directive');
-    assert.ok(formatted.includes('ORCHESTRATOR REPORT:'), 'must attach orchestrator report directive');
+    assert.ok(formatted.includes('MISSION CONTROL REPORT:'), 'must attach Mission Control report directive');
     // The completion directive body must name the API POST as the completion
     // signal — the mtime-based file-watcher phrasing is gone. The sentinel
     // alone is not enough: a paraphrased body that drops the POST leaves the
@@ -1018,29 +1018,29 @@ test('BEHAVIOUR: ensureDispatchProtocolDirectives attaches both completion and r
     assert.strictEqual(doubleFormatted, formatted, 'ensureDispatchProtocolDirectives must be idempotent');
 });
 
-test('BEHAVIOUR: ensureDispatchProtocolDirectives suppresses orchestrator report when orchestratorActive=false', () => {
+test('BEHAVIOUR: ensureDispatchProtocolDirectives suppresses Mission Control report when missionControlActive=false', () => {
     const raw = 'Please write the code according to the plan.';
     const formatted = ensureDispatchProtocolDirectives(raw, false);
     assert.ok(formatted.includes('COMPLETION REPORT:'), 'must still attach completion directive');
-    assert.ok(!formatted.includes('ORCHESTRATOR REPORT:'), 'must NOT attach orchestrator report directive when orchestratorActive=false');
+    assert.ok(!formatted.includes('MISSION CONTROL REPORT:'), 'must NOT attach Mission Control report directive when missionControlActive=false');
 
     // Default (no flag) still attaches both
     const defaultFormatted = ensureDispatchProtocolDirectives(raw);
-    assert.ok(defaultFormatted.includes('ORCHESTRATOR REPORT:'), 'must attach orchestrator report directive by default');
+    assert.ok(defaultFormatted.includes('MISSION CONTROL REPORT:'), 'must attach Mission Control report directive by default');
 });
 
 test('TaskViewerProvider _ptyHostVerb handles dispatch payload and folded attribution', () => {
     assert.ok(
-        TASK_VIEWER_SRC.includes('ensureDispatchProtocolDirectives(payload.data, orchestratorActive)'),
+        TASK_VIEWER_SRC.includes('ensureDispatchProtocolDirectives(payload.data, missionControlActive)'),
         'TaskViewerProvider must apply ensureDispatchProtocolDirectives when dispatch payload is present, '
-        + 'gated on the live orchestrator state'
+        + 'gated on the live Mission Control state'
     );
     assert.ok(
         TASK_VIEWER_SRC.includes("handleServiceVerb('attributePastedPrompt'"),
         'TaskViewerProvider must invoke attributePastedPrompt for folded attribution'
     );
     assert.ok(
-        TASK_VIEWER_SRC.includes('directivesAttached = orchestratorActive')
+        TASK_VIEWER_SRC.includes('directivesAttached = missionControlActive')
         && TASK_VIEWER_SRC.includes("? ['COMPLETION REPORT', 'ORCHESTRATOR REPORT']")
         && TASK_VIEWER_SRC.includes(": ['COMPLETION REPORT']"),
         'TaskViewerProvider must record directivesAttached on dispatch, and the record must track the '
@@ -1054,9 +1054,9 @@ test('TaskViewerProvider _ptyHostVerb handles dispatch payload and folded attrib
 
 test('standalone bootstrap handlePtyVerb and deliverPrompt handle dispatch payload', () => {
     assert.ok(
-        BOOTSTRAP_SRC.includes('ensureDispatchProtocolDirectives(out, orchestratorActive)'),
+        BOOTSTRAP_SRC.includes('ensureDispatchProtocolDirectives(out, missionControlActive)'),
         'bootstrap deliverPrompt must apply ensureDispatchProtocolDirectives on dispatch, '
-        + 'gated on the live orchestrator state'
+        + 'gated on the live Mission Control state'
     );
     assert.ok(
         BOOTSTRAP_SRC.includes("kanbanProvider.handleServiceVerb('attributePastedPrompt'"),

@@ -134,7 +134,7 @@ If you are remote:
       "from": "<your-agent-name>"
     }'
   ```
-  If your team has NO reviewer seat, do NOT move the card. Write a finished report to `.switchboard/orchestrator/reports/` naming the feature and its planId, and stop. The card stays where it is.
+  If your team has NO reviewer seat, do NOT move the card. Write a finished report to `.switchboard/mission-control/reports/` naming the feature and its planId, and stop. The card stays where it is.
 
 ### Step 5: Pull Next Feature (Queue Next)
 When the reviewer reports that the feature passed review:

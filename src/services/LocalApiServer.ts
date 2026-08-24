@@ -523,42 +523,42 @@ interface LocalApiServerOptions {
      */
     getFleetOrdersDatabase?: () => Promise<any | null | undefined>;
     /**
-     * Adopt the CALLING session as the orchestrator: record the seat and return the
+     * Adopt the CALLING session as Mission Control: record the seat and return the
      * kickoff prompt instead of injecting it into a terminal the host created.
-     * Reached by `POST /orchestration/adopt` from the /switchboard launcher.
+     * Reached by `POST /mission-control/adopt` from the /switchboard launcher.
      * Optional — absent in headless/test harnesses (returns 503).
      */
-    orchestrationAdopt?: (workspaceRoot?: string, terminalName?: string) => Promise<any>;
+    missionControlAdopt?: (workspaceRoot?: string, terminalName?: string) => Promise<any>;
     /**
-     * Arm the unattended orchestration engine — the same path the AUTOMATION tab
-     * "Start orchestrator" button takes (terminal + kickoff + autoban clock).
-     * Reached by `POST /orchestration/start` from the /switchboard-manage skill
+     * Arm the unattended Mission Control engine — the same path the AUTOMATION tab
+     * "Start Mission Control" button takes (terminal + kickoff + autoban clock).
+     * Reached by `POST /mission-control/start` from the /switchboard-manage skill
      * when the user explicitly asks to arm automation. Optional — absent in
      * headless/test harnesses (returns 503).
      */
-    orchestrationStart?: (workspaceRoot?: string) => Promise<{ success: boolean; mode?: string; prompt?: string; error?: string }>;
+    missionControlStart?: (workspaceRoot?: string) => Promise<{ success: boolean; mode?: string; prompt?: string; error?: string }>;
     /**
-     * Disarm the orchestrator — sets the automation enabled flag to false,
+     * Disarm Mission Control — sets the automation enabled flag to false,
      * persists state, and broadcasts. Does NOT stop the autoban engine.
-     * Reached by `POST /orchestration/stop`.
+     * Reached by `POST /mission-control/stop`.
      * Optional — absent in headless/test harnesses (returns 503).
      */
-    orchestrationStop?: () => Promise<void>;
+    missionControlStop?: () => Promise<void>;
     /**
-     * Confirm (arm) an orchestration session after the pre-flight interview.
-     * The arming half moved out of startOrchestratorFromKanban: this verifies
-     * `.switchboard/orchestrator/session.md` exists, then arms the single
+     * Confirm (arm) an Mission Control session after the pre-flight interview.
+     * The arming half moved out of startMissionControlFromKanban: this verifies
+     * `.switchboard/mission-control/session.md` exists, then arms the single
      * ON/OFF flag (`autobanState.enabled`) in `agent-managed` mode.
-     * Reached by `POST /orchestration/confirm` — the only path that arms.
+     * Reached by `POST /mission-control/confirm` — the only path that arms.
      * Optional — absent in headless/test harnesses (returns 503).
      */
-    orchestrationConfirm?: (workspaceRoot?: string) => Promise<{ success: boolean; sessionFile?: string; error?: string; status?: number }>;
+    missionControlConfirm?: (workspaceRoot?: string) => Promise<{ success: boolean; sessionFile?: string; error?: string; status?: number }>;
     /**
-     * Hand off orchestration to a coding lead and exit.
-     * Reached by `POST /orchestration/handoff`.
+     * Hand off Mission Control to a coding lead and exit.
+     * Reached by `POST /mission-control/handoff`.
      * Optional — absent in headless/test harnesses (returns 503).
      */
-    orchestrationHandoff?: (args: {
+    missionControlHandoff?: (args: {
         workspaceRoot?: string;
         headTerminal: string;
         stagedCount?: number;
@@ -2260,7 +2260,7 @@ export class LocalApiServer {
                     // what handles it (re-stage to a stronger seat, or park +
                     // notifyOperator). Firing the completion callbacks on a
                     // failure would tell the lead "seat X finished its turn on
-                    // <plan>" and write a `kind: finished` orchestrator report
+                    // <plan>" and write a `kind: finished` Mission Control report
                     // for work that failed — the lead would accept and advance a
                     // card nobody completed. `completed` is the only outcome the
                     // TurnEndInfo contract has for this path, so the fix is the
@@ -3635,7 +3635,7 @@ export class LocalApiServer {
      * POST /phone-a-friend/done — completion signal from the Phone-a-Friend agent.
      * Body: { target: string }. The host advances the per-target sequential queue.
      * Returns 200 on ack, 400 on bad body, 503 when no callback is wired.
-     * Callable by the orchestrator over HTTP to force-advance a wedged queue.
+     * Callable by Mission Control over HTTP to force-advance a wedged queue.
      */
     private async _handlePhoneAFriendDone(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -4130,7 +4130,7 @@ export class LocalApiServer {
      * Relay-then-act ordering: the completion report is sent to the lead BEFORE
      * the clear-and-dispatch steps, so the lead always sees the report even if
      * the dispatch step fails. The relay also makes the completion report
-     * interceptable by other consumers (orchestrator, future mobile
+     * interceptable by other consumers (Mission Control, future mobile
      * monitoring). If the POST itself fails, the standing order tells the
      * coder to fall back to reporting to the head directly via ptySendPrompt.
      *
@@ -4742,20 +4742,20 @@ export class LocalApiServer {
     }
 
     /**
-     * POST /orchestration/adopt — the caller IS the orchestrator. Body:
+     * POST /mission-control/adopt — the caller IS Mission Control. Body:
      * { workspaceRoot?, terminalName? }. Returns { mode, prompt, seat, liveDelivery, note? }.
-     * Seats no terminal and does NOT arm — arming stays POST /orchestration/confirm.
+     * Seats no terminal and does NOT arm — arming stays POST /mission-control/confirm.
      */
-    private async _handleOrchestrationAdopt(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    private async _handleMissionControlAdopt(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);
             return;
         }
 
-        const orchestrationAdopt = this._options.orchestrationAdopt;
-        if (!orchestrationAdopt) {
+        const missionControlAdopt = this._options.missionControlAdopt;
+        if (!missionControlAdopt) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Orchestration adopt not available' }));
+            res.end(JSON.stringify({ error: 'Mission Control adopt not available' }));
             return;
         }
 
@@ -4763,49 +4763,49 @@ export class LocalApiServer {
             const body = await this._parseJsonBody(req);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const terminalName = typeof body?.terminalName === 'string' ? body.terminalName.trim() : undefined;
-            const result = await orchestrationAdopt(workspaceRoot, terminalName);
+            const result = await missionControlAdopt(workspaceRoot, terminalName);
             if (result && result.success !== false) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result));
             } else {
                 res.writeHead(result?.status || 400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: result?.error || 'orchestration adopt failed' }));
+                res.end(JSON.stringify({ success: false, error: result?.error || 'Mission Control adopt failed' }));
             }
         } catch (err) {
-            console.error('[LocalApiServer] orchestrationAdopt error:', err);
+            console.error('[LocalApiServer] missionControlAdopt error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'orchestration adopt failed' }));
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'Mission Control adopt failed' }));
         }
     }
 
     /**
-     * POST /orchestration/start — seat the orchestrator into a pre-flight interview.
-     * Calls startOrchestratorFromKanban (the same path the AUTOMATION tab button
+     * POST /mission-control/start — seat Mission Control into a pre-flight interview.
+     * Calls startMissionControlFromKanban (the same path the AUTOMATION tab button
      * takes). Body: { workspaceRoot? }. Reached by the /switchboard-manage skill
      * when the user explicitly asks to start automation — never run on entry.
      *
-     * NOTE: this no longer arms. It seats the orchestrator terminal and delivers
-     * the pre-flight prompt; arming is `POST /orchestration/confirm`, called by
+     * NOTE: this no longer arms. It seats Mission Control terminal and delivers
+     * the pre-flight prompt; arming is `POST /mission-control/confirm`, called by
      * the agent after the user answers the interview. A script reading the
      * response message is the only signal it has that the semantics changed.
      */
-    private async _handleOrchestrationStart(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    private async _handleMissionControlStart(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);
             return;
         }
 
-        const orchestrationStart = this._options.orchestrationStart;
-        if (!orchestrationStart) {
+        const missionControlStart = this._options.missionControlStart;
+        if (!missionControlStart) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Orchestration start not available' }));
+            res.end(JSON.stringify({ error: 'Mission Control start not available' }));
             return;
         }
 
         try {
             const body = await this._parseJsonBody(req);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
-            const result = await orchestrationStart(workspaceRoot);
+            const result = await missionControlStart(workspaceRoot);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             // The message is a script caller's only semantic signal, so it MUST
             // match what actually happened — not a fixed string. Three cases:
@@ -4814,7 +4814,7 @@ export class LocalApiServer {
             //     prompt is returned for the caller to run
             //   - terminal (default): the existing verbatim string — a script
             //     scanning for /awaiting confirmation/i (see
-            //     orchestrator-tick-and-reports-contract.test.js) still matches.
+            //     mission-control-tick-and-reports-contract.test.js) still matches.
             // Spread the result FIRST so its `success` (true/false) and `mode`
             // own those fields, then override `message` with the computed string
             // — a result-supplied message (none today) would be replaced, which
@@ -4824,45 +4824,45 @@ export class LocalApiServer {
             // TS2783 (duplicate key) AND silently let result.success override a
             // key the reader sees first — spreading first is unambiguous.
             const message = result && result.success === false
-                ? 'Orchestration start failed: ' + (result.error || 'unknown error') + '. No terminal was seated.'
+                ? 'Mission Control start failed: ' + (result.error || 'unknown error') + '. No terminal was seated.'
                 : result && result.mode === 'clipboard'
-                    ? 'No terminal created — clipboard mode. The /switchboard launcher prompt is returned for the caller to run; no agent was seated. Call POST /orchestration/confirm after the user answers to arm.'
-                    : 'Orchestrator seated and awaiting confirmation — pre-flight interview delivered. Call POST /orchestration/confirm after the user answers to arm.';
+                    ? 'No terminal created — clipboard mode. The /switchboard launcher prompt is returned for the caller to run; no agent was seated. Call POST /mission-control/confirm after the user answers to arm.'
+                    : 'Orchestrator seated and awaiting confirmation — pre-flight interview delivered. Call POST /mission-control/confirm after the user answers to arm.';
             res.end(JSON.stringify({
                 ...(result || { success: true }),
                 message
             }));
         } catch (err) {
-            console.error('[LocalApiServer] orchestrationStart error:', err);
+            console.error('[LocalApiServer] missionControlStart error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'orchestration start failed' }));
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'Mission Control start failed' }));
         }
     }
 
     /**
-     * POST /orchestration/confirm — arm an orchestration session after the
-     * pre-flight interview. The arming half moved out of startOrchestratorFromKanban:
-     * this verifies `.switchboard/orchestrator/session.md` exists, then arms the
+     * POST /mission-control/confirm — arm an Mission Control session after the
+     * pre-flight interview. The arming half moved out of startMissionControlFromKanban:
+     * this verifies `.switchboard/mission-control/session.md` exists, then arms the
      * single ON/OFF flag (`autobanState.enabled`) in `agent-managed` mode.
-     * Body: { workspaceRoot? }. Mirrors _handleOrchestrationStart line for line.
+     * Body: { workspaceRoot? }. Mirrors _handleMissionControlStart line for line.
      */
-    private async _handleOrchestrationConfirm(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    private async _handleMissionControlConfirm(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);
             return;
         }
 
-        const orchestrationConfirm = this._options.orchestrationConfirm;
-        if (!orchestrationConfirm) {
+        const missionControlConfirm = this._options.missionControlConfirm;
+        if (!missionControlConfirm) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Orchestration confirm not available' }));
+            res.end(JSON.stringify({ error: 'Mission Control confirm not available' }));
             return;
         }
 
         try {
             const body = await this._parseJsonBody(req);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
-            const result = await orchestrationConfirm(workspaceRoot);
+            const result = await missionControlConfirm(workspaceRoot);
             if (result.success) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, sessionFile: result.sessionFile }));
@@ -4871,27 +4871,27 @@ export class LocalApiServer {
                 res.end(JSON.stringify({ success: false, error: result.error || 'confirm failed' }));
             }
         } catch (err) {
-            console.error('[LocalApiServer] orchestrationConfirm error:', err);
+            console.error('[LocalApiServer] missionControlConfirm error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'orchestration confirm failed' }));
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'Mission Control confirm failed' }));
         }
     }
 
     /**
-     * POST /orchestration/handoff — hand off orchestration to a coding lead and exit.
+     * POST /mission-control/handoff — hand off Mission Control to a coding lead and exit.
      * Body: { workspaceRoot?, headTerminal, stagedCount, firstCardPlanId, summary }.
-     * Reached by the orchestrator agent when one team is enough.
+     * Reached by Mission Control agent when one team is enough.
      */
-    private async _handleOrchestrationHandoff(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    private async _handleMissionControlHandoff(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);
             return;
         }
 
-        const orchestrationHandoff = this._options.orchestrationHandoff;
-        if (!orchestrationHandoff) {
+        const missionControlHandoff = this._options.missionControlHandoff;
+        if (!missionControlHandoff) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Orchestration handoff not available' }));
+            res.end(JSON.stringify({ error: 'Mission Control handoff not available' }));
             return;
         }
 
@@ -4903,7 +4903,7 @@ export class LocalApiServer {
             const firstCardPlanId = body?.firstCardPlanId ? String(body.firstCardPlanId).trim() : undefined;
             const summary = String(body?.summary || '').trim();
 
-            const result = await orchestrationHandoff({
+            const result = await missionControlHandoff({
                 workspaceRoot,
                 headTerminal,
                 stagedCount,
@@ -4914,38 +4914,38 @@ export class LocalApiServer {
             res.writeHead(status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result));
         } catch (err) {
-            console.error('[LocalApiServer] orchestrationHandoff error:', err);
+            console.error('[LocalApiServer] missionControlHandoff error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'orchestration handoff failed' }));
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'Mission Control handoff failed' }));
         }
     }
 
     /**
-     * POST /orchestration/stop — disarm the orchestrator.
-     * Calls stopOrchestratorFromKanban (sets enabled=false,
+     * POST /mission-control/stop — disarm Mission Control.
+     * Calls stopMissionControlFromKanban (sets enabled=false,
      * persists state, broadcasts). Does NOT stop the autoban engine. No body required.
      */
-    private async _handleOrchestrationStop(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    private async _handleMissionControlStop(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);
             return;
         }
 
-        const orchestrationStop = this._options.orchestrationStop;
-        if (!orchestrationStop) {
+        const missionControlStop = this._options.missionControlStop;
+        if (!missionControlStop) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Orchestration stop not available' }));
+            res.end(JSON.stringify({ error: 'Mission Control stop not available' }));
             return;
         }
 
         try {
-            await orchestrationStop();
+            await missionControlStop();
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, message: 'Oversight agent disarmed' }));
         } catch (err) {
-            console.error('[LocalApiServer] orchestrationStop error:', err);
+            console.error('[LocalApiServer] missionControlStop error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'orchestration stop failed' }));
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'Mission Control stop failed' }));
         }
     }
 
@@ -5070,7 +5070,7 @@ export class LocalApiServer {
         });
     }
 
-    private async _handleGetOrchestratorSessionLog(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    private async _handleGetMissionControlSessionLog(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
             const root = this._options.workspaceRoot;
             // Prefer session.md (the current session file); fall back to the
@@ -5078,12 +5078,12 @@ export class LocalApiServer {
             // name, response shape (markdown string, '' when absent) are
             // unchanged — the fallback IS the migration for installs that never
             // had session.md.
-            const sessionPath = path.join(root, '.switchboard', 'orchestrator', 'session.md');
+            const sessionPath = path.join(root, '.switchboard', 'mission-control', 'session.md');
             try {
                 const content = await fs.readFile(sessionPath, 'utf8');
                 return content;
             } catch { /* fall through to legacy */ }
-            const legacyPath = path.join(root, '.switchboard', 'orchestrator', 'session-log.md');
+            const legacyPath = path.join(root, '.switchboard', 'mission-control', 'session-log.md');
             try {
                 const content = await fs.readFile(legacyPath, 'utf8');
                 return content;
@@ -6390,16 +6390,16 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/taskViewer/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/taskViewer/verb/'.length));
                 await this._handleTaskViewerVerb(verb, req, res);
-            } else if (pathname === '/orchestration/adopt' && req.method === 'POST') {
-                await this._handleOrchestrationAdopt(req, res);
-            } else if (pathname === '/orchestration/start' && req.method === 'POST') {
-                await this._handleOrchestrationStart(req, res);
-            } else if (pathname === '/orchestration/confirm' && req.method === 'POST') {
-                await this._handleOrchestrationConfirm(req, res);
-            } else if (pathname === '/orchestration/handoff' && req.method === 'POST') {
-                await this._handleOrchestrationHandoff(req, res);
-            } else if (pathname === '/orchestration/stop' && req.method === 'POST') {
-                await this._handleOrchestrationStop(req, res);
+            } else if (pathname === '/mission-control/adopt' && req.method === 'POST') {
+                await this._handleMissionControlAdopt(req, res);
+            } else if (pathname === '/mission-control/start' && req.method === 'POST') {
+                await this._handleMissionControlStart(req, res);
+            } else if (pathname === '/mission-control/confirm' && req.method === 'POST') {
+                await this._handleMissionControlConfirm(req, res);
+            } else if (pathname === '/mission-control/handoff' && req.method === 'POST') {
+                await this._handleMissionControlHandoff(req, res);
+            } else if (pathname === '/mission-control/stop' && req.method === 'POST') {
+                await this._handleMissionControlStop(req, res);
             } else if (pathname === '/kanban/plans/import' && req.method === 'POST') {
                 await this._handleImportPlans(req, res);
             } else if (pathname === '/kanban/plans/project' && req.method === 'PUT') {
@@ -6454,8 +6454,8 @@ export class LocalApiServer {
                 const parts = pathname.split('/');
                 const worktreeId = parts[2]; // /worktree/<worktreeId>/diff
                 await this._handleGetWorktreeDiff(req, res, worktreeId);
-            } else if (pathname === '/orchestrator/session-log' && req.method === 'GET') {
-                await this._handleGetOrchestratorSessionLog(req, res);
+            } else if (pathname === '/mission-control/session-log' && req.method === 'GET') {
+                await this._handleGetMissionControlSessionLog(req, res);
             } else if (pathname === '/catalog' && req.method === 'GET') {
                 await this._handleGetCatalog(req, res);
             } else if ((pathname === '/' || pathname === '/index.html') && req.method === 'GET') {
@@ -6497,6 +6497,8 @@ export class LocalApiServer {
                 await this._handleServePanelById('terminals', req, res);
             } else if ((pathname === '/agent-control' || pathname === '/agent-control.html') && req.method === 'GET') {
                 await this._handleServePanelById('agent-control', req, res);
+            } else if ((pathname === '/mission-control' || pathname === '/mission-control.html') && req.method === 'GET') {
+                await this._handleServePanelById('mission-control', req, res);
             } else if (pathname === '/design/asset' && req.method === 'GET') {
                 await this._handleDesignAsset(req, res);
             } else if (pathname.startsWith('/static/') && req.method === 'GET') {

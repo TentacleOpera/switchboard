@@ -10,7 +10,7 @@
  *
  *  - Git only parses trailers in the message's FINAL paragraph. A clause that
  *    says "after the subject line" without demanding a blank line produces
- *    commits whose markers are ordinary body text; the orchestrator's
+ *    commits whose markers are ordinary body text; Mission Control's
  *    `git log --format='%(trailers:key=Switchboard-Stage,valueonly)'` returns
  *    EMPTY (verified against git 2.50.1). Total, silent loss of the signal.
  *  - `dontCommit` is a key in GIT_COMMIT_CLAUSES, so a `commit !== 'notSpecified'`
@@ -124,7 +124,7 @@ test('an unmapped role yields undefined — no default, no "unknown" sentinel', 
 test('every role holding a commit strategy in KanbanProvider has a stage', () => {
     // gitCommitStrategyByRole resolves these from role config rather than
     // hardcoding 'notSpecified'; each is therefore able to commit, and a
-    // commit with no stage is the "orchestrator still has to infer it" hole.
+    // commit with no stage is the "Mission Control still has to infer it" hole.
     const block = KANBAN_PROVIDER_SRC.slice(
         KANBAN_PROVIDER_SRC.indexOf('gitCommitStrategyByRole: {'),
         KANBAN_PROVIDER_SRC.indexOf('gitPushStrategyByRole: {')

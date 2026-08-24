@@ -170,12 +170,12 @@ export interface PromptBuilderOptions {
     /** Whether advanced regression analysis block is appended (reviewer role). */
     advancedReviewerEnabled?: boolean;
     /**
-     * When false, the ORCHESTRATOR_REPORT_DIRECTIVE is suppressed (no orchestrator
+     * When false, the MISSION_CONTROL_REPORT_DIRECTIVE is suppressed (no Mission Control
      * is running to consume the reports). Defaults to true (backward-compatible:
      * callers that don't pass the flag get the current behavior). The
      * COMPLETION_REPORT_DIRECTIVE is always appended regardless of this flag.
      */
-    orchestratorActive?: boolean;
+    missionControlActive?: boolean;
     /** When true, replaces theatrical reviewer voice with terse bullet-point findings. */
     reviewerConciseModeEnabled?: boolean;
     /** When true, the work has passed the mechanical pre-check gate (compile + diff coverage)
@@ -698,7 +698,7 @@ export function buildGitPolicyBlock(opts: {
     // in the message's final paragraph. Verified against git 2.50.1 — a message
     // whose trailer lines follow the subject with no blank line returns EMPTY
     // from `git log --format='%(trailers:key=Switchboard-Stage,valueonly)'`,
-    // which is the exact query the orchestrator skill runs. Instructing the
+    // which is the exact query Mission Control skill runs. Instructing the
     // agent to put the trailers "after the subject line" therefore produces
     // commits that carry the markers as ordinary body text and read as
     // unmarked — a silent, total loss of the signal this feature exists to
@@ -1065,14 +1065,14 @@ export function ensureCompletionDirective(text: string): string {
     return text;
 }
 
-// ORCHESTRATOR_REPORT_DIRECTIVE is a sibling of CODING_COMPLETION_REPORT_DIRECTIVE,
+// MISSION_CONTROL_REPORT_DIRECTIVE is a sibling of CODING_COMPLETION_REPORT_DIRECTIVE,
 // NOT folded into it — the completion directive's text is load-bearing for
 // completion detection and asserted elsewhere. This directive gives agents a
 // file-based reply channel for mid-work updates (finished, blocked, question,
-// status) that works when ptySendPrompt cannot reach the orchestrator. It is
+// status) that works when ptySendPrompt cannot reach Mission Control. It is
 // IN ADDITION TO, never INSTEAD OF, the completion POST (POST /kanban/queue/done) —
 // an agent that reads it as a replacement breaks completion detection for every card.
-export const ORCHESTRATOR_REPORT_DIRECTIVE = `ORCHESTRATOR REPORT: Post a report file to .switchboard/orchestrator/reports/ when you finish, when you are blocked, when you have a question, and when asked for status. Format: a markdown file named report-<UTC timestamp>-<kind>-<5 digits>.md with frontmatter:
+export const MISSION_CONTROL_REPORT_DIRECTIVE = `MISSION CONTROL REPORT: Post a report file to .switchboard/mission-control/reports/ when you finish, when you are blocked, when you have a question, and when asked for status. Format: a markdown file named report-<UTC timestamp>-<kind>-<5 digits>.md with frontmatter:
 ---
 from: <your seat name>
 kind: finished | blocked | question | status
@@ -1083,14 +1083,14 @@ created: <UTC timestamp>
 This is IN ADDITION TO, never INSTEAD OF, the completion POST (POST /kanban/queue/done) — the completion POST is the signal that clears your card. Do NOT skip the completion POST.`;
 
 /**
- * Idempotent report-directive guard. Appends ORCHESTRATOR_REPORT_DIRECTIVE to
- * `text` only if the directive's sentinel (`ORCHESTRATOR REPORT:`) is not
+ * Idempotent report-directive guard. Appends MISSION_CONTROL_REPORT_DIRECTIVE to
+ * `text` only if the directive's sentinel (`MISSION CONTROL REPORT:`) is not
  * already present, so the directive is never double-appended. Travels
  * alongside ensureCompletionDirective at every call site.
  */
-export function ensureOrchestratorReportDirective(text: string): string {
-    if (!text.includes('ORCHESTRATOR REPORT:')) {
-        return text + '\n\n' + ORCHESTRATOR_REPORT_DIRECTIVE;
+export function ensureMissionControlReportDirective(text: string): string {
+    if (!text.includes('MISSION CONTROL REPORT:')) {
+        return text + '\n\n' + MISSION_CONTROL_REPORT_DIRECTIVE;
     }
     return text;
 }
@@ -1100,12 +1100,12 @@ export function ensureOrchestratorReportDirective(text: string): string {
  * Idempotent — each member guards on its own sentinel. Add new dispatch-protocol
  * directives HERE, never at a call site.
  */
-export function ensureDispatchProtocolDirectives(text: string, orchestratorActive = true): string {
+export function ensureDispatchProtocolDirectives(text: string, missionControlActive = true): string {
     const withCompletion = ensureCompletionDirective(text);
-    if (!orchestratorActive) {
+    if (!missionControlActive) {
         return withCompletion;
     }
-    return ensureOrchestratorReportDirective(withCompletion);
+    return ensureMissionControlReportDirective(withCompletion);
 }
 
 /**
@@ -1471,13 +1471,13 @@ export const RETIRED_WORKFLOW_PATH_MAP: Record<string, string> = {
     '.agents/workflows/improve-plan.md': DEFAULT_PLANNER_WORKFLOW,
     '.agents/workflows/improve-feature.md': DEFAULT_FEATURE_PLANNER_WORKFLOW,
     '.agents/workflows/accuracy.md': '.agents/protocols/accuracy/SKILL.md',
-    '.agents/workflows/switchboard-orchestrator.md': '.agents/protocols/switchboard-orchestrator/SKILL.md',
+    '.agents/workflows/switchboard-orchestrator.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
     // Persisted .agents/skills/ paths from the v1 migration → normalized to the
     // protocol move at runtime so users who already migrated don't get dead refs.
     '.agents/skills/improve-plan/SKILL.md': '.agents/protocols/improve-plan/SKILL.md',
     '.agents/skills/improve-feature/SKILL.md': '.agents/protocols/improve-feature/SKILL.md',
     '.agents/skills/accuracy/SKILL.md': '.agents/protocols/accuracy/SKILL.md',
-    '.agents/skills/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-orchestrator/SKILL.md',
+    '.agents/skills/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
     // Protocols briefly lived under `.switchboard/protocols/` before that destination
     // was found to be unshippable (`.vscodeignore` excludes `.switchboard/**`, so the
     // files never reach a user workspace). A dev build sharing the published version
@@ -1486,7 +1486,10 @@ export const RETIRED_WORKFLOW_PATH_MAP: Record<string, string> = {
     '.switchboard/protocols/improve-plan/SKILL.md': '.agents/protocols/improve-plan/SKILL.md',
     '.switchboard/protocols/improve-feature/SKILL.md': '.agents/protocols/improve-feature/SKILL.md',
     '.switchboard/protocols/accuracy/SKILL.md': '.agents/protocols/accuracy/SKILL.md',
-    '.switchboard/protocols/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-orchestrator/SKILL.md',
+    '.switchboard/protocols/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
+    // Protocol directory renamed from switchboard-orchestrator → switchboard-mission-control.
+    // The old protocol path is a stale ref after the rename; normalize it to the new path.
+    '.agents/protocols/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
 };
 
 /** Rewrite a retired relocated workflow path to its new skills path. Any other
@@ -1511,15 +1514,15 @@ const CODE_TOUCHING_ROLES = new Set(['planner', 'lead', 'coder', 'intern', 'revi
 
 /**
  * Card-move prohibition — relocated here from the resident CLAUDE.md/AGENTS.md
- * block because it is role-scoped: leads and the orchestrator legitimately move
- * cards (the orchestrator via move-card.js / POST /kanban/move, a lead when
+ * block because it is role-scoped: leads and Mission Control legitimately move
+ * cards (Mission Control via move-card.js / POST /kanban/move, a lead when
  * dispatching), so a role-agnostic resident rule spent most of its length
  * enumerating exceptions. Phrased to close the motive — transitions happen
  * automatically — rather than merely forbidding one route (forbid SQL and the
  * agent reaches for move-card.js; forbid moves and it improvises a board edit).
  * Present for the five execution seats that must never move a card; absent for
- * lead and orchestrator (which are not routed through assembleSuffix anyway —
- * the orchestrator is launched by path, and lead's branch still calls
+ * lead and Mission Control (which are not routed through assembleSuffix anyway —
+ * Mission Control is launched by path, and lead's branch still calls
  * assembleSuffix but is excluded from CARD_MOVE_ROLES).
  */
 const CARD_MOVE_RULE = `KANBAN COLUMN TRANSITIONS: the system moves cards automatically as work progresses — never move a card yourself (no SQL, no move-card.js, no manual board edit). Moving a card yourself races the system and can drop or duplicate it.`;
@@ -1925,7 +1928,7 @@ UNATTENDED IMPROVER CONTRACT:
         // override-proofing this call provides MUST survive: without it a reviewer `replace`
         // override silently breaks completion detection and the card's working-state light
         // never clears.
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.orchestratorActive !== false);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.missionControlActive !== false);
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
@@ -2061,7 +2064,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.orchestratorActive !== false);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.missionControlActive !== false);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -2135,7 +2138,7 @@ For each plan:
             if (cavemanOutputEnabled) {
                 baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
             }
-            baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.orchestratorActive !== false);
+            baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.missionControlActive !== false);
 
 
             // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
@@ -2190,7 +2193,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.orchestratorActive !== false);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.missionControlActive !== false);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -2229,7 +2232,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.orchestratorActive !== false);
+        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.missionControlActive !== false);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.

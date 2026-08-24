@@ -344,6 +344,14 @@ function post(port, pathname, body) {
             /isControlString[\s\S]{0,200}?sendText\(CLEAR_INPUT_LINE, false\)/.test(tvp),
             "sendToTerminal's HostTerminal seam fallback must write CLEAR_INPUT_LINE with addNewLine=false — true would submit the reset as its own line."
         );
+        assert.ok(
+            !/terminal\.sendText\(input, true\)/.test(tvp),
+            "sendToTerminal's HostTerminal seam leg must not call sendText(input, true) — that resolves to write(text + '\\r') on the pty seam (ptyBackend.ts), and devin 3000.5.20 inserts a CR arriving in the same read as printable text as a literal newline instead of submitting. Split it: sendText(input, false), settle SUBMIT_SETTLE_MS, sendText('', true)."
+        );
+        assert.ok(
+            /sendText\(input, false\)[\s\S]{0,200}?SUBMIT_SETTLE_MS[\s\S]{0,120}?sendText\('', true\)/.test(tvp),
+            "sendToTerminal's HostTerminal seam leg must send the payload, settle SUBMIT_SETTLE_MS, then submit with a bare newline — the settle is load-bearing: two writes with no delay coalesce into one read."
+        );
     });
 
     await test('terminals.js dials the pty host origin, not the page origin', () => {

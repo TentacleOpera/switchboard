@@ -1,7 +1,7 @@
-# Orchestrator — External Runsheet
+# Mission Control — External Runsheet
 
 You are an external agent. No host process wakes you — turn-end notices land in
-`.switchboard/orchestrator/reports/` and nobody delivers them to your terminal.
+`.switchboard/mission-control/reports/` and nobody delivers them to your terminal.
 You MUST start the self-wake loop before your first tick, or the session dies on
 arrival. Arming means you stay alive and self-wake.
 
@@ -10,16 +10,16 @@ arrival. Arming means you stay alive and self-wake.
 > **This mechanism must be started as step 4 of the confirmation sequence** (see
 > `## On confirmation` in the shared logic), not discovered later. Ending the
 > confirmation flow without it running is the single most common way an
-> orchestrator session dies silently.
+> Mission Control session dies silently.
 
-When operating in self-wake or persistent orchestration mode, the orchestrator
+When operating in self-wake or persistent Mission Control mode, Mission Control
 manages its own wakeup cycle using one of two mechanisms:
 
 ### A. Background script (default)
 Run a sleep loop in a background terminal or background process:
 
 ```bash
-# Run in background to wake every N minutes (default 600s = 10m from orchestrationConfig.intervalMinutes)
+# Run in background to wake every N minutes (default 600s = 10m from missionControlConfig.intervalMinutes)
 while true; do sleep 600; echo "WAKE $(date -u +%FT%TZ)"; done
 ```
 
@@ -27,7 +27,7 @@ When you see `WAKE`, re-read the board, drain reports, and act on what you find.
 
 **The interval is 10 minutes** unless the user named a different one during the
 pre-flight — write whichever you are using into `session.md` so it survives a restart.
-Do not go hunting for the board's configured value: `orchestrationConfig.intervalMinutes`
+Do not go hunting for the board's configured value: `missionControlConfig.intervalMinutes`
 (default 10) lives in VS Code workspace state under the `autoban.state` key. There is no
 `.switchboard/autoban.state` file, and `GET /health` does not carry it. No endpoint
 exposes it to you.
@@ -36,7 +36,7 @@ exposes it to you.
 If your runtime supports background scheduling or tools (e.g. background bash/scheduling), use it to run the same sleep-and-signal loop: wake every N minutes, re-read the board, act on what you find.
 
 **Constraints for self-wake:**
-- The orchestrator terminal stays alive for the duration of the session.
+- Mission Control terminal stays alive for the duration of the session.
 - On each wake, re-derive everything from the board and git fresh.
 - A no-op wake (nothing to dispatch, nothing to advance) writes nothing to the session log.
 - One dispatch per lane per wake.
@@ -44,7 +44,7 @@ If your runtime supports background scheduling or tools (e.g. background bash/sc
 
 ## On confirmation — step 4 (external)
 
-After calling `POST /orchestration/confirm` (step 3 of the confirmation sequence
+After calling `POST /mission-control/confirm` (step 3 of the confirmation sequence
 in the shared logic), start the wake mechanism before processing the first tick:
 
 4. **Start the wake mechanism.** Before processing the first tick, start the
@@ -79,6 +79,6 @@ script. The session is complete.
 
 ---
 
-The shared orchestration logic follows. It covers Hard Rules, the tick,
+The shared Mission Control logic follows. It covers Hard Rules, the tick,
 dispatch, handoff, signals, and the session file — everything you do when awake.
 It does not mention wake; that is this runsheet's job.

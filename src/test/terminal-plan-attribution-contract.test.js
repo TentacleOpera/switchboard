@@ -384,7 +384,7 @@ test('the self-recipient skip is scoped to parent resolution in BOTH hosts', () 
         );
         assert.ok(
             /if \(info\.recipientSeat\) \{\s*\n\s*recipientName = info\.recipientSeat;/.test(src),
-            `${host}: recipientSeat must bypass parent resolution — resolving the head's parent addresses the orchestrator instead`
+            `${host}: recipientSeat must bypass parent resolution — resolving the head's parent addresses Mission Control instead`
         );
         assert.ok(src.includes('info.body ??'), `${host}: a pre-composed evidence body must win over the host's fallback message`);
     }

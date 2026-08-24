@@ -17,16 +17,16 @@ export const AUTOBAN_BATCH_SIZE_OPTIONS = [1, 2, 3, 4, 5] as const;
 export const DEFAULT_AUTOBAN_BATCH_SIZE = 1;
 export const MAX_AUTOBAN_TERMINALS_PER_ROLE = 5;
 
-export const ORCHESTRATOR_TERMINAL_NAME = 'Orchestrator';
+export const MISSION_CONTROL_TERMINAL_NAME = 'Mission Control';
 
 export const AUTOBAN_SOURCE_COLUMN = 'PLAN REVIEWED';
 
 /**
  * The automation axis is retained as a synthetic read-only value for
  * backward compatibility with callers that still read it. The real state
- * is two independent switches: `enabled` (schedule) and `orchestratorArmed`.
+ * is two independent switches: `enabled` (schedule) and `missionControlArmed`.
  *
- * `agent-managed` — the orchestrator is armed.
+ * `agent-managed` — Mission Control is armed.
  * `scheduled` — the schedule is enabled.
  * `external` — neither switch is on.
  *
@@ -54,15 +54,15 @@ export type SingleColumnAutobanConfig = {
     whenSchedule?: string | null;
 };
 
-export type OrchestrationConfig = {
-    intervalMinutes: number;   // wake interval for the orchestrator
+export type MissionControlConfig = {
+    intervalMinutes: number;   // wake interval for Mission Control
 };
 
-export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationConfig = {
+export const DEFAULT_MISSION_CONTROL_CONFIG: MissionControlConfig = {
     intervalMinutes: 10
 };
 
-export function normalizeOrchestrationConfig(state?: Partial<OrchestrationConfig> | null): OrchestrationConfig {
+export function normalizeMissionControlConfig(state?: Partial<MissionControlConfig> | null): MissionControlConfig {
     return {
         // Floor of 1 minute, no ceiling — "once every few hours" and "overnight"
         // are valid wake intervals, same reasoning as the schedule interval.
@@ -97,24 +97,76 @@ export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanC
 }
 
 /**
- * The orchestrator seat when a session adopted the role in place (POST
- * /orchestration/adopt) rather than the host seating a terminal named
- * 'Orchestrator'. `terminalName` is the pty friendlyName when the caller could
+ * Mission Control seat when a session adopted the role in place (POST
+ * /mission-control/adopt) rather than the host seating a terminal named
+ * 'Mission Control'. `terminalName` is the pty friendlyName when the caller could
  * name itself (SWITCHBOARD_TERMINAL) — omitted when it could not, in which case
  * the seat is real but has no live delivery channel and reads the reports inbox.
  * Absent (the shipped default) = no adopted seat = pre-adopt behaviour.
  */
-export interface OrchestratorSeat {
+export interface MissionControlSeat {
     terminalName?: string;
     adoptedAt: string;
+}
+
+export type ScheduleSelector = 'oldest';
+
+export interface ScheduleRule {
+    timeWindow?: string | { start: string; end: string } | null;
+    sourceColumn: string;
+    selector: ScheduleSelector;
+    targetColumn: string;
+}
+
+export type MissionRunFlavour = 'unattended' | 'operations';
+
+export interface MissionRunConfig {
+    missionId: string;
+    flavour: MissionRunFlavour;
+}
+
+export function normalizeScheduleRule(rule: unknown): ScheduleRule | null {
+    if (!rule || typeof rule !== 'object') return null;
+    const r = rule as any;
+    if (typeof r.sourceColumn !== 'string' || !r.sourceColumn.trim()) return null;
+    if (typeof r.targetColumn !== 'string' || !r.targetColumn.trim()) return null;
+
+    let timeWindow = r.timeWindow;
+    if (typeof timeWindow === 'string') {
+        timeWindow = timeWindow.trim() || undefined;
+    } else if (timeWindow && typeof timeWindow === 'object') {
+        const start = typeof timeWindow.start === 'string' ? timeWindow.start.trim() : '';
+        const end = typeof timeWindow.end === 'string' ? timeWindow.end.trim() : '';
+        timeWindow = (start || end) ? { start, end } : undefined;
+    } else {
+        timeWindow = undefined;
+    }
+
+    return {
+        timeWindow,
+        sourceColumn: r.sourceColumn.trim(),
+        selector: 'oldest',
+        targetColumn: r.targetColumn.trim()
+    };
+}
+
+export function normalizeMissionRunConfig(config: unknown): MissionRunConfig | null {
+    if (!config || typeof config !== 'object') return null;
+    const c = config as any;
+    if (typeof c.missionId !== 'string' || !c.missionId.trim()) return null;
+    const flavour: MissionRunFlavour = c.flavour === 'operations' ? 'operations' : 'unattended';
+    return {
+        missionId: c.missionId.trim(),
+        flavour
+    };
 }
 
 export type AutobanConfigState = {
     enabled: boolean;
     /** Orchestrator switch — independent of the schedule. Both can be on. */
-    orchestratorArmed?: boolean;
-    /** Orchestrator seat when adopted in place via POST /orchestration/adopt. */
-    orchestratorSeat?: OrchestratorSeat;
+    missionControlArmed?: boolean;
+    /** Mission Control seat when adopted in place via POST /mission-control/adopt. */
+    missionControlSeat?: MissionControlSeat;
     batchSize: number;
     complexityFilter: AutobanComplexityFilter;
     routingMode: AutobanRoutingMode;
@@ -127,7 +179,7 @@ export type AutobanConfigState = {
     /** Synthetic read-only value derived from the two switches. Not authoritative. */
     automationMode?: AutobanAutomationMode;
     singleColumnConfig?: SingleColumnAutobanConfig;
-    orchestrationConfig?: OrchestrationConfig;
+    missionControlConfig?: MissionControlConfig;
     /** One-time notice shown in the Internal panel when a board-batch job is migrated. */
     migratedBoardBatchNotice?: string;
     /** One-time notice shown when custom scheduler jobs are dropped on read. */
@@ -135,12 +187,14 @@ export type AutobanConfigState = {
     /** One-time notice shown when a retired automationMode is detected on load.
      * The schedule is forced off — the user must explicitly re-arm it. */
     retiredAutomationModeNotice?: string;
+    /** One-time notice shown when recurring jobs resume after external mode retirement. */
+    recurringJobsResumedNotice?: string;
 };
 
 /**
  * Every `automationMode` value that has ever shipped. ALL of them are retired —
  * the exclusive mode axis is deleted and replaced by two independent switches
- * (`enabled` = queue schedule, `orchestratorArmed` = orchestrator wake), so a
+ * (`enabled` = queue schedule, `missionControlArmed` = Mission Control wake), so a
  * shipped install carrying ANY of these must not keep its clock running. The
  * guard in `normalizeAutobanConfigState` does not test membership of this set
  * (a state can carry an unrecognised value too); the set exists so the disarm
@@ -313,20 +367,20 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
     // a naive carry-over gives that install one it never had.
     //
     // The discriminator is therefore the ABSENCE of the new switch, not the
-    // value of the old one. `orchestratorArmed` is always written by this
+    // value of the old one. `missionControlArmed` is always written by this
     // normaliser, so any state that has an `automationMode` but no
-    // `orchestratorArmed` predates the collapse and is disarmed exactly once;
+    // `missionControlArmed` predates the collapse and is disarmed exactly once;
     // every state written after that carries the flag and is left alone. This
     // is the inversion the plan calls for — under the old shape an unrecognised
     // value meant "keep ticking the board", and there is no board tick left.
     const rawAutomationMode = typeof state?.automationMode === 'string' ? state.automationMode : undefined;
     const isRetiredMode = rawAutomationMode !== undefined
-        && state?.orchestratorArmed === undefined;
+        && state?.missionControlArmed === undefined;
 
     // Derive the two switches from the legacy mode if the new flags are absent.
-    const legacyMode = normalizeAutomationMode(state?.automationMode, (state as any)?.orchestrationConfig?.enabled);
-    const orchestratorArmed = state?.orchestratorArmed === true
-        || (state?.orchestratorArmed === undefined && legacyMode === 'agent-managed' && state?.enabled === true);
+    const legacyMode = normalizeAutomationMode(state?.automationMode, (state as any)?.missionControlConfig?.enabled);
+    const missionControlArmed = state?.missionControlArmed === true
+        || (state?.missionControlArmed === undefined && legacyMode === 'agent-managed' && state?.enabled === true);
     // `enabled` is the schedule switch. If the new flag is absent, derive from
     // the legacy mode: scheduled → enabled, agent-managed/external → disabled.
     // A retired mode ALWAYS forces enabled: false — the guard that prevents
@@ -341,7 +395,11 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
     // TaskViewerProvider latches the DISPLAY behind a workspaceState flag so it
     // shows on exactly one activation — the same pattern as migratedBoardBatchNotice.
     const retiredAutomationModeNotice = isRetiredMode
-        ? `Automation mode '${rawAutomationMode}'${RETIRED_AUTOMATION_MODES.has(rawAutomationMode!) ? '' : ' (unrecognised)'} is retired — the schedule and the orchestrator are now independent switches. The schedule has been turned off so nothing dispatches from a queue you did not stage; re-arm it explicitly from the Automation panel to resume.`
+        ? `Automation mode '${rawAutomationMode}'${RETIRED_AUTOMATION_MODES.has(rawAutomationMode!) ? '' : ' (unrecognised)'} is retired — the schedule and Mission Control are now independent switches. The schedule has been turned off so nothing dispatches from a queue you did not stage; re-arm it explicitly from the Automation panel to resume.`
+        : undefined;
+
+    const recurringJobsResumedNotice = (isRetiredMode && rawAutomationMode === 'external')
+        ? 'Recurring jobs (fetch-plans, reconcile) have resumed. External scheduling is now a prompt generator that runs independently and no longer pauses local background jobs.'
         : undefined;
 
     // Preserve unknown/legacy keys from the input state rather than dropping
@@ -353,7 +411,7 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
     return {
         ...preservedUnknownKeys,
         enabled,
-        orchestratorArmed,
+        missionControlArmed,
         batchSize: normalizeAutobanBatchSize(state?.batchSize),
         complexityFilter: (function(f: any) {
             if (f === 'low_only') return 'low_and_below';
@@ -384,18 +442,19 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         aggressivePairProgramming: state?.aggressivePairProgramming === true,
         automationMode: legacyMode,
         singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig),
-        orchestrationConfig: normalizeOrchestrationConfig(state?.orchestrationConfig),
-        orchestratorSeat: (function (s: any) {
+        missionControlConfig: normalizeMissionControlConfig(state?.missionControlConfig),
+        missionControlSeat: (function (s: any) {
             if (!s || typeof s !== 'object') return undefined;
             const adoptedAt = typeof s.adoptedAt === 'string' ? s.adoptedAt : '';
             if (!adoptedAt) return undefined;
             const terminalName = typeof s.terminalName === 'string' && s.terminalName.trim()
                 ? s.terminalName.trim() : undefined;
             return { terminalName, adoptedAt };
-        })((state as any)?.orchestratorSeat),
+        })((state as any)?.missionControlSeat),
         migratedBoardBatchNotice: typeof state?.migratedBoardBatchNotice === 'string' ? state.migratedBoardBatchNotice : undefined,
         droppedCustomJobsNotice: typeof state?.droppedCustomJobsNotice === 'string' ? state.droppedCustomJobsNotice : undefined,
-        retiredAutomationModeNotice
+        retiredAutomationModeNotice,
+        recurringJobsResumedNotice
     };
 }
 

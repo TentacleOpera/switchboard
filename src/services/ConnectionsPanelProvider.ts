@@ -184,7 +184,7 @@ export class ConnectionsPanelProvider implements vscode.Disposable {
         const capabilities: HostCapabilities = {
             terminalDispatch: true,
             automation: true,
-            orchestrator: true,
+            'mission-control': true,
             terminalFleet: true,
             mcpTerminals: true,
             secretsEntry: true,

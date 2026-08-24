@@ -490,11 +490,11 @@
                 document.head.appendChild(style);
             }
 
-            // orchestrator / mcpTerminals: the body class is the contract; the selector
+            // mission-control / mcpTerminals: the body class is the contract; the selector
             // lists below are FORWARD-COMPATIBILITY ONLY and currently match nothing in
-            // kanban.html (verified: 0 occurrences of #btn-orchestrator, .orchestrator-only,
+            // kanban.html (verified: 0 occurrences of #btn-mission-control, .mission-control-only,
             // .mcp-monitor-only, #btn-launch-mcp-monitor). Both clusters are built
-            // dynamically inside the automation panel — the orchestrator as an automation
+            // dynamically inside the automation panel — Mission Control as an automation
             // MODE (kanban.html:9296, :10796) and the MCP monitor as `mcpConfigPanel`
             // (:10991) — so what actually hides them today is the `automation === false`
             // tab gate above. Do NOT "fix" these by adding matching selectors to real
@@ -502,12 +502,12 @@
             // TaskViewerProvider baseHostCapabilities) while its MCP monitor works, so a
             // matching selector would hide a working editor surface. Gate those on a new,
             // honestly-derived flag instead.
-            if (caps.orchestrator === false) {
-                document.body.classList.add('host-orchestrator-false');
+            if (caps['mission-control'] === false) {
+                document.body.classList.add('host-mission-control-false');
                 const style = document.createElement('style');
                 style.textContent = `
-.host-orchestrator-false #btn-orchestrator,
-.host-orchestrator-false .orchestrator-only {
+.host-mission-control-false #btn-mission-control,
+.host-mission-control-false .mission-control-only {
     display: none !important;
 }
 `;

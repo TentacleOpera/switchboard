@@ -23,10 +23,19 @@
  * that unlisted CLIs (devin) show pasted text land in the input field unsent.
  * "Unconditional" is the load-bearing word: no regex, no allowlist, no role
  * check — the CLI_AGENT_REGEX gate that used to gate it is deleted and must
- * stay deleted. Why one \r suffices on terminalUtils.ts's clipboard branch and
- * not here is NOT established; scripts/capture-cli-modes.js against a devin
- * seat is how to settle it. If that lands and the second CR goes away, this
- * file's CONFIRM_CR_COUNT is the single knob to turn.
+ * stay deleted. If the second CR ever goes away, this file's CONFIRM_CR_COUNT is
+ * the single knob to turn.
+ *
+ * SPLIT CR: no write may carry printable text AND the CR that submits it.
+ * Measured 2026-08-23 on devin 3000.4.25 vs 3000.5.20: the new build inserts a
+ * literal newline instead of submitting whenever the CR arrives in the same READ
+ * as text, which broke every slash command (the clear/model buttons) and made
+ * clearBeforePrompt deliver `/clear\n<prompt>` with the context never reset. Two
+ * writes with no delay between them coalesce into one read, so the settle between
+ * them is part of the contract — hence the timing assertion below, which is the
+ * only thing standing between the fix and someone "optimising" the await away.
+ * That also answers the old question about terminalUtils.ts's clipboard branch:
+ * its Enter is already isolated (`sendText('', true)`), so one suffices there.
  *
  * No compilation step required — Node's native type stripping loads the .ts
  * source directly. The `import type` in ptyPromptDelivery.ts is erased, so
@@ -91,14 +100,16 @@ function expectedWrites(text) {
 /** A stub handle that records every write call. */
 function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
     const writes = [];
+    const times = [];
     return {
         name,
         role,
         writes,
+        times,
         handle: {
             name,
             role,
-            write(chunk) { writes.push(chunk); },
+            write(chunk) { writes.push(chunk); times.push(Date.now()); },
         },
     };
 }
@@ -190,7 +201,8 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         await sendPromptToPty(handle, text, { clearBeforePrompt: true, clearBeforePromptDelayMs: 0 });
 
         assert.strictEqual(writes[0], '\x15', 'first write must reset the CLI input line (Ctrl+U)');
-        assert.strictEqual(writes[1], '/clear\r', 'second write must be the /clear command');
+        assert.strictEqual(writes[1], '/clear', 'second write must be the bare /clear command — no CR appended');
+        assert.strictEqual(writes[2], '\r', "the clear's submitting CR must be its own write");
 
         // After the clear, the paste framing must still be whole.
         const pasteStart = writes.indexOf('\x1b[200~');
@@ -202,13 +214,52 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         assert.strictEqual(writes[closeIdx], '\x1b[201~', 'close marker must be whole');
         assert.strictEqual(writes[writes.length - 1], '\r', 'final write must be \\r');
 
-        // The /clear command is a single write '/clear\r', so it does NOT add to
-        // the bare-'\r' count — the clear carries its own \r inside the string.
-        // Only the submit + confirm CRs equal '\r' exactly.
+        // The clear's CR is now a bare write of its own, so it adds exactly one to
+        // the bare-'\r' count on top of the submit + confirm CRs.
         const submitCrCount = writes.filter(w => w === '\r').length;
         assert.strictEqual(
-            submitCrCount, CONFIRM_CR_COUNT,
-            `exactly ${CONFIRM_CR_COUNT} bare \\r (the clear carries its own \\r inside /clear\\r)`
+            submitCrCount, CONFIRM_CR_COUNT + 1,
+            `exactly ${CONFIRM_CR_COUNT + 1} bare \\r (submit + confirm, plus the clear's own split CR)`
+        );
+    });
+
+    // --- behavioural: text and its submitting CR never share a write --------
+    await test('no write carries printable text AND a trailing CR', async () => {
+        const { handle, writes } = stubHandle();
+        await sendPromptToPty(handle, 'y'.repeat(300), { clearBeforePrompt: true, clearBeforePromptDelayMs: 0 });
+        for (const w of writes) {
+            if (w === '\r') { continue; }
+            assert.ok(
+                !w.endsWith('\r'),
+                `a CR must never ride along with printable text — devin 3000.5.20 inserts it as a newline instead of submitting: ${JSON.stringify(w)}`
+            );
+        }
+    });
+
+    await test('writeSlashCommandLocked emits exactly [Ctrl+U, command, CR]', async () => {
+        const { writeSlashCommandLocked } = mod;
+        const { handle, writes } = stubHandle();
+        await writeSlashCommandLocked(handle, '/model');
+        assert.deepStrictEqual(
+            writes, ['\x15', '/model', '\r'],
+            'the command and its submitting CR must be separate writes, with Ctrl+U first'
+        );
+    });
+
+    await test('a real delay separates the command from its CR', async () => {
+        const { writeSlashCommandLocked } = mod;
+        const { handle, writes, times } = stubHandle();
+        await writeSlashCommandLocked(handle, '/clear');
+        const cmdIdx = writes.indexOf('/clear');
+        const crIdx = writes.indexOf('\r');
+        assert.ok(cmdIdx !== -1 && crIdx === cmdIdx + 1, 'the CR must be the write right after the command');
+        const gap = times[crIdx] - times[cmdIdx];
+        // Separate write() calls are NOT enough: with no delay the pty coalesces
+        // them into one read and the CR is absorbed as a literal newline, exactly
+        // as if it had been concatenated. Measured 0ms fails, 40ms submits.
+        assert.ok(
+            gap >= 25,
+            `the command and its CR must be separated by an awaited settle, not just two write() calls (gap was ${gap}ms)`
         );
     });
 
@@ -254,11 +305,35 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         );
     });
 
-    await test(`code contains exactly ${CONFIRM_CR_COUNT} handle.write('\\r')`, () => {
-        const matches = code.match(/handle\.write\('\\r'\)/g) || [];
+    await test(`sendPromptToPty contains exactly ${CONFIRM_CR_COUNT} handle.write('\\r')`, () => {
+        // Scoped to sendPromptToPty's body. writeSlashCommandLocked now has a bare
+        // CR write of its own (the split submit), and counting file-wide would
+        // conflate the two paths — a future change to either would fail as the
+        // other's regression.
+        const from = code.indexOf('export async function sendPromptToPty');
+        const to = code.indexOf('export async function clearPty');
+        assert.ok(from !== -1 && to > from, 'could not locate sendPromptToPty..clearPty in the source');
+        const body = code.slice(from, to);
+        const matches = body.match(/handle\.write\('\\r'\)/g) || [];
         assert.strictEqual(
             matches.length, CONFIRM_CR_COUNT,
-            `exactly ${CONFIRM_CR_COUNT} handle.write('\\r') — the submit Enter plus the unconditional confirm Enter; found ${matches.length}.`
+            `exactly ${CONFIRM_CR_COUNT} handle.write('\\r') in sendPromptToPty — the submit Enter plus the unconditional confirm Enter; found ${matches.length}.`
+        );
+    });
+
+    await test("writeSlashCommandLocked submits with a bare handle.write('\\r')", () => {
+        const from = code.indexOf('export async function writeSlashCommandLocked');
+        const to = code.indexOf('export interface PromptDeliveryOptions');
+        assert.ok(from !== -1 && to > from, 'could not locate writeSlashCommandLocked in the source');
+        const body = code.slice(from, to);
+        const matches = body.match(/handle\.write\('\\r'\)/g) || [];
+        assert.strictEqual(
+            matches.length, 1,
+            `the slash-command submit must be exactly one bare CR write; found ${matches.length}.`
+        );
+        assert.ok(
+            !/handle\.write\([^)]*\+ '\\r'\)/.test(body),
+            "the CR must never be concatenated onto the command — devin 3000.5.20 inserts a CR arriving in the same read as printable text as a literal newline instead of submitting."
         );
     });
 

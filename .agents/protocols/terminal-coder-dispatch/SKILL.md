@@ -201,7 +201,7 @@ record, so the sweep never saw the dispatch and the notifier never fired.
 `ptySendPrompt` takes an optional `dispatch` field: `{ "dispatch": { "planId"?, "planFile"?,
 "role"? } }`. When you pass it, the host registers the dispatch **itself, before delivering**,
 and attaches the protocol directives the board attaches — the plan-file completion report and
-the orchestrator reports directive. This is the route to use, on both hosts:
+Mission Control reports directive. This is the route to use, on both hosts:
 
 ```bash
 curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" $AUTH \
@@ -380,7 +380,7 @@ Your own live reasoning is not on this ladder. A head that treats its own live t
 stack produces unreviewed drift that bypasses every gate. Four mandatory rules govern prompt contents:
 
 1. **Every finding cites a plan clause.** Quote the section or line the diff violates. A defect you
-cannot cite is not a finding: it is recorded as a question report (`.switchboard/orchestrator/reports/`), never dispatched to a seat as work.
+cannot cite is not a finding: it is recorded as a question report (`.switchboard/mission-control/reports/`), never dispatched to a seat as work.
 *(See Appendix: 2026-08-16 resolver accepted on existence, not plan-named source)*
 
 2. **Name the defect, never the mechanism.** A dispatch or fix prompt states what is wrong and which
@@ -411,7 +411,7 @@ Git history, plan files and board columns are recoverable; elapsed time is not.
 
 **Which mode you are in.** You are attended only while a human is demonstrably reading — the user
 has written to you in this session and is still there. A head started by an automation (the
-orchestrator, an autoban wake, a `POST /kanban/queue/next` hand-off), or one whose last human
+Mission Control, an autoban wake, a `POST /kanban/queue/next` hand-off), or one whose last human
 message is many turns behind, is unattended, and this section governs. **When you cannot tell, you
 are unattended** — assuming attended wrongly costs the whole night, while assuming unattended
 wrongly costs one recorded question that a human reads anyway. Without this rule the mode has no
@@ -435,7 +435,7 @@ Every decision the role faces maps to a stated default action:
 Rules bounding unattended execution:
 
 - **A default is never an invention.** The action taken must be one the plan already sanctions. "Decide" resolves ambiguity about *which* sanctioned action; it never authorises a new one.
-- **Recording is not asking.** A `question` report (`.switchboard/orchestrator/reports/`) is an artefact a human reads on their own schedule. Writing one must never end the head's turn — the head records and then continues in the same turn.
+- **Recording is not asking.** A `question` report (`.switchboard/mission-control/reports/`) is an artefact a human reads on their own schedule. Writing one must never end the head's turn — the head records and then continues in the same turn.
 - **Recording does not end your turn.** The attended turn model says your turn ends after you dispatch a subtask. Unattended, recording a question and proceeding to the next queue item is a single turn — the head does not end its turn when it records, it takes the next queue item in the same turn.
 - **The head commits as the team's head, not via a seat.** §5.5 rule 3 prohibits issuing git verbs to team seats; the head's own commit is not a verb to a seat. Unattended, the head commits the team's work itself (per the "team's work is complete" row above).
 
@@ -652,7 +652,7 @@ are modified.
 - **Short parallel fan-out** (90 s per join, 30 min per batch) → use `/delegates/dispatch` +
   `/delegates/await` (see the `delegates` skill). That is a different job.
 - **Unattended, deterministic column sweeps** with no agent watching → read
-  `.agents/protocols/switchboard-orchestration/SKILL.md`. This skill is driving by a reasoning agent — attended, or
+  `.agents/protocols/switchboard-mission-control-http/SKILL.md`. This skill is driving by a reasoning agent — attended, or
   unattended under §5.6 — not a deterministic sweep.
 
 ---

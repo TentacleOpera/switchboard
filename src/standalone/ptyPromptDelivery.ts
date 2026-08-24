@@ -57,7 +57,18 @@ export async function writeSlashCommand(handle: ExtendedTerminalHandle, command:
 export async function writeSlashCommandLocked(handle: ExtendedTerminalHandle, command: string): Promise<void> {
     handle.write(CLEAR_INPUT_LINE);
     await new Promise(r => setTimeout(r, CLEAR_INPUT_SETTLE_MS));
-    handle.write(command.replace(/[\r\n]+$/, '') + '\r');
+    // The submitting CR is its OWN write, after a real delay — NEVER concatenated
+    // onto the command. Measured 2026-08-23 (see rule 2 below): devin 3000.5.20
+    // inserts a literal newline instead of submitting when the CR arrives in the
+    // same READ as printable text, so `'/clear' + '\r'` leaves the command sitting
+    // in the input box unsent — and clearBeforePrompt then pastes the prompt on
+    // top of it, delivering `/clear\n<prompt>` with the context never reset.
+    // The await is load-bearing, not pacing: two back-to-back write() calls with
+    // no delay between them fail exactly like one concatenated write, because the
+    // pty coalesces them into a single read. Do not remove it.
+    handle.write(command.replace(/[\r\n]+$/, ''));
+    await new Promise(r => setTimeout(r, SUBMIT_SETTLE_MS));
+    handle.write('\r');
 }
 
 export interface PromptDeliveryOptions {
@@ -92,24 +103,27 @@ export async function sendPromptToPty(
         //      allowlisted seats a confirm Enter and everyone else one; claude was allowlisted
         //      and submits reliably, devin was not and shows the pasted text land in the input
         //      field unsent — so the second CR below is UNCONDITIONAL: no regex, no allowlist,
-        //      no role check, no CLI detection. Why one \r is enough on the clipboard branch in
-        //      terminalUtils.ts (which pastes, sends ONE Enter, and returns — no confirm Enter
-        //      for anyone, claude included, and that path ships) but not here is still open —
-        //      but one theory is REFUTED by measurement, so do not revive it. Measured
-        //      2026-08-14 with scripts/capture-cli-modes.js: it is NOT that we frame blind.
-        //      BOTH CLIs enable bracketed paste at startup — claude emits ?2004h (after ?1049h
-        //      alt-screen and mouse 1000/1002/1003/1006), devin emits ?2004h FIRST, on the
-        //      normal screen, no mouse, synchronized output (?2026). The markers written below
-        //      are honoured on both seats, so "devin's escape parser swallows an unnegotiated
-        //      marker and eats the CR behind it" cannot explain the split.
-        //      What survives: this path settles SUBMIT_SETTLE_MS (40ms) before the Enter where
-        //      the clipboard branch settles ~400ms (POST_PASTE_SETTLE_MS + NEWLINE_DELAY), and
-        //      the devin observation was made AFTER that constant was cut 100 -> 40. Nobody has
-        //      tested devin at 100ms with a SINGLE CR — do that before treating the second CR as
-        //      load-bearing. If it still needs two at a long settle, the next candidate is
-        //      post-paste Enter semantics: a TUI that treats the first Enter after a bracketed
-        //      paste as newline rather than submit needs two at any delay. The prior
-        //      gate (CLI_AGENT_REGEX) was a static name match standing in for a runtime question:
+        //      no role check, no CLI detection. Two theories about WHY are now closed by
+        //      measurement. Do not revive either.
+        //      (a) Measured 2026-08-14 with scripts/capture-cli-modes.js: it is NOT that we
+        //      frame blind. BOTH CLIs enable bracketed paste at startup — claude emits ?2004h
+        //      (after ?1049h alt-screen and mouse 1000/1002/1003/1006), devin emits ?2004h
+        //      FIRST, on the normal screen, no mouse, synchronized output (?2026). The markers
+        //      written below are honoured on both seats, so "devin's escape parser swallows an
+        //      unnegotiated marker and eats the CR behind it" cannot explain the split.
+        //      (b) Measured 2026-08-23, devin 3000.4.25 vs 3000.5.20, writing to a drawn input
+        //      frame: it is not a settle-length question either. What decides submission is
+        //      whether the CR arrives in the SAME READ as printable text. Concatenated
+        //      ('/clear\r' as one write — or as two writes with no delay, which the pty
+        //      coalesces) NEVER submits on 3000.5.20 at any delay; the CR is inserted as a
+        //      literal newline. The identical bytes submit on 3000.4.25. An isolated CR 40ms
+        //      after the text submits on both. LF instead of CR submits on neither. That also
+        //      answers the old open question about the clipboard branch in terminalUtils.ts:
+        //      its Enter is already isolated (`sendText('', true)` writes the newline on its
+        //      own), so ONE is enough there. Every write of printable text on this path is
+        //      therefore split from the CR that submits it — here and in
+        //      writeSlashCommandLocked — and the settle between them must stay awaited.
+        //      The prior gate (CLI_AGENT_REGEX) was a static name match standing in for a runtime question:
         //      it tested handle.name and handle.role, which carry no CLI identity for role-named
         //      seats, and it silently omitted 13 of the 19 CLIs in CLI_BRAND_ICON_KEYS. A stray
         //      Enter into a plain shell prints a blank prompt line — visible, user-fixable, and

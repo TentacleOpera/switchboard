@@ -21,7 +21,7 @@
  *    the only adoption entry point for a shipped type besides `+ Build your own`;
  *  - the `#teams-flow-error` span and the failed-adopt rollback that writes into it;
  *  - the host's `startAgentGroup` verb arm, which stays registered as an HTTP
- *    surface for external orchestration. This change removes a UI CONTROL, not a
+ *    surface for external Mission Control. This change removes a UI CONTROL, not a
  *    capability — and deleting the arm would force a regeneration of two
  *    committed generated artefacts (verbAllowlist.ts, protocol-catalog.json).
  */
@@ -143,10 +143,10 @@ test('the host startAgentGroup verb arm stays registered', () => {
     // This plan removes a UI control, not a capability. The arm is an allowlisted
     // kanban verb and appears in the generated protocol catalog; deleting it would
     // move two committed generated artefacts and drop an HTTP surface external
-    // orchestration can legitimately use.
+    // Mission Control can legitimately use.
     assert.ok(
         /case 'startAgentGroup'|'startAgentGroup'/.test(kanbanProviderTs),
-        'KanbanProvider must keep the startAgentGroup verb arm — headless orchestration still starts teams'
+        'KanbanProvider must keep the startAgentGroup verb arm — headless Mission Control still starts teams'
     );
 });
 

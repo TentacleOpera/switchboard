@@ -370,7 +370,7 @@ export class GlobalIntegrationConfigService {
     // and are preserved by mergeVisibleAgentsToGlobalFile (which never removes un-patched
     // keys), so they must be stripped at the read layer. This strips the picker only —
     // it does not hide a running terminal; the `hidden` flag is what hides a terminal.
-    private static SYSTEM_ONLY_ROLES = new Set(['orchestrator', 'mcp_monitor', 'jules_monitor', 'scheduler', 'improver_claude', 'improver_devin', 'improver_openai', 'improver_anthropic', 'improver_google']);
+    private static SYSTEM_ONLY_ROLES = new Set(['mission-control', 'mcp_monitor', 'jules_monitor', 'scheduler', 'improver_claude', 'improver_devin', 'improver_openai', 'improver_anthropic', 'improver_google']);
 
     /**
      * Read the machine-global visible-agents store and merge it over the built-in

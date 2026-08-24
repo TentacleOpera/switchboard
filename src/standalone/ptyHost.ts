@@ -44,6 +44,17 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
     const token = crypto.randomBytes(32).toString('hex');
     const gateway = new TerminalWsGateway(fleet, async () => token);
 
+    // Controller seat mirror — the extension host pushes the adopted
+    // Mission Control seat here via the ptySetControllerSeat verb so the
+    // pty child's singleton guard can see an adopted session (which
+    // carries neither the 'mission-control' role nor the 'Mission Control'
+    // name in the fleet). Without this, a role-only scan in the child
+    // would mint a duplicate beside an adopted controller. The child is
+    // a separate process and cannot read the extension host's in-process
+    // autoban state, so the seat is pushed over the verb boundary.
+    let controllerSeat: { terminalName?: string } | null | undefined = undefined;
+    fleet.setControllerSeatResolver(() => controllerSeat);
+
     // Sweep pasted-image temp files older than 1 hour every 10 minutes. The
     // ptyPasteImage verb writes screenshots to os.tmpdir()/switchboard-paste/;
     // without this, long sessions accumulate files unbounded. .unref() so the
@@ -265,6 +276,15 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 } catch (err) {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
+            }
+            case 'ptySetControllerSeat': {
+                // Mirror the extension host's adopted Mission Control seat into
+                // the child process so the singleton guard in create() can see
+                // an adopted controller. The seat is pushed on every seat
+                // change (adopt, stop, handoff, confirm). null/undefined
+                // clears it. See the controllerSeat declaration above.
+                controllerSeat = payload?.seat || null;
+                return { success: true };
             }
             default:
                 return { success: false, error: `Unknown terminal verb '${verb}'` };

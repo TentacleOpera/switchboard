@@ -7,7 +7,7 @@ import {
     CODING_COMPLETION_REPORT_DIRECTIVE,
     COMPLETION_STEP_FULL,
     COMPLETION_STEP_COMPACT,
-    ORCHESTRATOR_REPORT_DIRECTIVE,
+    MISSION_CONTROL_REPORT_DIRECTIVE,
     STAGGERED_IMPLEMENTATION_DIRECTIVE
 } from '../agentPromptBuilder';
 
@@ -270,8 +270,8 @@ suite('agentPromptBuilder', () => {
                 assert.ok(!directive.includes('the file watcher detects it'), `Directive should not reference file watcher: ${directive}`);
                 assert.ok(directive.startsWith('COMPLETION REPORT:'), `Directive must keep sentinel: ${directive}`);
             }
-            assert.ok(ORCHESTRATOR_REPORT_DIRECTIVE.includes('the completion POST'), 'ORCHESTRATOR_REPORT_DIRECTIVE should reference completion POST');
-            assert.ok(!ORCHESTRATOR_REPORT_DIRECTIVE.includes('the plan-file completion report'), 'ORCHESTRATOR_REPORT_DIRECTIVE should not say the plan-file completion report');
+            assert.ok(MISSION_CONTROL_REPORT_DIRECTIVE.includes('the completion POST'), 'MISSION_CONTROL_REPORT_DIRECTIVE should reference completion POST');
+            assert.ok(!MISSION_CONTROL_REPORT_DIRECTIVE.includes('the plan-file completion report'), 'MISSION_CONTROL_REPORT_DIRECTIVE should not say the plan-file completion report');
             assert.ok(STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('POST /kanban/queue/done'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should reference POST /kanban/queue/done');
             assert.ok(!STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('the per-plan completion report (which still goes to each subtask\'s own plan file)'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should not reference per-plan completion report');
         });

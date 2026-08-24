@@ -441,7 +441,7 @@ async function run() {
     );
     assert.match(
         agentPromptBuilderSource,
-        /'\.agents\/workflows\/improve-feature\.md'[\s\S]*?'\.agents\/workflows\/accuracy\.md'[\s\S]*?'\.agents\/workflows\/switchboard-orchestrator\.md'/,
+        /'\.agents\/workflows\/improve-feature\.md'[\s\S]*?'\.agents\/workflows\/accuracy\.md'[\s\S]*?'\.agents\/workflows\/switchboard-mission-control\.md'/,
         'Expected RETIRED_WORKFLOW_PATH_MAP to cover all four retired workflow paths.'
     );
 
@@ -452,17 +452,17 @@ async function run() {
         '.agents/workflows/improve-plan.md': '.agents/protocols/improve-plan/SKILL.md',
         '.agents/workflows/improve-feature.md': '.agents/protocols/improve-feature/SKILL.md',
         '.agents/workflows/accuracy.md': '.agents/protocols/accuracy/SKILL.md',
-        '.agents/workflows/switchboard-orchestrator.md': '.agents/protocols/switchboard-orchestrator/SKILL.md',
+        '.agents/workflows/switchboard-mission-control.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
         '.agents/skills/improve-plan/SKILL.md': '.agents/protocols/improve-plan/SKILL.md',
         '.agents/skills/improve-feature/SKILL.md': '.agents/protocols/improve-feature/SKILL.md',
         '.agents/skills/accuracy/SKILL.md': '.agents/protocols/accuracy/SKILL.md',
-        '.agents/skills/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-orchestrator/SKILL.md',
+        '.agents/skills/switchboard-mission-control/SKILL.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
         // `.switchboard/protocols/` vintage — an unshippable destination (.vscodeignore
         // excludes .switchboard/**) that a dev build could have persisted.
         '.switchboard/protocols/improve-plan/SKILL.md': '.agents/protocols/improve-plan/SKILL.md',
         '.switchboard/protocols/improve-feature/SKILL.md': '.agents/protocols/improve-feature/SKILL.md',
         '.switchboard/protocols/accuracy/SKILL.md': '.agents/protocols/accuracy/SKILL.md',
-        '.switchboard/protocols/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-orchestrator/SKILL.md',
+        '.switchboard/protocols/switchboard-mission-control/SKILL.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
     };
     const norm = normalizeRetiredWorkflowPath || ((p) => retiredMap[p] ?? p);
     for (const [oldP, newP] of Object.entries(retiredMap)) {

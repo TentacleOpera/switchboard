@@ -2136,6 +2136,30 @@
         body.is-team-scoped #btn-link-up {
             display: none !important;
         }
+        /* Controller-scoped mode: hide general-purpose sidebar buttons
+           (same set as team-scoped) and reveal the controller-specific ops
+           block (#btn-controller-stop). Mirrors is-team-scoped /
+           #btn-team-close — the end-session control lives here, where it
+           can carry a label, rather than on the unlabeled rail icon. The
+           rail button is now navigational (lit → reveal this scope). */
+        body.is-controller-scoped #btn-open-all,
+        body.is-controller-scoped #btn-fill-grid,
+        body.is-controller-scoped #fill-grid-form,
+        body.is-controller-scoped #btn-start-team,
+        body.is-controller-scoped #start-team-form,
+        body.is-controller-scoped #btn-clear-all,
+        body.is-controller-scoped #btn-save-group,
+        body.is-controller-scoped #btn-link-up,
+        body.is-controller-scoped #btn-team-orders,
+        body.is-controller-scoped #btn-team-automations,
+        body.is-controller-scoped #btn-team-clear,
+        body.is-controller-scoped #btn-team-clear-members,
+        body.is-controller-scoped #btn-team-close,
+        body.is-controller-scoped #btn-team-restart,
+        body.is-controller-scoped #btn-team-ack,
+        body.is-controller-scoped #btn-team-add {
+            display: none !important;
+        }
         /* The team header's back button is gone — exiting team scope is the
            "← All" tab that renderGroupTabStrip puts at the head of the tab
            row, styled by .group-tab like every other tab. Its .team-header-back
@@ -2388,6 +2412,18 @@
                     title="Acknowledge all member completion lights" hidden>ACKNOWLEDGE COMPLETIONS</button>
             <button type="button" id="btn-team-add" class="secondary-btn is-teal w-full"
                     title="New terminal in this team" hidden>ADD TERMINAL</button>
+            <!-- Controller-scoped ops. Shown when the panel is scoped to the
+                 controller (is-controller-scoped body class). The end-session
+                 button is shaped like #btn-team-close — labelled, immediate,
+                 no confirm gate (CLAUDE.md). This is the control that moved
+                 OFF the rail icon: the rail is a row of navigational icons
+                 and cannot carry a label, so the destructive end-session
+                 control lives here where it can be read. /handoff refuses
+                 armed, lead-less and empty-queue sessions, so this is the
+                 only general way out of a controller session that has gone
+                 wrong. -->
+            <button type="button" id="btn-controller-stop" class="secondary-btn w-full"
+                    title="End the Mission Control session immediately (disarms, archives session, leaves terminal alive)" hidden>STOP MISSION CONTROL</button>
         </div>
         <div id="terminals-list" class="terminals-list"></div>
     </div>

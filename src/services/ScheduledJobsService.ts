@@ -172,19 +172,19 @@ export async function claimInboxItem(workspaceRoot: string, filename: string, ag
 }
 
 /**
- * Lazily creates `.switchboard/orchestrator/reports/claimed/` and returns the
+ * Lazily creates `.switchboard/mission-control/reports/claimed/` and returns the
  * reports directory. Returns `null` when `.switchboard` is absent — same lazy
  * guard as `bootstrapInstructionsDirectory` — so a non-Switchboard folder is
  * never littered. No standing-job seeding (this is a reports inbox, not an
  * instructions pipeline).
  */
-export async function bootstrapOrchestratorReportsDirectory(workspaceRoot: string): Promise<string | null> {
+export async function bootstrapMissionControlReportsDirectory(workspaceRoot: string): Promise<string | null> {
     const sbDir = path.join(workspaceRoot, '.switchboard');
     if (!fs.existsSync(sbDir)) {
         // Lazy creation: do not eagerly pollute non-Switchboard workspaces
         return null;
     }
-    const reportsDir = path.join(sbDir, 'orchestrator', 'reports');
+    const reportsDir = path.join(sbDir, 'mission-control', 'reports');
     const claimedDir = path.join(reportsDir, 'claimed');
     await fs.promises.mkdir(claimedDir, { recursive: true });
     return reportsDir;
@@ -193,7 +193,7 @@ export async function bootstrapOrchestratorReportsDirectory(workspaceRoot: strin
 /**
  * Lazily creates `.switchboard/teams/<teamId>/reports/claimed/` and returns the
  * reports directory. Returns `null` when `.switchboard` is absent — same lazy
- * guard as `bootstrapOrchestratorReportsDirectory`.
+ * guard as `bootstrapMissionControlReportsDirectory`.
  */
 export async function bootstrapTeamReportsDirectory(workspaceRoot: string, teamId: string): Promise<string | null> {
     const sbDir = path.join(workspaceRoot, '.switchboard');
@@ -209,7 +209,7 @@ export async function bootstrapTeamReportsDirectory(workspaceRoot: string, teamI
 
 /**
  * Writes a report file to `.switchboard/teams/<teamId>/reports/` using the same
- * `writeInboxFile` mechanics as orchestrator reports.
+ * `writeInboxFile` mechanics as Mission Control reports.
  */
 export async function writeTeamReport(workspaceRoot: string, teamId: string, req: InstructionRequest): Promise<InstructionWriteResult> {
     try {
@@ -224,14 +224,14 @@ export async function writeTeamReport(workspaceRoot: string, teamId: string, req
 }
 
 /**
- * Writes a report file to `.switchboard/orchestrator/reports/` using the same
+ * Writes a report file to `.switchboard/mission-control/reports/` using the same
  * `writeInboxFile` mechanics as the instructions inbox (exclusive-create with
  * retry, frontmatter flatten). The only TS writer for the reports channel —
  * agent-authored reports are plain file writes by the agent, not code.
  */
-export async function writeOrchestratorReport(workspaceRoot: string, req: InstructionRequest): Promise<InstructionWriteResult> {
+export async function writeMissionControlReport(workspaceRoot: string, req: InstructionRequest): Promise<InstructionWriteResult> {
     try {
-        const reportsDir = await bootstrapOrchestratorReportsDirectory(workspaceRoot);
+        const reportsDir = await bootstrapMissionControlReportsDirectory(workspaceRoot);
         if (!reportsDir) {
             return { success: false, error: '.switchboard directory does not exist' };
         }

@@ -16,7 +16,7 @@ import {
     ensureDispatchProtocolDirectives,
     validateDispatchPayload,
 } from '../services/agentPromptBuilder';
-import { writeOrchestratorReport } from '../services/ScheduledJobsService';
+import { writeMissionControlReport } from '../services/ScheduledJobsService';
 import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets } from './hostServices';
 import {
     getShellHtml as sharedGetShellHtml,
@@ -35,7 +35,7 @@ import { PtyFleetService, PTY_IDE_NAME } from './ptyFleetService';
 import { resolveTeamScopedRoleTerminal } from '../services/teamWiring';
 import { isPtyAvailable } from './ptyBackend';
 import { SURFACES } from '../services/wsHub';
-import { ORCHESTRATOR_TERMINAL_NAME } from '../services/autobanState';
+import { MISSION_CONTROL_TERMINAL_NAME } from '../services/autobanState';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 import { TerminalWsGateway } from './terminalWsGateway';
 import { sendPromptToPty, clearPty, modelPty, writeSlashCommand } from './ptyPromptDelivery';
@@ -286,8 +286,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
         let out = text;
         if (dispatch && typeof dispatch === 'object') {
-            const orchestratorActive = taskViewerProvider?.isOversightAgentRunning() ?? true;
-            out = ensureDispatchProtocolDirectives(out, orchestratorActive);
+            const missionControlActive = taskViewerProvider?.isOversightAgentRunning() ?? true;
+            out = ensureDispatchProtocolDirectives(out, missionControlActive);
         }
         // Hoist the standing-orders config reads above the seat-block branch so
         // the team-commit gate can resolve team standing BEFORE seat options are
@@ -805,7 +805,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const baseStandaloneCapabilities: HostCapabilities = {
         terminalDispatch: ptyReady,
         automation: false,
-        orchestrator: false,
+        'mission-control': false,
         terminalFleet: ptyReady,
         mcpTerminals: false,
         secretsEntry: true,
@@ -2163,6 +2163,23 @@ Each plan file must include:
     ptyFleetService.setClaudeInlineRenderingResolver(
         () => configProvider.getConfigBoolean('terminal.claudeInlineRendering', true)
     );
+    // Singleton seat resolver — lets ptyFleetService.create() consult the
+    // adopted controller seat record so an adopted session (which carries
+    // neither the 'mission-control' role nor the 'Mission Control' name) is seen as
+    // the singleton and a second create returns it instead of minting a
+    // duplicate. The fact is sourced from the in-process autoban state, which
+    // is global to this host by construction — NOT from workspaceState, which
+    // is per-workspace and cannot answer a global question. See the plan's
+    // User Review Required section. taskViewerProvider owns the seat record
+    // (adoptMissionControlSeat writes _autobanState.missionControlSeat), so the
+    // resolver reads it directly. taskViewerProvider is constructed below this
+    // line, but the resolver is a CLOSURE — it is only called inside create(),
+    // which runs after taskViewerProvider exists. Wiring it here keeps it
+    // beside the other fleet resolvers rather than as a stray setter call
+    // further down.
+    ptyFleetService.setControllerSeatResolver(
+        () => (taskViewerProvider as any)?._autobanState?.missionControlSeat
+    );
     // Activity-light liveness seam, wired HERE rather than beside the engine's
     // other seams: the sweep calls this synchronous getter on a 10 s timer to
     // partition the fleet into live (spare) / exited (force-clear) / silent (fall
@@ -2180,7 +2197,7 @@ Each plan file must include:
     // friendlyName / lastDataAt / status, no parent). The engine emits
     // { seatName, planFile, outcome, workspaceRoot } plus a composed `body` for
     // `completed` and `stalled`; this host resolves the
-    // recipient (parentInstanceId → live terminal, orchestrator fallback) and
+    // recipient (parentInstanceId → live terminal, Mission Control fallback) and
     // delivers via `deliverPrompt` with clearBeforePrompt: false and standing
     // orders enabled (the recipient acts on this notification and needs its
     // durable orders fresh in context).
@@ -2188,7 +2205,7 @@ Each plan file must include:
     // engine's setTurnEndNotifier AND the LocalApiServer's onTurnEndNotify
     // callback (the API-based queue/done path) share ONE delivery path — no
     // duplicated recipient resolution or deliverPrompt logic. Captures
-    // deliverPrompt, taskViewerProvider, ptyFleetService, writeOrchestratorReport,
+    // deliverPrompt, taskViewerProvider, ptyFleetService, writeMissionControlReport,
     // log, opts — all in scope here.
     const handleTurnEndNotify = (info: any) => {
         void (async () => {
@@ -2203,18 +2220,18 @@ Each plan file must include:
                     ? `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`
                     : `[switchboard:turn-end] Seat '${seatName}' has gone quiet on '${planFile}' without reporting done — it may be waiting on input.`);
             // Fire-and-forget mirror to the reports directory — a non-pty
-            // orchestrator reads the same notice as a file. Never awaited
+            // Mission Control reads the same notice as a file. Never awaited
             // ahead of the pty send, never able to suppress it. `finished`
             // for the seat-finished variant; `blocked` for both the gone-
             // quiet and feature-stall variants. Same helper, same from:
             // system mapping as the extension host twin.
-            void writeOrchestratorReport(info.workspaceRoot, {
+            void writeMissionControlReport(info.workspaceRoot, {
                 from: 'system',
                 kind: info.outcome === 'completed' ? 'finished' : 'blocked',
                 planId: planFile,
                 body: message
             }).then(r => {
-                // writeOrchestratorReport RETURNS its failure rather than throwing,
+                // writeMissionControlReport RETURNS its failure rather than throwing,
                 // so a bare .catch() swallows the case that actually happens (no
                 // .switchboard dir, 5 name collisions, EACCES) and the mirror goes
                 // silently missing while the pty send still succeeds.
@@ -2223,7 +2240,7 @@ Each plan file must include:
             const active = ptyFleetService.listActive();
             // `recipientSeat` (the feature nudge) names the recipient directly —
             // the head IS the recipient, so resolving its parent would address the
-            // orchestrator instead. Skip the parent-chain walk entirely.
+            // Mission Control instead. Skip the parent-chain walk entirely.
             let recipientName: string | undefined;
             if (info.recipientSeat) {
                 recipientName = info.recipientSeat;
@@ -2233,20 +2250,20 @@ Each plan file must include:
                     const parent = active.find(t => t.agentInstanceId === seatRow.parentInstanceId);
                     if (parent) { recipientName = parent.friendlyName; }
                 }
-                // Fallback: an adopted seat is the orchestrator even though no
-                // terminal is named 'Orchestrator' and no fleet row carries role
-                // 'orchestrator'. Same order as the extension-host twin
+                // Fallback: an adopted seat is Mission Control even though no
+                // terminal is named 'Mission Control' and no fleet row carries role
+                // 'mission-control'. Same order as the extension-host twin
                 // (TaskViewerProvider.notifyTurnEnd): after the parent walk, so a
                 // seat's own head still wins, and before the role scan. Without
-                // this arm a standalone orchestrator that adopted in place via
-                // POST /orchestration/adopt never receives a live turn-end notice.
+                // this arm a standalone Mission Control that adopted in place via
+                // POST /mission-control/adopt never receives a live turn-end notice.
                 if (!recipientName) {
-                    const adoptedName = (taskViewerProvider as any)?._autobanState?.orchestratorSeat?.terminalName;
+                    const adoptedName = (taskViewerProvider as any)?._autobanState?.missionControlSeat?.terminalName;
                     if (adoptedName) { recipientName = adoptedName; }
                 }
-                // Fallback: a live orchestrator terminal (role === 'orchestrator').
+                // Fallback: a live Mission Control terminal (role === 'mission-control').
                 if (!recipientName) {
-                    const orch = active.find(t => (t.role || '') === 'orchestrator');
+                    const orch = active.find(t => (t.role || '') === 'mission-control');
                     if (orch) { recipientName = orch.friendlyName; }
                 }
             }
@@ -2481,39 +2498,39 @@ Each plan file must include:
         allowSecretWritesOverHttp: true,
         taskViewerVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             taskViewerProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
-        // POST /orchestration/stop — disarm the orchestrator, clear the seat,
+        // POST /mission-control/stop — disarm Mission Control, clear the seat,
         // persist, broadcast, and archive the session file. The method is
         // public on TaskViewerProvider and needs no VS Code APIs, so the
         // standalone host can wire it directly. This unblocks the shell rail's
-        // UFO icon click-to-stop (the browser UI's only orchestrator off
+        // UFO icon click-to-stop (the browser UI's only Mission Control off
         // switch); without it the endpoint returns 503 in standalone mode.
-        orchestrationStop: async () => {
-            await taskViewerProvider.stopOrchestratorFromKanban(workspaceRoot);
+        missionControlStop: async () => {
+            await taskViewerProvider.stopMissionControlFromKanban(workspaceRoot);
         },
-        // POST /orchestration/adopt — the caller IS the orchestrator. Wired here
+        // POST /mission-control/adopt — the caller IS Mission Control. Wired here
         // because BOTH standalone entry points already promise this door exists:
-        // the /switchboard launcher's step 2 calls it, and orchestrationStart
+        // the /switchboard launcher's step 2 calls it, and missionControlStart
         // below documents that the agent it seats "adopts the seat itself via
-        // POST /orchestration/adopt". Unwired, the endpoint answers 503 and both
+        // POST /mission-control/adopt". Unwired, the endpoint answers 503 and both
         // promises are false — no seat is ever recorded in standalone, which also
-        // makes orchestrationStart's own seat guard below unreachable.
-        // adoptOrchestratorSeat needs no VS Code API: _resolveWorkspaceRoot,
+        // makes missionControlStart's own seat guard below unreachable.
+        // adoptMissionControlSeat needs no VS Code API: _resolveWorkspaceRoot,
         // _hasFleet/_ptyHostVerb (headless-aware), the file-backed workspaceState
-        // memento, and buildOrchestratorKickoffPrompt all work in this host.
-        orchestrationAdopt: async (workspaceRootArg?: string, terminalName?: string) => {
-            return await taskViewerProvider.adoptOrchestratorSeat(
+        // memento, and buildMissionControlKickoffPrompt all work in this host.
+        missionControlAdopt: async (workspaceRootArg?: string, terminalName?: string) => {
+            return await taskViewerProvider.adoptMissionControlSeat(
                 workspaceRootArg || workspaceRoot, terminalName, undefined
             );
         },
-        // POST /orchestration/start — the shell rail's dimmed UFO click. Two
+        // POST /mission-control/start — the shell rail's dimmed UFO click. Two
         // paths, decided by whether a lead/coder agent is configured:
-        //   - Terminal path: create a pty terminal named 'Orchestrator', boot the
+        //   - Terminal path: create a pty terminal named 'Mission Control', boot the
         //     lead/coder CLI into it, wait for shell readiness, then deliver the
-        //     persona prompt (buildOrchestratorKickoffPrompt). The agent in the
-        //     terminal reads switchboard-orchestrator/SKILL.md, runs the
-        //     pre-flight, and adopts the seat itself via POST /orchestration/adopt.
-        //     The server does NOT seat the orchestrator — the agent does, after
-        //     reading the prompt. Mirrors startOrchestratorFromKanban's flow.
+        //     persona prompt (buildMissionControlKickoffPrompt). The agent in the
+        //     terminal reads switchboard-mission-control/SKILL.md, runs the
+        //     pre-flight, and adopts the seat itself via POST /mission-control/adopt.
+        //     The server does NOT seat Mission Control — the agent does, after
+        //     reading the prompt. Mirrors startMissionControlFromKanban's flow.
         //   - Clipboard fallback (no agent configured, or pty unavailable): NO
         //     terminal is created. Returns { mode:'clipboard', prompt } so the
         //     shell copies the /switchboard launcher text. The agent that
@@ -2521,15 +2538,15 @@ Each plan file must include:
         // A seat guard mirrors the extension host: if a seat already exists with
         // a live terminal, the persona prompt is redelivered to it instead of
         // spawning a second terminal (double-click protection).
-        orchestrationStart: async (workspaceRootArg?: string) => {
+        missionControlStart: async (workspaceRootArg?: string) => {
             const root = workspaceRootArg || workspaceRoot;
             // 1. Seat guard: deliver to an already-seated, live terminal.
-            const seat = (taskViewerProvider as any)?._autobanState?.orchestratorSeat;
+            const seat = (taskViewerProvider as any)?._autobanState?.missionControlSeat;
             if (seat?.terminalName) {
                 const handle = ptyFleetService.get(seat.terminalName);
                 if (handle && handle.status === 'active') {
                     try {
-                        const { prompt } = await taskViewerProvider.buildOrchestratorKickoffPrompt(root, undefined);
+                        const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined);
                         await deliverPrompt(handle, prompt, getPromptDeliveryOptions());
                         return { success: true, mode: 'terminal' };
                     } catch (err: any) {
@@ -2545,21 +2562,21 @@ Each plan file must include:
             const startupCommand = startupCommands['lead'] || startupCommands['coder'] || '';
             if (startupCommand && startupCommand.trim() && ptyReady) {
                 // 3. Double-click protection: the seat guard above reads
-                //    _autobanState.orchestratorSeat, but the server NEVER seats —
-                //    the agent adopts later via POST /orchestration/adopt, seconds
+                //    _autobanState.missionControlSeat, but the server NEVER seats —
+                //    the agent adopts later via POST /mission-control/adopt, seconds
                 //    or minutes after start. So two rapid clicks both see an empty
                 //    seat, and ptyFleetService.create renames on name collision
-                //    (while this.terminals.has(name)) producing 'Orchestrator' AND
-                //    'orchestrator-2' — two agents each told they are the
-                //    orchestrator. Before creating, check for an existing LIVE
+                //    (while this.terminals.has(name)) producing 'Mission Control' AND
+                //    'mission-control-2' — two agents each told they are the
+                //    Mission Control. Before creating, check for an existing LIVE
                 //    terminal by the canonical name; if found, redeliver the
                 //    persona prompt to it instead of spawning a second one.
-                //    ORCHESTRATOR_TERMINAL_NAME is imported from autobanState.ts
+                //    MISSION_CONTROL_TERMINAL_NAME is imported from autobanState.ts
                 //    rather than hardcoded to avoid drift vs the extension host.
-                const existing = ptyFleetService.get(ORCHESTRATOR_TERMINAL_NAME);
+                const existing = ptyFleetService.get(MISSION_CONTROL_TERMINAL_NAME);
                 if (existing && existing.status === 'active') {
                     try {
-                        const { prompt } = await taskViewerProvider.buildOrchestratorKickoffPrompt(root, undefined);
+                        const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined);
                         await deliverPrompt(existing, prompt, getPromptDeliveryOptions());
                         return { success: true, mode: 'terminal' };
                     } catch (err: any) {
@@ -2568,14 +2585,14 @@ Each plan file must include:
                 }
                 // 4. Terminal path. create() injects the boot command after its
                 //    internal SHELL_READINESS_DELAY_MS; the extra 1500ms mirrors
-                //    startOrchestratorFromKanban's post-create wait so the CLI
+                //    startMissionControlFromKanban's post-create wait so the CLI
                 //    is ready to receive the persona prompt.
                 try {
                     const handle = await ptyFleetService.create(
-                        'orchestrator', ORCHESTRATOR_TERMINAL_NAME, root, undefined, undefined, startupCommand.trim()
+                        'mission-control', MISSION_CONTROL_TERMINAL_NAME, root, undefined, undefined, startupCommand.trim()
                     );
                     await new Promise(r => setTimeout(r, 1500));
-                    const { prompt } = await taskViewerProvider.buildOrchestratorKickoffPrompt(root, undefined);
+                    const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined);
                     await deliverPrompt(handle, prompt, getPromptDeliveryOptions());
                     return { success: true, mode: 'terminal' };
                 } catch (err: any) {
@@ -2583,7 +2600,7 @@ Each plan file must include:
                 }
             }
             // 5. Clipboard fallback: NO terminal created.
-            return { success: true, mode: 'clipboard', prompt: 'Run /switchboard workflow to start orchestration' };
+            return { success: true, mode: 'clipboard', prompt: 'Run /switchboard workflow to start Mission Control' };
         },
         createExternalTeam: async (wsRoot: string, template: string, headName: string, featureId?: string) => {
             // Standalone is single-root: `db` (module scope) is the only

@@ -2,7 +2,7 @@
 
 > **Scope.** This is a *behavior* reference, not an *invocation* reference. It answers
 > "how does Switchboard behave?" — never "how do I call endpoint X?" For invocation
-> (endpoints, verbs, payload fields), read **`.agents/protocols/switchboard-orchestration/SKILL.md`** and
+> (endpoints, verbs, payload fields), read **`.agents/protocols/switchboard-mission-control-http/SKILL.md`** and
 > `GET /catalog`. Consult this skill when you are unsure *why* something happens or
 > *what* a system convention is. Every fact below cites its source-of-truth file so
 > staleness is checkable; the contracts are slow-moving (conventions), not mechanics.
@@ -69,7 +69,7 @@ time a managing agent needed them.
    the extension is the sole `kanban.db` writer.** You never write to `kanban.db`
    directly — you call the LocalApiServer endpoints. The board is the source of truth; the
    UI is one view of it. Source: `src/services/LocalApiServer.ts` + the
-   `.agents/protocols/switchboard-orchestration/SKILL.md`.
+   `.agents/protocols/switchboard-mission-control-http/SKILL.md`.
 
 8. **Project pins are resolve-only on import; the workspace name is never a project.** A
    workspace is a workspace; a project is a user-created board filter. They are not
@@ -113,7 +113,7 @@ time a managing agent needed them.
 
 ## When to consult this skill
 
-- You are a managing/orchestrating agent unsure *why* a card did or did not move.
+- You are a managing/coordinating agent unsure *why* a card did or did not move.
 - You need to know how completion is detected (so you do not wait for a board move that
   will never come).
 - You are about to edit a plan file mid-work and want to confirm whether that is safe
@@ -122,5 +122,5 @@ time a managing agent needed them.
 
 ## When NOT to consult this skill
 
-- To find an endpoint or verb payload → read `.agents/protocols/switchboard-orchestration/SKILL.md` + `GET /catalog`.
+- To find an endpoint or verb payload → read `.agents/protocols/switchboard-mission-control-http/SKILL.md` + `GET /catalog`.
 - To learn the human-facing UI → read the user manual.

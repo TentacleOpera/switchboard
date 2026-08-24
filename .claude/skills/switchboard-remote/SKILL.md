@@ -22,9 +22,7 @@ Check which MCP servers are connected (Linear, Notion, GitHub):
   `.switchboard/plans/` or commit to a branch for planning work.
 - Use `list_issues` (Linear) / Notion database queries to read the current kanban
   state (not local `kanban.db` or `kanban-board.md`).
-- To improve a plan: author the improved content directly into the Notion page
-  body or Linear issue description via MCP (see the provider steps below), then
-  set the column. Do not reach for a local workflow file — you have no repo access.
+- To improve a plan: use `/improve-remote-plan` (not `/improve-plan`).
 - To create a new plan: write directly to a new Linear issue or Notion page, set
   status to "Created".
 - Column transitions happen via status updates in Linear/Notion — the extension

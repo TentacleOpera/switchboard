@@ -355,7 +355,7 @@ async function run() {
     await check('_runQueueDone does NOT fire the completion callbacks on outcome: failed', async () => {
         // A `failed` report releases the latch and runs the escalation ladder —
         // it is NOT a completion. Firing the callbacks would tell the lead the
-        // seat "finished its turn" and mirror a `kind: finished` orchestrator
+        // seat "finished its turn" and mirror a `kind: finished` Mission Control
         // report for work that failed, so the lead accepts and advances a card
         // nobody completed. The standing orders explicitly instruct a seat that
         // cannot finish to call THIS endpoint with {"outcome":"failed"}, so this

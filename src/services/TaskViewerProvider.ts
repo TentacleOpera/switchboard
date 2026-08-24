@@ -16,7 +16,7 @@ import {
     resolveTeamStanding,
     renderStandaloneOrdersBlock,
 } from './standingOrders';
-import { writeOrchestratorReport, writeInstruction, bootstrapInstructionsDirectory, ingestJobActivity } from './ScheduledJobsService';
+import { writeMissionControlReport, writeInstruction, bootstrapInstructionsDirectory, ingestJobActivity } from './ScheduledJobsService';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConstitutionPath } from './constitutionUtils';
@@ -57,7 +57,7 @@ let JSDOMClass: any;
 import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog';
 import { KanbanProvider } from './KanbanProvider';
 import type { SetupPanelProvider } from './SetupPanelProvider';
-import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock, clearTerminalInputLine, CLEAR_INPUT_LINE, CLEAR_INPUT_SETTLE_MS } from './terminalUtils';
+import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock, clearTerminalInputLine, CLEAR_INPUT_LINE, CLEAR_INPUT_SETTLE_MS, SUBMIT_SETTLE_MS } from './terminalUtils';
 import { buildFetchPlansPrompt, buildReconcilePrompt, buildTeamAutomationPrompt } from './schedulerPresets';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
 import {
@@ -138,10 +138,10 @@ import {
     DEFAULT_SINGLE_COLUMN_CONFIG,
     AUTOBAN_SOURCE_COLUMN,
     AUTOBAN_RUN_SHEET_TICK_KEY,
-    OrchestrationConfig,
-    DEFAULT_ORCHESTRATION_CONFIG,
-    ORCHESTRATOR_TERMINAL_NAME,
-    OrchestratorSeat
+    MissionControlConfig,
+    DEFAULT_MISSION_CONTROL_CONFIG,
+    MISSION_CONTROL_TERMINAL_NAME,
+    MissionControlSeat
 } from './autobanState';
 import { parseComplexityScore, scoreToRoutingRole, getFallbackRole, scoreToCategory } from './complexityScale';
 const { syncMirrorToBrain } = require('./mirrorSync') as {
@@ -640,9 +640,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     };
                 }
 
-                const orchestratorActive = this.isOversightAgentRunning();
-                payload = { ...payload, data: ensureDispatchProtocolDirectives(payload.data, orchestratorActive) };
-                directivesAttached = orchestratorActive
+                const missionControlActive = this.isOversightAgentRunning();
+                payload = { ...payload, data: ensureDispatchProtocolDirectives(payload.data, missionControlActive) };
+                directivesAttached = missionControlActive
                     ? ['COMPLETION REPORT', 'ORCHESTRATOR REPORT']
                     : ['COMPLETION REPORT'];
             }
@@ -932,7 +932,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // is dispatched, fire-and-forget. Never awaited ahead of the send
                 // (the send completed above), never able to fail it — a lost
                 // registration degrades a backstop, a blocked send loses the
-                // dispatch. Mirrors the writeOrchestratorReport precedent
+                // dispatch. Mirrors the writeMissionControlReport precedent
                 // (never awaited ahead of the pty send, never able to suppress
                 // it). Reuses the shipped `attributePastedPrompt` verb so plan
                 // resolution (planIds first, planFiles fallback) is identical to
@@ -1343,11 +1343,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Serialization queue: ensures only one column tick runs at a time to prevent terminal dispatch contention.
     private _autobanTickQueue: Promise<void> = Promise.resolve();
     private _autobanState: AutobanConfigState = normalizeAutobanConfigState();
-    private _orchestrationSessionState: 'none' | 'interviewing' | 'armed' | 'handed-off' = 'none';
+    private _missionControlSessionState: 'none' | 'interviewing' | 'armed' | 'handed-off' = 'none';
     private _singleColumnAutobanState: SingleColumnAutobanConfig = DEFAULT_SINGLE_COLUMN_CONFIG;
     private _migratedBoardBatchNotice: string | undefined;
     private _droppedCustomJobsNotice: string | undefined;
     private _retiredAutomationModeNotice: string | undefined;
+    private _recurringJobsResumedNotice: string | undefined;
     private _postAutobanStateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private _activeDispatchSessions = new Map<string, string>();
 
@@ -1434,7 +1435,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // longer than this with no /phone-a-friend/done callback, emit a stalled
     // notice. NOT a destruction threshold: the timer does not auto-advance (that
     // would /clear a review still in flight — the original bug with a bigger
-    // constant). A human or the orchestrator decides whether to force-advance.
+    // constant). A human or Mission Control decides whether to force-advance.
     private static readonly PHONE_A_FRIEND_STALL_MS = 10 * 60 * 1000;
     // Pre-review sequential gate waiters — keyed by `${targetKey}::${planFile}`.
     // When POST /phone-a-friend/done fires for a plan, the waiter is resolved
@@ -1581,6 +1582,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             void this._context.workspaceState.update('retiredAutomationMode.noticed', true);
         }
 
+        // One-time notice for recurring jobs resuming on upgrade from external mode.
+        const alreadyNoticedRecurringResumed = this._context.workspaceState.get<boolean>('recurringJobsResumed.noticed') === true;
+        if (!alreadyNoticedRecurringResumed) {
+            if (this._autobanState.recurringJobsResumedNotice) {
+                this._recurringJobsResumedNotice = this._autobanState.recurringJobsResumedNotice;
+            }
+            void this._context.workspaceState.update('recurringJobsResumed.noticed', true);
+        }
+
         // Ensure pair programming defaults to OFF on load regardless of previous session state
         this._autobanState.pairProgrammingMode = 'off';
 
@@ -1638,19 +1648,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // The mode axis is deleted. Return a synthetic value for backward compat
         // with callers that still read this — the two switches map back to the
         // old modes so the panel can render during the transition.
-        if (this._autobanState.orchestratorArmed) { return 'agent-managed'; }
+        if (this._autobanState.missionControlArmed) { return 'agent-managed'; }
         if (this._autobanState.enabled) { return 'scheduled'; }
         return 'external';
     }
 
     /**
-     * Returns true when the orchestrator is armed (agent-managed mode + enabled).
-     * This is the single source of truth for "is an orchestrator supervising" —
+     * Returns true when Mission Control is armed (agent-managed mode + enabled).
+     * This is the single source of truth for "is a Mission Control supervising" —
      * it is NOT a mode comparison alone. The name is preserved for callers; the
      * implementation reads the mode and the armed flag, not a deleted config field.
      */
     public isOversightAgentRunning(): boolean {
-        return !!this._autobanState.orchestratorArmed;
+        return !!this._autobanState.missionControlArmed;
     }
 
     /**
@@ -1710,7 +1720,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * the engine has no fleet identity data and must stay host-agnostic.
      *
      * Recipient resolution: the seat's `parentInstanceId` → that terminal, if
-     * live; otherwise a live orchestrator terminal; otherwise nobody (logged).
+     * live; otherwise a live Mission Control terminal; otherwise nobody (logged).
      * The fleet lives in a pty host CHILD PROCESS, so the cached
      * `_ptyTerminalNames` array (names only) is NOT enough — `ptyListTerminals`
      * is the path that actually carries `agentInstanceId` and `parentInstanceId`.
@@ -1739,22 +1749,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     ? `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`
                     : `[switchboard:turn-end] Seat '${seatName}' has gone quiet on '${planFile}' without reporting done — it may be waiting on input.`);
             // Fire-and-forget mirror to the reports directory — a non-pty
-            // orchestrator reads the same notice as a file. Never awaited
+            // Mission Control reads the same notice as a file. Never awaited
             // ahead of the pty send, never able to suppress it. `finished`
             // for the seat-finished variant; `blocked` for both the gone-
             // quiet and feature-stall variants.
             //
             // This mirror MUST run before the _ptyHostPort guard below: with no
             // pty host the file is the ONLY thing that survives — exactly the
-            // unattended case where the report is the only channel an orchestrator
+            // unattended case where the report is the only channel a Mission Control
             // has. The guard skips live delivery, not the durable write.
-            void writeOrchestratorReport(info.workspaceRoot, {
+            void writeMissionControlReport(info.workspaceRoot, {
                 from: 'system',
                 kind: info.outcome === 'completed' ? 'finished' : 'blocked',
                 planId: planFile,
                 body: message
             }).then(r => {
-                // writeOrchestratorReport RETURNS its failure rather than throwing,
+                // writeMissionControlReport RETURNS its failure rather than throwing,
                 // so a bare .catch() swallows the case that actually happens (no
                 // .switchboard dir, 5 name collisions, EACCES) and the mirror goes
                 // silently missing while the pty send still succeeds.
@@ -1786,7 +1796,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const active = terminals.filter((t: any) => t.status === 'active');
             // `recipientSeat` (the feature nudge) names the recipient directly —
             // the head IS the recipient, so resolving its parent would address the
-            // orchestrator instead. Skip the parent-chain walk entirely.
+            // Mission Control instead. Skip the parent-chain walk entirely.
             let recipientName: string | undefined;
             if (info.recipientSeat) {
                 recipientName = info.recipientSeat;
@@ -1799,15 +1809,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     const parent = active.find((t: any) => t.agentInstanceId === seatRow.parentInstanceId);
                     if (parent) { recipientName = parent.friendlyName; }
                 }
-                // Fallback: an adopted seat is the orchestrator even though no terminal is named
-                // 'Orchestrator' and no fleet row carries role 'orchestrator'. Checked after the
+                // Fallback: an adopted seat is Mission Control even though no terminal is named
+                // 'Orchestrator' and no fleet row carries role 'mission-control'. Checked after the
                 // parent walk (a seat's own head still wins) and before the role scan.
                 if (!recipientName) {
-                    const adoptedName = this._autobanState.orchestratorSeat?.terminalName;
+                    const adoptedName = this._autobanState.missionControlSeat?.terminalName;
                     if (adoptedName) { recipientName = adoptedName; }
                 }
                 if (!recipientName) {
-                    const orch = active.find((t: any) => this._normalizeAgentKey(t.role || '') === 'orchestrator');
+                    const orch = active.find((t: any) => this._normalizeAgentKey(t.role || '') === 'mission-control');
                     if (orch) { recipientName = orch.friendlyName; }
                 }
             }
@@ -1939,9 +1949,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // _terminalAgentInfo.set directly and is therefore excluded by
         // structure — only fresh-spawn sites route through this method.
         this._deliverStandingOrdersOnEstablish(suffixedName, role, {
-            skipOrchestrator: true,
+            skipMissionControl: true,
             // The caller sends the CLI's boot command immediately before this, so the
-            // agent is still starting. Same 1500ms grace the orchestrator kickoff uses
+            // agent is still starting. Same 1500ms grace Mission Control kickoff uses
             // for a freshly-created terminal — without it the one-shot is typed into a
             // shell prompt or a boot screen and lost.
             readyDelayMs: TaskViewerProvider.ESTABLISH_ORDERS_READY_DELAY_MS,
@@ -1955,22 +1965,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * effective orders, builds a roleMap from _terminalAgentInfo, renders the
      * standalone block, and sends it via _dispatchExecuteMessage (reusing the
      * per-terminal withTerminalSendLock and PTY fleet resolution). Skips the
-     * orchestrator role (its kickoff dispatch carries the orders block). Skips
+     * Mission Control role (its kickoff dispatch carries the orders block). Skips
      * when no orders apply (renderStandaloneOrdersBlock returns null → no
      * prompt sent, no noise).
      */
     private async _deliverStandingOrdersOnEstablish(
         terminalName: string,
         role: string,
-        opts?: { skipOrchestrator?: boolean; readyDelayMs?: number }
+        opts?: { skipMissionControl?: boolean; readyDelayMs?: number }
     ): Promise<void> {
-        // Orchestrator skip — on ESTABLISH only. The orchestrator's spawn is
+        // Mission Control skip — on ESTABLISH only. Mission Control's spawn is
         // immediately followed by the kickoff dispatch, which carries the orders
         // block via applyStandingOrders; a one-shot there is a redundant second
         // block in the same spawn sequence. After a CLEAR there is no such
-        // follow-up, so the caller passes skipOrchestrator: false and the
-        // orchestrator gets its orders back like any other seat.
-        if (opts?.skipOrchestrator && role === 'orchestrator') { return; }
+        // follow-up, so the caller passes skipMissionControl: false and the
+        // Mission Control gets its orders back like any other seat.
+        if (opts?.skipMissionControl && role === 'mission-control') { return; }
 
         const workspaceRoot = this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '';
         if (!workspaceRoot) { return; }
@@ -2070,14 +2080,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * (renderStandaloneOrdersBlock returns null inside the shared method).
      */
     private _deliverStandingOrdersAfterClear(terminalName: string): void {
-        // No role argument and no orchestrator skip: role is only consulted for the
-        // establish-time orchestrator skip, and that skip exists because the kickoff
+        // No role argument and no Mission Control skip: role is only consulted for the
+        // establish-time Mission Control skip, and that skip exists because the kickoff
         // dispatch follows a spawn. Nothing follows a clear — for either
         // clearTerminalContext caller the next dispatch usually goes to a DIFFERENT
         // seat — so this one-shot is the cleared terminal's only orders delivery.
         // No ready delay either: clearTerminalContext has already waited out its own
         // clear delay, so the CLI is up.
-        this._deliverStandingOrdersOnEstablish(terminalName, '', { skipOrchestrator: false })
+        this._deliverStandingOrdersOnEstablish(terminalName, '', { skipMissionControl: false })
             .catch((err) => {
                 console.warn(`[TaskViewerProvider] Standing-orders post-clear delivery failed for '${terminalName}':`, err);
             });
@@ -2085,7 +2095,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     /**
      * Grace period between a terminal's CLI boot command and the standing-orders
-     * one-shot. Matches the orchestrator kickoff's freshly-created-terminal delay.
+     * one-shot. Matches Mission Control kickoff's freshly-created-terminal delay.
      */
     private static readonly ESTABLISH_ORDERS_READY_DELAY_MS = 1500;
 
@@ -3789,7 +3799,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 const baseHostCapabilities = {
                     terminalDispatch: true,
                     automation: true,
-                    orchestrator: true,
+                    'mission-control': true,
                     terminalFleet: ptyHostReady(),
                     mcpTerminals: false,
                     secretsEntry: false,
@@ -3903,30 +3913,30 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // researcher is live so the planner falls back to emitting the prompt.
                 return await this._dispatchResearchToResearcher(workspaceRoot, prompt);
             },
-            orchestrationAdopt: async (wsRoot, terminalName) => {
-                return await this.adoptOrchestratorSeat(wsRoot, terminalName, undefined);
+            missionControlAdopt: async (wsRoot, terminalName) => {
+                return await this.adoptMissionControlSeat(wsRoot, terminalName, undefined);
             },
-            orchestrationStart: async (wsRoot) => {
-                // POST /kanban/orchestration/start — an HTTP caller by definition, so the
+            missionControlStart: async (wsRoot) => {
+                // POST /kanban/mission-control/start — an HTTP caller by definition, so the
                 // surface is known statically here. There is no body to stamp. Returns a
                 // result object so the shell rail can branch on `mode` (terminal vs
                 // clipboard fallback). The extension host always takes the terminal path
-                // (startOrchestratorFromKanban creates/reuses the Orchestrator terminal).
-                await this.startOrchestratorFromKanban(wsRoot, undefined);
+                // (startMissionControlFromKanban creates/reuses the Mission Control terminal).
+                await this.startMissionControlFromKanban(wsRoot, undefined);
                 return { success: true, mode: 'terminal' };
             },
-            orchestrationStop: async () => {
-                await this.stopOrchestratorFromKanban();
+            missionControlStop: async () => {
+                await this.stopMissionControlFromKanban();
             },
-            orchestrationConfirm: async (wsRoot) => {
-                // POST /orchestration/confirm — the only path that arms. Called by the
-                // orchestrator agent after the user answers the pre-flight and writes
-                // .switchboard/orchestrator/session.md.
-                return await this.confirmOrchestrationSession(wsRoot);
+            missionControlConfirm: async (wsRoot) => {
+                // POST /mission-control/confirm — the only path that arms. Called by the
+                // Mission Control agent after the user answers the pre-flight and writes
+                // .switchboard/mission-control/session.md.
+                return await this.confirmMissionControlSession(wsRoot);
             },
-            orchestrationHandoff: async (args) => {
-                // POST /orchestration/handoff — hand off orchestration to a coding lead and exit.
-                return await this.handoffOrchestrationSession(args);
+            missionControlHandoff: async (args) => {
+                // POST /mission-control/handoff — hand off Mission Control to a coding lead and exit.
+                return await this.handoffMissionControlSession(args);
             },
             catalogProvider: async () => {
                 const candidates = [
@@ -6391,7 +6401,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         if (!delivered) {
             // Dispatch dropped (no terminal running, target off, etc.) — fail OPEN.
-            // Emit a drop notice (if orchestrator is configured) and advance.
+            // Emit a drop notice (if Mission Control is configured) and advance.
             this._emitPhoneAFriendNotice('blocked',
                 `Phone-a-Friend dispatch dropped for '${queue.agentName}' on '${planFile}' — no terminal running. Queue advanced to the next plan. ` +
                 `To re-queue: POST /kanban/verb with verb 'phoneAFriendSelected'. To force-advance: POST /phone-a-friend/done with {"target":"${targetKey}"}.`,
@@ -6410,7 +6420,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // from "still working" — there is no idle signal for a vscode.Terminal, which
         // is the entire reason the callback exists. Auto-advancing would /clear a
         // review still in flight — the original bug with a bigger constant (3.3s → 10min).
-        // A human or the orchestrator decides whether the friend is dead; a timer must not.
+        // A human or Mission Control decides whether the friend is dead; a timer must not.
         // The force-advance instructions in the notice are the safe remedy: /done
         // correlates on planFile, so a deliberate advance cannot skip the wrong plan.
         queue.stallTimer = setTimeout(() => {
@@ -6424,7 +6434,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 `To force-advance: POST /phone-a-friend/done with {"target":"${targetKey}","planFile":"${planFile}"}. To re-queue: POST /kanban/verb with verb 'phoneAFriendSelected'.`,
                 planFile, q.agentName, q.pending.length);
             // Do NOT clear inFlight or pump — leave the queue as-is. The notice
-            // is the output; the advance is a human/orchestrator decision.
+            // is the output; the advance is a human/Mission Control decision.
         }, TaskViewerProvider.PHONE_A_FRIEND_STALL_MS);
     }
 
@@ -6472,36 +6482,36 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Whether an orchestrator is configured — a seat is held OR orchestration is
-     * armed. Used to gate Phone-a-Friend orchestrator reports: no orchestrator
+     * Whether a Mission Control is configured — a seat is held OR Mission Control is
+     * armed. Used to gate Phone-a-Friend Mission Control reports: no Mission Control
      * means no report file, no notifyTurnEnd call. Diagnostics and status
      * messages are NOT gated — a stalled queue must never go silent.
      */
-    private _hasOrchestrator(): boolean {
-        return !!this._autobanState?.orchestratorSeat || !!this._autobanState?.orchestratorArmed;
+    private _hasMissionControl(): boolean {
+        return !!this._autobanState?.missionControlSeat || !!this._autobanState?.missionControlArmed;
     }
 
     /**
-     * Resolve the orchestrator's terminal name for recipientSeat — the explicit
-     * seat → head via parentInstanceId → adopted orchestrator seat → orchestrator
+     * Resolve Mission Control's terminal name for recipientSeat — the explicit
+     * seat → head via parentInstanceId → adopted Mission Control seat → Mission Control
      * role scan. Without recipientSeat, notifyTurnEnd walks the friend's
      * parentInstanceId first, which lands on the friend's head (not the
-     * orchestrator) when the Phone-a-Friend terminal is a fleet seat.
+     * Mission Control) when the Phone-a-Friend terminal is a fleet seat.
      */
-    private _resolveOrchestratorRecipient(): string | undefined {
-        const adopted = this._autobanState?.orchestratorSeat?.terminalName;
+    private _resolveMissionControlRecipient(): string | undefined {
+        const adopted = this._autobanState?.missionControlSeat?.terminalName;
         if (adopted) { return adopted; }
-        // No adopted seat — scan for an active orchestrator-role terminal.
-        // This is best-effort; the caller already gated on _hasOrchestrator.
+        // No adopted seat — scan for an active Mission Control-role terminal.
+        // This is best-effort; the caller already gated on _hasMissionControl.
         return undefined;
     }
 
     /**
      * Emit a Phone-a-Friend notice. ALWAYS logs to the diagnostics channel and
      * posts a showStatusMessage to the kanban webview — a stalled queue must
-     * never go silent, even with no orchestrator. The orchestrator report
+     * never go silent, even with no Mission Control. Mission Control report
      * (notifyTurnEnd → durable file + live delivery) is gated on
-     * _hasOrchestrator: writing reports nobody will read litters .switchboard/
+     * _hasMissionControl: writing reports nobody will read litters .switchboard/
      * and is the same hollow pattern as a dispatch that silently drops.
      */
     private _emitPhoneAFriendNotice(
@@ -6516,12 +6526,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Always post a status message to the kanban webview.
         const isError = outcome !== 'completed';
         this.postMessage({ type: 'showStatusMessage', message: body, isError }, SURFACES.kanban);
-        // Gate the orchestrator report — no orchestrator means no report file,
+        // Gate Mission Control report — no Mission Control means no report file,
         // no notifyTurnEnd call. Check before the write, not after.
-        if (!this._hasOrchestrator()) { return; }
+        if (!this._hasMissionControl()) { return; }
         const workspaceRoot = this._resolveWorkspaceRoot('');
         if (!workspaceRoot) { return; }
-        const recipientSeat = this._resolveOrchestratorRecipient();
+        const recipientSeat = this._resolveMissionControlRecipient();
         this.notifyTurnEnd({
             seatName: agentName,
             planFile,
@@ -6529,7 +6539,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             workspaceRoot,
             body,
             // Pass recipientSeat explicitly so notifyTurnEnd addresses the
-            // orchestrator directly, not the friend's fleet head.
+            // Mission Control directly, not the friend's fleet head.
             ...(recipientSeat ? { recipientSeat } : {}),
         });
     }
@@ -11043,7 +11053,7 @@ Each plan file must include:
         if (!this._autobanState.enabled) {
             return false;
         }
-        // An orchestrator is still working the board (grouping plans,
+        // A Mission Control is still working the board (grouping plans,
         // handling judgement transitions), so an empty column is not a stop
         // condition while one is armed. The user stops it via the toggle.
         if (this.isOversightAgentRunning()) {
@@ -11236,7 +11246,8 @@ Each plan file must include:
             singleColumnConfig: this._singleColumnAutobanState,
             migratedBoardBatchNotice: this._migratedBoardBatchNotice,
             droppedCustomJobsNotice: this._droppedCustomJobsNotice,
-            retiredAutomationModeNotice: this._retiredAutomationModeNotice
+            retiredAutomationModeNotice: this._retiredAutomationModeNotice,
+            recurringJobsResumedNotice: this._recurringJobsResumedNotice
         }, this._autobanLastTickAt.entries());
     }
 
@@ -11273,6 +11284,27 @@ Each plan file must include:
         });
         // Also broadcast to Kanban webview if open
         this._kanbanProvider?.updateAutobanConfig(state);
+    }
+
+    /**
+     * Push the adopted controller seat to the pty child process so its
+     * singleton guard can see an adopted controller (which carries neither
+     * the 'mission-control' role nor the 'Mission Control' name in the fleet).
+     * Called on every seat change — adopt, stop, handoff, confirm. The pty
+     * child is a separate process and cannot read this host's in-process
+     * autoban state, so the seat is mirrored over the verb boundary.
+     *
+     * No-op in standalone (the fleet is in-process and the seat resolver
+     * reads _autobanState directly via bootstrap.ts's closure) and when no
+     * pty child exists. Best-effort: a verb failure logs and continues — the
+     * role scan alone still covers pty-created Mission Control terminals.
+     */
+    private _pushControllerSeatToPtyHost(): void {
+        if (this._headlessRuntime) { return; }
+        if (!this._ptyHostChild || !this._ptyHostPort) { return; }
+        const seat = this._autobanState?.missionControlSeat;
+        void this._ptyHostVerb('ptySetControllerSeat', { seat: seat || null })
+            .catch(() => { /* best-effort — role scan is the fallback */ });
     }
 
     private _postPipelineState(): void {
@@ -11314,8 +11346,8 @@ Each plan file must include:
     /** Called by Kanban controls strip to toggle the shared Autoban engine state. */
     public async setAutobanEnabledFromKanban(enabled: boolean): Promise<void> {
         // The mode axis is deleted. This toggle controls the schedule switch
-        // only. The orchestrator switch is controlled separately (via
-        // setAutomationModeFromKanban or the Start/Stop orchestrator buttons).
+        // only. Mission Control switch is controlled separately (via
+        // setAutomationModeFromKanban or the Start/Stop Mission Control buttons).
         const wasEnabled = this._autobanState.enabled;
         this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, enabled });
 
@@ -11335,30 +11367,30 @@ Each plan file must include:
     }
 
     /**
-     * The three-way orchestrator kickoff prompt (interview / resume /
-     * stale-session), chosen by two facts: does .switchboard/orchestrator/session.md
+     * The three-way Mission Control kickoff prompt (interview / resume /
+     * stale-session), chosen by two facts: does .switchboard/mission-control/session.md
      * exist, and is automation armed. Extracted so BOTH doors emit the same text —
      * the seat-a-terminal door injects it, the adopt door returns it over HTTP.
      * Duplicating this branch is how the two doors drift.
      */
-    public async buildOrchestratorKickoffPrompt(
+    public async buildMissionControlKickoffPrompt(
         root: string,
         initiatorProject?: string | null,
         deliveryMode?: 'host' | 'self'
     ): Promise<{ mode: 'interview' | 'resume' | 'stale-session' | 'no-persona'; prompt: string }> {
-        const sharedLogicPath = path.join(root, '.agents', 'protocols', 'switchboard-orchestrator', 'SKILL.md');
+        const sharedLogicPath = path.join(root, '.agents', 'protocols', 'switchboard-mission-control', 'SKILL.md');
         const runsheetName = deliveryMode === 'self'
-            ? 'switchboard-orchestrator-external'
-            : 'switchboard-orchestrator-internal';
+            ? 'switchboard-mission-control-external'
+            : 'switchboard-mission-control-internal';
         const runsheetPath = path.join(root, '.agents', 'protocols', runsheetName, 'SKILL.md');
         let projectFilter = '';
         try {
             projectFilter = (await this._kanbanProvider?.resolveAuthoringProject(root, initiatorProject)) || '';
         } catch { /* best-effort */ }
-        const sessionPath = path.join(root, '.switchboard', 'orchestrator', 'session.md');
+        const sessionPath = path.join(root, '.switchboard', 'mission-control', 'session.md');
         let sessionExists = false;
         try { await fs.promises.access(sessionPath); sessionExists = true; } catch { /* absent */ }
-        const armed = !!this._autobanState?.orchestratorArmed;
+        const armed = !!this._autobanState?.missionControlArmed;
         try {
             await fs.promises.access(sharedLogicPath);
             await fs.promises.access(runsheetPath);
@@ -11370,7 +11402,7 @@ Each plan file must include:
             const sharedBody = await fs.promises.readFile(sharedLogicPath, 'utf8');
             const personaContent = runsheetBody.trimEnd() + '\n\n---\n\n' + sharedBody;
             const baseLines = [
-                `You are the Switchboard orchestrator. Read and follow the combined document below (runsheet + shared orchestration logic).`,
+                `You are Switchboard Mission Control. Read and follow the combined document below (runsheet + shared Mission Control logic).`,
                 ``,
                 personaContent,
                 ``,
@@ -11384,80 +11416,80 @@ Each plan file must include:
             // ## Pre-flight section owns the protocol for each mode.
             if (!sessionExists) {
                 const prompt = baseLines.concat([
-                    `This is a fresh start — no session file exists. Run the pre-flight: the six checks in ## Pre-flight, report what you find, propose a goal for this session, and STOP. Do not begin ticking. The user will answer in this terminal; on their confirmation, write .switchboard/orchestrator/session.md (Rules then Log) and call POST /orchestration/confirm — only then begin.`
+                    `This is a fresh start — no session file exists. Run the pre-flight: the six checks in ## Pre-flight, report what you find, propose a goal for this session, and STOP. Do not begin ticking. The user will answer in this terminal; on their confirmation, write .switchboard/mission-control/session.md (Rules then Log) and call POST /mission-control/confirm — only then begin.`
                 ]).join('\n');
                 return { mode: 'interview', prompt };
             } else if (armed) {
                 const prompt = baseLines.concat([
-                    `A session is already confirmed and armed — .switchboard/orchestrator/session.md exists and automation is armed. Resume: read session.md, continue under its existing rules, do not re-run the pre-flight or re-interview. Pick up where the session left off.`
+                    `A session is already confirmed and armed — .switchboard/mission-control/session.md exists and automation is armed. Resume: read session.md, continue under its existing rules, do not re-run the pre-flight or re-interview. Pick up where the session left off.`
                 ]).join('\n');
                 return { mode: 'resume', prompt };
             } else {
                 const prompt = baseLines.concat([
-                    `A stale session file exists at .switchboard/orchestrator/session.md but orchestration is not armed. Run the pre-flight (## Pre-flight, the six checks), tell the user a stale session file exists, and offer to reuse its goal. On confirmation, write session.md (overwrite the stale one if the user accepts it, or write a fresh one if they alter the goal) and call POST /orchestration/confirm — only then begin.`
+                    `A stale session file exists at .switchboard/mission-control/session.md but Mission Control is not armed. Run the pre-flight (## Pre-flight, the six checks), tell the user a stale session file exists, and offer to reuse its goal. On confirmation, write session.md (overwrite the stale one if the user accepts it, or write a fresh one if they alter the goal) and call POST /mission-control/confirm — only then begin.`
                 ]).join('\n');
                 return { mode: 'stale-session', prompt };
             }
         } catch {
-            const prompt = `You are the Switchboard orchestrator. The orchestrator workflow is incomplete: the shared logic or required runtime runsheet is missing. Stand by — do not take autonomous action.`;
+            const prompt = `You are Switchboard Mission Control. Mission Control workflow is incomplete: the shared logic or required runtime runsheet is missing. Stand by — do not take autonomous action.`;
             return { mode: 'no-persona', prompt };
         }
     }
 
     /**
-     * Called by the Kanban AUTOMATION tab (Start orchestrator). Launches (or
-     * reuses) the Orchestrator terminal, boots the lead CLI, injects the
+     * Called by the Kanban AUTOMATION tab (Start Mission Control). Launches (or
+     * reuses) the Mission Control terminal, boots the lead CLI, injects the
      * kickoff prompt, and arms the session. The wake tick (subtask 5) reuses
      * the terminal-launch portion for delivery-failure recovery.
      */
-    public async startOrchestratorFromKanban(
+    public async startMissionControlFromKanban(
         workspaceRoot?: string,
         initiatorProject?: string | null
     ): Promise<void> {
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (!root) {
-            this._seams().ui.showErrorMessage('No workspace folder found. Cannot start the orchestrator.');
+            this._seams().ui.showErrorMessage('No workspace folder found. Cannot start Mission Control.');
             return;
         }
 
-        // A session already adopted the role in place (POST /orchestration/adopt). The
+        // A session already adopted the role in place (POST /mission-control/adopt). The
         // button must not spawn a second terminal alongside it — deliver to the adopted
         // seat when it is reachable, and say so when it is not.
-        const adopted = this._autobanState.orchestratorSeat;
+        const adopted = this._autobanState.missionControlSeat;
         if (adopted?.terminalName) {
-            const { prompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject, 'host');
+            const { prompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, 'host');
             const sent = await this._dispatchExecuteMessage(
-                root, adopted.terminalName, prompt, { orchestrationKickoff: true }, 'sidebar'
+                root, adopted.terminalName, prompt, { missionControlKickoff: true }, 'sidebar'
             );
-            this.postMessage({ type: 'orchestratorStartResult', success: sent,
+            this.postMessage({ type: 'missionControlStartResult', success: sent,
                 ...(sent ? {} : { error: `adopted seat '${adopted.terminalName}' did not accept the kickoff` }) });
             return;
         }
         if (adopted) {
             // Adopted without a name: the seat is real, we simply cannot address it.
             // Creating a terminal here would be the duplicate the adopt door removes.
-            this._seams().ui.showInformationMessage('An agent session already holds the orchestrator seat. Talk to it there, or stop orchestration first.');
+            this._seams().ui.showInformationMessage('An agent session already holds Mission Control seat. Talk to it there, or stop Mission Control first.');
             // NOTE: success: true here is a mild hollow-success smell — the kickoff is
             // NOT delivered anywhere by this click (the adopted session already has its
             // prompt from the adopt call). Carry an explanatory note so the AUTOMATION
             // tab does not read as "kickoff sent" when nothing was sent.
-            this.postMessage({ type: 'orchestratorStartResult', success: true, note: 'Adopted seat has no terminal name — kickoff was not re-delivered. The adopted session already holds the prompt.' });
+            this.postMessage({ type: 'missionControlStartResult', success: true, note: 'Adopted seat has no terminal name — kickoff was not re-delivered. The adopted session already holds the prompt.' });
             return;
         }
 
-        // Reuse a live Orchestrator terminal if one is registered; otherwise
+        // Reuse a live Mission Control terminal if one is registered; otherwise
         // create one. NOT via _createAutobanTerminal — its role gate rejects
-        // non-pool roles like 'orchestrator'. Replicate the createTerminal +
+        // non-pool roles like 'mission-control'. Replicate the createTerminal +
         // onDidStartTerminalShellExecution startup wait inline.
         let terminal: vscode.Terminal | undefined;
-        const candidates = [ORCHESTRATOR_TERMINAL_NAME, this._suffixedName(ORCHESTRATOR_TERMINAL_NAME)];
+        const candidates = [MISSION_CONTROL_TERMINAL_NAME, this._suffixedName(MISSION_CONTROL_TERMINAL_NAME)];
         if (this._registeredTerminals) {
             for (const name of candidates) {
                 const t = this._registeredTerminals.get(name);
                 if (t && t.exitStatus === undefined) { terminal = t; break; }
             }
             if (!terminal) {
-                const normalized = this._normalizeAgentKey(ORCHESTRATOR_TERMINAL_NAME);
+                const normalized = this._normalizeAgentKey(MISSION_CONTROL_TERMINAL_NAME);
                 for (const [name, t] of this._registeredTerminals.entries()) {
                     if (t.exitStatus !== undefined) continue;
                     if (this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized) {
@@ -11468,7 +11500,7 @@ Each plan file must include:
         }
         if (!terminal) {
             terminal = vscode.window.terminals.find(t =>
-                this._normalizeAgentKey(t.name) === this._normalizeAgentKey(ORCHESTRATOR_TERMINAL_NAME)
+                this._normalizeAgentKey(t.name) === this._normalizeAgentKey(MISSION_CONTROL_TERMINAL_NAME)
                 && t.exitStatus === undefined
             );
         }
@@ -11477,15 +11509,15 @@ Each plan file must include:
         if (!terminal) {
             createdNew = true;
             terminal = vscode.window.createTerminal({
-                name: ORCHESTRATOR_TERMINAL_NAME,
+                name: MISSION_CONTROL_TERMINAL_NAME,
                 location: vscode.TerminalLocation.Panel,
                 cwd: root
             });
-            const suffixed = this._suffixedName(ORCHESTRATOR_TERMINAL_NAME);
+            const suffixed = this._suffixedName(MISSION_CONTROL_TERMINAL_NAME);
             this._registeredTerminals?.set(suffixed, terminal);
             terminal.show();
 
-            // Register in state.terminals with the orchestrator purpose.
+            // Register in state.terminals with Mission Control purpose.
             const suffixedForState = suffixed;
             void this._waitWithTimeout(terminal.processId, 10000, undefined)
                 .then(pid => {
@@ -11504,13 +11536,13 @@ Each plan file must include:
             await this.updateState(async (state) => {
                 if (!state.terminals) state.terminals = {};
                 state.terminals[suffixedForState] = {
-                    purpose: 'orchestrator',
-                    role: 'orchestrator',
+                    purpose: 'mission-control',
+                    role: 'mission-control',
                     pid: undefined,
                     childPid: undefined,
                     startTime: new Date().toISOString(),
                     status: 'active',
-                    friendlyName: ORCHESTRATOR_TERMINAL_NAME,
+                    friendlyName: MISSION_CONTROL_TERMINAL_NAME,
                     icon: 'terminal',
                     color: 'cyan',
                     lastSeen: new Date().toISOString(),
@@ -11550,7 +11582,7 @@ Each plan file must include:
                     });
                     const safetyTimer = setTimeout(() => {
                         if (!disposed) {
-                            console.warn(`[TaskViewerProvider] Shell init timeout for Orchestrator terminal, sending startup command via fallback`);
+                            console.warn(`[TaskViewerProvider] Shell init timeout for Mission Control terminal, sending startup command via fallback`);
                             sendOnce();
                             cleanup();
                             resolve();
@@ -11559,59 +11591,59 @@ Each plan file must include:
                 });
 
                 const displayName = this.deriveAgentDisplayName(startupCommand);
-                this.setTerminalAgentInfo(suffixedForState, 'orchestrator', displayName);
+                this.setTerminalAgentInfo(suffixedForState, 'mission-control', displayName);
             }
             this._refreshTerminalStatuses();
         }
 
-        // Inject the kickoff prompt. The persona workflow (.agents/protocols/switchboard-orchestrator/SKILL.md)
+        // Inject the kickoff prompt. The persona workflow (.agents/protocols/switchboard-mission-control/SKILL.md)
         // encodes the full pre-flight + Kickoff Protocol; this prompt points the agent at it and injects
         // the runtime context (UNATTENDED flag, workspace root, active project filter). The dispatch
         // path uses sendRobustText (clipboard-paste for long payloads).
         //
-        // Start no longer arms. It seats the orchestrator and delivers one of three
-        // prompts chosen by two facts: does .switchboard/orchestrator/session.md exist,
+        // Start no longer arms. It seats Mission Control and delivers one of three
+        // prompts chosen by two facts: does .switchboard/mission-control/session.md exist,
         // and is automation armed (autobanState.enabled)? The arming half moved to
-        // confirmOrchestrationSession (called by POST /orchestration/confirm after the
+        // confirmMissionControlSession (called by POST /mission-control/confirm after the
         // user answers the pre-flight). See the ## Pre-flight section of the persona skill.
-        const { prompt: kickoffPrompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject, 'host');
+        const { prompt: kickoffPrompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, 'host');
         // Small delay so a freshly-created terminal's CLI is ready to receive.
         if (createdNew) { await new Promise(r => setTimeout(r, 1500)); }
         const kickoffSent = await this._dispatchExecuteMessage(
-            root, ORCHESTRATOR_TERMINAL_NAME, kickoffPrompt,
-            { orchestrationKickoff: true }, 'sidebar'
+            root, MISSION_CONTROL_TERMINAL_NAME, kickoffPrompt,
+            { missionControlKickoff: true }, 'sidebar'
         );
         if (!kickoffSent) {
-            // Silent failure here means the orchestrator terminal sits idle forever and the
+            // Silent failure here means Mission Control terminal sits idle forever and the
             // board reports a run that never started. Surface it instead.
             this._seams().ui.showErrorMessage(
-                `Orchestrator kickoff could not be delivered to '${ORCHESTRATOR_TERMINAL_NAME}'. The run did not start.`
+                `Orchestrator kickoff could not be delivered to '${MISSION_CONTROL_TERMINAL_NAME}'. The run did not start.`
             );
-            this.postMessage({ type: 'orchestratorStartResult', success: false, error: 'kickoff prompt not delivered' });
+            this.postMessage({ type: 'missionControlStartResult', success: false, error: 'kickoff prompt not delivered' });
             return;
         }
 
         // Start no longer arms here. The arming block (stop the run-sheet engine,
         // flip enabled=true + automationMode='agent-managed', persist, broadcast)
-        // moved to confirmOrchestrationSession, called by POST /orchestration/confirm
-        // after the user answers the pre-flight. A seated-but-unconfirmed orchestrator
+        // moved to confirmMissionControlSession, called by POST /mission-control/confirm
+        // after the user answers the pre-flight. A seated-but-unconfirmed Mission Control
         // leaves enabled false and the topology untouched — the interview is a clean
         // no-op if the user closes the terminal.
-        this._orchestrationSessionState = 'interviewing';
-        this.postMessage({ type: 'orchestratorStartResult', success: true });
+        this._missionControlSessionState = 'interviewing';
+        this.postMessage({ type: 'missionControlStartResult', success: true });
     }
 
     /**
-     * The caller IS the orchestrator. Records the seat and returns the same kickoff
-     * prompt startOrchestratorFromKanban would have injected into a terminal it
+     * The caller IS Mission Control. Records the seat and returns the same kickoff
+     * prompt startMissionControlFromKanban would have injected into a terminal it
      * created. Seats nothing, boots nothing, arms nothing — arming stays
-     * POST /orchestration/confirm.
+     * POST /mission-control/confirm.
      */
-    public async adoptOrchestratorSeat(
+    public async adoptMissionControlSeat(
         workspaceRoot?: string,
         terminalName?: string,
         initiatorProject?: string | null
-    ): Promise<{ success: boolean; mode?: string; prompt?: string; seat?: OrchestratorSeat; liveDelivery?: boolean; note?: string; error?: string }> {
+    ): Promise<{ success: boolean; mode?: string; prompt?: string; seat?: MissionControlSeat; liveDelivery?: boolean; note?: string; error?: string }> {
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (!root) { return { success: false, error: 'No workspace folder found.' }; }
 
@@ -11637,29 +11669,30 @@ Each plan file must include:
                 } catch { /* treat as not live */ }
             }
             if (live) { resolvedName = requested; }
-            else { note = `'${requested}' is not an active fleet terminal — turn-end notices will land in .switchboard/orchestrator/reports/ instead of this terminal.`; }
+            else { note = `'${requested}' is not an active fleet terminal — turn-end notices will land in .switchboard/mission-control/reports/ instead of this terminal.`; }
         } else {
-            note = 'No terminal name supplied (SWITCHBOARD_TERMINAL is set for fleet seats only) — turn-end notices will land in .switchboard/orchestrator/reports/ instead of this terminal.';
+            note = 'No terminal name supplied (SWITCHBOARD_TERMINAL is set for fleet seats only) — turn-end notices will land in .switchboard/mission-control/reports/ instead of this terminal.';
         }
 
-        const seat: OrchestratorSeat = { terminalName: resolvedName, adoptedAt: new Date().toISOString() };
-        this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, orchestratorSeat: seat });
+        const seat: MissionControlSeat = { terminalName: resolvedName, adoptedAt: new Date().toISOString() };
+        this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, missionControlSeat: seat });
         await this._persistAutobanState();
         this._postAutobanStateNow();
+        this._pushControllerSeatToPtyHost();
 
         const liveDelivery = !!resolvedName;
-        const { mode, prompt } = await this.buildOrchestratorKickoffPrompt(root, initiatorProject, liveDelivery ? 'host' : 'self');
+        const { mode, prompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, liveDelivery ? 'host' : 'self');
         return { success: true, mode, prompt, seat, liveDelivery, ...(note ? { note } : {}) };
     }
 
     /**
      * The arming half of Start, callable over HTTP. Called by
-     * `POST /orchestration/confirm` after the orchestrator agent has run the
+     * `POST /mission-control/confirm` after Mission Control agent has run the
      * pre-flight, the user has answered in the terminal, and the agent has
-     * written `.switchboard/orchestrator/session.md` (Rules then Log).
+     * written `.switchboard/mission-control/session.md` (Rules then Log).
      *
      * Verifies the session file exists, then runs the arming block moved
-     * verbatim out of startOrchestratorFromKanban: stop the run-sheet engine,
+     * verbatim out of startMissionControlFromKanban: stop the run-sheet engine,
      * flip `enabled=true` + `automationMode='agent-managed'`, persist,
      * broadcast. Idempotent on a second call — relies on the existing
      * double-enter behaviour of the arming calls rather than adding a new guard.
@@ -11669,46 +11702,46 @@ Each plan file must include:
      * forgot to write it learns immediately instead of arming a session with
      * no rules.
      */
-    public async confirmOrchestrationSession(workspaceRoot?: string): Promise<{ success: boolean; sessionFile?: string; error?: string; status?: number }> {
-        if (this._orchestrationSessionState === 'handed-off') {
+    public async confirmMissionControlSession(workspaceRoot?: string): Promise<{ success: boolean; sessionFile?: string; error?: string; status?: number }> {
+        if (this._missionControlSessionState === 'handed-off') {
             return { success: false, status: 409, error: 'Session already handed off — cannot confirm after handoff' };
         }
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (!root) {
-            return { success: false, error: 'no workspace folder found — cannot confirm orchestration session' };
+            return { success: false, error: 'no workspace folder found — cannot confirm Mission Control session' };
         }
-        const sessionPath = path.join(root, '.switchboard', 'orchestrator', 'session.md');
+        const sessionPath = path.join(root, '.switchboard', 'mission-control', 'session.md');
         try {
             await fs.promises.access(sessionPath);
         } catch {
-            return { success: false, error: 'no session file — write .switchboard/orchestrator/session.md before confirming' };
+            return { success: false, error: 'no session file — write .switchboard/mission-control/session.md before confirming' };
         }
 
-        // Arming sets the orchestrator switch. The mode axis is deleted —
-        // there is no exclusivity between the schedule and the orchestrator,
+        // Arming sets Mission Control switch. The mode axis is deleted —
+        // there is no exclusivity between the schedule and Mission Control,
         // so no _stopAutobanEngine() call. The schedule (if armed) keeps
-        // ticking; the orchestrator wake interval is installed separately.
+        // ticking; Mission Control wake interval is installed separately.
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
-            orchestratorArmed: true
+            missionControlArmed: true
         });
-        this._orchestrationSessionState = 'armed';
+        this._missionControlSessionState = 'armed';
         await this._persistAutobanState();
         this._postAutobanStateNow();
         return { success: true, sessionFile: sessionPath };
     }
 
     /**
-     * Hand off orchestration to a coding lead and exit.
-     * Reached by `POST /orchestration/handoff`.
+     * Hand off Mission Control to a coding lead and exit.
+     * Reached by `POST /mission-control/handoff`.
      *
      * 1. Refuse unsafe handoff (no live coding head or empty queue) with 409.
      * 2. Refuse second terminal move (already armed or already handed off) with 409.
      * 3. Post summary to session log before closing terminal.
-     * 4. Close orchestrator seat via _closeTerminal(ORCHESTRATOR_TERMINAL_NAME).
+     * 4. Close Mission Control seat via _closeTerminal(MISSION_CONTROL_TERMINAL_NAME).
      * 5. Does NOT arm or disarm autobanState (no _stopAutobanEngine, no automationMode change, no timer).
      */
-    public async handoffOrchestrationSession(args: {
+    public async handoffMissionControlSession(args: {
         workspaceRoot?: string;
         headTerminal: string;
         stagedCount?: number;
@@ -11717,14 +11750,14 @@ Each plan file must include:
     }): Promise<{ success: boolean; status?: number; error?: string; [key: string]: any }> {
         const root = this._resolveWorkspaceRoot(args?.workspaceRoot);
         if (!root) {
-            return { success: false, status: 400, error: 'no workspace folder found — cannot hand off orchestration session' };
+            return { success: false, status: 400, error: 'no workspace folder found — cannot hand off Mission Control session' };
         }
 
         // Refuse second terminal move.
-        if (this._orchestrationSessionState === 'handed-off') {
+        if (this._missionControlSessionState === 'handed-off') {
             return { success: false, status: 409, error: 'Session already handed off — cannot hand off twice' };
         }
-        if (this._autobanState?.orchestratorArmed) {
+        if (this._autobanState?.missionControlArmed) {
             return { success: false, status: 409, error: 'Session already armed — cannot hand off an armed session' };
         }
 
@@ -11751,7 +11784,7 @@ Each plan file must include:
         // The queue candidate predicate matches dispatchNextFromQueue in LocalApiServer.ts
         // exactly: column STAGING AND !dispatchedAt AND (!featureId || featureId === '').
         // STAGING only — a handoff that "succeeded" off a full PLAN REVIEWED lane with
-        // an empty queue would exit the orchestrator having handed the lead nothing it
+        // an empty queue would exit Mission Control having handed the lead nothing it
         // will actually be given, which is the outage this gate exists to refuse.
         const isQueueable = (p: any): boolean =>
             !!p
@@ -11780,44 +11813,45 @@ Each plan file must include:
         const summary = String(args?.summary || '').trim();
 
         // 3. Post summary to session log BEFORE touching terminal.
-        const sessionPath = path.join(root, '.switchboard', 'orchestrator', 'session.md');
+        const sessionPath = path.join(root, '.switchboard', 'mission-control', 'session.md');
         const entry = `\n\n### Handoff — ${new Date().toISOString()}\n- **Lead:** ${headTerminal}\n- **Staged:** ${stagedCount ?? 'all scoped'}\n- **First card:** ${args?.firstCardPlanId || 'none'}\n- **Summary:** ${summary}\n`;
         try {
             await fs.promises.appendFile(sessionPath, entry, 'utf8');
         } catch {
-            const sessionsDir = path.join(root, '.switchboard', 'orchestrator');
+            const sessionsDir = path.join(root, '.switchboard', 'mission-control');
             await fs.promises.mkdir(sessionsDir, { recursive: true });
             await fs.promises.writeFile(sessionPath, `# Session\n\n## Log${entry}`, 'utf8');
         }
 
-        // 4. Close the orchestrator seat.
-        // NOTE: This intentionally differs from stopOrchestratorFromKanban (which leaves the
+        // 4. Close Mission Control seat.
+        // NOTE: This intentionally differs from stopMissionControlFromKanban (which leaves the
         // terminal alive because a running agent might have uncommitted context). Here, the
-        // orchestrator agent has just called /handoff at the end of its pre-flight after
+        // Mission Control agent has just called /handoff at the end of its pre-flight after
         // posting its report and summary, so there is nothing in-flight to lose.
-        await this._closeTerminal(ORCHESTRATOR_TERMINAL_NAME);
+        await this._closeTerminal(MISSION_CONTROL_TERMINAL_NAME);
 
-        // 5. Clear the orchestrator switch — the lead owns the pipeline now.
+        // 5. Clear Mission Control switch — the lead owns the pipeline now.
         // The schedule switch is independent and stays untouched.
         //
-        // The SEAT goes with it. Handoff ends the orchestrator session: it closes
+        // The SEAT goes with it. Handoff ends Mission Control session: it closes
         // the `Orchestrator` terminal above, and the persona's handoff sequence
         // tells an adopted session to exit itself. A surviving seat record then
         // names a terminal nobody is in, and because notifyTurnEnd checks the seat
         // BEFORE the role-scan fallback, that dead name outranks a real
-        // orchestrator-role terminal for every later turn-end — the notice is
+        // Mission Control-role terminal for every later turn-end — the notice is
         // logged as 'not active — skipping' instead of being delivered. Stop
         // already clears it; handoff is the other end-of-session door.
-        this._orchestrationSessionState = 'handed-off';
+        this._missionControlSessionState = 'handed-off';
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
-            orchestratorArmed: false,
-            orchestratorSeat: undefined
+            missionControlArmed: false,
+            missionControlSeat: undefined
         });
         await this._persistAutobanState();
+        this._pushControllerSeatToPtyHost();
 
         this.postMessage({
-            type: 'orchestrationHandoff',
+            type: 'missionControlHandoff',
             headTerminal,
             stagedCount,
             firstCardPlanId: args?.firstCardPlanId
@@ -11834,30 +11868,31 @@ Each plan file must include:
     }
 
     /**
-     * Called by the Kanban AUTOMATION tab (Stop orchestrator) or
-     * POST /orchestration/stop. Disarms the automation — sets the single
+     * Called by the Kanban AUTOMATION tab (Stop Mission Control) or
+     * POST /mission-control/stop. Disarms the automation — sets the single
      * ON/OFF flag to false. Does NOT dispose the terminal — a running agent
      * may hold uncommitted context; killing it is the user's call via the
      * terminal UI.
      *
-     * Also archives `.switchboard/orchestrator/session.md` to
-     * `.switchboard/orchestrator/sessions/session-<ISO>.md` so the next Start
+     * Also archives `.switchboard/mission-control/session.md` to
+     * `.switchboard/mission-control/sessions/session-<ISO>.md` so the next Start
      * interviews from scratch. Best-effort: a rename failure logs and disarm
      * still completes. Without this, the next Start reads a stale session file
      * and never re-interviews.
      */
-    public async stopOrchestratorFromKanban(workspaceRoot?: string): Promise<void> {
-        this._orchestrationSessionState = 'none';
-        // Clear the orchestrator switch. The schedule switch is independent
-        // and must not be touched here — stopping the orchestrator does not
+    public async stopMissionControlFromKanban(workspaceRoot?: string): Promise<void> {
+        this._missionControlSessionState = 'none';
+        // Clear Mission Control switch. The schedule switch is independent
+        // and must not be touched here — stopping Mission Control does not
         // stop the schedule.
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
-            orchestratorArmed: false,
-            orchestratorSeat: undefined
+            missionControlArmed: false,
+            missionControlSeat: undefined
         });
         await this._persistAutobanState();
         this._postAutobanStateNow();
+        this._pushControllerSeatToPtyHost();
 
         // Best-effort archive of the session file. A missing file is a no-op
         // (Stop during an interview never wrote one). A name collision on the
@@ -11865,10 +11900,10 @@ Each plan file must include:
         // session.
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (root) {
-            const sessionPath = path.join(root, '.switchboard', 'orchestrator', 'session.md');
+            const sessionPath = path.join(root, '.switchboard', 'mission-control', 'session.md');
             try {
                 await fs.promises.access(sessionPath);
-                const sessionsDir = path.join(root, '.switchboard', 'orchestrator', 'sessions');
+                const sessionsDir = path.join(root, '.switchboard', 'mission-control', 'sessions');
                 await fs.promises.mkdir(sessionsDir, { recursive: true });
                 const iso = new Date().toISOString().replace(/[:.]/g, '-');
                 let archivePath = path.join(sessionsDir, `session-${iso}.md`);
@@ -11887,7 +11922,7 @@ Each plan file must include:
                 await fs.promises.rename(sessionPath, archivePath);
             } catch (err) {
                 // session.md absent (no-op) or rename failure — log and continue.
-                console.warn('[TaskViewerProvider] stopOrchestratorFromKanban: session archive skipped:', err instanceof Error ? err.message : err);
+                console.warn('[TaskViewerProvider] stopMissionControlFromKanban: session archive skipped:', err instanceof Error ? err.message : err);
             }
         }
     }
@@ -11895,15 +11930,15 @@ Each plan file must include:
     public async setAutomationModeFromKanban(msg: any): Promise<void> {
         // The mode axis is deleted. Two independent switches:
         //  - scheduleEnabled (on/off, with interval or cron)
-        //  - orchestratorArmed (on/off, with wake interval)
+        //  - missionControlArmed (on/off, with wake interval)
         // Both can be on simultaneously. The UI sends these flags directly;
         // a legacy `mode` field is mapped for backward compatibility.
 
         // Backward compat: map old mode field to the new switches.
-        if (msg.mode && msg.scheduleEnabled === undefined && msg.orchestratorArmed === undefined) {
-            if (msg.mode === 'scheduled') { msg.scheduleEnabled = msg.enabled ?? true; msg.orchestratorArmed = false; }
-            else if (msg.mode === 'agent-managed') { msg.scheduleEnabled = false; msg.orchestratorArmed = msg.enabled ?? true; }
-            else if (msg.mode === 'external') { msg.scheduleEnabled = false; msg.orchestratorArmed = false; }
+        if (msg.mode && msg.scheduleEnabled === undefined && msg.missionControlArmed === undefined) {
+            if (msg.mode === 'scheduled') { msg.scheduleEnabled = msg.enabled ?? true; msg.missionControlArmed = false; }
+            else if (msg.mode === 'agent-managed') { msg.scheduleEnabled = false; msg.missionControlArmed = msg.enabled ?? true; }
+            else if (msg.mode === 'external') { msg.scheduleEnabled = false; msg.missionControlArmed = false; }
         }
 
         const wasEnabled = this._autobanState.enabled;
@@ -11928,18 +11963,18 @@ Each plan file must include:
         await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
 
         // Orchestrator switch
-        const orchestratorArmed = msg.orchestratorArmed === undefined ? !!this._autobanState.orchestratorArmed : !!msg.orchestratorArmed;
-        const orchIntervalMinutes = msg.orchIntervalMinutes || this._autobanState.orchestrationConfig?.intervalMinutes || 10;
+        const missionControlArmed = msg.missionControlArmed === undefined ? !!this._autobanState.missionControlArmed : !!msg.missionControlArmed;
+        const orchIntervalMinutes = msg.orchIntervalMinutes || this._autobanState.missionControlConfig?.intervalMinutes || 10;
 
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
             enabled: scheduleEnabled,
-            orchestratorArmed,
+            missionControlArmed,
             batchSize,
             complexityFilter,
             routingMode,
             singleColumnConfig: this._singleColumnAutobanState,
-            orchestrationConfig: { intervalMinutes: orchIntervalMinutes }
+            missionControlConfig: { intervalMinutes: orchIntervalMinutes }
         });
 
         if (scheduleEnabled) {
@@ -13774,7 +13809,7 @@ Each plan file must include:
     /** Start the continuous Autoban background polling engine. */
     private _startAutobanEngine(): void {
         // The schedule is one of two independent switches. No mode gate —
-        // the orchestrator can be armed simultaneously, and both call the
+        // Mission Control can be armed simultaneously, and both call the
         // queue pop. The pop's 409 arbitrates between them.
         this._stopAutobanEngine();
         const { batchSize } = this._autobanState;
@@ -15672,7 +15707,18 @@ Each plan file must include:
                                 terminal.sendText(CLEAR_INPUT_LINE, false);
                                 await new Promise(r => setTimeout(r, CLEAR_INPUT_SETTLE_MS));
                             }
-                            terminal.sendText(input, true);
+                            // Split the payload from its submitting newline.
+                            // sendText(input, true) resolves to write(text + '\r') on the
+                            // pty seam (ptyBackend.ts), and a CR in the same read as
+                            // printable text is inserted as a literal newline rather than
+                            // submitted by devin 3000.5.20 — see ptyPromptDelivery.ts rule 2.
+                            // Fixed here rather than in the seam because
+                            // TerminalHandle.sendText is synchronous and cannot settle
+                            // between two writes without reordering against the caller's
+                            // next write.
+                            terminal.sendText(input, false);
+                            await new Promise(r => setTimeout(r, SUBMIT_SETTLE_MS));
+                            terminal.sendText('', true);
                         }
                         console.log(`[TaskViewer] sendToTerminal: sent to '${name}' (paced: ${paced}, len: ${input.length})`);
                         return { success: true };

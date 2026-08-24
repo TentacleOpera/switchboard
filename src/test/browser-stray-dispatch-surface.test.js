@@ -1,14 +1,14 @@
 'use strict';
 
 /**
- * Contract: the four stray _dispatchExecuteMessage call sites (orchestrator
+ * Contract: the four stray _dispatchExecuteMessage call sites (Mission Control
  * kickoff/wake, pair-programming coder, airlock send-to-coder) must be
- * host-derived (no apiOriginated flag). The orchestrator no longer remembers
+ * host-derived (no apiOriginated flag). Mission Control no longer remembers
  * a starting surface — fleet consultation is unconditional via _ptyHostPort.
  *
  * (browser-stray-dispatch-sites-hardcode-vscode-fleet.md)
  *
- * Source-text contract: the failure mode is a silent dead-on-arrival orchestrator
+ * Source-text contract: the failure mode is a silent dead-on-arrival Mission Control
  * or an invisible VS Code toast, so we pin structure. Run with:
  *   node src/test/browser-stray-dispatch-surface.test.js
  */
@@ -85,20 +85,20 @@ function run() {
             'and the marker must default to false so a new call site gains the seat block rather than losing it.');
     });
 
-    // 2. _orchestratorApiOriginated is gone.
-    test('_orchestratorApiOriginated field is fully removed', () => {
-        assert.doesNotMatch(taskViewerSource, /_orchestratorApiOriginated/,
-            '_orchestratorApiOriginated must be fully removed from TaskViewerProvider.');
+    // 2. _missionControlApiOriginated is gone.
+    test('_missionControlApiOriginated field is fully removed', () => {
+        assert.doesNotMatch(taskViewerSource, /_missionControlApiOriginated/,
+            '_missionControlApiOriginated must be fully removed from TaskViewerProvider.');
     });
 
-    test('orchestrator kickoff reports a failed delivery instead of a silent dead-on-arrival run', () => {
-        const startBody = extractMethodBody(taskViewerSource, 'startOrchestratorFromKanban');
+    test('Mission Control kickoff reports a failed delivery instead of a silent dead-on-arrival run', () => {
+        const startBody = extractMethodBody(taskViewerSource, 'startMissionControlFromKanban');
         assert.match(startBody, /const\s+kickoffSent\s*=\s*await\s+this\._dispatchExecuteMessage\(/,
             'kickoff dispatch must capture its result.');
-        assert.doesNotMatch(startBody, /_orchestratorApiOriginated/,
-            'kickoff dispatch must NOT reference _orchestratorApiOriginated.');
-        assert.match(startBody, /if\s*\(!kickoffSent\)\s*\{[\s\S]*?orchestratorStartResult[\s\S]*?success:\s*false/,
-            'kickoff must post orchestratorStartResult { success: false } when delivery failed.');
+        assert.doesNotMatch(startBody, /_missionControlApiOriginated/,
+            'kickoff dispatch must NOT reference _missionControlApiOriginated.');
+        assert.match(startBody, /if\s*\(!kickoffSent\)\s*\{[\s\S]*?missionControlStartResult[\s\S]*?success:\s*false/,
+            'kickoff must post missionControlStartResult { success: false } when delivery failed.');
     });
 
     // 3. dispatchToCoderTerminal signature + return.

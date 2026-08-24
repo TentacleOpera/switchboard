@@ -87,7 +87,7 @@
         body.theme-claudify .icon-btn.recover:hover:not(:disabled),
         body.theme-claudify .icon-btn.success,
         body.theme-claudify .mini-action-btn.is-active,
-        body.theme-claudify .orchestrator-controls .action-btn.stop-btn:hover:not(:disabled),
+        body.theme-claudify .mission-control-controls .action-btn.stop-btn:hover:not(:disabled),
         body.theme-claudify .secondary-btn.is-cyan:hover,
         body.theme-claudify .secondary-btn.is-orange:hover:not(:disabled),
         body.theme-claudify .secondary-btn.is-teal:hover { box-shadow: none; }
@@ -1116,7 +1116,7 @@
         }
 
         /* Orchestrator Card */
-        .orchestrator-card {
+        .mission-control-card {
             background: var(--panel-bg2);
             border: 1px solid var(--border-color);
             border-radius: 3px;
@@ -1124,18 +1124,18 @@
             margin: 0 8px 8px 8px;
         }
 
-        .orchestrator-card.hidden {
+        .mission-control-card.hidden {
             display: none !important;
         }
 
-        .orchestrator-header {
+        .mission-control-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
             margin-bottom: 8px;
         }
 
-        .orchestrator-label {
+        .mission-control-label {
             font-size: 10px;
             font-weight: 700;
             letter-spacing: 1.5px;
@@ -1143,7 +1143,7 @@
             text-transform: uppercase;
         }
 
-        .orchestrator-timer {
+        .mission-control-timer {
             font-family: var(--font-code);
             font-size: 18px;
             font-weight: 700;
@@ -1154,13 +1154,13 @@
             text-shadow: var(--glow-green);
         }
 
-        .orchestrator-timer.idle {
+        .mission-control-timer.idle {
             color: var(--text-secondary);
             text-shadow: none;
             font-size: 11px;
         }
 
-        .orchestrator-next-stage {
+        .mission-control-next-stage {
             font-size: 10px;
             color: var(--text-secondary);
             text-align: center;
@@ -1168,42 +1168,42 @@
             letter-spacing: 0.5px;
         }
 
-        .orchestrator-controls {
+        .mission-control-controls {
             display: flex;
             gap: 6px;
         }
 
-        .orchestrator-controls .action-btn {
+        .mission-control-controls .action-btn {
             flex: 1;
         }
 
-        .orchestrator-controls .action-btn.stop-btn {
+        .mission-control-controls .action-btn.stop-btn {
             color: var(--accent-red);
             border-color: color-mix(in srgb, var(--accent-red) 40%, transparent);
             flex: 0 0 auto;
             width: 70px;
         }
 
-        .orchestrator-controls .action-btn.stop-btn:hover:not(:disabled) {
+        .mission-control-controls .action-btn.stop-btn:hover:not(:disabled) {
             border-color: var(--accent-red);
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-red) 30%, transparent);
         }
 
-        .orchestrator-interval {
+        .mission-control-interval {
             display: flex;
             align-items: center;
             gap: 6px;
             margin-top: 6px;
         }
 
-        .orchestrator-interval label {
+        .mission-control-interval label {
             font-size: 9px;
             color: var(--text-secondary);
             letter-spacing: 0.5px;
             white-space: nowrap;
         }
 
-        .orchestrator-interval input {
+        .mission-control-interval input {
             width: 60px;
             background: #0a0a0a;
             color: var(--text-primary);
@@ -1213,8 +1213,8 @@
             text-align: center;
         }
 
-        .orchestrator-interval input:hover,
-        .orchestrator-interval input:focus {
+        .mission-control-interval input:hover,
+        .mission-control-interval input:focus {
             border-color: var(--border-bright);
             outline: none;
         }

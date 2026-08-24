@@ -56,6 +56,13 @@ export const CLEAR_INPUT_LINE = '\x15';
 // vscode.Terminal's) — paces off the same value instead of a copy that silently
 // stops tracking this one.
 export const CLEAR_INPUT_SETTLE_MS = 30;
+// Settle between a payload write and the CR that submits it. The twin of
+// ptyPromptDelivery.ts's SUBMIT_SETTLE_MS (same value, same reason): a CR that
+// arrives in the same read as printable text is inserted as a literal newline
+// rather than submitted by devin 3000.5.20, so the two must never share a write
+// OR an event-loop tick. Exported for the HostTerminal seam leg in
+// TaskViewerProvider, which cannot reach the standalone constant.
+export const SUBMIT_SETTLE_MS = 40;
 
 /**
  * Reset a terminal's CLI input line. For the sendText-based legs; the clipboard

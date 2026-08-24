@@ -8,7 +8,7 @@
  * live writer was `applyOversightWorktreeTopology` — machinery whose whole job
  * was to take the setting away on arm and hand it back on disarm. A crashed or
  * force-quit session left the forced `per-feature` in place with the user's real
- * value parked under `orchestration_prior_feature_worktree_mode`.
+ * value parked under `mission-control_prior_feature_worktree_mode`.
  *
  * Three properties, because deleting the forcing machinery alone satisfies none
  * of them:
@@ -84,10 +84,10 @@ test('the permanent reconciler is gone — the drain replaced it', () => {
 });
 
 test('the stash key survives in exactly one place: the drain', () => {
-    const hits = kanbanProviderSource.split('orchestration_prior_feature_worktree_mode').length - 1;
+    const hits = kanbanProviderSource.split('mission-control_prior_feature_worktree_mode').length - 1;
     assert.strictEqual(
         hits, 1,
-        `orchestration_prior_feature_worktree_mode appears ${hits} time(s) in KanbanProvider — asserted by COUNT, not presence, so a left-behind writer fails`
+        `mission-control_prior_feature_worktree_mode appears ${hits} time(s) in KanbanProvider — asserted by COUNT, not presence, so a left-behind writer fails`
     );
 });
 
@@ -99,7 +99,7 @@ test('the setFeatureWorktreeMode arm writes the mode and nothing else', () => {
     const armEnd = armRest.slice(1).indexOf("\n            case '");
     const arm = armEnd === -1 ? armRest : armRest.slice(0, armEnd + 1);
     assert.ok(
-        !arm.includes('orchestration_prior_feature_worktree_mode'),
+        !arm.includes('mission-control_prior_feature_worktree_mode'),
         'the arm still clears the stashed prior — that clear defended against a restore that no longer exists, and clearing it here would consume the key before the drain can rescue a stranded install'
     );
     assert.ok(

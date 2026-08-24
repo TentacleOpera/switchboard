@@ -945,7 +945,7 @@
                 const data = await fetchPtyVisibleRoles();
                 const visible = data.visibleAgents;
                 const hasCommand = data.hasCommand;
-                const SYSTEM_ROLES = new Set(['orchestrator', 'mcp_monitor']);
+                const SYSTEM_ROLES = new Set(['mission-control', 'mcp_monitor']);
                 const roles = Object.keys(visible)
                     .filter(k => visible[k] !== false && !SYSTEM_ROLES.has(k))
                     .sort((a, b) => {
@@ -1192,6 +1192,16 @@
                 // other shell-driven arm.
                 if (event.origin !== location.origin) { return; }
                 enterTeamScope(message.groupId);
+            } else if (message.type === 'switchToController') {
+                // In-place controller navigation: the shell rail's lit UFO
+                // click posts this to reveal the controller terminal. The rail
+                // button is navigational (like every other rail icon), so it
+                // switches the panel to controller scope rather than posting
+                // /mission-control/stop. The end-session control lives in the
+                // scoped .sidebar-ops block (#btn-controller-stop), where it
+                // can carry a label. Origin-guarded.
+                if (event.origin !== location.origin) { return; }
+                enterControllerScope();
             } else if (message.type === 'peekTerminal' && typeof message.name === 'string') {
                 if (event.origin !== location.origin) { return; }
                 if (peekTerminalName === message.name) {
@@ -1223,7 +1233,7 @@
                 reloadTerminalGroups();
             } else if ((message.type === 'autobanStateSync' || message.type === 'updateAutobanConfig') && message.state) {
                 // Orchestrator seat/armed state, relayed to the shell rail so
-                // its UFO icon can light/dim. Two carriers, same payload shape:
+                // its Mission Control icon can light/dim. Two carriers, same payload shape:
                 // `autobanStateSync` is the live push-on-change (fired by
                 // _postAutobanStateNow in TaskViewerProvider); `updateAutobanConfig`
                 // is the WS resync-on-connect twin (kanbanProvider.getFullState
@@ -1232,7 +1242,7 @@
                 // connect without any extra endpoint. No origin guard: both
                 // arrive via the wsHub broadcast rail (transport.js unwraps wsHub
                 // frames as MessageEvents with origin ''), like terminalsChanged.
-                relayOrchestratorStateToShell(message.state);
+                relayMissionControlStateToShell(message.state);
             } else if (message.type === 'panelVisibility' && typeof message.visible === 'boolean') {
                 if (event.origin !== location.origin) { return; }
                 // The shell hides a panel by setting display:none on its IFRAME. This
@@ -1736,18 +1746,18 @@
         return teamEntries;
     }
 
-    /* Relay orchestrator seat/armed state to the shell rail so its UFO icon can
+    /* Relay Mission Control seat/armed state to the shell rail so its Mission Control icon can
      * light (active) or dim (inactive). Mirrors postFleetStateToShell's
      * embedded-frame guard and origin-targeting. The shell handler checks
      * event.origin === location.origin on its end; this side uses the same
      * target origin so a foreign framer cannot spoof the relay. */
-    function relayOrchestratorStateToShell(state) {
+    function relayMissionControlStateToShell(state) {
         if (window.parent === window) { return; } // not embedded
-        const seat = state.orchestratorSeat || null;
+        const seat = state.missionControlSeat || null;
         window.parent.postMessage({
-            type: 'orchestratorState',
-            active: !!(state.orchestratorSeat || state.orchestratorArmed),
-            armed: !!state.orchestratorArmed,
+            type: 'missionControlState',
+            active: !!(state.missionControlSeat || state.missionControlArmed),
+            armed: !!state.missionControlArmed,
             seat: seat ? { terminalName: seat.terminalName || null, adoptedAt: seat.adoptedAt || null } : null
         }, location.origin);
     }
@@ -4526,6 +4536,9 @@
         if (btnTeamAck) { btnTeamAck.hidden = !teamScopeId; }
         const btnTeamAdd = document.getElementById('btn-team-add');
         if (btnTeamAdd) { btnTeamAdd.hidden = !teamScopeId; }
+        // Controller-scoped ops button: visible only in controller scope.
+        const btnControllerStop = document.getElementById('btn-controller-stop');
+        if (btnControllerStop) { btnControllerStop.hidden = !controllerScopeActive; }
         // RESTART EXITED MEMBERS: dynamic disabled state — re-evaluated on
         // every renderSidebarList call (5s poll) so a deleted definition
         // disables the button within one poll cycle.
@@ -7828,7 +7841,7 @@
         const data = rolePickerData || { visibleAgents: {}, hasCommand: {} };
         const visible = data.visibleAgents;
         const hasCommand = data.hasCommand;
-        const SYSTEM_ROLES = new Set(['orchestrator', 'mcp_monitor']);
+        const SYSTEM_ROLES = new Set(['mission-control', 'mcp_monitor']);
         const roles = Object.keys(visible)
             .filter(k => visible[k] !== false && !SYSTEM_ROLES.has(k))
             .sort((a, b) => {
@@ -10671,6 +10684,56 @@
         postFleetStateToShell();
     }
 
+    /* ── Controller-scoped mode ────────────────────────────────────────
+       Mirrors team-scoped mode: an `is-controller-scoped` body class swaps
+       the .sidebar-ops block to show the controller's own controls
+       (#btn-controller-stop) instead of the general-purpose buttons. The
+       rail icon's lit click navigates here (switchToController postMessage),
+       matching every other rail button — team buttons switch to team scope,
+       this one switches to controller scope. The end-session control that
+       USED to live on the rail icon lives here now, where it can carry a
+       label (the rail icon cannot). */
+    let controllerScopeActive = false;
+
+    /** Enter controller-scoped mode. Finds the controller terminal (by role
+     *  'mission-control' or 'project_manager', or by the adopted seat name) and
+     *  seats it into a pane. Falls back to a no-scope reveal when no
+     *  controller terminal exists — the rail lit state and the seat record
+     *  can diverge briefly during adoption. */
+    function enterControllerScope() {
+        // If already in team scope, exit it first — the two scopes are
+        // mutually exclusive, exactly as enterTeamScope clears a prior team.
+        if (teamScopeId) { exitTeamScope(); }
+        controllerScopeActive = true;
+        document.body.classList.add('is-controller-scoped');
+        // Show the controller-specific ops button, hide the general-purpose
+        // ones (CSS handles the hide — the class is on body). Unhide the
+        // stop button explicitly since it starts hidden.
+        const stopBtn = document.getElementById('btn-controller-stop');
+        if (stopBtn) { stopBtn.hidden = false; }
+        // Find and focus the controller terminal in a pane.
+        const controller = fleetList.find(t =>
+            t.role === 'mission-control' || t.role === 'project_manager'
+        );
+        if (controller) {
+            // Seat the controller terminal into pane 0 so the operator sees it.
+            paneAssignments[0] = controller.friendlyName;
+            initialAssignmentDone = true;
+            renderPaneGrid();
+        }
+        renderSidebarList();
+    }
+
+    /** Exit controller-scoped mode and return to the full fleet view. */
+    function exitControllerScope() {
+        controllerScopeActive = false;
+        document.body.classList.remove('is-controller-scoped');
+        const stopBtn = document.getElementById('btn-controller-stop');
+        if (stopBtn) { stopBtn.hidden = true; }
+        renderSidebarList();
+        renderPaneGrid();
+    }
+
     /** The render-boundary filter. Returns `fleetList` filtered to the scoped
      *  team's live members when `teamScopeId` is set, and `fleetList` unchanged
      *  otherwise. Called only from render paths — NEVER from fetch, standing-
@@ -10770,7 +10833,7 @@
         + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
         + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
         + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-        + 'dispatching again (or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+        + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
         + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
         + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
         + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
@@ -10779,7 +10842,7 @@
         + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
         + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
         + 'pwd> (that read returns one record per subtask, each with its kanbanColumn). '
-        + 'Never move a card backwards to an earlier pipeline stage — only the orchestrator may do that. '
+        + 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
         + 'Never move a card to a new column yourself: your only card action is the POST '
         + '/kanban/dispatch call below, and only when your team has a reviewer seat. '
         + 'Check your team roster (the YOUR TEAM block in your prompt or ptyListTerminals) for a seat '
@@ -10793,7 +10856,7 @@
         + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
         + 'empty and stop. '
         + 'If your team has NO reviewer seat, do NOT move the card — that is not your role. '
-        + 'Post a finished report to .switchboard/orchestrator/reports/ naming the feature and its planId, '
+        + 'Post a finished report to .switchboard/mission-control/reports/ naming the feature and its planId, '
         + 'and stop. The card stays where it is.'
         + ' When the work is complete, stage the files you changed by explicit path '
         + '— never `git add -A` or `git add .`. Then create a single commit with a '
@@ -11858,6 +11921,36 @@
                 ? { parentRoot: headTerm.parentRoot }
                 : undefined;
             onNewTerminalClicked(targetSpec, 'team:' + teamScopeId);
+        });
+    })();
+
+    // ── Controller action bar button. The end-session control that moved
+    //    off the rail icon. Shaped like #btn-team-close — labelled,
+    //    immediate, no confirm gate (CLAUDE.md). POST /mission-control/stop
+    //    disarms the session and archives it, deliberately leaving the
+    //    terminal alive (a running agent may have uncommitted context).
+    //    After stop, exit controller scope — the session is gone, so the
+    //    scoped ops block has nothing to act on. ──────────────────────
+    (function wireControllerActionBar() {
+        const btnControllerStop = document.getElementById('btn-controller-stop');
+        if (btnControllerStop) btnControllerStop.addEventListener('click', () => {
+            btnControllerStop.disabled = true;
+            fetch('/mission-control/stop', { method: 'POST', credentials: 'same-origin' })
+                .then(res => res.json())
+                .then(result => {
+                    if (result.success) {
+                        showPaneToast('Orchestrator session ended');
+                    } else {
+                        showPaneToast('Failed to stop Mission Control: ' + (result.error || 'unknown'));
+                    }
+                })
+                .catch(err => {
+                    showPaneToast('Failed to stop Mission Control: ' + err.message);
+                })
+                .finally(() => {
+                    btnControllerStop.disabled = false;
+                    exitControllerScope();
+                });
         });
     })();
 

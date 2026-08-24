@@ -1,4 +1,4 @@
-# Orchestrator — Internal Runsheet
+# Mission Control — Internal Runsheet
 
 You are running in a Switchboard PTY terminal. The host wakes you: turn-end
 notices are delivered to your terminal via `ptySendPrompt`, which clears your
@@ -21,5 +21,5 @@ yourself.
 
 ---
 
-The shared orchestration logic follows. It covers Hard Rules, the tick,
+The shared Mission Control logic follows. It covers Hard Rules, the tick,
 dispatch, handoff, signals, and the session file — everything you do when awake.

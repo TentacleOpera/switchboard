@@ -58,9 +58,9 @@ export interface RemoteConfig {
     content: boolean;
     /**
      * Opt-in batch sequencing (subtask 7 step 5, default OFF). When true, a
-     * poll cycle that staged at least one card wakes an orchestrator once with
+     * poll cycle that staged at least one card wakes a Mission Control once with
      * the batch to reorder by dependency / group into features before the first
-     * dispatch. Bounded: if no orchestrator can be started or it does not
+     * dispatch. Bounded: if no Mission Control can be started or it does not
      * respond within the bound, the queue proceeds in arrival order and the
      * fallback is logged. The bound is enforced by the extension, not by the
      * agent's cooperation — an agent that hangs is the expected failure, not
@@ -147,9 +147,9 @@ interface RemoteControlDeps {
      * Opt-in batch sequencing (subtask 7 step 5). Called once per poll cycle
      * that staged at least one card, when `queueSequencing` is on. Receives the
      * staged plan ids in arrival order and the workspace root. The extension
-     * starts (or reuses) an orchestrator, hands it the batch, and waits for it
+     * starts (or reuses) a Mission Control, hands it the batch, and waits for it
      * to finish reordering — bounded by a timeout the extension enforces. If
-     * the orchestrator cannot be started or does not respond within the bound,
+     * Mission Control cannot be started or does not respond within the bound,
      * returns `{ sequenced: false }` and the queue proceeds in arrival order.
      * Optional — absent in test harnesses (sequencing is always off).
      */
@@ -715,11 +715,11 @@ export class RemoteControlService {
             }
         }
         // ── Opt-in batch sequencing (default OFF) ──────────────────────
-        // When `queueSequencing` is on, wake an orchestrator once with the
+        // When `queueSequencing` is on, wake a Mission Control once with the
         // batch to reorder by dependency / group into features before the first
         // dispatch. One wake per batch, not per card — a wake per card
         // reintroduces the fan-out this plan removes, one level up. Bounded: if
-        // no orchestrator can be started or it does not respond within the
+        // no Mission Control can be started or it does not respond within the
         // bound, the queue proceeds in arrival order and the fallback is
         // logged. The bound is enforced by the extension, not by the agent's
         // cooperation — an agent that hangs is the expected failure, not the

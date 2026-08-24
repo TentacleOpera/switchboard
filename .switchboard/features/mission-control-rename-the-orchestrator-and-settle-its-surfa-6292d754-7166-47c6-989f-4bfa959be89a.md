@@ -15,10 +15,10 @@ Rename the orchestrator persona to Mission Control and build out the surfaces th
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Mission Control panel: UI specification](../plans/mission-control-panel-ui-specification.md) — **PLAN REVIEWED**
-- [ ] [One controller, enforced at the service](../plans/one-controller-enforced-at-the-service.md) — **PLAN REVIEWED**
-- [ ] [Rename the orchestrator to Mission Control](../plans/rename-the-orchestrator-to-mission-control.md) — **PLAN REVIEWED**
-- [ ] [The automation model: four things, not a mode axis](../plans/the-automation-model-four-things-not-a-mode-axis.md) — **PLAN REVIEWED**
+- [ ] [Mission Control panel: UI specification](../plans/mission-control-panel-ui-specification.md) — **CODER CODED**
+- [ ] [One controller, enforced at the service](../plans/one-controller-enforced-at-the-service.md) — **CODER CODED**
+- [ ] [Rename the orchestrator to Mission Control](../plans/rename-the-orchestrator-to-mission-control.md) — **CODER CODED**
+- [ ] [The automation model: four things, not a mode axis](../plans/the-automation-model-four-things-not-a-mode-axis.md) — **CODER CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

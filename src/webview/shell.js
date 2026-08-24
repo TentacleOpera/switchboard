@@ -282,26 +282,37 @@
         tooltipTarget = null;
     }
 
-    /* ── Orchestrator rail icon ─────────────────────────────────────────
+    /* ── Mission Control rail icon ─────────────────────────────────────────
        A UFO button at the top of #strip-terminals that lights (animated cyan
-       lights) when an orchestrator session is active and dims when inactive.
-       Lit click → POST /orchestration/stop (end the session). Dimmed click →
-       POST /orchestration/start: the server decides — if a lead/coder agent is
-       configured it creates a pty terminal and delivers the persona prompt
-       (mode 'terminal'); otherwise it returns the /switchboard launcher text
-       (mode 'clipboard') for the shell to copy. State arrives via
-       `orchestratorState` postMessages relayed from terminals.js (which gets
-       autobanStateSync / updateAutobanConfig over the WS broadcast rail). */
-    let orchestratorActive = false;
-    let orchestratorSeat = null;
-    // In-flight guard for the dimmed-click /orchestration/start fetch. The
-    // server's seat guard cannot help here: the agent adopts the seat seconds
-    // or minutes after the terminal is created, so two rapid clicks both see
-    // an empty seat and spawn a second 'Orchestrator' terminal (renamed to
-    // 'orchestrator-2' by ptyFleetService.create's collision loop). A second
-    // click while a start fetch is pending is a silent no-op — cleared in both
-    // the success and failure paths. No confirmation dialog (CLAUDE.md).
-    let orchestrationStartInFlight = false;
+       lights) when an Mission Control session is active and dims when inactive.
+       Lit click → REVEAL (navigate to the terminals panel and focus the
+       controller terminal), matching every other button in the rail — team
+       buttons switch the panel to team scope, ungrouped terminal buttons
+       focus/peek. The rail is a row of navigational icons, and this one is no
+       longer the exception: the destructive end-session control lives in the
+       controller's own scoped ops block inside the terminals panel (see
+       btn-controller-stop), where it can carry a label — the rail icon cannot.
+       Dimmed click → POST /mission-control/start: the server decides — if a
+       lead/coder agent is configured it creates a pty terminal and delivers
+       the persona prompt (mode 'terminal'); otherwise it returns the
+       /switchboard launcher text (mode 'clipboard') for the shell to copy.
+       State arrives via `missionControlState` postMessages relayed from
+       terminals.js (which gets autobanStateSync / updateAutobanConfig over the
+       WS broadcast rail). */
+    let missionControlActive = false;
+    let missionControlSeat = null;
+    // UI affordance for the dimmed-click /mission-control/start fetch. This is
+    // NO LONGER THE GUARD against duplicate controllers — that guard now lives
+    // in ptyFleetService.create(), which consults the singleton identity
+    // before the collision loop and returns the existing live handle rather
+    // than minting mission-control-2. The service guard is the one chokepoint
+    // every path goes through (rail, panel, dock, standalone host), so a
+    // client flag cannot be the protection and was never sufficient: two shell
+    // tabs, a shell tab plus the extension panel, or a reload mid-flight all
+    // defeated it. This flag now only disables the button while a start fetch
+    // is pending, so a double-click does not fire two fetches — a UX nicety,
+    // not a correctness gate. No confirmation dialog (CLAUDE.md).
+    let missionControlStartInFlight = false;
 
     /* Minimal transient message near the rail. Reuses the body-level
        tooltip-overlay positioning pattern but auto-dismisses. textContent
@@ -324,46 +335,46 @@
         toast._dismissTimer = setTimeout(() => { toast.style.opacity = '0'; }, 3000);
     }
 
-    function createOrchestratorIcon() {
+    function createMissionControlIcon() {
         const btn = document.createElement('button');
-        btn.id = 'strip-orchestrator';
+        btn.id = 'strip-mission-control';
         btn.type = 'button';
-        btn.className = 'orchestrator-dimmed';
-        btn.setAttribute('aria-label', 'Orchestrator session');
-        btn.dataset.tooltip = 'Operator: inactive — click to start';
+        btn.className = 'mission-control-dimmed';
+        btn.setAttribute('aria-label', 'Mission Control session');
+        btn.dataset.tooltip = 'Mission Control: inactive — click to start';
 
         // Inline SVG (not an <img src>) so shell.html's CSS can select into the
         // icon's sub-elements — the dimmed freeze and reduced-motion rules are
         // inert when the SVG is a separate document. The SVG's internal <style>
         // block is dropped; all animation rules live in shell.html. ids are
-        // prefixed (sb-orch-*) to avoid document-wide collisions now that they
+        // prefixed (sb-mc-*) to avoid document-wide collisions now that they
         // are global. aria-hidden="true" + no role/aria-labelledby so the icon
         // does not double-announce beside the button's aria-label. Class names
         // on sub-elements (.ufo, .beam, .light-a, .light-b, .star-a, .star-b)
         // are kept — shell.html's selectors depend on them.
-        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" aria-hidden="true" shape-rendering="crispEdges" class="strip-orch-icon">'
+        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" aria-hidden="true" shape-rendering="crispEdges" class="strip-mc-icon">'
             + '<defs>'
-            + '<filter id="sb-orch-cyan-glow" x="-100%" y="-100%" width="300%" height="300%">'
+            + '<filter id="sb-mc-cyan-glow" x="-100%" y="-100%" width="300%" height="300%">'
             + '<feGaussianBlur stdDeviation="3" result="blur"/>'
             + '<feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>'
             + '</filter>'
-            + '<linearGradient id="sb-orch-beam" x1="0" y1="0" x2="0" y2="1">'
+            + '<linearGradient id="sb-mc-beam" x1="0" y1="0" x2="0" y2="1">'
             + '<stop offset="0" stop-color="#00e5ff" stop-opacity=".22"/>'
             + '<stop offset="1" stop-color="#00e5ff" stop-opacity="0"/>'
             + '</linearGradient>'
             + '</defs>'
-            + '<g fill="#00e5ff" filter="url(#sb-orch-cyan-glow)">'
+            + '<g fill="#00e5ff" filter="url(#sb-mc-cyan-glow)">'
             + '<rect class="star-a" x="40" y="36" width="4" height="4"/>'
             + '<rect class="star-b" x="268" y="54" width="4" height="4"/>'
             + '<rect class="star-b" x="74" y="126" width="3" height="3"/>'
             + '<rect class="star-a" x="248" y="132" width="3" height="3"/>'
             + '</g>'
             + '<g class="beam">'
-            + '<path d="M128 104h64l32 68H96z" fill="url(#sb-orch-beam)"/>'
+            + '<path d="M128 104h64l32 68H96z" fill="url(#sb-mc-beam)"/>'
             + '<rect x="112" y="168" width="96" height="4" fill="#00e5ff" opacity=".16"/>'
             + '</g>'
             + '<g class="ufo">'
-            + '<g filter="url(#sb-orch-cyan-glow)" opacity=".35" fill="#00e5ff">'
+            + '<g filter="url(#sb-mc-cyan-glow)" opacity=".35" fill="#00e5ff">'
             + '<rect x="112" y="50" width="96" height="4"/>'
             + '<rect x="88" y="70" width="144" height="20"/>'
             + '<rect x="104" y="90" width="112" height="12"/>'
@@ -383,7 +394,7 @@
             + '<rect x="120" y="102" width="80" height="4" fill="#1d2323"/>'
             + '<rect x="72" y="82" width="16" height="4" fill="#5e6666"/>'
             + '<rect x="232" y="82" width="16" height="4" fill="#5e6666"/>'
-            + '<g fill="#00e5ff" filter="url(#sb-orch-cyan-glow)">'
+            + '<g fill="#00e5ff" filter="url(#sb-mc-cyan-glow)">'
             + '<rect class="light-a" x="96" y="82" width="12" height="8"/>'
             + '<rect class="light-b" x="120" y="86" width="12" height="8"/>'
             + '<rect class="light-a" x="144" y="88" width="12" height="8"/>'
@@ -391,43 +402,49 @@
             + '<rect class="light-a" x="192" y="86" width="12" height="8"/>'
             + '<rect class="light-b" x="216" y="82" width="12" height="8"/>'
             + '</g>'
-            + '<rect x="156" y="98" width="8" height="8" fill="#00e5ff" filter="url(#sb-orch-cyan-glow)"/>'
+            + '<rect x="156" y="98" width="8" height="8" fill="#00e5ff" filter="url(#sb-mc-cyan-glow)"/>'
             + '</g>'
             + '</svg>';
 
         btn.addEventListener('click', () => {
-            if (orchestratorActive) {
-                // End immediately — no confirmation. The user is in control.
-                btn.dataset.tooltip = 'Orchestrator: stopping…';
-                fetch('/orchestration/stop', { method: 'POST', credentials: 'same-origin' })
-                    .then(res => res.json())
-                    .then(result => {
-                        if (result.success) {
-                            showStripToast('Orchestrator session ended');
-                        } else {
-                            showStripToast('Failed to stop orchestrator: ' + (result.error || 'unknown'));
-                        }
-                    })
-                    .catch(err => {
-                        showStripToast('Failed to stop orchestrator: ' + err.message);
-                    });
+            if (missionControlActive) {
+                // Lit click → REVEAL, matching every other button in the rail.
+                // Team buttons switch the panel to team scope; ungrouped
+                // terminal buttons focus/peek. This one navigates to the
+                // terminals panel and asks it to focus the controller terminal
+                // (or enter controller scope). Purely navigational — no
+                // /mission-control/stop is posted from any rail path. The
+                // destructive end-session control lives in the controller's
+                // own scoped ops block inside the terminals panel
+                // (btn-controller-stop), where it can carry a label.
+                selectPanel('terminals');
+                const termFrame = frames.get('terminals');
+                if (termFrame && termFrame.contentWindow) {
+                    try {
+                        termFrame.contentWindow.postMessage({
+                            type: 'switchToController'
+                        }, location.origin);
+                    } catch { /* ignore */ }
+                }
             } else {
-                // Dimmed click: start the operator. The server decides the path
+                // Dimmed click: start Mission Control. The server decides the path
                 // — terminal (agent configured) or clipboard fallback (no agent).
-                // In-flight guard: a second click while a start fetch is pending
-                // is a silent no-op (double-click protection — see the module
-                // flag's comment for why the server seat guard cannot help).
-                if (orchestrationStartInFlight) { return; }
-                orchestrationStartInFlight = true;
-                btn.dataset.tooltip = 'Operator: starting…';
-                fetch('/orchestration/start', { method: 'POST', credentials: 'same-origin' })
+                // UI affordance only: disable the button while a start fetch is
+                // pending so a double-click does not fire two fetches. This is
+                // NOT the duplicate-controller guard — that lives in
+                // ptyFleetService.create() now (see the flag's comment above).
+                if (missionControlStartInFlight) { return; }
+                missionControlStartInFlight = true;
+                btn.disabled = true;
+                btn.dataset.tooltip = 'Mission Control: starting…';
+                fetch('/mission-control/start', { method: 'POST', credentials: 'same-origin' })
                     .then(res => res.json())
                     .then(result => {
                         if (result.success && result.mode === 'terminal') {
-                            showStripToast('Operator started — check the Orchestrator terminal');
+                            showStripToast('Mission Control started — check Mission Control terminal');
                         } else if (result.success && result.mode === 'clipboard') {
                             // No agent configured — copy the prompt to clipboard.
-                            const text = result.prompt || 'Run /switchboard workflow to start orchestration';
+                            const text = result.prompt || 'Run /switchboard workflow to start Mission Control';
                             if (navigator.clipboard && navigator.clipboard.writeText) {
                                 navigator.clipboard.writeText(text).then(() => {
                                     showStripToast('Copied: ' + text);
@@ -438,18 +455,19 @@
                                 showStripToast(text);
                             }
                         } else {
-                            showStripToast('Failed to start operator: ' + (result.error || 'unknown'));
+                            showStripToast('Failed to start Mission Control: ' + (result.error || 'unknown'));
                         }
                         // Restore the inactive tooltip after the attempt resolves
                         // so a later hover is not stuck on 'starting…'.
-                        btn.dataset.tooltip = 'Operator: inactive — click to start';
+                        btn.dataset.tooltip = 'Mission Control: inactive — click to start';
                     })
                     .catch(err => {
-                        showStripToast('Failed to start operator: ' + err.message);
-                        btn.dataset.tooltip = 'Operator: inactive — click to start';
+                        showStripToast('Failed to start Mission Control: ' + err.message);
+                        btn.dataset.tooltip = 'Mission Control: inactive — click to start';
                     })
                     .finally(() => {
-                        orchestrationStartInFlight = false;
+                        missionControlStartInFlight = false;
+                        btn.disabled = false;
                     });
             }
         });
@@ -476,14 +494,14 @@
             }
         }
         container.insertBefore(btn, container.firstChild);
-        // The fleet container owns the bottom anchor in CSS; the orchestrator
+        // The fleet container owns the bottom anchor in CSS; Mission Control
         // icon rides above it. Reconcile so the anchor stays on the container.
         applyBottomAnchor();
         return btn;
     }
 
-    /* Ensure the orchestrator rail icon exists independently of any
-       `orchestratorState` postMessage. renderOrchestratorIcon is the ONLY
+    /* Ensure the Mission Control rail icon exists independently of any
+       `missionControlState` postMessage. renderMissionControlIcon is the ONLY
        other creator and it only runs when a state message arrives — on a cold
        shell load with no autoban state change, NO icon would exist at all and
        the start control would be unreachable. This is called (a) once during
@@ -491,36 +509,36 @@
        renderTerminalSection in BOTH branches — including the early-return
        `!frames.has('terminals')` branch, which removes the container (and the
        icon with it). Idempotent: a no-op when the icon already exists. */
-    function ensureOrchestratorIcon() {
-        if (document.getElementById('strip-orchestrator')) { return; }
-        createOrchestratorIcon();
+    function ensureMissionControlIcon() {
+        if (document.getElementById('strip-mission-control')) { return; }
+        createMissionControlIcon();
     }
 
-    function renderOrchestratorIcon(state) {
-        orchestratorActive = !!state.active;
-        orchestratorSeat = state.seat || null;
+    function renderMissionControlIcon(state) {
+        missionControlActive = !!state.active;
+        missionControlSeat = state.seat || null;
         // Only update classes/tooltip on an icon that already exists —
-        // ensureOrchestratorIcon() owns creation (init + renderTerminalSection).
+        // ensureMissionControlIcon() owns creation (init + renderTerminalSection).
         // Creating here would re-introduce the cold-load gap this function
         // cannot close: it only runs when a state message arrives.
-        const icon = document.getElementById('strip-orchestrator');
+        const icon = document.getElementById('strip-mission-control');
         if (!icon) { return; }
-        if (!orchestratorActive) {
-            icon.classList.remove('orchestrator-active');
-            icon.classList.add('orchestrator-dimmed');
-            icon.dataset.tooltip = 'Operator: inactive — click to start';
+        if (!missionControlActive) {
+            icon.classList.remove('mission-control-active');
+            icon.classList.add('mission-control-dimmed');
+            icon.dataset.tooltip = 'Mission Control: inactive — click to start';
             return;
         }
-        icon.classList.remove('orchestrator-dimmed');
-        icon.classList.add('orchestrator-active');
-        const since = orchestratorSeat && orchestratorSeat.adoptedAt
-            ? new Date(orchestratorSeat.adoptedAt).toLocaleTimeString()
+        icon.classList.remove('mission-control-dimmed');
+        icon.classList.add('mission-control-active');
+        const since = missionControlSeat && missionControlSeat.adoptedAt
+            ? new Date(missionControlSeat.adoptedAt).toLocaleTimeString()
             : '';
-        const where = orchestratorSeat && orchestratorSeat.terminalName
-            ? ' on ' + orchestratorSeat.terminalName : '';
+        const where = missionControlSeat && missionControlSeat.terminalName
+            ? ' on ' + missionControlSeat.terminalName : '';
         icon.dataset.tooltip = since
-            ? 'Orchestrator: active' + where + ' since ' + since + ' — click to end session'
-            : 'Orchestrator: active — click to end session';
+            ? 'Mission Control: active' + where + ' since ' + since + ' — click to reveal'
+            : 'Mission Control: active — click to reveal';
     }
 
     // Delegation via mouseover/mouseout (these bubble; mouseenter/mouseleave do
@@ -722,7 +740,7 @@
 
     // Roles that operate via skills/addons, not as dockable agent CLIs —
     // same exclusion onNewTerminalClicked applies (terminals.js:3605-3607).
-    const DOCK_SYSTEM_ROLES = new Set(['orchestrator', 'mcp_monitor']);
+    const DOCK_SYSTEM_ROLES = new Set(['mission-control', 'mcp_monitor']);
 
     function labelForRole(role) {
         const meta = (typeof BUILT_IN_AGENT_LABELS !== 'undefined')
@@ -1059,11 +1077,11 @@
             // moves the anchor onto the Setup icon when one is present, so the
             // cluster reads `Setup | Toggle Theme` at the foot of the rail.
             applyBottomAnchor();
-            // The container.remove() above took the orchestrator icon with it.
+            // The container.remove() above took Mission Control icon with it.
             // Re-create it so the rail control survives a terminals-panel-less
             // rebuild — the start control must stay reachable without a state
             // message (CRITICAL 1 regression guard).
-            ensureOrchestratorIcon();
+            ensureMissionControlIcon();
             return;
         }
 
@@ -1096,13 +1114,13 @@
         }
         applyBottomAnchor();
 
-        // Rebuild only the fleet terminal buttons. #strip-orchestrator (managed
-        // by renderOrchestratorIcon) is a first child of this container and
+        // Rebuild only the fleet terminal buttons. #strip-mission-control (managed
+        // by renderMissionControlIcon) is a first child of this container and
         // MUST survive the rebuild — a plain innerHTML='' would wipe it every
         // 5s poll and leave the rail dark until the next autoban state push.
-        // The orchestrator button carries no .strip-term-btn / .strip-team-btn
+        // Mission Control button carries no .strip-term-btn / .strip-team-btn
         // class, so removing those children is equivalent to the old wipe minus
-        // the orchestrator.
+        // Mission Control.
         for (const child of Array.from(container.querySelectorAll(':scope > .strip-term-btn, :scope > .strip-team-btn'))) {
             child.remove();
         }
@@ -1227,11 +1245,11 @@
         for (const key of Array.from(pulsedDoneStamps.keys())) {
             if (!seenKeys.has(key)) { pulsedDoneStamps.delete(key); }
         }
-        // The selective button removal above preserves #strip-orchestrator, but a
+        // The selective button removal above preserves #strip-mission-control, but a
         // future edit to this rebuild could still drop it. Ensure it exists at the
         // end of every fleet rebuild so the rail control never vanishes without a
         // state message (CRITICAL 1 regression guard).
-        ensureOrchestratorIcon();
+        ensureMissionControlIcon();
     }
 
     /**
@@ -1439,13 +1457,13 @@
             loadDockRole();
         }
 
-        // The orchestrator rail icon must exist on a cold load with no
-        // orchestratorState message — without this the start control is
+        // The Mission Control rail icon must exist on a cold load with no
+        // missionControlState message — without this the start control is
         // unreachable until a seat changes. renderTerminalSection's own
-        // ensureOrchestratorIcon() call covers its branches, but the very first
+        // ensureMissionControlIcon() call covers its branches, but the very first
         // build goes through renderManifest before any fleet push, so ensure
         // here too (idempotent).
-        ensureOrchestratorIcon();
+        ensureMissionControlIcon();
 
         // Ask the terminals iframe for its fleet state once it's loaded. The iframe's
         // own postFleetStateToShell runs on init and on a 5s poll, but a transient
@@ -1508,12 +1526,12 @@
             // the seat we just created, or report that a previously-live seat
             // has exited.
             if (dockOpen) { syncDockSeat(); }
-        } else if (data.type === 'orchestratorState') {
+        } else if (data.type === 'missionControlState') {
             // Relayed from terminals.js (autobanStateSync / updateAutobanConfig
             // over the WS broadcast rail). Origin-guarded: the relay targets
             // location.origin, so a foreign framer cannot light the icon.
             if (event.origin !== location.origin) { return; }
-            renderOrchestratorIcon(data);
+            renderMissionControlIcon(data);
         } else if (data.type === 'popoutTerminal' && typeof data.name === 'string') {
             if (event.origin !== location.origin) { return; }
             const slug = data.name.replace(/[^A-Za-z0-9_-]/g, '_');

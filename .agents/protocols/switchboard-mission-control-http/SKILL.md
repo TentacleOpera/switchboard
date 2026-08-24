@@ -1,8 +1,8 @@
 # Skill: Switchboard Orchestration HTTP Surface
 
 This is the **complete** HTTP contract for driving Switchboard from outside the VS Code webview —
-whether you are a **fleet coding/review agent** working inside an orchestration worktree, an
-**external orchestrator** (Cursor / Zed / Claude Code / Antigravity) driving the whole board, or a
+whether you are a **fleet coding/review agent** working inside a Mission Control worktree, an
+**external Mission Control** (Cursor / Zed / Claude Code / Antigravity) driving the whole board, or a
 **team member** (a discoverable-skill agent) reading the local board.
 
 Switchboard's LocalApiServer runs inside the VS Code extension and is the **sole writer** of
@@ -67,7 +67,7 @@ primary workspace.
 | `GET /kanban/columns` | `{ builtIn: [...defs], custom: [{id,label,labelSource,displayModeOf?,legacyAliasOf?}], displayOnly: [{label,aliasOf}] }` — `displayModeOf`/`legacyAliasOf` mark a column that is NOT an independent peer (`BACKLOG` is a view of `CREATED`; `CODED` is a legacy alias of `LEAD CODED`) |
 | `GET /kanban/features` | All features (`isFeature` rows) |
 | `GET /worktree/list` | All worktree rows (`path`, `branch`, `subtask_plan_id`, `feature_id`, `tier`, `status`, `base_branch`) |
-| `GET /orchestrator/session-log` | The orchestrator's session file — `.switchboard/orchestrator/session.md` when it exists, falling back to the legacy `.switchboard/orchestrator/session-log.md` (markdown string, `''` when neither exists) |
+| `GET /mission-control/session-log` | Mission Control's session file — `.switchboard/mission-control/session.md` when it exists, falling back to the legacy `.switchboard/mission-control/session-log.md` (markdown string, `''` when neither exists) |
 
 ```bash
 curl -s "$BASE/kanban/board"
@@ -137,11 +137,11 @@ curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also
 | `POST /kanban/feature/delete` | `{ featurePlanId, deleteSubtasks?, workspaceRoot? }` | Delete a feature |
 | `POST /kanban/feature/split` | `{ featurePlanId, keptPlanIds: [...], firstFeatureName, secondFeatureName, workspaceRoot? }` | Split a feature in two |
 | `POST /worktree/cleanup` | `{ worktreeId or branch, workspaceRoot? }` | Mark a worktree merged and clean it up (kind-aware) |
-| `POST /orchestration/adopt` | `{ workspaceRoot?, terminalName? }` | **The caller IS the orchestrator.** Records the seat and returns `{ mode, prompt, seat, liveDelivery, note? }` — the same pre-flight prompt `/orchestration/start` would have injected into a terminal it created, handed back so you run it in your own session. Seats no terminal. **Does not arm** — arming is `POST /orchestration/confirm`. Pass `terminalName` from `$SWITCHBOARD_TERMINAL` when set; omitted or unmatched → `liveDelivery: false` and turn-end notices arrive in the reports inbox instead |
-| `POST /orchestration/start` | `{ workspaceRoot? }` | Two paths, decided by whether a lead/coder agent is configured. **Terminal mode**: create a pty terminal named `Orchestrator`, boot the lead/coder CLI into it, and deliver the pre-flight interview (the agent adopts the seat itself via `POST /orchestration/adopt` — the server does NOT seat). **Clipboard mode** (no agent configured, or pty unavailable): NO terminal is created; returns `{ mode:'clipboard', prompt }` with the `/switchboard` launcher text for the caller to run. **Does not arm** in either path — the terminal-mode message says the orchestrator is seated and awaiting confirmation; arming is `POST /orchestration/confirm`. Double-click protection: a second call while an `Orchestrator` terminal is already live redelivers the persona prompt to it instead of spawning a second terminal |
-| `POST /orchestration/confirm` | `{ workspaceRoot? }` | Arm an orchestration session after the pre-flight. Verifies `.switchboard/orchestrator/session.md` exists, then arms the orchestrator switch (sets `orchestratorArmed`; the schedule switch is independent and may also be on). Returns `{ success, sessionFile }` or `{ success:false, error }` when `session.md` is absent. The only path that arms |
-| `POST /orchestration/handoff` | `{ headTerminal, stagedCount?, firstCardPlanId?, summary, workspaceRoot? }` | Hand off orchestration to a coding lead and exit (default pre-flight exit). Refuses with 409 if no live coding head, if queue is empty, if already armed, or if already handed off. Writes summary to session log, closes orchestrator seat, and leaves automation state untouched |
-| `POST /orchestration/stop` | — | Disarm the orchestrator and archive `session.md` to `sessions/session-<ISO>.md` |
+| `POST /mission-control/adopt` | `{ workspaceRoot?, terminalName? }` | **The caller IS Mission Control.** Records the seat and returns `{ mode, prompt, seat, liveDelivery, note? }` — the same pre-flight prompt `/mission-control/start` would have injected into a terminal it created, handed back so you run it in your own session. Seats no terminal. **Does not arm** — arming is `POST /mission-control/confirm`. Pass `terminalName` from `$SWITCHBOARD_TERMINAL` when set; omitted or unmatched → `liveDelivery: false` and turn-end notices arrive in the reports inbox instead |
+| `POST /mission-control/start` | `{ workspaceRoot? }` | Two paths, decided by whether a lead/coder agent is configured. **Terminal mode**: create a pty terminal named `Mission Control`, boot the lead/coder CLI into it, and deliver the pre-flight interview (the agent adopts the seat itself via `POST /mission-control/adopt` — the server does NOT seat). **Clipboard mode** (no agent configured, or pty unavailable): NO terminal is created; returns `{ mode:'clipboard', prompt }` with the `/switchboard` launcher text for the caller to run. **Does not arm** in either path — the terminal-mode message says Mission Control is seated and awaiting confirmation; arming is `POST /mission-control/confirm`. Double-click protection: a second call while an `Mission Control` terminal is already live redelivers the persona prompt to it instead of spawning a second terminal |
+| `POST /mission-control/confirm` | `{ workspaceRoot? }` | Arm a Mission Control session after the pre-flight. Verifies `.switchboard/mission-control/session.md` exists, then arms Mission Control switch (sets `missionControlArmed`; the schedule switch is independent and may also be on). Returns `{ success, sessionFile }` or `{ success:false, error }` when `session.md` is absent. The only path that arms |
+| `POST /mission-control/handoff` | `{ headTerminal, stagedCount?, firstCardPlanId?, summary, workspaceRoot? }` | Hand off Mission Control to a coding lead and exit (default pre-flight exit). Refuses with 409 if no live coding head, if queue is empty, if already armed, or if already handed off. Writes summary to session log, closes Mission Control seat, and leaves automation state untouched |
+| `POST /mission-control/stop` | — | Disarm Mission Control and archive `session.md` to `sessions/session-<ISO>.md` |
 
 ```bash
 # Column vocabulary: CREATED | PLAN REVIEWED | LEAD CODED | CODER CODED | INTERN CODED
@@ -201,7 +201,7 @@ prompt-delivery verb pair. The full contract lives in the
 
 | Endpoint | Body | Purpose |
 |---|---|---|
-| `POST /terminals/verb/ptySendPrompt` | `{ name, data, clearBeforePrompt, dispatch? }` | Deliver a prompt to a named terminal. **Pass `clearBeforePrompt: false` explicitly** — the omitted-field default has moved once already; if it moves back, every send wipes the coder's conversation. Both hosts apply standing orders (the callback contract). **Dispatching a subtask? Pass `dispatch: { planFile\|planId, role }`** — the host then registers the dispatch before delivering *and* attaches the protocol directives the board attaches (plan-file completion report + orchestrator reports directive), echoing `attributed` and `directivesAttached`. Without it the coder is never told to write a completion report, so a finished subtask reports nothing the board can see. Fails closed: `attributed: 0` → `success: false`, nothing delivered. Never send `dispatch` on a plain message or on a report back to your head — it would make the recipient write a plan file and fire a false `completed`. |
+| `POST /terminals/verb/ptySendPrompt` | `{ name, data, clearBeforePrompt, dispatch? }` | Deliver a prompt to a named terminal. **Pass `clearBeforePrompt: false` explicitly** — the omitted-field default has moved once already; if it moves back, every send wipes the coder's conversation. Both hosts apply standing orders (the callback contract). **Dispatching a subtask? Pass `dispatch: { planFile\|planId, role }`** — the host then registers the dispatch before delivering *and* attaches the protocol directives the board attaches (plan-file completion report + Mission Control reports directive), echoing `attributed` and `directivesAttached`. Without it the coder is never told to write a completion report, so a finished subtask reports nothing the board can see. Fails closed: `attributed: 0` → `success: false`, nothing delivered. Never send `dispatch` on a plain message or on a report back to your head — it would make the recipient write a plan file and fire a false `completed`. |
 | `POST /terminals/verb/ptyListTerminals` | `{}` | Enumerate live terminals: `{ terminals: [...], hiddenTerminals: [...] }`. Copy `friendlyName` verbatim. |
 | `POST /terminals/verb/ptyClearTerminal` | `{ name }` | Reset a named terminal's context. Send it when you put a terminal **at rest** — a clear issued at rest is what resets a coder you always send with `clearBeforePrompt: false`, and it lands long before the next dispatch instead of racing it. Never send it to your own terminal, and never use `ptyClearAllTerminals` (it clears every active terminal, you included). |
 
@@ -230,7 +230,7 @@ Passthrough to the tracker APIs using Switchboard's stored tokens (you never see
 
 You were dispatched into a worktree to code or review one plan. You report back to your head
 agent via `ptySendPrompt` (installed as a standing order on every team member). You do **not**
-have a chat channel to the orchestrator; you use HTTP for board reads.
+have a chat channel to Mission Control; you use HTTP for board reads.
 
 ```bash
 PORT=$(cat .switchboard/api-server-port.txt); BASE="http://127.0.0.1:$PORT"
@@ -238,20 +238,20 @@ PORT=$(cat .switchboard/api-server-port.txt); BASE="http://127.0.0.1:$PORT"
 # 1. Find your plan (its planId is in your dispatch prompt) and read its full spec.
 curl -s "$BASE/kanban/plan?planId=$PLAN_ID" | jq -r '.data.content'
 
-# 2. Do the work in this worktree. Commit as you go (the orchestrator verifies via git, not chat).
+# 2. Do the work in this worktree. Commit as you go (Mission Control verifies via git, not chat).
 
 # 3. Report back to your head agent when done (the standing order installed on dispatch).
-#    The head agent or the extension's turn-end notifier will signal the orchestrator.
+#    The head agent or the extension's turn-end notifier will signal Mission Control.
 ```
 
-You do **not** move your own card or merge — the orchestrator does that after verifying your git state.
+You do **not** move your own card or merge — Mission Control does that after verifying your git state.
 
 ---
 
-## 8. Workflow B — external orchestrator driving the board
+## 8. Workflow B — external Mission Control driving the board
 
-You are an external agent acting as the orchestrator. Mirror the in-VS-Code persona
-(`switchboard-orchestrator`): coding + code-review only; planner-stage questions escalate to the human.
+You are an external agent acting as Mission Control. Mirror the in-VS-Code persona
+(`switchboard-mission-control`): coding + code-review only; planner-stage questions escalate to the human.
 
 ```bash
 PORT=$(cat .switchboard/api-server-port.txt); BASE="http://127.0.0.1:$PORT"
@@ -307,20 +307,20 @@ Trust **git and board state**, never an agent's self-reported "done":
 - **`503`** — DB/extension not ready yet → retry after a short delay.
 
 ## 11. File-based fallback (no HTTP)
-If the API server is down you can still communicate via the filesystem (the orchestrator reads these):
-- **Session file:** `.switchboard/orchestrator/session.md` — the current session file (Rules + append-only Log); read it to see the orchestrator's decisions. The legacy `.switchboard/orchestrator/session-log.md` is still honoured as a fallback by `GET /orchestrator/session-log` on installs that have one.
-- **Progress:** `.switchboard/orchestrator/progress.json` — the orchestrator's per-plan stall state.
+If the API server is down you can still communicate via the filesystem (Mission Control reads these):
+- **Session file:** `.switchboard/mission-control/session.md` — the current session file (Rules + append-only Log); read it to see Mission Control's decisions. The legacy `.switchboard/mission-control/session-log.md` is still honoured as a fallback by `GET /mission-control/session-log` on installs that have one.
+- **Progress:** `.switchboard/mission-control/progress.json` — Mission Control's per-plan stall state.
 
-### Reports channel — `.switchboard/orchestrator/reports/`
+### Reports channel — `.switchboard/mission-control/reports/`
 
-A **report is a message *to* the orchestrator**; the session file is the orchestrator's own record. Do not write your update into the session file, and do not write it into the plan file — plan files are write-once-at-the-end, so a mid-work edit breaks completion detection for that card.
+A **report is a message *to* Mission Control**; the session file is Mission Control's own record. Do not write your update into the session file, and do not write it into the plan file — plan files are write-once-at-the-end, so a mid-work edit breaks completion detection for that card.
 
-This is a directory convention, **not an HTTP surface**. There is no endpoint. Post a file; the orchestrator lists the directory on its next wake.
+This is a directory convention, **not an HTTP surface**. There is no endpoint. Post a file; Mission Control lists the directory on its next wake.
 
 **Write one file per report, never rewritten:**
 
 ```
-.switchboard/orchestrator/reports/report-<UTC-compact>-<kind>-<5 digits>.md
+.switchboard/mission-control/reports/report-<UTC-compact>-<kind>-<5 digits>.md
 ```
 
 `<UTC-compact>` is an ISO timestamp with `-` and `:` stripped and the milliseconds dropped (`20260817T031403Z`). The 5-digit random tail is what keeps two agents posting in the same second from colliding — pick a fresh one and retry if the name is taken.
@@ -337,21 +337,21 @@ Subtask 3 needs a decision on the migration key before I can continue.
 ```
 
 - Every frontmatter value is a single line. A value containing a newline is flattened on write — this is deliberate, so a message body cannot forge a `kind:` or `from:` key.
-- `from: system` marks a report the extension wrote itself: each `[switchboard:turn-end]` notice is mirrored here (`finished` when a seat completed, `blocked` when it went quiet or a feature stalled) so a non-pty orchestrator sees the same notices a pty one is sent.
+- `from: system` marks a report the extension wrote itself: each `[switchboard:turn-end]` notice is mirrored here (`finished` when a seat completed, `blocked` when it went quiet or a feature stalled) so a non-pty Mission Control sees the same notices a pty one is sent.
 - An unrecognised `kind` reads as `status`. Mis-binning a message beats dropping it.
 
-**Claiming.** The orchestrator marks what it has acted on by writing `reports/claimed/<report-filename>.claim`:
+**Claiming.** Mission Control marks what it has acted on by writing `reports/claimed/<report-filename>.claim`:
 
 ```
 claimed_ts: 2026-08-17T03:15:11Z
-agent: orchestrator
+agent: mission-control
 ```
 
-A claim older than the staleness window (**24 hours** by default) reads as unclaimed again, so a long-running session can legitimately re-surface a report it already handled. Claims are a de-duplication record across ticks of one agent — the orchestrator is a singleton — **not** a mutual-exclusion lock between agents. Do not rely on them for exclusion.
+A claim older than the staleness window (**24 hours** by default) reads as unclaimed again, so a long-running session can legitimately re-surface a report it already handled. Claims are a de-duplication record across ticks of one agent — Mission Control is a singleton — **not** a mutual-exclusion lock between agents. Do not rely on them for exclusion.
 
 This sits alongside `ptySendPrompt`, it does not replace it: a pty-hosted lead reporting to a pty-hosted head keeps working exactly as it does now.
 
 ## Notes
 - localhost only (127.0.0.1) — never a public interface.
 - Reads wrap payloads in `.data`; mutations return `{ success, ...fields }`.
-- This surface is documented for external tools; the in-VS-Code orchestrator persona is `switchboard-orchestrator`.
+- This surface is documented for external tools; the in-VS-Code Mission Control persona is `switchboard-mission-control`.

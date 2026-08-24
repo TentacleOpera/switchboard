@@ -527,7 +527,7 @@ test('the overlay hides on rail scroll, click, and terminal-section rebuild', ()
     const section = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     const hideAt = section.indexOf('hideStripTooltip();');
     // The rebuild no longer wipes via `container.innerHTML = ''` — that would
-    // destroy #strip-orchestrator (a first child of the container) every 5s
+    // destroy #strip-mission-control (a first child of the container) every 5s
     // poll. It now removes only the fleet buttons via a selective
     // `:scope > .strip-term-btn` loop. The load-bearing ordering guarantee this
     // test exists to protect is unchanged: hideStripTooltip() must still occur
@@ -705,7 +705,7 @@ test('the reduced-motion variant overrides animation-name only, with a distinct 
     // Select the reduced-motion block by CONTENT, not by position. A bare
     // `.match` (no /g) returns the FIRST @media block in the file, which is a
     // silent-wrong-assertion hazard: a second reduced-motion block added
-    // elsewhere (e.g. the orchestrator icon's own guard) would either break
+    // elsewhere (e.g. the Mission Control icon's own guard) would either break
     // this test for an unrelated reason or — worse — pass while checking the
     // wrong block. Collect ALL reduced-motion blocks and select the one whose
     // body contains `strip-term-done-pulse-reduced` — that is the block this
@@ -725,105 +725,124 @@ test('the reduced-motion variant overrides animation-name only, with a distinct 
         'the media query must NOT re-declare @keyframes strip-term-done-pulse — a second same-named block is invisible to this test and reorder-unsafe');
 });
 
-// ---------------------------------------------- orchestrator rail icon (UFO)
+// ---------------------------------------------- Mission Control rail icon (UFO)
 
-test('the orchestrator icon is created and inserted as the first child of #strip-terminals', () => {
+test('the Mission Control icon is created and inserted as the first child of #strip-terminals', () => {
     // The UFO button must sit at the top of the fleet container, above the
     // terminal buttons, and carry the id the rest of the file keys off.
-    const fn = block(shellJs, 'function createOrchestratorIcon() {', 'function ensureOrchestratorIcon() {');
-    assert.ok(/btn\.id\s*=\s*'strip-orchestrator'/.test(fn),
-        'createOrchestratorIcon must stamp id="strip-orchestrator" on the button');
+    const fn = block(shellJs, 'function createMissionControlIcon() {', 'function ensureMissionControlIcon() {');
+    assert.ok(/btn\.id\s*=\s*'strip-mission-control'/.test(fn),
+        'createMissionControlIcon must stamp id="strip-mission-control" on the button');
     assert.ok(/container\.insertBefore\(btn,\s*container\.firstChild\)/.test(fn),
-        'the orchestrator button must be inserted as the FIRST child of #strip-terminals, not appended');
+        'the Mission Control button must be inserted as the FIRST child of #strip-terminals, not appended');
 });
 
-test('the orchestrator icon is an inline <svg>, not an <img> with a /static/icons/ src', () => {
+test('the Mission Control icon is an inline <svg>, not an <img> with a /static/icons/ src', () => {
     // The SVG is inlined into the shell document so shell.html's CSS can select
     // into its sub-elements (.light-a/.light-b for the dimmed freeze and the
-    // reduced-motion guard). An <img src="/static/icons/orchestrator-ufo.svg">
+    // reduced-motion guard). An <img src="/static/icons/mission-control-ufo.svg">
     // would be a separate document and those rules would be inert.
-    const fn = block(shellJs, 'function createOrchestratorIcon() {', 'function ensureOrchestratorIcon() {');
+    const fn = block(shellJs, 'function createMissionControlIcon() {', 'function ensureMissionControlIcon() {');
     assert.ok(/<svg[^>]*aria-hidden="true"/.test(fn),
         'the icon must be an inline <svg> with aria-hidden="true" (no double-announce beside the button aria-label)');
-    assert.ok(/class="strip-orch-icon"/.test(fn),
-        'the inline <svg> must carry the .strip-orch-icon class (sizing + pointer-events:none)');
-    assert.ok(!/orchestrator-ufo\.svg/.test(fn),
-        'the icon must NOT reference /static/icons/orchestrator-ufo.svg — the SVG is inlined, the file is deleted');
+    assert.ok(/class="strip-mc-icon"/.test(fn),
+        'the inline <svg> must carry the .strip-mc-icon class (sizing + pointer-events:none)');
+    assert.ok(!/mission-control-ufo\.svg/.test(fn),
+        'the icon must NOT reference /static/icons/mission-control-ufo.svg — the SVG is inlined, the file is deleted');
     assert.ok(!/createElement\('img'\)/.test(fn),
-        'createOrchestratorIcon must not create an <img> — the SVG is inlined via innerHTML');
+        'createMissionControlIcon must not create an <img> — the SVG is inlined via innerHTML');
     // ids must be prefixed to avoid document-wide collisions now that they are global.
-    assert.ok(/sb-orch-cyan-glow/.test(fn) && /sb-orch-beam/.test(fn),
-        'inlined SVG ids must be prefixed (sb-orch-*) to avoid collisions in the shell document');
-    assert.ok(/url\(#sb-orch-cyan-glow\)/.test(fn) && /url\(#sb-orch-beam\)/.test(fn),
+    assert.ok(/sb-mc-cyan-glow/.test(fn) && /sb-mc-beam/.test(fn),
+        'inlined SVG ids must be prefixed (sb-mc-*) to avoid collisions in the shell document');
+    assert.ok(/url\(#sb-mc-cyan-glow\)/.test(fn) && /url\(#sb-mc-beam\)/.test(fn),
         'url(#...) references must match the prefixed ids');
     // Class names on sub-elements must be kept — shell.html selectors depend on them.
     assert.ok(/class="light-a"/.test(fn) && /class="light-b"/.test(fn),
         'the inlined SVG must keep .light-a/.light-b class names — shell.html animation rules depend on them');
 });
 
-test('lit-click posts /orchestration/stop and dimmed-click posts /orchestration/start', () => {
-    // The two click paths are the shell rail's only orchestrator controls.
-    const fn = block(shellJs, 'function createOrchestratorIcon() {', 'function ensureOrchestratorIcon() {');
-    assert.ok(/orchestratorActive\)/.test(fn),
-        'the click handler must branch on orchestratorActive (lit vs dimmed)');
-    assert.ok(/fetch\('\/orchestration\/stop'/.test(fn),
-        'the lit-click path must POST /orchestration/stop');
-    assert.ok(/fetch\('\/orchestration\/start'/.test(fn),
-        'the dimmed-click path must POST /orchestration/start');
+test('lit-click navigates (no /mission-control/stop) and dimmed-click posts /mission-control/start', () => {
+    // The rail button is navigational — every other button in #strip-terminals
+    // navigates (team → selectPanel + switchToTeam, ungrouped → focus/peek), so
+    // the lit Mission Control click reveals the controller terminal rather than
+    // ending the session. The end-session control moved to the controller's
+    // own scoped ops block (#btn-controller-stop in terminals.html), where it
+    // can carry a label — the rail icon cannot. The singleton guard in
+    // ptyFleetService.create() is the duplicate-controller protection now, not
+    // a client flag or a stop-on-lit-click.
+    const fn = block(shellJs, 'function createMissionControlIcon() {', 'function ensureMissionControlIcon() {');
+    assert.ok(/missionControlActive\)/.test(fn),
+        'the click handler must branch on missionControlActive (lit vs dimmed)');
+    // Lit path must NOT post /mission-control/stop — it navigates instead.
+    assert.ok(!/fetch\('\/mission-control\/stop'/.test(fn),
+        'the lit-click path must NOT POST /mission-control/stop — the rail button is navigational');
+    assert.ok(/selectPanel\('terminals'\)/.test(fn),
+        "the lit-click path must navigate via selectPanel('terminals')");
+    assert.ok(/switchToController/.test(fn),
+        'the lit-click path must post switchToController to the terminals panel');
+    assert.ok(/fetch\('\/mission-control\/start'/.test(fn),
+        'the dimmed-click path must POST /mission-control/start');
 });
 
 test('the dimmed-click response branches on result.mode (terminal vs clipboard)', () => {
     // The server decides the path; the shell must branch on `mode` so a
     // clipboard result (no agent configured) does not toast "check the
-    // Orchestrator terminal" for a terminal that was never created.
-    const fn = block(shellJs, 'function createOrchestratorIcon() {', 'function ensureOrchestratorIcon() {');
+    // Mission Control terminal" for a terminal that was never created.
+    const fn = block(shellJs, 'function createMissionControlIcon() {', 'function ensureMissionControlIcon() {');
     assert.ok(/result\.success\s*&&\s*result\.mode\s*===\s*'terminal'/.test(fn),
         "the dimmed-click handler must branch on result.mode === 'terminal'");
     assert.ok(/result\.success\s*&&\s*result\.mode\s*===\s*'clipboard'/.test(fn),
         "the dimmed-click handler must branch on result.mode === 'clipboard'");
 });
 
-test('the dimmed-click has an in-flight guard against double-click', () => {
-    // The server seat guard cannot help: the agent adopts the seat seconds or
-    // minutes after the terminal is created, so two rapid clicks both see an
-    // empty seat. A module-scoped boolean cleared in both .then and .catch (via
-    // .finally) prevents a second /orchestration/start fetch while one is pending.
-    const fn = block(shellJs, 'function createOrchestratorIcon() {', 'function ensureOrchestratorIcon() {');
-    assert.ok(/orchestrationStartInFlight/.test(fn),
-        'the dimmed-click handler must check the orchestrationStartInFlight guard');
-    assert.ok(/if\s*\(orchestrationStartInFlight\)\s*\{\s*return;\s*\}/.test(fn),
-        'a second click while a start fetch is pending must be a silent no-op');
+test('the dimmed-click in-flight flag is a UI affordance, not the duplicate guard', () => {
+    // The duplicate-controller guard now lives in ptyFleetService.create(),
+    // which consults the singleton identity before the collision loop and
+    // returns the existing live handle rather than minting mission-control-2.
+    // The client-side missionControlStartInFlight flag is demoted to a UI
+    // affordance: it disables the button while a start fetch is pending so a
+    // double-click does not fire two fetches — a UX nicety, not a correctness
+    // gate. The old comment said "the server seat guard cannot help here";
+    // the service guard CAN help now, which is why the flag is no longer the
+    // protection.
+    const fn = block(shellJs, 'function createMissionControlIcon() {', 'function ensureMissionControlIcon() {');
+    assert.ok(/missionControlStartInFlight/.test(fn),
+        'the dimmed-click handler must still check the missionControlStartInFlight flag (UI affordance)');
+    assert.ok(/if\s*\(missionControlStartInFlight\)\s*\{\s*return;\s*\}/.test(fn),
+        'a second click while a start fetch is pending must be a silent no-op (UI disable)');
+    assert.ok(/btn\.disabled\s*=\s*true/.test(fn),
+        'the button must be disabled while a start fetch is pending (UI affordance, not just a guard)');
     assert.ok(/\.finally\(/.test(fn),
-        'the in-flight guard must be cleared in both success and failure paths (via .finally)');
+        'the in-flight flag and disabled state must be cleared in both success and failure paths (via .finally)');
 });
 
-test('the orchestrator icon is ensured to exist independently of an orchestratorState message', () => {
-    // CRITICAL 1 regression guard: renderOrchestratorIcon is the only OTHER
-    // creator and it only runs when an 'orchestratorState' postMessage arrives.
+test('the Mission Control icon is ensured to exist independently of an missionControlState message', () => {
+    // CRITICAL 1 regression guard: renderMissionControlIcon is the only OTHER
+    // creator and it only runs when an 'missionControlState' postMessage arrives.
     // On a cold load with no autoban state change, NO icon would exist and the
-    // start control would be unreachable. ensureOrchestratorIcon() must be
+    // start control would be unreachable. ensureMissionControlIcon() must be
     // called (a) once during shell init after the rail/manifest is built, and
     // (b) at the END of renderTerminalSection in BOTH branches — including the
     // early-return !frames.has('terminals') branch, which removes the container
-    // (and the icon with it). renderOrchestratorIcon itself must NOT create —
+    // (and the icon with it). renderMissionControlIcon itself must NOT create —
     // it only updates classes/tooltip on an icon that already exists.
-    assert.ok(/function ensureOrchestratorIcon\(\)\s*\{/.test(shellJs),
-        'ensureOrchestratorIcon() must be declared');
-    assert.ok(/getElementById\('strip-orchestrator'\)\)\s*\{\s*return;\s*\}/.test(shellJs),
-        'ensureOrchestratorIcon() must be a no-op when the icon already exists (idempotent)');
-    // renderOrchestratorIcon must NOT call createOrchestratorIcon — it only updates.
-    const render = block(shellJs, 'function renderOrchestratorIcon(state) {', "// Delegation via mouseover/mouseout");
-    assert.ok(!/createOrchestratorIcon\(\)/.test(render),
-        'renderOrchestratorIcon must NOT create the icon — ensureOrchestratorIcon() owns creation, or the cold-load gap returns');
+    assert.ok(/function ensureMissionControlIcon\(\)\s*\{/.test(shellJs),
+        'ensureMissionControlIcon() must be declared');
+    assert.ok(/getElementById\('strip-mission-control'\)\)\s*\{\s*return;\s*\}/.test(shellJs),
+        'ensureMissionControlIcon() must be a no-op when the icon already exists (idempotent)');
+    // renderMissionControlIcon must NOT call createMissionControlIcon — it only updates.
+    const render = block(shellJs, 'function renderMissionControlIcon(state) {', "// Delegation via mouseover/mouseout");
+    assert.ok(!/createMissionControlIcon\(\)/.test(render),
+        'renderMissionControlIcon must NOT create the icon — ensureMissionControlIcon() owns creation, or the cold-load gap returns');
     // Init call: after renderTerminalSection([]) in renderManifest.
     const manifest = block(shellJs, 'function renderManifest(manifest) {', 'function loadManifest() {');
-    assert.ok(/renderTerminalSection\(\[\]\);[\s\S]*?ensureOrchestratorIcon\(\)/.test(manifest),
-        'renderManifest must call ensureOrchestratorIcon() after the initial renderTerminalSection([])');
-    // Both branches of renderTerminalSection must call ensureOrchestratorIcon().
+    assert.ok(/renderTerminalSection\(\[\]\);[\s\S]*?ensureMissionControlIcon\(\)/.test(manifest),
+        'renderManifest must call ensureMissionControlIcon() after the initial renderTerminalSection([])');
+    // Both branches of renderTerminalSection must call ensureMissionControlIcon().
     const section = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
-    const ensures = (section.match(/ensureOrchestratorIcon\(\)/g) || []).length;
+    const ensures = (section.match(/ensureMissionControlIcon\(\)/g) || []).length;
     assert.strictEqual(ensures, 2,
-        'renderTerminalSection must call ensureOrchestratorIcon() in BOTH branches (early-return and normal exit) — the early-return removes the container and takes the icon with it');
+        'renderTerminalSection must call ensureMissionControlIcon() in BOTH branches (early-return and normal exit) — the early-return removes the container and takes the icon with it');
 });
 
 // ---------------------------------------------- UAT: shell strip team icons
@@ -875,7 +894,7 @@ test('the team icon fallback skips the head brand mark', () => {
 });
 
 test('buildTeamsForShell does not fall back to the head brand mark', () => {
-    const fn = block(terminalsJs, 'function buildTeamsForShell() {', 'function relayOrchestratorStateToShell');
+    const fn = block(terminalsJs, 'function buildTeamsForShell() {', 'function relayMissionControlStateToShell');
     // The brand-mark fallback block must be gone — the relay sends iconUri or
     // empty string, and the shell handles the empty case with the role letter.
     assert.ok(

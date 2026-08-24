@@ -71,7 +71,7 @@ import { listIconPalette, validateTeamIcon, type IconPaletteEntry } from './icon
 /**
  * Feature workflow mode directives, prepended at position-zero of a feature prompt
  * when the corresponding sticky board toggle is active. Distinct from the
- * legacy ULTRACODE_DIRECTIVE (deleted with the orchestrator role).
+ * legacy ULTRACODE_DIRECTIVE (deleted with the Mission Control role).
  */
 const ULTRACODE_FEATURE_PREFIX = 'This is a feature with multiple subtasks. Activate your ultracode workflow.';
 const GOAL_FEATURE_PREFIX = '/goal';
@@ -2497,8 +2497,8 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
-     * One-time drain of the retired orchestration worktree stash. Prior versions
-     * forced `feature_worktree_mode = 'per-feature'` while an oversight session was
+     * One-time drain of the retired Mission Control worktree stash. Prior versions
+     * forced `feature_worktree_mode = 'per-feature'` while an Mission Control session was
      * armed and parked the user's real value under PRIOR_KEY. A session that ended
      * uncleanly (crash, reload) left the forced value in place. This restores the
      * user's value and consumes the key; once cleared it never fires again, so the
@@ -2507,7 +2507,7 @@ export class KanbanProvider implements vscode.Disposable {
     private async _drainRetiredWorktreeModeStash(workspaceRoot: string): Promise<void> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !await db.ensureReady()) { return; }
-        const PRIOR_KEY = 'orchestration_prior_feature_worktree_mode';
+        const PRIOR_KEY = 'mission-control_prior_feature_worktree_mode';
         const savedPrior = await db.getConfig(PRIOR_KEY);
         if (!savedPrior) { return; }                 // '' and null both mean "already drained"
         await db.setConfig('feature_worktree_mode', normalizeFeatureWorktreeMode(savedPrior));
@@ -2666,36 +2666,36 @@ export class KanbanProvider implements vscode.Disposable {
                 }
             },
             // Opt-in batch sequencing (subtask 7 step 5, default OFF). Wakes an
-            // orchestrator once with the batch to reorder by dependency / group
+            // Mission Control once with the batch to reorder by dependency / group
             // into features before the first dispatch. Bounded by a timeout the
-            // extension enforces — if the orchestrator cannot be started or does
+            // extension enforces — if Mission Control cannot be started or does
             // not respond within the bound, the queue proceeds in arrival order
             // and the fallback is logged. The bound is enforced here, not by
             // the agent's cooperation.
             onSequenceBatch: async (wsRoot, stagedPlanIds) => {
                 try {
                     if (!this._taskViewerProvider) {
-                        return { sequenced: false, error: 'no task viewer provider — cannot start orchestrator' };
+                        return { sequenced: false, error: 'no task viewer provider — cannot start Mission Control' };
                     }
-                    // Start the orchestrator (seats the terminal + delivers the
-                    // pre-flight interview). The orchestrator agent receives the
+                    // Start Mission Control (seats the terminal + delivers the
+                    // pre-flight interview). The Mission Control agent receives the
                     // batch context in its prompt and sequences it, then hands
-                    // off via POST /orchestration/handoff. The bound is enforced
-                    // by a timeout: if the orchestrator does not hand off within
+                    // off via POST /mission-control/handoff. The bound is enforced
+                    // by a timeout: if Mission Control does not hand off within
                     // SEQUENCING_BOUND_MS, the queue proceeds in arrival order.
                     const SEQUENCING_BOUND_MS = 5 * 60 * 1000; // 5 minutes
-                    await this._taskViewerProvider.startOrchestratorFromKanban(wsRoot, undefined);
-                    // The orchestrator is now seated. It will sequence the batch
+                    await this._taskViewerProvider.startMissionControlFromKanban(wsRoot, undefined);
+                    // The Mission Control is now seated. It will sequence the batch
                     // and hand off. The bound is enforced by the handoff endpoint's
-                    // own state machine — if the orchestrator never calls handoff,
+                    // own state machine — if Mission Control never calls handoff,
                     // the queue stays in arrival order (the lead pulls in
                     // queue_position order, which is arrival order). A timer-based
                     // fallback is not needed here because the queue is never held
-                    // shut: the lead can pull the first card while the orchestrator
-                    // is still sequencing, and a reorder by the orchestrator
+                    // shut: the lead can pull the first card while Mission Control
+                    // is still sequencing, and a reorder by Mission Control
                     // updates queue_positions for the remaining cards.
                     this._outputChannel?.appendLine(
-                        `[KanbanProvider] Queue sequencing: orchestrator seated for ${stagedPlanIds.length} staged card(s) in ${wsRoot}.`
+                        `[KanbanProvider] Queue sequencing: Mission Control seated for ${stagedPlanIds.length} staged card(s) in ${wsRoot}.`
                     );
                     return { sequenced: true };
                 } catch (e) {
@@ -5992,7 +5992,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // workspace (a local board worked at the desk while another is phone-driven
             // must stay unchanged). The global flag is the cheap short-circuit.
             remoteControlActive: await this._isRemoteActiveForDispatch(workspaceRoot, plans),
-            orchestratorActive: overrides?.orchestratorActive ?? this._taskViewerProvider?.isOversightAgentRunning?.() ?? true,
+            missionControlActive: overrides?.missionControlActive ?? this._taskViewerProvider?.isOversightAgentRunning?.() ?? true,
         };
 
         // §8 — Use shared _resolvePrdReferences helper instead of inline loop.
@@ -6990,7 +6990,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // STAGING has no dispatch role — it is a queue, not a coding seat.
             // Advance buttons must skip it so cards never land in STAGING via
             // the advance path (STAGING is reachable only by drag-and-drop or
-            // orchestrator placement).
+            // Mission Control placement).
             //
             // COMPLETED is the ONE role-less column that must stay reachable:
             // it is the pipeline's terminal stage, advanced into from TICKET
@@ -9539,14 +9539,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'startOrchestrator': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (workspaceRoot && this._taskViewerProvider) {
-                    await this._taskViewerProvider.startOrchestratorFromKanban(workspaceRoot, undefined);
+                    await this._taskViewerProvider.startMissionControlFromKanban(workspaceRoot, undefined);
                     return { success: true };
                 }
                 return { success: false, error: 'No workspace root or task viewer available' };
             }
             case 'stopOrchestrator': {
                 if (this._taskViewerProvider) {
-                    await this._taskViewerProvider.stopOrchestratorFromKanban(msg.workspaceRoot);
+                    await this._taskViewerProvider.stopMissionControlFromKanban(msg.workspaceRoot);
                 }
                 return { success: true };
             }

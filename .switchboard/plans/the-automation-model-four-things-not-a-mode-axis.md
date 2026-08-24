@@ -125,3 +125,7 @@ Stored mode selections are forced off with a notice. Recurring jobs paused by an
 ## Outstanding Questions
 
 - What does a schedule do when its action cannot apply — no card in the source column, or the target column hidden? Silent no-op is right for fire-and-forget, but it should be visible in a run log rather than invisible.
+
+## Completion Report
+
+Implemented the four-thing automation model decoupling schedules, external prompt generation, and unattended/operations mission runs from an exclusive mode axis. Eliminated mode-keyed UI hiding branches and clarified that external scheduling does not pause local background recurring jobs, wiring a dedicated one-time migration notice for resuming recurring jobs on upgrade from legacy external mode. Updated `autobanState.ts`, `TaskViewerProvider.ts`, `kanban.html`, and `autoban-state-regression.test.js`. No issues encountered during implementation.

@@ -2912,7 +2912,6 @@
    Absent attribute ⇒ neither rule matches and the board is unaffected. */
 body[data-view="agent-control"] .shared-tab-btn:not([data-tab="agents"]):not([data-tab="teams"]):not([data-tab="prompts"]):not([data-tab="standing-orders"]) { display: none; }
 body[data-view="agent-control"] #kanban-tab-content,
-body[data-view="agent-control"] #automation-tab-content,
 body[data-view="agent-control"] #worktrees-tab-content,
 body[data-view="agent-control"] #uat-tab-content,
 body[data-view="agent-control"] #setup-tab-content { display: none !important; }
@@ -2950,7 +2949,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn" data-tab="teams">TEAMS</button>
         <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="shared-tab-btn" data-tab="standing-orders">STANDING ORDERS</button>
-        <button class="shared-tab-btn" data-tab="automation">AUTOMATION</button>
         <button class="shared-tab-btn" data-tab="worktrees">WORKTREES</button>
 
         <button class="shared-tab-btn" data-tab="uat">UAT</button>
@@ -3039,10 +3037,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
     </div>
 
-    <!-- Automation Tab Content -->
-    <div id="automation-tab-content" class="shared-tab-content">
-        <div id="automation-panel-root" class="automation-panel"></div>
-    </div>
+    <!-- The Automation tab moved to the Mission Control panel (mission-control.html).
+         The renderAutobanPanel() JS guards on getElementById('automation-panel-root')
+         and no-ops when absent, so the legacy render path is dead but harmless. -->
 
     <!-- The Remote tab (§10) moved to project.html (Project panel). The toolbar
          start/stop toggle below remains; config UI lives in its new home. -->
@@ -3490,7 +3487,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="db-subsection">
             <div class="subsection-header"><span>Add-ons</span></div>
             <div class="config-section addons-section">
-              <p class="section-desc">Planner-specific orchestration features.</p>
+              <p class="section-desc">Planner-specific Mission Control features.</p>
               
               <div class="checkbox-group">
                 <label class="checkbox-item" title="Include batch execution rules and focus directive">
@@ -3680,7 +3677,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="db-subsection">
             <div class="subsection-header"><span>Add-ons</span></div>
             <div class="config-section addons-section">
-              <p class="section-desc" id="roleAddonsDesc">Role-specific orchestration features.</p>
+              <p class="section-desc" id="roleAddonsDesc">Role-specific Mission Control features.</p>
               
               <div id="roleAddonsGroup" class="checkbox-group">
                 <!-- Role-specific add-ons injected here via JavaScript -->
@@ -3925,7 +3922,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
     </div>
 
-    <!-- Feature management lives in the Features tab of the project view (orchestration, delete,
+    <!-- Feature management lives in the Features tab of the project view (Mission Control, delete,
          add/remove subtask). The on-board feature-manage modal was removed (no per-feature UI
          that silently saves global config). -->
 
@@ -4834,7 +4831,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
                     + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
                     + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-                    + 'dispatching again (or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+                    + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
                     + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
                     + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
                     + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
@@ -4843,7 +4840,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
                     + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
                     + 'pwd> (that read returns one record per subtask, each with its kanbanColumn). '
-                    + 'Never move a card backwards to an earlier pipeline stage — only the orchestrator may do that. '
+                    + 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
                     + 'Never move a card to a new column yourself: your only card action is the POST '
                     + '/kanban/dispatch call below, and only when your team has a reviewer seat. '
                     + 'Check your team roster (the YOUR TEAM block in your prompt or ptyListTerminals) for a seat '
@@ -4857,7 +4854,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
                     + 'empty and stop. '
                     + 'If your team has NO reviewer seat, do NOT move the card — that is not your role. '
-                    + 'Post a finished report to .switchboard/orchestrator/reports/ naming the feature and its planId, '
+                    + 'Post a finished report to .switchboard/mission-control/reports/ naming the feature and its planId, '
                     + 'and stop. The card stays where it is.'
                     + ' When the work is complete, stage the files you changed by explicit path '
                     + '— never `git add -A` or `git add .`. Then create a single commit with a '
@@ -4881,7 +4878,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'commit first, then correct forward. '
                     + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
                     + 'other agents may be working the same tree.',
-                headPrompt: 'Never move a card backwards to an earlier pipeline stage — only the orchestrator may do that. '
+                headPrompt: 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
                     + 'Never move a card to a new column yourself. '
                     + 'You are the reviewer on a review team. When work lands in your terminal, review it '
                     + '(Stage 1: adversarial findings, Stage 2: balanced synthesis). Apply a fully diagnosed fix set under '
@@ -6188,7 +6185,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         ];
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
         // Cached from the `startupCommands` broadcast. The AUTOMATION tab reads it to
-        // show which CLI the orchestrator will actually boot; the Agents tab writes
+        // show which CLI Mission Control will actually boot; the Agents tab writes
         // the values. Read-only here — this panel is not a second editor for them.
         let lastStartupCommands = {};
         let columns = columnDefinitions
@@ -8505,10 +8502,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (img) {
                 img.alt = isActive ? 'Stop Automation' : 'Start Automation';
             }
-            // External mode runs no clock — hide the toolbar Start button rather
-            // than toast-guarding it. A button that explains why it does nothing
-            // is still a button that does nothing (PRD contract #6).
-            autobanBtn.style.display = currentAutomationMode === 'external' ? 'none' : '';
+            autobanBtn.style.display = '';
 
             const resetBtn = document.getElementById('btn-reset-autoban-timer');
             if (resetBtn) {
@@ -11044,22 +11038,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 }
-                case 'orchestratorStartResult': {
+                case 'missionControlStartResult': {
                     // Set the status line AFTER the re-render — renderAutobanPanel
                     // rewrites automation-status-line from the mode.
                     renderAutobanPanel(true);
                     const status = document.getElementById('automation-status-line');
                     if (status) {
                         if (!msg.success) {
-                            status.textContent = 'Start failed: ' + (msg.error || 'the orchestrator did not start.');
+                            status.textContent = 'Start failed: ' + (msg.error || 'Mission Control did not start.');
                             status.style.color = 'var(--accent-red, #d9534f)';
                         } else {
-                            // Start seats the orchestrator; it does NOT arm. `enabled`
-                            // stays false until the agent calls POST /orchestration/confirm,
+                            // Start seats Mission Control; it does NOT arm. `enabled`
+                            // stays false until the agent calls POST /mission-control/confirm,
                             // so the re-render correctly snaps the toggle back to OFF —
                             // which, unexplained, reads as a button that did nothing.
                             // This is the primary success path, not an edge case.
-                            status.textContent = 'Orchestrator seated — answer its pre-flight in the terminal. Automation arms when you confirm.';
+                            status.textContent = 'Mission Control seated — answer its pre-flight in the terminal. Automation arms when you confirm.';
                             status.style.color = '';
                         }
                     }
@@ -11954,7 +11948,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function closeFeatureCreateModal() {
             document.getElementById('feature-create-modal')?.classList.add('hidden');
         }
-        // Feature management (delete, add/remove subtask, orchestration config) now lives in
+        // Feature management (delete, add/remove subtask, Mission Control config) now lives in
         // the Features tab of the project view — the on-board feature-manage modal was removed.
 
         // Close buttons (both × header and Cancel footer)
@@ -12031,7 +12025,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             container.appendChild(startHint);
 
             // Mode radios. NOTE: the exclusive mode AXIS is deleted in the
-            // engine — `enabled` (queue schedule) and `orchestratorArmed` are
+            // engine — `enabled` (queue schedule) and `missionControlArmed` are
             // two independent switches that may both be on. This selector is
             // the legacy surface over them: picking a mode sets one switch and
             // clears the other (setAutomationModeFromKanban), so it can express
@@ -12042,7 +12036,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const modeRow = document.createElement('div');
             modeRow.style.cssText = 'display:flex; align-items:center; gap:12px; padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:4px; flex-wrap:wrap;';
             const modeRadios = [
-                { value: 'agent-managed', label: 'Agent-managed', desc: 'Wake the orchestrator every N min to decide the next action.' },
+                { value: 'agent-managed', label: 'Agent-managed', desc: 'Wake Mission Control every N min to decide the next action.' },
                 { value: 'scheduled', label: 'Scheduled', desc: 'Pop the Dispatch queue every N min: the live coding head gets the next staged card. Mechanical, no agent deciding.' },
                 { value: 'external', label: 'External', desc: 'Switchboard runs no clock. Copy a prompt for your external scheduler.' }
             ];
@@ -12065,7 +12059,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             // Mode description line
             const modeDescriptions = {
-                'agent-managed': 'Wake the orchestrator every N min to decide the next action.',
+                'agent-managed': 'Wake Mission Control every N min to decide the next action.',
                 'scheduled': 'Pop the Dispatch queue every N min: the live coding head gets the next staged card. Mechanical, no agent deciding.',
                 'external': 'Switchboard runs no clock. Copy a prompt for your external scheduler.'
             };
@@ -12092,10 +12086,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
             onOffRow.appendChild(onOffLabel);
             onOffRow.appendChild(onOffToggle);
-            // Hide ON/OFF in External — no clock to arm.
-            if (currentAutomationMode === 'external') {
-                onOffRow.style.display = 'none';
-            }
             container.appendChild(onOffRow);
 
             // Status line — always present, even when nothing has happened.
@@ -12104,7 +12094,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             statusLine.style.cssText = 'padding:0 8px; font-size:9px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
             if (isArmed) {
                 statusLine.textContent = currentAutomationMode === 'agent-managed'
-                    ? 'The orchestrator is armed and supervising the board.'
+                    ? 'Mission Control is armed and supervising the board.'
                     : currentAutomationMode === 'scheduled'
                     ? 'The run sheet is advancing cards on the interval.'
                     : '';
@@ -12220,16 +12210,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             };
             if (currentAutomationMode === 'agent-managed') {
                 // ─── Agent-managed mode panel ──────────────────────────────────
-                // The orchestrator is the automation. The tab carries the two things
+                // Mission Control is the automation. The tab carries the two things
                 // that define the mode: which CLI starts the agent, and how often
-                // Switchboard wakes it. Pressing ON starts the orchestrator terminal
+                // Switchboard wakes it. Pressing ON starts Mission Control terminal
                 // and sends the kickoff prompt.
                 //
-                // The boot command is shown, not edited. The orchestrator has no
-                // startup-command slot of its own — startOrchestratorFromKanban boots
+                // The boot command is shown, not edited. Mission Control has no
+                // startup-command slot of its own — startMissionControlFromKanban boots
                 // `lead` and falls back to `coder` — so an editable field here would
-                // mean inventing an `orchestrator` role, which this feature explicitly
-                // does not do ("no bespoke orchestrator machinery to expose"). One
+                // mean inventing an `mission-control` role, which this feature explicitly
+                // does not do ("no bespoke Mission Control machinery to expose"). One
                 // owner for the value, the Agents tab; this is the read-only mirror.
                 const amContainer = document.createElement('div');
                 amContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
@@ -12248,10 +12238,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const amDesc = document.createElement('div');
                 amDesc.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                amDesc.textContent = 'The orchestrator wakes every N minutes to decide and take the next action — dispatch a card to a team, group loose plans into a feature, or nothing. Judgement lives in the agent.';
+                amDesc.textContent = 'Mission Control wakes every N minutes to decide and take the next action — dispatch a card to a team, group loose plans into a feature, or nothing. Judgement lives in the agent.';
                 amSection.appendChild(amDesc);
 
-                // Boot command — mirrors startOrchestratorFromKanban's resolution
+                // Boot command — mirrors startMissionControlFromKanban's resolution
                 // (`lead`, falling back to `coder`) so the tab names the CLI that
                 // will actually start. Says so honestly when neither is configured:
                 // that is the case where the kickoff cannot be delivered at all.
@@ -12276,7 +12266,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 amSection.appendChild(bootRow);
 
                 // Wake interval
-                const orchConfig = state.orchestrationConfig || { intervalMinutes: 10 };
+                const orchConfig = state.missionControlConfig || { intervalMinutes: 10 };
                 const wakeRow = document.createElement('div');
                 wakeRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:6px 8px 4px 8px; font-size:10px;';
                 const wakeLbl = document.createElement('span');
@@ -12592,6 +12582,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     automationRulesSectionSc.appendChild(notice);
                 }
 
+                // One-time notice for recurring jobs resuming on upgrade from external mode.
+                if (state.recurringJobsResumedNotice) {
+                    const notice = document.createElement('div');
+                    notice.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
+                    notice.textContent = state.recurringJobsResumedNotice;
+                    automationRulesSectionSc.appendChild(notice);
+                }
+
                 // Request the scheduler config from the host so the survivor
                 // checkboxes populate. The host pushes updateSchedulerConfig
                 // on changes, but the first render needs the initial state.
@@ -12649,13 +12647,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
                 extSection.appendChild(copyPromptBtn);
 
-                // Paused-jobs line: tells the user that recurring jobs (fetch-plans,
-                // reconcile) are paused while external mode is selected — external
-                // mode runs no clock.
-                const pausedNote = document.createElement('div');
-                pausedNote.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
-                pausedNote.textContent = 'Recurring jobs (fetch-plans, reconcile) are paused while External mode is selected — external mode runs no clock. Switch back to Scheduled to re-arm them.';
-                extSection.appendChild(pausedNote);
+                // External scheduling info line: external scheduling runs on an
+                // external agent clock and does not pause local recurring jobs.
+                const extInfoNote = document.createElement('div');
+                extInfoNote.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
+                extInfoNote.textContent = 'External scheduling runs on an external agent clock. Generating or copying a prompt does not pause or modify local jobs.';
+                extSection.appendChild(extInfoNote);
+
+                if (state.recurringJobsResumedNotice) {
+                    const resumedNotice = document.createElement('div');
+                    resumedNotice.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
+                    resumedNotice.textContent = state.recurringJobsResumedNotice;
+                    extSection.appendChild(resumedNotice);
+                }
             }
 
             return container;

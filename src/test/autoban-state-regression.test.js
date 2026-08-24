@@ -9,9 +9,11 @@ const {
     buildAutobanBroadcastState,
     normalizeAutobanConfigState,
     normalizeAutomationMode,
-    normalizeOrchestrationConfig,
+    normalizeMissionControlConfig,
     normalizeAutobanBatchSize,
     normalizeSingleColumnConfig,
+    normalizeScheduleRule,
+    normalizeMissionRunConfig,
     shouldSkipSharedReviewerAutobanDispatch
 } = require(path.join(process.cwd(), 'out', 'services', 'autobanState.js'));
 
@@ -424,11 +426,11 @@ async function run() {
     // alone, so the disarm is one-shot rather than a permanent lockout that
     // re-fires on every load and makes the schedule impossible to arm.
     const alreadyMigrated = normalizeAutobanConfigState({
-        automationMode: 'scheduled', enabled: true, orchestratorArmed: false,
+        automationMode: 'scheduled', enabled: true, missionControlArmed: false,
     });
     assert.strictEqual(
         alreadyMigrated.enabled, true,
-        'a state carrying orchestratorArmed has already been migrated — the guard must not disarm it again'
+        'a state carrying missionControlArmed has already been migrated — the guard must not disarm it again'
     );
     assert.strictEqual(
         alreadyMigrated.retiredAutomationModeNotice, undefined,
@@ -455,9 +457,9 @@ async function run() {
         'agent-managed',
         'the retired orchestration mode migrates to agent-managed'
     );
-    // `internal` + `orchestrationConfig.enabled === true` → `agent-managed` (the 150001 cohort)
+    // `internal` + `missionControlConfig.enabled === true` → `agent-managed` (the 150001 cohort)
     assert.strictEqual(
-        normalizeAutobanConfigState({ automationMode: 'internal', orchestrationConfig: { enabled: true } }).automationMode,
+        normalizeAutobanConfigState({ automationMode: 'internal', missionControlConfig: { enabled: true } }).automationMode,
         'agent-managed',
         'internal with oversight enabled migrates to agent-managed — the 150001 cohort must not lose its agent'
     );
@@ -471,38 +473,38 @@ async function run() {
         'bare internal migrates to external — the inverted default runs nothing until the user arms a switch'
     );
 
-    // --- orchestrationConfig.enabled is DELETED; intervalMinutes is RESTORED ---
+    // --- missionControlConfig.enabled is DELETED; intervalMinutes is RESTORED ---
     assert.strictEqual(
-        normalizeOrchestrationConfig({ intervalMinutes: 45 }).intervalMinutes,
+        normalizeMissionControlConfig({ intervalMinutes: 45 }).intervalMinutes,
         45,
-        'normalizeOrchestrationConfig must read through a persisted intervalMinutes, not hard-default past it'
+        'normalizeMissionControlConfig must read through a persisted intervalMinutes, not hard-default past it'
     );
     assert.strictEqual(
-        normalizeOrchestrationConfig({ intervalMinutes: 0 }).intervalMinutes,
+        normalizeMissionControlConfig({ intervalMinutes: 0 }).intervalMinutes,
         1,
         'intervalMinutes floors at 1'
     );
     assert.strictEqual(
-        normalizeOrchestrationConfig({ intervalMinutes: 999 }).intervalMinutes,
+        normalizeMissionControlConfig({ intervalMinutes: 999 }).intervalMinutes,
         999,
         'intervalMinutes has no ceiling — "overnight" is a valid wake interval'
     );
     assert.strictEqual(
-        normalizeOrchestrationConfig(undefined).intervalMinutes,
+        normalizeMissionControlConfig(undefined).intervalMinutes,
         10,
         'intervalMinutes defaults to 10 when absent'
     );
     assert.ok(
-        !('enabled' in normalizeOrchestrationConfig({ enabled: true, intervalMinutes: 10 })),
-        'normalizeOrchestrationConfig must not return an enabled field — it is deleted'
+        !('enabled' in normalizeMissionControlConfig({ enabled: true, intervalMinutes: 10 })),
+        'normalizeMissionControlConfig must not return an enabled field — it is deleted'
     );
     assert.ok(
-        !('maxConcurrentSubtasks' in normalizeOrchestrationConfig({ maxConcurrentSubtasks: 5, intervalMinutes: 10 })),
-        'normalizeOrchestrationConfig must not return maxConcurrentSubtasks — it belongs to a fan-out model that is not part of this feature'
+        !('maxConcurrentSubtasks' in normalizeMissionControlConfig({ maxConcurrentSubtasks: 5, intervalMinutes: 10 })),
+        'normalizeMissionControlConfig must not return maxConcurrentSubtasks — it belongs to a fan-out model that is not part of this feature'
     );
     assert.ok(
-        !('lastWakeAt' in normalizeOrchestrationConfig({ lastWakeAt: '2026-01-01', intervalMinutes: 10 })),
-        'normalizeOrchestrationConfig must not return lastWakeAt — it is status the tab derives from the engine, not config'
+        !('lastWakeAt' in normalizeMissionControlConfig({ lastWakeAt: '2026-01-01', intervalMinutes: 10 })),
+        'normalizeMissionControlConfig must not return lastWakeAt — it is status the tab derives from the engine, not config'
     );
 
     // The attended oversight pass is DELETED, not flagged off.
@@ -512,8 +514,8 @@ async function run() {
             `TaskViewerProvider still references the deleted oversight pass (${dead})`
         );
     }
-    // START DOES NOT ARM. Seating the orchestrator opens a pre-flight interview;
-    // arming is `POST /orchestration/confirm` → confirmOrchestrationSession, after
+    // START DOES NOT ARM. Seating Mission Control opens a pre-flight interview;
+    // arming is `POST /mission-control/confirm` → confirmMissionControlSession, after
     // the user has answered and the agent has written session.md. A Start that
     // arms is the original footgun — a click that silently begins an unattended
     // overnight run against a board that may have no coding team seated.
@@ -524,27 +526,27 @@ async function run() {
     // behavioural check of the interview passes while the arm has already
     // happened. Scoped to the method BODY — the method is long enough that a
     // fixed char window runs past its closing brace.
-    const startOrchStart = providerSource.indexOf('public async startOrchestratorFromKanban');
-    assert.ok(startOrchStart !== -1, 'startOrchestratorFromKanban must exist');
+    const startOrchStart = providerSource.indexOf('public async startMissionControlFromKanban');
+    assert.ok(startOrchStart !== -1, 'startMissionControlFromKanban must exist');
     const startAfterSig = providerSource.slice(startOrchStart);
     const startNextDecl = startAfterSig.slice(1).search(/\n {4}(?:public|private|protected)\s/);
     const startOrchBody = startNextDecl === -1 ? startAfterSig : startAfterSig.slice(0, startNextDecl + 1);
     assert.ok(
-        !/orchestrationConfig:\s*\{[\s\S]*?enabled:\s*true/.test(startOrchBody),
-        'startOrchestratorFromKanban must not write orchestrationConfig.enabled — the field is deleted'
+        !/missionControlConfig:\s*\{[\s\S]*?enabled:\s*true/.test(startOrchBody),
+        'startMissionControlFromKanban must not write missionControlConfig.enabled — the field is deleted'
     );
     assert.ok(
         !/enabled:\s*true/.test(startOrchBody),
-        'startOrchestratorFromKanban must NOT arm — it seats the orchestrator and delivers the pre-flight; arming moved to confirmOrchestrationSession'
+        'startMissionControlFromKanban must NOT arm — it seats Mission Control and delivers the pre-flight; arming moved to confirmMissionControlSession'
     );
     assert.ok(
         !startOrchBody.includes('_stopAutobanEngine()'),
-        'startOrchestratorFromKanban must not tear down the schedule — the schedule and orchestrator are independent switches'
+        'startMissionControlFromKanban must not tear down the schedule — the schedule and Mission Control are independent switches'
     );
-    // The arming block sets the orchestratorArmed switch. The mode axis is deleted
-    // — no _stopAutobanEngine call, no exclusivity between schedule and orchestrator.
-    const confirmStart = providerSource.indexOf('public async confirmOrchestrationSession');
-    assert.ok(confirmStart !== -1, 'confirmOrchestrationSession must exist — it is the only path that arms');
+    // The arming block sets the missionControlArmed switch. The mode axis is deleted
+    // — no _stopAutobanEngine call, no exclusivity between schedule and Mission Control.
+    const confirmStart = providerSource.indexOf('public async confirmMissionControlSession');
+    assert.ok(confirmStart !== -1, 'confirmMissionControlSession must exist — it is the only path that arms');
     const confirmAfterSig = providerSource.slice(confirmStart);
     const confirmNextDecl = confirmAfterSig.slice(1).search(/\n {4}(?:public|private|protected)\s/);
     // Strip `//` lines before the negative assertions below, exactly as the
@@ -556,33 +558,33 @@ async function run() {
         confirmNextDecl === -1 ? confirmAfterSig : confirmAfterSig.slice(0, confirmNextDecl + 1)
     );
     assert.ok(
-        /orchestratorArmed:\s*true/.test(confirmBody),
-        'confirmOrchestrationSession must set orchestratorArmed = true — the mode axis is deleted, arming is a switch'
+        /missionControlArmed:\s*true/.test(confirmBody),
+        'confirmMissionControlSession must set missionControlArmed = true — the mode axis is deleted, arming is a switch'
     );
     assert.ok(
         !/_stopAutobanEngine\(\)/.test(confirmBody),
-        'confirmOrchestrationSession must NOT call _stopAutobanEngine — the schedule and orchestrator are independent switches'
+        'confirmMissionControlSession must NOT call _stopAutobanEngine — the schedule and Mission Control are independent switches'
     );
     assert.ok(
         /session\.md/.test(confirmBody) && /success:\s*false/.test(confirmBody),
-        'confirmOrchestrationSession must refuse when session.md is absent — arming a session with no rules is the silent half-state'
+        'confirmMissionControlSession must refuse when session.md is absent — arming a session with no rules is the silent half-state'
     );
     // Scoped to the method BODY, not a fixed byte window. A character-count window
     // tracks the method's length: deleting the worktree-topology restore block shrank
     // this method enough that a 900-char window ran past its closing brace into
     // setAutomationModeFromKanban, whose _stopAutobanEngine() call is legitimate.
-    const stopOrchStart = providerSource.indexOf('public async stopOrchestratorFromKanban');
-    assert.ok(stopOrchStart !== -1, 'stopOrchestratorFromKanban must exist');
+    const stopOrchStart = providerSource.indexOf('public async stopMissionControlFromKanban');
+    assert.ok(stopOrchStart !== -1, 'stopMissionControlFromKanban must exist');
     const afterSig = providerSource.slice(stopOrchStart);
     const nextDeclOffset = afterSig.slice(1).search(/\n {4}(?:public|private|protected)\s/);
     const stopOrchBody = nextDeclOffset === -1 ? afterSig : afterSig.slice(0, nextDeclOffset + 1);
     assert.ok(
         !stopOrchBody.includes('_stopAutobanEngine()'),
-        'stopOrchestratorFromKanban must not stop the autoban engine — disarming the orchestrator sets enabled=false, not _stopAutobanEngine()'
+        'stopMissionControlFromKanban must not stop the autoban engine — disarming Mission Control sets enabled=false, not _stopAutobanEngine()'
     );
     assert.ok(
         providerSource.includes('public isOversightAgentRunning(): boolean'),
-        'callers meaning "is the orchestrator supervising" need an explicit accessor, not an overloaded mode read'
+        'callers meaning "is Mission Control supervising" need an explicit accessor, not an overloaded mode read'
     );
     // The forcing machinery is DELETED, not flagged off. Worktree strategy is the
     // user's; nothing outside the setFeatureWorktreeMode arm and the one-time
@@ -601,7 +603,7 @@ async function run() {
     );
     assert.ok(setAutomationModeArm.length > 0, 'the setAutomationMode verb arm must still exist');
     assert.ok(
-        !setAutomationModeArm.includes('orchestration_prior_feature_worktree_mode') &&
+        !setAutomationModeArm.includes('mission-control_prior_feature_worktree_mode') &&
         !setAutomationModeArm.includes('feature_worktree_mode'),
         'a setAutomationMode call must not read, write or clear the stashed worktree prior — this is the left-behind else-arm regression'
     );
@@ -630,20 +632,20 @@ async function run() {
         !kanbanHtmlForSweep.includes("=== 'orchestration'"),
         "kanban.html must not compare a mode against 'orchestration' — it is a retired value"
     );
-    // orchestrationConfig.enabled appears nowhere under src/ as a CONFIG READ.
+    // missionControlConfig.enabled appears nowhere under src/ as a CONFIG READ.
     // autobanState.ts is excluded — it reads the raw persisted state for the
     // migration table, which is the intended carrier of the old field's intent.
     for (const file of ['services/TaskViewerProvider.ts', 'services/KanbanProvider.ts', 'webview/kanban.html']) {
         const src = fs.readFileSync(path.join(process.cwd(), 'src', file), 'utf8');
         assert.ok(
-            !/orchestrationConfig[\.\?]+enabled/.test(src),
-            `${file} must not reference orchestrationConfig.enabled — the field is deleted`
+            !/missionControlConfig[\.\?]+enabled/.test(src),
+            `${file} must not reference missionControlConfig.enabled — the field is deleted`
         );
     }
 
     // --- The mode axis is deleted — no mode gates anywhere ---
-    // The schedule runs whenever `enabled` is true. The orchestrator runs
-    // whenever `orchestratorArmed` is true. Both can be on simultaneously.
+    // The schedule runs whenever `enabled` is true. Mission Control runs
+    // whenever `missionControlArmed` is true. Both can be on simultaneously.
     // No method should gate on `automationMode !== 'scheduled'`.
     const methodBody = (marker) => {
         const start = providerSource.indexOf(marker);
@@ -665,22 +667,22 @@ async function run() {
         'setAutobanPausedFromKanban must NOT gate on automationMode — the mode axis is deleted'
     );
     // A FOURTH path: the updateAutobanState message arm. It must not force
-    // `enabled` false in agent-managed (that would disarm the orchestrator),
+    // `enabled` false in agent-managed (that would disarm Mission Control),
     // but must never install the run-sheet clock behind it either.
     const updateArm = providerSource.slice(providerSource.indexOf("case 'updateAutobanState': {"));
     assert.ok(
         !/automationMode !== 'scheduled'/.test(updateArm),
         'the updateAutobanState arm must not gate on automationMode — the mode axis is deleted'
     );
-    // Arming the orchestrator sets the orchestratorArmed switch. The mode axis
+    // Arming Mission Control sets the missionControlArmed switch. The mode axis
     // is deleted — no _stopAutobanEngine call, no exclusivity.
     assert.ok(
-        /orchestratorArmed: true/.test(confirmBody),
-        'confirmOrchestrationSession must set orchestratorArmed: true — the mode axis is deleted, arming is a switch'
+        /missionControlArmed: true/.test(confirmBody),
+        'confirmMissionControlSession must set missionControlArmed: true — the mode axis is deleted, arming is a switch'
     );
     assert.ok(
         !/_stopAutobanEngine\(\)/.test(confirmBody),
-        'confirmOrchestrationSession must NOT call _stopAutobanEngine — the schedule and orchestrator are independent switches'
+        'confirmMissionControlSession must NOT call _stopAutobanEngine — the schedule and Mission Control are independent switches'
     );
     // Survivor jobs run on their own activation-scoped timer, not the run-sheet tick.
     assert.ok(
@@ -936,10 +938,10 @@ async function run() {
         extensionSrc.includes("registerCommand('switchboard.startOrchestrator'"),
         'switchboard.startOrchestrator must be registered in extension.ts'
     );
-    // The external-mode paused-jobs line says "Scheduled", not "Internal".
+    // The external-mode description confirms external scheduling does not pause local jobs.
     assert.ok(
-        kanbanHtml.includes('Switch back to Scheduled to re-arm them'),
-        'the external-mode paused-jobs line must say "Scheduled" (the new mode name), not "Internal"'
+        kanbanHtml.includes('Generating or copying a prompt does not pause or modify local jobs'),
+        'the external-mode panel must explain that external scheduling does not pause local jobs'
     );
     // The run-sheet timer badges are SCHEDULED-only. Both badge filters had an
     // `else if (mode === 'external')` arm, which on a three-value axis let
@@ -955,14 +957,57 @@ async function run() {
     );
     // Agent-managed carries the two things that define the mode: the wake
     // interval and the CLI that starts the agent. The boot command is SHOWN,
-    // not edited — the orchestrator has no startup-command slot of its own.
+    // not edited — Mission Control has no startup-command slot of its own.
     assert.ok(
         kanbanHtml.includes('agent-managed-boot-command'),
-        'the agent-managed panel must name the CLI the orchestrator boots with — the mode is "a startup command and a wake interval"'
+        'the agent-managed panel must name the CLI Mission Control boots with — the mode is "a startup command and a wake interval"'
     );
     assert.ok(
         /lastStartupCommands\['lead'\] \|\| lastStartupCommands\['coder'\]/.test(kanbanHtml),
-        "the displayed boot command must mirror startOrchestratorFromKanban's own resolution (lead, falling back to coder) — a divergent display lies about what will start"
+        "the displayed boot command must mirror startMissionControlFromKanban's own resolution (lead, falling back to coder) — a divergent display lies about what will start"
+    );
+
+    // --- The automation model: four things, not a mode axis ---
+    // 1. Schedule rules stay small: window, source, selector ('oldest'), target.
+    // Must NOT admit role, batch size, or complexity filter.
+    if (typeof normalizeScheduleRule === 'function') {
+        const validSchedule = normalizeScheduleRule({
+            timeWindow: 'midnight-7am',
+            sourceColumn: 'CODED',
+            selector: 'oldest',
+            targetColumn: 'CODE REVIEWED',
+            role: 'lead',
+            batchSize: 5,
+            complexityFilter: 'high_and_above'
+        });
+        assert.deepStrictEqual(validSchedule, {
+            timeWindow: 'midnight-7am',
+            sourceColumn: 'CODED',
+            selector: 'oldest',
+            targetColumn: 'CODE REVIEWED'
+        }, 'schedule rules must admit only timeWindow, sourceColumn, selector, and targetColumn — no role, batchSize, or complexity');
+    }
+
+    // 2. Mission run flavours: unattended vs operations is per run.
+    if (typeof normalizeMissionRunConfig === 'function') {
+        const unattendedRun = normalizeMissionRunConfig({ missionId: 'm-1', flavour: 'unattended' });
+        const operationsRun = normalizeMissionRunConfig({ missionId: 'm-2', flavour: 'operations' });
+        assert.strictEqual(unattendedRun.flavour, 'unattended');
+        assert.strictEqual(operationsRun.flavour, 'operations');
+    }
+
+    // 3. Migration from external mode sets recurringJobsResumedNotice.
+    const externalMigrated = normalizeAutobanConfigState({ automationMode: 'external', enabled: false });
+    assert.strictEqual(externalMigrated.enabled, false);
+    assert.ok(
+        typeof externalMigrated.recurringJobsResumedNotice === 'string' && externalMigrated.recurringJobsResumedNotice.includes('resumed'),
+        'migrating retired external mode must set recurringJobsResumedNotice'
+    );
+
+    // 4. No credentials in generated external prompt.
+    assert.ok(
+        !/ghp_|api[_-]?key|bearer|token|secret/i.test(externalPromptBody),
+        'the external prompt must not contain any credentials or secrets'
     );
 
     console.log('autoban state regression test passed');

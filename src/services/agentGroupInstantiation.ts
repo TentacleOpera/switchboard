@@ -275,7 +275,7 @@ If you are remote (reaching Switchboard through a tunnel):
 Do not rely on worker self-reports alone; inspect the actual git commits.
 
 ## 7. Triggering Review
-Never move a card backwards to an earlier pipeline stage — only the orchestrator may do that. Never move a card to a new column yourself: your only card action is the POST /kanban/dispatch call below, and only when your team has a reviewer seat.
+Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. Never move a card to a new column yourself: your only card action is the POST /kanban/dispatch call below, and only when your team has a reviewer seat.
 
 When all subtasks of the feature are complete and verified:
 \`\`\`json

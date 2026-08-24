@@ -16,7 +16,7 @@ import * as path from 'path';
 export interface HostCapabilities {
     terminalDispatch?: boolean;
     automation?: boolean;
-    orchestrator?: boolean;
+    'mission-control'?: boolean;
     terminalFleet?: boolean;
     mcpTerminals?: boolean;
     secretsEntry?: boolean;
@@ -31,7 +31,7 @@ export interface HostCapabilities {
 const DEFAULT_HOST_CAPABILITIES: HostCapabilities = {
     terminalDispatch: false,
     automation: false,
-    orchestrator: false,
+    'mission-control': false,
     terminalFleet: false,
     mcpTerminals: false,
     secretsEntry: false,
@@ -228,6 +228,37 @@ export function getBoardHtml(repoRoot: string, workspaceRoot: string, capabiliti
 export function getAgentControlHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
     const result = getBoardHtml(repoRoot, workspaceRoot, capabilities, themeClass);
     return { ...result, html: injectBodyAttributes(result.html, 'data-view="agent-control"') };
+}
+
+export function getMissionControlHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
+    const candidates = [
+        path.join(repoRoot, 'dist', 'webview', 'mission-control.html'),
+        path.join(repoRoot, 'src', 'webview', 'mission-control.html'),
+    ];
+    const htmlPath = findFile(candidates);
+    if (!htmlPath) {
+        return { html: '<html><body>Mission Control panel HTML not found.</body></html>', csp: '' };
+    }
+    let content = fs.readFileSync(htmlPath, 'utf8');
+    const nonce = makeNonce();
+    // frame-src 'self' is widened to the loopback origins so the controller
+    // strip's /terminals?solo=<seat> iframe loads in the browser host. The VS
+    // Code webview host serves the panel from vscode-webview:// and the strip's
+    // iframe resolves through the acquireVsCodeApi bridge instead, so the
+    // directive is inert there either way.
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' http://127.0.0.1:* http://localhost:* http://*.localhost:* data:; font-src 'self'; connect-src 'self' https: http://127.0.0.1:* http://localhost:* http://*.localhost:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self' http://127.0.0.1:* http://localhost:* http://*.localhost:*;`;
+    content = content.replace(/\{\{NONCE\}\}/g, nonce);
+    content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
+    content = content.replace(/{{MISSION_CONTROL_JS_URI}}/g, '/static/webview/mission-control.js');
+    content = content.replace(/{{GEIST_PIXEL_FONT_URI}}/g, '/static/designs/GeistPixel-Square.woff2');
+    content = content.replace(/{{HANKEN_FONT_URI}}/g, '/static/designs/HankenGrotesk-Variable.woff2');
+    const firstScript = `<script nonce="${nonce}" src="/static/webview/mission-control.js"></script>`;
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', firstScript);
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="mission-control" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    content = injectBodyAttributes(content, bodyAttr);
+    content = applyThemeClass(content, themeClass);
+    return { html: content, csp };
 }
 
 export function getProjectHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
@@ -518,6 +549,9 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
     const iconDir = '/static/icons';
     return [
         { id: 'board', label: 'Board', icon: `${iconDir}/nav-board.svg`, route: '/board', enabled: true },
+        { id: 'mission-control', label: 'Mission Control', icon: `${iconDir}/nav-mission-control.svg`, route: '/mission-control', enabled: true },
+        { id: 'agent-control', label: 'Agents', icon: `${iconDir}/nav-agent-control.svg`, route: '/agent-control', enabled: true },
+        { id: 'terminals', label: 'Terminals', icon: `${iconDir}/nav-terminals.svg`, route: '/terminals', enabled: terminalsEnabled },
         { id: 'project', label: 'Project', icon: `${iconDir}/nav-project.svg`, route: '/project', enabled: true },
         { id: 'memo', label: 'Memo', icon: `${iconDir}/nav-memo.svg`, route: '/memo', enabled: true, presentation: 'modal' },
         { id: 'tickets', label: 'Tickets', icon: `${iconDir}/nav-tickets.svg`, route: '/tickets', enabled: ticketsEnabled },
@@ -525,14 +559,13 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
         { id: 'design', label: 'Design', icon: `${iconDir}/nav-design.svg`, route: '/design', enabled: designEnabled },
         { id: 'setup', label: 'Setup', icon: `${iconDir}/nav-setup.svg`, route: '/setup', enabled: setupEnabled, placement: 'bottom' },
         { id: 'connections', label: 'Connections', icon: `${iconDir}/nav-connections.svg`, route: '/connections', enabled: connectionsEnabled },
-        { id: 'terminals', label: 'Terminals', icon: `${iconDir}/nav-terminals.svg`, route: '/terminals', enabled: terminalsEnabled },
-        { id: 'agent-control', label: 'Agents', icon: `${iconDir}/nav-agent-control.svg`, route: '/agent-control', enabled: true },
     ];
 }
 
 export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult | null {
     switch (id) {
         case 'board': return getBoardHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'mission-control': return getMissionControlHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'agent-control': return getAgentControlHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'project': return getProjectHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'memo': return getMemoHtml(repoRoot, workspaceRoot, capabilities, themeClass);

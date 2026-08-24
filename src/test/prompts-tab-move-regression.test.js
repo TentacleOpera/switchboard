@@ -274,10 +274,13 @@ function run() {
         /data-tab="agents"/,
         'Expected agents tab to still exist'
     );
-    expectRegex(
+    // The AUTOMATION tab moved to the Mission Control panel
+    // (mission-control.html) — see mission-control-panel-ui-specification.md.
+    // Assert it is gone from the board, not that it remains.
+    expectNoRegex(
         kanbanSource,
         /data-tab="automation"/,
-        'Expected automation tab to still exist'
+        'Expected automation tab to be removed from the board (moved to Mission Control panel)'
     );
     expectRegex(
         kanbanSource,
@@ -285,11 +288,11 @@ function run() {
         'Expected setup tab to still exist'
     );
 
-    // Verify position of AUTOMATION and SETUP tabs
+    // Verify position of WORKTREES and SETUP tabs (AUTOMATION is gone)
     expectRegex(
         kanbanSource,
-        /data-tab="automation"[\s\S]*?data-tab="setup"/,
-        'Expected AUTOMATION tab to be positioned before SETUP'
+        /data-tab="worktrees"[\s\S]*?data-tab="setup"/,
+        'Expected WORKTREES tab to be positioned before SETUP'
     );
 
     console.log('✓ Test 6 passed\n');

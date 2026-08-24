@@ -15,6 +15,34 @@ export const SHELL_READINESS_DELAY_MS = 750;
 export const SIGTERM_GRACE_MS = 3000;
 
 /**
+ * Singleton role identities. Roles mapped here share ONE seat across the fleet
+ * — a second {@link PtyFleetService.create} for any key in the same identity
+ * returns the existing live handle instead of minting `<role>-2`. Pool roles
+ * (researcher, coder, lead, etc.) are deliberately absent: three coders is a
+ * legitimate configuration and the collision loop serves it correctly.
+ *
+ * `mission-control` and `project_manager` are the controller under two role
+ * keys. A set listing both as separate entries would still permit one of each
+ * — which is two controllers. They share identity `'controller'` so the guard
+ * treats them as one seat, not two.
+ *
+ * NOTE: this is the OPPOSITE of the `worktrees.branch` lesson from this
+ * programme, where unscoped uniqueness was the bug. Here it is the
+ * requirement — one controller across every control-plane directory, not one
+ * per workspace root. The two look identical to a reviewer applying the earlier
+ * fix by analogy, which is why this comment exists.
+ */
+const SINGLETON_IDENTITIES: ReadonlyMap<string, string> = new Map([
+    ['mission-control', 'controller'],
+    ['project_manager', 'controller'],
+]);
+
+/** Returns the singleton identity id for a role, or undefined for pool roles. */
+function singletonIdentityForRole(role: string): string | undefined {
+    return SINGLETON_IDENTITIES.get(role);
+}
+
+/**
  * Registry owner tag. The extension's `isCompatibleIdeName` partition (see
  * extension.ts) uses this to leave PTY rows alone instead of adopting them.
  */
@@ -164,6 +192,35 @@ export class PtyFleetService {
         this._claudeInlineRenderingResolver = resolver;
     }
 
+    /**
+     * Host-injected resolver for the adopted controller seat. Returns the
+     * terminalName of a session that adopted the Mission Control seat in place
+     * (POST /mission-control/adopt), or null/undefined when no seat is adopted.
+     *
+     * An adopted controller carries NEITHER the `'mission-control'` role NOR
+     * the `'Mission Control'` name in the fleet — a role-only singleton check
+     * would mint a duplicate beside it. This resolver lets {@link create}
+     * consult the seat record so the guard sees the adopted session as the
+     * controller.
+     *
+     * The fact is sourced from the host's in-process state (the autoban
+     * `missionControlSeat` record), which is global to the host by
+     * construction — NOT from `workspaceState`, which is per-workspace and
+     * cannot answer a global question. See the plan's User Review Required
+     * section.
+     *
+     * Unset (ptyHost.ts's child process) → undefined. The child never fields a
+     * Mission Control create (the extension host seats VS Code terminals, not
+     * pty terminals), so the seat check is not needed there — the role scan
+     * alone covers every path the child actually serves.
+     */
+    private _controllerSeatResolver?: () => { terminalName?: string } | null | undefined;
+
+    /** See {@link _controllerSeatResolver}. Called once by the host that owns the seat record. */
+    public setControllerSeatResolver(resolver: () => { terminalName?: string } | null | undefined): void {
+        this._controllerSeatResolver = resolver;
+    }
+
     constructor(workspaceRoot: string, db?: KanbanDatabase, apiToken?: string) {
         this.workspaceRoot = workspaceRoot;
         this.db = db;
@@ -220,6 +277,50 @@ export class PtyFleetService {
     }
 
     public async create(role: string, friendlyName?: string, cwd?: string, worktreePath?: string, parentInstanceId?: string | null, startupCommand?: string, opts?: CreateOptions): Promise<ExtendedTerminalHandle> {
+        // Singleton guard — BEFORE the collision loop. The loop below is the
+        // right default for pool roles (three coders → coder-2, coder-3), but
+        // for a singleton identity a second create must return the existing
+        // live handle rather than minting `<role>-2`. This is the one chokepoint
+        // every path goes through — the rail button, startMissionControlFromKanban,
+        // the standalone host, and any future panel or dock control — so the
+        // invariant holds regardless of which surface issued the call.
+        //
+        // The check is GLOBAL: never scoped by workspace root. One controller
+        // across every control-plane directory, not one per root. See the
+        // SINGLETON_IDENTITIES comment for why this is the opposite of the
+        // worktrees.branch lesson.
+        //
+        // Consults BOTH the role scan AND the adopted seat record. An adopted
+        // controller carries neither the role nor the name, so a role-only
+        // check would mint a duplicate beside it — the exact race the plan's
+        // Problem Analysis documents.
+        const identity = singletonIdentityForRole(role);
+        if (identity) {
+            const existing = this._findSingletonHandle(identity);
+            if (existing) {
+                if (existing.status === 'active') {
+                    // Live singleton — return it. A second create for the same
+                    // identity is a duplicate-by-construction; returning the
+                    // handle lets every caller's "did I just spawn?" branch
+                    // see the existing seat instead of a phantom second one.
+                    return existing;
+                }
+                // Dead singleton (process exited, name still in the map). Reclaim
+                // rather than refuse: a stale name must not lock the role out
+                // permanently. Drop the dead handle so the collision loop below
+                // sees the canonical name as free, then fall through to spawn.
+                // The new handle reuses the same friendlyName the caller asked
+                // for (or the dead one's name when the caller passed none),
+                // which is the re-seat the stop-then-start path needs.
+                this.terminals.delete(existing.friendlyName);
+                if (!friendlyName) {
+                    // Inherit the dead handle's name so a nameless re-seat keeps
+                    // the canonical name rather than falling back to `<role>-1`.
+                    friendlyName = existing.friendlyName;
+                }
+            }
+        }
+
         let name = friendlyName || `${role}-1`;
         let counter = 1;
         while (this.terminals.has(name)) {
@@ -422,6 +523,77 @@ export class PtyFleetService {
             if (t.agentInstanceId === id) { return t; }
         }
         return undefined;
+    }
+
+    /**
+     * Find the singleton handle for an identity id, consulting BOTH the role
+     * scan AND the adopted seat record.
+     *
+     * 1. Scan every terminal for a role that maps to this identity. Returns
+     *    the first match (live OR exited — the caller decides what to do with
+     *    a dead handle).
+     * 2. If no role match, consult the host-injected seat resolver. An adopted
+     *    controller carries neither the `'mission-control'` role nor the
+     *    `'Mission Control'` name, so a role-only scan would miss it and mint
+     *    a duplicate beside it. The resolver returns the adopted terminal's
+     *    friendlyName; look it up in the fleet.
+     *
+     * Returns undefined when no singleton of this identity exists.
+     */
+    private _findSingletonHandle(identity: string): ExtendedTerminalHandle | undefined {
+        // 1. Role scan.
+        for (const t of this.terminals.values()) {
+            if (singletonIdentityForRole(t.role) === identity) {
+                return t;
+            }
+        }
+        // 2. Adopted seat record.
+        if (this._controllerSeatResolver) {
+            try {
+                const seat = this._controllerSeatResolver();
+                const seatName = seat?.terminalName;
+                if (seatName) {
+                    const handle = this.terminals.get(seatName);
+                    if (handle) { return handle; }
+                }
+            } catch { /* best-effort — a resolver error must not block creation */ }
+        }
+        return undefined;
+    }
+
+    /**
+     * Report pre-existing singleton duplicates rather than removing them.
+     * Anyone who double-clicked before this guard shipped may have a
+     * `mission-control-2` (or `project_manager-2`) in the wild; its scrollback
+     * may hold unsaved context, so killing it silently is wrong. Instead,
+     * surface the duplicate names so the operator can decide.
+     *
+     * Returns the list of duplicate friendlyNames for a given identity (any
+     * terminal whose role maps to the identity, beyond the first). The first
+     * handle is the canonical singleton; the rest are the duplicates to report.
+     */
+    public reportSingletonDuplicates(identity: string): string[] {
+        const handles: ExtendedTerminalHandle[] = [];
+        for (const t of this.terminals.values()) {
+            if (singletonIdentityForRole(t.role) === identity) {
+                handles.push(t);
+            }
+        }
+        // Also include adopted-seat terminals — but only when there is more
+        // than one handle total, since the seat alone is not a duplicate.
+        if (handles.length > 0 && this._controllerSeatResolver) {
+            try {
+                const seat = this._controllerSeatResolver();
+                const seatName = seat?.terminalName;
+                if (seatName && !handles.some(h => h.friendlyName === seatName)) {
+                    const seatHandle = this.terminals.get(seatName);
+                    if (seatHandle) { handles.push(seatHandle); }
+                }
+            } catch { /* best-effort */ }
+        }
+        if (handles.length <= 1) { return []; }
+        // First is canonical; the rest are duplicates.
+        return handles.slice(1).map(h => h.friendlyName);
     }
 
     public listChildren(parentId: string): ExtendedTerminalHandle[] {

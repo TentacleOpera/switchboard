@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Mission Control panel — the automation model's home. Two tabs
+         (Missions, Schedules) using the sidebar-list-plus-detail layout from
+         tickets.html, plus a persistent controller strip (NOT a tab) hosting
+         the persona's terminal so it is reachable at any window width. See
+         .switchboard/plans/mission-control-panel-ui-specification.md. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' {{WEBVIEW_CSP_SOURCE}}; style-src 'unsafe-inline' {{WEBVIEW_CSP_SOURCE}}; img-src {{WEBVIEW_CSP_SOURCE}} https: http://127.0.0.1:* http://localhost:* data: file:; font-src {{WEBVIEW_CSP_SOURCE}}; connect-src https:; frame-src 'self' http://127.0.0.1:* http://localhost:*;">
+    <title>Mission Control</title>
+    <style>
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: normal;
+            font-style: normal;
+        }
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-display: swap;
+        }
+        :root {
+            --kanban-bg: #000000;
+            --panel-bg: #000000;
+            --panel-bg2: #0a0a0a;
+            --border-color: #333333;
+            --border-bright: #444444;
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --accent-teal-bright: #5ce8e6;
+            --accent-orange: #d18616;
+            --accent-green: #4ec9b0;
+            --accent-red: #f85149;
+            --accent-neon: var(--accent-teal);
+            --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            --card-bg: #0d0d0d;
+            --card-bg-hover: #1a1a1a;
+            --card-border: 1px solid #333333;
+            --text-primary: #e0e0e0;
+            --text-secondary: #8C8C8C;
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-code:   Menlo, Consolas, monospace;
+            --spacing-unit: 8px;
+            --spacing-xs: calc(var(--spacing-unit) / 2);
+            --spacing-sm: var(--spacing-unit);
+            --spacing-md: calc(var(--spacing-unit) * 1.5);
+            --spacing-lg: calc(var(--spacing-unit) * 2);
+        }
+        body.theme-claudify {
+            --accent-primary: #D97757;
+            --accent-teal: #D97757;
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E2A188;
+            --accent-neon: #D97757;
+            --glow-teal: none;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: var(--font-family);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            font-size: 13px;
+            color: var(--text-primary);
+            background: var(--panel-bg);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── Tab bar (ported from kanban.html) ─────────────────────────── */
+        .shared-tab-bar {
+            display: flex; align-items: center; gap: 2px;
+            padding: 8px 16px 0;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            overflow-x: auto; overflow-y: hidden;
+            flex-shrink: 0;
+        }
+        .shared-tab-btn {
+            flex-shrink: 0; white-space: nowrap;
+            background: transparent; border: 1px solid transparent; border-bottom: none;
+            color: var(--text-secondary);
+            font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+            padding: 8px 16px; cursor: pointer;
+            border-radius: 3px 3px 0 0; transition: all 0.08s;
+            position: relative; top: 1px;
+        }
+        .shared-tab-btn:hover { color: var(--text-primary); background: color-mix(in srgb, var(--accent-teal) 5%, transparent); }
+        .shared-tab-btn.active { color: var(--accent-teal); background: var(--panel-bg2); border-color: var(--border-color); border-bottom-color: var(--panel-bg2); }
+        .cyber-theme-enabled .shared-tab-btn.active { box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent); }
+        body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
+        body.theme-claudify .shared-tab-btn.active { background: var(--panel-bg); border-color: transparent; border-bottom-color: transparent; }
+        body.theme-claudify .shared-tab-btn:hover:not(.active) { color: #c8c8c8; background: color-mix(in srgb, #ffffff 5%, transparent); }
+
+        /* ── Body layout: tab area (flex:1) + persistent controller strip ── */
+        .mc-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .mc-tab-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+        .shared-tab-content { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+        .shared-tab-content.active { display: flex; }
+
+        /* ── Controls strip (ported from tickets.html) ──────────────────── */
+        .controls-strip {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 12px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0; overflow-x: auto; flex-wrap: nowrap;
+        }
+        .controls-strip > * { flex-shrink: 0; }
+        .workspace-filter-select, .planning-select, .mc-select {
+            font-size: 11px; letter-spacing: 0.5px; padding: 3px 8px;
+            background: var(--panel-bg2); color: var(--text-primary);
+            border: 1px solid var(--border-color); border-radius: 2px;
+            cursor: pointer; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+        }
+        .workspace-filter-select:hover, .planning-select:hover, .mc-select:hover { border-color: var(--accent-teal-dim); }
+        .workspace-filter-select:focus, .planning-select:focus, .mc-select:focus { outline: 1px solid var(--accent-teal); }
+        .strip-btn {
+            background: transparent; border: 1px solid var(--border-color);
+            color: var(--text-secondary); font-family: var(--font-family);
+            font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+            padding: 4px 10px; cursor: pointer; border-radius: 2px; transition: all 0.15s;
+        }
+        .strip-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-teal) 8%, transparent); border-color: var(--accent-teal-dim); color: var(--accent-teal); }
+        .strip-btn.active { background: var(--accent-teal-dim); border-color: var(--accent-teal); color: var(--accent-teal); font-weight: 600; }
+        .strip-btn--primary { background: var(--accent-teal-dim); border-color: var(--accent-teal); color: var(--accent-teal); }
+        .strip-btn--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-teal) 18%, transparent); }
+        .strip-btn:disabled { opacity: 0.4; cursor: not-allowed; border-color: var(--border-color); color: var(--text-secondary); }
+        .strip-btn.is-teal { color: var(--accent-teal); border-color: var(--accent-teal-dim); background: color-mix(in srgb, var(--accent-teal) 5%, transparent); }
+        .strip-btn.is-teal:hover:not(:disabled) { border-color: var(--accent-teal); background: color-mix(in srgb, var(--accent-teal) 10%, transparent); }
+        .strip-btn.is-danger:hover:not(:disabled) { color: var(--accent-red); border-color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 8%, transparent); }
+
+        /* ── Sidebar list + detail (ported from tickets.html) ───────────── */
+        .content-row { display: flex; flex: 1; overflow: hidden; }
+        .content-row > * { transition: flex 0.2s ease; }
+        .content-row > :first-child { flex: 1; overflow-y: auto; }
+        .content-row > :last-child { flex: 3; overflow-y: auto; }
+        .content-row.collapsed > :first-child { flex: 0 0 40px !important; }
+        .content-row.collapsed > :last-child { flex: 1 !important; }
+        .mc-sidebar {
+            display: flex; flex-direction: column;
+            background: var(--panel-bg);
+            border-right: 1px solid var(--border-color);
+            min-width: 0;
+        }
+        .sidebar-toggle-row { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-bottom: 8px; padding: 8px 12px 0; }
+        .sidebar-toggle-btn { background: transparent; border: 1px solid var(--border-color); color: var(--text-secondary); cursor: pointer; padding: 2px 6px; border-radius: 3px; font-size: 14px; line-height: 1; transition: all 0.15s; }
+        .sidebar-toggle-btn:hover { color: var(--accent-teal); border-color: var(--accent-teal-dim); background: color-mix(in srgb, var(--accent-teal) 8%, transparent); }
+        .content-row.collapsed .mc-sidebar { padding: 4px; overflow: hidden; }
+        .content-row.collapsed .mc-sidebar > *:not(.sidebar-toggle-row) { display: none !important; }
+        .content-row.collapsed .sidebar-toggle-row { position: static; display: flex; justify-content: center; margin-bottom: 8px; }
+
+        .mc-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+        .mc-list-item {
+            padding: 10px 12px; margin-bottom: 6px;
+            background: var(--card-bg); border: var(--card-border); border-radius: 3px;
+            cursor: pointer; transition: all 0.12s;
+        }
+        .mc-list-item:hover { background: var(--card-bg-hover); border-color: var(--border-bright); }
+        .mc-list-item.selected { border-color: var(--accent-teal); box-shadow: inset 0 0 0 1px var(--accent-teal); }
+        body.theme-claudify .mc-list-item.selected { box-shadow: inset 0 0 0 1px var(--accent-primary); }
+        .mc-list-item-title { font-size: 12px; color: var(--text-primary); font-weight: 600; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mc-list-item-sub { font-size: 10px; color: var(--text-secondary); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .mc-badge { font-size: 9px; letter-spacing: 0.5px; text-transform: uppercase; padding: 1px 6px; border-radius: 2px; border: 1px solid var(--border-color); color: var(--text-secondary); }
+        .mc-badge.is-ready { color: var(--accent-green); border-color: var(--accent-green); }
+        .mc-badge.is-active { color: var(--accent-teal); border-color: var(--accent-teal); }
+        .mc-badge.is-aborted { color: var(--accent-red); border-color: var(--accent-red); }
+        .mc-badge.is-completed { color: var(--accent-green); border-color: var(--accent-green); }
+        .mc-empty-state { padding: 32px 16px; text-align: center; color: var(--text-secondary); font-size: 12px; }
+
+        /* ── Detail pane ────────────────────────────────────────────────── */
+        .mc-detail { display: flex; flex-direction: column; overflow-y: auto; padding: 16px 20px; background: var(--panel-bg); }
+        .mc-detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }
+        .mc-detail-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+        .mc-detail-id { font-size: 10px; color: var(--text-secondary); font-family: var(--font-code); margin-top: 2px; }
+        .mc-field { margin-bottom: 14px; }
+        .mc-field-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-secondary); margin-bottom: 4px; display: block; }
+        .mc-field-value { font-size: 12px; color: var(--text-primary); line-height: 1.5; }
+        .mc-input, .mc-textarea, .mc-select-field {
+            width: 100%; background: var(--panel-bg2); color: var(--text-primary);
+            border: 1px solid var(--border-color); border-radius: 2px;
+            padding: 6px 8px; font-size: 12px; font-family: var(--font-family);
+        }
+        .mc-textarea { min-height: 64px; resize: vertical; font-family: var(--font-code); }
+        .mc-input:focus, .mc-textarea:focus, .mc-select-field:focus { outline: 1px solid var(--accent-teal); border-color: var(--accent-teal-dim); }
+        .mc-select-field { cursor: pointer; max-width: 320px; }
+        .mc-field-row { display: flex; gap: 12px; flex-wrap: wrap; }
+        .mc-field-row .mc-field { flex: 1; min-width: 180px; }
+        .mc-chip-list { display: flex; flex-wrap: wrap; gap: 6px; }
+        .mc-chip { font-size: 11px; padding: 3px 8px; background: var(--panel-bg2); border: 1px solid var(--border-color); border-radius: 10px; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
+        .mc-chip-remove { cursor: pointer; color: var(--text-secondary); font-size: 13px; line-height: 1; }
+        .mc-chip-remove:hover { color: var(--accent-red); }
+        .mc-add-chip { font-size: 11px; padding: 3px 8px; background: transparent; border: 1px dashed var(--border-color); border-radius: 10px; color: var(--text-secondary); cursor: pointer; }
+        .mc-add-chip:hover { color: var(--accent-teal); border-color: var(--accent-teal-dim); }
+        .mc-log { font-family: var(--font-code); font-size: 11px; color: var(--text-secondary); background: var(--panel-bg2); border: 1px solid var(--border-color); border-radius: 2px; padding: 10px 12px; max-height: 240px; overflow-y: auto; line-height: 1.6; white-space: pre-wrap; }
+        .mc-log-entry { padding: 2px 0; border-bottom: 1px solid color-mix(in srgb, var(--border-color) 50%, transparent); }
+        .mc-log-entry:last-child { border-bottom: none; }
+        .mc-log-time { color: var(--accent-teal-dim); margin-right: 8px; }
+        .mc-sequencing { font-family: var(--font-code); font-size: 11px; color: var(--text-secondary); background: var(--panel-bg2); border: 1px solid var(--border-color); border-radius: 2px; padding: 10px 12px; line-height: 1.7; }
+        .mc-sequencing-step { display: flex; align-items: center; gap: 8px; }
+        .mc-sequencing-num { color: var(--accent-teal); font-weight: 600; min-width: 20px; }
+        .mc-sequencing-default { font-style: italic; color: var(--text-secondary); }
+
+        /* ── Schedules conditional fields ───────────────────────────────── */
+        .mc-conditional { display: none; }
+        .mc-conditional.is-shown { display: block; }
+        .mc-prompt-editor { width: 100%; min-height: 160px; resize: vertical; background: var(--panel-bg2); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 2px; padding: 8px; font-size: 12px; font-family: var(--font-code); line-height: 1.5; }
+        .mc-prompt-editor:focus { outline: 1px solid var(--accent-teal); border-color: var(--accent-teal-dim); }
+        .mc-log-view { font-family: var(--font-code); font-size: 11px; color: var(--text-secondary); background: var(--panel-bg2); border: 1px solid var(--border-color); border-radius: 2px; padding: 12px; line-height: 1.6; white-space: pre-wrap; overflow-y: auto; flex: 1; }
+        .mc-log-asof { font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; font-style: italic; }
+
+        /* ── Controller strip (persistent, NOT a tab) ───────────────────── */
+        .mc-controller-strip {
+            flex-shrink: 0;
+            display: flex; flex-direction: column;
+            background: var(--panel-bg2);
+            border-top: 1px solid var(--border-color);
+            overflow: hidden;
+        }
+        .mc-controller-strip.is-collapsed { height: 32px; }
+        .mc-controller-strip.is-hidden { display: none; }
+        .mc-controller-header {
+            display: flex; align-items: center; gap: 8px;
+            padding: 4px 12px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+        .mc-controller-strip.is-collapsed .mc-controller-header { border-bottom: none; }
+        .mc-controller-label { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent-teal); font-weight: 600; }
+        .mc-controller-seat { font-size: 11px; color: var(--text-secondary); font-family: var(--font-code); }
+        .mc-controller-ops { display: flex; gap: 6px; margin-left: auto; align-items: center; }
+        .mc-controller-body { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+        .mc-controller-strip.is-collapsed .mc-controller-body { display: none; }
+        #mc-controller-frame { flex: 1; border: none; background: var(--panel-bg); width: 100%; min-height: 120px; }
+        .mc-controller-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px; padding: 16px; text-align: center; }
+
+        /* ── Retired-mode notice ────────────────────────────────────────── */
+        .mc-notice { padding: 8px 12px; background: color-mix(in srgb, var(--accent-orange) 12%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--accent-orange) 40%, transparent); color: var(--accent-orange); font-size: 11px; display: flex; align-items: center; gap: 8px; }
+        .mc-notice-dismiss { margin-left: auto; cursor: pointer; color: var(--text-secondary); font-size: 14px; line-height: 1; background: transparent; border: none; }
+        .mc-notice-dismiss:hover { color: var(--text-primary); }
+
+        /* ── Scrollbars (ported) ────────────────────────────────────────── */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-corner { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+        @supports not selector(::-webkit-scrollbar) {
+            :root { scrollbar-width: thin; scrollbar-color: var(--border-bright) transparent; }
+        }
+        :root { color-scheme: dark; }
+    </style>
+</head>
+<body class="cyber-theme-enabled" data-panel="mission-control">
+    <!-- Retired-mode notice (surfaces once when legacy autoban mode state exists) -->
+    <div id="mc-retired-notice" class="mc-notice" hidden>
+        <span>The AUTOMATION tab has moved here. Your previous mode selection has been retired.</span>
+        <button class="mc-notice-dismiss" id="mc-notice-dismiss" title="Dismiss">×</button>
+    </div>
+
+    <div class="shared-tab-bar">
+        <button class="shared-tab-btn active" data-tab="missions" id="mc-tab-missions">MISSIONS</button>
+        <button class="shared-tab-btn" data-tab="schedules" id="mc-tab-schedules">SCHEDULES</button>
+    </div>
+
+    <div class="mc-body">
+        <div class="mc-tab-area">
+            <!-- ══ Missions tab ════════════════════════════════════════════ -->
+            <div id="missions-tab-content" class="shared-tab-content active">
+                <div class="controls-strip" id="missions-controls">
+                    <select id="mc-workspace-select" class="workspace-filter-select" data-tooltip="Workspace and project scope"></select>
+                    <button class="strip-btn is-teal" id="mc-launch" data-tooltip="Launch the selected ready mission" disabled>LAUNCH</button>
+                    <button class="strip-btn" id="mc-new-mission" data-tooltip="Create a new mission">+ NEW MISSION</button>
+                    <select id="mc-status-filter" class="mc-select" data-tooltip="Filter missions by status">
+                        <option value="all">All statuses</option>
+                        <option value="not-started">Not started</option>
+                        <option value="in-flight">In flight</option>
+                        <option value="aborted">Aborted</option>
+                        <option value="completed">Completed</option>
+                    </select>
+                    <button class="strip-btn is-danger" id="mc-delete-mission" data-tooltip="Delete the selected mission" disabled>DELETE</button>
+                    <button class="strip-btn is-danger" id="mc-stop-mission" data-tooltip="Stop the selected in-flight mission" disabled>STOP</button>
+                    <button class="strip-btn is-teal" id="mc-ready-mission" data-tooltip="Mark the selected mission ready for pickup" disabled>READY</button>
+                </div>
+                <div class="content-row" id="missions-content-row">
+                    <div class="mc-sidebar" id="missions-sidebar">
+                        <div class="sidebar-toggle-row">
+                            <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                        </div>
+                        <div class="mc-list" id="missions-list">
+                            <div class="mc-empty-state">No missions yet. Use + NEW MISSION to create one.</div>
+                        </div>
+                    </div>
+                    <div class="mc-detail" id="missions-detail">
+                        <div class="mc-empty-state">Select a mission to view its detail.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══ Schedules tab ═══════════════════════════════════════════ -->
+            <div id="schedules-tab-content" class="shared-tab-content">
+                <div class="controls-strip" id="schedules-controls">
+                    <button class="strip-btn" id="mc-new-schedule" data-tooltip="Create a new scheduled action">+ NEW SCHEDULE</button>
+                    <button class="strip-btn is-danger" id="mc-delete-schedule" data-tooltip="Delete the selected schedule" disabled>DELETE</button>
+                    <button class="strip-btn is-teal" id="mc-start-schedule" data-tooltip="Start the selected schedule" disabled>START</button>
+                    <button class="strip-btn is-danger" id="mc-stop-schedule" data-tooltip="Stop the selected schedule" disabled>STOP</button>
+                    <button class="strip-btn" id="mc-schedule-logs" data-tooltip="View the schedule log file">LOGS</button>
+                </div>
+                <div class="content-row" id="schedules-content-row">
+                    <div class="mc-sidebar" id="schedules-sidebar">
+                        <div class="sidebar-toggle-row">
+                            <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                        </div>
+                        <div class="mc-list" id="schedules-list">
+                            <div class="mc-empty-state">No schedules yet. Use + NEW SCHEDULE to create one.</div>
+                        </div>
+                    </div>
+                    <div class="mc-detail" id="schedules-detail">
+                        <div class="mc-empty-state">Select a schedule to view its detail.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══ Controller strip (persistent, NOT a tab) ═════════════════════
+             Hosts the controller terminal (?solo=<seat> frame) and the scoped
+             btn-controller-* ops. Hidden when no node-pty / no controller seat.
+             A strip outside the tabbed content area is hidden only when the
+             whole panel is (selectPanel covers that), so a tab switch never
+             clamps the controller's pty size vote — see the plan's "Why not a
+             tab" section. -->
+        <div id="mc-controller-strip" class="mc-controller-strip is-hidden">
+            <div class="mc-controller-header">
+                <span class="mc-controller-label">Controller</span>
+                <span class="mc-controller-seat" id="mc-controller-seat-name"></span>
+                <div class="mc-controller-ops">
+                    <button type="button" id="btn-controller-stop" class="strip-btn is-danger" title="End the Mission Control session immediately (disarms, archives session, leaves terminal alive)" hidden>STOP MISSION CONTROL</button>
+                    <button type="button" id="btn-controller-restart" class="strip-btn" title="Restart the controller terminal" hidden>RESTART</button>
+                    <button type="button" id="btn-controller-ack" class="strip-btn" title="Acknowledge controller completion" hidden>ACK</button>
+                    <button type="button" id="mc-controller-collapse" class="strip-btn" title="Collapse/expand the controller strip">▾</button>
+                </div>
+            </div>
+            <div class="mc-controller-body" id="mc-controller-body">
+                <div class="mc-controller-empty" id="mc-controller-empty">No controller terminal running. Use the rail orchestrator button to start Mission Control.</div>
+                <iframe id="mc-controller-frame" title="Controller terminal"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <!-- SHARED_DEFAULTS_SCRIPT -->
+    <script nonce="{{NONCE}}" src="{{MISSION_CONTROL_JS_URI}}"></script>
+</body>
+</html>

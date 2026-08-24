@@ -92,7 +92,7 @@ export interface TurnEndInfo {
     /** The workspace root the swept card lives in. */
     workspaceRoot: string;
     /** Deliver directly to this terminal, skipping parent resolution. Used by the feature-level
-     *  nudge, where the head IS the recipient — resolving its parent would address the orchestrator
+     *  nudge, where the head IS the recipient — resolving its parent would address Mission Control
      *  instead. When absent, hosts resolve the seat's parent (the existing turn-end path). */
     recipientSeat?: string;
     /** Pre-composed evidence body for the nudge (remaining subtasks, their seats, silence, mtime).
@@ -271,7 +271,7 @@ export class PlanIngestionEngine {
      * mtime-based clear's retirement, gated on the same `transitioned` boolean. The engine passes only what
      * it knows — the seat name, the plan file, the outcome and the workspace
      * root — and stays host-agnostic: recipient resolution (parentInstanceId →
-     * live terminal, orchestrator fallback) and delivery (ptySendPrompt) belong
+     * live terminal, Mission Control fallback) and delivery (ptySendPrompt) belong
      * to the host, which has the fleet identity data this module deliberately
      * does not import. A host that sets no notifier degrades silently — the
      * classification still runs, nothing is delivered, no null-callback crash.
@@ -1207,7 +1207,7 @@ export class PlanIngestionEngine {
 
             // Deliver via the turn-end notifier with `recipientSeat` = the head
             // (skip parent resolution — the head IS the recipient; resolving its
-            // parent would address the orchestrator instead) and the composed body.
+            // parent would address Mission Control instead) and the composed body.
             try {
                 this._turnEndNotifier({
                     seatName: watch.headTerminal,

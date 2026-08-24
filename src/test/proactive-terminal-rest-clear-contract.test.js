@@ -23,7 +23,7 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const read = (rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 
 const SKILL = '.agents/protocols/terminal-coder-dispatch/SKILL.md';
-const ORCH = '.agents/protocols/switchboard-orchestration/SKILL.md';
+const ORCH = '.agents/protocols/switchboard-mission-control-http/SKILL.md';
 
 let failures = 0;
 function test(name, fn) {
@@ -53,9 +53,9 @@ test('proactive clearing did NOT trade away clearBeforePrompt: false', () => {
     );
 });
 
-test('the orchestration HTTP surface documents the clear verb', () => {
+test('the Mission Control HTTP surface documents the clear verb', () => {
     const orch = read(ORCH);
-    assert.ok(/ptyClearTerminal/.test(orch), 'switchboard-orchestration §4b omits ptyClearTerminal');
+    assert.ok(/ptyClearTerminal/.test(orch), 'switchboard-mission-control-http §4b omits ptyClearTerminal');
 });
 
 test('neither contract re-states a retired standing-order cap', () => {

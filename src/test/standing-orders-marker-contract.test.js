@@ -383,9 +383,9 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     assert.ok(!headPrompt.includes('give that coder the next subtask'),
         'Coding headPrompt must NOT say "give that coder the next subtask" — '
         + 'stacking subtasks on the same coder causes context-wall losses.');
-    assert.ok(!headPrompt.includes('Post a status report to .switchboard/orchestrator/reports/'),
-        'Coding headPrompt must NOT hardcode the orchestrator report instruction — '
-        + 'it is now gated by the orchestratorActive flag in ensureDispatchProtocolDirectives.');
+    assert.ok(!headPrompt.includes('Post a status report to .switchboard/mission-control/reports/'),
+        'Coding headPrompt must NOT hardcode Mission Control report instruction — '
+        + 'it is now gated by Mission ControlActive flag in ensureDispatchProtocolDirectives.');
     // The shipped Coding reviewer member must declare
     // relationship: 'reports-to-head' (member-receives → no pair-scoped
     // bypass order on the lead). A future edit that reinstates
@@ -467,7 +467,7 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     // §5.6 exists to remove. Standing orders survive a /clear, which is what
     // makes this instruction durable across a head's context resets.
     const unattendedEscalationSentence = 'stop and report to the human instead of dispatching again '
-        + '(or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+        + '(or unattended: record the blocked card to .switchboard/mission-control/reports/ '
         + 'and proceed to the next queue item).';
     assert.ok(
         tsHeadPrompt.includes(unattendedEscalationSentence),

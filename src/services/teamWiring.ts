@@ -727,7 +727,7 @@ export const PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT =
     + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
     + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
     + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-    + 'dispatching again (or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+    + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
     + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
     + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
     + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
@@ -774,7 +774,7 @@ export const PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT =
     + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
     + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
     + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-    + 'dispatching again (or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+    + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
     + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
     + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
     + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
@@ -795,7 +795,7 @@ export const PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT =
     + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
     + 'empty and stop. '
     + 'If your team has NO reviewer seat, do NOT move the card to CODE REVIEWED — that is not your role. '
-    + 'Post a finished report to .switchboard/orchestrator/reports/ naming the feature and its planId, '
+    + 'Post a finished report to .switchboard/mission-control/reports/ naming the feature and its planId, '
     + 'and stop. The card stays where it is.';
 
 /**
@@ -827,7 +827,7 @@ export const PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT =
     + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
     + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
     + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-    + 'dispatching again (or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+    + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
     + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
     + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
     + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
@@ -848,7 +848,7 @@ export const PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT =
     + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
     + 'empty and stop. '
     + 'If your team has NO reviewer seat, do NOT move the card to CODE REVIEWED — that is not your role. '
-    + 'Post a finished report to .switchboard/orchestrator/reports/ naming the feature and its planId, '
+    + 'Post a finished report to .switchboard/mission-control/reports/ naming the feature and its planId, '
     + 'and stop. The card stays where it is.'
     + ' When the work is complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
@@ -862,7 +862,7 @@ export const PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT =
  * (`:719`) and by the order converter with the live head name.
  *
  * Card-movement rules (added by the card-movement-rule migration):
- *  - Never move a card backwards — only the orchestrator may do that.
+ *  - Never move a card backwards — only Mission Control may do that.
  *  - Never move a card to a new column yourself — with ONE named exception:
  *    the POST /kanban/dispatch call, and only when the team has a reviewer
  *    seat. The exception has to be named in the text: the payload carries
@@ -891,7 +891,7 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
     + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
     + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-    + 'dispatching again (or unattended: record the blocked card to .switchboard/orchestrator/reports/ '
+    + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
     + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
     + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
     + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
@@ -900,7 +900,7 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
     + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
     + 'pwd> (that read returns one record per subtask, each with its kanbanColumn). '
-    + 'Never move a card backwards to an earlier pipeline stage — only the orchestrator may do that. '
+    + 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
     + 'Never move a card to a new column yourself: your only card action is the POST '
     + '/kanban/dispatch call below, and only when your team has a reviewer seat. '
     + 'Check your team roster (the YOUR TEAM block in your prompt or ptyListTerminals) for a seat '
@@ -914,7 +914,7 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
     + 'empty and stop. '
     + 'If your team has NO reviewer seat, do NOT move the card — that is not your role. '
-    + 'Post a finished report to .switchboard/orchestrator/reports/ naming the feature and its planId, '
+    + 'Post a finished report to .switchboard/mission-control/reports/ naming the feature and its planId, '
     + 'and stop. The card stays where it is.'
     + ' When the work is complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
@@ -979,7 +979,7 @@ export const PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT =
     + 'descriptive message.';
 
 export const NEW_REVIEW_TEAM_HEAD_PROMPT =
-    'Never move a card backwards to an earlier pipeline stage — only the orchestrator may do that. '
+    'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
     + 'Never move a card to a new column yourself. '
     + 'You are the reviewer on a review team. When work lands in your terminal, review it '
     + '(Stage 1: adversarial findings, Stage 2: balanced synthesis). Apply a fully diagnosed fix set under '
@@ -1004,7 +1004,7 @@ export const CURRENT_BUGGY_CODING_HEAD_PROMPT =
     'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
     + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
     + 'no such seat, dispatch to a coder and say why in your status report. Post a status report '
-    + 'to .switchboard/orchestrator/reports/ when a subtask is dispatched, and a finished report '
+    + 'to .switchboard/mission-control/reports/ when a subtask is dispatched, and a finished report '
     + 'when the feature is handed to review. When a seat fails review on the same subtask twice, '
     + 'do not send that subtask to it a third time — escalate one rung along intern → coder → lead, '
     + 'name the specific defects in the dispatch, and say in your status report which seat you moved '
@@ -2395,7 +2395,7 @@ export const OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review you
  * disk on every install that adopted the Coding team from `226b7f09` onward.
  * That text carried the four defects this migration corrects (`GET
  * /kanban/feature`, no `workspaceRoot`, same-coder stacking, a hardcoded
- * orchestrator-report line).
+ * Mission Control-report line).
  *
  * Fixing the group's `headPrompt` alone does not reach those installs:
  * `wireSpawnedTeam` skips the head order when one already exists for the
