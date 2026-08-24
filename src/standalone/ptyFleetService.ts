@@ -5,6 +5,7 @@ import { PtyTerminalBackend } from './ptyBackend';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 import type { KanbanDatabase } from '../services/KanbanDatabase';
 import type { DelegateDefinition } from '../services/agentConfig';
+import { deriveCliFamily, type CliFamily } from '../services/cliIdentity';
 
 /** Delegate children one head agent may co-launch. A pty is a process, not a row. */
 export const MAX_DELEGATES_PER_PARENT = 8;
@@ -61,6 +62,7 @@ export interface FleetTerminalInfo {
     purpose: string;
     agentInstanceId: string;
     parentInstanceId?: string | null;
+    cliFamily?: CliFamily;
 }
 
 export interface ExtendedTerminalHandle extends TerminalHandle {
@@ -75,6 +77,7 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
     cwd: string;
     exitCode?: number;
     hidden?: boolean;
+    cliFamily: CliFamily;
     /**
      * Internal: marks a terminal spawned by spawnDelegates as a team member,
      * suppressing auto-start triggering. A shared member is unparented by
@@ -416,6 +419,17 @@ export class PtyFleetService {
             env: { ...claudeEnvDefaults, ...process.env, ...switchboardEnv } as Record<string, string>,
         });
 
+        let effectiveStartupCommand = startupCommand;
+        if (!effectiveStartupCommand) {
+            try {
+                const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
+                effectiveStartupCommand = commands[role];
+            } catch {
+                effectiveStartupCommand = undefined;
+            }
+        }
+        const cliFamily = deriveCliFamily(effectiveStartupCommand);
+
         const startTime = new Date().toISOString();
         const handle: ExtendedTerminalHandle = {
             ...rawHandle,
@@ -436,6 +450,7 @@ export class PtyFleetService {
             // screen is the reported bug, half-fixed. Inheriting from the handle keeps
             // this correct in ptyHost.ts's child too, which cannot read the setting.
             claudeInlineRendering,
+            cliFamily,
             // Initialise the heartbeat to creation time so a freshly-spawned shell
             // that has not yet emitted its banner still reads as "just heard from".
             lastDataAt: Date.now(),
@@ -466,7 +481,7 @@ export class PtyFleetService {
         this.updateRegistryState();
         this.emitter.emit('change', { type: 'created', terminal: handle });
 
-        await this.injectStartupCommand(handle, role, startupCommand);
+        await this.injectStartupCommand(handle, role, effectiveStartupCommand);
 
         return handle;
     }
@@ -910,6 +925,7 @@ export class PtyFleetService {
                     purpose: 'pty',
                     agentInstanceId: t.agentInstanceId,
                     parentInstanceId: t.parentInstanceId,
+                    cliFamily: t.cliFamily,
                 } satisfies FleetTerminalInfo;
             }
             await db.setConfigJson('runtime.terminals', terminalMap);

@@ -13,6 +13,7 @@
 		// "noFallthroughCasesInSwitch": true, /* Report errors for fallthrough cases in switch statement. */
 		// "noUnusedParameters": true,  /* Report errors on unused parameters. */
 		"skipLibCheck": true,
+		"allowImportingTsExtensions": true,
 		"noEmit": true /* Prevent tsc from emitting .js alongside .ts — webpack handles bundling */
 	},
 	"exclude": [

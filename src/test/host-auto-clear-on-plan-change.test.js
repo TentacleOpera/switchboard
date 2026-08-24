@@ -118,11 +118,12 @@ test('extension host clears map on ptyClearAllTerminals', () => {
         /ptyClearAllTerminals/.test(PTY_HOST_VERB_SRC),
         '_ptyHostVerb must reference ptyClearAllTerminals'
     );
-    // The .clear() call should be near the ptyClearAllTerminals branch.
-    const clearAllIdx = PTY_HOST_VERB_SRC.indexOf('ptyClearAllTerminals');
-    const afterClearAll = PTY_HOST_VERB_SRC.slice(clearAllIdx, clearAllIdx + 200);
+    // Find the actual branch (else if), not comment mentions.
+    const branchIdx = PTY_HOST_VERB_SRC.indexOf("else if (verb === 'ptyClearAllTerminals')");
+    assert.ok(branchIdx > 0, '_ptyHostVerb must have a ptyClearAllTerminals branch');
+    const afterBranch = PTY_HOST_VERB_SRC.slice(branchIdx, branchIdx + 300);
     assert.ok(
-        /_lastDispatchedPlanByTerminal\.clear\(\)/.test(afterClearAll),
+        /_lastDispatchedPlanByTerminal\.clear\(\)/.test(afterBranch),
         '_ptyHostVerb must clear _lastDispatchedPlanByTerminal on ptyClearAllTerminals'
     );
 });

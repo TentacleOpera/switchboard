@@ -341,9 +341,10 @@ export function TEAM_QUEUE_DONE_ORDER_BODY(groupId: string): string {
     return 'When you finish the task you were dispatched, POST /terminals/teams/'
         + `${groupId}/queue/done with {"from":"<your terminal name>"} against the port in `
         + '.switchboard/api-server-port.txt. '
-        + 'The system will relay your completion report to your team lead, clear your terminal, '
-        + 'and dispatch the next queued item to the lead. '
-        + 'If there are no more items, your terminal stays cleared and the team is done with queued work. '
+        + 'The system will relay your completion report to your team lead and dispatch '
+        + 'the next queued item to the lead. Your terminal context is preserved for review '
+        + 'and fix requests; your lead will clear it upon accepting the task with POST /kanban/task/complete. '
+        + 'If there are no more items, your terminal stays as-is and the team is done with queued work. '
         + 'If the POST fails, report to your head directly via ptySendPrompt as a fallback.';
 }
 

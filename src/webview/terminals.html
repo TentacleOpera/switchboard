@@ -1452,10 +1452,10 @@
             gap: 8px;
         }
 
-        /* Startup curtain. An OVERLAY, not output filtering: xterm keeps rendering
+        /* Startup / Dispatch curtain. An OVERLAY, not output filtering: xterm keeps rendering
            underneath, so scrollback survives and the operator can scroll back to the
            banner. .pane-content is already position:relative (line 860). */
-        .startup-curtain {
+        .startup-curtain, .terminal-curtain {
             position: absolute;
             inset: 0;
             z-index: 4;                       /* above .terminal-view-host (z-index auto) and
@@ -1470,7 +1470,7 @@
         }
         /* The icon and its sweep ring share ONE positioned box, so the ring is centred on
            the icon rather than on the pane. */
-        .startup-curtain-badge {
+        .startup-curtain-badge, .terminal-curtain-badge {
             position: relative;
             width: 96px;
             height: 96px;
@@ -1479,18 +1479,31 @@
             justify-content: center;
             flex-shrink: 0;
         }
-        .startup-curtain-icon {
+        .startup-curtain-icon, .terminal-curtain-icon {
             width: 56px;
             height: 56px;
             object-fit: contain;
         }
-        .startup-curtain-label {
+        .startup-curtain-icon.is-ufo,
+        .terminal-curtain-icon.is-ufo,
+        .dispatch-curtain-icon {
+            width: 80px;
+            height: 45px;
+            object-fit: contain;
+        }
+        .startup-curtain-label, .terminal-curtain-label {
             font-size: 10px;
             letter-spacing: 1px;
             color: var(--text-secondary);
             text-transform: uppercase;
         }
-        .startup-curtain-dismiss {
+        .startup-curtain-sublabel, .terminal-curtain-sublabel {
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            color: var(--text-muted, var(--text-secondary));
+            margin-top: -4px;
+        }
+        .startup-curtain-dismiss, .terminal-curtain-dismiss {
             pointer-events: auto;             /* the ONE interactive element */
             background: transparent;
             border: 1px solid var(--border-color);
@@ -1502,17 +1515,19 @@
             border-radius: 3px;
             cursor: pointer;
         }
-        .startup-curtain-dismiss:hover {
+        .startup-curtain-dismiss:hover, .terminal-curtain-dismiss:hover {
             color: var(--accent-teal);
             border-color: var(--accent-teal);
         }
         /* Motion gated on the same class the other panels use for the animation
            preference (project.html:629, planning.html:2087). NOTE: that class only
            reaches this panel under the extension host — see the Dependencies audit. */
-        body:not(.cyber-animation-disabled) .startup-curtain-icon {
+        body:not(.cyber-animation-disabled) .startup-curtain-icon,
+        body:not(.cyber-animation-disabled) .terminal-curtain-icon {
             animation: curtain-breathe 1.6s ease-in-out infinite;
         }
-        body:not(.cyber-animation-disabled) .startup-curtain-badge::after {
+        body:not(.cyber-animation-disabled) .startup-curtain-badge::after,
+        body:not(.cyber-animation-disabled) .terminal-curtain-badge::after {
             content: '';
             position: absolute;
             inset: 0;
@@ -1528,19 +1543,24 @@
         @keyframes curtain-sweep {
             to { transform: rotate(360deg); }
         }
-        /* Sidebar row echo: the same brand icon pulses while its terminal boots. */
-        body:not(.cyber-animation-disabled) .item-role-icon.is-starting {
+        /* Sidebar row echo: the same brand icon pulses while its terminal boots or prepares. */
+        body:not(.cyber-animation-disabled) .item-role-icon.is-starting,
+        body:not(.cyber-animation-disabled) .item-role-icon.is-preparing {
             animation: curtain-breathe 1.6s ease-in-out infinite;
         }
         /* Reduced motion keeps the curtain (it still hides the noise) and drops the
            movement — matches kanban.html:1047. Covers the sidebar echo too. */
         @media (prefers-reduced-motion: reduce) {
             body:not(.cyber-animation-disabled) .startup-curtain-icon,
+            body:not(.cyber-animation-disabled) .terminal-curtain-icon,
             body:not(.cyber-animation-disabled) .item-role-icon.is-starting,
-            body:not(.cyber-animation-disabled) .startup-curtain-badge::after {
+            body:not(.cyber-animation-disabled) .item-role-icon.is-preparing,
+            body:not(.cyber-animation-disabled) .startup-curtain-badge::after,
+            body:not(.cyber-animation-disabled) .terminal-curtain-badge::after {
                 animation: none;
             }
-            body:not(.cyber-animation-disabled) .startup-curtain-badge::after { display: none; }
+            body:not(.cyber-animation-disabled) .startup-curtain-badge::after,
+            body:not(.cyber-animation-disabled) .terminal-curtain-badge::after { display: none; }
         }
 
         /* Kanban-mode pane — a live kanban column viewer in an empty grid slot.

@@ -270,7 +270,10 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                         clearBeforePrompt: payload.clearBeforePrompt === true,
                         clearBeforePromptDelayMs: typeof payload.clearBeforePromptDelayMs === 'number'
                             ? payload.clearBeforePromptDelayMs
-                            : undefined
+                            : undefined,
+                        clearReadinessMode: payload.clearReadinessMode === 'auto' || payload.clearReadinessMode === 'manual'
+                            ? payload.clearReadinessMode
+                            : undefined,
                     });
                     return { success: true };
                 } catch (err) {

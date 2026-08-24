@@ -3132,11 +3132,44 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             </label>
                             <span class="toggle-label">Clear before prompt</span>
                         </label>
-                        <div id="clear-delay-container" style="display:none; margin-top:4px; align-items:center; gap:6px; font-size:10px; color:var(--text-secondary);">
-                            <label style="font-size:11px;">Delay:</label>
-                            <input type="number" id="clear-terminal-delay-input" min="0" max="10000" step="100" value="2000"
-                                   style="width:70px; font-size:11px; padding:2px 4px; border:1px solid #555; border-radius:3px; background:var(--vscode-input-background); color:var(--vscode-input-foreground);">
-                            <span style="font-size:10px; opacity:0.7;">ms (0&ndash;10000)</span>
+                        <div id="clear-delay-container" style="display:none; margin-top:8px; flex-direction:column; gap:12px; font-size:11px; color:var(--text-secondary);">
+                            <div class="terminal-clear-group" style="display:flex; flex-direction:column; gap:4px;">
+                                <div style="font-weight:600; color:var(--vscode-foreground, #ccc);">VS Code terminals &mdash; clear settle delay</div>
+                                <div style="display:flex; align-items:center; gap:6px;">
+                                    <label style="font-size:11px;">Delay:</label>
+                                    <input type="number" id="clear-terminal-delay-input" min="0" max="10000" step="100" value="2000"
+                                           style="width:70px; font-size:11px; padding:2px 4px; border:1px solid #555; border-radius:3px; background:var(--vscode-input-background); color:var(--vscode-input-foreground);">
+                                    <span style="font-size:10px; opacity:0.7;">ms (0&ndash;10000)</span>
+                                </div>
+                                <div class="hint-text" style="font-size:10px; opacity:0.8; margin-top:2px;">
+                                    Fixed wait required because terminal output readiness is not observable through the stable VS Code API.
+                                </div>
+                            </div>
+                            <div class="terminal-clear-group" style="display:flex; flex-direction:column; gap:6px; border-top:1px solid rgba(255,255,255,0.08); padding-top:8px;">
+                                <div style="font-weight:600; color:var(--vscode-foreground, #ccc);">PTY fleet / browser</div>
+                                <div style="display:flex; flex-direction:column; gap:4px;">
+                                    <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                        <input type="radio" name="pty-clear-mode" id="pty-clear-mode-auto" value="auto" checked>
+                                        <span>Automatic CLI readiness (recommended)</span>
+                                    </label>
+                                    <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                        <input type="radio" name="pty-clear-mode" id="pty-clear-mode-manual" value="manual">
+                                        <span>Manual delay override</span>
+                                    </label>
+                                </div>
+                                <div id="pty-delay-container" style="display:flex; align-items:center; gap:6px; margin-top:2px;">
+                                    <label style="font-size:11px;">PTY Delay:</label>
+                                    <input type="number" id="pty-clear-delay-input" min="0" max="10000" step="100" value="600"
+                                           style="width:70px; font-size:11px; padding:2px 4px; border:1px solid #555; border-radius:3px; background:var(--vscode-input-background); color:var(--vscode-input-foreground);">
+                                    <span style="font-size:10px; opacity:0.7;">ms (0&ndash;10000)</span>
+                                </div>
+                                <div id="pty-clear-auto-hint" class="hint-text" style="font-size:10px; opacity:0.8;">
+                                    Known Devin/Claude/Antigravity seats use tailored readiness profiles. Unknown/custom CLIs use the displayed PTY fallback.
+                                </div>
+                                <div id="pty-clear-source-status" style="font-size:10px; font-style:italic; opacity:0.85; color:var(--vscode-descriptionForeground, #888);">
+                                    Automatic: no explicit override
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -6219,6 +6252,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let allowUnknownComplexityAutoMove = true;
         let clearTerminalBeforePrompt = true;
         let clearTerminalBeforePromptDelay = 2000;
+        let ptyClearReadinessMode = 'auto';
+        let ptyClearBeforePromptDelay = 600;
+        let ptyClearSource = 'default';
 
         let collapseCodersEnabled = true;
         let unrenderedColumnRefreshRequested = false;
@@ -7464,11 +7500,33 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         }
 
+        function getPtySourceLabel(mode, source) {
+            if (source === 'pty-explicit') {
+                return 'Manual compatibility: explicit PTY value';
+            }
+            if (source === 'legacy-explicit') {
+                return 'Manual compatibility: inherited VS Code value';
+            }
+            if (source === 'default') {
+                return 'Automatic: no explicit override';
+            }
+            if (source === 'mode-explicit') {
+                return mode === 'auto' ? 'Automatic CLI readiness' : 'Manual delay override';
+            }
+            return '';
+        }
+
         function updateClearTerminalBeforePromptUi() {
             const toggle = document.getElementById('clear-terminal-before-prompt-toggle');
             const toggleLabel = document.getElementById('clear-terminal-before-prompt-label');
             const delayContainer = document.getElementById('clear-delay-container');
             const delayInput = document.getElementById('clear-terminal-delay-input');
+            const autoRadio = document.getElementById('pty-clear-mode-auto');
+            const manualRadio = document.getElementById('pty-clear-mode-manual');
+            const ptyDelayInput = document.getElementById('pty-clear-delay-input');
+            const ptyDelayContainer = document.getElementById('pty-delay-container');
+            const ptySourceStatus = document.getElementById('pty-clear-source-status');
+
             if (toggle) {
                 toggle.checked = !!clearTerminalBeforePrompt;
             }
@@ -7481,6 +7539,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (delayInput) {
                 delayInput.value = String(clearTerminalBeforePromptDelay);
             }
+            if (autoRadio && manualRadio) {
+                autoRadio.checked = (ptyClearReadinessMode === 'auto');
+                manualRadio.checked = (ptyClearReadinessMode === 'manual');
+            }
+            if (ptyDelayInput) {
+                ptyDelayInput.value = String(ptyClearBeforePromptDelay);
+                ptyDelayInput.disabled = (ptyClearReadinessMode === 'auto');
+            }
+            if (ptyDelayContainer) {
+                ptyDelayContainer.style.opacity = (ptyClearReadinessMode === 'auto') ? '0.6' : '1';
+            }
+            if (ptySourceStatus) {
+                ptySourceStatus.textContent = getPtySourceLabel(ptyClearReadinessMode, ptyClearSource);
+            }
+
             const scToggle = document.getElementById('sc-clear-terminal-before-prompt-toggle');
             if (scToggle) {
                 scToggle.checked = !!clearTerminalBeforePrompt;
@@ -10763,18 +10836,37 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'clearTerminalBeforePromptState':
                     clearTerminalBeforePrompt = msg.enabled !== false;
-                    if (msg.delay !== undefined) {
+                    if (typeof msg.delay === 'number') {
                         clearTerminalBeforePromptDelay = msg.delay;
+                    }
+                    if (msg.ptyMode === 'auto' || msg.ptyMode === 'manual') {
+                        ptyClearReadinessMode = msg.ptyMode;
+                    }
+                    if (typeof msg.ptyDelay === 'number') {
+                        ptyClearBeforePromptDelay = msg.ptyDelay;
+                    }
+                    if (msg.ptySource) {
+                        ptyClearSource = msg.ptySource;
                     }
                     updateClearTerminalBeforePromptUi();
                     break;
 
                 case 'clearTerminalBeforePromptDelayState':
-                    if (msg.delay !== undefined) {
+                    if (typeof msg.delay === 'number') {
                         clearTerminalBeforePromptDelay = msg.delay;
                         const delayInput = document.getElementById('clear-terminal-delay-input');
                         if (delayInput) delayInput.value = String(msg.delay);
                     }
+                    if (msg.ptyMode === 'auto' || msg.ptyMode === 'manual') {
+                        ptyClearReadinessMode = msg.ptyMode;
+                    }
+                    if (typeof msg.ptyDelay === 'number') {
+                        ptyClearBeforePromptDelay = msg.ptyDelay;
+                    }
+                    if (msg.ptySource) {
+                        ptyClearSource = msg.ptySource;
+                    }
+                    updateClearTerminalBeforePromptUi();
                     break;
                 case 'liveSyncUpdate': {
                     window.liveSyncStates = window.liveSyncStates || {};
@@ -11569,6 +11661,35 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 clearTerminalBeforePromptDelay = clamped;
                 event.target.value = String(clamped);
                 postKanbanMessage({ type: 'updateClearTerminalBeforePromptDelay', delay: clamped });
+            }
+        });
+        document.getElementById('pty-clear-mode-auto')?.addEventListener('change', (event) => {
+            if (event.target?.checked) {
+                ptyClearReadinessMode = 'auto';
+                ptyClearSource = 'mode-explicit';
+                updateClearTerminalBeforePromptUi();
+                postKanbanMessage({ type: 'updateClearTerminalBeforePromptPtyMode', mode: 'auto' });
+            }
+        });
+        document.getElementById('pty-clear-mode-manual')?.addEventListener('change', (event) => {
+            if (event.target?.checked) {
+                ptyClearReadinessMode = 'manual';
+                ptyClearSource = 'mode-explicit';
+                updateClearTerminalBeforePromptUi();
+                postKanbanMessage({
+                    type: 'updateClearTerminalBeforePromptPtyMode',
+                    mode: 'manual',
+                    delay: ptyClearBeforePromptDelay
+                });
+            }
+        });
+        document.getElementById('pty-clear-delay-input')?.addEventListener('change', (event) => {
+            const value = parseInt(event.target?.value, 10);
+            if (!isNaN(value)) {
+                const clamped = Math.min(Math.max(value, 0), 10000);
+                ptyClearBeforePromptDelay = clamped;
+                event.target.value = String(clamped);
+                postKanbanMessage({ type: 'updateClearTerminalBeforePromptPtyDelay', delay: clamped });
             }
         });
 

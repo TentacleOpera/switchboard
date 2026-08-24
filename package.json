@@ -328,21 +328,29 @@
         "switchboard.terminal.clearBeforePrompt": {
           "type": "boolean",
           "default": true,
-          "description": "When enabled, sends /clear to the terminal before dispatching prompts. The wait duration is configurable via terminal.clearBeforePromptDelay."
+          "description": "When enabled, sends /clear to the terminal before dispatching prompts. Non-PTY (VS Code) seats wait terminal.clearBeforePromptDelay; PTY seats follow terminal.ptyClearReadinessMode."
         },
         "switchboard.terminal.clearBeforePromptDelay": {
           "type": "number",
           "default": 2000,
           "minimum": 0,
           "maximum": 10000,
-          "description": "Milliseconds to wait after sending /clear before dispatching the prompt. Only used when terminal.clearBeforePrompt is enabled. Non-paced (same-agent) dispatches use approximately 1/3 of this value."
+          "description": "Exact wait for VS Code terminal seats; PTY fleet uses readiness mode."
+        },
+        "switchboard.terminal.ptyClearReadinessMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "manual"
+          ],
+          "description": "Controls directly-owned PTY clear timing. Auto uses known-CLI readiness detection and the PTY delay only for unknown/custom CLIs. Manual always waits terminal.ptyClearBeforePromptDelay. If unset, existing explicit delay settings are preserved through compatibility inference."
         },
         "switchboard.terminal.ptyClearBeforePromptDelay": {
           "type": "number",
           "default": 600,
           "minimum": 0,
           "maximum": 10000,
-          "description": "Milliseconds to wait after sending /clear before dispatching the prompt to a directly-owned PTY seat (the browser cockpit's terminal grid and the standalone host). Lower than terminal.clearBeforePromptDelay because a PTY write goes straight to the pty master fd with no clipboard round trip, focus acquisition or extension-host IPC. VS Code terminal seats continue to use terminal.clearBeforePromptDelay."
+          "description": "Manual PTY delay, or unknown/custom fallback in Auto mode. Known CLI profiles ignore it in Auto."
         },
         "switchboard.terminal.claudeInlineRendering": {
           "type": "boolean",
@@ -999,7 +1007,8 @@
     "test:contract:external-headed-team": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/external-headed-team-contract.test.js",
     "test:contract:terminal-coder-dispatch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-coder-dispatch-contract.test.js",
     "test:contract:feature-drive-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/feature-drive-prompt-reframe-contract.test.js",
-    "test:contract:drive-mode-prompt-overhaul": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/drive-mode-prompt-overhaul-contract.test.js"
+    "test:contract:drive-mode-prompt-overhaul": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/drive-mode-prompt-overhaul-contract.test.js",
+    "test:contract:pty-clear-policy": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-clear-policy-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

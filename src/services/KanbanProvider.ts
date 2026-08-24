@@ -20,6 +20,7 @@ import {
     BuiltInAgentRole
 } from './agentConfig';
 import { AgentSkillExporter } from './AgentSkillExporter';
+import { deriveAgentDisplayName } from './cliIdentity';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
@@ -67,6 +68,7 @@ import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { importPlanFiles } from './PlanFileImporter';
 import { matchWorktreePath } from './worktreeResolver';
 import { listIconPalette, validateTeamIcon, type IconPaletteEntry } from './iconPalette';
+import { resolvePtyClearPolicy, type PtyClearPolicy } from './ptyClearPolicy';
 
 /**
  * Feature workflow mode directives, prepended at position-zero of a feature prompt
@@ -557,10 +559,32 @@ export class KanbanProvider implements vscode.Disposable {
                         const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
                         this.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                     }
+                    if (e.affectsConfiguration('switchboard.terminal')) {
+                        this._clearTerminalBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
+                        this._clearTerminalBeforePromptDelay = Math.min(Math.max(
+                            vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000),
+                            0
+                        ), 10000);
+                        const policy = this._getPtyClearPolicy();
+                        const ptyDelay = policy.mode === 'manual' ? policy.delayMs : policy.unknownDelayMs;
+                        this.postMessage({
+                            type: 'clearTerminalBeforePromptState',
+                            enabled: this._clearTerminalBeforePrompt,
+                            delay: this._clearTerminalBeforePromptDelay,
+                            ptyMode: policy.mode,
+                            ptyDelay: ptyDelay,
+                            ptySource: policy.source,
+                        });
+                    }
                 })
             );
         }
     }
+
+    private _getPtyClearPolicy(): PtyClearPolicy {
+        return resolvePtyClearPolicy(vscode.workspace.getConfiguration('switchboard'));
+    }
+
 
     /** Check if a card matches any ID in the given array (planId-primary, sessionId-legacy). */
     private _cardMatchesIds(card: KanbanCard, ids: string[]): boolean {
@@ -2376,10 +2400,15 @@ export class KanbanProvider implements vscode.Disposable {
                 type: 'collapseCodersState',
                 enabled: this._collapseCodersEnabled
             });
+            const ptyPolicy2380 = this._getPtyClearPolicy();
+            const ptyDelay2380 = ptyPolicy2380.mode === 'manual' ? ptyPolicy2380.delayMs : ptyPolicy2380.unknownDelayMs;
             this.postMessage({
                 type: 'clearTerminalBeforePromptState',
                 enabled: this._clearTerminalBeforePrompt,
-                delay: this._clearTerminalBeforePromptDelay
+                delay: this._clearTerminalBeforePromptDelay,
+                ptyMode: ptyPolicy2380.mode,
+                ptyDelay: ptyDelay2380,
+                ptySource: ptyPolicy2380.source
             });
 
             let agentNames: Record<string, string> = {};
@@ -4087,10 +4116,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 type: 'collapseCodersState',
                 enabled: this._collapseCodersEnabled
             });
+            const ptyPolicy4091 = this._getPtyClearPolicy();
+            const ptyDelay4091 = ptyPolicy4091.mode === 'manual' ? ptyPolicy4091.delayMs : ptyPolicy4091.unknownDelayMs;
             this.postMessage({
                 type: 'clearTerminalBeforePromptState',
                 enabled: this._clearTerminalBeforePrompt,
-                delay: this._clearTerminalBeforePromptDelay
+                delay: this._clearTerminalBeforePromptDelay,
+                ptyMode: ptyPolicy4091.mode,
+                ptyDelay: ptyDelay4091,
+                ptySource: ptyPolicy4091.source
             });
 
             this.postMessage({ type: 'updateAgentNames', agentNames });
@@ -5679,7 +5713,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
             '  -d \'{"name":"<seat>","data":"Implement the plan at <path>. This subtask only.","clearBeforePrompt":false,"dispatch":{"planId":"<id>","role":"coder"}}\'',
             '',
-            'REVIEW: On callback, review git diff — not the coder\'s self-report. Resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead.',
+            'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Post POST /kanban/task/complete only after accepting the work (acceptance clears the coder). Escalate after two failures on the same subtask: intern → coder → lead.',
             '',
             'FEATURE WATCH: Armed by the system (stopColumns: CODE REVIEWED). You will be nudged if you go idle with un-accepted subtasks. No action needed.',
             '',
@@ -5690,10 +5724,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- Do NOT query kanban.db directly. The plan IDs are in your prompt; use the API for anything else.',
             '- Do NOT verify work before dispatching. The kanban column is the system\'s record, not a coder\'s claim.',
             '- Clear a terminal only when at rest (completion received AND next work goes elsewhere).',
-            '- The host auto-clears a terminal when a dispatch references a different planId than the terminal\'s last dispatched plan. This is mandatory for correctness — stale context degrades reasoning and induces hallucinated conflicts over multiple subtasks. Manual ptyClearTerminal is for the stand-down case only — a terminal you are putting away without dispatching new work to it. Clear at rest, always — the auto-clear enforces this at the system level; the manual clear enforces it for the stand-down path.',
+            '- The host auto-clears the full team roster once when a new feature run starts, and clears an accepted coder upon POST /kanban/task/complete. Coder self-report does not clear context — do not manually clear between subtasks or fixes before acceptance. Manual ptyClearTerminal is for the stand-down case only — a terminal you are putting away without dispatching new work to it. Clear at rest, always — the auto-clear enforces this at the system level; the manual clear enforces it for the stand-down path.',
             '- clearBeforePrompt stays false on every dispatch — the host overrides it to true automatically when the plan changes. The caller\'s contract is unchanged.',
-            '- Every new plan dispatch gets a fresh context. The previous "same code" exception (keeping context when the next subtask edits the same code) is removed. Context is preserved only for same-plan resends (fix prompts), which carry the same planId.',
-            '- When a seat reports and its next work is a different plan, the host auto-clears on dispatch — no manual action needed. If standing the terminal down without new work, ptyClearTerminal it.',
+            '- Every new feature run gets a fresh team context. Context is preserved across coder reports, review, fixes, and handoffs until lead acceptance clears the accepted coder.',
+            '- When a seat reports, its context is preserved for review. If standing the terminal down without new work, ptyClearTerminal it.',
             '- One subtask per terminal at a time. Use a second terminal for concurrency.',
             '- Every finding cites a plan clause. Quote the section or line the diff violates. A defect you cannot cite is a question report, not a dispatch.',
             '- Name the defect, never the mechanism. State what is wrong and which plan clause it breaks; do not tell the coder how to fix it. Where the plan itself names a mechanism, quote the plan verbatim.',
@@ -6056,6 +6090,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             resolvedOptions.reviewerConciseModeEnabled = promptsConfig.reviewerConciseModeEnabled;
             resolvedOptions.reviewerCompactPlanUpdateEnabled = promptsConfig.reviewerCompactPlanUpdateEnabled;
             resolvedOptions.noSeparateReviewArtifactsEnabled = promptsConfig.noSeparateReviewArtifactsEnabled;
+            resolvedOptions.reviewerRisksToMemoEnabled = promptsConfig.reviewerRisksToMemoEnabled;
             // REVIEW UNIT — resolve the newest coded commit carrying each plan's id, so
             // the reviewer is handed a bounded diff instead of a shared dirty tree. The
             // builder only renders; resolution lives here (the caller), keeping
@@ -6283,6 +6318,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             reviewerConciseModeEnabled: reviewerConfig?.addons?.reviewerConciseMode ?? false,
             reviewerCompactPlanUpdateEnabled: reviewerConfig?.addons?.reviewerCompactPlanUpdate ?? false,
             noSeparateReviewArtifactsEnabled: reviewerConfig?.addons?.noSeparateReviewArtifacts ?? true,
+            reviewerRisksToMemoEnabled: reviewerConfig?.addons?.reviewerRisksToMemo ?? true,
             leadChallengeEnabled: leadConfig?.addons?.leadChallenge ?? config.get<boolean>('leadCoder.inlineChallenge', false),
             aggressivePairProgramming: plannerConfig?.addons?.aggressivePairProgramming ?? (() => {
                 const newInspect = config.inspect<boolean>('pairProgramming.aggressive');
@@ -7459,20 +7495,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
             for (const role of roles) {
                 const cmd = (mergedCommands[role] || '').trim();
                 if (cmd) {
-                    // Brand-name overrides must stay in step with
-                    // TaskViewerProvider.CLI_BRAND_NAMES and
-                    // KanbanDatabase._resolveAgentForColumn.
-                    if (this._taskViewerProvider) {
-                        configuredNames[role] = this._taskViewerProvider.deriveAgentDisplayName(cmd);
-                    } else {
-                        const binary = cmd.split(/\s+/)[0];
-                        const base = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
-                        const CLI_BRAND_NAMES: Record<string, string> = {
-                            agy: 'Antigravity CLI',
-                        };
-                        configuredNames[role] = CLI_BRAND_NAMES[base]
-                            || (path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI');
-                    }
+                    configuredNames[role] = this._taskViewerProvider
+                        ? this._taskViewerProvider.deriveAgentDisplayName(cmd)
+                        : deriveAgentDisplayName(cmd);
                 } else {
                     configuredNames[role] = 'No agent assigned';
                 }
@@ -10248,10 +10273,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 } catch (err) {
                     console.error('[KanbanProvider] Failed to persist clearTerminalBeforePrompt:', err);
                 }
+                const togglePolicy = this._getPtyClearPolicy();
+                const togglePtyDelay = togglePolicy.mode === 'manual' ? togglePolicy.delayMs : togglePolicy.unknownDelayMs;
                 this.postMessage({
                     type: 'clearTerminalBeforePromptState',
                     enabled: this._clearTerminalBeforePrompt,
-                    delay: this._clearTerminalBeforePromptDelay
+                    delay: this._clearTerminalBeforePromptDelay,
+                    ptyMode: togglePolicy.mode,
+                    ptyDelay: togglePtyDelay,
+                    ptySource: togglePolicy.source
                 });
                 return { success: true, enabled: this._clearTerminalBeforePrompt };
 
@@ -10267,11 +10297,88 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 } catch (err) {
                     console.error('[KanbanProvider] Failed to persist clearTerminalBeforePromptDelay:', err);
                 }
+                const delayPolicy = this._getPtyClearPolicy();
+                const currentPtyDelay = delayPolicy.mode === 'manual' ? delayPolicy.delayMs : delayPolicy.unknownDelayMs;
                 this.postMessage({
                     type: 'clearTerminalBeforePromptDelayState',
-                    delay: clampedDelay
+                    delay: clampedDelay,
+                    ptyMode: delayPolicy.mode,
+                    ptyDelay: currentPtyDelay,
+                    ptySource: delayPolicy.source
                 });
                 return { success: true, delay: clampedDelay };
+
+            case 'updateClearTerminalBeforePromptPtyMode': {
+                const mode = msg.mode;
+                if (mode !== 'auto' && mode !== 'manual') {
+                    return { success: false, error: 'mode must be auto or manual' };
+                }
+                if (mode === 'manual' && typeof msg.delay === 'number') {
+                    const clamped = Math.min(Math.max(msg.delay, 0), 10000);
+                    try {
+                        await this._seams().pathConfig.updateConfigGlobal(
+                            'terminal.ptyClearBeforePromptDelay',
+                            clamped
+                        );
+                    } catch (err) {
+                        console.error('[KanbanProvider] Failed to persist ptyClearBeforePromptDelay:', err);
+                    }
+                }
+                this._markConfigDirty();
+                try {
+                    await this._seams().pathConfig.updateConfigGlobal(
+                        'terminal.ptyClearReadinessMode',
+                        mode
+                    );
+                } catch (err) {
+                    console.error('[KanbanProvider] Failed to persist ptyClearReadinessMode:', err);
+                }
+                const updatedPolicy = this._getPtyClearPolicy();
+                const effectivePtyDelay = updatedPolicy.mode === 'manual' ? updatedPolicy.delayMs : updatedPolicy.unknownDelayMs;
+                this.postMessage({
+                    type: 'clearTerminalBeforePromptState',
+                    enabled: this._clearTerminalBeforePrompt,
+                    delay: this._clearTerminalBeforePromptDelay,
+                    ptyMode: updatedPolicy.mode,
+                    ptyDelay: effectivePtyDelay,
+                    ptySource: updatedPolicy.source
+                });
+                return {
+                    success: true,
+                    ptyMode: updatedPolicy.mode,
+                    ptyDelay: effectivePtyDelay,
+                    ptySource: updatedPolicy.source
+                };
+            }
+
+            case 'updateClearTerminalBeforePromptPtyDelay': {
+                const clamped = Math.min(Math.max(msg.delay ?? 600, 0), 10000);
+                this._markConfigDirty();
+                try {
+                    await this._seams().pathConfig.updateConfigGlobal(
+                        'terminal.ptyClearBeforePromptDelay',
+                        clamped
+                    );
+                } catch (err) {
+                    console.error('[KanbanProvider] Failed to persist ptyClearBeforePromptDelay:', err);
+                }
+                const updatedPolicy = this._getPtyClearPolicy();
+                const effectivePtyDelay = updatedPolicy.mode === 'manual' ? updatedPolicy.delayMs : updatedPolicy.unknownDelayMs;
+                this.postMessage({
+                    type: 'clearTerminalBeforePromptState',
+                    enabled: this._clearTerminalBeforePrompt,
+                    delay: this._clearTerminalBeforePromptDelay,
+                    ptyMode: updatedPolicy.mode,
+                    ptyDelay: effectivePtyDelay,
+                    ptySource: updatedPolicy.source
+                });
+                return {
+                    success: true,
+                    ptyDelay: effectivePtyDelay,
+                    ptyMode: updatedPolicy.mode,
+                    ptySource: updatedPolicy.source
+                };
+            }
             case 'updateRoutingConfig':
                 if (msg.config && typeof msg.config === 'object') {
                     await this._updateRoutingConfig(msg.config);

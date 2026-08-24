@@ -2175,7 +2175,8 @@ export class LocalApiServer {
      * declares a feature or plan finished by writing a `completed_at`
      * timestamp on the plans table row. This is the ONLY way the system
      * learns that work finished — not board position, not a file write, not
-     * a queue pop. See `add-a-task-complete-endpoint-for-the-lead.md`.
+     * a queue pop. See `add-a-task-complete-endpoint-for-the-lead.md` and
+     * `atomic-team-feature-run-context-lifecycle.md`.
      *
      * Body: `{ from, planId, workspaceRoot?, outcome?, note? }`.
      * - `from` — the lead's terminal name.
@@ -2186,7 +2187,7 @@ export class LocalApiServer {
      * Contract:
      * - Idempotent: a repeat call with the same `planId` returns the existing
      *   record without re-writing `completed_at` or re-recording the event.
-     * - No dispatch, no column move, no terminal clear. Complete means complete.
+     * - No dispatch, no column move. Clear accepted work's recorded seat once.
      * - `queue/done` is untouched — it means "give me the next item", not "done".
      */
     private async _handleKanbanTaskComplete(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -2231,9 +2232,16 @@ export class LocalApiServer {
                 return;
             }
 
-            // Idempotency: check if already completed.
+            // Read the canonical plan row before writing completed_at
             const existing = await db.getPlanByPlanId?.(planId);
-            if (existing && existing.completedAt) {
+            if (!existing) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Plan not found: ${planId}` }));
+                return;
+            }
+
+            // Idempotency: check if already completed.
+            if (existing.completedAt) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     success: true,
@@ -2244,6 +2252,40 @@ export class LocalApiServer {
                     idempotent: true
                 }));
                 return;
+            }
+
+            // Resolve accepted coding seat from host evidence:
+            // Prefer current dispatchedTerminal when dispatch role is coder/intern;
+            // otherwise use latest canonical coding dispatch event for this plan.
+            let acceptedCodingSeat: string | undefined;
+            const currentRole = String(existing.routedTo || '').toLowerCase();
+            if (existing.dispatchedTerminal && (currentRole === 'coder' || currentRole === 'intern')) {
+                acceptedCodingSeat = existing.dispatchedTerminal;
+            } else if (typeof db.getPlanEventsByPlanId === 'function') {
+                try {
+                    const events = await db.getPlanEventsByPlanId(planId);
+                    for (let i = events.length - 1; i >= 0; i--) {
+                        const ev = events[i];
+                        if (!ev) continue;
+                        let p: any = null;
+                        if (typeof ev.payload === 'string') {
+                            try { p = JSON.parse(ev.payload); } catch {}
+                        } else if (ev.payload && typeof ev.payload === 'object') {
+                            p = ev.payload;
+                        }
+                        const role = String(p?.role || ev.role || '').toLowerCase();
+                        const term = String(p?.terminal || p?.terminalName || p?.dispatchedTerminal || ev.terminal || '').trim();
+                        if ((role === 'coder' || role === 'intern') && term) {
+                            acceptedCodingSeat = term;
+                            break;
+                        }
+                    }
+                } catch { /* best-effort event scan */ }
+            }
+
+            // Never clear the lead in `from`, planner, or reviewer
+            if (acceptedCodingSeat === from) {
+                acceptedCodingSeat = undefined;
             }
 
             // Write completed_at timestamp.
@@ -2260,8 +2302,24 @@ export class LocalApiServer {
             await db.appendPlanEventByPlanId?.(planId, {
                 eventType: 'completed',
                 workflow: 'task-complete',
-                payload: JSON.stringify({ from, outcome, note })
+                payload: JSON.stringify({ from, outcome, note, acceptedCodingSeat })
             });
+
+            // On first successful completion write, clear the accepted coding seat once.
+            let cleared = false;
+            let clearError: string | undefined;
+            if (acceptedCodingSeat && this._options.clearTerminalContext) {
+                try {
+                    const clr = await this._options.clearTerminalContext(workspaceRoot, acceptedCodingSeat);
+                    cleared = !!clr?.cleared;
+                    if (clr && clr.cleared === false && clr.error) {
+                        clearError = clr.error;
+                    }
+                } catch (clrErr) {
+                    clearError = clrErr instanceof Error ? clrErr.message : String(clrErr);
+                    console.warn(`[LocalApiServer] clearTerminalContext failed for accepted seat '${acceptedCodingSeat}':`, clrErr);
+                }
+            }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
@@ -2269,7 +2327,10 @@ export class LocalApiServer {
                 planId,
                 completed_at: timestamp,
                 outcome,
-                note
+                note,
+                cleared,
+                ...(clearError ? { clearError } : {}),
+                ...(acceptedCodingSeat ? { acceptedCodingSeat } : {})
             }));
         } catch (err) {
             console.error('[LocalApiServer] kanbanTaskComplete error:', err);
@@ -2490,12 +2551,15 @@ export class LocalApiServer {
                         // tells the lead "somebody finished something". The
                         // mismatch guard above already proved they agree when
                         // the caller supplies one.
+                        const isTeamMember = !!(relayHead || (await this._resolveTeamGroupForSeat(workspaceRoot, from)));
                         const relayPlanId = held.planId || planId;
                         const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
                             + (relayPlanId ? ` (plan ${relayPlanId})` : '')
                             + `${composeCompletionEvidence(held, Date.now())}.`
                             + ` ${TURN_END_VERIFY_INSTRUCTION}`
-                            + ` The system is clearing ${from} and dispatching the next card.`;
+                            + (isTeamMember
+                                ? ` The system preserves ${from}'s context for review and fix requests. Accept with POST /kanban/task/complete to clear.`
+                                : ` The system is clearing ${from} and dispatching the next card.`);
                         try {
                             // ptySendPrompt reports a dead or unknown recipient
                             // as a RESOLVED { success: false } body, never a
@@ -2518,22 +2582,13 @@ export class LocalApiServer {
                     }
 
                     // ── Clear the finishing seat ───────────────────────────
-                    // /clear is pasted onto the RECEIVING terminal at dispatch;
-                    // the next card usually routes to a different seat, so the
-                    // finisher would otherwise keep its context indefinitely.
-                    // Reuse the clipboard-paste path + per-terminal send lock
-                    // via the host callback — a hand-rolled sendText('/clear')
-                    // gets swallowed by CLI slash-command mode. Respect
-                    // terminal.clearBeforePrompt (off → cleared: false, no
-                    // send). A clear failure is logged and does NOT abort the
-                    // pop. Clear ordering when the next card routes to the
-                    // SAME seat: this done-clear runs first, then the
-                    // dispatch-clear runs inside _runQueuePop's
-                    // performKanbanDispatch, then the prompt — all inside this
-                    // one chain block. Do NOT reorder.
+                    // Team members preserve context across coder report, review,
+                    // and fixes until lead acceptance via POST /kanban/task/complete.
+                    // Non-team seats clear on completion.
+                    const isTeamMember = !!(relayHead || (await this._resolveTeamGroupForSeat(workspaceRoot, from)));
                     let cleared = false;
                     let clearError: string | undefined;
-                    if (this._options.clearTerminalContext) {
+                    if (!isTeamMember && this._options.clearTerminalContext) {
                         try {
                             const clr = await this._options.clearTerminalContext(workspaceRoot, from);
                             cleared = !!clr?.cleared;
@@ -4471,7 +4526,7 @@ export class LocalApiServer {
                     // block is pure inflation on the relay path).
                     const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
                         + (planId ? ` (plan ${planId})` : '')
-                        + `. The system is clearing ${from} and dispatching the next queued item to you.`;
+                        + `. The system preserves ${from}'s context for review and fix requests. Accept with POST /kanban/task/complete to clear.`;
                     if (this._options.terminalVerb) {
                         try {
                             await this._options.terminalVerb('ptySendPrompt', {
@@ -4486,17 +4541,9 @@ export class LocalApiServer {
                     }
 
                     // ── Clear the finishing terminal ───────────────────────
-                    // Best-effort: a clear failure is logged and does NOT abort
-                    // the dispatch (same contract as the kanban _runQueueDone).
+                    // Team members preserve context across coder report, review,
+                    // and fixes until lead acceptance via POST /kanban/task/complete.
                     let cleared = false;
-                    if (this._options.clearTerminalContext) {
-                        try {
-                            const clr = await this._options.clearTerminalContext(workspaceRoot, from);
-                            cleared = !!clr?.cleared;
-                        } catch (clrErr) {
-                            console.warn('[LocalApiServer] clearTerminalContext failed:', clrErr);
-                        }
-                    }
 
                     // ── Read the file-based queue and dispatch the next item ─
                     const listResult = await listQueue(workspaceRoot, groupId);

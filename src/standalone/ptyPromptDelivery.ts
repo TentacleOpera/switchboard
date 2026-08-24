@@ -1,4 +1,6 @@
 import type { ExtendedTerminalHandle } from './ptyFleetService';
+import type { CliFamily } from '../services/cliIdentity';
+import { createClearReadinessTracker, type ClearReadinessResult, type ClearReadinessMode } from './clearReadiness.ts';
 
 const CHUNK_SIZE = 256;
 // 30ms was inherited from the VS Code sendText path, where each chunk crosses an
@@ -74,6 +76,8 @@ export async function writeSlashCommandLocked(handle: ExtendedTerminalHandle, co
 export interface PromptDeliveryOptions {
     clearBeforePrompt?: boolean;
     clearBeforePromptDelayMs?: number;
+    clearReadinessMode?: ClearReadinessMode;
+    cliFamily?: CliFamily;
 }
 
 export async function sendPromptToPty(
@@ -83,9 +87,25 @@ export async function sendPromptToPty(
 ): Promise<void> {
     return withTerminalLock(handle.name, async () => {
         if (opts?.clearBeforePrompt) {
-            await writeSlashCommandLocked(handle, '/clear');
-            const delay = opts.clearBeforePromptDelayMs ?? DEFAULT_CLEAR_SETTLE_MS;
-            await new Promise(r => setTimeout(r, Math.min(10000, Math.max(0, delay))));
+            if (handle.status === 'exited') {
+                return;
+            }
+            const tracker = createClearReadinessTracker(handle, {
+                mode: opts.clearReadinessMode,
+                fallbackDelayMs: opts.clearBeforePromptDelayMs ?? DEFAULT_CLEAR_SETTLE_MS,
+                cliFamily: opts.cliFamily || handle.cliFamily,
+            });
+            let readinessResult: ClearReadinessResult;
+            try {
+                await writeSlashCommandLocked(handle, '/clear');
+                readinessResult = await tracker.promise;
+            } finally {
+                tracker.dispose();
+            }
+
+            if (readinessResult.reason === 'exit' || (handle.status as string) === 'exited') {
+                return;
+            }
         }
 
         // PORTED VERBATIM from _sendRobustTextBackground (src/services/terminalUtils.ts:241-258),

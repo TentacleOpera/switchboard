@@ -241,10 +241,13 @@
     // NOT on the terminalsMap entry: a curtain is armed at ptyCreateTerminal time, and
     // the entry does not exist until the pane has a rendered box (see whenRendered).
     const startupCurtains = new Map();
+    const dispatchCurtains = new Map(); // name -> Map<operationId, opState>
     const CURTAIN_QUIET_MS = 1200;      // LIVE output stopped this long => CLI has settled
     const CURTAIN_NO_OUTPUT_MS = 4000;  // no live output at all => nothing to cover (late-seated
                                         // pane got its whole boot as replay, or no CLI booted)
     const CURTAIN_MAX_MS = 15000;       // hard cap: never strand a pane behind it
+    const MIN_DISPATCH_CURTAIN_MS = 350;
+    const MAX_DISPATCH_CURTAIN_MS = 16000;
     // name -> { container, term, fitAddon, rendererAddon, isWebgl, ws, lastSeq, batchQueue,
     //           pendingAckChars, ackSuppressChars, reconnectTimer, reconnectDelay,
     //           resizeObserver, exited, disposed }
@@ -1231,6 +1234,18 @@
                 // group vanishes with no error anywhere. No origin guard: this
                 // arrives via the wsHub broadcast rail (like terminalsChanged).
                 reloadTerminalGroups();
+            } else if (message.type === 'terminalDispatchPreparing') {
+                if (message.terminalName && message.operationId) {
+                    armDispatchCurtain(message.terminalName, message.operationId, {
+                        cliFamily: message.cliFamily,
+                        phase: message.phase || 'clearing',
+                        teamName: message.teamName
+                    });
+                }
+            } else if (message.type === 'terminalDispatchFinished') {
+                if (message.terminalName && message.operationId) {
+                    disarmDispatchCurtain(message.terminalName, message.operationId, message.reason, message.elapsedMs);
+                }
             } else if ((message.type === 'autobanStateSync' || message.type === 'updateAutobanConfig') && message.state) {
                 // Mission Control seat/armed state, relayed to the shell rail so
                 // its Mission Control icon can light/dim. Two carriers, same payload shape:
@@ -2482,6 +2497,172 @@
         curtain.appendChild(dismiss);
 
         contentEl.appendChild(curtain);
+    }
+
+    function getUfoIconUri() {
+        const ds = document.body.dataset || {};
+        const isClaudify = document.body.classList.contains('theme-claudify');
+        const isMotionDisabled = document.body.classList.contains('cyber-animation-disabled');
+        if (isClaudify) {
+            return isMotionDisabled
+                ? (ds.ufoClaudifyStatic || '/static/icons/switchboard-ufo-claudify-static.svg')
+                : (ds.ufoClaudifyAnimated || '/static/icons/switchboard-ufo-claudify.svg');
+        }
+        return isMotionDisabled
+            ? (ds.ufoStatic || '/static/icons/switchboard-ufo-static.svg')
+            : (ds.ufoAnimated || '/static/icons/switchboard-ufo.svg');
+    }
+
+    function armDispatchCurtain(name, operationId, options = {}) {
+        if (!name || !operationId) { return; }
+        let opMap = dispatchCurtains.get(name);
+        if (!opMap) {
+            opMap = new Map();
+            dispatchCurtains.set(name, opMap);
+        }
+        const existing = opMap.get(operationId);
+        if (existing) {
+            if (options.phase) existing.phase = options.phase;
+            if (options.cliFamily) existing.cliFamily = options.cliFamily;
+            if (options.teamName) existing.teamName = options.teamName;
+        } else {
+            const op = {
+                operationId,
+                phase: options.phase || 'clearing',
+                cliFamily: options.cliFamily || '',
+                teamName: options.teamName || '',
+                armedAt: Date.now(),
+                dismissed: false,
+                hardTimer: null,
+            };
+            op.hardTimer = setTimeout(() => {
+                op.dismissed = true;
+                updatePaneCurtains(name);
+            }, MAX_DISPATCH_CURTAIN_MS);
+            opMap.set(operationId, op);
+        }
+
+        updatePaneCurtains(name);
+        if (listEl) {
+            const sel = `.item-role-icon[data-terminal="${cssAttrEscape(name)}"]`;
+            listEl.querySelectorAll(sel).forEach(el => el.classList.add('is-preparing'));
+        }
+    }
+
+    function disarmDispatchCurtain(name, operationId, reason, elapsedMs) {
+        if (!name || !operationId) { return; }
+        const opMap = dispatchCurtains.get(name);
+        if (!opMap || !opMap.has(operationId)) { return; }
+        const op = opMap.get(operationId);
+        if (op.hardTimer) {
+            clearTimeout(op.hardTimer);
+            op.hardTimer = null;
+        }
+        const age = Date.now() - op.armedAt;
+        const remaining = Math.max(0, MIN_DISPATCH_CURTAIN_MS - age);
+        setTimeout(() => {
+            opMap.delete(operationId);
+            if (opMap.size === 0) {
+                dispatchCurtains.delete(name);
+                if (listEl) {
+                    const sel = `.item-role-icon[data-terminal="${cssAttrEscape(name)}"]`;
+                    listEl.querySelectorAll(sel).forEach(el => el.classList.remove('is-preparing'));
+                }
+            }
+            updatePaneCurtains(name);
+        }, remaining);
+    }
+
+    function updatePaneCurtains(name) {
+        if (paneGridEl) {
+            const paneIndex = paneAssignments.indexOf(name);
+            if (paneIndex >= 0 && paneIndex < paneGridEl.children.length) {
+                const contentEl = paneGridEl.children[paneIndex].querySelector('.pane-content');
+                if (contentEl) {
+                    renderDispatchCurtain(contentEl, name);
+                }
+            }
+        }
+    }
+
+    function renderDispatchCurtain(contentEl, name) {
+        const opMap = dispatchCurtains.get(name);
+        const activeOps = opMap ? Array.from(opMap.values()).filter(op => !op.dismissed) : [];
+        const existingCurtain = contentEl.querySelector(`.terminal-curtain.dispatch-curtain[data-terminal="${cssAttrEscape(name)}"]`);
+
+        if (activeOps.length === 0) {
+            if (existingCurtain) { existingCurtain.remove(); }
+            return;
+        }
+
+        const latestOp = activeOps[activeOps.length - 1];
+        let curtain = existingCurtain;
+        if (!curtain) {
+            curtain = document.createElement('div');
+            curtain.className = 'terminal-curtain dispatch-curtain';
+            curtain.dataset.terminal = name;
+
+            const badge = document.createElement('div');
+            badge.className = 'terminal-curtain-badge';
+            const icon = document.createElement('img');
+            icon.className = 'terminal-curtain-icon is-ufo dispatch-curtain-icon';
+            icon.src = getUfoIconUri();
+            icon.alt = '';
+            badge.appendChild(icon);
+            curtain.appendChild(badge);
+
+            const label = document.createElement('div');
+            label.className = 'terminal-curtain-label';
+            label.textContent = 'Preparing for dispatch…';
+            curtain.appendChild(label);
+
+            const sublabel = document.createElement('div');
+            sublabel.className = 'terminal-curtain-sublabel';
+            curtain.appendChild(sublabel);
+
+            const dismiss = document.createElement('button');
+            dismiss.className = 'terminal-curtain-dismiss';
+            dismiss.type = 'button';
+            dismiss.textContent = 'show output';
+            curtain.appendChild(dismiss);
+
+            contentEl.appendChild(curtain);
+        }
+
+        const iconImg = curtain.querySelector('.dispatch-curtain-icon');
+        if (iconImg) {
+            const expectedSrc = getUfoIconUri();
+            if (iconImg.getAttribute('src') !== expectedSrc && !iconImg.src.endsWith(expectedSrc)) {
+                iconImg.src = expectedSrc;
+            }
+        }
+
+        const sublabel = curtain.querySelector('.terminal-curtain-sublabel');
+        if (sublabel) {
+            if (latestOp.teamName) {
+                sublabel.textContent = 'Preparing team for new feature run.';
+            } else {
+                let cliName = 'CLI';
+                if (latestOp.cliFamily === 'devin') cliName = 'Devin';
+                else if (latestOp.cliFamily === 'claude') cliName = 'Claude';
+                else if (latestOp.cliFamily === 'antigravity') cliName = 'Antigravity';
+                else {
+                    const fleetItem = fleetList.find(t => t.friendlyName === name);
+                    if (fleetItem && fleetItem.cliFamily === 'devin') cliName = 'Devin';
+                    else if (fleetItem && fleetItem.cliFamily === 'claude') cliName = 'Claude';
+                    else if (fleetItem && fleetItem.cliFamily === 'antigravity') cliName = 'Antigravity';
+                }
+                sublabel.textContent = `${cliName} is resetting context.`;
+            }
+        }
+    }
+
+    function updateCurtainVisuals() {
+        if (!paneGridEl) return;
+        const ufoUri = getUfoIconUri();
+        paneGridEl.querySelectorAll('.dispatch-curtain-icon').forEach(img => {
+            img.src = ufoUri;
+        });
     }
 
     /**
@@ -5817,6 +5998,8 @@
                     // than leaving the field absent (which now defaults to false). An
                     // operator who set the config to false gets false; the destructive
                     // direction is never taken implicitly.
+                    const opId = `drop-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                    armDispatchCurtain(targetName, opId, { phase: 'clearing' });
                     beginDispatchIndicator(targetName);
                     let promptResult;
                     try {
@@ -5826,7 +6009,8 @@
                             body: JSON.stringify({
                                 name: targetName,
                                 data: promptText,
-                                clearBeforePromptFromConfig: true
+                                clearBeforePromptFromConfig: true,
+                                operationId: opId
                             })
                         });
                         promptResult = await promptRes.json();
@@ -5835,6 +6019,7 @@
                         // strand the chip, and the failure toast below must never
                         // appear beside a live "dispatching…".
                         endDispatchIndicator(targetName);
+                        disarmDispatchCurtain(targetName, opId, promptResult && promptResult.success ? 'signal' : 'error');
                     }
                     if (!promptResult || !promptResult.success) {
                         showPaneToast('Failed to send prompt: ' + ((promptResult && promptResult.error) || 'unknown'));
@@ -6022,7 +6207,7 @@
         contentEl.addEventListener('click', (e) => {
             const target = e.target;
             if (!target || !target.classList) { return; }
-            if (target.classList.contains('startup-curtain-dismiss')) {
+            if (target.classList.contains('startup-curtain-dismiss') || target.classList.contains('terminal-curtain-dismiss')) {
                 e.stopPropagation();
                 // The node's OWN stamp, not paneAssignments[index]: the two can
                 // disagree for one reconcile after a displacing click, and dismissing
@@ -6030,8 +6215,17 @@
                 // leaving the overlay the operator just clicked on screen. The
                 // explicit remove() makes the escape hatch work even when the state
                 // entry is already gone — this is the one path that must never no-op.
-                const curtainEl = target.closest('.startup-curtain');
-                dismissStartupCurtain((curtainEl && curtainEl.dataset.terminal) || paneAssignments[index]);
+                const curtainEl = target.closest('.startup-curtain, .terminal-curtain');
+                const termName = (curtainEl && curtainEl.dataset.terminal) || paneAssignments[index];
+                dismissStartupCurtain(termName);
+                if (dispatchCurtains.has(termName)) {
+                    const opMap = dispatchCurtains.get(termName);
+                    if (opMap) {
+                        for (const op of opMap.values()) {
+                            op.dismissed = true;
+                        }
+                    }
+                }
                 if (curtainEl) { curtainEl.remove(); }
                 return;
             }
@@ -6366,6 +6560,9 @@
             // cannot visually reorder anything either.
             if (startupCurtains.has(assignedName)) {
                 renderStartupCurtain(contentEl, assignedName);
+            }
+            if (dispatchCurtains.has(assignedName)) {
+                renderDispatchCurtain(contentEl, assignedName);
             }
         } else if (!contentEl.querySelector('.pane-empty-slot')) {
             // Clears a container still parented here from a previous assignment. The
@@ -10306,6 +10503,7 @@
         // Body class first: buildTerminalTheme reads the CSS variables it selects,
         // so recolouring before the swap would just re-read the outgoing theme.
         setThemeBodyClass(theme);
+        updateCurtainVisuals();
         const nextTheme = buildTerminalTheme();
         for (const entry of terminalsMap.values()) {
             if (entry.term) {

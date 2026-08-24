@@ -40,6 +40,7 @@ import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationCon
 import { TerminalWsGateway } from './terminalWsGateway';
 import { sendPromptToPty, clearPty, modelPty, writeSlashCommand } from './ptyPromptDelivery';
 import { extractDispatchIdentity } from '../services/dispatchIdentity';
+import { resolveStandalonePtyClearDelay, resolveStandalonePtyClearPolicy } from '../services/ptyClearPolicy';
 import {
     applyStandingOrders,
     stripStandingOrdersBlock,
@@ -54,6 +55,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
 // only server-side reader of `terminals.standingOrders` in either host.
 import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
+import { resolveWorkContext, resolveTeamGroupForTerminal } from '../services/workContextResolver';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -215,28 +217,15 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
      * `switchboard.`-prefixed form and the env override. Pointing them at the db
      * would read a key nothing ever writes in standalone, silently pinning
      * clear-before-prompt on and making the board's toggle inert.
-     *
-     * The delay uses terminal.ptyClearBeforePromptDelay (default 600ms), falling
-     * back to an explicitly-set terminal.clearBeforePromptDelay before the 600ms
-     * default — the same respect-operator-intent rule as resolvePtyClearDelay in
-     * TaskViewerProvider. The standalone config provider has no contributed-default
-     * trap (it reads .switchboard/config.json and env vars, not package.json), so
-     * getConfigNumber with a NaN sentinel distinguishes "set" from "unset",
-     * including an explicit 0. See resolvePtyClearDelay for the
-     * KanbanProvider.updateClearTerminalBeforePromptDelay consequence.
      */
-    const resolveStandalonePtyClearDelay = (): number => {
-        const ptyDelay = configProvider.getConfigNumber('terminal.ptyClearBeforePromptDelay', Number.NaN);
-        if (!Number.isNaN(ptyDelay)) { return ptyDelay; }
-        const legacyDelay = configProvider.getConfigNumber('terminal.clearBeforePromptDelay', Number.NaN);
-        if (!Number.isNaN(legacyDelay)) { return legacyDelay; }
-        return 600;
+    const getPromptDeliveryOptions = () => {
+        const policy = resolveStandalonePtyClearPolicy(configProvider);
+        return {
+            clearBeforePrompt: configProvider.getConfigBoolean('terminal.clearBeforePrompt', true),
+            clearBeforePromptDelayMs: policy.mode === 'manual' ? policy.delayMs : policy.unknownDelayMs,
+            clearReadinessMode: policy.mode,
+        };
     };
-
-    const getPromptDeliveryOptions = () => ({
-        clearBeforePrompt: configProvider.getConfigBoolean('terminal.clearBeforePrompt', true),
-        clearBeforePromptDelayMs: resolveStandalonePtyClearDelay(),
-    });
 
     let taskViewerProvider: TaskViewerProvider | null = null;
     const seatBlockCache = new Map<string, string>();
@@ -246,6 +235,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // deliverPrompt writes /clear before the prompt. In-memory only — on
     // host restart, terminals are fresh pty processes with no stale context.
     const lastDispatchedPlanByTerminal = new Map<string, string>();
+    const lastWorkContextByTerminal = new Map<string, string>();
+    const lastWorkContextByTeam = new Map<string, string>();
+    const teamPreparationChains = new Map<string, Promise<void>>();
 
     /**
      * Sole standalone chokepoint for prompt delivery. Every `sendPromptToPty` call
@@ -419,7 +411,40 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 parsedDispatchedAt = new Date().toISOString();
             }
         }
-        await sendPromptToPty(handle, out, opts);
+        const isClearing = opts?.clearBeforePrompt === true;
+        const operationId = (opts as any)?.operationId || (isClearing ? `op-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` : undefined);
+        const startAt = Date.now();
+        if (isClearing && operationId) {
+            try {
+                server?.broadcastWs('terminalDispatchPreparing', {
+                    type: 'terminalDispatchPreparing',
+                    operationId,
+                    terminalName: handle.friendlyName,
+                    cliFamily: handle.cliFamily || 'unknown',
+                    phase: 'clearing',
+                }, SURFACES.terminals);
+            } catch { /* best effort broadcast */ }
+        }
+        let sendErr: Error | null = null;
+        try {
+            await sendPromptToPty(handle, out, opts);
+        } catch (err: any) {
+            sendErr = err;
+            throw err;
+        } finally {
+            if (isClearing && operationId) {
+                try {
+                    server?.broadcastWs('terminalDispatchFinished', {
+                        type: 'terminalDispatchFinished',
+                        operationId,
+                        terminalName: handle.friendlyName,
+                        success: !sendErr,
+                        reason: sendErr ? 'error' : (handle.status === 'exited' ? 'exit' : 'signal'),
+                        elapsedMs: Math.max(0, Date.now() - startAt),
+                    }, SURFACES.terminals);
+                } catch { /* best effort broadcast */ }
+            }
+        }
         // Register AFTER the send is dispatched, fire-and-forget. Never awaited
         // ahead of the send (the send completed above), never able to fail it.
         // Reuses the shipped `attributePastedPrompt` verb so plan resolution
@@ -1560,6 +1585,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 case 'ptyCloseTerminal': {
                     const ok = ptyFleetService.kill(payload.name);
                     lastDispatchedPlanByTerminal.delete(payload.name);
+                    lastWorkContextByTerminal.delete(payload.name);
                     return { success: ok };
                 }
 
@@ -1646,6 +1672,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             lastDispatchedPlanByTerminal.delete(payload.name);
                             lastDispatchedPlanByTerminal.set(payload.alias, oldPlan);
                         }
+                        const oldWorkKey = lastWorkContextByTerminal.get(payload.name);
+                        if (oldWorkKey) {
+                            lastWorkContextByTerminal.delete(payload.name);
+                            lastWorkContextByTerminal.set(payload.alias, oldWorkKey);
+                        }
                     }
                     return { success: ok };
                 }
@@ -1657,6 +1688,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         seatBlockCache.delete(handle.agentInstanceId);
                     }
                     lastDispatchedPlanByTerminal.delete(payload.name);
+                    lastWorkContextByTerminal.delete(payload.name);
                     if (handle.status === 'active') { await clearPty(handle); }
                     return { success: true };
                 }
@@ -1748,19 +1780,100 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         }
                         directivesAttached = ['COMPLETION REPORT', 'MISSION CONTROL REPORT'];
 
-                        // Auto-clear on plan change: when the dispatch references
-                        // a different planId than the terminal's last dispatched
-                        // plan, set payload.clearBeforePrompt = true so the
-                        // resolvedClear computation below picks up true. The
-                        // caller's explicit false is intentionally overridden.
-                        // Same-planId resends preserve false (context kept for
-                        // fix prompts).
-                        if (parsed.value.planId) {
+                        // Atomic work context lifecycle:
+                        const dispatchDb = db;
+                        const workCtx = await resolveWorkContext(dispatchDb, parsed.value);
+                        const workContextKey = workCtx ? workCtx.workContextKey : (parsed.value.planId || '');
+
+                        const teamInfo = typeof payload?.name === 'string'
+                            ? await resolveTeamGroupForTerminal(dispatchDb, payload.name)
+                            : null;
+
+                        if (teamInfo && teamInfo.id) {
+                            const teamId = teamInfo.id;
+                            const roster = teamInfo.roster;
+                            const lastTeamWorkKey = lastWorkContextByTeam.get(teamId);
+
+                            if (lastTeamWorkKey === workContextKey) {
+                                payload.clearBeforePrompt = false;
+                            } else {
+                                let prevChain = teamPreparationChains.get(teamId) || Promise.resolve();
+                                const prepPromise = prevChain.then(async () => {
+                                    if (lastWorkContextByTeam.get(teamId) === workContextKey) {
+                                        return;
+                                    }
+                                    const deliveryDefaults = getPromptDeliveryOptions();
+                                    const clearEnabled = deliveryDefaults.clearBeforePrompt;
+                                    if (!clearEnabled) {
+                                        lastWorkContextByTeam.set(teamId, workContextKey);
+                                        return;
+                                    }
+                                    const active = ptyFleetService.listActive();
+                                    const activeNames = new Set(active.map(t => t.friendlyName));
+                                    const activeMembers = roster.filter(name => activeNames.has(name));
+                                    if (activeMembers.length > 0) {
+                                        const teamOpId = `team-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                                        const handles = activeMembers.map(name => ptyFleetService.get(name)).filter(Boolean);
+                                        const startAt = Date.now();
+                                        for (const h of handles) {
+                                            try {
+                                                server.broadcastWs('terminalDispatchPreparing', {
+                                                    type: 'terminalDispatchPreparing',
+                                                    operationId: teamOpId,
+                                                    terminalName: h!.friendlyName,
+                                                    cliFamily: h!.cliFamily || 'unknown',
+                                                    teamName: teamId,
+                                                    phase: 'clearing',
+                                                }, SURFACES.terminals);
+                                            } catch { /* best effort */ }
+                                        }
+                                        let teamErr: Error | null = null;
+                                        try {
+                                            await Promise.all(handles.map(h => clearPty(h!)));
+                                        } catch (err: any) {
+                                            teamErr = err;
+                                            throw err;
+                                        } finally {
+                                            for (const h of handles) {
+                                                try {
+                                                    server.broadcastWs('terminalDispatchFinished', {
+                                                        type: 'terminalDispatchFinished',
+                                                        operationId: teamOpId,
+                                                        terminalName: h!.friendlyName,
+                                                        success: !teamErr,
+                                                        reason: teamErr ? 'error' : 'signal',
+                                                        elapsedMs: Math.max(0, Date.now() - startAt),
+                                                    }, SURFACES.terminals);
+                                                } catch { /* best effort */ }
+                                            }
+                                        }
+                                    }
+                                    lastWorkContextByTeam.set(teamId, workContextKey);
+                                });
+                                teamPreparationChains.set(teamId, prepPromise.catch(() => {}));
+                                try {
+                                    await prepPromise;
+                                    payload.clearBeforePrompt = false;
+                                } catch (prepErr) {
+                                    return {
+                                        success: false,
+                                        attributed: 0,
+                                        skipped: (parsed.value.planId || parsed.value.planFile ? 1 : 0),
+                                        directivesAttached: [],
+                                        error: prepErr instanceof Error ? prepErr.message : String(prepErr)
+                                    };
+                                }
+                            }
+                        } else if (payload.name) {
+                            const lastWorkKey = lastWorkContextByTerminal.get(payload.name);
                             const lastPlanId = lastDispatchedPlanByTerminal.get(payload.name);
-                            if (lastPlanId && lastPlanId !== parsed.value.planId) {
+                            if ((lastWorkKey && lastWorkKey !== workContextKey) || (lastPlanId && lastPlanId !== parsed.value.planId)) {
                                 payload.clearBeforePrompt = true;
                             }
-                            lastDispatchedPlanByTerminal.set(payload.name, parsed.value.planId);
+                            lastWorkContextByTerminal.set(payload.name, workContextKey);
+                            if (parsed.value.planId) {
+                                lastDispatchedPlanByTerminal.set(payload.name, parsed.value.planId);
+                            }
                         }
                     }
                     try {
@@ -1776,6 +1889,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 clearBeforePromptDelayMs: typeof payload.clearBeforePromptDelayMs === 'number'
                                     ? payload.clearBeforePromptDelayMs
                                     : deliveryDefaults.clearBeforePromptDelayMs,
+                                clearReadinessMode: payload.clearReadinessMode || deliveryDefaults.clearReadinessMode,
                             },
                             payload.standingOrders !== false,
                             true,
@@ -1797,6 +1911,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 case 'ptyClearAllTerminals': {
                     seatBlockCache.clear();
                     lastDispatchedPlanByTerminal.clear();
+                    lastWorkContextByTerminal.clear();
+                    lastWorkContextByTeam.clear();
+                    teamPreparationChains.clear();
                     const active = ptyFleetService.listActive();
                     await Promise.all(active.map(t => clearPty(t)));
                     return { success: true, cleared: active.length };
