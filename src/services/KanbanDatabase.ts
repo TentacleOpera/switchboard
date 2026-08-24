@@ -135,6 +135,14 @@ export interface KanbanPlanRecord {
      * updatedAt or createdAt.
      */
     columnEnteredAt?: string | null;
+    /**
+     * V62: ISO timestamp the lead asserted completion via POST /kanban/task/complete.
+     * NULL means "not completed" (the team is still working). The in-flight scan
+     * checks this to release a team whose card is still in a coding column but
+     * has been explicitly declared done. Set only by the completion endpoint —
+     * never by file re-import or column move.
+     */
+    completedAt?: string | null;
 }
 
 export interface ImportedDocEntry {
@@ -224,7 +232,8 @@ CREATE TABLE IF NOT EXISTS plans (
     workspace_name    TEXT DEFAULT '',
     project_id        INTEGER DEFAULT NULL,
     queue_position    INTEGER DEFAULT NULL,
-    column_entered_at TEXT DEFAULT NULL
+    column_entered_at TEXT DEFAULT NULL,
+    completed_at      TEXT DEFAULT NULL
 );
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -533,6 +542,16 @@ const MIGRATION_V60_SQL = [
 const MIGRATION_V61_SQL = [
     `ALTER TABLE plans ADD COLUMN column_entered_at TEXT DEFAULT NULL`,
     `UPDATE plans SET column_entered_at = updated_at WHERE column_entered_at IS NULL`,
+];
+
+// V62: plans.completed_at — the asserted completion timestamp. Written by
+// POST /kanban/task/complete. NULL means "not completed" (the team is still
+// working). The in-flight scan checks this to release a team whose card is
+// still in a coding column but has been explicitly declared done. Additive —
+// the column is also in SCHEMA_TABLES_SQL, so fresh DBs get it from creation
+// and the ALTER is a no-op there. Idempotent under the version gate.
+const MIGRATION_V62_SQL = [
+    `ALTER TABLE plans ADD COLUMN completed_at TEXT DEFAULT NULL`,
 ];
 
 
@@ -916,7 +935,7 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
                        dispatched_terminal, dispatched_at, last_liveness_at, blocked_at,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
-                       workspace_name, project_id, queue_position, column_entered_at`;
+                       workspace_name, project_id, queue_position, column_entered_at, completed_at`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -2939,6 +2958,28 @@ export class KanbanDatabase {
         // Bubble-up: a subtask rescore lifts the parent feature's derived complexity.
         if (ok && target?.featureId) { await this.recomputeFeatureComplexity(target.featureId); }
         return ok;
+    }
+
+    /**
+     * Set the asserted completion timestamp on a plan. Written by
+     * POST /kanban/task/complete — the only writer. Returns false if the
+     * plan does not exist (zero rows modified). Does NOT move the card
+     * or dispatch anything.
+     */
+    public async setCompletedAt(planId: string, timestamp: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            this._db.run(
+                'UPDATE plans SET completed_at = ?, updated_at = ? WHERE plan_id = ?',
+                [timestamp, timestamp, planId]
+            );
+            const affected = this._db.getRowsModified();
+            await this._persist();
+            return affected > 0;
+        } catch (error) {
+            console.error('[KanbanDatabase] setCompletedAt failed:', error);
+            return false;
+        }
     }
 
     public async updateTagsByPlanFile(planFile: string, workspaceId: string, tags: string): Promise<boolean> {
@@ -8582,6 +8623,16 @@ export class KanbanDatabase {
             await this.setMigrationVersion(61);
             console.log('[KanbanDatabase] V61 migration completed: column_entered_at column added + backfilled');
         }
+
+        // V62: plans.completed_at (asserted completion timestamp).
+        const v62 = await this.getMigrationVersion();
+        if (v62 < 62) {
+            for (const sql of MIGRATION_V62_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(62);
+            console.log('[KanbanDatabase] V62 migration completed: completed_at column added to plans');
+        }
     }
 
     /**
@@ -10554,7 +10605,8 @@ FROM plans
                     workspaceName: String(row.workspace_name || ""),
                     projectId: row.project_id !== null && row.project_id !== undefined ? Number(row.project_id) : null,
                     // Absent from SELECT lists that predate V61 → undefined → null.
-                    columnEnteredAt: row.column_entered_at !== null && row.column_entered_at !== undefined ? String(row.column_entered_at) : null
+                    columnEnteredAt: row.column_entered_at !== null && row.column_entered_at !== undefined ? String(row.column_entered_at) : null,
+                    completedAt: row.completed_at !== null && row.completed_at !== undefined ? String(row.completed_at) : null
                 });
             }
         } finally {

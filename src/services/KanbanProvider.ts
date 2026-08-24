@@ -3748,6 +3748,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 headTerminal,
                 armedAt: Date.now(),
                 lastNudgedAt: 0,
+                nudgeCount: 0,
                 stopColumns: ['CODE REVIEWED'],
             };
             await db.updateConfigJson<FeatureWatchRecord[]>(WATCH_KEY, [], watches => [
@@ -11370,6 +11371,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         headTerminal,
                         armedAt: Date.now(),
                         lastNudgedAt: 0,
+                        nudgeCount: 0,
                         stopColumns: stopColumns.length > 0 ? stopColumns : undefined,
                     };
                     // Arming twice for the same feature REPLACES the watch rather

@@ -333,12 +333,9 @@ export async function applySeatPacingOrders(opts: {
  * equivalent) but targets the file-based team queue
  * (`POST /terminals/teams/<groupId>/queue/done`), not the kanban column.
  *
- * The feature-completion check (the `GET /kanban/plans?featureId=...` block) is
- * standing-order text the coder performs before posting — when every subtask of
- * a feature is in `LEAD CODED`, the coder hands the feature to review via
- * `POST /kanban/dispatch` with `targetColumn: "CODE REVIEWED"` instead of
- * posting to `queue/done`. This is the existing feature-completion path from
- * `agentGroupInstantiation.ts`; the order just tells the coder to take it.
+ * Completion is asserted by the lead via POST /kanban/task/complete — a coder
+ * does not infer it from board position. The coder's job is to report its own
+ * subtask done via queue/done; the lead declares the feature complete.
  */
 export function TEAM_QUEUE_DONE_ORDER_BODY(groupId: string): string {
     return 'When you finish the task you were dispatched, POST /terminals/teams/'
@@ -347,17 +344,19 @@ export function TEAM_QUEUE_DONE_ORDER_BODY(groupId: string): string {
         + 'The system will relay your completion report to your team lead, clear your terminal, '
         + 'and dispatch the next queued item to the lead. '
         + 'If there are no more items, your terminal stays cleared and the team is done with queued work. '
-        + 'If the POST fails, report to your head directly via ptySendPrompt as a fallback. '
-        + 'Before posting, check GET /kanban/plans?featureId=<your feature id> — if all subtasks '
-        + 'are in LEAD CODED, POST /kanban/dispatch with '
-        + '{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED","from":"<your terminal name>"} '
-        + 'instead of posting to queue/done. The feature is complete — hand it to review.';
+        + 'If the POST fails, report to your head directly via ptySendPrompt as a fallback.';
 }
 
 /**
  * Variant of {@link TEAM_QUEUE_DONE_ORDER_BODY} specifically for Review teams.
  * Omits the "clear your terminal" fragment so reviewers retain their review
  * context between the judging turn and the apportioned fix turn.
+ *
+ * Completion is asserted, never inferred — see {@link TEAM_QUEUE_DONE_ORDER_BODY}.
+ * The board-position clause that used to live here is removed for the same
+ * reason: a seat must not infer feature completion from "all subtasks in LEAD
+ * CODED". The reviewer reports its turn done and requests the next item; the
+ * lead declares the feature complete via POST /kanban/task/complete.
  */
 export function REVIEW_TEAM_QUEUE_DONE_ORDER_BODY(groupId: string): string {
     return 'When you finish the task you were dispatched, POST /terminals/teams/'
@@ -367,10 +366,8 @@ export function REVIEW_TEAM_QUEUE_DONE_ORDER_BODY(groupId: string): string {
         + 'the next queued item to the lead. '
         + 'If there are no more items, your terminal stays as-is and the team is done with queued work. '
         + 'If the POST fails, report to your head directly via ptySendPrompt as a fallback. '
-        + 'Before posting, check GET /kanban/plans?featureId=<your feature id> — if all subtasks '
-        + 'are in LEAD CODED, POST /kanban/dispatch with '
-        + '{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED","from":"<your terminal name>"} '
-        + 'instead of posting to queue/done. The feature is complete — hand it to review.';
+        + 'Do not infer feature completion from board position — handing the feature to review is '
+        + 'your lead\'s call, not yours. POST queue/done and let the lead decide.';
 }
 
 /**
@@ -677,7 +674,7 @@ export const OFFERED_REVIEW_TEAM_GROUP: any = {
     id: 'review-team',
     name: 'Review team',
     headRole: 'reviewer',
-    headPrompt: NEW_REVIEW_TEAM_HEAD_PROMPT,
+    get headPrompt() { return NEW_REVIEW_TEAM_HEAD_PROMPT; },
     members: [],
 };
 
@@ -956,8 +953,9 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
     + 'empty and stop. '
     + 'If your team has NO reviewer seat, do NOT move the card — that is not your role. '
-    + 'Post a finished report to .switchboard/mission-control/reports/ naming the feature and its planId, '
-    + 'and stop. The card stays where it is.'
+    + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the FEATURE planId>","workspaceRoot":'
+    + '"<your current working directory>"} against the port in .switchboard/api-server-port.txt. '
+    + 'The card stays where it is. Completion is asserted, never inferred from board position.'
     + ' When the work is complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message.';

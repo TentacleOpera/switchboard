@@ -1700,31 +1700,33 @@ export class LocalApiServer {
      * - `'seat'`: complexity routing picks the column AND the routed role's
      *   seat on this team receives the card directly — `restrictToOriginTeam:
      *   true` with no override. No head, no review hop. The in-flight refusal
-     *   is SKIPPED on this path: cards move on coding *start* and never on
-     *   finish, so a coded card stays in its coding column and board position
-     *   never releases — the scan would pin the team as busy forever and every
-     *   later pop would 409. The seat-paced path has one trigger (the finishing
-     *   seat) driving a strictly serial sequence on `_queueNextChain`, so there
-     *   is no race for the scan to arbitrate. An external head (non-terminal
-     *   agent) forces the seat branch regardless of pacing: it has no terminal,
-     *   so `targetTerminalOverride: from` would name a terminal that does not
+     *   applies on this path too: the scan checks `!p.completedAt`, so a
+     *   completed card no longer pins the team regardless of pacing mode.
+     *   An external head (non-terminal agent) forces the seat branch
+     *   regardless of pacing: it has no terminal, so
+     *   `targetTerminalOverride: from` would name a terminal that does not
      *   exist.
      *
      * Resolution: the explicit argument → the requesting team's stored `pacing`
      *   field (subtask 3 writes it; absent reads as `'head'`) → `'head'`.
      *
-     * In-flight refusal (head pacing only — the one-in-one-out contract): a
+     * In-flight refusal (BOTH pacing modes — the one-in-one-out contract): a
      * team is in flight when any active card belonging to that team is sitting
-     * in a coding column (`LEAD CODED` / `CODER CODED` / `INTERN CODED`). Team
-     * membership is resolved from the card's `dispatched_terminal` through the
-     * same path `resolveTeamRoleTerminal` uses (`resolveTeamMembers`). The flag
-     * releases exactly when the head hands the feature to review — the moment
-     * the team is genuinely free. It is derived from board position, so no
-     * plan-file `mtime` side effect and no staleness sweep can corrupt it.
-     * Keying the predicate on `dispatched_at` instead would refuse the head's
-     * own legitimate call (the just-reviewed card sits in `CODE REVIEWED` with
-     * `dispatched_at` set and `dispatched_terminal` naming the reviewer) and
-     * deadlock the pipeline after card one.
+     * in a coding column (`LEAD CODED` / `CODER CODED` / `INTERN CODED`) with
+     * no completion fact. Team membership is resolved from the card's
+     * `dispatched_terminal` through the same path `resolveTeamRoleTerminal`
+     * uses (`resolveTeamMembers`). The flag releases when the lead asserts
+     * completion — either by posting `completed_at` via POST
+     * /kanban/task/complete, or by handing the feature to review (the card
+     * leaves the coding column). Completion is an asserted event, not a trace
+     * derived from board position, so no plan-file `mtime` side effect and no
+     * staleness sweep can corrupt it. Keying the predicate on `dispatched_at`
+     * instead would refuse the head's own legitimate call (the just-reviewed
+     * card sits in `CODE REVIEWED` with `dispatched_at` set and
+     * `dispatched_terminal` naming the reviewer) and deadlock the pipeline
+     * after card one. The seat-paced path no longer skips this scan — the
+     * skip existed only because board position never released, and the
+     * completion fact makes that reason obsolete.
      *
      * `targetTerminalOverride: from` (head pacing) short-circuits the
      * team-scoped resolver, so complexity routing chooses the *column* and the
@@ -1850,29 +1852,38 @@ export class LocalApiServer {
                 } catch (err) { console.warn('[LocalApiServer] resolveTeamPacing failed:', err); }
             }
 
-            // ── In-flight refusal (HEAD PACING ONLY) ───────────────────
+            // ── In-flight refusal (BOTH PACING MODES) ─────────────────
             // A team is in flight when any active card belonging to it sits
             // in a coding column. `dispatched_terminal` is only ever a real
             // terminal name; an empty value is a card nobody has picked up.
             //
-            // SKIPPED on the seat-paced path: cards move on coding *start* and
-            // never on finish, so a coded card stays in its coding column and
-            // board position never releases — the scan would pin the team as
-            // busy forever and every later pop would 409. The seat-paced path
-            // has one trigger (the finishing seat) driving a serial sequence
-            // on `_queueNextChain`, so there is no race for the scan to
-            // arbitrate. Duplicate reports are answered by clearWorkingState's
-            // `IS NOT NULL` gate (no-op). Head pacing keeps the scan byte-for-
-            // byte unchanged.
-            if (pacing !== 'seat' && isTeamDispatch) {
+            // The scan keys on the completion FACT (`completed_at`), not on
+            // board position alone. A card releases the team when its
+            // `completed_at` is set (the lead's explicit POST
+            // /kanban/task/complete) OR when it leaves the coding column (the
+            // lead's explicit POST /kanban/dispatch to CODE REVIEWED). "No
+            // fact" — `completed_at` is NULL and the card is still in a coding
+            // column — means busy, the safe direction: a lead that never
+            // posted leaves the team held rather than freed for more work.
+            //
+            // The seat-paced path no longer skips this scan. The skip existed
+            // only because board position never released (cards move on coding
+            // *start* and never on finish); with the scan reading the
+            // completion fact, a posted `completed_at` releases the team under
+            // either pacing mode, so the special case is dead weight. Both
+            // pacing modes now run the byte-for-byte identical check.
+            // Duplicate reports are answered by clearWorkingState's
+            // `IS NOT NULL` gate (no-op).
+            if (isTeamDispatch) {
                 const inFlightCard = board.find((p: any) =>
                     p && CODING_COLUMNS.has(String(p.kanbanColumn || ''))
+                    && !p.completedAt
                     && typeof p.dispatchedTerminal === 'string'
                     && p.dispatchedTerminal.length > 0
                     && teamSet.has(p.dispatchedTerminal)
                 );
                 if (inFlightCard) {
-                    return fail(409, `Team already in flight: card '${inFlightCard.planId}' is in '${inFlightCard.kanbanColumn}' held by '${inFlightCard.dispatchedTerminal}'. Hand the feature to review before asking for the next card.`, {
+                    return fail(409, `Team already in flight: card '${inFlightCard.planId}' is in '${inFlightCard.kanbanColumn}' held by '${inFlightCard.dispatchedTerminal}' with no completion post. Post /kanban/task/complete (or hand the feature to review) before asking for the next card.`, {
                         inFlight: {
                             planId: inFlightCard.planId,
                             kanbanColumn: inFlightCard.kanbanColumn,
@@ -2141,6 +2152,114 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanQueueDone error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanQueueDone failed' }));
+        }
+    }
+
+    /**
+     * POST /kanban/task/complete — the asserted completion signal. A lead
+     * declares a feature or plan finished by writing a `completed_at`
+     * timestamp on the plans table row. This is the ONLY way the system
+     * learns that work finished — not board position, not a file write, not
+     * a queue pop. See `add-a-task-complete-endpoint-for-the-lead.md`.
+     *
+     * Body: `{ from, planId, workspaceRoot?, outcome?, note? }`.
+     * - `from` — the lead's terminal name.
+     * - `planId` — the plan being declared complete.
+     * - `workspaceRoot` — defaults to the server's primary root.
+     * - `outcome` / `note` — optional, recorded in plan_events.
+     *
+     * Contract:
+     * - Idempotent: a repeat call with the same `planId` returns the existing
+     *   record without re-writing `completed_at` or re-recording the event.
+     * - No dispatch, no column move, no terminal clear. Complete means complete.
+     * - `queue/done` is untouched — it means "give me the next item", not "done".
+     */
+    private async _handleKanbanTaskComplete(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const from = String(body?.from || '').trim();
+            const planId = String(body?.planId || '').trim();
+            const outcome = typeof body?.outcome === 'string' ? body.outcome.trim() : '';
+            const note = typeof body?.note === 'string' ? body.note.trim() : '';
+
+            if (!workspaceRoot) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            if (!from) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: "Missing required field: from (the lead's terminal name)" }));
+                return;
+            }
+            if (!planId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: planId' }));
+                return;
+            }
+            // Reject path separators in planId — never interpolate into a path.
+            if (planId.includes('/') || planId.includes('\\') || planId.includes('..')) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Invalid planId: path separators not allowed' }));
+                return;
+            }
+
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
+                return;
+            }
+
+            // Idempotency: check if already completed.
+            const existing = await db.getPlanByPlanId?.(planId);
+            if (existing && existing.completedAt) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    planId,
+                    completed_at: existing.completedAt,
+                    outcome,
+                    note,
+                    idempotent: true
+                }));
+                return;
+            }
+
+            // Write completed_at timestamp.
+            const timestamp = new Date().toISOString();
+            const updated = await db.setCompletedAt?.(planId, timestamp);
+
+            if (!updated) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Plan not found: ${planId}` }));
+                return;
+            }
+
+            // Record to plan_events for queryability.
+            await db.appendPlanEventByPlanId?.(planId, {
+                eventType: 'completed',
+                workflow: 'task-complete',
+                payload: JSON.stringify({ from, outcome, note })
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                planId,
+                completed_at: timestamp,
+                outcome,
+                note
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanTaskComplete error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanTaskComplete failed' }));
         }
     }
 
@@ -6314,6 +6433,8 @@ export class LocalApiServer {
                 await this._handleKanbanQueueNext(req, res);
             } else if (pathname === '/kanban/queue/done' && req.method === 'POST') {
                 await this._handleKanbanQueueDone(req, res);
+            } else if (pathname === '/kanban/task/complete' && req.method === 'POST') {
+                await this._handleKanbanTaskComplete(req, res);
             } else if (pathname === '/kanban/move' && req.method === 'POST') {
                 await this._handleKanbanMove(req, res);
             } else if (pathname === '/kanban/feature' && req.method === 'POST') {

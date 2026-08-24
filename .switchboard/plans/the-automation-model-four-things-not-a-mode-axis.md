@@ -36,7 +36,12 @@ The exclusive axis came first, when automation *was* one behaviour with variants
 
 - **This supersedes two earlier plans of mine** — `scope-automation-to-missions.md` and `scheduled-jobs-get-their-own-panel.md`. Both approached this piecemeal (bound the triggers; move the scheduler out) and together they reproduced the complexity they were meant to remove. Mark both superseded rather than building alongside.
 - **Schedules live in the Mission Control panel** as a tab, per `mission-control-panel-ui-specification.md`. The AUTOMATION tab is deleted — its contents move into Mission Control. Settled.
-- **The schedule selector is "oldest" only.** Any custom logic is a mission, not a schedule. Keeping the selector to exactly "oldest" is what makes a schedule fire-and-forget; every added selector moves it toward the mode axis being deleted.
+- **The schedule selector: "oldest" or "queue-order" (STAGING).**
+
+> **Premise Change & Selector Refinement (Why "oldest only" changed, citing `completion-is-asserted-never-inferred.md` and queue-priority semantics):**
+> Illustrating the selector as "oldest" only was wrong when the source column is STAGING, where `queue_position` holds a user-set priority written by `reorderQueue`. A schedule that advances the oldest card (by timestamp) out of a hand-ordered staging queue contradicts the user's explicit queue ordering.
+> 
+> "Oldest" is correct for columns ordered by `column_entered_at` (most coding columns), but **wrong when the source column is STAGING**, where `queue_position` holds user-set priority. The `selector` field already exists in the rule definition (`time window, source column, selector, target column`), so admitting a `queue-order` value (`MIN(queue_position)`) alongside `oldest` is a **refinement** of the existing selector field, not an addition of new fields — the schema test that guards against field regrowth is not violated. Same defect, same fix, as `batch-moves-to-a-team-send-the-feature-implementation-prompt.md`.
 
 ## Complexity Audit
 
@@ -50,7 +55,7 @@ The exclusive axis came first, when automation *was* one behaviour with variants
 
 - **The mode axis is persisted state on ~4,000 installs.** `automationMode` was already retired once for exactly this reason (`autobanState.ts:141-146`: *"ALL of them are retired … a shipped install carrying ANY of these must not keep its clock running"*), replaced by two independent switches. This plan continues that direction, and the same rule applies: a retired selection is forced off with a one-time notice, never silently reinterpreted as one of the four new things. Reinterpretation would start work the user did not choose.
 - **Cutting the external/recurring-jobs pause changes behaviour on upgrade.** A user who selected External has their recurring jobs currently paused; after this they resume. That is the correct state, and it is still a change that should be announced rather than discovered.
-- **A schedule is the one new clock, so its rule must stay small.** *Advance the oldest card from column A to column B within a window* needs no agent and no reasoning. The moment a rule needs a role, a batch size or a complexity band, it has become the thing being deleted. Resist that in the schema, not in the UI.
+- **A schedule is the one new clock, so its rule must stay small.** *Advance the oldest card (or head card in queue-order when source is STAGING) from column A to column B within a window* needs no agent and no reasoning. The moment a rule needs a role, a batch size or a complexity band, it has become the thing being deleted. Resist that in the schema, not in the UI.
 - **Unattended vs operations must be a property of the run, not a global switch.** Two missions can want different treatment at the same time; a global setting would recreate the axis one level up.
 - **`external` currently hides controls rather than being absent.** `:8151` and `:11690` hide the Start button and ON/OFF when it is selected. As a plain button those branches go — check for other consumers keying on the mode value before deleting, since a hidden-control branch left behind will hide something in a state that no longer exists.
 
@@ -86,7 +91,7 @@ The exclusive axis came first, when automation *was* one behaviour with variants
 ## Proposed Changes
 
 1. **Delete the exclusive mode axis** and its radio machinery.
-2. **Schedules**: a small recurring rule — time window, source column, selector, target column. No agent, no role, no batch size. Fire and forget.
+2. **Schedules**: a small recurring rule — time window, source column, selector (`oldest` or `queue-order`), target column. No agent, no role, no batch size. Fire and forget.
 3. **External scheduling becomes a Copy prompt button**, not a mode. No ON/OFF, no clock, and **no pause of anything local**.
 4. **Mission Control, unattended**: launch a mission that queues sequentially with no persona.
 5. **Mission Control, operations**: launch a mission with the persona active for planning and oversight.

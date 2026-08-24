@@ -50,6 +50,7 @@ function card(planId, kanbanColumn, extra = {}) {
         dispatchedAt: null,
         dispatchedTerminal: '',
         queuePosition: null,
+        completedAt: null,
         ...extra,
     };
 }
@@ -143,8 +144,11 @@ async function run() {
     // ── Subtask 1: the in-flight predicate (the deadlock regression) ───────
 
     await check('seat pacing ignores resting coded cards and routes the next queued card', async () => {
+        // Post anchor plan: the seat-pacing skip is deleted. A resting coded
+        // card must have completedAt set to release the team — completion is
+        // asserted, not inferred from column position.
         const board = [
-            card('resting', 'INTERN CODED', { dispatchedTerminal: 'Intern 1', dispatchedAt: null }),
+            card('resting', 'INTERN CODED', { dispatchedTerminal: 'Intern 1', dispatchedAt: null, completedAt: '2026-08-24T12:00:00Z' }),
             card('next', 'STAGING', { queuePosition: 1 }),
         ];
         const { server, dispatched } = makeServer(board, {
@@ -573,11 +577,58 @@ async function run() {
         assert.ok(!/kanbanColumn === 'PLAN REVIEWED'/.test(body),
             "the watch's queue must be STAGING only — counting PLAN REVIEWED means it never reaches 'queue empty' on a real board and nudges forever");
         assert.ok(/watch\.escalatedAt/.test(body),
-            'escalation must be bounded by a one-shot stamp — re-escalating every silence window trains the user to ignore it');
+            'escalatedAt must remain in the body — it bounds the genuine operator alerts (dead-pacer/no-pacer), not the removed stall escalation');
         assert.ok(/nudgeCount >= 1/.test(body),
-            'one nudge, then escalate — a head that ignored the first nudge will not answer a second');
+            'one nudge, then stop — nudgeCount >= 1 keeps the watch silent without escalating');
         assert.ok(/_queueTeamMembersResolver/.test(body) && /teamMembers\.has\(p\.dispatchedTerminal\)/.test(body),
             "a seat-paced watch must select a held card from its own team, not another team's first active card");
+        // The head-pacing branch must also use the team resolver for in-flight
+        // detection (not just `=== watch.headTerminal`).
+        assert.ok(/headTeamSet\.has\(p\.dispatchedTerminal\)/.test(body),
+            'the head-pacing branch must use team-wide in-flight detection via the resolver, not head-only');
+        // Both sweeps must have a team-liveness suppression gate.
+        assert.ok(/nudgeSilenceMs/.test(body),
+            'the queue nudge sweep must use nudgeSilenceMs for the pacing floor and team-liveness window');
+        // The removed stall-escalation branches must not contain a notifier call.
+        // The genuine operator alerts (no-head, dead-head, no-pacer, dead-pacer)
+        // still call _turnEndNotifier; the gate-(8) stop-guards must not.
+        const gateIdx = body.indexOf('if (watch.nudgeCount >= 1)');
+        assert.notStrictEqual(gateIdx, -1, 'gate (8) nudgeCount >= 1 guard must exist');
+        // Find all gate-(8) blocks and confirm none contain a notifier call.
+        let searchFrom = 0;
+        let guardCount = 0;
+        while (true) {
+            const idx = body.indexOf('if (watch.nudgeCount >= 1)', searchFrom);
+            if (idx === -1) break;
+            guardCount++;
+            const blockEnd = body.indexOf('continue;', idx);
+            const block = body.slice(idx, blockEnd);
+            assert.ok(!/_turnEndNotifier/.test(block),
+                'gate (8) stop-guard must not contain a _turnEndNotifier call — user escalation is removed');
+            searchFrom = blockEnd + 1;
+        }
+        assert.ok(guardCount >= 2, 'both head-pacing and seat-pacing must have a nudgeCount >= 1 stop-guard');
+    });
+
+    await check('the feature nudge has nudgeCount and stops after one nudge', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'PlanIngestionEngine.ts'), 'utf8');
+        const i = src.indexOf('private async _runFeatureNudgeSweep(');
+        assert.notStrictEqual(i, -1, '_runFeatureNudgeSweep must exist');
+        const body = src.slice(i, src.indexOf('\n    private ', i + 10));
+        assert.ok(/nudgeCount/.test(body),
+            'the feature nudge sweep must use nudgeCount to stop after one nudge');
+        assert.ok(/nudgeSilenceMs/.test(body),
+            'the feature nudge sweep must use nudgeSilenceMs for the pacing floor and team-liveness window');
+        assert.ok(/_queueTeamMembersResolver/.test(body),
+            'the feature nudge sweep must have a team-liveness suppression gate using the resolver');
+    });
+
+    await check('nudgeSilenceMs is read from config in the tick', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'PlanIngestionEngine.ts'), 'utf8');
+        assert.ok(/getNumber\('nudgeSilenceMs'/.test(src),
+            "the tick must read nudgeSilenceMs from the activityLight config section");
     });
 
     await check('a dispatch clears the whole stall state, not just the nudge counter', () => {

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Delete the clause in `TEAM_QUEUE_DONE_ORDER_BODY` that tells any seat to move a feature to `CODE REVIEWED` on a board-state check, because it grants a permission the head's own standing order explicitly withholds and can cause concurrent edits to the same files.
+Delete the clause in `TEAM_QUEUE_DONE_ORDER_BODY` that tells any seat to move a feature to `CODE REVIEWED` on a board-state check. This is the first concrete application of the category rule that completion is asserted, never inferred (`completion-is-asserted-never-inferred.md`), landing alongside the anchor plan to eliminate an invalid board-position inference that grants a permission the head's own standing order explicitly withholds and causes concurrent edits to the same files.
 
 ### Problem Analysis
 
@@ -32,9 +32,24 @@ The head holds both, because `applyTeamQueueOrders` installs the seat body at `t
 
 **Nothing depends on it.** Server-side, completion is already a report: `LocalApiServer.ts:4117-4128` relays `[queue/done] ${from} reports its dispatched task complete` to the head, then clears and dispatches the next item. No board-state inference anywhere in the handler. The clause is guidance layered on top of a report-based design, contradicting it.
 
+### Why the premise changed: first application of the category rule (completion is asserted, never inferred)
+
+> **Framing & Premise Change (citing `completion-is-asserted-never-inferred.md`):**
+> This change is the first concrete application of the system-wide category rule: **completion is an asserted event (`POST /kanban/task/complete` writing `completed_at`), never inferred from board position.**
+> 
+> Previously, because the system lacked an explicit completion signal, consumers attempted to guess completion from whatever durable trace was available. The seat order looked at board position ("all subtasks are in `LEAD CODED`") and inferred "The feature is complete — hand it to review." But cards move to coding columns on coding *start*, not finish, so that clause named an assignment state as an attestation and manufactured a "probably done" state out of silence.
+> 
+> With `completion-is-asserted-never-inferred.md` establishing explicit asserted completion and silence-halts semantics, all inference paths are eliminated as a category rather than site-by-site. This plan lands alongside the anchor plan (`completion-is-asserted-never-inferred.md`) as its first application.
+
 ### Root Cause
 
 The clause was written to solve a real problem — how does a *feature* (as opposed to a subtask) get advanced when its last subtask finishes? — and solved it with the information a seat had to hand: the board. The headPrompt later solved the same problem correctly, with the roster check and the reviewer-seat condition. The seat version was never removed, so both shipped.
+
+### Why the premise changed: this is the first application of the category rule
+
+> **Premise change (citing `completion-is-asserted-never-inferred.md`):** This plan was originally scoped as a local cleanup — one contradictory clause at one site. With the anchor plan's decision that completion is an asserted event (`POST /kanban/task/complete` writes `completed_at`), this plan is recognisably the **first application of the category rule**: no consumer derives completion from a kanban column. The clause it removes is one instance of that pattern — inferring "the feature is complete" from "all subtasks are in `LEAD CODED`" — and the anchor plan makes the pattern explicit so the next consumer does not re-derive it.
+>
+> This plan should land alongside the anchor plan (`completion-is-asserted-never-inferred.md`) so the category rule and its first application do not disagree in the interim. The anchor plan retires the report-file instruction in the head order and repoints the in-flight predicate at `completed_at`; this plan removes the seat order's board-position clause. Together they close all three inference sites identified by the anchor.
 
 ## Metadata
 
@@ -43,7 +58,7 @@ The clause was written to solve a real problem — how does a *feature* (as oppo
 
 ## User Review Required
 
-- **Sequencing matters more than the edit.** Deleting this leaves a no-reviewer-seat team with no completion signal except the report file, until `add-a-task-complete-endpoint-for-the-lead.md` lands. Ship the endpoint first, or ship both together. Deleting alone is safe but leaves the in-flight gap wider.
+- **Sequencing: lands alongside the anchor plan.** This plan is the first application of the category rule and lands alongside `completion-is-asserted-never-inferred.md`. It requires `add-a-task-complete-endpoint-for-the-lead.md` for the explicit completion post. Shipping both together ensures no team is left with contradictory instructions or unhandled completion signals.
 
 ## Complexity Audit
 
@@ -75,7 +90,8 @@ The clause was written to solve a real problem — how does a *feature* (as oppo
 
 ## Dependencies
 
-- **Should follow** `add-a-task-complete-endpoint-for-the-lead.md`.
+- **Lands alongside** `completion-is-asserted-never-inferred.md` — the anchor plan establishing the category rule.
+- **Should follow (or land with)** `add-a-task-complete-endpoint-for-the-lead.md` — providing the authoritative completion post.
 - **Subsumed by** `compose-standing-orders-from-a-library.md` if that ships first — a composed order set would not emit this clause to a team without a reviewer seat. Shipping this deletion separately is worth it because it is a two-line fix for a live hazard and the library is a larger build.
 - **Also subsumed by** `context-aware-completion-reporting.md` if that ships first — it replaces the entire `TEAM_QUEUE_DONE_ORDER_BODY` with a context-aware order. Same calculus: this is a smaller, faster fix for a live hazard.
 

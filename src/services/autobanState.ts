@@ -189,6 +189,10 @@ export type AutobanConfigState = {
     retiredAutomationModeNotice?: string;
     /** One-time notice shown when recurring jobs resume after external mode retirement. */
     recurringJobsResumedNotice?: string;
+    /** Reason recorded whenever automation switches itself off. Absent reads as
+     *  "no recorded reason". Set by _stopAutobanEngine and every self-stop path.
+     *  Survives persistence because _autobanState is workspace-state-persisted. */
+    stopReason?: string;
 };
 
 /**
@@ -492,7 +496,9 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         migratedBoardBatchNotice: typeof state?.migratedBoardBatchNotice === 'string' ? state.migratedBoardBatchNotice : undefined,
         droppedCustomJobsNotice: typeof state?.droppedCustomJobsNotice === 'string' ? state.droppedCustomJobsNotice : undefined,
         retiredAutomationModeNotice,
-        recurringJobsResumedNotice
+        recurringJobsResumedNotice,
+        stopReason: typeof (state as any)?.stopReason === 'string' && (state as any).stopReason.trim()
+            ? (state as any).stopReason : undefined
     };
 }
 

@@ -1,8 +1,8 @@
-# Mission cards: turn dispatch analysis into a stream map on a card, launched from the board
+# Persist dependency edges and gate dispatch on asserted completion at pop time
 
 ## Goal
 
-Change the Analyze pass from emitting "the largest set that can start now" to emitting a **persisted stage map** of all candidate work — ordered streams that run in parallel with each other — so the STAGING queue can feed several teams at once, each in its own worktree, without violating a dependency. Add the Analyze control to the STAGING header alongside Planned.
+Persist dependency edges emitted by dispatch analysis and evaluate them at pop time against the asserted completion fact (`completed_at`), so the STAGING queue can feed multiple teams in parallel without violating dependencies and without precomputing static stream columns. Add the Analyze control to the STAGING header alongside Planned.
 
 ### Problem Analysis
 
@@ -25,29 +25,33 @@ Cross-team leakage from that shared queue is already guarded: `:1624-1627` refus
 1. **A chain never stages.** A→B→C is three mutual conflicts, so at most one member is promoted per run.
 2. **Nothing persists what depends on what.** The dependency knowledge is computed once, used to exclude, and thrown away — so no consumer can order anything by it.
 
-A maximum-independent-set answer is a *subset*: it says what can start now and is invalid the moment anything finishes. A **stage map** is a plan of execution: stage 1 runs concurrently, stage 2 follows, and it stays valid until the inputs change — a plan added, edited, removed, or its file set altered. Never on completion. That is the difference between re-running Analyze after every card and running it once.
+A maximum-independent-set answer is a *subset*: it says what can start now and is invalid the moment anything finishes. Persisting dependency edges makes execution dynamic: stages are not stored, but derived at pop time by checking whether predecessor cards have reached asserted completion (`completed_at IS NOT NULL`).
 
-### Streams are information the operator reports, not a mode it enters
+### Why the premise changed: asserted completion collapses static streams to dynamic edges
 
-The orchestrator protocol already has this vocabulary, which makes exposing the map an extension rather than an addition:
-
-- **`## Handoff, or arm?` (`:240-250`)** already lists the three session models, and **none of them changes**. A map makes the existing "arm" choice better-informed rather than adding a fourth: arm's stated trigger is *"Multiple teams across worktrees or separate repos requiring persistent coordination"*, and today the operator has to judge that from the plan list. With a map it can say how many independent streams actually exist, so arming is a decision with evidence instead of an inference.
-- **`### One dispatch per lane per wake` (`:329-332`)** — *"A wake may feed both lanes, never the same lane twice. Assess both, act on what is free, and stop."* Lanes already exist as the unit of parallel progress. A stream **is** a lane, with the difference that its order is persisted rather than inferred per wake.
-- **`### Propose a goal, then stop` (`:206-211`)** is the first message, and it already offers *"cap it at one lane"* — so the shape for discussing parallelism with the user exists. The addition is one or two sentences of advice: how many streams, how deep, what running more than one would require, and where the map's confidence is weakest. Then it stops, as it already does.
-- **`### Obey the worktree setting; never write it` (`:354-357`)** already states the constraint, and names what stream-parallel changes: *"The default is `none` — one checkout, one team at a time."*
-
-This is why `stream_id` matters over a bare stage number: the operator's report, its lane assignment and its violation detection all need to name *which chain*.
+> **Premise change (citing `completion-is-asserted-never-inferred.md`):** This plan originally proposed encoding execution ordering via `stream_id` and `stream_seq` columns. That precomputed schema was scaffolding created because the system could not answer "is predecessor B finished?" without relying on board position or running another analysis pass.
+> 
+> With `completion-is-asserted-never-inferred.md`, completion is an explicit asserted event recorded in `completed_at`. A pop-time check can now directly ask: *"Have all dependency predecessors of card A completed (`completed_at IS NOT NULL`)?"* The requirement collapses to persisting dependency edges and evaluating them when popping a card. Stages become derived dynamically rather than precomputed and stored.
 
 ### Root Cause
 
-The analysis was built to answer the safe question — "which of these can I fire simultaneously right now" — because that is all a single-consumer queue could use. Once the queue could feed N teams, the same graph could have answered the larger question, but the output shape was never revisited. The graph it builds is most of the work: file overlap is *undirected* (same stream), a declared dependency is *directed* (order within a stream).
+The analysis was built to answer the safe question — "which of these can I fire simultaneously right now" — because that is all a single-consumer queue could use. Once the queue could feed N teams, the same graph could have answered the larger question, but the output shape was never revisited. The graph it builds is most of the work: file overlap is *undirected* (concurrency constraints), a declared dependency is *directed* (order edges).
 
 ## Metadata
 
-**Complexity:** 6
+**Complexity:** 3
 **Tags:** backend, database, api, ui, reliability
 
 ## User Review Required
+
+### Recommended Plan Split (Recommendation Only — Not Performed Here)
+
+This plan historically accumulated multiple distinct concerns across data modeling, board UI, and worktree mechanics. The architectural recommendation is to separate them:
+1. **Persisting dependency edges and pop-time completion gating** (backend queue execution engine) — the primary scope of this plan.
+2. **Mission card data model, drag behaviors, and Mission Control panel integration** — belongs with `the-automation-model-four-things-not-a-mode-axis.md` and `mission-control-panel-ui-specification.md`.
+3. **Worktree provisioning and multi-checkout merge-back topology** — belongs with `worktree-models-consolidate-and-a-staging-toggle.md`.
+
+*Note: As instructed, this split is recorded here as a recommendation only and is not performed in this plan file.*
 
 ### A mission is the staging queue, named — nothing existing changes
 
@@ -75,7 +79,7 @@ The map lives on a **mission card**: a board card the analysis writes, holding t
 - `recomputeFeatureComplexity` is max-of-active-subtasks and does not recurse, so a super-feature's complexity would be meaningless.
 - **The cascade is the wrong semantics.** `cascadeFeatureByPlanId` moves the feature *and every active subtask* to the same column atomically. Advancing a mission card must start **stream heads only** — not drop every chain into a coding column at once.
 
-So a mission card **references without owning**: members keep their own `feature_id` (or none) and are linked by `stream_id`. No nesting, no cascade, no derived complexity.
+So a mission card **references without owning**: members keep their own `feature_id` (or none) and are linked by dependency edges. No nesting, no cascade, no derived complexity.
 
 ### Missions live only in STAGING, and membership is a containment gesture
 
@@ -93,7 +97,7 @@ So a mission card **references without owning**: members keep their own `feature
 
 > **Superseded:** The mission card's home is a **`missions` panel** (`missions.html` + `missions.js`).
 > **Reason:** `mission-control-panel-ui-specification.md` specifies the same panel with a different name and richer scope. Its Dependencies section states: *"Supersedes the `missions.html` panel proposed inside the streams plan — same panel, specified here."* That plan specifies `mission-control.html` + `mission-control.js` with a Missions tab (sidebar list + detail), a Schedules tab, and a Control tab hosting the persona terminal. It also depends on this plan: *"Requires `staging-streams-parallel-dispatch-and-worktrees.md` for missions, stream maps and the sequencing view."* Building a separate `missions.html` panel here would create two competing panels for the same concept.
-> **Replaced with:** This plan owns the **mission card data model, the stream map, the board drag interception, and the launch logic**. The **panel UI** — `mission-control.html` + `mission-control.js`, manifest registration, rail icon, sidebar-list-plus-detail layout — is specified by `mission-control-panel-ui-specification.md`. Items 8b–8e below describe *behaviours* the Mission Control panel implements; item 8a (panel creation) is deferred entirely to that plan.
+> **Replaced with:** This plan owns the **mission card data model, the dependency edge map, the board drag interception, and the launch logic**. The **panel UI** — `mission-control.html` + `mission-control.js`, manifest registration, rail icon, sidebar-list-plus-detail layout — is specified by `mission-control-panel-ui-specification.md`. Items 8b–8e below describe *behaviours* the Mission Control panel implements; item 8a (panel creation) is deferred entirely to that plan.
 
 The mission card's home is the **Mission Control panel** (specified by `mission-control-panel-ui-specification.md`). The card appears on the board, but **moving it switches to the panel** — it does not launch, and it does not move. The card only takes its new column when **Launch mission** is pressed in the panel.
 
@@ -109,8 +113,10 @@ If the panel's Launch step wants a final choice step of its own, the form is con
 
 **It must not use `window.confirm()`.** That is a silent no-op in a VS Code webview (sandboxed iframe without `allow-modals`, always returns `false`) — the bug that broke the kanban delete-plan button. The codebase contains zero `confirm()` calls and two comments recording why (`kanban.html:12526`, `:13369` — line numbers are approximate; grep for `confirm()` to find them). Build it as a custom in-webview modal on the existing pattern: `feature-create-modal` / `openFeatureCreateModal` (`:11898`) / `closeModal` (`:11621`).
 
-- **Decided: stream id + sequence**, not a single stage number. Records the chain identity as well as the order, which is what the operator's detection and reporting need — "stream 3 is blocked at step 2" is answerable; "stage 2 is blocked" is not.
-- **A stream/sequence pair is the recommendation, not `base_branch`.** `queue_position` is documented as "a 1-based sort key" assigned append-from-`MAX+1` (`KanbanDatabase.ts:508-516`) — a total order that never ties by construction, so encoding stages as equal positions would overload a sort key with grouping semantics nothing reads. And `base_branch` expresses *one* predecessor, which cannot express "these four run together, then those two." So: `stream_id` + `stream_seq` columns carry the map, `queue_position` remains the tiebreak among cards at the same sequence, and `base_branch` becomes **derived** — a card at sequence *n* cuts from the merged result of sequence *n-1* in its own stream. This reverses an earlier recommendation of `base_branch` as the encoding.
+> **Superseded:** `stream_id` + `stream_seq` encoding columns and the argument against `base_branch`.
+> **Reason:** Citing `completion-is-asserted-never-inferred.md`, completion is an explicit asserted event recorded in `completed_at`. The previous design rejected `base_branch` because it *"expresses one predecessor, which cannot express 'these four run together, then those two.'"* That argument was distorted by the absence of an asserted completion fact — it assumed order had to be precomputed into stage numbers. With dependency edges evaluated against `completed_at`, multiple predecessors are simply multiple edges, and "run together" is simply the absence of edges between cards. Precomputing streams or stages in `stream_id`/`stream_seq` columns is unnecessary scaffolding.
+> **Replaced with:** Persisting dependency edges per card, evaluated at pop time in `_runQueuePop` against `completed_at IS NOT NULL`.
+
 - **The operator advises before confirmation and acts after it.** Sequential stays the default. The operator reads the map and, in its opening proposal, states what parallelism is available and what it would cost and risk *against the goal the user stated* — then waits. An earlier revision added stream-parallel as a fourth session model plus a selection rule; that was over-prescriptive. A later revision then swung too far and left the operator advisory-only, which would have removed the execution it already performs. Both were wrong in the same way — treating this as a question about *how much the operator does* rather than *which state it writes*.
 
 **The real line is state lifetime, not authority.** `worktree-strategy-control-contract.test.js` exists because `applyOversightWorktreeTopology` forced `feature_worktree_mode` on arm and restored it on disarm, and a crash left the forced value in place with the user's own parked in `orchestration_prior_feature_worktree_mode`. The defect was *taking away and giving back a persistent user setting*. So:
@@ -125,21 +131,21 @@ Advice remains strictly more capable than a rule for the *decision*: it can say 
 ### Routine
 
 - Adding the Analyze control to the STAGING column header (the Planned one exists at `kanban.html:8050`).
-- Two stage columns (`stream_id`, `stream_seq`) on `plans` plus V62 migration, and a `map_fingerprint` column on the mission card.
-- Rewriting `dispatch-analysis`'s output section to emit and persist streams.
+- Persisting dependency edges emitted by dispatch analysis (`plan_dependencies` table or `depends_on` column on `plans`), plus migration, and a `map_fingerprint` column on the mission card.
+- Evaluating dependency edges at queue pop time against the asserted completion fact (`completed_at IS NOT NULL`).
 
 ### Complex / Risky
 
-- **The graph is already built; the change is what is emitted from it.** Connected components of the undirected (file-overlap) graph are streams; topological order within a component, from the directed dependency edges, is the sequence. A cycle in the declared dependencies is a real input error and must be *reported*, not silently broken — a greedy pass would otherwise pick an arbitrary order and look successful.
-- **A stage map is only as good as declared dependencies.** Step 2 reads them "if declared". File overlap is inferred and reliable; declared dependencies are optional prose. So the map will be confident about conflicts and incomplete about ordering, and it must say which parts rest on declarations rather than presenting one uniform confidence.
-- **Persisting the map creates a staleness question the subset never had.** A subset was consumed immediately; a map lives across dispatches. If a plan is edited after analysis, its file set may change and its stage may be wrong. The map needs a validity marker — a `map_fingerprint` hash of `{planId}:{sortedFileSet}` pairs, recomputed on read — so a stale map is *detected* rather than silently followed. This is the single most important design element and the easiest to omit.
-- **Features are one unit and the map must preserve that.** The protocol's rule (`:53-70`) is emphatic — analyse at the feature level, move the feature card only (a `POST /kanban/move` on a feature cascades to subtasks atomically; moving a subtask re-derives the parent's column and drags the feature somewhere the user did not put it). Stage assignment therefore attaches to the feature, never to a subtask.
-- **N teams draining one list needs the stage gate at pop time, not at analysis time.** `queue/next` must refuse a card whose stage predecessors are incomplete rather than handing it out. That is a new refusal in the same critical section as the in-flight one — a section maintained for ~4,000 installs — and it needs its own test rather than being folded into the existing 409 path.
+- **The graph is already built; the change is what is emitted from it.** Connected components of the undirected (file-overlap) graph determine independent sets; directed dependency edges determine order constraints. A cycle in the declared dependencies is a real input error and must be *reported*, not silently broken — a greedy pass would otherwise pick an arbitrary order and look successful.
+- **A dependency map is only as good as declared dependencies.** Step 2 reads them "if declared". File overlap is inferred and reliable; declared dependencies are optional prose. So the map will be confident about conflicts and incomplete about ordering, and it must say which parts rest on declarations rather than presenting one uniform confidence.
+- **Persisting the map creates a staleness question the subset never had.** A subset was consumed immediately; a map lives across dispatches. If a plan is edited after analysis, its file set may change and its dependencies may be wrong. The map needs a validity marker — a `map_fingerprint` hash of `{planId}:{sortedFileSet}` pairs, recomputed on read — so a stale map is *detected* rather than silently followed. This is the single most important design element and the easiest to omit.
+- **Features are one unit and the map must preserve that.** The protocol's rule (`:53-70`) is emphatic — analyse at the feature level, move the feature card only (a `POST /kanban/move` on a feature cascades to subtasks atomically; moving a subtask re-derives the parent's column and drags the feature somewhere the user did not put it). Dependency assignment therefore attaches to the feature, never to a subtask.
+- **N teams draining one list needs the dependency gate at pop time, not at analysis time.** `queue/next` must refuse a card whose dependency predecessors are incomplete (`completed_at` is NULL) rather than handing it out. That is a new refusal in the same critical section as the in-flight one — a section maintained for ~4,000 installs — and it needs its own test rather than being folded into the existing 409 path.
 - **Parallel worktrees multiply the unscoped-`branch` collision.** The current schema has `branch TEXT NOT NULL UNIQUE`, workspace-unscoped (the V24/V25 migrations used `UNIQUE(branch, workspace_id)`). Owned by `scope-unscoped-tables-by-workspace-id.md`, but N concurrent worktrees make the collision likelier, so that plan becomes a practical precondition rather than a tidy-up.
 
 ## Edge-Case & Dependency Audit
 
-**Migration.** V62 — additive nullable columns (`stream_id`, `stream_seq`, `map_fingerprint`). A plan with no stage behaves exactly as today, so the queue keeps working for anyone who never runs Analyze. No existing behaviour changes until a map exists.
+**Migration.** V62 — additive dependency edges storage (e.g. `plan_dependencies` table or `depends_on` column) and `map_fingerprint` on `plans`. A plan with no dependency edges behaves exactly as today, so the queue keeps working for anyone who never runs Analyze. No existing behaviour changes until edges exist.
 
 **Security.** No new endpoint or path resolution. The analysis remains read-only on plan files and moves cards via the API.
 
@@ -149,10 +155,11 @@ Advice remains strictly more capable than a rule for the *decision*: it can say 
 
 ## Dependencies
 
+- **Requires** `completion-is-asserted-never-inferred.md` and `add-a-task-complete-endpoint-for-the-lead.md` for the asserted completion fact (`completed_at`).
 - **Requires** `worktree-models-consolidate-and-a-staging-toggle.md`.
 - **Practical precondition:** `scope-unscoped-tables-by-workspace-id.md` for the `branch` uniqueness collision.
-- **Shares the merge-back gap** with the per-feature-worktree queue design: a stage-2 worktree cutting from "stage 1's merged result" presumes stage 1 merged, and nothing merges today. Now settled in `worktree-models-consolidate-and-a-staging-toggle.md`: one merge endpoint with three callers — the kanban WORKTREES tab, the Mission Control panel for mission-owned worktrees, and the controller agent. **The controller caller is the one this plan depends on**, since a stream advancing unattended has nobody to click either UI.
-- **Panel UI owned by** `mission-control-panel-ui-specification.md` — that plan requires this plan for missions, stream maps and the sequencing view, and supersedes the `missions.html` panel originally proposed here. This plan defines the data model; that plan defines the panel.
+- **Shares the merge-back gap** with the per-feature-worktree queue design: later worktrees cutting from earlier merged results presumes merge occurred. Now settled in `worktree-models-consolidate-and-a-staging-toggle.md`: one merge endpoint with three callers — the kanban WORKTREES tab, the Mission Control panel for mission-owned worktrees, and the controller agent. **The controller caller is the one this plan depends on**, since a stream advancing unattended has nobody to click either UI.
+- **Panel UI owned by** `mission-control-panel-ui-specification.md` — that plan requires this plan for missions, dependency maps and the sequencing view, and supersedes the `missions.html` panel originally proposed here. This plan defines the data model; that plan defines the panel.
 - **Automation model owned by** `the-automation-model-four-things-not-a-mode-axis.md` — supersedes the deleted `scope-automation-to-missions.md`.
 - Independent of the orders work.
 
@@ -160,84 +167,81 @@ Advice remains strictly more capable than a rule for the *decision*: it can say 
 
 **"The current subset behaviour is safe — a map invites running too much at once."** The map does not decide concurrency; the per-team in-flight refusal and the number of live teams do. The map only records what *may* run together. Today's subset is not safer, it is less informative: it discards the ordering it computed.
 
-**"Re-run Analyze after each completion instead of persisting a map."** That is the current behaviour and it is why a chain never progresses: each run sees the same mutual conflicts and promotes one card. It also puts an agent dispatch in the completion path of every card.
+**"Re-run Analyze after each completion instead of persisting edges."** That is the current behaviour and it is why a chain never progresses: each run sees the same mutual conflicts and promotes one card. It also puts an agent dispatch in the completion path of every card.
 
-**"Use `base_branch` and skip the schema change."** `base_branch` names one predecessor branch. Stages are sets, and the relationship is many-to-many across streams. It is the right field for *deriving* where a worktree cuts from, and the wrong one for carrying the map.
-
-**"Let the operator sequence the work instead of persisting stages."** That puts an agent in the critical path of every dispatch and gives it authority the strategy contract withholds. A persisted map is inspectable, testable and deterministic; an agent re-deriving order per pop is none of those. Note this cuts the opposite way from the advisory framing above and both hold: the *map* is deterministic and persisted; the *decision to run several streams* is the user's, informed by the operator. Machinery decides ordering; a person decides concurrency.
+**"Let the operator sequence the work instead of persisting dependency edges."** That puts an agent in the critical path of every dispatch and gives it authority the strategy contract withholds. Persisted dependency edges are inspectable, testable and deterministic; an agent re-deriving order per pop is none of those. Note this cuts the opposite way from the advisory framing above and both hold: the *dependency graph* is deterministic and persisted; the *decision to run several streams* is the user's, informed by the operator. Machinery decides ordering; a person decides concurrency.
 
 **"The panel UI is specified here — build `missions.html`."** It is not. `mission-control-panel-ui-specification.md` explicitly supersedes the `missions.html` panel and specifies `mission-control.html` + `mission-control.js` instead. Building the panel from this plan would create two competing surfaces. This plan owns the data model and board behaviours; the panel is the other plan's deliverable.
 
 ### Risk Summary
 
-Key risks: (1) the pop-time stage gate is a new refusal in the `_runQueuePop` critical section maintained for ~4,000 installs — it must be its own test, not folded into the in-flight 409 path; (2) the staleness fingerprint is the easiest element to omit and its absence silently reintroduces conflicts; (3) the plan references a superseded panel (`missions.html`) and a deleted dependency (`scope-automation-to-missions.md`) — both are now corrected with superseded callouts, but a coder reading only the Proposed Changes without the User Review context would miss the deferral. Mitigations: the pop-time gate is NULL-inert (skipped when `stream_id`/`stream_seq` are NULL), the fingerprint is a cheap hash recomputed on read, and the superseded callouts are inline at the point of confusion.
+Key risks: (1) the pop-time dependency gate is a new refusal in the `_runQueuePop` critical section maintained for ~4,000 installs — it must be its own test, not folded into the in-flight 409 path; (2) the staleness fingerprint is the easiest element to omit and its absence silently reintroduces conflicts; (3) the plan references a superseded panel (`missions.html`) and a deleted dependency (`scope-automation-to-missions.md`) — both are now corrected with superseded callouts, but a coder reading only the Proposed Changes without the User Review context would miss the deferral. Mitigations: the pop-time gate is NULL-inert (skipped when no dependency edges exist), the fingerprint is a cheap hash recomputed on read, and the superseded callouts are inline at the point of confusion.
 
 ## Proposed Changes
 
-1. **Analyze emits streams, not a subset**: connected components of the file-overlap graph become streams; topological order within a component becomes the sequence. **Dependency cycles are reported as input errors in the analysis report** (step 6 of `dispatch-analysis/SKILL.md`): name the cycle members and the declared edges, leave all cycle members in Planned, and do not emit a partial order. A greedy pass that picks an arbitrary order and looks successful is the failure mode.
-2. **Persist the map** in two nullable columns on `plans`: `stream_id INTEGER DEFAULT NULL` and `stream_seq INTEGER DEFAULT NULL`. `queue_position` remains the intra-stage tiebreak. Both columns are also added to `SCHEMA_TABLES_SQL` so fresh DBs get them from creation (the established pattern — see V60/V61).
+1. **Analyze emits dependency edges, not a subset**: connected components of the file-overlap graph identify parallel opportunities; directed dependency edges define prerequisite ordering. **Dependency cycles are reported as input errors in the analysis report** (step 6 of `dispatch-analysis/SKILL.md`): name the cycle members and the declared edges, leave all cycle members in Planned, and do not emit a partial order. A greedy pass that picks an arbitrary order and looks successful is the failure mode.
+2. **Persist dependency edges** in a `plan_dependencies` table (`plan_id TEXT, depends_on_plan_id TEXT, PRIMARY KEY(plan_id, depends_on_plan_id)`) or equivalent edge list on `plans`. `queue_position` remains the intra-priority tiebreak.
 3. **Record a validity marker** — a `map_fingerprint` column on the mission card (TEXT, nullable) storing a hash of the concatenated `{planId}:{sortedFileSet}` pairs for every member at analysis time. On read, recompute the hash from current plan files; a mismatch means the map is stale. This is more reliable than mtime (noisy, filesystem-dependent) and more precise than the plan set alone (a plan's file set can change without the set membership changing). The fingerprint is cheap: the analysis already reads every plan file to build the graph.
 4. **Stage all candidates**, not only the currently-unblocked ones.
-5. **`queue/next` gates on stage**: refuse a card whose stage predecessors are incomplete, with its own test. The refusal is a new 409 path in `_runQueuePop` (`LocalApiServer.ts:1772+`), checked after the in-flight refusal and before the dispatch. It reads `stream_id` / `stream_seq` on the candidate and checks whether any card with the same `stream_id` and a lower `stream_seq` is still in STAGING or a coding column. If so, refuse with a message naming the blocking predecessor.
-6. **Derive `base_branch`** from the stage: a later stage's worktree cuts from the previous stage's merged result.
-7. **Analyze control in the STAGING header** as well as Planned.
-8. **The mission card is the carrier.** Analysis writes it as a plan file (file tier, works sandboxed) or via the API; it holds the streams and their order. Members are linked by `stream_id`, never re-parented. A new card kind — not a feature, no cascade, no derived complexity. **Codename generator**: a mission card gets a stable codename on creation — a two-word `{adjective}-{noun}` pair drawn from two small word lists (~50 adjectives, ~50 nouns, ~2,500 combinations) embedded as constants in `KanbanDatabase.ts` or a sibling module. The pair is chosen by hashing the mission's `plan_id` into the adjective × noun space, so the same card always gets the same codename without a stored field. Collision is checked at creation time; a collision rehashes with a salt suffix. No external word-list file, no network dependency.
+5. **`queue/next` gates on asserted completion of dependencies**: refuse a card whose dependency predecessors are incomplete (`completed_at IS NULL`), with its own test. The refusal is a new 409 path in `_runQueuePop` (`LocalApiServer.ts:1772+`), checked after the in-flight refusal and before the dispatch. It queries dependency edges for the candidate and checks whether any predecessor plan is uncompleted (`completed_at` is NULL or sitting in STAGING/coding column). If so, refuse with a message naming the blocking predecessor.
+6. **Analyze control in the STAGING header** as well as Planned.
+7. **The mission card is the carrier.** Analysis writes it as a plan file (file tier, works sandboxed) or via the API; it holds the dependency map. Members are linked by dependency edges, never re-parented. A new card kind — not a feature, no cascade, no derived complexity. **Codename generator**: a mission card gets a stable codename on creation — a two-word `{adjective}-{noun}` pair drawn from two small word lists (~50 adjectives, ~50 nouns, ~2,500 combinations) embedded as constants in `KanbanDatabase.ts` or a sibling module. The pair is chosen by hashing the mission's `plan_id` into the adjective × noun space, so the same card always gets the same codename without a stored field. Collision is checked at creation time; a collision rehashes with a salt suffix. No external word-list file, no network dependency.
 8a. **Panel UI deferred to `mission-control-panel-ui-specification.md`.** That plan specifies `mission-control.html` + `mission-control.js` with a Missions tab (sidebar list + detail), registered in `getPanelsManifest` as `mission-control`, a `getPanelHtmlById` case, and a `LocalApiServer` route. This plan defines the data model and behaviours the panel hosts; it does not create the panel files.
 8b. **Board move = navigate.** A drag on a mission card is intercepted before the optimistic path (`optimisticMoveUntil`, `kanban.html:6300`), opens the Mission Control panel, and writes nothing. The card keeps its column until Launch.
-8c. **Launch mission** in the panel performs the column move and the fan-out as one action: seat teams, provision worktrees, stage, dispatch each stream head.
+8c. **Launch mission** in the panel performs the column move and the fan-out as one action: seat teams, provision worktrees, stage, dispatch each unblocked stream head.
 8d. **Launch is idempotent.** Moving the card twice must not double-seat teams or double-dispatch. This is the one behaviour on the board where a card's move fans out beyond itself, so it needs an explicit guard rather than relying on the user not doing it.
-8e. **Expose the map to the operator**: a read path (`GET /kanban/mission/{planId}/streams` or equivalent) returning streams, their depth, and each card's `stream_id` / `stream_seq`.
-9. **Sequential stays the default; the handoff sequence generalises from one team to N.** `## The handoff sequence` (`:252-266`) is already scope → launch → stage → dispatch card one → report and exit. For streams it becomes:
-   1. **Scope** — read the map.
-   2. **Advise and stop** — streams available, what running several costs, where the map is weakest. The user confirms which streams to run. *(The only genuinely new step.)*
+8e. **Expose the map to the operator**: a read path (`GET /kanban/mission/{planId}/streams` or equivalent) returning dependency chains, their depth, and each card's dependency edges.
+9. **Sequential stays the default; the handoff sequence generalises from one team to N.** `## The handoff sequence` (`:252-266`) is already scope → launch → stage → dispatch card one → report and exit. For parallel streams it becomes:
+   1. **Scope** — read the dependency map.
+   2. **Advise and stop** — parallel chains available, what running several costs, where the map is weakest. The user confirms which streams to run. *(The only genuinely new step.)*
    3. **Launch** — seat one team per confirmed stream.
    4. **Provision** — one worktree per stream, host-owned as today. *(The only step needing a run parameter.)*
-   5. **Stage** — in the map's order; `stream_id`/`stream_seq` are already persisted.
-   6. **Dispatch the head of each confirmed stream** — one `queue/next` per team. The per-team in-flight refusal already serialises this correctly.
+   5. **Stage** — in dependency order with edges persisted.
+   6. **Dispatch the head of each confirmed stream** — one `queue/next` per team. The per-team in-flight refusal and dependency completion check serialises this correctly.
    7. **Report and exit** — `POST /orchestration/handoff`, whose `409` on a dead head or empty queue becomes an N-team check.
    Steps 3–7 are what it already does, once per stream instead of once.
-10. **Operator detects and reports** stream violations. It never writes strategy, reorders work, or cuts branches.
+10. **Operator detects and reports** dependency violations. It never writes strategy, reorders work, or cuts branches.
 
 ### Migration
 
-**V62** — `ALTER TABLE plans ADD COLUMN stream_id INTEGER DEFAULT NULL` and `ALTER TABLE plans ADD COLUMN stream_seq INTEGER DEFAULT NULL`. Both columns are also added to `SCHEMA_TABLES_SQL` so fresh DBs get them from creation (the established V60/V61 pattern). Idempotent under the version gate with try/catch covering a stale restore. A plan with no `stream_id`/`stream_seq` behaves as today — the pop-time gate is skipped when both are NULL. The `map_fingerprint` column on the mission card is the same migration: `ALTER TABLE plans ADD COLUMN map_fingerprint TEXT DEFAULT NULL`.
+**V62** — Add `plan_dependencies` table (`plan_id TEXT NOT NULL, depends_on_plan_id TEXT NOT NULL, PRIMARY KEY(plan_id, depends_on_plan_id)`) and `ALTER TABLE plans ADD COLUMN map_fingerprint TEXT DEFAULT NULL`. Added to `SCHEMA_TABLES_SQL` so fresh DBs get them from creation. Idempotent under version gate. A plan with no dependencies behaves as today — pop-time dependency gate is skipped when no edges exist.
 
 ## Verification Plan
 
 ### Goal Invariants
 
-- Analyze produces a stage map covering every candidate, not a subset.
-- No card is dispatched while a stage predecessor is incomplete.
-- A chain A→B→C stages in one Analyze run and dispatches in order without re-running it.
+- Analyze produces a dependency map covering every candidate, not a subset.
+- No card is dispatched while any dependency predecessor has not asserted completion (`completed_at` is NULL).
+- A chain A→B→C stages in one Analyze run and dispatches in order without re-running analysis.
 - A stale map is detected rather than followed.
-- Features carry stage assignment; subtasks never do.
+- Features carry dependency assignment; subtasks never do.
 
 ### Automated Tests
 
-- **A chain stages in one run:** analyse A→B→C and assert all three are staged with ascending stages. This is the behaviour today's implementation cannot produce, so it is the test that proves the change landed rather than being described.
-- **Parallel streams are concurrent:** two independent chains; assert their heads share a stage and both dispatch to different teams simultaneously.
-- **Pop-time stage gate:** request a stage-2 card while its stage-1 predecessor is in flight; assert refusal. Then complete the predecessor and assert it is handed out. Its own test, not folded into the in-flight 409 path.
-- **No re-run needed:** run Analyze once, then drive the whole map to completion without invoking it again. Directly pins the map-versus-subset distinction.
-- **Staleness detected (fingerprint):** edit a plan's file set after analysis; assert the `map_fingerprint` mismatch is detected and the map is reported stale rather than followed. The easiest requirement to omit and the one whose absence silently reintroduces conflicts.
+- **A chain stages in one run:** analyse A→B→C and assert all three are staged with edges persisted.
+- **Parallel streams are concurrent:** two independent chains; assert their heads share no dependency edges and both dispatch to different teams simultaneously.
+- **Pop-time dependency gate on asserted completion:** request plan B depending on A while A's `completed_at` is NULL; assert refusal. Then assert A's completion (`POST /kanban/task/complete` sets `completed_at`) and assert B is handed out.
+- **No re-run needed:** run Analyze once, then drive the whole chain to completion without invoking analysis again.
+- **Staleness detected (fingerprint):** edit a plan's file set after analysis; assert the `map_fingerprint` mismatch is detected and the map is reported stale rather than followed.
 - **Dependency cycle reported:** declare A→B→A; assert an input error, not an arbitrary order.
-- **Features stay whole:** a feature with subtasks gets one stage on the feature card and none on subtasks; assert no subtask is staged independently.
-- **Nullable columns are inert:** with no map, the queue behaves byte-identically to today.
-- **No confirm gate, and the modal is not `confirm()`:** assert the launch path contains no `window.confirm(`/`confirm(` call and that the modal is a real in-webview element. Both halves — a `confirm()` implementation would pass a "modal exists" check while doing literally nothing, which is precisely the shipped bug this rule was written from.
+- **Features stay whole:** a feature with subtasks gets dependency edges on the feature card and none on subtasks; assert no subtask is staged independently.
+- **Empty dependency edges are inert:** with no dependencies, the queue behaves byte-identically to today.
+- **No confirm gate, and the modal is not `confirm()`:** assert the launch path contains no `window.confirm(`/`confirm(` call and that the modal is a real in-webview element.
 - **Launch is idempotent:** press Launch twice; assert one set of teams, one set of worktrees, one dispatch per stream.
-- **A board move launches nothing and persists nothing:** drag a mission card to another column; assert the panel opens, the card's stored column is unchanged, and no team was seated. Then assert the same for a drag that is abandoned — the failure mode the optimistic window makes possible.
-- **Panel registered in both hosts:** assert `/mission-control` serves the panel over HTTP and the rail renders its icon from the manifest, with no `shell.html` edit. (Panel UI is owned by `mission-control-panel-ui-specification.md`; this test asserts the route exists, not the panel's internal layout.)
+- **A board move launches nothing and persists nothing:** drag a mission card to another column; assert the panel opens, the card's stored column is unchanged, and no team was seated.
+- **Panel registered in both hosts:** assert `/mission-control` serves the panel over HTTP and the rail renders its icon from the manifest, with no `shell.html` edit.
 - **Missions are STAGING-only:** assert a mission card cannot be created in, or moved to, any other column.
-- **Membership removes from the board:** drop a plan onto a mission card; assert it becomes a member and no longer renders as a loose column card. Then assert the reverse — removing it from the mission returns it to its column rather than orphaning it.
-- **The two drags are distinguishable:** assert dragging the mission opens the panel and dragging a plan onto it adds a member, with no path where a mis-drop both moves the mission and swallows the card.
-- **An unanalysed mission behaves exactly as today's queue:** create a mission by dropping cards into STAGING, never run Analyze, launch it; assert the dispatch sequence is byte-identical to the current staging-queue behaviour. This is the test that proves missions generalise rather than replace, and its failure means the change is not backward-compatible however good the map is.
-- **Auto-create on first drop:** drop a card into STAGING with no mission open; assert one mission is created with a codename and the card is a member. Drop a second card; assert it joins the same mission rather than creating another.
+- **Membership removes from the board:** drop a plan onto a mission card; assert it becomes a member and no longer renders as a loose column card.
+- **The two drags are distinguishable:** assert dragging the mission opens the panel and dragging a plan onto it adds a member.
+- **An unanalysed mission behaves exactly as today's queue:** create a mission by dropping cards into STAGING, never run Analyze, launch it; assert the dispatch sequence is byte-identical to the current staging-queue behaviour.
+- **Auto-create on first drop:** drop a card into STAGING with no mission open; assert one mission is created with a codename and the card is a member.
 - **Codenames are stable and unique:** assert a mission's codename does not change across reloads and two missions never collide.
 - **Mission card is not a feature:** assert it does not set `feature_id` on its members, does not cascade on move, and is not counted in feature complexity derivation.
-- **Sandboxed creation path:** create a mission card by writing only a plan file, with no API call; assert it imports and is launchable. This is the tier that makes the design work for a sandboxed client, and it is the one nobody will test by hand.
-- **Advice degrades to a question:** with no map, assert the opening proposal says so and offers to run Analyze, rather than silently omitting the subject. With a map, assert it states stream count and depth. There is no mode to assert, which is the point — advice has no dead-control failure mode.
-- **Operator writes run state, never user settings:** assert no operator path writes `feature_worktree_mode` or `orchestration_prior_feature_worktree_mode`, and that the run parameters it *does* write do not persist past the session. This is the test that distinguishes legitimate execution from the deleted forcing machinery, and asserting "writes nothing" instead would forbid the handoff the operator already performs.
-- **Nothing to restore after a crash:** kill the session mid-run and assert no user setting was changed and no stash key is populated. The precise failure the strategy contract was written for, checked against the new run parameters rather than the old forced setting.
-- **N-team handoff refusal:** assert `POST /orchestration/handoff` still refuses when any confirmed stream has no live head, rather than reporting a partial handoff as complete.
+- **Sandboxed creation path:** create a mission card by writing only a plan file, with no API call; assert it imports and is launchable.
+- **Advice degrades to a question:** with no map, assert the opening proposal says so and offers to run Analyze. With a map, assert it states stream count and depth.
+- **Operator writes run state, never user settings:** assert no operator path writes `feature_worktree_mode` or `orchestration_prior_feature_worktree_mode`.
+- **Nothing to restore after a crash:** kill the session mid-run and assert no user setting was changed and no stash key is populated.
+- **N-team handoff refusal:** assert `POST /orchestration/handoff` still refuses when any confirmed stream has no live head.
 
 ### Manual Verification
 
@@ -247,6 +251,8 @@ Key risks: (1) the pop-time stage gate is a new refusal in the `_runQueuePop` cr
 ## Outstanding Questions
 
 - **[user]** Analyze on both headers confirmed? — proceeding on the assumption that yes, Analyze appears on both Planned and STAGING headers.
-- **[user]** Should this plan be split? It covers 3+ distinct deliverables (stream map schema + analysis rewrite, pop-time stage gate, mission card data model + board drag interception, operator protocol changes). The panel UI is already owned by `mission-control-panel-ui-specification.md`. A split into "stream map + analysis + gate" (backend) and "mission card + board behavior" (card model) would let each ship independently. — proceeding on the assumption that the plan stays as one, since the mission card is the carrier for the stream map and the two are intertwined.
-- With several streams free and the user having approved parallel work, does the operator still pick per wake, or does the user name the streams up front? The protocol's *"assess both, act on what is free"* was written for two lanes; at five it is ambiguous. Naming them up front keeps the choice with the user and needs no rule. — proceeding on the assumption that the user names streams up front at confirmation, and the operator dispatches the confirmed set per wake.
-- Does anything today read `queue_position` in a way that assumes uniqueness? The migration comment calls it a 1-based sort key; if a consumer assumes no gaps or no ties, adding a stage dimension beside it needs that consumer checked. — proceeding on the assumption that `queue_position` consumers treat it as a sort key only (the V60 comment says "1-based sort key"), and that adding `stream_id`/`stream_seq` beside it does not break them.
+- **[user]** Should this plan be split? It covers 3+ distinct deliverables (persisting dependency edges + analysis rewrite, pop-time completion gate, mission card data model + board drag interception, operator protocol changes). Recommended split is recorded in User Review Required; proceeding on the recommendation that this plan retains its backend scope.
+- With several streams free and the user having approved parallel work, does the operator still pick per wake, or does the user name the streams up front? Proceeding on the assumption that the user names streams up front at confirmation, and the operator dispatches the confirmed set per wake.
+- Does anything today read `queue_position` in a way that assumes uniqueness? Proceeding on the assumption that `queue_position` consumers treat it as a sort key only.
+
+**Routing: Complexity 3 → Send to Intern.**

@@ -10990,7 +10990,7 @@ Each plan file must include:
             ...this._autobanState,
             enabled: false
         });
-        this._stopAutobanEngine();
+        this._stopAutobanEngine(message);
         await this._persistAutobanState();
         this._postAutobanState();
         if (level === 'info') {
@@ -13913,7 +13913,7 @@ Each plan file must include:
     }
 
     /** Stop all Autoban background timers. */
-    private _stopAutobanEngine(): void {
+    private _stopAutobanEngine(reason?: string): void {
         for (const [, timer] of this._autobanTimers) {
             clearInterval(timer);
         }
@@ -13929,6 +13929,40 @@ Each plan file must include:
         this._autobanLastTickAt.clear();
         this._activeDispatchSessions.clear();
         this._autobanTickQueue = Promise.resolve();
+
+        // Record the stop reason on _autobanState so the off state explains itself.
+        // The reason is recorded regardless of whether a Mission Control exists —
+        // a halt must be distinguishable from a hang.
+        if (reason) {
+            this._autobanState.stopReason = reason;
+            this._context?.workspaceState?.update?.('autoban.state', this._autobanState);
+        }
+
+        // Relay the halt to Mission Control when one is active. The message is
+        // agent-facing text rendered as text — no security concern. The relay
+        // uses clearBeforePrompt: false AND standingOrders: false so it never
+        // resets the recipient's context — the established machine-origin relay
+        // shape (see LocalApiServer's /terminals/relay route). standingOrders:
+        // false stops the delivery layer recomposing an orders block the
+        // Mission Control already has; omitting it would drop the role-scoped
+        // rules on the VS Code path and silently reset the controller's context.
+        if (reason && this._hasMissionControl()) {
+            const adoptedName = this._autobanState?.missionControlSeat?.terminalName;
+            if (adoptedName) {
+                void this._ptyHostVerb('ptySendPrompt', {
+                    name: adoptedName,
+                    data: `[AUTOMATION HALT] ${reason}`,
+                    clearBeforePrompt: false,
+                    standingOrders: false,
+                }).then((sendRes: any) => {
+                    if (sendRes?.success === false) {
+                        console.warn(`[TaskViewerProvider] automation halt relay to '${adoptedName}' failed: ${sendRes.error || 'unknown error'}.`);
+                    }
+                }).catch((err: any) => {
+                    console.warn(`[TaskViewerProvider] automation halt relay to '${adoptedName}' failed:`, err);
+                });
+            }
+        }
     }
 
     public async handleBatchDispatchLow(workspaceRoot?: string): Promise<boolean> {
