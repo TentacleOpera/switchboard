@@ -2406,6 +2406,70 @@ export class LocalApiServer {
                         }
                     }
 
+                    // ── Relay the completion to the team lead ────────────────
+                    // BEFORE the clear-and-pop steps, so the lead always sees
+                    // the report even if the dispatch step fails. Mirrors the
+                    // file-based _handleTeamQueueDone relay. Best-effort: a
+                    // relay failure is logged and does NOT abort the pop. A
+                    // standalone agent (no team group) skips the relay —
+                    // notifyTurnEnd handles whatever notification is appropriate.
+                    if (outcome === 'finished') {
+                        try {
+                            const group = await this._resolveTeamGroupForSeat(workspaceRoot, from);
+                            const headName = group ? teamHeadName(group) : undefined;
+                            // Three seats are NOT relay recipients:
+                            //   - no group / no head: a standalone agent has no lead.
+                            //   - headName === from: the head's own queue/done. Seat
+                            //     pacing installs the order at `team-head` scope too
+                            //     (applySeatPacingOrders), and the head is order[0] of
+                            //     its own roster, so this is routine, not malformed.
+                            //     Prompting a seat about itself is noise, and the clear
+                            //     below wipes it two statements later. notifyTurnEnd
+                            //     refuses the same delivery for the same reason.
+                            //   - externalHead: the head is a non-terminal agent
+                            //     (Antigravity/Cursor/IDE chat) whose name matches no
+                            //     pty seat, so ptySendPrompt is a dead click. Those
+                            //     workers already report via
+                            //     EXTERNAL_HEAD_CALLBACK_INSTRUCTION, which writes into
+                            //     the team's reports inbox — the head's real channel.
+                            const externalHead = !!(group && group.externalHead === true);
+                            if (headName && headName !== from && !externalHead && this._options.terminalVerb) {
+                                // held.planId, not the request's optional planId: every
+                                // shipped standing order POSTs {"from":"<seat>"} with no
+                                // planId, so keying the message off the request field
+                                // tells the lead "somebody finished something". The
+                                // mismatch guard above already proved they agree when
+                                // the caller supplies one.
+                                const relayPlanId = held.planId || planId;
+                                const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
+                                    + (relayPlanId ? ` (plan ${relayPlanId})` : '')
+                                    + `. The system is clearing ${from} and dispatching the next card.`
+                                    + (held?.featureId ? ` Feature ${held.featureId} may be ready for review — check if all subtasks are coded.` : '');
+                                try {
+                                    // ptySendPrompt reports a dead or unknown recipient
+                                    // as a RESOLVED { success: false } body, never a
+                                    // throw — a bare try/catch logs nothing in the case
+                                    // that actually happens and the relay reads as
+                                    // delivered. Check the body (same contract as
+                                    // notifyTurnEnd's delivery capture).
+                                    const relayRes = await this._options.terminalVerb('ptySendPrompt', {
+                                        name: headName,
+                                        data: relayMsg,
+                                        clearBeforePrompt: false,
+                                        standingOrders: false,
+                                    }, workspaceRoot);
+                                    if (relayRes?.success === false) {
+                                        console.warn(`[LocalApiServer] queue/done relay to team lead '${headName}' failed: ${relayRes.error || 'unknown error'} (seat '${from}').`);
+                                    }
+                                } catch (relayErr) {
+                                    console.warn('[LocalApiServer] queue/done relay to team lead failed:', relayErr);
+                                }
+                            }
+                        } catch (groupErr) {
+                            console.warn('[LocalApiServer] queue/done team group resolution failed:', groupErr);
+                        }
+                    }
+
                     // ── Clear the finishing seat ───────────────────────────
                     // /clear is pasted onto the RECEIVING terminal at dispatch;
                     // the next card usually routes to a different seat, so the
@@ -4046,6 +4110,66 @@ export class LocalApiServer {
     }
 
     /**
+     * Every registered terminal group for a workspace, read from the current
+     * TERMINALS_GROUPS_KEY and the legacy 'terminals.groups' key and
+     * deduplicated by id (current key wins — it is read first). Best effort:
+     * an unreadable key contributes nothing rather than failing the read.
+     *
+     * The single reader for both group lookups below (`_resolveRegisteredTeamGroup`
+     * by id, `_resolveTeamGroupForSeat` by roster membership) — two hand-copied
+     * loops over the same two config keys is exactly how one of them ends up
+     * reading a key the other does not.
+     */
+    private async _readRegisteredTeamGroups(workspaceRoot: string): Promise<any[]> {
+        const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+        if (!db) { return []; }
+        const groups: any[] = [];
+        for (const key of [TERMINALS_GROUPS_KEY, 'terminals.groups']) {
+            try {
+                const raw = await db.getConfigJson(key, []);
+                if (!Array.isArray(raw)) { continue; }
+                for (const group of raw) {
+                    if (group && typeof group.id === 'string' && !groups.some(existing => existing.id === group.id)) {
+                        groups.push(group);
+                    }
+                }
+            } catch { /* best effort */ }
+        }
+        return groups;
+    }
+
+    private async _resolveRegisteredTeamGroup(workspaceRoot: string, groupId: string): Promise<any | null> {
+        const groups = await this._readRegisteredTeamGroups(workspaceRoot);
+        return groups.find(group => group.id === groupId) || null;
+    }
+
+    /**
+     * Find the registered terminal group whose roster contains `seatName`,
+     * reading through `_readRegisteredTeamGroups`. The roster is `order` when
+     * non-empty, else `members` — the same precedence `_handleTeamQueueDone`
+     * uses to validate its `from`.
+     *
+     * Returns the group object, or null when the seat is not on any team
+     * (a standalone agent — no head to relay to). A seat listed in more than
+     * one group resolves to the first match; a seat belongs to one team by
+     * construction (`wireSpawnedTeam` replaces rosters rather than unioning).
+     */
+    private async _resolveTeamGroupForSeat(
+        workspaceRoot: string,
+        seatName: string
+    ): Promise<any | null> {
+        if (!seatName) { return null; }
+        const groups = await this._readRegisteredTeamGroups(workspaceRoot);
+        return groups.find(g => {
+            if (!g || typeof g !== 'object') { return false; }
+            const roster: string[] = Array.isArray(g.order) && g.order.length
+                ? g.order
+                : (Array.isArray(g.members) ? g.members : []);
+            return roster.includes(seatName);
+        }) || null;
+    }
+
+    /**
      * Team work queue routes. All paths under `/terminals/teams/<groupId>/queue`.
      *
      *   GET   /terminals/teams/<groupId>/queue           — list items
@@ -4060,24 +4184,6 @@ export class LocalApiServer {
      * rejects `../`, absolute paths, URL-encoded traversal, and any character
      * outside [a-zA-Z0-9._-].
      */
-    private async _resolveRegisteredTeamGroup(workspaceRoot: string, groupId: string): Promise<any | null> {
-        const db = await this._options.getKanbanDatabase?.(workspaceRoot);
-        if (!db) { return null; }
-        const groups: any[] = [];
-        for (const key of [TERMINALS_GROUPS_KEY, 'terminals.groups']) {
-            try {
-                const raw = await db.getConfigJson(key, []);
-                if (!Array.isArray(raw)) { continue; }
-                for (const group of raw) {
-                    if (group && typeof group.id === 'string' && !groups.some(existing => existing.id === group.id)) {
-                        groups.push(group);
-                    }
-                }
-            } catch { /* best effort */ }
-        }
-        return groups.find(group => group.id === groupId) || null;
-    }
-
     private async _handleTeamQueueRoute(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);

@@ -985,6 +985,7 @@
     "test:contract:unattended-batch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/unattended-batch-improvement-contract.test.js",
     "test:contract:mission-control-tick": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/mission-control-tick-and-reports-contract.test.js",
     "test:contract:queue-pipeline": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/queue-pipeline-contract.test.js",
+    "test:contract:queue-done-relay": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/queue-done-lead-relay-contract.test.js",
     "test:contract:external-headed-team": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/external-headed-team-contract.test.js",
     "test:contract:terminal-coder-dispatch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-coder-dispatch-contract.test.js",
     "test:contract:feature-drive-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/feature-drive-prompt-reframe-contract.test.js",

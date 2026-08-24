@@ -891,6 +891,20 @@ jobs:
       - name: Lead-paced queue pipeline contract
         run: npm run test:contract:queue-pipeline
 
+      # The queue/done team-lead relay. Every failure mode is silent: the POST
+      # returns {"success":true} whether the lead was told or not. The shipped
+      # bug was exactly that — release, clear and pop all worked while the lead
+      # learned nothing. Pins that a member's completion reaches the head named
+      # by the REGISTERED GROUP (not a parentInstanceId walk), that it lands
+      # before the clear and the pop, and the three seats that are NOT
+      # recipients: the head reporting its own completion (seat pacing installs
+      # the order at team-head scope, so this is routine), an external head that
+      # owns no pty seat, and a standalone agent on no team.
+      # Drives the real compiled services from out/, so this step must stay AFTER
+      # "Compile test outputs".
+      - name: queue/done team-lead relay contract
+        run: npm run test:contract:queue-done-relay
+
       # External-headed team mode: the lead is a non-terminal agent, so every
       # failure mode is a silent mis-route. The head must stay out of the group
       # roster (a head name in `members` seats a pane that can never exist), the
