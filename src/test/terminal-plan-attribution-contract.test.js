@@ -582,7 +582,12 @@ test('the completed notifier call site lives in LocalApiServer and passes a body
     const enginePleted = planIngestionTs.match(/_turnEndNotifier\(\{[^}]*outcome:\s*'completed'[^}]*\}\)/g) || [];
     assert.strictEqual(enginePleted.length, 0,
         'PlanIngestionEngine must not report completed — mtime-based completion is retired');
-    const apiCompleted = localApiServerTs.match(/onTurnEndNotify\(\{[\s\S]{0,300}?outcome:\s*'completed'[\s\S]{0,200}?\}\)/g) || [];
+    // The trailing window is generous on purpose: `\}\)` is non-greedy, so it
+    // still stops at the FIRST close after `outcome: 'completed'` and the count
+    // stays exact. A tight window instead fails the moment the call gains a
+    // legitimate field (it did — `liveDelivery`), which reads as a second call
+    // site appearing when none did.
+    const apiCompleted = localApiServerTs.match(/onTurnEndNotify\(\{[\s\S]{0,300}?outcome:\s*'completed'[\s\S]{0,600}?\}\)/g) || [];
     assert.strictEqual(apiCompleted.length, 1, 'exactly one completed notifier call site: _runQueueDone');
     assert.ok(apiCompleted[0].includes('body'), `completed notifier call must pass body: ${apiCompleted[0]}`);
 });

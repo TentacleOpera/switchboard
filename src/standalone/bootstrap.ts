@@ -2267,6 +2267,19 @@ Each plan file must include:
                 // silently missing while the pty send still succeeds.
                 if (!r.success) { log(opts, `turn-end report mirror failed: ${r.error}`); }
             }).catch(err => { log(opts, `turn-end report mirror threw: ${err}`); });
+            // Live-delivery suppression. Placed AFTER the report mirror and
+            // BEFORE every recipient-resolution step, because the mirror and the
+            // live send serve different readers: the mirror is a non-pty Mission
+            // Control's only channel and is never suppressed, while the live send
+            // is skipped when the queue/done relay already prompted the team lead
+            // (LocalApiServer._runQueueDone sets liveDelivery: false when it
+            // resolved a head). Without this the lead is prompted twice about one
+            // completion — notifyTurnEnd's parent walk lands on the head too,
+            // since a team member's parentInstanceId IS the head.
+            if (info.liveDelivery === false) {
+                log(opts, `turn-end: live delivery suppressed for seat '${seatName}' (${info.outcome} on ${planFile}) — the queue/done relay owns the team lead's notification. Report mirror written.`);
+                return;
+            }
             const active = ptyFleetService.listActive();
             // `recipientSeat` (the feature nudge) names the recipient directly —
             // the head IS the recipient, so resolving its parent would address the

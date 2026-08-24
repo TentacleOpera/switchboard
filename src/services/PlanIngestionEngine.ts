@@ -2266,13 +2266,24 @@ export function expandHome(p: string): string {
 
 // ─── Turn-end notice composer for completed arm ─────────────────────────────
 
-export function composeCompletedTurnEndBody(
+export const TURN_END_VERIFY_INSTRUCTION =
+    'Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.';
+
+/**
+ * The evidence fragment a completion notice carries after the seat/plan
+ * identity: ` — "topic" (column X, feature Y, worked 12m)`. Empty when the
+ * record has neither a topic nor a single renderable clause.
+ *
+ * Split out of {@link composeCompletedTurnEndBody} so the queue/done team-lead
+ * relay renders the SAME evidence rather than a second, thinner summary of the
+ * same card. Two notices about one completion that disagree on the detail is
+ * worse than one — and the relay is the notice the lead actually receives now
+ * (see `_runQueueDone`, which suppresses the turn-end live send when it fires).
+ */
+export function composeCompletionEvidence(
     record: Pick<KanbanPlanRecord, 'topic' | 'kanbanColumn' | 'featureId' | 'dispatchedAt'>,
-    seatName: string,
-    planFile: string,
     nowMs: number
 ): string {
-    const safePlanFile = String(planFile || '').replace(/[\r\n]+/g, ' ').trim();
     const rawTopic = String(record?.topic || '').replace(/[\r\n]+/g, ' ').trim();
     let safeTopic = rawTopic;
     if (safeTopic.length > 80) {
@@ -2297,9 +2308,19 @@ export function composeCompletedTurnEndBody(
 
     const topicClause = safeTopic ? ` — "${safeTopic}"` : '';
     const parenthetical = clauses.length > 0 ? ` (${clauses.join(', ')})` : '';
-    const header = `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${safePlanFile}'${topicClause}${parenthetical}.`;
-    const instruction = 'Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.';
+    return `${topicClause}${parenthetical}`;
+}
 
-    return `${header}\n${instruction}`;
+export function composeCompletedTurnEndBody(
+    record: Pick<KanbanPlanRecord, 'topic' | 'kanbanColumn' | 'featureId' | 'dispatchedAt'>,
+    seatName: string,
+    planFile: string,
+    nowMs: number
+): string {
+    const safePlanFile = String(planFile || '').replace(/[\r\n]+/g, ' ').trim();
+    const evidence = composeCompletionEvidence(record, nowMs);
+    const header = `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${safePlanFile}'${evidence}.`;
+
+    return `${header}\n${TURN_END_VERIFY_INSTRUCTION}`;
 }
 

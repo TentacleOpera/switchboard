@@ -1777,7 +1777,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * malformed parent chain), skip. Derived entirely from the pty stream — no
      * hooks, no tokens, no agent-side obligation.
      */
-    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string }): void {
+    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean }): void {
         void (async () => {
             const seatName = info.seatName;
             const planFile = info.planFile;
@@ -1812,6 +1812,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // silently missing while the pty send still succeeds.
                 if (!r.success) { console.warn('[TaskViewerProvider] turn-end report mirror failed:', r.error); }
             }).catch(err => { console.warn('[TaskViewerProvider] turn-end report mirror threw:', err); });
+            // Live-delivery suppression. Placed AFTER the report mirror and
+            // BEFORE every recipient-resolution step, because the mirror and the
+            // live send serve different readers: the mirror is a non-pty Mission
+            // Control's only channel and is never suppressed, while the live send
+            // is skipped when the queue/done relay already prompted the team lead
+            // (LocalApiServer._runQueueDone sets liveDelivery: false when it
+            // resolved a head). Without this the lead is prompted twice about one
+            // completion — notifyTurnEnd's parent walk lands on the head too,
+            // since a team member's parentInstanceId IS the head.
+            if (info.liveDelivery === false) {
+                console.log(`[TaskViewerProvider] turn-end: live delivery suppressed for seat '${seatName}' (${info.outcome} on ${planFile}) — the queue/done relay owns the team lead's notification. Report mirror written.`);
+                return;
+            }
             if (!this._ptyHostPort) {
                 // Say so. Every other no-delivery path here logs; a silent return
                 // when the fleet host is absent is the same hollow success in a

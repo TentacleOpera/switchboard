@@ -40,7 +40,7 @@ import { validateVerbPayload } from './verbSchemas';
 import { isLoopbackHostHeader, isLoopbackOrigin } from '../utils/loopbackHostname';
 import { listIconPalette } from './iconPalette';
 import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQueue, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
-import { composeCompletedTurnEndBody } from './PlanIngestionEngine';
+import { composeCompletedTurnEndBody, composeCompletionEvidence, TURN_END_VERIFY_INSTRUCTION } from './PlanIngestionEngine';
 
 /** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
  *  'lead_coded' / 'Lead Coded' all → 'LEAD CODED'. */
@@ -378,7 +378,22 @@ interface LocalApiServerOptions {
      * The host resolves the recipient and delivers the notification. Optional —
      * absent in headless/test harnesses (no notification, pop still proceeds).
      */
-    onTurnEndNotify?: (info: { seatName: string; planFile: string; outcome: 'completed'; workspaceRoot: string; body?: string }) => void;
+    onTurnEndNotify?: (info: {
+        seatName: string;
+        planFile: string;
+        outcome: 'completed';
+        workspaceRoot: string;
+        body?: string;
+        /**
+         * `false` = write the Mission Control report mirror but do NOT deliver
+         * live. Set when the queue/done team-lead relay already owns the head's
+         * notification, so the lead is not prompted twice about one completion.
+         * The two are not alternatives to each other: the relay reaches the head
+         * and the mirror reaches a non-pty Mission Control, so the mirror is
+         * never suppressed. Absent/true = deliver as before.
+         */
+        liveDelivery?: boolean;
+    }) => void;
     /**
      * Notify the operator of a non-fatal event that needs human attention —
      * used by the escalation ladder's park case (a card that failed at lead and
@@ -2363,6 +2378,51 @@ export class LocalApiServer {
                         return;
                     }
 
+                    // ── Resolve the team lead ONCE, before either notifier ──
+                    // Both the turn-end notice and the relay below can land on
+                    // the SAME terminal: notifyTurnEnd resolves its recipient by
+                    // walking the seat's parentInstanceId, and a team member's
+                    // parent IS the head — so on a team with no Mission Control
+                    // adopted, the "Mission Control notifier" reaches the lead on
+                    // its first resolution step. Two prompts about one completion
+                    // are two turns for a CLI seat, arriving in nondeterministic
+                    // order (the notice is fire-and-forget and does a
+                    // ptyListTerminals round trip first; the relay is awaited and
+                    // goes straight to ptySendPrompt), each carrying half the
+                    // detail. Resolving here — ahead of the callbacks — is what
+                    // lets the notice be told to skip its live send.
+                    //
+                    // Three seats are NOT relay recipients:
+                    //   - no group / no head: a standalone agent has no lead.
+                    //   - headName === from: the head's own queue/done. Seat
+                    //     pacing installs the order at `team-head` scope too
+                    //     (applySeatPacingOrders), and the head is order[0] of
+                    //     its own roster, so this is routine, not malformed.
+                    //     Prompting a seat about itself is noise, and the clear
+                    //     below wipes it two statements later. notifyTurnEnd
+                    //     refuses the same delivery for the same reason.
+                    //   - externalHead: the head is a non-terminal agent
+                    //     (Antigravity/Cursor/IDE chat) whose name matches no
+                    //     pty seat, so ptySendPrompt is a dead click. Those
+                    //     workers already report via
+                    //     EXTERNAL_HEAD_CALLBACK_INSTRUCTION, which writes into
+                    //     the team's reports inbox — the head's real channel.
+                    // In all three the turn-end notice keeps its live delivery:
+                    // nothing else is going to tell anyone.
+                    let relayHead: string | undefined;
+                    if (outcome === 'finished') {
+                        try {
+                            const group = await this._resolveTeamGroupForSeat(workspaceRoot, from);
+                            const headName = group ? teamHeadName(group) : undefined;
+                            const externalHead = !!(group && group.externalHead === true);
+                            if (headName && headName !== from && !externalHead) {
+                                relayHead = headName;
+                            }
+                        } catch (groupErr) {
+                            console.warn('[LocalApiServer] queue/done team group resolution failed:', groupErr);
+                        }
+                    }
+
                     // ── Fire completion callbacks (parity with the file-watcher
                     // path). Both hang off the SAME `transitioned` gate the
                     // watcher uses — the boolean is the single-fire contract, so
@@ -2393,12 +2453,17 @@ export class LocalApiServer {
                         if (this._options.onTurnEndNotify) {
                             try {
                                 const body = composeCompletedTurnEndBody(held, from, held.planFile, Date.now());
+                                // liveDelivery: the relay below owns the lead's
+                                // notification when it fires, so the host writes the
+                                // Mission Control report mirror and skips the live
+                                // send. With no relay it delivers as before.
                                 this._options.onTurnEndNotify({
                                     seatName: from,
                                     planFile: held.planFile,
                                     outcome: 'completed',
                                     workspaceRoot,
                                     body,
+                                    liveDelivery: !relayHead,
                                 });
                             } catch (e) {
                                 console.warn('[LocalApiServer] onTurnEndNotify callback failed:', e);
@@ -2407,66 +2472,48 @@ export class LocalApiServer {
                     }
 
                     // ── Relay the completion to the team lead ────────────────
-                    // BEFORE the clear-and-pop steps, so the lead always sees
-                    // the report even if the dispatch step fails. Mirrors the
-                    // file-based _handleTeamQueueDone relay. Best-effort: a
-                    // relay failure is logged and does NOT abort the pop. A
-                    // standalone agent (no team group) skips the relay —
-                    // notifyTurnEnd handles whatever notification is appropriate.
-                    if (outcome === 'finished') {
+                    // BEFORE the clear-and-pop steps, so the lead always sees the
+                    // report even if the dispatch step fails. Mirrors the
+                    // file-based _handleTeamQueueDone relay. Best-effort: a relay
+                    // failure is logged and does NOT abort the pop.
+                    //
+                    // This is the lead's ONE notice, so it carries the turn-end
+                    // body's evidence and its verify instruction rather than a
+                    // thinner second summary of the same card. The verify clause
+                    // is the load-bearing part: on this board completion is
+                    // asserted by the seat that did the work and never inferred,
+                    // so the lead must read the diff before it advances anything.
+                    if (relayHead && this._options.terminalVerb) {
+                        // held.planId, not the request's optional planId: every
+                        // shipped standing order POSTs {"from":"<seat>"} with no
+                        // planId, so keying the message off the request field
+                        // tells the lead "somebody finished something". The
+                        // mismatch guard above already proved they agree when
+                        // the caller supplies one.
+                        const relayPlanId = held.planId || planId;
+                        const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
+                            + (relayPlanId ? ` (plan ${relayPlanId})` : '')
+                            + `${composeCompletionEvidence(held, Date.now())}.`
+                            + ` ${TURN_END_VERIFY_INSTRUCTION}`
+                            + ` The system is clearing ${from} and dispatching the next card.`;
                         try {
-                            const group = await this._resolveTeamGroupForSeat(workspaceRoot, from);
-                            const headName = group ? teamHeadName(group) : undefined;
-                            // Three seats are NOT relay recipients:
-                            //   - no group / no head: a standalone agent has no lead.
-                            //   - headName === from: the head's own queue/done. Seat
-                            //     pacing installs the order at `team-head` scope too
-                            //     (applySeatPacingOrders), and the head is order[0] of
-                            //     its own roster, so this is routine, not malformed.
-                            //     Prompting a seat about itself is noise, and the clear
-                            //     below wipes it two statements later. notifyTurnEnd
-                            //     refuses the same delivery for the same reason.
-                            //   - externalHead: the head is a non-terminal agent
-                            //     (Antigravity/Cursor/IDE chat) whose name matches no
-                            //     pty seat, so ptySendPrompt is a dead click. Those
-                            //     workers already report via
-                            //     EXTERNAL_HEAD_CALLBACK_INSTRUCTION, which writes into
-                            //     the team's reports inbox — the head's real channel.
-                            const externalHead = !!(group && group.externalHead === true);
-                            if (headName && headName !== from && !externalHead && this._options.terminalVerb) {
-                                // held.planId, not the request's optional planId: every
-                                // shipped standing order POSTs {"from":"<seat>"} with no
-                                // planId, so keying the message off the request field
-                                // tells the lead "somebody finished something". The
-                                // mismatch guard above already proved they agree when
-                                // the caller supplies one.
-                                const relayPlanId = held.planId || planId;
-                                const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
-                                    + (relayPlanId ? ` (plan ${relayPlanId})` : '')
-                                    + `. The system is clearing ${from} and dispatching the next card.`
-                                    + (held?.featureId ? ` Feature ${held.featureId} may be ready for review — check if all subtasks are coded.` : '');
-                                try {
-                                    // ptySendPrompt reports a dead or unknown recipient
-                                    // as a RESOLVED { success: false } body, never a
-                                    // throw — a bare try/catch logs nothing in the case
-                                    // that actually happens and the relay reads as
-                                    // delivered. Check the body (same contract as
-                                    // notifyTurnEnd's delivery capture).
-                                    const relayRes = await this._options.terminalVerb('ptySendPrompt', {
-                                        name: headName,
-                                        data: relayMsg,
-                                        clearBeforePrompt: false,
-                                        standingOrders: false,
-                                    }, workspaceRoot);
-                                    if (relayRes?.success === false) {
-                                        console.warn(`[LocalApiServer] queue/done relay to team lead '${headName}' failed: ${relayRes.error || 'unknown error'} (seat '${from}').`);
-                                    }
-                                } catch (relayErr) {
-                                    console.warn('[LocalApiServer] queue/done relay to team lead failed:', relayErr);
-                                }
+                            // ptySendPrompt reports a dead or unknown recipient
+                            // as a RESOLVED { success: false } body, never a
+                            // throw — a bare try/catch logs nothing in the case
+                            // that actually happens and the relay reads as
+                            // delivered. Check the body (same contract as
+                            // notifyTurnEnd's delivery capture).
+                            const relayRes = await this._options.terminalVerb('ptySendPrompt', {
+                                name: relayHead,
+                                data: relayMsg,
+                                clearBeforePrompt: false,
+                                standingOrders: false,
+                            }, workspaceRoot);
+                            if (relayRes?.success === false) {
+                                console.warn(`[LocalApiServer] queue/done relay to team lead '${relayHead}' failed: ${relayRes.error || 'unknown error'} (seat '${from}').`);
                             }
-                        } catch (groupErr) {
-                            console.warn('[LocalApiServer] queue/done team group resolution failed:', groupErr);
+                        } catch (relayErr) {
+                            console.warn('[LocalApiServer] queue/done relay to team lead failed:', relayErr);
                         }
                     }
 

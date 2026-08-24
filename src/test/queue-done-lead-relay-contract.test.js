@@ -111,6 +111,7 @@ function makeServer(board, opts = {}) {
         }),
         resolveTeamMembers: opts.resolveTeamMembers,
         getRegisteredTerminals: opts.getRegisteredTerminals || (() => []),
+        onTurnEndNotify: (info) => { calls.push({ kind: 'turnEnd', info }); },
         terminalVerb: async (verb, payload) => {
             calls.push({ kind: 'verb', verb, name: payload && payload.name, payload });
             if (opts.terminalVerbResult) { return opts.terminalVerbResult(verb, payload); }
@@ -134,6 +135,13 @@ function makeServer(board, opts = {}) {
 function relays(calls) {
     return calls.filter(c => c.kind === 'verb' && c.verb === 'ptySendPrompt'
         && typeof c.payload.data === 'string' && c.payload.data.startsWith('[queue/done]'));
+}
+
+/** The single turn-end notice `_runQueueDone` emitted, or undefined. */
+function turnEnd(calls) {
+    const found = calls.filter(c => c.kind === 'turnEnd');
+    assert.ok(found.length <= 1, `at most one turn-end notice per completion, got ${found.length}`);
+    return found[0] && found[0].info;
 }
 
 /**
@@ -294,6 +302,81 @@ async function run() {
         assert.strictEqual(sent.length, 1, 'exactly one relay, to exactly one head');
         assert.strictEqual(sent[0].payload.name, 'Coding',
             'the relay must resolve the head of the group whose roster holds the seat');
+    });
+
+    // ── One completion, one prompt to the lead ─────────────────────────────
+
+    await check('the relay carries the turn-end evidence and the verify instruction', async () => {
+        // The lead gets ONE notice, so it must not be the thinner of the two.
+        // The verify clause is load-bearing: completion here is asserted by the
+        // seat that did the work and never inferred, so the lead must read the
+        // diff before it advances anything.
+        const board = boardHeldBy('Coder 1', { topic: 'wire the relay', featureId: 'feat-9' });
+        const { server, calls } = makeServer(board, {
+            groups: [group('Coding', ['Coder 1'])],
+            resolveTeamMembers: async () => ['Coding', 'Coder 1'],
+        });
+        await server.reportQueueDone({ workspaceRoot: WS, from: 'Coder 1' });
+        const body = relays(calls)[0].payload.data;
+        assert.ok(/"wire the relay"/.test(body), `relay must carry the card topic, got: ${body}`);
+        assert.ok(/column CODER CODED/.test(body), `relay must carry the column, got: ${body}`);
+        assert.ok(/feature feat-9/.test(body), `relay must carry the feature, got: ${body}`);
+        assert.ok(/Verify the diff \(git diff\) before you trust the report/.test(body),
+            `relay must carry the verify instruction, got: ${body}`);
+    });
+
+    await check('a delivered relay suppresses the turn-end LIVE send, not the report mirror', async () => {
+        const { server, calls } = makeServer(boardHeldBy('Coder 1'), {
+            groups: [group('Coding', ['Coder 1'])],
+            resolveTeamMembers: async () => ['Coding', 'Coder 1'],
+        });
+        await server.reportQueueDone({ workspaceRoot: WS, from: 'Coder 1' });
+        assert.strictEqual(relays(calls).length, 1, 'the relay must fire');
+        const notice = turnEnd(calls);
+        assert.ok(notice, 'the turn-end notice must still be emitted — the report mirror rides on it');
+        assert.strictEqual(notice.liveDelivery, false,
+            'a delivered relay must tell the host to skip the live send, or the lead is prompted twice');
+    });
+
+    await check('no relay leaves the turn-end live send ALONE', async () => {
+        // Standalone, head-reporting-itself and external-head all fall here.
+        // Nothing else is going to tell anyone, so the notice must deliver.
+        for (const [label, seat, groups] of [
+            ['standalone', 'StandaloneCoder', [group('Coding', ['Coder 1'])]],
+            ['head itself', 'Coding', [group('Coding', ['Coder 1'])]],
+            ['external head', 'Coder 1', [group('External Lead', ['Coder 1'], { externalHead: true })]],
+        ]) {
+            const { server, calls } = makeServer(boardHeldBy(seat), {
+                groups,
+                resolveTeamMembers: async () => null,
+                getRegisteredTerminals: () => [seat],
+            });
+            await server.reportQueueDone({ workspaceRoot: WS, from: seat });
+            assert.deepStrictEqual(relays(calls), [], `${label}: no relay expected`);
+            const notice = turnEnd(calls);
+            assert.ok(notice, `${label}: the turn-end notice must be emitted`);
+            assert.notStrictEqual(notice.liveDelivery, false,
+                `${label}: with no relay, the turn-end notice is the only channel — it must still deliver live`);
+        }
+    });
+
+    await check('both host twins gate on liveDelivery AFTER writing the report mirror', async () => {
+        // The mirror is a non-pty Mission Control's ONLY channel. A gate placed
+        // above it would suppress the durable record along with the prompt, and
+        // the two hosts are parallel implementations — fixing one is drift.
+        const fs = require('fs');
+        for (const [label, file] of [
+            ['extension host', 'src/services/TaskViewerProvider.ts'],
+            ['standalone host', 'src/standalone/bootstrap.ts'],
+        ]) {
+            const src = fs.readFileSync(path.join(process.cwd(), file), 'utf8');
+            const gate = src.indexOf('info.liveDelivery === false');
+            assert.ok(gate > 0, `${label}: must honour liveDelivery === false`);
+            const mirror = src.indexOf('writeMissionControlReport(info.workspaceRoot');
+            assert.ok(mirror > 0, `${label}: must write the Mission Control report mirror`);
+            assert.ok(mirror < gate,
+                `${label}: the report mirror must be written BEFORE the liveDelivery gate — a suppressed prompt must never suppress the durable record`);
+        }
     });
 
     console.log('');
