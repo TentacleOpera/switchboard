@@ -86,8 +86,9 @@ time a managing agent needed them.
    `src/services/standingOrders.ts` (the durable instruction that carries the "report back"
    contract). Orientation matters and is easy to get backwards: an order's `parent` is the
    terminal that **receives** the block, `child` is the terminal it is **about**. A coder is
-   told to report back by an order whose `parent` is the *coder*. See the
-   `terminal-coder-dispatch` skill for the full procedure.
+   told to report back by an order whose `parent` is the *coder*. The full
+   procedure is inlined in the enriched drive prefix built by `_buildDrivePrefix`
+   in KanbanProvider.ts.
 
 10. **Prompt delivery clears the recipient's context by default.** Both hosts inject the
     config default `switchboard.terminal.clearBeforePrompt` (default `true`) when the caller

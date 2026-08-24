@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "generatedAt": "2026-08-23T00:28:38.384Z",
+  "generatedAt": "2026-08-24T12:20:04.996Z",
   "summary": {
     "totalArms": 634,
     "totalVerbs": 545,
-    "totalPushSites": 665,
-    "totalRequestSites": 624,
+    "totalPushSites": 666,
+    "totalRequestSites": 647,
     "providerArmCounts": {
       "Kanban": 164,
       "Planning": 113,
@@ -14,7 +14,7 @@
       "TaskViewer": 110,
       "Setup": 101
     },
-    "apiEndpointCount": 87,
+    "apiEndpointCount": 89,
     "manualReviewCount": 6
   },
   "providers": {
@@ -191,822 +191,822 @@
       "arms": [
         {
           "verb": "ready",
-          "line": 8980,
+          "line": 8988,
           "dynamic": false
         },
         {
           "verb": "selectPlan",
-          "line": 9092,
+          "line": 9100,
           "dynamic": false
         },
         {
           "verb": "openPlanByPath",
-          "line": 9101,
+          "line": 9109,
           "dynamic": false
         },
         {
           "verb": "refresh",
-          "line": 9131,
+          "line": 9139,
           "dynamic": false
         },
         {
           "verb": "scanFoldersNow",
-          "line": 9136,
+          "line": 9144,
           "dynamic": false
         },
         {
           "verb": "reassignPlansWorkspace",
-          "line": 9141,
+          "line": 9149,
           "dynamic": false
         },
         {
           "verb": "selectWorkspace",
-          "line": 9293,
+          "line": 9301,
           "dynamic": false
         },
         {
           "verb": "addProject",
-          "line": 9368,
+          "line": 9376,
           "dynamic": false
         },
         {
           "verb": "copyPrdPrompt",
-          "line": 9411,
+          "line": 9419,
           "dynamic": false
         },
         {
           "verb": "deleteProject",
-          "line": 9442,
+          "line": 9450,
           "dynamic": false
         },
         {
           "verb": "setPushScope",
-          "line": 9466,
+          "line": 9474,
           "dynamic": false
         },
         {
           "verb": "setProjectFilter",
-          "line": 9471,
+          "line": 9479,
           "dynamic": false
         },
         {
           "verb": "assignSelectedToProject",
-          "line": 9492,
+          "line": 9500,
           "dynamic": false
         },
         {
           "verb": "setAutomationMode",
-          "line": 9533,
+          "line": 9541,
           "dynamic": false
         },
         {
           "verb": "startOrchestrator",
-          "line": 9539,
-          "dynamic": false
-        },
-        {
-          "verb": "stopOrchestrator",
           "line": 9547,
           "dynamic": false
         },
         {
+          "verb": "stopOrchestrator",
+          "line": 9555,
+          "dynamic": false
+        },
+        {
           "verb": "getSchedulerConfig",
-          "line": 9553,
+          "line": 9561,
           "dynamic": false
         },
         {
           "verb": "setSchedulerConfig",
-          "line": 9558,
+          "line": 9566,
           "dynamic": false
         },
         {
           "verb": "runSchedulerJob",
-          "line": 9567,
+          "line": 9575,
           "dynamic": false
         },
         {
           "verb": "getAutobanConfig",
-          "line": 9574,
+          "line": 9582,
           "dynamic": false
         },
         {
           "verb": "updateAutobanConfig",
-          "line": 9577,
+          "line": 9585,
           "dynamic": false
         },
         {
           "verb": "toggleAutoban",
-          "line": 9583,
+          "line": 9591,
           "dynamic": false
         },
         {
           "verb": "resetAutobanTimers",
-          "line": 9600,
-          "dynamic": false
-        },
-        {
-          "verb": "toggleAutobanPause",
-          "line": 9604,
-          "dynamic": false
-        },
-        {
-          "verb": "setWhenSchedule",
           "line": 9608,
           "dynamic": false
         },
         {
+          "verb": "toggleAutobanPause",
+          "line": 9612,
+          "dynamic": false
+        },
+        {
+          "verb": "setWhenSchedule",
+          "line": 9616,
+          "dynamic": false
+        },
+        {
           "verb": "setPairProgrammingMode",
-          "line": 9614,
+          "line": 9622,
           "dynamic": false
         },
         {
           "verb": "getRemoteConfig",
-          "line": 9625,
-          "dynamic": false
-        },
-        {
-          "verb": "setRemoteConfig",
           "line": 9633,
           "dynamic": false
         },
         {
-          "verb": "runNotionRemoteSetup",
+          "verb": "setRemoteConfig",
           "line": 9641,
           "dynamic": false
         },
         {
+          "verb": "runNotionRemoteSetup",
+          "line": 9649,
+          "dynamic": false
+        },
+        {
           "verb": "startRemoteControl",
-          "line": 9650,
-          "dynamic": false
-        },
-        {
-          "verb": "stopRemoteControl",
-          "line": 9654,
-          "dynamic": false
-        },
-        {
-          "verb": "triggerAction",
           "line": 9658,
           "dynamic": false
         },
         {
+          "verb": "stopRemoteControl",
+          "line": 9662,
+          "dynamic": false
+        },
+        {
+          "verb": "triggerAction",
+          "line": 9666,
+          "dynamic": false
+        },
+        {
           "verb": "triggerBatchAction",
-          "line": 9929,
+          "line": 9937,
           "dynamic": false
         },
         {
           "verb": "moveCardBackwards",
-          "line": 10013,
+          "line": 10021,
           "dynamic": false
         },
         {
           "verb": "moveCardForward",
-          "line": 10031,
+          "line": 10039,
           "dynamic": false
         },
         {
           "verb": "openSetupPanel",
-          "line": 10049,
+          "line": 10057,
           "dynamic": false
         },
         {
           "verb": "saveIntegrationAutoPullSettings",
-          "line": 10055,
+          "line": 10063,
           "dynamic": false
         },
         {
           "verb": "setWorkspaceOverride",
-          "line": 10105,
+          "line": 10113,
           "dynamic": false
         },
         {
           "verb": "setProjectOverride",
-          "line": 10126,
+          "line": 10134,
           "dynamic": false
         },
         {
           "verb": "toggleCliTriggers",
-          "line": 10161,
+          "line": 10169,
           "dynamic": false
         },
         {
           "verb": "setFeatureWorkflowMode",
-          "line": 10166,
+          "line": 10174,
           "dynamic": false
         },
         {
           "verb": "toggleDynamicComplexityRouting",
-          "line": 10192,
+          "line": 10200,
           "dynamic": false
         },
         {
           "verb": "toggleCollapseCoders",
-          "line": 10204,
+          "line": 10212,
           "dynamic": false
         },
         {
           "verb": "toggleAllowUnknownComplexityAutoMove",
-          "line": 10220,
+          "line": 10228,
           "dynamic": false
         },
         {
           "verb": "toggleClearTerminalBeforePrompt",
-          "line": 10232,
+          "line": 10240,
           "dynamic": false
         },
         {
           "verb": "updateClearTerminalBeforePromptDelay",
-          "line": 10250,
+          "line": 10258,
           "dynamic": false
         },
         {
           "verb": "updateRoutingConfig",
-          "line": 10267,
+          "line": 10275,
           "dynamic": false
         },
         {
           "verb": "setColumnDragDropMode",
-          "line": 10273,
+          "line": 10281,
           "dynamic": false
         },
         {
           "verb": "recoverSelected",
-          "line": 10283,
+          "line": 10291,
           "dynamic": false
         },
         {
           "verb": "archiveSelected",
-          "line": 10300,
+          "line": 10308,
           "dynamic": false
         },
         {
           "verb": "recoverAll",
-          "line": 10409,
+          "line": 10417,
           "dynamic": false
         },
         {
           "verb": "showInfo",
-          "line": 10439,
-          "dynamic": false
-        },
-        {
-          "verb": "showWarning",
           "line": 10447,
           "dynamic": false
         },
         {
+          "verb": "showWarning",
+          "line": 10455,
+          "dynamic": false
+        },
+        {
           "verb": "promptOnDrop",
-          "line": 10456,
+          "line": 10464,
           "dynamic": false
         },
         {
           "verb": "batchPlannerPrompt",
-          "line": 10616,
+          "line": 10624,
           "dynamic": false
         },
         {
           "verb": "batchDispatchLow",
-          "line": 10636,
-          "dynamic": false
-        },
-        {
-          "verb": "batchLowComplexity",
           "line": 10644,
           "dynamic": false
         },
         {
+          "verb": "batchLowComplexity",
+          "line": 10652,
+          "dynamic": false
+        },
+        {
           "verb": "julesLowComplexity",
-          "line": 10665,
+          "line": 10673,
           "dynamic": false
         },
         {
           "verb": "moveSelected",
-          "line": 10694,
+          "line": 10702,
           "dynamic": false
         },
         {
           "verb": "moveAll",
-          "line": 10829,
+          "line": 10837,
           "dynamic": false
         },
         {
           "verb": "chatCopyPrompt",
-          "line": 10971,
+          "line": 10979,
           "dynamic": false
         },
         {
           "verb": "copyChatWorkflow",
-          "line": 11005,
-          "dynamic": false
-        },
-        {
-          "verb": "promptSelected",
           "line": 11013,
           "dynamic": false
         },
         {
+          "verb": "promptSelected",
+          "line": 11021,
+          "dynamic": false
+        },
+        {
           "verb": "promptAll",
-          "line": 11138,
+          "line": 11146,
           "dynamic": false
         },
         {
           "verb": "attributePastedPrompt",
-          "line": 11251,
+          "line": 11259,
           "dynamic": false
         },
         {
           "verb": "watchFeature",
-          "line": 11334,
+          "line": 11342,
           "dynamic": false
         },
         {
           "verb": "unwatchFeature",
-          "line": 11381,
+          "line": 11390,
           "dynamic": false
         },
         {
           "verb": "julesSelected",
-          "line": 11414,
+          "line": 11423,
           "dynamic": false
         },
         {
           "verb": "phoneAFriendSelected",
-          "line": 11436,
+          "line": 11445,
           "dynamic": false
         },
         {
           "verb": "completePlan",
-          "line": 11511,
+          "line": 11520,
           "dynamic": false
         },
         {
           "verb": "completeSelected",
-          "line": 11541,
+          "line": 11550,
           "dynamic": false
         },
         {
           "verb": "completeAll",
-          "line": 11575,
+          "line": 11584,
           "dynamic": false
         },
         {
           "verb": "uncompleteCard",
-          "line": 11618,
+          "line": 11627,
           "dynamic": false
         },
         {
           "verb": "reviewPlan",
-          "line": 11683,
+          "line": 11692,
           "dynamic": false
         },
         {
           "verb": "pauseLiveSync",
-          "line": 11736,
+          "line": 11745,
           "dynamic": false
         },
         {
           "verb": "resumeLiveSync",
-          "line": 11741,
-          "dynamic": false
-        },
-        {
-          "verb": "copyPlanLink",
           "line": 11750,
           "dynamic": false
         },
         {
-          "verb": "improvePlan",
+          "verb": "copyPlanLink",
           "line": 11759,
           "dynamic": false
         },
         {
+          "verb": "improvePlan",
+          "line": 11768,
+          "dynamic": false
+        },
+        {
           "verb": "createPlan",
-          "line": 11812,
+          "line": 11821,
           "dynamic": false
         },
         {
           "verb": "toggleBacklogView",
-          "line": 11833,
+          "line": 11842,
           "dynamic": false
         },
         {
           "verb": "sendToBacklog",
-          "line": 11838,
-          "dynamic": false
-        },
-        {
-          "verb": "sendToNew",
           "line": 11847,
           "dynamic": false
         },
         {
-          "verb": "sendToPlanned",
+          "verb": "sendToNew",
           "line": 11856,
           "dynamic": false
         },
         {
-          "verb": "dispatchAnalyze",
+          "verb": "sendToPlanned",
           "line": 11865,
           "dynamic": false
         },
         {
+          "verb": "dispatchAnalyze",
+          "line": 11874,
+          "dynamic": false
+        },
+        {
           "verb": "stageForQueue",
-          "line": 11906,
+          "line": 11915,
           "dynamic": false
         },
         {
           "verb": "reorderQueue",
-          "line": 11927,
+          "line": 11936,
           "dynamic": false
         },
         {
           "verb": "runQueue",
-          "line": 11940,
+          "line": 11949,
           "dynamic": false
         },
         {
           "verb": "importFromClipboard",
-          "line": 12049,
+          "line": 12058,
           "dynamic": false
         },
         {
           "verb": "copyDispatchPromptSelected",
-          "line": 12052,
+          "line": 12061,
           "dynamic": false
         },
         {
           "verb": "codeMapConfirm",
-          "line": 12113,
+          "line": 12122,
           "dynamic": false
         },
         {
           "verb": "codeMapSelected",
-          "line": 12126,
+          "line": 12135,
           "dynamic": false
         },
         {
           "verb": "getDbPath",
-          "line": 12151,
+          "line": 12160,
           "dynamic": false
         },
         {
           "verb": "testingFailed",
-          "line": 12156,
+          "line": 12165,
           "dynamic": false
         },
         {
           "verb": "addCoderTerminal",
-          "line": 12245,
+          "line": 12254,
           "dynamic": false
         },
         {
           "verb": "focusTerminal",
-          "line": 12267,
+          "line": 12276,
           "dynamic": false
         },
         {
           "verb": "getStartupCommands",
-          "line": 12285,
+          "line": 12294,
           "dynamic": false
         },
         {
           "verb": "saveStartupCommands",
-          "line": 12292,
+          "line": 12301,
           "dynamic": false
         },
         {
           "verb": "getPromptsConfig",
-          "line": 12315,
+          "line": 12324,
           "dynamic": false
         },
         {
           "verb": "savePromptsConfig",
-          "line": 12322,
+          "line": 12331,
           "dynamic": false
         },
         {
           "verb": "getDefaultPromptOverrides",
-          "line": 12328,
+          "line": 12337,
           "dynamic": false
         },
         {
           "verb": "saveDefaultPromptOverrides",
-          "line": 12335,
+          "line": 12344,
           "dynamic": false
         },
         {
           "verb": "fileExists",
-          "line": 12341,
+          "line": 12350,
           "dynamic": false
         },
         {
           "verb": "saveSetting",
-          "line": 12364,
+          "line": 12373,
           "dynamic": false
         },
         {
           "verb": "getSetting",
-          "line": 12407,
+          "line": 12416,
           "dynamic": false
         },
         {
           "verb": "getDefaultPromptPreviews",
-          "line": 12426,
+          "line": 12435,
           "dynamic": false
         },
         {
           "verb": "getPromptPreview",
-          "line": 12433,
+          "line": 12442,
           "dynamic": false
         },
         {
           "verb": "planner",
-          "line": 12459,
+          "line": 12468,
           "dynamic": false
         },
         {
           "verb": "lead",
-          "line": 12461,
+          "line": 12470,
           "dynamic": false
         },
         {
           "verb": "coder",
-          "line": 12462,
+          "line": 12471,
           "dynamic": false
         },
         {
           "verb": "intern",
-          "line": 12463,
-          "dynamic": false
-        },
-        {
-          "verb": "reviewer",
           "line": 12472,
           "dynamic": false
         },
         {
+          "verb": "reviewer",
+          "line": 12481,
+          "dynamic": false
+        },
+        {
           "verb": "tester",
-          "line": 12474,
+          "line": 12483,
           "dynamic": false
         },
         {
           "verb": "generateAntigravityPrompt",
-          "line": 12500,
+          "line": 12509,
           "dynamic": false
         },
         {
           "verb": "externalAutomationPrompt",
-          "line": 12515,
+          "line": 12524,
           "dynamic": false
         },
         {
           "verb": "getPersonaForRole",
-          "line": 12529,
+          "line": 12538,
           "dynamic": false
         },
         {
           "verb": "copyGatherPrompt",
-          "line": 12544,
+          "line": 12553,
           "dynamic": false
         },
         {
           "verb": "copyExecutePrompt",
-          "line": 12564,
+          "line": 12573,
           "dynamic": false
         },
         {
           "verb": "getKanbanStructure",
-          "line": 12583,
+          "line": 12592,
           "dynamic": false
         },
         {
           "verb": "getBoardCards",
-          "line": 12597,
+          "line": 12606,
           "dynamic": false
         },
         {
           "verb": "getAutoArchiveConfig",
-          "line": 12647,
+          "line": 12656,
           "dynamic": false
         },
         {
           "verb": "saveAutoArchiveConfig",
-          "line": 12652,
+          "line": 12661,
           "dynamic": false
         },
         {
           "verb": "updateKanbanStructure",
-          "line": 12657,
+          "line": 12666,
           "dynamic": false
         },
         {
           "verb": "saveKanbanColumn",
-          "line": 12668,
+          "line": 12677,
           "dynamic": false
         },
         {
           "verb": "deleteKanbanColumn",
-          "line": 12680,
+          "line": 12689,
           "dynamic": false
         },
         {
           "verb": "restoreKanbanDefaults",
-          "line": 12692,
+          "line": 12701,
           "dynamic": false
         },
         {
           "verb": "toggleKanbanColumnVisibility",
-          "line": 12704,
+          "line": 12713,
           "dynamic": false
         },
         {
           "verb": "exportAgentAsSkill",
-          "line": 12716,
+          "line": 12725,
           "dynamic": false
         },
         {
           "verb": "saveCustomAgent",
-          "line": 12750,
+          "line": 12759,
           "dynamic": false
         },
         {
           "verb": "deleteCustomAgent",
-          "line": 12766,
+          "line": 12775,
           "dynamic": false
         },
         {
           "verb": "getCustomAgents",
-          "line": 12782,
+          "line": 12791,
           "dynamic": false
         },
         {
           "verb": "getAgentGroups",
-          "line": 12797,
+          "line": 12806,
           "dynamic": false
         },
         {
           "verb": "getIconPalette",
-          "line": 12812,
+          "line": 12821,
           "dynamic": false
         },
         {
           "verb": "getStandingOrders",
-          "line": 12829,
+          "line": 12838,
           "dynamic": false
         },
         {
           "verb": "addStandingOrder",
-          "line": 12871,
+          "line": 12880,
           "dynamic": false
         },
         {
           "verb": "updateStandingOrder",
-          "line": 12928,
+          "line": 12937,
           "dynamic": false
         },
         {
           "verb": "deleteStandingOrder",
-          "line": 12983,
+          "line": 12992,
           "dynamic": false
         },
         {
           "verb": "saveAgentGroup",
-          "line": 13007,
+          "line": 13016,
           "dynamic": false
         },
         {
           "verb": "deleteAgentGroup",
-          "line": 13043,
+          "line": 13052,
           "dynamic": false
         },
         {
           "verb": "startAgentGroup",
-          "line": 13058,
+          "line": 13067,
           "dynamic": false
         },
         {
           "verb": "getUATData",
-          "line": 13093,
+          "line": 13102,
           "dynamic": false
         },
         {
           "verb": "setUATCheckState",
-          "line": 13158,
+          "line": 13167,
           "dynamic": false
         },
         {
           "verb": "getWorktreeConfig",
-          "line": 13176,
+          "line": 13185,
           "dynamic": false
         },
         {
           "verb": "getSafetySession",
-          "line": 13177,
+          "line": 13186,
           "dynamic": false
         },
         {
           "verb": "createWorktree",
-          "line": 13183,
+          "line": 13192,
           "dynamic": false
         },
         {
           "verb": "createWorktreeForFeature",
-          "line": 13217,
+          "line": 13226,
           "dynamic": false
         },
         {
           "verb": "createWorktreeForProject",
-          "line": 13254,
+          "line": 13263,
           "dynamic": false
         },
         {
           "verb": "toggleWorktreeAgentsOpenWithGrid",
-          "line": 13292,
+          "line": 13301,
           "dynamic": false
         },
         {
           "verb": "setSuppressMainTerminals",
-          "line": 13303,
+          "line": 13312,
           "dynamic": false
         },
         {
           "verb": "getFeatureWorktreeMode",
-          "line": 13314,
+          "line": 13323,
           "dynamic": false
         },
         {
           "verb": "setFeatureWorktreeMode",
-          "line": 13320,
+          "line": 13329,
           "dynamic": false
         },
         {
           "verb": "openWorktreeTerminals",
-          "line": 13336,
+          "line": 13345,
           "dynamic": false
         },
         {
           "verb": "copyWorktreeMergePrompt",
-          "line": 13360,
+          "line": 13369,
           "dynamic": false
         },
         {
           "verb": "cleanupWorktree",
-          "line": 13421,
+          "line": 13430,
           "dynamic": false
         },
         {
           "verb": "abandonWorktree",
-          "line": 13428,
+          "line": 13437,
           "dynamic": false
         },
         {
           "verb": "getWorktreeStatuses",
-          "line": 13454,
+          "line": 13463,
           "dynamic": false
         },
         {
           "verb": "addSubtaskToFeature",
-          "line": 13469,
+          "line": 13478,
           "dynamic": false
         },
         {
           "verb": "promoteToFeature",
-          "line": 13502,
+          "line": 13511,
           "dynamic": false
         },
         {
           "verb": "createFeature",
-          "line": 13577,
+          "line": 13586,
           "dynamic": false
         },
         {
           "verb": "suggestFeatures",
-          "line": 13596,
+          "line": 13605,
           "dynamic": false
         },
         {
           "verb": "dispatchProjectManager",
-          "line": 13620,
+          "line": 13629,
           "dynamic": false
         },
         {
           "verb": "removeSubtaskFromFeature",
-          "line": 13644,
+          "line": 13653,
           "dynamic": false
         },
         {
           "verb": "deleteFeature",
-          "line": 13652,
+          "line": 13661,
           "dynamic": false
         },
         {
           "verb": "getFeatureDetails",
-          "line": 13660,
+          "line": 13669,
           "dynamic": false
         },
         {
           "verb": "updateFeatureConfig",
-          "line": 13680,
+          "line": 13689,
           "dynamic": false
         }
       ]
@@ -2710,552 +2710,552 @@
       "arms": [
         {
           "verb": "ready",
-          "line": 14007,
+          "line": 14138,
           "dynamic": false
         },
         {
           "verb": "runSetup",
-          "line": 14056,
+          "line": 14187,
           "dynamic": false
         },
         {
           "verb": "runSetupIDEs",
-          "line": 14059,
+          "line": 14190,
           "dynamic": false
         },
         {
           "verb": "dispatchProjectManager",
-          "line": 14062,
+          "line": 14193,
           "dynamic": false
         },
         {
           "verb": "openKanban",
-          "line": 14083,
+          "line": 14214,
           "dynamic": false
         },
         {
           "verb": "openPlanningPanel",
-          "line": 14086,
+          "line": 14217,
           "dynamic": false
         },
         {
           "verb": "openDesignPanel",
-          "line": 14089,
+          "line": 14220,
           "dynamic": false
         },
         {
           "verb": "openSetupPanel",
-          "line": 14092,
+          "line": 14223,
           "dynamic": false
         },
         {
           "verb": "openProjectPanel",
-          "line": 14095,
+          "line": 14226,
           "dynamic": false
         },
         {
           "verb": "openInBrowser",
-          "line": 14098,
+          "line": 14229,
           "dynamic": false
         },
         {
           "verb": "jobsList",
-          "line": 14101,
+          "line": 14232,
           "dynamic": false
         },
         {
           "verb": "jobsInboxList",
-          "line": 14135,
+          "line": 14266,
           "dynamic": false
         },
         {
           "verb": "jobsMovesList",
-          "line": 14143,
+          "line": 14274,
           "dynamic": false
         },
         {
           "verb": "jobsDropInstruction",
-          "line": 14150,
+          "line": 14281,
           "dynamic": false
         },
         {
           "verb": "jobsClearStuckClaim",
-          "line": 14163,
+          "line": 14294,
           "dynamic": false
         },
         {
           "verb": "jobsRefresh",
-          "line": 14185,
+          "line": 14316,
           "dynamic": false
         },
         {
           "verb": "linearLoadProject",
-          "line": 14192,
+          "line": 14323,
           "dynamic": false
         },
         {
           "verb": "linearLoadProjects",
-          "line": 14250,
+          "line": 14381,
           "dynamic": false
         },
         {
           "verb": "linearLoadTaskDetails",
-          "line": 14292,
+          "line": 14423,
           "dynamic": false
         },
         {
           "verb": "linearImportTask",
-          "line": 14364,
+          "line": 14495,
           "dynamic": false
         },
         {
           "verb": "clickupImportTask",
-          "line": 14389,
+          "line": 14520,
           "dynamic": false
         },
         {
           "verb": "linearImportAndSendToPlanner",
-          "line": 14414,
+          "line": 14545,
           "dynamic": false
         },
         {
           "verb": "clickupLoadProject",
-          "line": 14479,
+          "line": 14610,
           "dynamic": false
         },
         {
           "verb": "clickupLoadSpaces",
-          "line": 14548,
+          "line": 14679,
           "dynamic": false
         },
         {
           "verb": "clickupLoadFolders",
-          "line": 14577,
+          "line": 14708,
           "dynamic": false
         },
         {
           "verb": "clickupLoadLists",
-          "line": 14609,
+          "line": 14740,
           "dynamic": false
         },
         {
           "verb": "clickupSaveListSelection",
-          "line": 14640,
+          "line": 14771,
           "dynamic": false
         },
         {
           "verb": "clickupSaveSpaceSelection",
-          "line": 14662,
+          "line": 14793,
           "dynamic": false
         },
         {
           "verb": "clickupSaveFolderSelection",
-          "line": 14685,
+          "line": 14816,
           "dynamic": false
         },
         {
           "verb": "linearSaveProjectSelection",
-          "line": 14707,
+          "line": 14838,
           "dynamic": false
         },
         {
           "verb": "clickupLoadTaskDetails",
-          "line": 14725,
+          "line": 14856,
           "dynamic": false
         },
         {
           "verb": "linearUpdateIssueLabels",
-          "line": 14775,
+          "line": 14906,
           "dynamic": false
         },
         {
           "verb": "clickupUpdateTaskTags",
-          "line": 14813,
+          "line": 14944,
           "dynamic": false
         },
         {
           "verb": "linearLoadAutomationCatalog",
-          "line": 14852,
+          "line": 14983,
           "dynamic": false
         },
         {
           "verb": "clickupLoadSpaceTags",
-          "line": 14875,
+          "line": 15006,
           "dynamic": false
         },
         {
           "verb": "copyTextToClipboard",
-          "line": 14900,
-          "dynamic": false
-        },
-        {
-          "verb": "showInfo",
-          "line": 14912,
-          "dynamic": false
-        },
-        {
-          "verb": "showWarning",
-          "line": 14917,
-          "dynamic": false
-        },
-        {
-          "verb": "initializeProtocols",
-          "line": 14922,
-          "dynamic": false
-        },
-        {
-          "verb": "finishOnboarding",
-          "line": 14925,
-          "dynamic": false
-        },
-        {
-          "verb": "scaffoldMultiRepo",
-          "line": 14928,
-          "dynamic": false
-        },
-        {
-          "verb": "openExternalUrl",
-          "line": 14954,
-          "dynamic": false
-        },
-        {
-          "verb": "openDocs",
-          "line": 14961,
-          "dynamic": false
-        },
-        {
-          "verb": "toggleSilentSetup",
-          "line": 14966,
-          "dynamic": false
-        },
-        {
-          "verb": "setTerminalRole",
-          "line": 14972,
-          "dynamic": false
-        },
-        {
-          "verb": "focusTerminal",
-          "line": 14977,
-          "dynamic": false
-        },
-        {
-          "verb": "focus",
-          "line": 14978,
-          "dynamic": false
-        },
-        {
-          "verb": "closeTerminal",
-          "line": 14988,
-          "dynamic": false
-        },
-        {
-          "verb": "executeRemote",
-          "line": 14993,
-          "dynamic": false
-        },
-        {
-          "verb": "executeLocal",
-          "line": 14998,
-          "dynamic": false
-        },
-        {
-          "verb": "renameTerminal",
-          "line": 15003,
-          "dynamic": false
-        },
-        {
-          "verb": "requestContextFile",
-          "line": 15008,
-          "dynamic": false
-        },
-        {
-          "verb": "registerAllTerminals",
-          "line": 15013,
-          "dynamic": false
-        },
-        {
-          "verb": "deregisterAllTerminals",
-          "line": 15016,
-          "dynamic": false
-        },
-        {
-          "verb": "createAgentGrid",
-          "line": 15019,
-          "dynamic": false
-        },
-        {
-          "verb": "createAgentGridEditor",
-          "line": 15028,
-          "dynamic": false
-        },
-        {
-          "verb": "openTerminalGrid",
           "line": 15031,
           "dynamic": false
         },
         {
-          "verb": "closeChatAgent",
-          "line": 15034,
+          "verb": "showInfo",
+          "line": 15043,
           "dynamic": false
         },
         {
-          "verb": "setChatAgentRole",
-          "line": 15039,
+          "verb": "showWarning",
+          "line": 15048,
           "dynamic": false
         },
         {
-          "verb": "triggerAgentAction",
-          "line": 15045,
+          "verb": "initializeProtocols",
+          "line": 15053,
           "dynamic": false
         },
         {
-          "verb": "sendAnalystMessage",
-          "line": 15050,
+          "verb": "finishOnboarding",
+          "line": 15056,
           "dynamic": false
         },
         {
-          "verb": "generateContextMap",
+          "verb": "scaffoldMultiRepo",
           "line": 15059,
           "dynamic": false
         },
         {
-          "verb": "reviewPlan",
-          "line": 15063,
-          "dynamic": false
-        },
-        {
-          "verb": "viewPlan",
+          "verb": "openExternalUrl",
           "line": 15085,
           "dynamic": false
         },
         {
+          "verb": "openDocs",
+          "line": 15092,
+          "dynamic": false
+        },
+        {
+          "verb": "toggleSilentSetup",
+          "line": 15097,
+          "dynamic": false
+        },
+        {
+          "verb": "setTerminalRole",
+          "line": 15103,
+          "dynamic": false
+        },
+        {
+          "verb": "focusTerminal",
+          "line": 15108,
+          "dynamic": false
+        },
+        {
+          "verb": "focus",
+          "line": 15109,
+          "dynamic": false
+        },
+        {
+          "verb": "closeTerminal",
+          "line": 15119,
+          "dynamic": false
+        },
+        {
+          "verb": "executeRemote",
+          "line": 15124,
+          "dynamic": false
+        },
+        {
+          "verb": "executeLocal",
+          "line": 15129,
+          "dynamic": false
+        },
+        {
+          "verb": "renameTerminal",
+          "line": 15134,
+          "dynamic": false
+        },
+        {
+          "verb": "requestContextFile",
+          "line": 15139,
+          "dynamic": false
+        },
+        {
+          "verb": "registerAllTerminals",
+          "line": 15144,
+          "dynamic": false
+        },
+        {
+          "verb": "deregisterAllTerminals",
+          "line": 15147,
+          "dynamic": false
+        },
+        {
+          "verb": "createAgentGrid",
+          "line": 15150,
+          "dynamic": false
+        },
+        {
+          "verb": "createAgentGridEditor",
+          "line": 15159,
+          "dynamic": false
+        },
+        {
+          "verb": "openTerminalGrid",
+          "line": 15162,
+          "dynamic": false
+        },
+        {
+          "verb": "closeChatAgent",
+          "line": 15165,
+          "dynamic": false
+        },
+        {
+          "verb": "setChatAgentRole",
+          "line": 15170,
+          "dynamic": false
+        },
+        {
+          "verb": "triggerAgentAction",
+          "line": 15176,
+          "dynamic": false
+        },
+        {
+          "verb": "sendAnalystMessage",
+          "line": 15181,
+          "dynamic": false
+        },
+        {
+          "verb": "generateContextMap",
+          "line": 15190,
+          "dynamic": false
+        },
+        {
+          "verb": "reviewPlan",
+          "line": 15194,
+          "dynamic": false
+        },
+        {
+          "verb": "viewPlan",
+          "line": 15216,
+          "dynamic": false
+        },
+        {
           "verb": "copyPlanLink",
-          "line": 15098,
-          "dynamic": false
-        },
-        {
-          "verb": "deletePlan",
-          "line": 15105,
-          "dynamic": false
-        },
-        {
-          "verb": "importPlans",
-          "line": 15110,
-          "dynamic": false
-        },
-        {
-          "verb": "completePlan",
-          "line": 15113,
-          "dynamic": false
-        },
-        {
-          "verb": "recoverPlanFromSidebar",
-          "line": 15118,
-          "dynamic": false
-        },
-        {
-          "verb": "claimPlan",
-          "line": 15123,
-          "dynamic": false
-        },
-        {
-          "verb": "createDraftPlanTicket",
-          "line": 15128,
-          "dynamic": false
-        },
-        {
-          "verb": "getRecoverablePlans",
-          "line": 15131,
-          "dynamic": false
-        },
-        {
-          "verb": "restorePlan",
-          "line": 15136,
-          "dynamic": false
-        },
-        {
-          "verb": "saveStartupCommands",
-          "line": 15148,
-          "dynamic": false
-        },
-        {
-          "verb": "fetchNotionContent",
-          "line": 15151,
-          "dynamic": false
-        },
-        {
-          "verb": "getNotionFetchState",
-          "line": 15186,
-          "dynamic": false
-        },
-        {
-          "verb": "getStartupCommands",
-          "line": 15209,
-          "dynamic": false
-        },
-        {
-          "verb": "getVisibleAgents",
-          "line": 15214,
-          "dynamic": false
-        },
-        {
-          "verb": "getAccurateCodingSetting",
-          "line": 15219,
-          "dynamic": false
-        },
-        {
-          "verb": "getAdvancedReviewerSetting",
-          "line": 15224,
-          "dynamic": false
-        },
-        {
-          "verb": "getLeadChallengeSetting",
           "line": 15229,
           "dynamic": false
         },
         {
-          "verb": "getJulesAutoSyncSetting",
-          "line": 15234,
+          "verb": "deletePlan",
+          "line": 15236,
           "dynamic": false
         },
         {
-          "verb": "getDefaultPromptOverrides",
-          "line": 15239,
+          "verb": "importPlans",
+          "line": 15241,
           "dynamic": false
         },
         {
-          "verb": "saveDefaultPromptOverrides",
+          "verb": "completePlan",
           "line": 15244,
           "dynamic": false
         },
         {
+          "verb": "recoverPlanFromSidebar",
+          "line": 15249,
+          "dynamic": false
+        },
+        {
+          "verb": "claimPlan",
+          "line": 15254,
+          "dynamic": false
+        },
+        {
+          "verb": "createDraftPlanTicket",
+          "line": 15259,
+          "dynamic": false
+        },
+        {
+          "verb": "getRecoverablePlans",
+          "line": 15262,
+          "dynamic": false
+        },
+        {
+          "verb": "restorePlan",
+          "line": 15267,
+          "dynamic": false
+        },
+        {
+          "verb": "saveStartupCommands",
+          "line": 15279,
+          "dynamic": false
+        },
+        {
+          "verb": "fetchNotionContent",
+          "line": 15282,
+          "dynamic": false
+        },
+        {
+          "verb": "getNotionFetchState",
+          "line": 15317,
+          "dynamic": false
+        },
+        {
+          "verb": "getStartupCommands",
+          "line": 15340,
+          "dynamic": false
+        },
+        {
+          "verb": "getVisibleAgents",
+          "line": 15345,
+          "dynamic": false
+        },
+        {
+          "verb": "getAccurateCodingSetting",
+          "line": 15350,
+          "dynamic": false
+        },
+        {
+          "verb": "getAdvancedReviewerSetting",
+          "line": 15355,
+          "dynamic": false
+        },
+        {
+          "verb": "getLeadChallengeSetting",
+          "line": 15360,
+          "dynamic": false
+        },
+        {
+          "verb": "getJulesAutoSyncSetting",
+          "line": 15365,
+          "dynamic": false
+        },
+        {
+          "verb": "getDefaultPromptOverrides",
+          "line": 15370,
+          "dynamic": false
+        },
+        {
+          "verb": "saveDefaultPromptOverrides",
+          "line": 15375,
+          "dynamic": false
+        },
+        {
           "verb": "getDefaultPromptPreviews",
-          "line": 15248,
+          "line": 15379,
           "dynamic": false
         },
         {
           "verb": "memoListWorkspaces",
-          "line": 15253,
+          "line": 15384,
           "dynamic": false
         },
         {
           "verb": "setActiveTab",
-          "line": 15263,
+          "line": 15394,
           "dynamic": false
         },
         {
           "verb": "setActiveSubTab",
-          "line": 15268,
+          "line": 15399,
           "dynamic": false
         },
         {
           "verb": "memoLoad",
-          "line": 15274,
+          "line": 15405,
           "dynamic": false
         },
         {
           "verb": "memoSave",
-          "line": 15289,
+          "line": 15420,
           "dynamic": false
         },
         {
           "verb": "memoClear",
-          "line": 15303,
-          "dynamic": false
-        },
-        {
-          "verb": "memoGeneratePrompt",
-          "line": 15313,
-          "dynamic": false
-        },
-        {
-          "verb": "getRecentActivity",
-          "line": 15400,
-          "dynamic": false
-        },
-        {
-          "verb": "updateAutobanState",
-          "line": 15406,
-          "dynamic": false
-        },
-        {
-          "verb": "pipelineStart",
-          "line": 15427,
-          "dynamic": false
-        },
-        {
-          "verb": "pipelineStop",
           "line": 15434,
           "dynamic": false
         },
         {
+          "verb": "memoGeneratePrompt",
+          "line": 15444,
+          "dynamic": false
+        },
+        {
+          "verb": "getRecentActivity",
+          "line": 15531,
+          "dynamic": false
+        },
+        {
+          "verb": "updateAutobanState",
+          "line": 15537,
+          "dynamic": false
+        },
+        {
+          "verb": "pipelineStart",
+          "line": 15558,
+          "dynamic": false
+        },
+        {
+          "verb": "pipelineStop",
+          "line": 15565,
+          "dynamic": false
+        },
+        {
           "verb": "pipelinePause",
-          "line": 15437,
+          "line": 15568,
           "dynamic": false
         },
         {
           "verb": "pipelineUnpause",
-          "line": 15440,
+          "line": 15571,
           "dynamic": false
         },
         {
           "verb": "pipelineSetInterval",
-          "line": 15443,
+          "line": 15574,
           "dynamic": false
         },
         {
           "verb": "airlock_sendToCoder",
-          "line": 15448,
+          "line": 15579,
           "dynamic": false
         },
         {
           "verb": "airlock_syncRepo",
-          "line": 15453,
+          "line": 15584,
           "dynamic": false
         },
         {
           "verb": "kanban_workflowEvent",
-          "line": 15456,
+          "line": 15587,
           "dynamic": false
         },
         {
           "verb": "getDbPath",
-          "line": 15461,
+          "line": 15592,
           "dynamic": false
         },
         {
           "verb": "setLocalDb",
-          "line": 15466,
+          "line": 15597,
           "dynamic": false
         },
         {
           "verb": "editDbPath",
-          "line": 15470,
+          "line": 15601,
           "dynamic": false
         },
         {
           "verb": "testDbConnection",
-          "line": 15513,
+          "line": 15644,
           "dynamic": false
         },
         {
           "verb": "setCustomDbPath",
-          "line": 15538,
+          "line": 15669,
           "dynamic": false
         },
         {
           "verb": "setPresetDbPath",
-          "line": 15542,
+          "line": 15673,
           "dynamic": false
         },
         {
           "verb": "resetDatabase",
-          "line": 15546,
+          "line": 15677,
           "dynamic": false
         },
         {
           "verb": "sendToTerminal",
-          "line": 15550,
+          "line": 15681,
           "dynamic": false
         }
       ]
@@ -8630,6 +8630,13 @@
       ],
       "siteCount": 1
     },
+    "getSchedulerConfig": {
+      "payloadKeys": [
+        "type",
+        "workspaceRoot"
+      ],
+      "siteCount": 1
+    },
     "getStartupCommands": {
       "payloadKeys": [
         "type"
@@ -9178,6 +9185,142 @@
       "payloadKeys": "dynamic",
       "siteCount": 2
     },
+    "mcAddMissionMember": {
+      "payloadKeys": [
+        "type",
+        "missionId"
+      ],
+      "siteCount": 1
+    },
+    "mcControllerAck": {
+      "payloadKeys": [
+        "type"
+      ],
+      "siteCount": 1
+    },
+    "mcControllerRestart": {
+      "payloadKeys": [
+        "type",
+        "seat"
+      ],
+      "siteCount": 1
+    },
+    "mcControllerStop": {
+      "payloadKeys": [
+        "type"
+      ],
+      "siteCount": 1
+    },
+    "mcDeleteMission": {
+      "payloadKeys": [
+        "type",
+        "missionId"
+      ],
+      "siteCount": 1
+    },
+    "mcDeleteSchedule": {
+      "payloadKeys": [
+        "type",
+        "scheduleId"
+      ],
+      "siteCount": 1
+    },
+    "mcInit": {
+      "payloadKeys": [
+        "type",
+        "workspaceRoot"
+      ],
+      "siteCount": 1
+    },
+    "mcLaunchMission": {
+      "payloadKeys": [
+        "type",
+        "missionId"
+      ],
+      "siteCount": 1
+    },
+    "mcNewMission": {
+      "payloadKeys": [
+        "type"
+      ],
+      "siteCount": 1
+    },
+    "mcNewSchedule": {
+      "payloadKeys": [
+        "type"
+      ],
+      "siteCount": 1
+    },
+    "mcReadyMission": {
+      "payloadKeys": [
+        "type",
+        "missionId"
+      ],
+      "siteCount": 1
+    },
+    "mcRemoveMissionMember": {
+      "payloadKeys": [
+        "type",
+        "missionId",
+        "kind",
+        "name"
+      ],
+      "siteCount": 1
+    },
+    "mcScheduleExternalCopy": {
+      "payloadKeys": [
+        "type",
+        "scheduleId",
+        "prompt"
+      ],
+      "siteCount": 3
+    },
+    "mcScheduleLoadLog": {
+      "payloadKeys": [
+        "type",
+        "scheduleId"
+      ],
+      "siteCount": 1
+    },
+    "mcStartSchedule": {
+      "payloadKeys": [
+        "type",
+        "scheduleId"
+      ],
+      "siteCount": 1
+    },
+    "mcStopMission": {
+      "payloadKeys": [
+        "type",
+        "missionId"
+      ],
+      "siteCount": 1
+    },
+    "mcStopSchedule": {
+      "payloadKeys": [
+        "type",
+        "scheduleId"
+      ],
+      "siteCount": 1
+    },
+    "mcUpdateMission": {
+      "payloadKeys": [
+        "type",
+        "missionId",
+        "field",
+        "value"
+      ],
+      "siteCount": 1
+    },
+    "mcUpdateSchedule": {
+      "payloadKeys": [
+        "type",
+        "scheduleId",
+        "field",
+        "value"
+      ],
+      "siteCount": 1
+    },
     "memoClear": {
       "payloadKeys": [
         "type",
@@ -9264,6 +9407,28 @@
     "mergePromptReady": {
       "payloadKeys": "dynamic",
       "siteCount": 2
+    },
+    "missionControlHandoff": {
+      "payloadKeys": [
+        "type",
+        "headTerminal",
+        "stagedCount",
+        "firstCardPlanId"
+      ],
+      "siteCount": 1
+    },
+    "missionControlStartResult": {
+      "payloadKeys": "dynamic",
+      "siteCount": 4
+    },
+    "missionControlState": {
+      "payloadKeys": [
+        "type",
+        "active",
+        "armed",
+        "seat"
+      ],
+      "siteCount": 1
     },
     "moveCards": {
       "payloadKeys": [
@@ -9422,28 +9587,6 @@
         "type"
       ],
       "siteCount": 2
-    },
-    "orchestrationHandoff": {
-      "payloadKeys": [
-        "type",
-        "headTerminal",
-        "stagedCount",
-        "firstCardPlanId"
-      ],
-      "siteCount": 1
-    },
-    "orchestratorStartResult": {
-      "payloadKeys": "dynamic",
-      "siteCount": 4
-    },
-    "orchestratorState": {
-      "payloadKeys": [
-        "type",
-        "active",
-        "armed",
-        "seat"
-      ],
-      "siteCount": 1
     },
     "panelVisibility": {
       "payloadKeys": [
@@ -10304,6 +10447,13 @@
       ],
       "siteCount": 1
     },
+    "setSchedulerConfig": {
+      "payloadKeys": [
+        "type",
+        "config"
+      ],
+      "siteCount": 1
+    },
     "setStatusShowArtifactsSetting": {
       "payloadKeys": [
         "type",
@@ -10818,6 +10968,12 @@
       ],
       "siteCount": 1
     },
+    "switchToController": {
+      "payloadKeys": [
+        "type"
+      ],
+      "siteCount": 1
+    },
     "switchToTab": {
       "payloadKeys": [
         "type",
@@ -11310,7 +11466,7 @@
       "verb": "updateColumns",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4004,
+      "line": 4005,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11322,7 +11478,7 @@
       "verb": "allowUnknownComplexityAutoMoveState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4081,
+      "line": 4082,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11334,7 +11490,7 @@
       "verb": "collapseCodersState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4085,
+      "line": 4086,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11346,7 +11502,7 @@
       "verb": "clearTerminalBeforePromptState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4089,
+      "line": 4090,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11359,7 +11515,7 @@
       "verb": "updateAgentNames",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4095,
+      "line": 4096,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11371,7 +11527,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4096,
+      "line": 4097,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11383,7 +11539,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4104,
+      "line": 4105,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11395,7 +11551,7 @@
       "verb": "updatePairProgrammingMode",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4105,
+      "line": 4106,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11407,7 +11563,7 @@
       "verb": "updateColumns",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4223,
+      "line": 4224,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11419,7 +11575,7 @@
       "verb": "allowUnknownComplexityAutoMoveState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4286,
+      "line": 4287,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11431,7 +11587,7 @@
       "verb": "collapseCodersState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4290,
+      "line": 4291,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11443,7 +11599,7 @@
       "verb": "updateAgentNames",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4294,
+      "line": 4295,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11455,7 +11611,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4295,
+      "line": 4296,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11467,7 +11623,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4303,
+      "line": 4304,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11479,7 +11635,7 @@
       "verb": "updatePairProgrammingMode",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4304,
+      "line": 4305,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11491,7 +11647,7 @@
       "verb": "featureWorkflowModeState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4759,
+      "line": 4760,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11505,7 +11661,7 @@
       "verb": "saveDefaultPromptOverridesResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5072,
+      "line": 5073,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11517,7 +11673,7 @@
       "verb": "saveDefaultPromptOverridesResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5075,
+      "line": 5076,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11529,7 +11685,7 @@
       "verb": "antigravityPrompt",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6529,
+      "line": 6540,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11542,7 +11698,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6857,
+      "line": 6868,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11555,7 +11711,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6860,
+      "line": 6871,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11567,7 +11723,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6876,
+      "line": 6887,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11580,7 +11736,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6899,
+      "line": 6910,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11593,7 +11749,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6902,
+      "line": 6913,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11605,7 +11761,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6957,
+      "line": 6968,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11618,7 +11774,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6963,
+      "line": 6974,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11631,7 +11787,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7273,
+      "line": 7284,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11644,7 +11800,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7575,
+      "line": 7583,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11656,7 +11812,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7586,
+      "line": 7594,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11668,7 +11824,7 @@
       "verb": "updatePairProgrammingMode",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7587,
+      "line": 7595,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11680,7 +11836,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8593,
+      "line": 8601,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11693,7 +11849,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8596,
+      "line": 8604,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11705,7 +11861,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8648,
+      "line": 8656,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11718,7 +11874,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8651,
+      "line": 8659,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11730,7 +11886,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9044,
+      "line": 9052,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11742,7 +11898,7 @@
       "verb": "switchToTab",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9047,
+      "line": 9055,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11754,20 +11910,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9403,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "message",
-        "isError"
-      ]
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9426,
+      "line": 9411,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11790,10 +11933,23 @@
       ]
     },
     {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9442,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "message",
+        "isError"
+      ]
+    },
+    {
       "verb": "updateSchedulerConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9555,
+      "line": 9563,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11805,7 +11961,7 @@
       "verb": "updateSchedulerConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9562,
+      "line": 9570,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11817,7 +11973,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9597,
+      "line": 9605,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11829,7 +11985,7 @@
       "verb": "notionRemoteSetupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9645,
+      "line": 9653,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": "dynamic"
@@ -11838,7 +11994,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9718,
+      "line": 9726,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11851,7 +12007,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9720,
+      "line": 9728,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11863,7 +12019,7 @@
       "verb": "dispatchFailedPromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9787,
+      "line": 9795,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11877,7 +12033,7 @@
       "verb": "dispatchFailedPromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9804,
+      "line": 9812,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11891,7 +12047,7 @@
       "verb": "dispatchFailedPromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9897,
+      "line": 9905,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11905,7 +12061,7 @@
       "verb": "dispatchFailedPromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9915,
+      "line": 9923,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11919,7 +12075,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9989,
+      "line": 9997,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11932,7 +12088,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9992,
+      "line": 10000,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11944,7 +12100,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10026,
+      "line": 10034,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11957,7 +12113,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10044,
+      "line": 10052,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11970,7 +12126,7 @@
       "verb": "featureWorkflowModeState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10189,
+      "line": 10197,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11984,7 +12140,7 @@
       "verb": "collapseCodersState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10218,
+      "line": 10226,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -11996,7 +12152,7 @@
       "verb": "clearTerminalBeforePromptState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10243,
+      "line": 10251,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12009,25 +12165,12 @@
       "verb": "clearTerminalBeforePromptDelayState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10262,
+      "line": 10270,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
         "type",
         "delay"
-      ]
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10443,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "message",
-        "isError"
       ]
     },
     {
@@ -12044,74 +12187,10 @@
       ]
     },
     {
-      "verb": "promptOnDropResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10473,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "sessionIds",
-        "success"
-      ]
-    },
-    {
-      "verb": "moveCards",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10502,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "sessionIds",
-        "targetColumn"
-      ]
-    },
-    {
-      "verb": "moveCardsFailed",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10505,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "failures"
-      ]
-    },
-    {
-      "verb": "promptOnDropResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10509,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "sessionIds",
-        "success"
-      ]
-    },
-    {
-      "verb": "promptOnDropResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10527,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "sessionIds",
-        "success"
-      ]
-    },
-    {
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10529,
+      "line": 10459,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12121,10 +12200,23 @@
       ]
     },
     {
+      "verb": "promptOnDropResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10481,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "sessionIds",
+        "success"
+      ]
+    },
+    {
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10567,
+      "line": 10510,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12137,32 +12229,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10570,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "failures"
-      ]
-    },
-    {
-      "verb": "moveCards",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10593,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "sessionIds",
-        "targetColumn"
-      ]
-    },
-    {
-      "verb": "moveCardsFailed",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10596,
+      "line": 10513,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12174,7 +12241,20 @@
       "verb": "promptOnDropResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10612,
+      "line": 10517,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "sessionIds",
+        "success"
+      ]
+    },
+    {
+      "verb": "promptOnDropResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10535,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12187,46 +12267,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10613,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "message",
-        "isError"
-      ]
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10633,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "message",
-        "isError"
-      ]
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10662,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "message",
-        "isError"
-      ]
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10691,
+      "line": 10537,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12239,7 +12280,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10734,
+      "line": 10575,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12252,7 +12293,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10737,
+      "line": 10578,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12261,36 +12302,10 @@
       ]
     },
     {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10750,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "message",
-        "isError"
-      ]
-    },
-    {
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10762,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "sessionIds",
-        "targetColumn"
-      ]
-    },
-    {
-      "verb": "moveCards",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 10806,
+      "line": 10601,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12303,7 +12318,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10809,
+      "line": 10604,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12312,10 +12327,75 @@
       ]
     },
     {
+      "verb": "promptOnDropResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10620,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "sessionIds",
+        "success"
+      ]
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10621,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "message",
+        "isError"
+      ]
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10641,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "message",
+        "isError"
+      ]
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10670,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "message",
+        "isError"
+      ]
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10699,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "message",
+        "isError"
+      ]
+    },
+    {
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10878,
+      "line": 10742,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12328,7 +12408,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10881,
+      "line": 10745,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12340,7 +12420,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10895,
+      "line": 10758,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12353,7 +12433,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10906,
+      "line": 10770,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12366,7 +12446,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10952,
+      "line": 10814,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12379,7 +12459,32 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10955,
+      "line": 10817,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "failures"
+      ]
+    },
+    {
+      "verb": "moveCards",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10886,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "sessionIds",
+        "targetColumn"
+      ]
+    },
+    {
+      "verb": "moveCardsFailed",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10889,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12391,7 +12496,58 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10967,
+      "line": 10903,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "message",
+        "isError"
+      ]
+    },
+    {
+      "verb": "moveCards",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10914,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "sessionIds",
+        "targetColumn"
+      ]
+    },
+    {
+      "verb": "moveCards",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10960,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "sessionIds",
+        "targetColumn"
+      ]
+    },
+    {
+      "verb": "moveCardsFailed",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10963,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "failures"
+      ]
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 10975,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12404,7 +12560,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11002,
+      "line": 11010,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12417,7 +12573,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11008,
+      "line": 11016,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12430,7 +12586,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11045,
+      "line": 11053,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12444,7 +12600,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11075,
+      "line": 11083,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12457,7 +12613,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11078,
+      "line": 11086,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12471,7 +12627,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11080,
+      "line": 11088,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12484,7 +12640,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11106,
+      "line": 11114,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12497,7 +12653,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11110,
+      "line": 11118,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12511,7 +12667,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11113,
+      "line": 11121,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12524,7 +12680,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11117,
+      "line": 11125,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12538,7 +12694,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11119,
+      "line": 11127,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12551,7 +12707,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11129,
+      "line": 11137,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12564,7 +12720,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11132,
+      "line": 11140,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12578,7 +12734,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11134,
+      "line": 11142,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12591,7 +12747,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11185,
+      "line": 11193,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12604,7 +12760,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11186,
+      "line": 11194,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12617,7 +12773,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11216,
+      "line": 11224,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12630,7 +12786,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11225,
+      "line": 11233,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12643,7 +12799,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11227,
+      "line": 11235,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12656,7 +12812,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11240,
+      "line": 11248,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12669,7 +12825,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11247,
+      "line": 11255,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12682,7 +12838,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11433,
+      "line": 11442,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12695,7 +12851,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11506,
+      "line": 11515,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12708,7 +12864,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11572,
+      "line": 11581,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12721,7 +12877,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11615,
+      "line": 11624,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12734,7 +12890,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11754,
+      "line": 11763,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12748,7 +12904,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11796,
+      "line": 11805,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12761,7 +12917,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11804,
+      "line": 11813,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12774,7 +12930,7 @@
       "verb": "backlogViewState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11815,
+      "line": 11824,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12786,7 +12942,7 @@
       "verb": "backlogViewState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11835,
+      "line": 11844,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12798,7 +12954,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11916,
+      "line": 11925,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12811,7 +12967,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11924,
+      "line": 11933,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12824,7 +12980,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11936,
+      "line": 11945,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12837,7 +12993,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11955,
+      "line": 11964,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12850,7 +13006,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11960,
+      "line": 11969,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12863,7 +13019,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 11985,
+      "line": 11994,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12876,7 +13032,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12009,
+      "line": 12018,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12889,33 +13045,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12030,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "message",
-        "isError"
-      ]
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12032,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "message",
-        "isError"
-      ]
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12037,
+      "line": 12039,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12941,7 +13071,33 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12045,
+      "line": 12046,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "message",
+        "isError"
+      ]
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 12050,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "message",
+        "isError"
+      ]
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 12054,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12954,7 +13110,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12108,
+      "line": 12117,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12968,7 +13124,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12110,
+      "line": 12119,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12981,7 +13137,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12148,
+      "line": 12157,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -12994,7 +13150,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12153,
+      "line": 12162,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13006,7 +13162,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12236,
+      "line": 12245,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13019,7 +13175,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12289,
+      "line": 12298,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": "dynamic"
@@ -13028,7 +13184,7 @@
       "verb": "promptsConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12319,
+      "line": 12328,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": "dynamic"
@@ -13037,38 +13193,12 @@
       "verb": "defaultPromptOverrides",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12332,
+      "line": 12341,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
         "type",
         "overrides"
-      ]
-    },
-    {
-      "verb": "fileExistsResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12352,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "exists",
-        "path"
-      ]
-    },
-    {
-      "verb": "fileExistsResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12357,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "exists",
-        "path"
       ]
     },
     {
@@ -13085,10 +13215,36 @@
       ]
     },
     {
+      "verb": "fileExistsResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 12366,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "exists",
+        "path"
+      ]
+    },
+    {
+      "verb": "fileExistsResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 12370,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "exists",
+        "path"
+      ]
+    },
+    {
       "verb": "settingResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12423,
+      "line": 12432,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13101,7 +13257,7 @@
       "verb": "defaultPromptPreviews",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12430,
+      "line": 12439,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13113,7 +13269,7 @@
       "verb": "promptPreviewResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12493,
+      "line": 12502,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13127,7 +13283,7 @@
       "verb": "promptPreviewResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12496,
+      "line": 12505,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13141,7 +13297,7 @@
       "verb": "antigravityPrompt",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12508,
+      "line": 12517,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13154,7 +13310,7 @@
       "verb": "externalAutomationPrompt",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12523,
+      "line": 12532,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13166,7 +13322,7 @@
       "verb": "personaContent",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12532,
+      "line": 12541,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13180,7 +13336,7 @@
       "verb": "personaContent",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12537,
+      "line": 12546,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13193,7 +13349,7 @@
       "verb": "personaContent",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12540,
+      "line": 12549,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13207,7 +13363,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12590,
+      "line": 12599,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13221,7 +13377,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12665,
+      "line": 12674,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13235,7 +13391,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12676,
+      "line": 12685,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13249,7 +13405,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12688,
+      "line": 12697,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13263,7 +13419,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12700,
+      "line": 12709,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13277,7 +13433,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12712,
+      "line": 12721,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13291,7 +13447,7 @@
       "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12722,
+      "line": 12731,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13304,7 +13460,7 @@
       "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12729,
+      "line": 12738,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13312,24 +13468,6 @@
         "success",
         "error"
       ]
-    },
-    {
-      "verb": "exportAgentAsSkillResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12733,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": "dynamic"
-    },
-    {
-      "verb": "exportAgentAsSkillResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12739,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": "dynamic"
     },
     {
       "verb": "exportAgentAsSkillResult",
@@ -13338,6 +13476,24 @@
       "line": 12742,
       "receiver": "this",
       "provider": "Kanban",
+      "payloadKeys": "dynamic"
+    },
+    {
+      "verb": "exportAgentAsSkillResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 12748,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": "dynamic"
+    },
+    {
+      "verb": "exportAgentAsSkillResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 12751,
+      "receiver": "this",
+      "provider": "Kanban",
       "payloadKeys": [
         "type",
         "success",
@@ -13348,38 +13504,13 @@
       "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12746,
+      "line": 12755,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
         "type",
         "success",
         "error"
-      ]
-    },
-    {
-      "verb": "saveCustomAgentResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12753,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "success",
-        "error"
-      ]
-    },
-    {
-      "verb": "saveCustomAgentResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12758,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "success"
       ]
     },
     {
@@ -13396,28 +13527,28 @@
       ]
     },
     {
-      "verb": "deleteCustomAgentResult",
+      "verb": "saveCustomAgentResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12769,
+      "line": 12767,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "success"
+      ]
+    },
+    {
+      "verb": "saveCustomAgentResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 12771,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
         "type",
         "success",
         "error"
-      ]
-    },
-    {
-      "verb": "deleteCustomAgentResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12774,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "success"
       ]
     },
     {
@@ -13434,10 +13565,35 @@
       ]
     },
     {
+      "verb": "deleteCustomAgentResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 12783,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "success"
+      ]
+    },
+    {
+      "verb": "deleteCustomAgentResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 12787,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "success",
+        "error"
+      ]
+    },
+    {
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12785,
+      "line": 12794,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13450,7 +13606,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12790,
+      "line": 12799,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13463,7 +13619,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12793,
+      "line": 12802,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13476,7 +13632,7 @@
       "verb": "agentGroups",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12800,
+      "line": 12809,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13489,7 +13645,7 @@
       "verb": "agentGroups",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12805,
+      "line": 12814,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13502,7 +13658,7 @@
       "verb": "agentGroups",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12808,
+      "line": 12817,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13515,7 +13671,7 @@
       "verb": "iconPalette",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12822,
+      "line": 12831,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13527,7 +13683,7 @@
       "verb": "iconPalette",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12825,
+      "line": 12834,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13539,7 +13695,7 @@
       "verb": "standingOrders",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12846,
+      "line": 12855,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13552,7 +13708,7 @@
       "verb": "standingOrders",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12864,
+      "line": 12873,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13565,7 +13721,7 @@
       "verb": "standingOrders",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12867,
+      "line": 12876,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13578,33 +13734,7 @@
       "verb": "standingOrderAdded",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12874,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "success",
-        "error"
-      ]
-    },
-    {
-      "verb": "standingOrderAdded",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12886,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "success",
-        "error"
-      ]
-    },
-    {
-      "verb": "standingOrderAdded",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12891,
+      "line": 12883,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13656,7 +13786,7 @@
       "verb": "standingOrderAdded",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12910,
+      "line": 12909,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13669,7 +13799,33 @@
       "verb": "standingOrderAdded",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12921,
+      "line": 12913,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "success",
+        "error"
+      ]
+    },
+    {
+      "verb": "standingOrderAdded",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 12919,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "success",
+        "error"
+      ]
+    },
+    {
+      "verb": "standingOrderAdded",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 12930,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13682,7 +13838,7 @@
       "verb": "standingOrderAdded",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12924,
+      "line": 12933,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13695,7 +13851,7 @@
       "verb": "standingOrderUpdated",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12931,
+      "line": 12940,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13708,7 +13864,7 @@
       "verb": "standingOrderUpdated",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12936,
+      "line": 12945,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13721,7 +13877,7 @@
       "verb": "standingOrderUpdated",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12943,
+      "line": 12952,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13735,7 +13891,7 @@
       "verb": "standingOrderUpdated",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12972,
+      "line": 12981,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13749,7 +13905,7 @@
       "verb": "standingOrderUpdated",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12976,
+      "line": 12985,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13762,7 +13918,7 @@
       "verb": "standingOrderUpdated",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12979,
+      "line": 12988,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13776,20 +13932,7 @@
       "verb": "standingOrderDeleted",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 12986,
-      "receiver": "this",
-      "provider": "Kanban",
-      "payloadKeys": [
-        "type",
-        "success",
-        "error"
-      ]
-    },
-    {
-      "verb": "standingOrderDeleted",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 12991,
+      "line": 12995,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13808,6 +13951,19 @@
       "payloadKeys": [
         "type",
         "success",
+        "error"
+      ]
+    },
+    {
+      "verb": "standingOrderDeleted",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 13009,
+      "receiver": "this",
+      "provider": "Kanban",
+      "payloadKeys": [
+        "type",
+        "success",
         "id"
       ]
     },
@@ -13815,7 +13971,7 @@
       "verb": "standingOrderDeleted",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13003,
+      "line": 13012,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13828,7 +13984,7 @@
       "verb": "saveAgentGroupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13010,
+      "line": 13019,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13841,7 +13997,7 @@
       "verb": "saveAgentGroupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13022,
+      "line": 13031,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13854,7 +14010,7 @@
       "verb": "saveAgentGroupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13036,
+      "line": 13045,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13866,7 +14022,7 @@
       "verb": "saveAgentGroupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13039,
+      "line": 13048,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13879,7 +14035,7 @@
       "verb": "deleteAgentGroupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13046,
+      "line": 13055,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13892,7 +14048,7 @@
       "verb": "deleteAgentGroupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13051,
+      "line": 13060,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13904,7 +14060,7 @@
       "verb": "deleteAgentGroupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13054,
+      "line": 13063,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13917,7 +14073,7 @@
       "verb": "startAgentGroupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13066,
+      "line": 13075,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13930,7 +14086,7 @@
       "verb": "startAgentGroupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13086,
+      "line": 13095,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": "dynamic"
@@ -13939,7 +14095,7 @@
       "verb": "startAgentGroupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13089,
+      "line": 13098,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13952,7 +14108,7 @@
       "verb": "uatData",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13152,
+      "line": 13161,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13964,7 +14120,7 @@
       "verb": "mergePromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13370,
+      "line": 13379,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13977,7 +14133,7 @@
       "verb": "mergePromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13418,
+      "line": 13427,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -13990,7 +14146,7 @@
       "verb": "worktreeStatuses",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13463,
+      "line": 13472,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -14002,7 +14158,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13612,
+      "line": 13621,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -14015,7 +14171,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13617,
+      "line": 13626,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -14028,7 +14184,7 @@
       "verb": "featureDetails",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13669,
+      "line": 13678,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -14041,7 +14197,7 @@
       "verb": "featureDetails",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 13673,
+      "line": 13682,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -14054,7 +14210,7 @@
       "verb": "worktreeConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 14216,
+      "line": 14218,
       "receiver": "this",
       "provider": "Kanban",
       "payloadKeys": [
@@ -15955,7 +16111,7 @@
       "verb": "terminalAgentNames",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 2124,
+      "line": 2189,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -15967,7 +16123,7 @@
       "verb": "reloadRoleConfigs",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 2411,
+      "line": 2476,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -15978,7 +16134,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5224,
+      "line": 5296,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -15990,7 +16146,7 @@
       "verb": "loading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5876,
+      "line": 5948,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16002,7 +16158,7 @@
       "verb": "loading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5885,
+      "line": 5957,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16014,7 +16170,7 @@
       "verb": "loading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5935,
+      "line": 6007,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16026,7 +16182,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6518,
+      "line": 6590,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16039,7 +16195,7 @@
       "verb": "openMemoTab",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6608,
+      "line": 6680,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16050,7 +16206,7 @@
       "verb": "openMemoTab",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6611,
+      "line": 6683,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16061,7 +16217,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6882,
+      "line": 6954,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16074,7 +16230,7 @@
       "verb": "workspaceChanged",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8295,
+      "line": 8358,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16086,7 +16242,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8299,
+      "line": 8362,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16095,7 +16251,7 @@
       "verb": "terminalAgentNames",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8303,
+      "line": 8366,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16107,7 +16263,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8306,
+      "line": 8369,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16119,7 +16275,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8309,
+      "line": 8372,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16131,7 +16287,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8310,
+      "line": 8373,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16143,7 +16299,7 @@
       "verb": "julesAutoSyncSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8312,
+      "line": 8375,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16155,7 +16311,7 @@
       "verb": "designSystemDocSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8320,
+      "line": 8383,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16168,7 +16324,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8328,
+      "line": 8391,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16180,7 +16336,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8340,
+      "line": 8403,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16189,7 +16345,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8343,
+      "line": 8406,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16201,7 +16357,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8345,
+      "line": 8408,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16213,7 +16369,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8354,
+      "line": 8417,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16226,7 +16382,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8355,
+      "line": 8418,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16238,7 +16394,7 @@
       "verb": "julesAutoSyncSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8359,
+      "line": 8422,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16250,7 +16406,7 @@
       "verb": "accurateCodingSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8366,
+      "line": 8429,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16262,7 +16418,7 @@
       "verb": "advancedReviewerSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8370,
+      "line": 8433,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16274,7 +16430,7 @@
       "verb": "leadChallengeSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8374,
+      "line": 8437,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16286,7 +16442,7 @@
       "verb": "excludeReviewedBacklogSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8379,
+      "line": 8442,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16298,7 +16454,7 @@
       "verb": "statusShowTerminalsSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8384,
+      "line": 8447,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16310,7 +16466,7 @@
       "verb": "statusShowKanbanSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8388,
+      "line": 8451,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16322,7 +16478,7 @@
       "verb": "statusShowArtifactsSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8392,
+      "line": 8455,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16334,7 +16490,7 @@
       "verb": "statusShowDesignSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8396,
+      "line": 8459,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16346,7 +16502,7 @@
       "verb": "statusShowProjectSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8400,
+      "line": 8463,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16358,7 +16514,7 @@
       "verb": "statusShowMemoSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8404,
+      "line": 8467,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16370,7 +16526,7 @@
       "verb": "cyberAnimationDisabledSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8409,
+      "line": 8472,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16382,7 +16538,7 @@
       "verb": "boardStateExportSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8419,
+      "line": 8482,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16395,7 +16551,7 @@
       "verb": "cyberScanlinesDisabledSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8427,
+      "line": 8490,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16407,7 +16563,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8432,
+      "line": 8495,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16419,7 +16575,7 @@
       "verb": "gitIgnoreConfig",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8438,
+      "line": 8501,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16428,7 +16584,7 @@
       "verb": "controlPlaneStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8441,
+      "line": 8504,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16437,7 +16593,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8442,
+      "line": 8505,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16446,7 +16602,7 @@
       "verb": "integrationSetupStates",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8445,
+      "line": 8508,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16455,7 +16611,7 @@
       "verb": "selectPlanFile",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 9275,
+      "line": 9338,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16467,7 +16623,7 @@
       "verb": "selectPlanFile",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 9371,
+      "line": 9434,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16479,7 +16635,7 @@
       "verb": "initialState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 9636,
+      "line": 9699,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16497,7 +16653,7 @@
       "verb": "autobanStateSync",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11270,
+      "line": 11338,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16509,7 +16665,7 @@
       "verb": "pipelineState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11279,
+      "line": 11368,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16518,19 +16674,19 @@
       ]
     },
     {
-      "verb": "orchestratorStartResult",
+      "verb": "missionControlStartResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11432,
+      "line": 11526,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
     },
     {
-      "verb": "orchestratorStartResult",
+      "verb": "missionControlStartResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11444,
+      "line": 11538,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16540,10 +16696,10 @@
       ]
     },
     {
-      "verb": "orchestratorStartResult",
+      "verb": "missionControlStartResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11590,
+      "line": 11684,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16553,10 +16709,10 @@
       ]
     },
     {
-      "verb": "orchestratorStartResult",
+      "verb": "missionControlStartResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11601,
+      "line": 11695,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16565,10 +16721,10 @@
       ]
     },
     {
-      "verb": "orchestrationHandoff",
+      "verb": "missionControlHandoff",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11819,
+      "line": 11915,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16582,7 +16738,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12730,
+      "line": 12827,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16594,7 +16750,7 @@
       "verb": "notionFetchState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14045,
+      "line": 14176,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16609,7 +16765,7 @@
       "verb": "linearProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14195,
+      "line": 14326,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16623,7 +16779,7 @@
       "verb": "linearProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14207,
+      "line": 14338,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16637,7 +16793,7 @@
       "verb": "linearProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14233,
+      "line": 14364,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16651,7 +16807,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14242,
+      "line": 14373,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16664,7 +16820,7 @@
       "verb": "linearProjectsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14253,
+      "line": 14384,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16678,7 +16834,7 @@
       "verb": "linearProjectsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14265,
+      "line": 14396,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16692,7 +16848,7 @@
       "verb": "linearProjectsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14276,
+      "line": 14407,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16705,7 +16861,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14284,
+      "line": 14415,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16718,7 +16874,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14296,
+      "line": 14427,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16732,7 +16888,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14324,
+      "line": 14455,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16746,7 +16902,7 @@
       "verb": "linearTaskDetailsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14344,
+      "line": 14475,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16762,7 +16918,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14355,
+      "line": 14486,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16776,7 +16932,7 @@
       "verb": "linearTaskImported",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14368,
+      "line": 14499,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16790,7 +16946,7 @@
       "verb": "linearTaskImported",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14378,
+      "line": 14509,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16799,7 +16955,7 @@
       "verb": "clickupTaskImported",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14393,
+      "line": 14524,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16813,7 +16969,7 @@
       "verb": "clickupTaskImported",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14403,
+      "line": 14534,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16822,7 +16978,7 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14418,
+      "line": 14549,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16834,7 +16990,7 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14428,
+      "line": 14559,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16846,7 +17002,7 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14451,
+      "line": 14582,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16858,7 +17014,7 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14460,
+      "line": 14591,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16870,7 +17026,7 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14472,
+      "line": 14603,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16882,7 +17038,7 @@
       "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14487,
+      "line": 14618,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16896,7 +17052,7 @@
       "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14500,
+      "line": 14631,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16910,7 +17066,7 @@
       "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14512,
+      "line": 14643,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16924,7 +17080,7 @@
       "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14529,
+      "line": 14660,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16939,7 +17095,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14539,
+      "line": 14670,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16953,7 +17109,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14551,
+      "line": 14682,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16966,7 +17122,7 @@
       "verb": "clickupSpacesLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14562,
+      "line": 14693,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16978,7 +17134,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14569,
+      "line": 14700,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16991,7 +17147,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14580,
+      "line": 14711,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17004,7 +17160,7 @@
       "verb": "clickupFoldersLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14592,
+      "line": 14723,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17018,7 +17174,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14601,
+      "line": 14732,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17031,7 +17187,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14612,
+      "line": 14743,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17044,7 +17200,7 @@
       "verb": "clickupListsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14623,
+      "line": 14754,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17058,7 +17214,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14632,
+      "line": 14763,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17071,7 +17227,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14728,
+      "line": 14859,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17084,7 +17240,7 @@
       "verb": "clickupTaskDetailsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14755,
+      "line": 14886,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17100,7 +17256,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14766,
+      "line": 14897,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17114,7 +17270,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14781,
+      "line": 14912,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17129,7 +17285,7 @@
       "verb": "linearLabelsUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14794,
+      "line": 14925,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17143,7 +17299,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14803,
+      "line": 14934,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17158,7 +17314,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14820,
+      "line": 14951,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17173,7 +17329,7 @@
       "verb": "clickupTagsUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14833,
+      "line": 14964,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17187,7 +17343,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14842,
+      "line": 14973,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17202,7 +17358,7 @@
       "verb": "linearAutomationCatalogLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14858,
+      "line": 14989,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17215,7 +17371,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14866,
+      "line": 14997,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17229,7 +17385,7 @@
       "verb": "clickupSpaceTagsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14882,
+      "line": 15013,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17242,7 +17398,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14890,
+      "line": 15021,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17256,7 +17412,7 @@
       "verb": "multiRepoScaffoldResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14939,
+      "line": 15070,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17268,7 +17424,7 @@
       "verb": "multiRepoScaffoldResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14947,
+      "line": 15078,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17280,7 +17436,7 @@
       "verb": "createAgentGridResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15022,
+      "line": 15153,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17292,7 +17448,7 @@
       "verb": "createAgentGridResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15025,
+      "line": 15156,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17304,7 +17460,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15065,
+      "line": 15196,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17317,7 +17473,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15080,
+      "line": 15211,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17330,7 +17486,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15090,
+      "line": 15221,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17343,7 +17499,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15094,
+      "line": 15225,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17356,7 +17512,7 @@
       "verb": "recoverablePlans",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15133,
+      "line": 15264,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17368,7 +17524,7 @@
       "verb": "restorePlanResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15139,
+      "line": 15270,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17381,7 +17537,7 @@
       "verb": "recoverablePlans",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15142,
+      "line": 15273,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17393,7 +17549,7 @@
       "verb": "notionFetchState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15161,
+      "line": 15292,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17408,7 +17564,7 @@
       "verb": "notionFetchState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15170,
+      "line": 15301,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17420,7 +17576,7 @@
       "verb": "notionFetchState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15178,
+      "line": 15309,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17432,7 +17588,7 @@
       "verb": "notionFetchState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15200,
+      "line": 15331,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -17441,7 +17597,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15211,
+      "line": 15342,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -17450,7 +17606,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15216,
+      "line": 15347,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17462,7 +17618,7 @@
       "verb": "accurateCodingSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15221,
+      "line": 15352,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17474,7 +17630,7 @@
       "verb": "advancedReviewerSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15226,
+      "line": 15357,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17486,7 +17642,7 @@
       "verb": "leadChallengeSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15231,
+      "line": 15362,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17498,7 +17654,7 @@
       "verb": "julesAutoSyncSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15236,
+      "line": 15367,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17510,7 +17666,7 @@
       "verb": "defaultPromptOverrides",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15241,
+      "line": 15372,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17522,7 +17678,7 @@
       "verb": "defaultPromptPreviews",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15250,
+      "line": 15381,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17534,7 +17690,7 @@
       "verb": "memoWorkspaceItems",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15260,
+      "line": 15391,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17547,7 +17703,7 @@
       "verb": "memoError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15277,
+      "line": 15408,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17559,7 +17715,7 @@
       "verb": "memoContent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15286,
+      "line": 15417,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17571,7 +17727,7 @@
       "verb": "memoError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15292,
+      "line": 15423,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17583,7 +17739,7 @@
       "verb": "memoError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15306,
+      "line": 15437,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17595,7 +17751,7 @@
       "verb": "memoError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15317,
+      "line": 15448,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17607,7 +17763,7 @@
       "verb": "memoPromptResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15329,
+      "line": 15460,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17620,7 +17776,7 @@
       "verb": "memoContent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15372,
+      "line": 15503,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17632,7 +17788,7 @@
       "verb": "memoPromptResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15380,
+      "line": 15511,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17647,7 +17803,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15463,
+      "line": 15594,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -17656,7 +17812,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15507,
+      "line": 15638,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17668,7 +17824,7 @@
       "verb": "dbConnectionResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15519,
+      "line": 15650,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17680,7 +17836,7 @@
       "verb": "dbConnectionResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15525,
+      "line": 15656,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17693,7 +17849,7 @@
       "verb": "dbConnectionResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15533,
+      "line": 15664,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17706,7 +17862,7 @@
       "verb": "memoUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15977,
+      "line": 16119,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17718,7 +17874,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17345,
+      "line": 17487,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17730,7 +17886,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19212,
+      "line": 19354,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17742,7 +17898,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19466,
+      "line": 19608,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17754,7 +17910,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19471,
+      "line": 19613,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17766,7 +17922,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19760,
+      "line": 19902,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17780,7 +17936,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19818,
+      "line": 19960,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17795,7 +17951,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20908,
+      "line": 21050,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17810,7 +17966,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20919,
+      "line": 21061,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17824,7 +17980,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20974,
+      "line": 21116,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17838,7 +17994,7 @@
       "verb": "refresh",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 21077,
+      "line": 21219,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17849,7 +18005,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 21919,
+      "line": 22061,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17862,7 +18018,7 @@
       "verb": "airlock_syncStart",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 21931,
+      "line": 22073,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17873,7 +18029,7 @@
       "verb": "airlock_syncComplete",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 21939,
+      "line": 22081,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17884,7 +18040,7 @@
       "verb": "airlock_syncError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 21943,
+      "line": 22085,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17896,7 +18052,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 21946,
+      "line": 22088,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17909,7 +18065,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 21957,
+      "line": 22099,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17922,7 +18078,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22392,
+      "line": 22552,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17936,7 +18092,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22408,
+      "line": 22568,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17949,7 +18105,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22418,
+      "line": 22578,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17962,7 +18118,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22440,
+      "line": 22600,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17975,7 +18131,7 @@
       "verb": "planCreated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22685,
+      "line": 22845,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17986,7 +18142,7 @@
       "verb": "insertContextFile",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23251,
+      "line": 23411,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17999,7 +18155,7 @@
       "verb": "setupStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23261,
+      "line": 23421,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18011,7 +18167,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23269,
+      "line": 23429,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18023,7 +18179,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23271,
+      "line": 23431,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18035,7 +18191,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23274,
+      "line": 23434,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18048,7 +18204,7 @@
       "verb": "setupStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23287,
+      "line": 23447,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18060,7 +18216,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23292,
+      "line": 23452,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18072,7 +18228,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23293,
+      "line": 23453,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18084,7 +18240,7 @@
       "verb": "sessionStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23332,
+      "line": 23492,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18098,7 +18254,7 @@
       "verb": "sessionStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23339,
+      "line": 23499,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18112,7 +18268,7 @@
       "verb": "julesStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23627,
+      "line": 23787,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18125,7 +18281,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24039,
+      "line": 24199,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18138,7 +18294,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24058,
+      "line": 24218,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18151,7 +18307,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24314,
+      "line": 24474,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18165,7 +18321,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24315,
+      "line": 24475,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18179,7 +18335,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24336,
+      "line": 24496,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18194,7 +18350,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24343,
+      "line": 24503,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18209,7 +18365,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24460,
+      "line": 24620,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18221,7 +18377,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24465,
+      "line": 24625,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18233,7 +18389,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24484,
+      "line": 24644,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18245,7 +18401,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24497,
+      "line": 24657,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18257,7 +18413,7 @@
       "verb": "airlock_coderSent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24503,
+      "line": 24663,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18268,7 +18424,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24506,
+      "line": 24666,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18280,7 +18436,7 @@
       "verb": "airlock_syncComplete",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24514,
+      "line": 24674,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18291,7 +18447,7 @@
       "verb": "airlock_syncError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24517,
+      "line": 24677,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -19292,10 +19448,20 @@
       ]
     },
     {
+      "verb": "switchToController",
+      "direction": "push",
+      "file": "src/webview/shell.js",
+      "line": 424,
+      "receiver": "termFrame.contentWindow",
+      "payloadKeys": [
+        "type"
+      ]
+    },
+    {
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 683,
+      "line": 701,
       "receiver": "frame.contentWindow?",
       "payloadKeys": [
         "type",
@@ -19306,7 +19472,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 691,
+      "line": 709,
       "receiver": "dockFrame.contentWindow?",
       "payloadKeys": [
         "type",
@@ -19317,7 +19483,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 699,
+      "line": 717,
       "receiver": "win",
       "payloadKeys": [
         "type",
@@ -19328,7 +19494,7 @@
       "verb": "clearTeamBadges",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 1195,
+      "line": 1213,
       "receiver": "termFrame.contentWindow",
       "payloadKeys": [
         "type",
@@ -19339,7 +19505,7 @@
       "verb": "switchToTeam",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 1207,
+      "line": 1225,
       "receiver": "termFrame.contentWindow",
       "payloadKeys": [
         "type",
@@ -19350,7 +19516,7 @@
       "verb": "clearTerminalBadge",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 1346,
+      "line": 1364,
       "receiver": "termFrame.contentWindow",
       "payloadKeys": [
         "type",
@@ -19361,7 +19527,7 @@
       "verb": "peekTerminal",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 1362,
+      "line": 1380,
       "receiver": "termFrame.contentWindow",
       "payloadKeys": [
         "type",
@@ -19372,7 +19538,7 @@
       "verb": "requestFleetState",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 1377,
+      "line": 1395,
       "receiver": "termFrame.contentWindow",
       "payloadKeys": [
         "type"
@@ -19382,7 +19548,7 @@
       "verb": "popoutBlocked",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 1533,
+      "line": 1551,
       "receiver": "termFrame.contentWindow",
       "payloadKeys": [
         "type",
@@ -19393,7 +19559,7 @@
       "verb": "terminalFleetState",
       "direction": "push",
       "file": "src/webview/terminals.js",
-      "line": 1537,
+      "line": 1547,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",
@@ -19402,10 +19568,10 @@
       ]
     },
     {
-      "verb": "orchestratorState",
+      "verb": "missionControlState",
       "direction": "push",
       "file": "src/webview/terminals.js",
-      "line": 1747,
+      "line": 1762,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",
@@ -19418,7 +19584,7 @@
       "verb": "popoutTerminal",
       "direction": "push",
       "file": "src/webview/terminals.js",
-      "line": 5957,
+      "line": 5997,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",
@@ -21490,7 +21656,7 @@
       "verb": "deleteCustomAgent",
       "direction": "request",
       "file": "src/webview/kanban.html",
-      "line": 4482,
+      "line": 4480,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21502,7 +21668,7 @@
       "verb": "saveCustomAgent",
       "direction": "request",
       "file": "src/webview/kanban.html",
-      "line": 4493,
+      "line": 4491,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21514,7 +21680,7 @@
       "verb": "exportAgentAsSkill",
       "direction": "request",
       "file": "src/webview/kanban.html",
-      "line": 4539,
+      "line": 4537,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21526,7 +21692,7 @@
       "verb": "deleteCustomAgent",
       "direction": "request",
       "file": "src/webview/kanban.html",
-      "line": 4553,
+      "line": 4551,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21538,7 +21704,7 @@
       "verb": "saveStartupCommands",
       "direction": "request",
       "file": "src/webview/kanban.html",
-      "line": 6091,
+      "line": 6107,
       "receiver": "vscode",
       "payloadKeys": "dynamic"
     },
@@ -21546,7 +21712,7 @@
       "verb": "exportAgentAsSkill",
       "direction": "request",
       "file": "src/webview/kanban.html",
-      "line": 7181,
+      "line": 7197,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21558,7 +21724,7 @@
       "verb": "exportAgentAsSkill",
       "direction": "request",
       "file": "src/webview/kanban.html",
-      "line": 7184,
+      "line": 7200,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21570,7 +21736,7 @@
       "verb": "showInfo",
       "direction": "request",
       "file": "src/webview/kanban.html",
-      "line": 9506,
+      "line": 9524,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21581,7 +21747,7 @@
       "verb": "showInfo",
       "direction": "request",
       "file": "src/webview/kanban.html",
-      "line": 9518,
+      "line": 9536,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21710,6 +21876,264 @@
         "type",
         "content",
         "action",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "mcScheduleExternalCopy",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 356,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "scheduleId",
+        "prompt"
+      ]
+    },
+    {
+      "verb": "mcScheduleExternalCopy",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 358,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "scheduleId",
+        "prompt"
+      ]
+    },
+    {
+      "verb": "mcScheduleExternalCopy",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 361,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "scheduleId",
+        "prompt"
+      ]
+    },
+    {
+      "verb": "mcScheduleLoadLog",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 387,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "scheduleId"
+      ]
+    },
+    {
+      "verb": "mcControllerStop",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 430,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type"
+      ]
+    },
+    {
+      "verb": "mcControllerRestart",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 434,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "seat"
+      ]
+    },
+    {
+      "verb": "mcControllerAck",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 438,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type"
+      ]
+    },
+    {
+      "verb": "mcNewMission",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 452,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type"
+      ]
+    },
+    {
+      "verb": "mcLaunchMission",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 453,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "missionId"
+      ]
+    },
+    {
+      "verb": "mcDeleteMission",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 454,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "missionId"
+      ]
+    },
+    {
+      "verb": "mcStopMission",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 455,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "missionId"
+      ]
+    },
+    {
+      "verb": "mcReadyMission",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 456,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "missionId"
+      ]
+    },
+    {
+      "verb": "mcNewSchedule",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 457,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type"
+      ]
+    },
+    {
+      "verb": "mcDeleteSchedule",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 458,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "scheduleId"
+      ]
+    },
+    {
+      "verb": "mcStartSchedule",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 459,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "scheduleId"
+      ]
+    },
+    {
+      "verb": "mcStopSchedule",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 460,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "scheduleId"
+      ]
+    },
+    {
+      "verb": "mcUpdateMission",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 471,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "missionId",
+        "field",
+        "value"
+      ]
+    },
+    {
+      "verb": "mcUpdateSchedule",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 475,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "scheduleId",
+        "field",
+        "value"
+      ]
+    },
+    {
+      "verb": "mcRemoveMissionMember",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 479,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "missionId",
+        "kind",
+        "name"
+      ]
+    },
+    {
+      "verb": "mcAddMissionMember",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 483,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "missionId"
+      ]
+    },
+    {
+      "verb": "setSchedulerConfig",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 612,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "config"
+      ]
+    },
+    {
+      "verb": "mcInit",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 670,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "getSchedulerConfig",
+      "direction": "request",
+      "file": "src/webview/mission-control.js",
+      "line": 674,
+      "receiver": "vscode",
+      "payloadKeys": [
+        "type",
         "workspaceRoot"
       ]
     },
@@ -26952,6 +27376,11 @@
       "prefix": false
     },
     {
+      "path": "/kanban/task/complete",
+      "method": "POST",
+      "prefix": false
+    },
+    {
       "path": "/kanban/move",
       "method": "POST",
       "prefix": false
@@ -27067,27 +27496,27 @@
       "prefix": true
     },
     {
-      "path": "/orchestration/adopt",
+      "path": "/mission-control/adopt",
       "method": "POST",
       "prefix": false
     },
     {
-      "path": "/orchestration/start",
+      "path": "/mission-control/start",
       "method": "POST",
       "prefix": false
     },
     {
-      "path": "/orchestration/confirm",
+      "path": "/mission-control/confirm",
       "method": "POST",
       "prefix": false
     },
     {
-      "path": "/orchestration/handoff",
+      "path": "/mission-control/handoff",
       "method": "POST",
       "prefix": false
     },
     {
-      "path": "/orchestration/stop",
+      "path": "/mission-control/stop",
       "method": "POST",
       "prefix": false
     },
@@ -27212,7 +27641,7 @@
       "prefix": true
     },
     {
-      "path": "/orchestrator/session-log",
+      "path": "/mission-control/session-log",
       "method": "GET",
       "prefix": false
     },
@@ -27283,6 +27712,11 @@
     },
     {
       "path": "/agent-control",
+      "method": "GET",
+      "prefix": false
+    },
+    {
+      "path": "/mission-control",
       "method": "GET",
       "prefix": false
     },

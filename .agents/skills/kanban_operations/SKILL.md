@@ -25,7 +25,7 @@ Every op below is keyed on a **`planId`** (a UUID), but you should not need UUID
   #  → …plans/my-plan.md](…) — My Plan Title <!-- planId:eb75281d-… subtask-of:"Some Feature" -->
   ```
   Columns: `created`, `backlog`, `plan-reviewed`, `lead-coded`, `coder-coded`, `intern-coded`, `code-reviewed`, `acceptance-tested`, `coded`, `completed`, plus custom columns.
-- **Whole board over HTTP (clean JSON):** `GET http://127.0.0.1:$(cat .switchboard/api-server-port.txt)/kanban/board` → `{ success, data: [{ planId, planFile, kanbanColumn, isFeature, featureId, … }] }`.
+- **Whole board over HTTP (clean JSON):** `GET http://127.0.0.1:$(cat .switchboard/api-server-port.txt)/kanban/board` → `{ success, data: [{ planId, planFile, kanbanColumn, isFeature, featureId, … }] }`. *(If `SWITCHBOARD STATUS: Live` is present in your prompt, use the injected port directly instead of `cat .switchboard/api-server-port.txt`.)*
 
 > **The real fix is to not need IDs at all:** the path/slug-addressed feature API (`POST /kanban/features/reconcile`, Feature A · A3 — **landed**) lets you reference plans by file path or slug and reconcile the whole feature structure in one idempotent call. Use it (see "Reorganize Features" below) instead of the per-verb UUID choreography. The two lookups above remain useful for one-off card moves.
 
