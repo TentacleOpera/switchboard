@@ -3,8 +3,9 @@
 /**
  * Feature Drive-mode prompt-body reframe contract.
  *
- * The Drive toggle prepends DRIVE_FEATURE_PREFIX ("driven through a coder terminal…
- * read terminal-coder-dispatch/SKILL.md") at position zero. Before this contract the
+ * The Drive toggle prepends the enriched drive prefix (built by KanbanProvider's
+ * _buildDrivePrefix — team roster, port, curl template, inlined rules) at
+ * position zero. Before this contract the
  * rest of the prompt body was still execution-coded for solo implementation, so a
  * team lead read the body as governing, coded the subtasks itself, and left its wired
  * team idle. That was the reasonable resolution of a prompt where one line said
@@ -51,6 +52,8 @@ function testLeadDriveOn() {
     assert.ok(prompt.includes('begin dispatching subtasks to your team seats immediately'), 'Lead should have drive execution directive');
     assert.ok(prompt.includes('FEATURE MODE: You are driving the feature "Test Feature"'), 'Lead should have driving feature-mode opener');
     assert.ok(prompt.includes('Dispatch each subtask to a seat on your team — do not implement subtasks yourself.'), 'Lead should have drive feature directive');
+    assert.ok(prompt.includes('Do not commit after each subtask'), 'Lead should have commit-timing directive');
+    assert.ok(prompt.includes('Team Dispatch Instructions'), 'Lead should have feature-file Team Dispatch Instructions pointer');
     for (const phrase of IMPLEMENT_CODED) {
         assert.ok(!prompt.includes(phrase), `Lead Drive prompt must NOT contain "${phrase}"`);
     }
@@ -64,6 +67,7 @@ function testCoderDriveOn() {
     assert.ok(prompt.includes('EXECUTION MODE: The feature below is pre-approved — begin dispatching subtasks to your team seats immediately'), 'Coder should have drive feature execution block');
     assert.ok(prompt.includes('Dispatch each subtask plan to a coder seat; review the diff on callback and resend a fix prompt if it falls short.'), 'Coder should have dispatch instruction');
     assert.ok(prompt.includes('Dispatch each subtask to a seat on your team — do not implement subtasks yourself.'), 'Coder should have drive subagent block');
+    assert.ok(prompt.includes('Do not commit after each subtask'), 'Coder should have commit-timing directive');
     // The FEATURE FILE block is the coder's discovery path for the subtask list and
     // must SURVIVE under Drive — only its trailing verb flips. It renders whenever the
     // feature plan carries an absolutePath, which it always does in a real dispatch, so
@@ -83,6 +87,7 @@ function testInternDriveOn() {
     const prompt = buildKanbanBatchPrompt('intern', makeFeaturePlans(), driveOpts);
     assert.ok(prompt.includes('Please drive the feature described below through your team seats.'), 'Intern should have drive intro');
     assert.ok(prompt.includes('Dispatch each subtask to a seat on your team — do not implement subtasks yourself.'), 'Intern should have drive directive');
+    assert.ok(prompt.includes('Do not commit after each subtask'), 'Intern should have commit-timing directive');
     for (const phrase of IMPLEMENT_CODED) {
         assert.ok(!prompt.includes(phrase), `Intern Drive prompt must NOT contain "${phrase}"`);
     }
@@ -145,6 +150,7 @@ function testCustomAgentPath() {
     );
     assert.ok(!driveOn.includes('Handle all subtasks yourself'), 'Custom agent Drive on must NOT contain the noSubagents clause');
     assert.ok(driveOn.includes('Dispatch each subtask to a seat on your team — do not implement subtasks yourself.'), 'Custom agent Drive on must contain the drive subagent block');
+    assert.ok(driveOn.includes('Do not commit after each subtask'), 'Custom agent Drive on must contain the commit-timing directive');
 
     const driveOff = buildCustomAgentPrompt(
         makeFeaturePlans(),

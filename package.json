@@ -603,6 +603,14 @@
           "description": "How long (ms) a dispatched PTY-fleet seat must be silent before the activity-light sweep treats the turn as ended. Default 90s. Only applies to PTY-fleet seats; native vscode.Terminal seats degrade to the blind timeout. Completion is signalled explicitly by the agent (POST /kanban/queue/done), so silence past this threshold is read as blocked — and only on the second consecutive silent sweep, so a late completion POST is not reported as a stall. Effective threshold is max(livenessWindowMs, turnEndSilenceMs) because a seat inside the liveness window is spared before this test is reached.",
           "scope": "resource"
         },
+        "switchboard.activityLight.nudgeSilenceMs": {
+          "type": "integer",
+          "default": 600000,
+          "minimum": 300000,
+          "maximum": 3600000,
+          "description": "How long (ms) a team lead must be silent with work pending before a stall nudge fires. Default 10 min. Separate from turnEndSilenceMs (which gates turn-end detection at 90s) — a nudge is a backstop, not a turn-boundary probe. Only applies to the feature-level and queue-level stall nudges; turn-end classification (completed/blocked) is unaffected.",
+          "scope": "resource"
+        },
         "switchboard.activityLight.blockedTimeoutMs": {
           "type": "integer",
           "default": 14400000,
@@ -928,6 +936,7 @@
     "package:targets": "bash scripts/package-targets.sh",
     "publish:marketplace": "bash scripts/publish-marketplace.sh",
     "test:contract:vsix-packaging": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/vsix-packaging-contract.test.js",
+    "test:contract:goal-invariant-verification": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/goal-invariant-verification.test.js",
     "test:contract:pty-route-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-route-surface-contract.test.js",
     "test:contract:pty-prompt-delivery-framing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-prompt-delivery-framing.test.js",
     "test:contract:pty-dispatch-focus": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-dispatch-focus-contract.test.js",
@@ -964,6 +973,7 @@
     "test:contract:standalone-agent-isolation": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-agent-team-isolation-contract.test.js",
     "test:contract:autoban-state": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-state-regression.test.js",
     "test:contract:autoban-no-valid-tickets": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-no-valid-tickets-regression.test.js",
+    "test:contract:completion-asserted-never-inferred": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/completion-asserted-never-inferred.test.js",
     "test:contract:terminal-plan-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-plan-attribution-contract.test.js",
     "test:contract:scheduled-jobs": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/scheduled-jobs-and-connections.test.js",
     "test:contract:spark-context-exporter": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/spark-context-exporter-contract.test.js",

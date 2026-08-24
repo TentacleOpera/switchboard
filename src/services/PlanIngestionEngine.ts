@@ -112,6 +112,11 @@ export interface FeatureWatchRecord {
     headTerminal: string;
     armedAt: number;
     lastNudgedAt: number;
+    /** 0 = not yet nudged, 1 = nudged once (stop). Re-armed to 0 by gate (4a)
+     *  when a dispatch is outstanding, so the next idle window after a coder
+     *  finishes gets a fresh nudge. Old persisted records without this field
+     *  are treated as 0 (not yet nudged) — `undefined >= 1` is false. */
+    nudgeCount: number;
     /** Optional kanban columns the head treats as "accepted" beyond COMPLETED
      *  (e.g. CODE REVIEWED). A subtask parked in one of these counts as accepted
      *  and does not keep the watch alive. */
@@ -527,6 +532,16 @@ export class PlanIngestionEngine {
                 // is max(livenessWindowMs, turnEndSilenceMs) because the heartbeat
                 // branch runs first and spares any recently-active seat.
                 const turnEndSilenceMs = activityCfg.getNumber('turnEndSilenceMs', 90000);
+                // Nudge silence: how long a team lead must be silent with work
+                // pending before a stall nudge fires. Deliberately a separate knob
+                // from turnEndSilenceMs — 90s is right for turn-boundary detection
+                // (completed/blocked classification), but far too aggressive for
+                // nudge pacing: a lead processing a coder's report, composing a
+                // dispatch prompt, or thinking between cards is silent for 90s all
+                // the time. Default 10 min; the nudge is a backstop, not a
+                // turn-boundary probe. Only applies to the feature-level and
+                // queue-level stall nudges; turn-end classification is unaffected.
+                const nudgeSilenceMs = activityCfg.getNumber('nudgeSilenceMs', 600000);
                 const blockedTimeoutMs = activityCfg.getNumber('blockedTimeoutMs', 4 * 60 * 60 * 1000);
                 // Partition the fleet ONCE per tick (not per folder) — the fleet
                 // is process-global and the snapshot is cheap. A miss on the
@@ -675,7 +690,7 @@ export class PlanIngestionEngine {
                         // default; armed by the head agent via `watchFeature`.
                         try {
                             await this._runFeatureNudgeSweep({
-                                db, folder, liveness, nowMs, turnEndSilenceMs, notifiedSeatsThisTick,
+                                db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick,
                             });
                         } catch (nudgeErr) {
                             this._host.logger.appendLine(`[GlobalPlanWatcher] feature nudge sweep failed for ${folder}: ${nudgeErr}`);
@@ -683,12 +698,13 @@ export class PlanIngestionEngine {
                         // ── Queue-level stall nudge ────────────────────────────────
                         // The backstop for a lead-paced pipeline with the schedule
                         // off. Shares the same liveness snapshot, `nowMs`,
-                        // `turnEndSilenceMs` and `notifiedSeatsThisTick` set as the
-                        // feature sweep so a head that is both a feature head and a
-                        // queue head is nudged at most once per tick.
+                        // `turnEndSilenceMs`, `nudgeSilenceMs` and
+                        // `notifiedSeatsThisTick` set as the feature sweep so a
+                        // head that is both a feature head and a queue head is
+                        // nudged at most once per tick.
                         try {
                             await this._runQueueNudgeSweep({
-                                db, folder, liveness, nowMs, turnEndSilenceMs, notifiedSeatsThisTick,
+                                db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick,
                             });
                         } catch (queueNudgeErr) {
                             this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge sweep failed for ${folder}: ${queueNudgeErr}`);
@@ -1069,8 +1085,10 @@ export class PlanIngestionEngine {
      * `recipientSeat` = the head (skip parent resolution) and `body` = the composed
      * evidence. Cancellation is automatic when no un-accepted subtasks remain, or
      * the head terminal is absent/`exited`. Paced by `lastNudgedAt` with a floor of
-     * `turnEndSilenceMs` so a stalled feature produces a periodic reminder, not a
-     * stream. A watch is never retried against a dead head.
+     * `nudgeSilenceMs` (default 10 min) so a stalled feature produces a periodic
+     * reminder, not a stream. One nudge per stall — `nudgeCount` stops repeat
+     * nudges; a dispatch re-arms it via gate (4a). A watch is never retried
+     * against a dead head.
      */
     private async _runFeatureNudgeSweep(args: {
         db: KanbanDatabase;
@@ -1078,10 +1096,11 @@ export class PlanIngestionEngine {
         liveness: Array<{ friendlyName: string; lastDataAt: number; status: string }>;
         nowMs: number;
         turnEndSilenceMs: number;
+        nudgeSilenceMs: number;
         notifiedSeatsThisTick: Set<string>;
     }): Promise<void> {
         if (!this._turnEndNotifier) return; // no notifier → no delivery → nothing to do.
-        const { db, folder, liveness, nowMs, turnEndSilenceMs, notifiedSeatsThisTick } = args;
+        const { db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick } = args;
         const WATCH_KEY = 'kanban.featureWatches';
         let watches: FeatureWatchRecord[] = [];
         try {
@@ -1151,8 +1170,41 @@ export class PlanIngestionEngine {
             // is the "no dispatch to observe" window the nudge exists for.
             const outstanding = remaining.some(s => !!s.dispatchedAt);
             if (outstanding) {
+                // A dispatch is in progress — the head is working, not stalled.
+                // Re-arm the nudge state so the next idle window after this dispatch
+                // completes gets a fresh nudge (mirrors the queue watch's in-flight
+                // reset). Without this, nudgeCount latches at 1 after the first
+                // nudge and the head is never nudged again for this feature — even
+                // across new stall cycles.
+                if ((watch.nudgeCount ?? 0) > 0 || watch.lastNudgedAt > 0) {
+                    watch.nudgeCount = 0;
+                    watch.lastNudgedAt = 0;
+                    mutated = true;
+                }
                 kept.push(watch);
                 continue;
+            }
+
+            // Team-liveness: if any team member is actively producing output, the
+            // head is waiting for a coder, not stalled. Suppress the nudge. The
+            // feature head is a team head, so the roster is resolved the same way
+            // the queue nudge's seat-pacing branch resolves it. When the resolver
+            // is absent (headless/test harness), skip this gate — no evidence is
+            // not evidence of a live coder, so fall through to the normal gates.
+            if (this._queueTeamMembersResolver) {
+                try {
+                    const resolved = await this._queueTeamMembersResolver(folder, watch.headTerminal);
+                    const teamSet = new Set(resolved || []);
+                    teamSet.add(watch.headTerminal); // include the head itself
+                    const teamActive = Array.from(teamSet).some(name => {
+                        const entry = livenessByName.get(name);
+                        return entry && entry.lastDataAt > 0 && nowMs - entry.lastDataAt < nudgeSilenceMs;
+                    });
+                    if (teamActive) {
+                        kept.push(watch);
+                        continue;
+                    }
+                } catch { /* resolver failure is no evidence — fall through to normal gates */ }
             }
 
             // (4b) No turn-end notice for one of the feature's seats fired this tick.
@@ -1173,10 +1225,20 @@ export class PlanIngestionEngine {
                 continue;
             }
 
-            // Pacing: at most one nudge per watch per `turnEndSilenceMs` window.
+            // Pacing: at most one nudge per watch per `nudgeSilenceMs` window.
             // A floor well above the sweep tick (10s) so a stalled feature produces
-            // a periodic reminder rather than a stream.
-            if (watch.lastNudgedAt > 0 && nowMs - watch.lastNudgedAt < turnEndSilenceMs) {
+            // a periodic reminder rather than a stream. `nudgeSilenceMs` (default
+            // 10 min) is deliberately separate from `turnEndSilenceMs` (90s) — the
+            // nudge is a backstop, not a turn-boundary probe.
+            if (watch.lastNudgedAt > 0 && nowMs - watch.lastNudgedAt < nudgeSilenceMs) {
+                kept.push(watch);
+                continue;
+            }
+
+            // One nudge, then stop. A head that didn't respond to the first nudge
+            // won't respond to a second — repeating every window is the noise this
+            // fix exists to eliminate. A dispatch re-arms nudgeCount via gate (4a).
+            if ((watch.nudgeCount ?? 0) >= 1) {
                 kept.push(watch);
                 continue;
             }
@@ -1231,8 +1293,9 @@ export class PlanIngestionEngine {
             // foot-gun. Both sweeps must both read AND write this set.
             notifiedSeatsThisTick.add(watch.headTerminal);
 
-            // Stamp lastNudgedAt and keep the watch.
+            // Stamp lastNudgedAt and nudgeCount, and keep the watch.
             watch.lastNudgedAt = nowMs;
+            watch.nudgeCount = 1;
             mutated = true;
             kept.push(watch);
         }
@@ -1260,7 +1323,7 @@ export class PlanIngestionEngine {
      * hard-won guards verbatim: the empty-liveness guard (no evidence is not
      * "everyone died"), the mid-turn `lastDataAt` gate, the shared
      * `notifiedSeatsThisTick` set (both sweeps read AND write it), and the
-     * `turnEndSilenceMs` pacing floor. Called from the same tick as the feature
+     * `nudgeSilenceMs` pacing floor. Called from the same tick as the feature
      * sweep so the two share one liveness snapshot and one `nowMs`.
      *
      * Gates, in order:
@@ -1271,10 +1334,12 @@ export class PlanIngestionEngine {
      *     notify the user;
      *  5. any card in flight for this team → keep, stay silent, reset nudge
      *     state (the lead just dispatched);
+     *  5b. any team member actively producing output → keep, stay silent
+     *      (the lead is waiting for a coder, not stalled);
      *  6. a seat notified this tick → keep, stay silent (avoid a double wake);
      *  7. head `lastDataAt` within `turnEndSilenceMs` → keep, stay silent;
-     *  8. otherwise nudge, add the head to `notifiedSeatsThisTick`, and on the
-     *     second nudge with no dispatch in between, escalate to the user.
+     *  8. otherwise nudge once, add the head to `notifiedSeatsThisTick`, and
+     *     stop — no user escalation for the stall path. A dispatch re-arms.
      */
     private async _runQueueNudgeSweep(args: {
         db: KanbanDatabase;
@@ -1282,10 +1347,11 @@ export class PlanIngestionEngine {
         liveness: Array<{ friendlyName: string; lastDataAt: number; status: string }>;
         nowMs: number;
         turnEndSilenceMs: number;
+        nudgeSilenceMs: number;
         notifiedSeatsThisTick: Set<string>;
     }): Promise<void> {
         if (!this._turnEndNotifier) return; // no notifier → no delivery → nothing to do.
-        const { db, folder, liveness, nowMs, turnEndSilenceMs, notifiedSeatsThisTick } = args;
+        const { db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick } = args;
         const WATCH_KEY = 'kanban.queueWatches';
         let allWatches: QueueWatchRecord[] = [];
         try {
@@ -1498,42 +1564,22 @@ export class PlanIngestionEngine {
                     continue;
                 }
 
-                // Pacing floor: at most one nudge per watch per window.
-                if (watch.lastNudgedAt > 0 && nowMs - watch.lastNudgedAt < turnEndSilenceMs) {
+                // Pacing floor: at most one nudge per watch per `nudgeSilenceMs`
+                // window. `nudgeSilenceMs` (default 10 min) is deliberately
+                // separate from `turnEndSilenceMs` (90s) — the nudge is a
+                // backstop, not a turn-boundary probe.
+                if (watch.lastNudgedAt > 0 && nowMs - watch.lastNudgedAt < nudgeSilenceMs) {
                     kept.push(watch);
                     continue;
                 }
 
-                // (8 re-pointed) Escalation: one nudge, then escalate. The
-                // pacer may well be alive and simply slow; one nudge, then
-                // escalate to the operator AND record a failed attempt (step
-                // 7) so the card steps up the ladder.
+                // (8 re-pointed) One nudge, then stop. A pacer that ignored the
+                // first nudge is not going to answer a second — repeating every
+                // window is the noise this fix exists to eliminate. No user
+                // escalation for the stall path: the genuine operator alerts
+                // (no-pacer, dead-pacer) are preserved above. A dispatch resets
+                // nudgeCount, re-arming for the next stall.
                 if (watch.nudgeCount >= 1) {
-                    if (!watch.escalatedAt) {
-                        const body = `[switchboard:turn-end] Queue stall (seat pacing) — seat '${pacerSeat}' holding card '${heldCard.planId}' has not reported done after ${watch.nudgeCount} nudge(s). ${queueCards.length} card(s) remain staged. The seat may be stuck or gone; the card will be re-staged to a stronger seat.`;
-                        try {
-                            this._turnEndNotifier({
-                                seatName: pacerSeat,
-                                planFile: heldCard.planFile || '',
-                                outcome: 'stalled',
-                                workspaceRoot: folder,
-                                body,
-                            });
-                        } catch (cbErr) {
-                            this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge seat-pacing escalation notifier failed: ${cbErr}`);
-                        }
-                        this._host.logger.appendLine(
-                            `[GlobalPlanWatcher] Queue nudge (seat pacing): escalating to user for ${watch.workspaceRoot} — pacer '${pacerSeat}' ignored ${watch.nudgeCount} nudge(s) (${queueCards.length} card(s) staged).`
-                        );
-                        // Step 7: feed subtask 2's counter.
-                        if (this._queueEscalationRecorder) {
-                            try { await this._queueEscalationRecorder(folder, heldCard.planId, pacerSeat); }
-                            catch (recErr) { this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge escalation recorder failed: ${recErr}`); }
-                        }
-                        watch.escalatedAt = nowMs;
-                        watch.lastNudgedAt = nowMs;
-                        mutated = true;
-                    }
                     kept.push(watch);
                     continue;
                 }
@@ -1669,15 +1715,29 @@ export class PlanIngestionEngine {
             // reset nudge state. The lead just dispatched — a fresh stall
             // window starts from this dispatch. The in-flight predicate is
             // subtask 1's column-scoped one: a card in a coding column held
-            // by the head's team. Team membership is approximated here by
-            // `dispatchedTerminal === watch.headTerminal` (the head itself
-            // holds the card after a pop); the per-dispatch watchdog owns
-            // the working window.
+            // by the head's team. Team membership is resolved via
+            // `_queueTeamMembersResolver` (the same resolver the seat-pacing
+            // branch and `dispatchNextFromQueue` use), so a card dispatched to
+            // any team member counts as in-flight — not just one held by the
+            // head itself. When the resolver is absent (headless/test harness),
+            // fall back to `[watch.headTerminal]` — byte-for-byte the old
+            // head-only behavior.
+            let headTeamMembers: Set<string> | null = null;
+            if (this._queueTeamMembersResolver && watch.headTerminal) {
+                try {
+                    const resolved = await this._queueTeamMembersResolver(folder, watch.headTerminal);
+                    headTeamMembers = new Set(resolved || []);
+                } catch (memberErr) {
+                    this._host.logger.appendLine(`[GlobalPlanWatcher] Queue nudge: team resolution failed for ${watch.workspaceRoot}: ${memberErr}`);
+                    headTeamMembers = new Set();
+                }
+            }
+            const headTeamSet = headTeamMembers ?? new Set([watch.headTerminal]);
             const inFlight = board.some(p =>
                 p && CODING_COLUMNS.has(String(p.kanbanColumn || ''))
                 && typeof p.dispatchedTerminal === 'string'
                 && p.dispatchedTerminal.length > 0
-                && p.dispatchedTerminal === watch.headTerminal
+                && headTeamSet.has(p.dispatchedTerminal)
             );
             if (inFlight) {
                 if (watch.nudgeCount > 0 || watch.lastNudgedAt > 0 || watch.escalatedAt) {
@@ -1689,6 +1749,21 @@ export class PlanIngestionEngine {
                     delete watch.escalatedAt;
                     mutated = true;
                 }
+                kept.push(watch);
+                continue;
+            }
+
+            // Team-liveness: if any team member is actively producing output, the
+            // lead is waiting for a coder, not stalled. Suppress the nudge. Reuses
+            // the `headTeamSet` computed above and the `livenessByName` map. Even
+            // when no card is formally in-flight (all dispatch info cleared by
+            // `clearWorkingState`), a coder actively producing output means the
+            // lead is correctly idle — waiting for a coder, not stalled.
+            const headTeamActive = Array.from(headTeamSet).some(name => {
+                const entry = livenessByName.get(name);
+                return entry && entry.lastDataAt > 0 && nowMs - entry.lastDataAt < nudgeSilenceMs;
+            });
+            if (headTeamActive) {
                 kept.push(watch);
                 continue;
             }
@@ -1714,43 +1789,24 @@ export class PlanIngestionEngine {
                 continue;
             }
 
-            // Pacing: at most one nudge per watch per `turnEndSilenceMs` window.
-            if (watch.lastNudgedAt > 0 && nowMs - watch.lastNudgedAt < turnEndSilenceMs) {
+            // Pacing: at most one nudge per watch per `nudgeSilenceMs` window.
+            // `nudgeSilenceMs` (default 10 min) is deliberately separate from
+            // `turnEndSilenceMs` (90s) — the nudge is a backstop, not a
+            // turn-boundary probe.
+            if (watch.lastNudgedAt > 0 && nowMs - watch.lastNudgedAt < nudgeSilenceMs) {
                 kept.push(watch);
                 continue;
             }
 
-            // (8) Escalation: one nudge, then escalate. A nudge stream is what
-            // a poll is, and a head that ignored the first nudge is not going
-            // to answer a second. The escalation itself is ALSO one-shot —
-            // `escalatedAt` bounds it, because a user told the same thing every
-            // silence window learns to ignore the notice, which is the failure
-            // this watch exists to prevent. A real dispatch clears both stamps
-            // (the `onDispatch` re-arm and the in-flight gate below), so a queue
-            // that stalls again after progress escalates again.
+            // (8) One nudge, then stop. A head that ignored the first nudge is
+            // not going to answer a second — repeating every window is the noise
+            // this fix exists to eliminate. No user escalation: a lead paced by
+            // the queue watch is an agent, not a human, and a second notice to
+            // the human about an agent ignoring a first notice is noise that
+            // trains the human to ignore the genuine alerts. A dispatch resets
+            // nudgeCount (via the in-flight gate above), re-arming for the next
+            // stall.
             if (watch.nudgeCount >= 1) {
-                if (!watch.escalatedAt) {
-                    const body = `[switchboard:turn-end] Queue stall — coding head '${watch.headTerminal}' has not advanced the queue after ${watch.nudgeCount} nudge(s). ${queueCards.length} card(s) remain staged. The lead may be stuck, rate-limited, or gone.`;
-                    try {
-                        this._turnEndNotifier({
-                            seatName: watch.headTerminal,
-                            planFile: '',
-                            outcome: 'stalled',
-                            workspaceRoot: folder,
-                            body,
-                        });
-                    } catch (cbErr) {
-                        this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge escalation notifier failed: ${cbErr}`);
-                    }
-                    this._host.logger.appendLine(
-                        `[GlobalPlanWatcher] Queue nudge: escalating to user for ${watch.workspaceRoot} — head '${watch.headTerminal}' ignored ${watch.nudgeCount} nudge(s) (${queueCards.length} card(s) staged).`
-                    );
-                    watch.escalatedAt = nowMs;
-                    watch.lastNudgedAt = nowMs;
-                    mutated = true;
-                }
-                // Keep the watch but stop nudging AND stop escalating. A
-                // dispatch resets the stall state; nothing else does.
                 kept.push(watch);
                 continue;
             }

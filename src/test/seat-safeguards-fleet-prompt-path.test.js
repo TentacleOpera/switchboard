@@ -61,9 +61,6 @@ const BOOTSTRAP_SRC = fs.readFileSync(
 const KANBAN_PROVIDER_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'services', 'KanbanProvider.ts'), 'utf8'
 );
-const SKILL_SRC = fs.readFileSync(
-    path.join(__dirname, '..', '..', '.agents', 'protocols', 'terminal-coder-dispatch', 'SKILL.md'), 'utf8'
-);
 
 let passed = 0;
 let failed = 0;
@@ -817,27 +814,11 @@ test('standalone turn-end passes applyOrders = true, applySeatBlock = false', ()
     );
 });
 
-// ── 14. Skill file has the seat-safeguards paragraph ─────────────────────
-
-test('terminal-coder-dispatch SKILL.md has the seat-safeguards paragraph', () => {
-    assert.ok(
-        SKILL_SRC.includes('Seat safeguards ride the delivery layer'),
-        'terminal-coder-dispatch/SKILL.md must have the seat-safeguards paragraph'
-    );
-    assert.ok(
-        SKILL_SRC.includes('do not hand-copy'),
-        'The paragraph must state that a driving agent does not hand-copy seat safeguards'
-    );
-    assert.ok(
-        SKILL_SRC.includes('hand-typed') && SKILL_SRC.includes('can lose an') && SKILL_SRC.includes('argument to it'),
-        'The paragraph must state that hand-typed prose can lose an argument to the plan file'
-    );
-});
-
-// The .claude/skills mirror assertion is deliberately absent: terminal-coder-dispatch
-// is a path-delivered protocol and was dropped from MIRROR_MANIFEST, so no mirror copy
-// exists to compare against. A mirror assertion here would pass only while a stale
-// mirror lingered on disk, turning leftover staleness into a green gate.
+// ── 14. Skill file seat-safeguards paragraph — REMOVED ───────────────────
+// The terminal-coder-dispatch skill file was deleted; its rules were inlined
+// into _buildDrivePrefix in KanbanProvider.ts. The seat safeguards are enforced
+// by the delivery layer (buildSeatDirectiveBlock), not by a skill file, so no
+// retargeting is needed — the safeguards are system-enforced.
 
 // ── 15. Standing-orders regex and mirror are unchanged ───────────────────
 

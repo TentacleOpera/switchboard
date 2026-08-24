@@ -326,9 +326,9 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         if (value !== null) { prompts.push(value); }
     }
     assert.strictEqual(
-        prompts.length, 5,
-        `Expected 5 shipped team prompts, found ${prompts.length}. The gallery ships exactly ` +
-        'five team types (Batch planners, Coding, Review, Multi-agent planning, Planning with analyst) and each must carry a prompt.'
+        prompts.length, 6,
+        `Expected 6 shipped team prompts, found ${prompts.length}. The gallery ships exactly ` +
+        'six team types (Batch planners, Coding, Review, Multi-agent planning, Planning with analyst, Review and Acceptance) and each must carry a prompt.'
     );
     for (const p of prompts) {
         assert.ok(
@@ -405,7 +405,7 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     );
 
     // ── Review team headPrompt contract ──────────────────────────────
-    const reviewHeadPrompt = headPromptMatches.find(hp => hp.includes('You are the reviewer on a review team'));
+    const reviewHeadPrompt = headPromptMatches.find(hp => hp.includes('You lead this review team'));
     assert.ok(reviewHeadPrompt, 'Review team headPrompt not found among shipped headPrompts');
     const reviewHeadAnchor = /NEW_REVIEW_TEAM_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
     assert.ok(reviewHeadAnchor, 'NEW_REVIEW_TEAM_HEAD_PROMPT not found in teamWiring.ts');
@@ -415,10 +415,9 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         reviewHeadPrompt, tsReviewHeadPrompt,
         'Review headPrompt drift detected between kanban.html and teamWiring.ts.'
     );
-    assert.ok(reviewHeadPrompt.includes('{coder}'), 'Review headPrompt must carry {coder} substitution placeholder');
-    assert.ok(reviewHeadPrompt.includes('approximately 100 lines directly'), 'Review headPrompt must carry the self-fix threshold');
-    assert.ok(reviewHeadPrompt.includes('let the coder choose the fix'), 'Review headPrompt must preserve judgment-call autonomy');
-    assert.ok(reviewHeadPrompt.includes('POST /terminals/verb/ptySendPrompt'), 'Review headPrompt must reference ptySendPrompt');
+    assert.ok(reviewHeadPrompt.includes('assign its subtask plans to your reviewer seats in batches of up to two'), 'Review headPrompt must assign in batches of up to two');
+    assert.ok(reviewHeadPrompt.includes('four categories'), 'Review headPrompt must describe the four-category triage');
+    assert.ok(reviewHeadPrompt.includes('Apportion categories 2 and 3'), 'Review headPrompt must apportion categories 2 and 3');
     assert.ok(reviewHeadPrompt.includes('Never move a card backwards'),
         'Review headPrompt must carry the card-movement rule — the reviewer must not move cards backwards');
 
@@ -463,8 +462,8 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     // report) and unattended (record the blocked card, take the next queue
     // item). Without the unattended half, a head driving overnight ends its
     // turn on the first twice-failed subtask and the queue stalls with cards
-    // behind it — the failure `.agents/protocols/terminal-coder-dispatch/SKILL.md`
-    // §5.6 exists to remove. Standing orders survive a /clear, which is what
+    // behind it — the failure the inlined unattended rules in _buildDrivePrefix
+    // exist to remove. Standing orders survive a /clear, which is what
     // makes this instruction durable across a head's context resets.
     const unattendedEscalationSentence = 'stop and report to the human instead of dispatching again '
         + '(or unattended: record the blocked card to .switchboard/mission-control/reports/ '

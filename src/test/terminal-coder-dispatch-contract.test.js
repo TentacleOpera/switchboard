@@ -1,14 +1,25 @@
 'use strict';
 
 /**
- * Contract: Terminal Coder Dispatch bounds.
+ * Contract: Terminal Coder Dispatch bounds — retargeted to the enriched drive prefix.
  *
- * A head agent driving a feature through coder terminals must dispatch, review against
- * the plan, and report. It must not author design, must not add scope, must not issue
- * git verbs to its seats, and must not send a second message into a seat that has not reported.
+ * The skill file (.agents/protocols/terminal-coder-dispatch/SKILL.md) was deleted;
+ * its 7 load-bearing behavioral rules were inlined into _buildDrivePrefix in
+ * KanbanProvider.ts. This contract now pins those rules against the prefix source
+ * text so deletions or accidental regressions fail CI immediately.
  *
- * This contract test pins the load-bearing rules and bounds in the skill documentation
- * so that deletions or accidental regressions fail CI immediately.
+ * Retargeting decisions (per the plan's per-assertion table):
+ * - finding-cites-plan-clause → RETARGET to prefix wording
+ * - name-defect-not-mechanism → RETARGET to prefix wording (drop "The one exception" sub-assertion)
+ * - git-verb prohibition → RETARGET to prefix wording (drop enumerated-verbs sub-assertion)
+ * - clear-at-rest → RETARGET to prefix wording (drop "mandatory for correctness" sub-assertion)
+ * - §5.6 unattended → RETARGET the 4 inlined unattended rules
+ * - §6 escalation → RETARGET to prefix REVIEW line
+ * - authority order → DROP (full authority ladder not in prefix)
+ * - review conformance (§5) → DROP (review-methodology detail not in 7 rules)
+ * - never-message-a-working-seat → DROP (specific wording not in prefix)
+ * - §7 regression rules → DROP (operational details enforced by system)
+ * - All observed-failure anecdotes → DROP (illustrative, not operational)
  */
 
 const assert = require('assert');
@@ -16,14 +27,17 @@ const fs = require('fs');
 const path = require('path');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const read = (rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+const KANBAN_PROVIDER = fs.readFileSync(
+    path.join(REPO_ROOT, 'src', 'services', 'KanbanProvider.ts'), 'utf8'
+);
 
-const SKILL = '.agents/protocols/terminal-coder-dispatch/SKILL.md';
-// This protocol is delivered by PATH, not via CLI skill discovery, so it is no
-// longer mirrored into .claude/skills/ (it was dropped from MIRROR_MANIFEST by the
-// skill-injection-cleanup feature). Asserting against a mirror copy would only
-// re-pass while a stale mirror lingered on disk — which is precisely the staleness
-// that feature removes. The single source of truth is the protocol file itself.
+// Extract the _buildDrivePrefix method body from the source text. The rules are
+// inlined as string literals inside the `block` array literal within that method.
+const drivePrefixStart = KANBAN_PROVIDER.indexOf('_buildDrivePrefix');
+assert.ok(drivePrefixStart > 0, '_buildDrivePrefix method must exist in KanbanProvider.ts');
+const drivePrefixEnd = KANBAN_PROVIDER.indexOf('return block.join', drivePrefixStart);
+assert.ok(drivePrefixEnd > 0, '_buildDrivePrefix must have a return block.join statement');
+const DRIVE_PREFIX_SRC = KANBAN_PROVIDER.slice(drivePrefixStart, drivePrefixEnd);
 
 let failures = 0;
 function test(name, fn) {
@@ -36,202 +50,109 @@ function test(name, fn) {
     }
 }
 
-for (const target of [SKILL]) {
-    console.log(`\nValidating contract on ${target}:`);
+test('finding-cites-plan-clause rule is inlined in the drive prefix', () => {
+    assert.ok(
+        /Every finding cites a plan clause/.test(DRIVE_PREFIX_SRC),
+        'finding citation rule is missing from the drive prefix'
+    );
+    assert.ok(
+        /Quote the section or line the diff violates/.test(DRIVE_PREFIX_SRC),
+        'instruction to quote violated section or line is missing from the drive prefix'
+    );
+});
 
-    test(`[${target}] authority order appears and names the plan file as last`, () => {
-        const skill = read(target);
-        assert.ok(/authority order/i.test(skill), 'authority order section is missing');
-        assert.ok(/The user/i.test(skill), 'authority order missing "The user"');
-        assert.ok(/Project contracts/i.test(skill), 'authority order missing "Project contracts"');
-        assert.ok(
-            /The plan file[\s\S]{0,120}last in authority/i.test(skill) || /plan file[\s\S]{0,80}last/i.test(skill),
-            'authority order does not state the plan file is last'
-        );
-    });
+test('name-the-defect-not-the-mechanism rule is inlined in the drive prefix', () => {
+    assert.ok(
+        /Name the defect, never the mechanism/.test(DRIVE_PREFIX_SRC),
+        'name defect not mechanism rule is missing from the drive prefix'
+    );
+    assert.ok(
+        /Where the plan itself names a mechanism, quote the plan verbatim/.test(DRIVE_PREFIX_SRC),
+        'the plan-quoting exception for naming mechanism is missing from the drive prefix'
+    );
+});
 
-    test(`[${target}] a finding-must-cite-a-plan-clause rule exists with observed failure`, () => {
-        const skill = read(target);
-        assert.ok(
-            /[Ee]very finding cites a plan clause/.test(skill),
-            'finding citation rule is missing'
-        );
-        assert.ok(
-            /Quote the section or line/i.test(skill),
-            'instruction to quote violated section or line is missing'
-        );
-        // Anchored on wording unique to THIS rule. A looser "resolver ... dead store"
-        // regex is satisfied by rule 2's observed failure, so deleting rule 1's whole
-        // paragraph left the gate green.
-        assert.ok(
-            /[Oo]bserved failure[\s\S]{0,400}matches four existing[\s\S]{0,200}dead store[\s\S]{0,300}three-subtask defect/i.test(skill),
-            'observed failure for finding citation (an existing-but-wrong resolver accepted, then propagated) is missing'
-        );
-    });
+test('git-verb prohibition is inlined in the drive prefix', () => {
+    assert.ok(
+        /Never issue a git verb/.test(DRIVE_PREFIX_SRC),
+        'git-verb prohibition is missing from the drive prefix'
+    );
+    assert.ok(
+        /coders never commit/.test(DRIVE_PREFIX_SRC),
+        'rule that coders never commit is missing from the drive prefix'
+    );
+});
 
-    test(`[${target}] name-the-defect-not-the-mechanism rule exists, and its plan-quoting exception exists`, () => {
-        const skill = read(target);
-        assert.ok(
-            /[Nn]ame the defect, never the mechanism/.test(skill),
-            'name defect not mechanism rule is missing'
-        );
-        assert.ok(
-            /[Tt]he one exception[\s\S]{0,120}where the plan (itself )?names a mechanism[\s\S]{0,80}quote the plan verbatim/i.test(skill),
-            'the plan-quoting exception for naming mechanism is missing or incomplete'
-        );
-        assert.ok(
-            /(?:[Oo]bserved failure|### 2026-08-16: Head invented design)[\s\S]{0,500}(?:invented a resolver|designed a replacement)/i.test(skill),
-            'observed failure for invented mechanism is missing'
-        );
-    });
+test('clear-at-rest rule is inlined in the drive prefix', () => {
+    assert.ok(
+        /Clear a terminal only when at rest/.test(DRIVE_PREFIX_SRC),
+        'clear-at-rest rule is missing from the drive prefix'
+    );
+});
 
-    test(`[${target}] git-verb prohibition exists and names commit`, () => {
-        const skill = read(target);
-        assert.ok(
-            /[Nn]ever issue a git verb to a team seat/.test(skill),
-            'git-verb prohibition is missing'
-        );
-        assert.ok(
-            /No `?commit`?, `?push`?, `?branch`?, `?merge`?/i.test(skill),
-            'git-verb prohibition does not enumerate prohibited verbs including commit'
-        );
-        assert.ok(
-            /A team commits \*\*once\*\*, as its head/i.test(skill) || /Coders in a team never commit/i.test(skill),
-            'rule that coders never commit is missing'
-        );
-        // The cost half is pinned too: without it the failure reads as a style slip
-        // rather than an unscoped commit on main that the git policy forbids unwinding.
-        assert.ok(
-            /(?:[Oo]bserved failure|### 2026-08-16: "First commit" prose)[\s\S]{0,500}sw(?:ept|eeping) seven subtasks[\s\S]{0,200}unscoped commit on/i.test(skill),
-            'observed failure for git commit verb is missing (or its unscoped-commit-on-main cost was dropped)'
-        );
-    });
+test('§5.6 unattended rules are inlined in the drive prefix', () => {
+    assert.ok(
+        /You are unattended when no human is demonstrably reading/.test(DRIVE_PREFIX_SRC),
+        'unattended entry condition is missing from the drive prefix'
+    );
+    assert.ok(
+        /When you cannot tell, assume unattended/.test(DRIVE_PREFIX_SRC),
+        'unattended tie-break default is missing from the drive prefix'
+    );
+    assert.ok(
+        /Record a question report to .switchboard\/orchestrator\/reports\/ and continue in the same turn/.test(DRIVE_PREFIX_SRC),
+        'record-and-continue rule is missing from the drive prefix'
+    );
+    assert.ok(
+        /Subtask blocked after escalation: record blocked, leave the card, move to the next subtask/.test(DRIVE_PREFIX_SRC),
+        'blocked-after-escalation rule is missing from the drive prefix'
+    );
+    assert.ok(
+        /Anything irreversible.*destructive git.*pushing.*deleting data or cards.*stop and record/.test(DRIVE_PREFIX_SRC),
+        'irreversible-action rule is missing from the drive prefix'
+    );
+});
 
-    test(`[${target}] review turn (§5) includes mechanism conformance verification`, () => {
-        const skill = read(target);
-        assert.ok(
-            /Where the plan names a mechanism, verify the seat used \*\*that\*\*\s+mechanism/i.test(skill),
-            '§5 conformance step for plan-named mechanism is missing'
-        );
-        assert.ok(
-            /The function exists and has other call sites.*is not conformance/i.test(skill),
-            '§5 warning that existing function with call sites is not conformance is missing'
-        );
-    });
+test('§6 escalation ladder is in the drive prefix REVIEW line', () => {
+    assert.ok(
+        /Escalate after two failures on the same subtask: intern → coder → lead/.test(DRIVE_PREFIX_SRC),
+        'escalation ladder is missing from the drive prefix REVIEW line'
+    );
+});
 
-    test(`[${target}] never-message-a-working-seat and single-instruction rules exist`, () => {
-        const skill = read(target);
-        assert.ok(
-            /[Nn]ever message a seat that has not reported/.test(skill),
-            'never-message-a-working-seat rule is missing'
-        );
-        // Anchored to the working-seat sentence: a bare /mid-turn/ also matches §3.5's
-        // pre-existing "it will not interrupt you mid-turn", so the rationale was unpinned.
-        assert.ok(
-            /have not heard from is\s+mid-turn/i.test(skill),
-            'mid-turn rationale for working seat is missing'
-        );
-        assert.ok(
-            /[Cc]orrecting an instruction already delivered is a clear plus one authoritative dispatch/i.test(skill),
-            'clear plus one dispatch rule for correcting delivered instruction is missing'
-        );
-        assert.ok(
-            /[Pp]refer an idle seat over a second item/i.test(skill),
-            'prefer idle seat over piling on busy seat rule is missing'
-        );
-    });
+test('the skill file pointer has been removed from the drive prefix', () => {
+    assert.ok(
+        !/terminal-coder-dispatch\/SKILL\.md/.test(DRIVE_PREFIX_SRC),
+        'the drive prefix must not reference the deleted skill file'
+    );
+});
 
-    test(`[${target}] clear-at-rest rule is stated as mandatory for correctness`, () => {
-        const skill = read(target);
-        assert.ok(
-            /mandatory for correctness/i.test(skill),
-            'clear-at-rest is not marked as mandatory for correctness'
-        );
-        assert.ok(
-            /[Cc]lear at rest, always/.test(skill),
-            'clear at rest, always directive is missing'
-        );
-    });
+test('the SUBTASKS section has been removed from the drive prefix', () => {
+    assert.ok(
+        !/SUBTASKS:/.test(DRIVE_PREFIX_SRC),
+        'the drive prefix must not contain a SUBTASKS section (plan IDs are in the feature file)'
+    );
+});
 
-    test(`[${target}] §5.6 driving unattended section exists with core asymmetry, complete default-action table, and turn bounds`, () => {
-        const skill = read(target);
-        assert.ok(
-            /## 5\.6\. Driving unattended/i.test(skill) || /driving unattended/i.test(skill),
-            'driving unattended section is missing'
-        );
-        assert.ok(
-            /asking costs the whole night; acting wrongly on a reversible thing costs one card/i.test(skill),
-            'core asymmetry sentence is missing'
-        );
+test('the FEATURE FILE line is present in the drive prefix', () => {
+    assert.ok(
+        /FEATURE FILE:/.test(DRIVE_PREFIX_SRC),
+        'the drive prefix must contain a FEATURE FILE line pointing at the feature file'
+    );
+    assert.ok(
+        /Team Dispatch Instructions/.test(DRIVE_PREFIX_SRC),
+        'the FEATURE FILE line must reference the Team Dispatch Instructions section'
+    );
+});
 
-        // A mode with no entry condition never fires: a head that cannot tell which
-        // mode it is in reads the attended rules and stalls, which is the whole bug.
-        assert.ok(
-            /[Ww]hich mode you are in/.test(skill),
-            'the unattended mode has no stated entry condition — a head cannot tell which mode governs'
-        );
-        assert.ok(
-            /[Ww]hen you cannot tell, you\s+are unattended/i.test(skill),
-            'the tie-break defaulting an undetermined head to unattended is missing'
-        );
-
-        // Verify default-action table rows
-        assert.ok(/Which seat takes the next item/i.test(skill), 'table row "Which seat takes the next item" missing');
-        assert.ok(/Order of remaining work/i.test(skill), 'table row "Order of remaining work" missing');
-        assert.ok(/A defect with no citable plan clause/i.test(skill), 'table row "A defect with no citable plan clause" missing');
-        assert.ok(/A seat fails the same subtask twice/i.test(skill), 'table row "A seat fails the same subtask twice" missing');
-        assert.ok(/The team's work is complete/i.test(skill), 'table row "The team\'s work is complete" missing');
-        assert.ok(/A card looks superseded or redundant/i.test(skill), 'table row "A card looks superseded or redundant" missing');
-        assert.ok(/A seat has reported and its next work is a different surface/i.test(skill), 'table row "A seat has reported..." missing');
-        assert.ok(/Keeping a seat's context across subtasks/i.test(skill), 'table row "Keeping a seat\'s context across subtasks" missing');
-        assert.ok(/Any decision not listed above/i.test(skill), 'catch-all table row "Any decision not listed above" missing');
-        assert.ok(/Anything irreversible/i.test(skill), 'table row "Anything irreversible" missing');
-
-        // Verify irreversible block bounds
-        assert.ok(/Destructive git/i.test(skill), 'irreversible block does not name destructive git');
-        assert.ok(/force push/i.test(skill), 'irreversible block does not name force push');
-        assert.ok(/deleting user data or board cards/i.test(skill), 'irreversible block does not name deleting user data or board cards');
-
-        // Bounding rules
-        assert.ok(/A default is never an invention/i.test(skill), 'rule "A default is never an invention" missing');
-        assert.ok(/Recording is not asking/i.test(skill), 'rule "Recording is not asking" missing');
-        assert.ok(/Recording does not end your turn/i.test(skill), 'rule "Recording does not end your turn" missing');
-        assert.ok(/The head commits as the team's head, not via a seat/i.test(skill), 'rule "The head commits as the team\'s head" missing');
-    });
-
-    test(`[${target}] §6 resend & escalation ladder includes unattended terminal rung`, () => {
-        const skill = read(target);
-        assert.ok(
-            /Unattended:[\s\S]{0,200}retires \*\*that card\*\*, not the session/i.test(skill) ||
-            /retires \*\*that card\*\*, not the session/i.test(skill),
-            '§6 unattended ladder terminal rung retiring the card and proceeding to next queue item is missing'
-        );
-    });
-
-    test(`[${target}] §7 original load-bearing rules survive (regression guard)`, () => {
-        const skill = read(target);
-        assert.ok(
-            /[Nn]ever clear yourself/.test(skill),
-            'regression: "Never clear yourself" was dropped'
-        );
-        assert.ok(
-            /ptyClearAllTerminals/.test(skill),
-            'regression: ptyClearAllTerminals warning was dropped'
-        );
-        assert.ok(
-            /[Oo]nly clear a terminal that is genuinely at rest/.test(skill),
-            'regression: "Only clear a terminal that is genuinely at rest" was dropped'
-        );
-        assert.ok(
-            /no busy check/i.test(skill),
-            'regression: "no busy check" warning was dropped'
-        );
-        assert.ok(
-            /[Ss]tanding orders survive a clear/.test(skill),
-            'regression: "Standing orders survive a clear" was dropped'
-        );
-    });
-}
+test('DRIVE_FEATURE_PREFIX fallback does not reference the deleted skill file', () => {
+    const fallbackMatch = KANBAN_PROVIDER.match(/const DRIVE_FEATURE_PREFIX = '([^']*)'/);
+    assert.ok(fallbackMatch, 'DRIVE_FEATURE_PREFIX constant must exist');
+    assert.ok(
+        !/terminal-coder-dispatch/.test(fallbackMatch[1]),
+        'DRIVE_FEATURE_PREFIX fallback must not reference the deleted skill file'
+    );
+});
 
 if (failures > 0) {
     console.error(`\n${failures} contract failure(s)`);

@@ -61,7 +61,7 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     { source: 'workflows/switchboard-memo.md', name: 'switchboard-memo', invocation: 'default' },
 
     // --- Internal extension-dispatched skills (no-user: hidden from slash, model-loadable) ---
-    // improve-plan, improve-feature, accuracy, terminal-coder-dispatch, dispatch-analysis,
+    // improve-plan, improve-feature, accuracy, dispatch-analysis,
     // advise_research, switchboard-mission-control(-external/-internal), switchboard-mission-control-http,
     // switchboard-contracts, complexity-scoring, deep-planning, web-research, tuning,
     // constitution-builder, external-team-lead, improve-remote-plan, design-system-builder,

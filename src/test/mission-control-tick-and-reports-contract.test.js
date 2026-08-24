@@ -270,7 +270,7 @@ async function run() {
     await check('the handoff bullet describes what the queue watch actually does', () => {
         assert.ok(
             !/queue.watch[^.]{0,80}dispatches subsequent cards/i.test(persona),
-            'persona claims the queue watch dispatches for the lead — it sends one nudge telling the lead to call POST /kanban/queue/next itself (PlanIngestionEngine queue sweep), then escalates once and stops'
+            'persona claims the queue watch dispatches for the lead — it sends one nudge telling the lead to call POST /kanban/queue/next itself (PlanIngestionEngine queue sweep), then stops — no user escalation'
         );
         assert.ok(
             /lead-paced and queue-watched/.test(persona),

@@ -325,6 +325,14 @@ jobs:
       - name: VSIX packaging contract (no debug symbols, runtime files present, publish mechanics)
         run: npm run test:contract:vsix-packaging
 
+      # The reviewer must assess the plan's goal, not only its steps, and must
+      # escalate a destination change rather than silently reversing the plan's
+      # purpose. Pins the GOAL VERDICT clause, the escalation instruction, the
+      # pinned-string invariant, the constitution rule, and the protocol schema
+      # addition — all as source-level + behavioural assertions.
+      - name: Goal-invariant verification and review escalation contract
+        run: npm run test:contract:goal-invariant-verification
+
       - name: Design asset route security contract
         run: npm run test:contract:design-asset
 

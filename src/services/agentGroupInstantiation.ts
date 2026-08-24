@@ -278,6 +278,8 @@ Do not rely on worker self-reports alone; inspect the actual git commits.
 Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. Never move a card to a new column yourself: your only card action is the POST /kanban/dispatch call below, and only when your team has a reviewer seat.
 
 When all subtasks of the feature are complete and verified:
+1. Commit all changes once, as the team's head — do not commit after each subtask.
+2. Advance to review:
 \`\`\`json
 POST /kanban/dispatch
 {

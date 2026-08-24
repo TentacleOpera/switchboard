@@ -723,6 +723,14 @@ async function item8() {
             'TaskViewerProvider createHeadWithDelegates must forward teamName: spec.teamName in ptyCreateTerminal payload'
         );
     });
+
+    await test('agentGroupInstantiation.ts: writeHeadPromptFile §7 includes the commit-once guidance for the team head', () => {
+        assert.ok(
+            /Commit all changes once, as the team's head — do not commit after each subtask\./
+                .test(agentGroupInstantiationTs),
+            'writeHeadPromptFile §7 must include the commit-once guidance for the team head'
+        );
+    });
 }
 
 // ── Item 9: Reviewer delegation mode ────────────────────────────────────────
@@ -918,12 +926,12 @@ async function item9() {
         );
     });
 
-    await test('teamWiring.ts: NEW_REVIEW_TEAM_HEAD_PROMPT constant exists and contains {coder} and delegation directive', () => {
+    await test('teamWiring.ts: NEW_REVIEW_TEAM_HEAD_PROMPT constant exists and contains read-only triage and fix apportionment', () => {
         assert.ok(teamWiringTs.includes('export const NEW_REVIEW_TEAM_HEAD_PROMPT ='));
-        assert.ok(teamWiringTs.includes('You are the reviewer on a review team'));
-        assert.ok(teamWiringTs.includes('{coder}'));
-        assert.ok(teamWiringTs.includes('approximately 100 lines directly'));
-        assert.ok(teamWiringTs.includes('let the coder choose the fix'));
+        assert.ok(teamWiringTs.includes('You lead this review team'));
+        assert.ok(teamWiringTs.includes('assign its subtask plans to your reviewer seats in batches of up to two'));
+        assert.ok(teamWiringTs.includes('four categories'));
+        assert.ok(teamWiringTs.includes('Apportion categories 2 and 3'));
     });
 
     await test('review team migration replaces only the untouched shipped head prompt', () => {
@@ -936,10 +944,10 @@ async function item9() {
         assert.ok(!customResult || customResult[0].headPrompt === customized.headPrompt);
     });
 
-    await test('kanban.html: Review team preset exists in SHIPPED_TEAM_TYPES with reviewer headRole and coder member', () => {
+    await test('kanban.html: Review team preset exists in SHIPPED_TEAM_TYPES with reviewer headRole and reviewer members', () => {
         assert.ok(kanbanHtml.includes("name: 'Review'"));
         assert.ok(kanbanHtml.includes("headRole: 'reviewer'"));
-        assert.ok(kanbanHtml.includes("{ role: 'coder', count: 1, scope: 'per-team', relationship: 'reports-to-head' }"));
+        assert.ok(kanbanHtml.includes("{ role: 'reviewer', count: 3, scope: 'per-team', relationship: 'reports-to-head' }"));
     });
 }
 
