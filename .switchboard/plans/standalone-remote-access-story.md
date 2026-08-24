@@ -74,7 +74,7 @@ No user review required for the code changes (origin-relative URLs are strictly 
 ### Complex / Risky
 - **Three providers, not one.** Code review found that `PlanningPanelProvider._buildLocalAssetUrl` and `DesignPanelProvider._absoluteApiUrl` have the same absolute-URL pattern. All three must be fixed for the remote-access story to be complete. Each has a VS Code webview fallback (`asWebviewUri`) that must be preserved — the absolute form is correct for the webview host and wrong for the browser board, so the fix must be host-aware, not a blanket replacement.
 - **CSP revisit.** The board CSP (`headlessPanelHtml.ts:179`) has `img-src 'self' data:` only. The Planning and Design panel CSPs (`:282`, `:319`) include `http://127.0.0.1:*` specifically because of the absolute URLs. Once the URLs are origin-relative, `'self'` covers them by construction. The Planning/Design CSP entries for `http://127.0.0.1:*` become unnecessary (but harmless) and can be tightened.
-- **Tailscale configuration.** A tailnet name (e.g. `mybox.tail1234.ts.net`) is not in the accepted Host set (`isLoopbackHostname` accepts only `127.0.0.1`, `localhost`, `::1`, and `*.localhost`). The Tailscale path needs a local proxy performing the Host rewrite. The exact working configuration must be verified before publishing rather than asserted.
+- **Tailscale configuration.** A tailnet name (e.g. `mybox.tail1234.ts.net`) is not in the accepted Host set (`isLoopbackHostname` accepts only `127.0.0.1`, `localhost`, `::1`, and `*.localhost`). Bare Tailscale therefore needs a local proxy performing the Host rewrite, and the exact working configuration must be verified before publishing rather than asserted. The Tailscale + SSH tunnel form avoids the question entirely — it is the already-working SSH path over a different transport — and should be verified first, since if it works the proxy recipe may not need publishing at all.
 
 ## Edge-Case & Dependency Audit
 
@@ -100,6 +100,22 @@ No user review required for the code changes (origin-relative URLs are strictly 
 ## Adversarial Synthesis
 
 Key risks: (1) scope completeness — the original plan identified only `TicketsPanelProvider`; code review found two more providers with the same bug (`PlanningPanelProvider`, `DesignPanelProvider`), and all three must be fixed for the remote-access story to hold. (2) Host-aware fix — the absolute form is correct for the VS Code webview and wrong for the browser; the fix must detect which host is serving, not blindly replace. (3) Tailscale recipe — a tailnet name is not in the accepted Host set, so the recipe needs a verified proxy configuration, not an assertion. Mitigations: fix all three providers with host-aware logic; verify the Tailscale configuration before publishing; re-run the loopback-hostname-contract test to prove exposure-neutrality.
+
+## Ordering the paths by posture, not convenience
+
+*Added after the plan's review pass — appended rather than rewritten, so the original reasoning stands.*
+
+The doc's path list is currently ordered *"in ascending order of exposure"*, which is right, but it does not say **why** one private-network option beats another. That gap invites the common assumption that Tailscale is the secure choice and SSH the risky one. It is worth stating the actual reasoning, because it changes which recipe gets recommended.
+
+**SSH is not the weak part.** With key-only auth and passwords disabled, the protocol is sound. What carries risk is *exposure*: a publicly reachable `sshd` draws constant scanning, requires an inbound port-forward on a home router, and makes any future daemon CVE remotely reachable — not hypothetical, given regreSSHion (CVE-2024-6387) and the xz/liblzma backdoor that specifically targeted sshd.
+
+**What Tailscale contributes is the removal of the listener, not better tunnel crypto.** WireGuard underneath means the endpoint does not answer unauthenticated peers at all, plus device identity tied to SSO, per-device revocation, ACLs, and no port-forward. So the two are complementary: SSH is secure, and Tailscale removes the need to expose it.
+
+**Which makes Tailscale + SSH tunnel the recommended private-network recipe.** No public listener, no port-forward, no Host-rewrite proxy, and no code change — it reduces to the SSH path that already passes all four guards.
+
+**And bare Tailscale + proxy is a weaker posture than it looks.** Guards 2 and 3 reject any non-loopback peer *and* any non-loopback Host, so a tailnet peer cannot reach the board directly — even a compromised device on the tailnet gets a 403. That is a real protection layer, and the Host-rewrite proxy that makes bare Tailscale work is precisely what dismantles it: it terminates on the tailnet interface and satisfies the guard on the app's behalf. So the proxy recipe trades away the loopback guarantee, while the tunnel recipe keeps it. The doc should say that plainly rather than presenting the two as equivalent private-network options.
+
+**Neither transport substitutes for app-level auth**, and the plan's existing position on this is unchanged: one shared secret, no accounts, no revocation, no rate limiting. A transport that removes the public listener still leaves every peer that *can* reach the board holding the same single credential — so the multi-person case needs an identity-aware proxy regardless of which tunnel is used.
 
 ## Proposed Changes
 
@@ -135,7 +151,7 @@ Open with *why* the board is loopback-only: it spawns PTYs, writes the workspace
 Then, in ascending order of exposure:
 
 - **SSH tunnel** — the recommended default. Exact command, why it satisfies the guards, and the note that the tunnel's local port need not match the server's.
-- **Tailscale** — private-network access without a public DNS name. Flag honestly that a tailnet name is *not* in the accepted Host set, so this path needs a local proxy performing the Host rewrite; verify the exact working configuration before publishing rather than asserting one.
+- **Tailscale** — private-network access without a public DNS name. Flag honestly that a tailnet name is *not* in the accepted Host set, so bare Tailscale needs a local proxy performing the Host rewrite; verify the exact working configuration before publishing rather than asserting one. **Lead with Tailscale + SSH tunnel instead** — see *Ordering the paths by posture* below: it needs no proxy, no Host rewrite and no code change, and it is the stronger posture rather than merely the easier one.
 - **Reverse proxy (Caddy / nginx)** — tested snippets, with `Host` rewritten to `switchboard.localhost` and WebSocket upgrade headers passed through. State plainly that terminals silently fail to stream if the upgrade headers are dropped, since that is the symptom a reader will otherwise be debugging.
 - **What is not supported, and why** — S3, CDNs and serverless hosts cannot run this at all: `getBoardHtml` (`headlessPanelHtml.ts:168-226`) generates the page per request with a fresh CSP nonce and injects the workspace root and host capabilities as body attributes, before considering that every action is a PTY spawn or a filesystem/git write. There is no static bundle to upload. Saying so once, with the reason, retires a question that will otherwise keep being asked.
 - **Public internet** — state the prerequisite rather than a recipe: today's auth is one shared secret with no accounts, revocation or rate limiting, so anything internet-facing needs an identity-aware proxy in front. No copy-paste config for this one; a working snippet would be read as an endorsement.

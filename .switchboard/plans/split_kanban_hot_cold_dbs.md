@@ -1,5 +1,12 @@
 # Split kanban.db into Hot (operational) + Cold (archive) Stores, with a Time-Based Board Window
 
+> **SUPERSEDED — see `storage-topology-one-choice-three-stores.md`.** Nothing below is deleted, and the analysis is not wasted: the board-window half is carried forward verbatim as an input, including the finding that the completed cap is display-only and bounds the wrong axis.
+>
+> What expires is the *file split*. This plan's stated goal is to "permanently bound the `sql.js` per-write cost", and its mechanism argument is that `export()` copies the whole file per mutation, so "per-write cost scales linearly with total DB size" and "every card move serializes ~10 MB" at ~10,000 plans. `sidecar-owned-db-real-sqlite-binding.md` replaces `sql.js` with a real binding using WAL and page-level writes, where a write costs the pages it changes — a 100 MB database costs the same per card move as a 1 MB one. The premise is removed, so a second *file* is no longer the remedy.
+>
+> A cold boundary still exists in the superseding plan, for two reasons this plan could not have had: bounding the unbounded board *read* (a query window, which is this plan's own good idea), and keeping dormant history out of a remote replica's sync volume. Read this plan for its board-window analysis; take placement from the topology plan.
+
+
 ## Goal
 
 Make the extension snappy at scale and *permanently* bound the sql.js per-write cost by keeping the **hot** operational DB to the working set. Introduce a **mandatory second sql.js DB** (`kanban-archive.db`) for cold/long-term plans, and **replace the count-based Completed cap with a time/activity-based window** that also defines the hot/cold boundary. No external dependency (the cold store is sql.js, not DuckDB), no data loss (plans **move**, never delete), reversible on access.
