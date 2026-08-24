@@ -163,6 +163,13 @@ Import before delete, archive as `*.migrated.bak`, never unlink a file that may 
 - **Downgrade:** point an older extension at a newer registry; assert refusal with a clear message.
 - **Uninstall:** assert the projected tree is identifiable as orphaned (a marker file) so cleanup is possible.
 
+### Goal Invariants
+
+- `git ls-files .agents .claude` returns nothing on a fresh scaffold — the control-plane scaffold is gone from the repo.
+- `git status` is clean after scaffolding — no extension-shipped content is committed.
+- The projected `.agents/` tree exists on disk and every file matches the registry hash — the control-plane definitions are resolvable from the store, not absent.
+- `git check-ignore` reports `.switchboard/sessions/`, `.switchboard/README.md`, `.switchboard/SWITCHBOARD_PROTOCOL.md`, and `.switchboard/CLIENT_CONFIG.md` as ignored — the wrong whitelist lines are gone.
+
 ## Outstanding Questions
 
 - Does any user actually customise `.agents/` content today? If yes, override preservation is the headline feature; if no, it is insurance and the plan gets simpler.

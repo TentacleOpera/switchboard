@@ -109,6 +109,14 @@ Additive columns plus three transactional rebuilds, all under one new version ga
 - **Old-version DB:** run against a DB stamped at several older schema versions, including pre-V20, pre-V34, and pre-V42; assert each reaches head.
 - **Unattributable-write guard:** assert an INSERT omitting `workspace_id` throws rather than writing a NULL-scoped row.
 
+### Goal Invariants
+
+- `PRAGMA table_info` on all ten previously-unscoped tables shows `workspace_id` — every table is multi-tenant.
+- `worktrees.branch UNIQUE` is scoped to `(branch, workspace_id)` — two projects with a `main` branch coexist.
+- `job_instructions.file UNIQUE` is scoped to `(file, workspace_id)` — two repos with the same instruction path coexist.
+- `kanban_meta.key PRIMARY KEY` is scoped to `(key, workspace_id)` — per-workspace meta does not overwrite across projects.
+- An INSERT omitting `workspace_id` throws — no NULL-scoped row can be written.
+
 ## Outstanding Questions
 
 - Does anything outside `KanbanDatabase` write to these ten tables directly (agent scripts under `scripts/`, `move-card.js`, `create-feature.js`)? Those writers need the new column too.

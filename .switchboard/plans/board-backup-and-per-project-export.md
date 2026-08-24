@@ -106,6 +106,13 @@ None for user data. Legacy `kanban-state` backup files are preserved and listed,
 - **Hostile import:** feed import a truncated file, a non-SQLite file, and a DB with a newer schema version; assert each is rejected with a clear message and no partial write.
 - **Path refusal:** assert backups refuse a destination inside a git work tree or a known sync folder.
 
+### Goal Invariants
+
+- A scheduled backup exists and passes `integrity_check` — loss of the board is a recoverable event.
+- Export of workspace A from a multi-workspace DB, imported into an empty DB, produces matching rows in every scoped table with no id collision — "hand this project to someone else" is a supported action.
+- A corrupt backup never evicts a good one — retention is safe under failure.
+- A pre-restore snapshot exists before any restore overwrites the live DB — restore is reversible.
+
 ## Outstanding Questions
 
 - Should export include the workspace's markdown plans as well, producing a fully self-contained bundle, or stay DB-only on the assumption the recipient has the repo?

@@ -107,6 +107,13 @@ None. Historically clobbered rows self-heal via the plan-watcher re-import; veri
 - **`linkOk` surfacing:** force a link failure; assert it is reported rather than swallowed.
 - **Existing suite** passes, including the feature and kanban regression files.
 
+### Goal Invariants
+
+- `createFeatureFromPlanIds` with an empty `planId` whose `sessionId` collides with the feature's id leaves `is_feature=1` — the logic bug is fixed.
+- Acquiring the same DB by workspace root and by resolved DB path returns the same object instance — one in-memory image per file per process.
+- All three creation entry points (kanban button, Features tab, `POST /kanban/feature`) produce `is_feature=1` immediately — no reliance on the 15-minute self-heal.
+- A link failure in `createFeatureFromPlanIds` is reported, not swallowed.
+
 ## Outstanding Questions
 
 - Does the `sessionId` arm ever fire in practice? The added logging answers this and decides whether the fallback can be deleted.

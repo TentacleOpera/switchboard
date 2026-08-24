@@ -185,3 +185,7 @@ assert.ok(!prefix.includes('Do NOT read .switchboard/api-server-port.txt'), 'pre
 ---
 
 **Recommendation:** Complexity 2 → Send to Intern
+
+## Implementation Summary
+
+Implemented the drive-mode prompt overhaul to eliminate redundant port and terminal name checks. Strengthened `_buildDrivePrefix` in `src/services/KanbanProvider.ts` by replacing the vague opener with an explicit conditional directive instructing the lead not to read `.switchboard/api-server-port.txt` when the port is resolved, and explicitly directing it to skip terminal name and skill port checks. Removed the unnecessary terminal name line and the port file parenthetical from the prompt block. Added contract test assertions in `src/test/drive-mode-prompt-overhaul-contract.test.js` covering both resolved-port and fallback scenarios.

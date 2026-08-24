@@ -693,6 +693,33 @@ post-coding refusal rule rather than demoting finished work.
 
 ### 4. `.agents/skills/group-into-features/SKILL.md` — propose uniform groups, stop teaching the warning
 
+> **Superseded:** the target file named in this change's heading and used throughout its bullets —
+> `.agents/skills/group-into-features/SKILL.md` — and the `:8` line anchor for the doc-error fix.
+> **Reason:** that directory no longer exists. Its body was merged into the consolidated
+> `manage-features` skill (Create / Create from Plans / Group / Rearrange), and neither
+> `.agents/skills/group-into-features` nor `.claude/skills/group-into-features` is present. Every
+> edit specified below is unrunnable as written. `_buildSuggestFeaturesPrompt` has already been
+> repointed and now emits `${workspaceRoot}/.agents/skills/manage-features/SKILL.md`
+> (`src/services/KanbanProvider.ts:15411`), so the board button is current — only this plan's
+> target is stale.
+> **Replaced with:** the same edits, unchanged in substance, applied to
+> `.agents/skills/manage-features/SKILL.md` in its **Group** section:
+> - **Step 3 (PROPOSE)** — the ⚠ CROSS-COLUMN warning block is at `:325-336`, running from
+>   `**Cross-column warning:**` through `to a coder column.` and stopping before
+>   `For each proposed feature, write:`.
+> - **Step 5 (EXECUTE)** — the ⚠ Cross-Column Review Note template is at `:378-392`, ending with
+>   the sentence stating the note is preserved by `_regenerateFeatureFile`.
+> - **The doc error** is at `:274`, not `:8` — the "copies this skill's text with the workspace
+>   root injected" claim now sits in the Group section's **When to Use** paragraph. The mirror
+>   carries it at `.claude/skills/manage-features/SKILL.md:280`. Locate it by wording, not by line.
+>
+> The rule this change installs is unaltered: prefer uniform groupings; when a cross-column
+> grouping is the genuine capability fit, proceed and state plainly that creation demotes the later
+> plans to the earliest member's column, naming which. That decision was re-confirmed on
+> 2026-08-24 against the alternative of forbidding a mixed proposal outright; see
+> `one-feature-one-column-forbid-mixed-column-grouping.md` (withdrawn) for why the prohibition was
+> rejected.
+
 - **Step 3 (PROPOSE):** replace the ⚠ CROSS-COLUMN warning block. New rule: prefer groupings
   whose members share a column. When a cross-column grouping is genuinely the best capability
   fit, state plainly that **creating it will demote the later plans to the earliest member's
@@ -719,6 +746,25 @@ picks up skill edits at agent-execution time with no separate prompt edit — bu
 in the copied prompt still resolves, do not assume it.
 
 ### 5. `.agents/skills/kanban_operations/SKILL.md` — align the sibling guidance
+
+> **Superseded:** the four line anchors in this change, and the two pointers to
+> `group-into-features/SKILL.md` that its bullets rely on.
+> **Reason:** the file has shifted since this plan was written, and the path those pointers name
+> was deleted (see change 4). Current anchors: the `assign-to-feature.js` cross-column warning is
+> at `:131-135` (was `:127-131`); the Suggest Features Workflow steps are at `:193` and `:195`
+> (was `:189-191`); the declarative `reconcile-features.js` cross-column line is at `:256`
+> (was `:252`), under `## Reorganize Features`.
+> **Replaced with:** the same four edits at those anchors, plus one addition this change did not
+> account for — `:135`, `:193` and `:195` each defer to `group-into-features/SKILL.md` for the
+> warning text or the note template. Repoint all three at `.agents/skills/manage-features/SKILL.md`
+> (its **Group** section) in the same pass; as written they send a reader to a directory that is
+> not there.
+>
+> The `.claude/` mirror carries the same three dangling pointers at
+> `.claude/skills/kanban-operations/SKILL.md:142`, `:200` and `:202`. Change 7 regenerates them and
+> both skills are already in `MIRROR_MANIFEST` (`src/services/ClaudeCodeMirrorService.ts:47`), so
+> no manifest edit is needed — but note the source-to-target rename: `skills/kanban_operations`
+> mirrors to `kanban-operations`.
 
 - Rewrite the `assign-to-feature.js` cross-column warning (`:127-131`) to describe the new
   demote-on-assign behaviour instead of the Replan-afterwards remedy.
@@ -806,7 +852,11 @@ guidance cannot live in any one prompt. Name the destination where every actor p
   actor-agnostic by construction and is the load-bearing half.
 - **The skills carry the rule**, because they are what an agent reads before acting:
   `kanban_operations` (both the `assign-to-feature.js` and `reconcile-features.js` sections),
-  `create-feature-from-plans`, and `group-into-features`. State it once and identically: *work
+  `create-feature-from-plans`, and `group-into-features`. *(Superseded: the latter two are no
+  longer separate skills — both are sections of `manage-features` (**Create from Plans** and
+  **Group**). The rule goes into those two sections of that one file, so "state it once and
+  identically" now means two sections in `manage-features` plus two sections in
+  `kanban_operations`, not three files.)* State it once and identically: *work
   that surfaces while a feature is in flight goes to `<feature name> — Follow-ups` at CREATED,
   never onto the feature itself.* With no parent feature, it is a standalone plan at CREATED.
 - **Record provenance** in the new plan's body (`Discovered during work on <feature>`), so the
@@ -843,6 +893,26 @@ touched by changes 4 and 5, and they produce **three** mirrors, because
 A regeneration that updates `kanban-operations` but not `switchboard-kanban` leaves a stale copy
 under a name the model can still resolve — the failure this change exists to prevent, reproduced
 inside a single host.
+
+> **Superseded:** the mirror inventory table above, its three-mirror count, the
+> `switchboard-kanban` duplicate hazard, this section's opening `ClaudeCodeMirrorService.ts:167`
+> reference, and the `diff against group-into-features` example in the paragraph that follows.
+> **Reason:** `MIRROR_MANIFEST` has changed on all three rows. `skills/group-into-features` is
+> gone entirely (merged into `manage-features`); `skills/kanban_operations` has moved to `:87`;
+> and the second `kanban_operations` entry that produced a `switchboard-kanban` mirror **no longer
+> exists** — there is no such manifest row and no `.claude/skills/switchboard-kanban` directory on
+> disk. The duplicate-name hazard this section warns about cannot occur, so a verification step
+> written to catch it will look for a mirror that is not there and report blocked.
+> **Replaced with** — two source directories, **two** mirrors:
+>
+> | `.agents/` source | `.claude/skills/` mirror | manifest line |
+> | --- | --- | --- |
+> | `skills/manage-features` | `manage-features` | `:75` |
+> | `skills/kanban_operations` | `kanban-operations` | `:87` |
+>
+> Neither is a move, so no manifest edit is required — regenerate and compare bodies. The
+> source-to-target rename `kanban_operations` → `kanban-operations` still holds and is still the
+> thing a naive path-equality check gets wrong.
 
 **Mirrors are not byte-identical to their sources.** The generator prepends a YAML frontmatter
 block (`name`, `description`, `allowed-tools`, `user-invokable`) and leaves the body verbatim —
@@ -938,15 +1008,20 @@ planning pass. The steps below are the acceptance criteria to execute at impleme
     uniform case fires **zero** sync calls.
 14. **Skill round trip.** Press **SUGGEST FEATURES** on the board and inspect the copied prompt.
     Confirm it contains the correct
-    `<workspaceRoot>/.agents/skills/group-into-features/SKILL.md` path and the candidate-card
+    `<workspaceRoot>/.agents/skills/manage-features/SKILL.md` path and the candidate-card
     list with each card's column. Then confirm the file at that path no longer contains the
-    "⚠ CROSS-COLUMN" / "press Replan afterwards" instructions, and that its "When to Use" line
-    no longer claims the button copies the skill's text.
-    *(The original form of this step — "confirm the copied prompt carries the rewritten step 3 /
-    step 5 text" — is unrunnable: the prompt passes a path, never the skill body.)*
+    "⚠ CROSS-COLUMN" / "press Replan afterwards" instructions, and that its Group **When to Use**
+    paragraph (`:274`) no longer claims the button copies the skill's text.
+    *(Two earlier forms of this step were unrunnable. "Confirm the copied prompt carries the
+    rewritten step 3 / step 5 text" — the prompt passes a path, never the skill body. And the path
+    it asserted, `group-into-features/SKILL.md`, no longer exists;
+    `_buildSuggestFeaturesPrompt` emits `manage-features/SKILL.md` at
+    `src/services/KanbanProvider.ts:15411`.)*
 15. **All skill copies agree.** Compare each `.agents/` source against its `.claude/` mirror
-    **body**, skipping the generated YAML frontmatter block. Cover all three mirrors from the
-    change-6 table, including **both** `kanban_operations` targets.
+    **body**, skipping the generated YAML frontmatter block. Cover **both** mirrors from the
+    corrected change-7 inventory: `manage-features` and `kanban-operations`.
+    *(This step previously said "all three mirrors from the change-6 table" — the table is in
+    change 7, not 6, and the third mirror, `switchboard-kanban`, no longer exists.)*
 16. **Agent-level replay.** Re-run the grouping task that produced the observed failure (17
     candidates, three of them in PLAN REVIEWED) against the rewritten skill. The proposal must
     either group by column or state the demotion up front; the resulting board must contain no
@@ -979,9 +1054,13 @@ implementation time:
   `_resolveFeatureColumn`, and that `recomputeFeatureColumnFromSubtasks` still contains its
   `current !== 'CREATED'` early-return. Written in the style of the existing
   `src/test/*-regression.test.js` source-pinning tests.
-- **Skill-text regression** — assert `.agents/skills/group-into-features/SKILL.md` and
+- **Skill-text regression** — assert `.agents/skills/manage-features/SKILL.md` and
   `.agents/skills/kanban_operations/SKILL.md` contain no `CROSS-COLUMN` or `press the **Replan**`
-  strings, mirroring how `kanban-coded-auto-batching-regression.test.js` pins prompt text.
+  strings, mirroring how `kanban-coded-auto-batching-regression.test.js` pins prompt text. Assert
+  the same for the two `.claude/` mirrors, and additionally that neither source nor mirror contains
+  the string `group-into-features` — that path is deleted, and a surviving reference is a dangling
+  pointer rather than merely stale prose.
+  *(This test named `group-into-features/SKILL.md` as a target file; it does not exist.)*
 
 ---
 

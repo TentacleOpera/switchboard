@@ -162,6 +162,13 @@ No user-data migration. Ship-order safety: the sidecar must refuse to serve an e
 - **Dialect parity:** assert the 18 `rowid` sites, `last_insert_rowid()` (`:4094`), the 6 `PRAGMA` uses, 13 `AUTOINCREMENT` columns and 15 `datetime('now')` calls behave identically under the new binding as under sql.js. Both candidates are SQLite, so this should be a formality — run it anyway, because "should be" is the assumption the whole binding choice rests on, and `node:sqlite`'s API surface is narrower than sql.js's.
 - **Existing suite:** the ~220-file test suite must pass, with the eviction/persist tests deleted rather than skipped.
 
+### Goal Invariants
+
+- `_residentDbBudgetBytes` and the eviction sweep are absent from `src/` — the sql.js memory apparatus is gone.
+- `_doPersist()` does not call `this._db.export()` — the whole-file-in-memory export path is gone.
+- One sidecar process owns the database; every other client reaches it via `LocalApiServer` HTTP — no second in-memory image exists.
+- RSS stays flat under 200 card moves — memory is O(working set), not O(database).
+
 ## Outstanding Questions
 
 - How large is the async conversion inside the sidecar, measured rather than estimated? This is the deciding number for the binding choice; scope it in the first day of work and report before proceeding.

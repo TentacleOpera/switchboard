@@ -124,6 +124,13 @@ Per source database: migrate to head, merge under a transaction with id remappin
 - **Guard removal:** grep-level regression asserting `switchboardLocationGuard` and `db-pointer` are gone.
 - **Git-clean survival:** run `git clean -xdf` in a workspace; assert the board is intact.
 
+### Goal Invariants
+
+- `switchboardLocationGuard` and `db-pointer` are absent from `src/` — the three subsystems that existed only to answer "which database does this folder use?" are gone.
+- No `kanban.db` file exists inside any workspace repository after migration — board state has moved out of the repo.
+- Board state is resolvable at `~/.switchboard/` — the global store holds every workspace and serves the board.
+- `git clean -xdf` in a workspace leaves the board intact — the database is no longer in the repo to be deleted.
+
 ## Outstanding Questions
 
 - Is there any reliable enumeration of "workspaces this user has opened", or is discovery necessarily best-effort plus on-open?

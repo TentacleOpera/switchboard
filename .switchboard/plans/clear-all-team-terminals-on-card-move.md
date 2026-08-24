@@ -104,3 +104,7 @@ The custom-user column branch in `KanbanProvider.triggerAction` calls `dispatchC
    - `node --check src/services/TaskViewerProvider.ts` — syntax check
    - Run `src/test/seat-safeguards-fleet-prompt-path.test.js` — existing dispatch path assertions still pass
    - Run `src/test/standing-orders-marker-contract.test.js` — standing orders delivery after clear still works
+
+## Implementation Summary
+
+Implemented Step 1 only (Steps 2–3 verified no change needed). Inserted a fire-and-forget team-wide clear block in `_handleTriggerAgentActionInternal` (`src/services/TaskViewerProvider.ts`, after the F-04 security validation at line ~22079, before the terminal-focus block). After `targetAgent` is resolved and validated, the code calls `resolveTeamMembers(resolvedWorkspaceRoot, targetAgent)`; if the roster has >1 member, it filters out the destination seat and runs `void Promise.allSettled(others.map(name => this.clearTerminalContext(...)))`. The roster DB read is awaited (fast), but the sibling clears are detached — dispatch to the target proceeds without waiting. `clearTerminalContext` respects `terminal.clearBeforePrompt` (returns `{cleared:false}` when off), never throws, and re-delivers standing orders after a successful clear. Batch and custom-column dispatch paths route through the same `_handleTriggerAgentActionInternal`, so they inherit the team-wide clear (redundant clears on already-clean terminals are no-ops). Compilation and tests skipped per run directives.

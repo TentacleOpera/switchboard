@@ -175,3 +175,7 @@ Add test cases:
 - Dispatch a custom agent (custom role column) with the API server running — verify the prompt contains `SWITCHBOARD STATUS: Live`.
 
 Send to Intern
+
+## Implementation Summary
+
+Injected `SWITCHBOARD_LIVENESS_DIRECTIVE` into `agentPromptBuilder.ts` via `dispatchPrefixCore`, propagating the live LocalApiServer port to all seven agent roles and eliminating redundant port discovery checks. Updated reviewer delegation fix instructions to use the live port URL directly instead of pointing to `.switchboard/api-server-port.txt`. Integrated `customLivenessSuffix` into `KanbanProvider.ts` for custom agent dispatches, and added skip notes to five skill files (`switchboard-mission-control-http`, `terminal-coder-dispatch`, `external-team-lead`, `improve-feature`, `kanban_operations`). Added comprehensive test cases in `agentPromptBuilder.test.ts` verifying liveness injection across all roles, omission when `apiPort` is 0, and reviewer delegation port formatting.

@@ -99,6 +99,12 @@ Import before delete, archive as `.migrated.bak`, never unlink, preserve unknown
 - **Custom-path warning:** set a custom path under a folder named `Dropbox`; assert a warning with an override, not a hard block. Set one under a localised sync folder name; assert it is *not* detected, confirming the heuristic's stated limits rather than pretending to completeness.
 - **Remaining controls:** assert Edit Path, Test, and Use Local DB still function.
 
+### Goal Invariants
+
+- `setPresetDbPath`, `db-preset-google-btn`, `db-preset-dropbox-btn`, and `db-preset-icloud-btn` are absent from `src/` — the preset UI and its handler are gone.
+- A custom DB path under a non-sync folder still works — the ability to relocate the database is preserved, only sync-folder destinations are refused.
+- A user currently on a preset path is migrated to the global store on next launch, with the source archived as `.migrated.bak` — no data loss.
+
 ## Outstanding Questions
 
 - Is there telemetry or any signal for how many installs currently use a preset path? It changes how prominent the release note needs to be.

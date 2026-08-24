@@ -266,3 +266,9 @@ Source-level contract tests (same style as existing contract tests — read sour
 - Auto-clear for `sendToTerminal` calls (different payload shape, different host path).
 - Changes to `clearTerminalContext` beyond the map-delete optimization.
 - Changes to the `clearBeforePrompt` config setting or its default.
+
+---
+
+## Implementation Summary
+
+Implemented host-enforced auto-clear on plan change across both hosts. Added `_lastDispatchedPlanByTerminal` Map (extension host class field in TaskViewerProvider.ts, module-level const in bootstrap.ts). On dispatch with a different planId, the host overrides `clearBeforePrompt` to `true` — same-planId resends preserve `false`. Map maintenance covers ptyClearTerminal, ptyClearAllTerminals, ptyCloseTerminal, ptyRenameTerminal, ptyWrite with /clear (extension host), and clearTerminalContext (extension host). Adapted plan §5: skill files were previously deleted and rules inlined into `_buildDrivePrefix` in KanbanProvider.ts, so documentation updates were applied there instead — expanded inlined rules to cover §7 rewrite (mandatory for correctness, Clear at rest always, same-code exception removed, context preserved for same-plan resends only) and §5.6 table rows (seat reported + different plan, keeping context across subtasks). Existing contract test assertions preserved. Created new contract test file `src/test/host-auto-clear-on-plan-change.test.js` with 11 source-level assertions. No compilation or tests run per dispatch directives.

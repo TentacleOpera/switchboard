@@ -111,6 +111,13 @@ Non-destructive by construction. Existing per-repo DuckDB archives are left in p
 - **Control-plane pruning:** seed three versions of a definition plus one carrying a local override; prune; assert current-plus-one-prior survive, the overridden row survives regardless of age, and the projection still regenerates byte-identically afterwards.
 - **Default-off:** assert a fresh install performs no rotation until explicitly enabled.
 
+### Goal Invariants
+
+- After rotation, out-of-window rows in `plan_events`, `activity_log`, `job_runs`, and `board_move_requests` are absent from SQLite and present in DuckDB — the hot database has a bounded working set.
+- Total row count across SQLite and DuckDB is unchanged by rotation — no data is lost.
+- Archived data is queryable via the archive join, or the view explicitly reports a retained window — never silently short.
+- A dormant workspace archived and reactivated has matching rows in every scoped table — archival is reversible.
+
 ## Outstanding Questions
 
 - What are the actual row rates? Unknown until the reporting surface ships — every window number in this plan is provisional until then.
