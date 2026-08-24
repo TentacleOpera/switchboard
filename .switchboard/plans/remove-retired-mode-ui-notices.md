@@ -1,5 +1,48 @@
 # Remove Retired-Mode UI Notices
 
+> **DELIVERED — do not dispatch.** Landed 2026-08-24 in `a42cad1f` during the
+> reviewer pass on the *Mission Control* feature, not through this plan's own
+> dispatch. Every change below is already in the tree:
+> - `#mc-retired-notice`, its `.mc-notice` CSS, its dismiss button and the
+>   `mcRetiredNotice` handler are deleted from `mission-control.html` /
+>   `mission-control.js`.
+> - The `#mc-dropped-jobs-notice` span and its render are deleted.
+> - `TaskViewerProvider._surfaceRetiredAutomationNotices` — a host notification
+>   added and then removed in the same reviewer pass — is gone.
+> - The kanban renderings went with the AUTOMATION tab's panel builder.
+> - Per this plan's *What stays*: `autobanState.ts`'s notice fields, the
+>   `isRetiredMode` guard and `RETIRED_AUTOMATION_MODES` are untouched.
+>
+> `autoban-state-regression.test.js` now **pins the absence** — no notice field
+> is rendered by `kanban.html`, `mission-control.html`, `mission-control.js`, or
+> a `showInformationMessage` call. That guard is the part worth keeping: an
+> unread notice field invites the next pass to give it a reader, which is exactly
+> what happened once already.
+>
+> **Superseded:** *"Since the AUTOMATION tab was never released, no shipped
+> install carries the pre-migration state shape, making these notices
+> unreachable by real users."*
+> **Reason:** half right, and the wrong half is load-bearing. The AUTOMATION
+> *tab* is unreleased, but the *mode axis it displayed* shipped —
+> `autobanState.ts` says so outright: `RETIRED_AUTOMATION_MODES` is "every
+> `automationMode` value that has ever shipped". A genuinely pre-collapse
+> install (has `automationMode`, no armed flag) still trips `isRetiredMode` and
+> still has `enabled` forced to false. So the notices were reachable; they were
+> just not worth showing.
+> **Replaced with:** the deletion stands on the standing product rule — **no UI
+> notice** — not on unreachability. And the harm the notice was announcing is
+> fixed at the source: the same reviewer pass added a renamed-key compat read to
+> `normalizeAutobanConfigState`, without which `orchestratorArmed` →
+> `missionControlArmed` made *every already-migrated install* read as
+> pre-collapse and force-disarmed its schedule. With that read in place an
+> upgrade is a no-op, so there is nothing left to announce.
+>
+> **What this plan got right and is worth remembering:** the root-cause
+> diagnosis. `.mc-notice { display: flex }` beats the `hidden` attribute's UA
+> `display: none`, so the banner rendered unconditionally and every
+> `hidden = true` toggle was inert. The reviewer pass had missed that and was
+> wiring toggles onto a banner that could never hide.
+
 ## Goal
 
 The Mission Control panel shows a permanent orange banner reading "The AUTOMATION tab has moved here. Your previous mode selection has been retired." This banner is dead UI that renders unconditionally due to a CSS/HTML conflict: the `.mc-notice` class sets `display: flex`, which overrides the `hidden` attribute on the div. No host code ever sends the `mcRetiredNotice` message that would toggle its visibility — that message type does not exist anywhere in the TypeScript codebase.
