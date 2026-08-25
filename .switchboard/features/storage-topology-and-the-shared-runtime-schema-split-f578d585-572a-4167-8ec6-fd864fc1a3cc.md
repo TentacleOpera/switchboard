@@ -20,6 +20,7 @@ Decide the fundamental shape of Switchboard storage - which stores exist, where 
 - [ ] [Imported ticket metadata is gitignored files and two bare id strings — make it first-class shared board state](../plans/ticket-metadata-as-first-class-board-state.md) — **CREATED**
 - [ ] [The board read endpoints must survive the storage topology, or the SQL-to-endpoints migration lands on endpoints that lie](../plans/board-read-endpoints-must-survive-the-storage-topology.md) — **CREATED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 Topology first, then the tier split, then the read endpoints and ticket metadata in parallel.

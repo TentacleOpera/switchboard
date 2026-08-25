@@ -18,6 +18,7 @@ Put document actions where users look for them - the meta-bar above the preview,
 - [ ] [Relocate Copy Link to Preview Meta-Bars Across All Panels](../plans/relocate-copy-link-to-preview-meta-bars.md) — **PLAN REVIEWED**
 - [ ] [Add Copy Prompt and Advance Buttons to Project.html Kanban Plans Meta-Bar](../plans/add-copy-prompt-and-advance-to-kanban-meta-bar.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 Copy Link lands first: it sets the meta-bar pattern the second subtask follows, and doing them in the other order means establishing the pattern twice. The feedback fix is independent of both.

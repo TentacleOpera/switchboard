@@ -107,22 +107,34 @@ For each candidate plan, analyze concurrency and ordering constraints:
 1. **Cycle Detection:** Check directed dependency edges for cycles (e.g. A depends on B and B depends on A).
    - If a cycle exists: **Report all cycle members and declared edges as input errors** in the summary report (step 6).
    - Leave all cycle members in **Planned** (do not stage them, and do not emit a partial order).
-2. **Compute Map Fingerprint:** Compute a SHA-256 hash of concatenated `{planId}:{sortedFileSet}` pairs for all candidates. This fingerprint validates map freshness across subsequent runs and detects edits to candidate plan files.
+2. **Compute the map fingerprint:** a SHA-256 hash of the concatenated `{planId}:{sortedFileSet}` pairs for every candidate, sorted by `planId`.
+3. **Compare it against the stored one, and say so.** For each candidate, `GET
+   http://localhost:{API_PORT}/kanban/dependencies?planId={planId}&workspaceRoot={WORKSPACE_ROOT}`
+   returns `mapFingerprint`. If a stored fingerprint exists and differs from the
+   one you just computed, the persisted map is **stale** — a plan's file set has
+   changed since it was written. Say which plans changed in the report (step 6)
+   before you write anything. Storing a fingerprint nobody compares detects
+   nothing; the comparison is the whole point of having it.
 
 ### 5. Persist dependency edges and stage candidates
 
 Persisting dependency edges allows all unblocked and sequential candidates to stage together in one run without losing dependency constraints.
 
-**5a. Persist dependency edges via the API:**
-For each plan with dependencies, call:
+**5a. Persist dependency edges and the fingerprint via the API:**
+For each candidate, call the endpoint once — with its edges (an empty array when
+it has none) and the fingerprint from step 4:
 ```
 POST http://localhost:{API_PORT}/kanban/dependencies
 {
   "workspaceRoot": "{WORKSPACE_ROOT}",
   "planId": "{planId}",
-  "dependsOn": ["{dependsOnPlanId1}", "{dependsOnPlanId2}"]
+  "dependsOn": ["{dependsOnPlanId1}", "{dependsOnPlanId2}"],
+  "mapFingerprint": "{sha256FromStep4}"
 }
 ```
+A `409` with a `cycle` array means the server refused the edge because it would
+close a loop — the same input error step 4 tells you to detect. Report the cycle
+it names, leave those plans in Planned, and do not retry with a different order.
 
 **5b. Move cards to STAGING, one at a time:**
 Stage all valid candidates (both stream heads and dependent successors):
@@ -143,6 +155,7 @@ Output a summary:
 - Total Planned plans analyzed: N
 - Dependency edges persisted: list of `{planId} -> depends on -> {predecessorId}`
 - Dependency cycles / input errors, if any: list cycle members and declared edges
+- Stale maps detected, if any: plans whose stored `mapFingerprint` did not match the recomputed one, and what changed
 - Plans moved to Staging: list with plan IDs, roles/streams, and brief descriptions
 - Plans remaining in Planned: list with plan IDs and reason
 - Moves that failed, if any, with error
@@ -150,9 +163,36 @@ Output a summary:
 
 ## Rules
 
-- **Never modify plan files.** This is a read-only analysis pass — writes are card moves and dependency edges via the API.
-- **Stay inside the board's scope.** Scope per step 1 before analysing anything, and name scope in report.
-- **A feature is one unit.** Analyse it as union of subtasks, attach dependencies to feature card only, and never promote subtasks on their own.
-- **Report cycles as input errors.** Do not silently break cycles or guess execution order.
-- **Persist edges.** Record dependency edges in kanban DB so pop-time evaluation gates dispatch dynamically on asserted completion.
-- **One shot.** Report and exit. Do not stay running, do not poll board, do not edit plan files.
+- **Never modify plan files.** This is a read-only analysis pass — the only writes
+  are card moves and dependency edges via the API.
+- **Stay inside the board's scope.** The `/kanban/board` endpoint returns every
+  project; the column the user pressed Analyze on does not. Scope per step 1
+  before analysing anything, and name the scope in the report.
+- **Re-query the board, but only within scope.** The plan list in the prompt is a
+  snapshot; late additions must be included — late additions *to the same
+  project*, not to the workspace at large.
+- **A feature is one unit.** Analyse it as the union of its subtasks, move the
+  feature card and let the cascade carry them, attach dependency edges to the
+  feature card only, and never promote a subtask on its own. See step 1a.
+- **Report before you write, and after every write.** Card moves and edge writes
+  hit the database; the user must be able to watch them land, not just read about
+  them afterwards. Print the intended set and the intended edges before the first
+  write.
+- **Conservative on conflicts.** When uncertain about file overlap (e.g. a plan
+  says "various files" without listing them), treat it as conflicting with
+  everything. A false positive (plan left in Planned) is recoverable; a false
+  negative (two plans clobbering the same file in parallel) is not.
+- **Resolve `planFile`, never synthesize it.** See step 2 — a made-up
+  `<planId>.md` path turns every plan into an "unreadable" one and empties the
+  dispatch set.
+- **Unprovable stays in Planned.** A missing or unreadable plan file is never
+  promoted, and never gets a dependency edge.
+- **Report cycles as input errors.** Do not silently break a cycle or guess an
+  execution order. The server refuses cycles too — a `409` is not something to
+  work around.
+- **Declared dependencies are prose, file overlap is inferred.** Say which parts
+  of the map rest on a declaration rather than presenting one uniform confidence.
+- **Persist edges.** Record dependency edges in the kanban DB so pop-time
+  evaluation gates dispatch dynamically on asserted completion.
+- **One shot.** Report and exit. Do not stay running, do not poll the board, and
+  do not edit any plan file.

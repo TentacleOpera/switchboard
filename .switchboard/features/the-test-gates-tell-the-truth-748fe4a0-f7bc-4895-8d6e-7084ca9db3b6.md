@@ -16,6 +16,7 @@ Make CI mean something. Three control-plane tests are dark - invoked by nothing,
 - [ ] [Source-Regex Test Assertions Must Pin Behaviour, Not Spelling](../plans/test-assertions-pin-behaviour-not-spelling.md) — **CREATED**
 - [ ] [Three dark control-plane tests fail on a database that no longer auto-creates — fix the harness seam and wire them into CI](../plans/dark-control-plane-tests-fail-on-a-db-that-no-longer-auto-creates.md) — **CREATED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 Wire the dark tests in first. The sweep should run against a suite where everything actually executes, or it will spend effort converting assertions that nothing invokes.

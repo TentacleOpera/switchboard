@@ -16,6 +16,7 @@ Delete the two shipped mechanisms that guess whether work finished from board st
 - [ ] [Remove Silence-Based "Blocked" State from the Kanban](../plans/feature_plan_20260819160000_remove-silence-based-blocked-state-from-kanban.md) — **PLAN REVIEWED**
 - [ ] [Remove the seat order's hand-to-review clause](../plans/remove-the-seat-orders-code-reviewed-clause.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 Both subtasks are removals and are independent of each other.

@@ -16,6 +16,7 @@ Make the documented discovery path work from where agents actually run. The port
 - [ ] [The API server port file goes missing from eligible workspace roots and never comes back](../plans/api-server-port-file-missing-from-eligible-roots.md) — **PLAN REVIEWED**
 - [ ] [Add file-based IPC transport to LocalApiServer for sandboxed agents](../plans/add-file-based-ipc-transport.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 The port file lands first. It is the path that is supposed to work, and adding an alternative transport while the primary path is broken makes it impossible to tell which mechanism a given agent is actually using.

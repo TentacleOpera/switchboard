@@ -19,15 +19,17 @@ It doesn't work. Silence is ambiguous — it cannot distinguish "agent asked a q
 
 A second, related bug: column transitions (`moveCardToColumnWithReason`) never clear `dispatched_at`. When a plan is moved to `PLAN REVIEWED` or `COMPLETED`, the working state stays live until the 10-minute timeout sweep. This is why the user's specific card was glowing — it was moved to `PLAN REVIEWED` but the dispatch state was never cleared, so the silence detector stamped it blocked.
 
+A third bug: the 30-minute hard cap in `clearStaleWorkingState` and `isWorkingState` force-clears a card after 30 minutes from dispatch regardless of liveness. A coder actively producing output on a complex task gets its card yanked at 30 minutes. The liveness heartbeat already protects live terminals via the `last_liveness_at` basis — the hard cap was meant to catch a wedged agent that produces output but never finishes, but that is a rare edge case and the false positive (yanking a card from a working coder) is worse than the false negative (a wedged agent stays lit until the operator notices).
+
 ### Outcome
 
 After this fix:
 - The "Waiting on you" badge, dashed amber ring, and `title="Agent waiting on you…"` tooltip are gone from the kanban.
 - The silence branch in `PlanIngestionEngine.ts` no longer stamps `blocked_at` or fires the `blocked` turn-end outcome.
 - The `setBlockedState` writer is removed — no code writes to `blocked_at`.
-- The `isWorkingState` derive simplifies to its pre-V59 form: `working = withinHardCap && (now - basis) < timeoutMs`. No `blocked` boolean is computed or returned.
-- The feature rollup SQL drops the `anyBlocked` term.
-- The `clearStaleWorkingState` blocked-retention clause is removed.
+- The `isWorkingState` derive simplifies to `working = (now - basis) < timeoutMs`. No `blocked` boolean is computed or returned. The 30-minute hard cap (`withinHardCap`) is removed — a live terminal producing output stays lit indefinitely.
+- The feature rollup SQL drops the `anyBlocked` term and the `hardCapCutoff` guard.
+- The `clearStaleWorkingState` blocked-retention clause and the 30-minute hard cap clause are both removed. The 10-minute silence timeout stays as the dead-process backstop.
 - The `blockedTimeoutMs` config setting is no longer read — and is removed from `package.json` so it does not appear in the settings UI.
 - Column transitions clear `dispatched_at` so the working glow doesn't linger on moved cards.
 - The `blocked_at` column stays in the schema (shipped in V59, ~4,000 installs — removing it requires a migration and it's harmless as a dead column).
@@ -158,9 +160,9 @@ Remove the `setBlockedState` method (lines 10068-10074). After step 1, no caller
 
 **File:** `src/services/KanbanProvider.ts`
 
-Remove the `blockedAt` parameter and `blockedTimeoutMs` parameter from `isWorkingState()` (lines 167-192). Remove the `blocked` computation (lines 189-190). Simplify `working` to:
+Remove the `blockedAt` parameter and `blockedTimeoutMs` parameter from `isWorkingState()` (lines 167-192). Remove the `blocked` computation (lines 189-190). Remove the `withinHardCap` hard cap (line 189: `const withinHardCap = now - ts <= 3 * timeoutMs`) — a live terminal producing output should stay lit indefinitely, not be force-cleared after 30 minutes. Simplify `working` to:
 ```ts
-const working = withinHardCap && (now - basis) < timeoutMs;
+const working = (now - basis) < timeoutMs;
 return { working };
 ```
 
@@ -206,6 +208,18 @@ WHERE workspace_id = ? AND dispatched_at IS NOT NULL AND (
 ```
 The `blocked_at = NULL` in the SET clause is a no-op (always NULL after this fix) but leaving it is harmless and minimizes the diff. Remove the `blockedTimeoutMs` parameter from `clearStaleWorkingState` (line 10248) and the `blockedCutoff` computation (line 10254). Update the call at `PlanIngestionEngine.ts:614` to stop passing `blockedTimeoutMs`.
 
+**Also remove the 30-minute hard cap.** The current SQL includes `OR dispatched_at < ?` where the parameter is `hardCapCutoff = 3 × timeoutMs` (30 minutes by default). This force-clears a card after 30 minutes from dispatch **regardless of liveness** — a coder actively producing output on a complex task gets its card yanked at 30 minutes. The liveness heartbeat (`last_liveness_at`) already protects live terminals via the `MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < cutoff` clause, so a terminal producing output within the last 10 minutes is spared. The hard cap was meant to catch a wedged agent that produces output but never finishes (e.g. an infinite loop that prints), but that is a rare edge case and the false positive (yanking a card from a working coder) is worse than the false negative (a wedged agent stays lit until the operator notices).
+
+Remove the `hardCapCutoff` computation (line 10612: `const hardCapCutoff = new Date(Date.now() - 3 * maxAgeMs).toISOString()`) and the `OR dispatched_at < ?` clause from the SQL. The SQL simplifies further to:
+
+```sql
+UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL
+WHERE workspace_id = ? AND dispatched_at IS NOT NULL
+  AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ?
+```
+
+Parameters change from `[workspaceId, cutoff, hardCapCutoff, blockedCutoff]` to `[workspaceId, cutoff]`. The `maxAgeMs` parameter (the 10-minute silence timeout) stays — it is the dead-process backstop, clearing cards whose terminals have not produced output in 10 minutes.
+
 **Also remove** the `blockedTimeoutMs` parameter from `getFeatureWorkingStates` (line 6464) and the `anyBlocked` / `blockedCutoff` terms from the feature rollup SQL (lines 6470, 6476-6479, 6492). The SQL simplifies to just the `anyWorking` term:
 ```sql
 SELECT feature_id AS featureId,
@@ -217,7 +231,17 @@ WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
   AND status = 'active' AND is_feature = 0
 GROUP BY feature_id
 ```
-Parameters change from `[cutoff, hardCapCutoff, blockedCutoff, blockedCutoff, workspaceId]` to `[cutoff, hardCapCutoff, workspaceId]`. The return type changes from `Map<string, { working: boolean; blocked: boolean }>` to `Map<string, { working: boolean }>`. Update the type annotations at lines 6465-6466 and the consumer at `KanbanProvider.ts:2075`.
+Parameters change from `[cutoff, hardCapCutoff, blockedCutoff, blockedCutoff, workspaceId]` to `[cutoff, workspaceId]` (the `hardCapCutoff` parameter is also removed — see the hard cap removal above). The return type changes from `Map<string, { working: boolean; blocked: boolean }>` to `Map<string, { working: boolean }>`. Update the type annotations at lines 6465-6466 and the consumer at `KanbanProvider.ts:2075`. The feature rollup SQL also drops the `dispatched_at >= ?` hard-cap guard:
+
+```sql
+SELECT feature_id AS featureId,
+       MAX(dispatched_at IS NOT NULL
+           AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?) AS anyWorking
+FROM plans
+WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
+  AND status = 'active' AND is_feature = 0
+GROUP BY feature_id
+```
 
 ### 6. Remove blocked UI from `kanban.html`
 
@@ -343,3 +367,4 @@ Note: Users who have explicitly set this value in their `settings.json` will see
 8. **No `blocked_at` writes**: After exercising the board, query `SELECT COUNT(*) FROM plans WHERE blocked_at IS NOT NULL` — returns 0. No code path writes to `blocked_at`.
 9. **No `blockedTimeoutMs` in settings UI**: Open VS Code Settings, search for `blockedTimeoutMs` — no result. The config setting is gone.
 10. **TypeScript compiles**: Run `npx tsc --noEmit` — no type errors from the `isWorkingState` return type change or the `KanbanCard` interface change.
+11. **Hard cap removed**: Dispatch a plan to a coder terminal. Let the coder produce output continuously for 30+ minutes (or simulate by stamping `last_liveness_at` to recent timestamps while `dispatched_at` is old). Verify the card's working glow stays lit — it is NOT force-cleared by the 30-minute hard cap. The 10-minute silence timeout still clears a card whose terminal stops producing output for 10 minutes.

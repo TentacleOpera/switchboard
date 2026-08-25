@@ -16,6 +16,7 @@ Fix the two reasons a card changes position without anyone moving it. The Create
 - [ ] [Kanban card jumps to middle on copy-prompt advance, then to top on paste](../plans/feature_plan_20260819130405_kanban-card-optimistic-move-stale-ts.md) — **PLAN REVIEWED**
 - [ ] [Fix Created Column Sort — Use createdAt, Not columnEnteredAt/lastActivity](../plans/fix-created-column-sort-by-creation-date.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 No ordering constraint between the two; both are sort-key corrections and can be done in one pass.

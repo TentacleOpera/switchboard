@@ -18,6 +18,7 @@ Establish one access contract - agents reach state through the LocalApiServer's 
 - [ ] [Generate channel-declaration text in the Connections tab for the user to paste into a cloud agent](../plans/user-declared-state-channels-as-a-skill.md) — **CREATED**
 - [ ] [Register an Agent Running in Any Local Terminal, by Letting It Pull Instead of Being Pushed](../plans/register-an-agent-in-any-local-terminal.md) — **CREATED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 The contract lands first — it defines the routes the other two subtasks extend and describe. Pull-registration and the channel-declaration generator are independent of each other.

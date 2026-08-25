@@ -16,6 +16,7 @@ Give the operator control over how work enters a queue from the board. A toggle 
 - [ ] [Repurpose Created Column's Blank-Feature Button as a Planner Fan-Out Toggle for Batch Move](../plans/feature_plan_20260820220404_created-column-batch-move-planner-fanout-toggle.md) — **PLAN REVIEWED**
 - [ ] [Remove STAGING column gate — allow drag-back from any column](../plans/remove-staging-column-gate-allow-all-columns.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 No ordering constraints; the two subtasks touch different entry points and are independent.

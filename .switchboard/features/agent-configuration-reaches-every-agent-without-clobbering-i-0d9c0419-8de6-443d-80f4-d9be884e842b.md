@@ -16,6 +16,7 @@ Make the configuration Switchboard pushes to agents both distributable and safe 
 - [ ] [Add MCP config distribution — push MCP server configs to all agents from terminals.html](../plans/add-mcp-config-distribution.md) — **PLAN REVIEWED**
 - [ ] [Cross-panel startup command overwrite](../plans/cross-panel-startup-command-overwrite.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 Fix the overwrite first. Adding a second distribution path over a configuration store that loses writes multiplies the bug and makes the resulting corruption harder to attribute to either mechanism.

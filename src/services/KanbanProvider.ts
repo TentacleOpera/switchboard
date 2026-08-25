@@ -9853,99 +9853,101 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 return { success: true };
             }
 
+            // ── Mission Control (V64) ──────────────────────────────────
+            // Every arm resolves the db through `_resolveMissionDb`, the ONE
+            // accessor that exists (`_getKanbanDb` + `ensureReady`). An earlier
+            // revision called `this._getDatabase(...)`, which is not a method on
+            // this class — nine compile errors, and the whole mission backend
+            // dead. Resolve here, never inline.
             case 'mcInit': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
-                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
-                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
-                const missionsList = db ? await db.getMissions(wsId) : [];
+                const ctx = await this._resolveMissionDb(msg.workspaceRoot);
+                const missionsList = ctx ? await ctx.db.getMissions(ctx.wsId) : [];
                 this.postMessage({ type: 'mcMissions', missions: missionsList });
                 const config = await GlobalIntegrationConfigService.getSchedulerConfig();
                 this.postMessage({ type: 'updateSchedulerConfig', config });
                 return { success: true, missions: missionsList };
             }
             case 'mcNewMission': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
-                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
-                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
-                if (!db) return { success: false, error: 'Database unavailable' };
-                const m = await db.createMission({ workspaceId: wsId });
-                const missionsList = await db.getMissions(wsId);
-                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                const ctx = await this._resolveMissionDb(msg.workspaceRoot);
+                if (!ctx) return { success: false, error: 'Database unavailable' };
+                const m = await ctx.db.createMission({ workspaceId: ctx.wsId });
+                await this._postMissions(ctx);
                 return { success: true, mission: m };
             }
             case 'mcUpdateMission': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
-                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
-                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
-                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
-                const updates: any = {};
-                if (msg.field) updates[msg.field] = msg.value;
-                await db.updateMission(msg.missionId, updates);
-                const missionsList = await db.getMissions(wsId);
-                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                const ctx = await this._resolveMissionDb(msg.workspaceRoot);
+                if (!ctx || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                // Only the mission's own editable fields are writable from the
+                // panel. `runState` is deliberately absent: it is DERIVED from
+                // member state on read (see `_deriveMissionRunState`), never
+                // stored, so a run that dies mid-flight cannot leave a mission
+                // reading "in-flight" forever.
+                const MC_EDITABLE = new Set(['name', 'type', 'goal', 'ready', 'team', 'maxExtraWorktrees']);
+                if (!msg.field || !MC_EDITABLE.has(String(msg.field))) {
+                    return { success: false, error: `Field '${String(msg.field)}' is not editable on a mission` };
+                }
+                const updates: any = { [String(msg.field)]: msg.value };
+                await ctx.db.updateMission(msg.missionId, updates);
+                await this._postMissions(ctx);
                 return { success: true };
             }
             case 'mcDeleteMission': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
-                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
-                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
-                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
-                await db.deleteMission(msg.missionId);
-                const missionsList = await db.getMissions(wsId);
-                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                const ctx = await this._resolveMissionDb(msg.workspaceRoot);
+                if (!ctx || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                await ctx.db.deleteMission(msg.missionId);
+                await this._postMissions(ctx);
                 return { success: true };
             }
             case 'mcReadyMission': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
-                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
-                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
-                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
-                await db.updateMission(msg.missionId, { ready: true });
-                const missionsList = await db.getMissions(wsId);
-                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                const ctx = await this._resolveMissionDb(msg.workspaceRoot);
+                if (!ctx || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                // `ready` is a flag, not a status — a scheduler must not take an
+                // unready mission. It is stored; `runState` is not.
+                await ctx.db.updateMission(msg.missionId, { ready: true });
+                await this._postMissions(ctx);
                 return { success: true };
             }
             case 'mcLaunchMission': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
-                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
-                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
-                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
-                await db.updateMission(msg.missionId, { runState: 'in-flight' });
-                const missionsList = await db.getMissions(wsId);
-                this.postMessage({ type: 'mcMissions', missions: missionsList });
-                return { success: true };
+                const ctx = await this._resolveMissionDb(msg.workspaceRoot);
+                if (!ctx || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                const mission = await ctx.db.getMissionById(msg.missionId);
+                if (!mission) return { success: false, error: 'Mission not found' };
+                // Launch is not implemented: the fan-out (seat teams, stage,
+                // dispatch each unblocked stream head) and its idempotency guard
+                // are items 8c/8d of staging-streams-parallel-dispatch-and-worktrees.md
+                // and were never built. Refusing is the honest answer — writing a
+                // `runState` string here would report a launch that did not happen
+                // and would persist launched-ness the plan forbids storing.
+                return {
+                    success: false,
+                    error: 'Launch is not implemented yet — the mission fan-out (seat teams, stage, dispatch stream heads) is unbuilt. Use Run queue in the STAGING column.'
+                };
             }
             case 'mcStopMission': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
-                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
-                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
-                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
-                await db.updateMission(msg.missionId, { runState: 'aborted' });
-                const missionsList = await db.getMissions(wsId);
-                this.postMessage({ type: 'mcMissions', missions: missionsList });
-                return { success: true };
+                const ctx = await this._resolveMissionDb(msg.workspaceRoot);
+                if (!ctx || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                // Nothing to stop until launch exists, and there is no stored
+                // run state to clear — status is derived from member state.
+                return {
+                    success: false,
+                    error: 'Stop is not implemented yet — nothing launches a mission, so there is no run to stop.'
+                };
             }
             case 'mcAddMissionMember': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
-                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
-                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
-                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                const ctx = await this._resolveMissionDb(msg.workspaceRoot);
+                if (!ctx || !msg.missionId) return { success: false, error: 'Invalid arguments' };
                 const memberId = msg.memberId || msg.name;
                 if (memberId) {
-                    await db.addMissionMember(msg.missionId, memberId, msg.kind || 'plan');
+                    await ctx.db.addMissionMember(msg.missionId, memberId, msg.kind === 'feature' ? 'feature' : 'plan');
                 }
-                const missionsList = await db.getMissions(wsId);
-                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                await this._postMissions(ctx);
                 return { success: true };
             }
             case 'mcRemoveMissionMember': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
-                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
-                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
-                if (!db || !msg.missionId || !msg.name) return { success: false, error: 'Invalid arguments' };
-                await db.removeMissionMember(msg.missionId, msg.name);
-                const missionsList = await db.getMissions(wsId);
-                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                const ctx = await this._resolveMissionDb(msg.workspaceRoot);
+                if (!ctx || !msg.missionId || !msg.name) return { success: false, error: 'Invalid arguments' };
+                await ctx.db.removeMissionMember(msg.missionId, msg.name);
+                await this._postMissions(ctx);
                 return { success: true };
             }
 
@@ -14420,6 +14422,30 @@ ${FOCUS_DIRECTIVE}`;
             await this._removeWorktreeRow(workspaceRoot, db, wt, finalStatus);
         }
         await this._pruneWorktrees(workspaceRoot);
+    }
+
+    /**
+     * Resolve the kanban db + workspace id for a Mission Control verb.
+     *
+     * `_getKanbanDb` is the only db accessor on this class and it is
+     * synchronous — an earlier revision called a non-existent
+     * `_getDatabase(...)` from all nine `mc*` arms, which is why the mission
+     * backend did not compile. One resolver, one shape, no inline lookups.
+     */
+    private async _resolveMissionDb(
+        msgWorkspaceRoot?: string
+    ): Promise<{ db: KanbanDatabase; wsId: string; workspaceRoot: string } | null> {
+        const workspaceRoot = this._resolveWorkspaceRoot(msgWorkspaceRoot) || this._currentWorkspaceRoot;
+        if (!workspaceRoot) return null;
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return null;
+        const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+        return { db, wsId, workspaceRoot };
+    }
+
+    /** Broadcast the mission list to the Mission Control panel. */
+    private async _postMissions(ctx: { db: KanbanDatabase; wsId: string }): Promise<void> {
+        this.postMessage({ type: 'mcMissions', missions: await ctx.db.getMissions(ctx.wsId) });
     }
 
     public async getWorktreeMergePrompt(

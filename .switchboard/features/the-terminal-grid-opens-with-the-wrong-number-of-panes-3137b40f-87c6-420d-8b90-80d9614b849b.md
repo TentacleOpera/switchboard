@@ -18,6 +18,7 @@ Fix all three ways the terminal grid mis-sizes itself on open. Fill Grid mirrors
 - [ ] [Fill Grid mode dropdown should default to 2x2 instead of mirroring current layout](../plans/feature_plan_20260820082002_fill-grid-default-2x2.md) — **PLAN REVIEWED**
 - [ ] [Team grid shows too few terminals on first click — stale fleet under-sizes the layout](../plans/feature_plan_20260820221235_team-grid-stale-fleet-under-sized-on-enter.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 No ordering constraints; three independent count and default corrections on the same surface. Landing them in one pass avoids three separate rounds of grid-sizing verification.

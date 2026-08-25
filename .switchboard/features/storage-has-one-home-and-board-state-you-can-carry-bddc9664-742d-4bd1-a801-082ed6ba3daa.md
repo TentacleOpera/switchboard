@@ -18,6 +18,7 @@ Give storage a single operator-facing surface, and make board state survivable w
 - [ ] [Board state backup works and nobody knows it exists — document it, and stop telling only git that the state is unrecoverable](../plans/board-state-backup-discoverability.md) — **CREATED**
 - [ ] [A Database panel in the shell rail that owns storage, and the retirement of the Setup tab that half-owns it today](../plans/database-panel-in-the-shell-rail.md) — **CREATED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 Export/import and the backup documentation are independent of everything else and can ship first. The Database panel should follow **Storage Topology and the Shared/Runtime Schema Split**, because the topology decides what the panel renders.

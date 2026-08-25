@@ -20,6 +20,7 @@ Give the shared tier two concrete targets an operator can actually point at: a l
 - [ ] [Remote plan authoring over the shared store — a fourth provider kind, not a new pipeline](../plans/remote-authoring-over-the-shared-store-as-a-provider-kind.md) — **CREATED**
 - [ ] [One machine owns provider sync, and every board write says who made it](../plans/sync-owner-lease-and-write-attribution.md) — **CREATED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 **Storage Topology and the Shared/Runtime Schema Split** is a hard prerequisite in full — it decides what a shared store is allowed to hold. Within this feature: the sync-owner lease lands before either store target goes multi-writer, and remote authoring lands last because it needs a store to write into. The two store targets are independent of each other and an operator will choose one, not both.

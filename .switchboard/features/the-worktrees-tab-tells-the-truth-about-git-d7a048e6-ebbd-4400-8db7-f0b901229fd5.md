@@ -16,6 +16,7 @@ Make the Worktrees tab reflect what is actually on disk. It never consults git w
 - [ ] [Abandoning a Worktree Removes the Checkout and Leaves Everything That Points At It](../plans/abandon-worktree-leaves-a-branch-and-a-stale-feature-block.md) — **PLAN REVIEWED**
 - [ ] [The Worktrees Tab Never Looks at Git, So a Worktree It Did Not Create Is Unreachable Forever](../plans/worktrees-tab-never-looks-at-git.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 Reconciliation lands first — it changes what Abandon can be handed, so the cleanup work should be written against the reconciled view rather than the database-only one. The two plans name each other.

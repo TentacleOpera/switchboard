@@ -7,75 +7,24 @@ user-invokable: false
 
 # Query Kanban
 
-Read kanban board state. The **primary method is the LocalApiServer's read
-endpoints** — they return records with resolved column labels, so the caller
-never has to know the storage-id mapping. **Direct SQL is a fallback** for the
-case where the API server is unreachable but a local `kanban.db` exists. This
-skill is READ-ONLY — never run SQL `UPDATE`/`DELETE`/`INSERT` on the kanban
-database.
+Query kanban board state using direct SQL access to the kanban database. This skill is READ-ONLY — execution agents must never use SQL UPDATE/DELETE/INSERT on the kanban database.
 
-## Preconditions
+## Prerequisites
 
-| Need | How to check | What to do when absent |
-| :--- | :--- | :--- |
-| **LocalApiServer** (preferred) | `.switchboard/api-server-port.txt` exists **and** `GET http://127.0.0.1:<port>/health` responds `ok` | Fall back to SQL (below) **only if** a local `kanban.db` is present. If neither is reachable, **stop**: report that the board database is not reachable from this session — this is expected in a cloud, standalone-without-board, or tracker-only session, not a fault — and do **not** hand-write SQL, invent a database path, or declare the system broken. |
+1. **Workspace ID and Database Path**: Read from `.switchboard/workspace-id` (two lines: line 1 = workspace ID, line 2 = database path)
+2. **SQL CLI**: Use `sqlite3` CLI (pre-installed on macOS)
 
-A configured channel is not a reachable one: a port file that is stale, or a
-health check that fails, means the server is down — treat it the same as
-absent. Probe at point of use, not at session start (a probe made once goes
-stale the moment the extension restarts).
+## Fast Path: Read Board State (No SQL)
 
-## Primary method — read endpoints
-
-When the LocalApiServer is reachable, use these. They return records with
-resolved column labels, so the label↔storage-id trap below does not apply on
-this path. The **full endpoint contract** (verbs, payload fields, response
-envelopes) lives in the `switchboard-mission-control-http` protocol at
-`.agents/protocols/switchboard-mission-control-http/SKILL.md` — consult it for any
-call this table does not cover, and hit `GET /catalog` for the generated
-inventory of every endpoint the server serves.
+The kanban board auto-exports its current state to a markdown file on every change. For simple reads, use this instead of SQL:
 
 ```bash
-PORT=$(cat .switchboard/api-server-port.txt); BASE="http://127.0.0.1:$PORT"
-curl -s "$BASE/health"                      # liveness — confirm before any call
+read_file <workspace_root>/.switchboard/kanban-board.md
 ```
 
-| Need | Endpoint | Returns |
-| :--- | :--- | :--- |
-| Whole board | `GET /kanban/board` | Every active plan record for the workspace |
-| Plans in one column | `GET /kanban/plans?column=<col>` | Plans filtered to one column (`column` takes the storage id; see mapping below, or `GET /kanban/columns` for the live `{id,label}` list) |
-| One plan + its file content | `GET /kanban/plan?planId=<id>` | One plan record plus the full `.md` body (`.data.content`) |
-| All features | `GET /kanban/features` | Every `isFeature` row |
-| Subtasks of a feature | `GET /kanban/plans?featureId=<id>` | The feature's subtask records |
-| Column vocabulary (built-in + custom) | `GET /kanban/columns` | `{ builtIn, custom, displayOnly }` — `{id,label}` for every column, so you never guess a label |
+Use SQL queries only when you need filtering, aggregation, or specific plan lookups that the markdown file doesn't support.
 
-```bash
-curl -s "$BASE/kanban/board" | jq '.data'
-curl -s "$BASE/kanban/plans?column=PLAN%20REVIEWED" | jq '.data'
-curl -s "$BASE/kanban/plan?planId=a1b2c3d4" | jq '.data.content'
-curl -s "$BASE/kanban/features" | jq '.data'
-curl -s "$BASE/kanban/plans?featureId=$FEATURE_ID" | jq '.data'
-curl -s "$BASE/kanban/columns" | jq '.data'
-```
-
-Plan records include `planId`, `sessionId`, `topic`, `planFile`, `kanbanColumn`,
-`status`, `complexity`, `tags`, `project`, `isFeature`, `featureId`,
-`worktreeId`, `worktreeStatus`, `dispatchedAt`, `recommendedRole`. Filter and
-aggregate client-side with `jq` — the endpoints return the records; you do not
-need SQL for any of the common queries below.
-
-> **Fast path, no server either:** the board auto-exports its current state to
-> `.switchboard/kanban-board.md` on every change. For a simple glance, `read_file
-> <workspace_root>/.switchboard/kanban-board.md` is enough and needs no server.
-
-## Fallback — direct SQL (only when the API server is unreachable)
-
-Use this path **only** when the LocalApiServer is not reachable and a local
-`kanban.db` exists. It is the no-API escape hatch, not the default. SQL returns
-storage ids, not labels, so the column mapping below is load-bearing on this
-path — the endpoints spare you it.
-
-### Get Workspace ID and Database Path
+## Get Workspace ID and Database Path
 
 ```bash
 # Resolve the Switchboard control plane from the nearest ANCESTOR directory that
@@ -110,9 +59,9 @@ fi
 > reads. `-readonly` prevents accidental writes and is a second guard against
 > sqlite3 fabricating an empty database if the path is ever wrong.
 
-### Common SQL Queries
+## Common SQL Queries
 
-#### Get All Active Plans in a Column
+### Get All Active Plans in a Column
 
 ```sql
 SELECT plan_id, session_id, topic, kanban_column, status, complexity
@@ -125,67 +74,12 @@ ORDER BY updated_at DESC;
 
 **Valid columns:** CREATED, BACKLOG, PLAN REVIEWED, CONTEXT GATHERER, LEAD CODED, CODER CODED, CODE REVIEWED, CODED, COMPLETED
 
-#### Get Plans for Dependency Check (CREATED, BACKLOG, PLAN REVIEWED)
-
-```sql
-SELECT plan_id, session_id, topic, kanban_column, dependencies
-FROM plans
-WHERE workspace_id = '<workspace_id>' 
-  AND status = 'active' 
-  AND kanban_column IN ('CREATED', 'BACKLOG', 'PLAN REVIEWED')
-ORDER BY updated_at DESC;
-```
-
-#### Get Plan by Session ID
-
-```sql
-SELECT *
-FROM plans
-WHERE session_id = '<session_id>'
-LIMIT 1;
-```
-
-#### Get Full Board State (All Active Plans)
-
-```sql
-SELECT *
-FROM plans
-WHERE workspace_id = '<workspace_id>' 
-  AND status = 'active'
-ORDER BY kanban_column, updated_at DESC;
-```
-
-### Using sqlite3 CLI
-
-```bash
-# Resolve the control-plane root from the nearest ancestor (see note above) so a
-# wrong cwd can't make sqlite3 fabricate an empty DB.
-SB_ROOT="$PWD"
-while [ "$SB_ROOT" != "/" ] && [ ! -f "$SB_ROOT/.switchboard/workspace-id" ]; do
-  SB_ROOT=$(dirname "$SB_ROOT")
-done
-WORKSPACE_ID=$(sed -n '1p' "$SB_ROOT/.switchboard/workspace-id" 2>/dev/null)
-DB_PATH=$(sed -n '2p' "$SB_ROOT/.switchboard/workspace-id" 2>/dev/null)
-[ -z "$DB_PATH" ] && DB_PATH="$SB_ROOT/.switchboard/kanban.db"
-[ -f "$DB_PATH" ] || { echo "ERROR: kanban DB not found at '$DB_PATH'" >&2; exit 1; }
-
-# Get plans in BACKLOG column — READ-ONLY (this skill never writes).
-sqlite3 -readonly "$DB_PATH" "SELECT plan_id, session_id, topic, kanban_column FROM plans WHERE workspace_id = '$WORKSPACE_ID' AND status = 'active' AND kanban_column = 'BACKLOG' ORDER BY updated_at DESC;"
-```
-
-## Column labels vs storage ids (SQL fallback only)
-
 ### ⚠️ Users say the BOARD LABEL, not the stored column id — translate silently
 
 The `kanban_column` values above are **storage ids**. They are NOT what the user sees on the
 board, and they are NOT what the user will say to you. When a user names a column, they mean the
 label. Map it and move on — **never** reply that a column "doesn't exist" or list the storage ids
 back at them. That is a bug in your response, not a correction.
-
-> **On the endpoint path this trap does not apply:** `GET /kanban/columns`
-> returns `{id,label}` for every column, and `GET /kanban/plans` returns records
-> you filter by `id`. You resolve the label once via the columns endpoint rather
-> than memorizing the table below. The mapping is kept here for the SQL fallback.
 
 | Board label (what the user says) | `kanban_column` (what you query) |
 | :--- | :--- |
@@ -210,16 +104,69 @@ back at them. That is a bug in your response, not a correction.
 - **"New" is `CREATED`.** Nothing is stored as `NEW`.
 
 **Custom columns:** users can add their own, with labels this table cannot cover. The authoritative
-live mapping is `GET /kanban/columns`, which returns `{id, label}` for built-in and custom columns
-alike. Source of truth in code is `DEFAULT_KANBAN_COLUMNS` / `DISPLAY_MODE_COLUMNS` in
-`src/services/agentConfig.ts` — if this table ever disagrees with that file, the file wins and this
-table is stale.
+live mapping is `GET /kanban/columns` (see the `switchboard-orchestration` skill), which returns
+`{id, label}` for built-in and custom columns alike. Source of truth in code is
+`DEFAULT_KANBAN_COLUMNS` / `DISPLAY_MODE_COLUMNS` in `src/services/agentConfig.ts` — if this table
+ever disagrees with that file, the file wins and this table is stale.
 
 **If a label is genuinely ambiguous**, query the closest match and say which column you read
 (*"Planned (`PLAN REVIEWED`) has 3 plans"*) — one clause, then the answer. Do not open with a
 correction, and do not ask the user to restate the column in storage terms.
 
-## Schema Reference (SQL fallback only)
+### Get Plans for Dependency Check (CREATED, BACKLOG, PLAN REVIEWED)
+
+```sql
+SELECT plan_id, session_id, topic, kanban_column, dependencies
+FROM plans
+WHERE workspace_id = '<workspace_id>' 
+  AND status = 'active' 
+  AND kanban_column IN ('CREATED', 'BACKLOG', 'PLAN REVIEWED')
+ORDER BY updated_at DESC;
+```
+
+### Get Plan by Session ID
+
+```sql
+SELECT *
+FROM plans
+WHERE session_id = '<session_id>'
+LIMIT 1;
+```
+
+
+### Get Full Board State (All Active Plans)
+
+```sql
+SELECT *
+FROM plans
+WHERE workspace_id = '<workspace_id>' 
+  AND status = 'active'
+ORDER BY kanban_column, updated_at DESC;
+```
+
+## Usage Examples
+
+### Using sqlite3 CLI
+
+```bash
+# Resolve the control-plane root from the nearest ancestor (see note above) so a
+# wrong cwd can't make sqlite3 fabricate an empty DB.
+SB_ROOT="$PWD"
+while [ "$SB_ROOT" != "/" ] && [ ! -f "$SB_ROOT/.switchboard/workspace-id" ]; do
+  SB_ROOT=$(dirname "$SB_ROOT")
+done
+WORKSPACE_ID=$(sed -n '1p' "$SB_ROOT/.switchboard/workspace-id" 2>/dev/null)
+DB_PATH=$(sed -n '2p' "$SB_ROOT/.switchboard/workspace-id" 2>/dev/null)
+[ -z "$DB_PATH" ] && DB_PATH="$SB_ROOT/.switchboard/kanban.db"
+[ -f "$DB_PATH" ] || { echo "ERROR: kanban DB not found at '$DB_PATH'" >&2; exit 1; }
+
+# Get plans in BACKLOG column — READ-ONLY (this skill never writes).
+sqlite3 -readonly "$DB_PATH" "SELECT plan_id, session_id, topic, kanban_column FROM plans WHERE workspace_id = '$WORKSPACE_ID' AND status = 'active' AND kanban_column = 'BACKLOG' ORDER BY updated_at DESC;"
+
+
+```
+
+## Schema Reference
 
 ### plans Table
 
@@ -272,9 +219,9 @@ correction, and do not ask the user to restate the column in storage terms.
 
 **Key:** `workspace_id` stores the workspace identifier.
 
-## Ready-Made Query Templates (SQL fallback only)
+## Ready-Made Query Templates
 
-Ready-made SQL templates for querying the Switchboard Kanban `plans` table by workspace name, project, and feature/subtask relationships. On the endpoint path, the equivalents are `GET /kanban/board` (filter with `jq`), `GET /kanban/plans?featureId=<id>`, and `GET /kanban/features`.
+Ready-made SQL templates for querying the Switchboard Kanban `plans` table by workspace name, project, and feature/subtask relationships.
 
 ### Discovering Workspace Names
 

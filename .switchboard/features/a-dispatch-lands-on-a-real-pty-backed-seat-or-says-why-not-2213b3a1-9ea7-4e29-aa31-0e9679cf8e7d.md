@@ -18,6 +18,7 @@ Make seat resolution honest. Teams are PTY-only, so no team automation may fall 
 - [ ] [Enforce PTY-Only for Team Automations](../plans/enforce-pty-only-for-team-automations.md) — **PLAN REVIEWED**
 - [ ] [Complexity Routing Degrades to the Live Terminal Pool](../plans/complexity-routing-degrade-to-live-pool.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 PTY-only lands first: it narrows the pool that complexity routing then degrades across, so routing built against the wider pool would need reworking. The commandless-seats report is independent of both.

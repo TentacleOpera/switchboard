@@ -24,6 +24,7 @@ Fix what authoring agents are required to do, and what their output must contain
 - [ ] [Split-Gate Return Routing via Standing Orders](../plans/split-gate-return-routing-for-automation.md) — **PLAN REVIEWED**
 - [ ] [Replace agent-authored project pinning with a sticky-project UI setting](../plans/replace-agent-project-pinning-with-a-sticky-ui-setting.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 The split gate lands before its return routing — the routing has nothing to route until the gate actually halts. The other four subtasks are independent of each other and of the gate work, and can be executed in parallel.

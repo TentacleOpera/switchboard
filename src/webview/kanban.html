@@ -13017,96 +13017,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // ==========================================
             const featuresSection = createSubsection('FEATURES');
 
-            // FEATURES -> Manual Creation
-            const manualFeatureHeader = document.createElement('div');
-            manualFeatureHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 4px;';
-            manualFeatureHeader.textContent = 'Manual Creation';
-            featuresSection.appendChild(manualFeatureHeader);
-
-            const featureForm = document.createElement('div');
-            featureForm.style.cssText = 'display: flex; gap: 8px; align-items: center; padding: 4px 8px 8px;';
-            const featureLabel = document.createElement('span');
-            featureLabel.style.fontSize = '11px';
-            featureLabel.textContent = 'Feature:';
-            const featureSelect = document.createElement('select');
-            featureSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
-            const featureDefaultOpt = document.createElement('option');
-            featureDefaultOpt.value = '';
-            featureDefaultOpt.textContent = '-- Choose a Feature --';
-            featureSelect.appendChild(featureDefaultOpt);
-
-            // Build column ID → label map from columnDefinitions
-            const colIdMap = new Map();
-            (columnDefinitions || []).forEach((col, index) => {
-                const normId = (col.id || '').trim().toUpperCase();
-                colIdMap.set(normId, { index, label: col.label || col.id });
-            });
-
-            // Group feature cards by column, sorted by column order
-            const featureCards = (Array.isArray(currentCards) ? currentCards : [])
-                .filter(c => c.isFeature)
-                .filter(c => !currentFeatureWorktrees[c.planId]); // exclude features that already have a worktree
-
-            const groups = new Map();
-            for (const feature of featureCards) {
-                const col = (feature.column || 'CREATED').trim().toUpperCase();
-                if (!groups.has(col)) groups.set(col, []);
-                groups.get(col).push(feature);
-            }
-
-            // Sort groups by column order (using columnDefinitions index)
-            const sortedGroupKeys = Array.from(groups.keys()).sort((a, b) => {
-                const aIdx = colIdMap.has(a) ? colIdMap.get(a).index : 999;
-                const bIdx = colIdMap.has(b) ? colIdMap.get(b).index : 999;
-                return aIdx - bIdx;
-            });
-
-            for (const colId of sortedGroupKeys) {
-                const features = groups.get(colId);
-                if (features.length === 0) continue;
-                const info = colIdMap.get(colId);
-                const displayLabel = info ? info.label : colId;
-                const group = document.createElement('optgroup');
-                group.label = displayLabel.toUpperCase();
-                for (const feature of features) {
-                    const opt = document.createElement('option');
-                    opt.value = feature.planId;
-                    opt.textContent = feature.topic;
-                    group.appendChild(opt);
-                }
-                featureSelect.appendChild(group);
-            }
-            const createFeatureBtn = document.createElement('button');
-            createFeatureBtn.className = 'worktree-primary-btn';
-            createFeatureBtn.style.padding = '4px 8px';
-            createFeatureBtn.style.fontSize = '10px';
-            createFeatureBtn.textContent = 'Create Feature Worktree';
-            if (config && config.controlPlaneMode === 'explicit' && repos.length === 0) {
-                createFeatureBtn.disabled = true;
-                createFeatureBtn.title = 'No git repositories detected in control plane';
-            }
-            createFeatureBtn.addEventListener('click', () => {
-                const selectedFeatureId = featureSelect.value;
-                if (!selectedFeatureId) {
-                    postKanbanMessage({ type: 'showWarning', message: 'Please select a feature first.' });
-                    return;
-                }
-                const feature = featureCards.find(e => e.planId === selectedFeatureId);
-                if (!feature) return;
-                createFeatureBtn.disabled = true;
-                postKanbanMessage({
-                    type: 'createWorktreeForFeature',
-                    featureId: selectedFeatureId,
-                    featureTopic: feature.topic,
-                    workspaceRoot: currentWorkspaceRoot,
-                    repoName: selectedWorktreeRepo || undefined
-                });
-                setTimeout(() => { createFeatureBtn.disabled = false; }, 5000);
-            });
-            featureForm.appendChild(featureLabel);
-            featureForm.appendChild(featureSelect);
-            featureForm.appendChild(createFeatureBtn);
-            featuresSection.appendChild(featureForm);
+            // FEATURES -> creation lives on the STAGING toggle, not here.
+            // The "Create Feature Worktree" dropdown + button was removed: it cut a
+            // worktree for any feature at any time, off whatever the default branch
+            // happened to be, for work that may never be staged. Two features cut
+            // that way off the same base cannot see each other's changes and nothing
+            // knew one depended on the other — the confusion this consolidation
+            // exists to remove. Feature worktrees are now provisioned at STAGING
+            // time by the Worktrees toggle in the STAGING column header, which is
+            // the moment the work is actually about to run. This section lists what
+            // exists and offers merge/cleanup per worktree; it does not create.
+            //
+            // The `createWorktreeForFeature` verb survives as the programmatic path
+            // (allowlist + KanbanProvider arm) — the narrowing is UI-only.
 
             // FEATURES -> Active Worktrees
             const activeFeatureHeader = document.createElement('div');

@@ -18,6 +18,7 @@ Remove three code paths that serve nothing. A tickets ask-agent verb whose butto
 - [ ] [Remove the dead tickets ask-agent path](../plans/remove-dead-tickets-ask-agent-path.md) — **CREATED**
 - [ ] [Remove Retired-Mode UI Notices](../plans/remove-retired-mode-ui-notices.md) — **CREATED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 No ordering constraints; three independent deletions. Grouped because they are all pure removals with the same verification shape — confirm no live caller, delete, confirm the gates stay green — so one pass covers all three.

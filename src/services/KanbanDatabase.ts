@@ -276,7 +276,6 @@ CREATE TABLE IF NOT EXISTS missions (
     type                TEXT NOT NULL DEFAULT 'mission',
     goal                TEXT DEFAULT '',
     ready               INTEGER DEFAULT 0,
-    run_state           TEXT DEFAULT 'not-started',
     team                TEXT DEFAULT '',
     max_extra_worktrees INTEGER DEFAULT 0,
     workspace_id        TEXT NOT NULL,
@@ -636,7 +635,7 @@ const MIGRATION_V64_SQL = [
     `ALTER TABLE plans ADD COLUMN map_fingerprint TEXT DEFAULT NULL`,
     `CREATE TABLE IF NOT EXISTS plan_dependencies (plan_id TEXT NOT NULL, depends_on_plan_id TEXT NOT NULL, PRIMARY KEY(plan_id, depends_on_plan_id))`,
     `CREATE INDEX IF NOT EXISTS idx_plan_dependencies_depends ON plan_dependencies(depends_on_plan_id)`,
-    `CREATE TABLE IF NOT EXISTS missions (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'mission', goal TEXT DEFAULT '', ready INTEGER DEFAULT 0, run_state TEXT DEFAULT 'not-started', team TEXT DEFAULT '', max_extra_worktrees INTEGER DEFAULT 0, workspace_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS missions (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'mission', goal TEXT DEFAULT '', ready INTEGER DEFAULT 0, team TEXT DEFAULT '', max_extra_worktrees INTEGER DEFAULT 0, workspace_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS mission_members (mission_id TEXT NOT NULL, member_id TEXT NOT NULL, member_kind TEXT NOT NULL, PRIMARY KEY (mission_id, member_id))`,
     `CREATE INDEX IF NOT EXISTS idx_mission_members_mission ON mission_members(mission_id)`,
     `CREATE INDEX IF NOT EXISTS idx_missions_workspace ON missions(workspace_id)`,
@@ -11081,8 +11080,40 @@ FROM plans
         return out;
     }
 
+    /**
+     * Walk the existing edges to see whether `from` is already reachable from
+     * `to` — i.e. whether adding `from -> depends on -> to` would close a cycle.
+     * Returns the cycle path when one would be created, otherwise null.
+     *
+     * A cycle is a real input error and must be REFUSED at the write, not
+     * discovered at dispatch: the pop gate would 409 every member of the cycle
+     * against every other member forever, with no diagnosis anywhere and no UI
+     * to clear it. The analysis pass reports cycles too, but an agent's report is
+     * not a constraint — this is.
+     */
+    public async findDependencyCycle(planId: string, dependsOnPlanId: string): Promise<string[] | null> {
+        if (!planId || !dependsOnPlanId) return null;
+        if (planId === dependsOnPlanId) return [planId, planId];
+        // Depth-first from the proposed predecessor. If we can reach `planId`,
+        // the new edge closes a loop.
+        const seen = new Set<string>();
+        const stack: Array<{ id: string; path: string[] }> = [{ id: dependsOnPlanId, path: [planId, dependsOnPlanId] }];
+        while (stack.length) {
+            const { id, path } = stack.pop()!;
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const nextIds = await this.getPlanDependencies(id);
+            for (const nextId of nextIds) {
+                if (nextId === planId) return [...path, nextId];
+                stack.push({ id: nextId, path: [...path, nextId] });
+            }
+        }
+        return null;
+    }
+
     public async addPlanDependency(planId: string, dependsOnPlanId: string): Promise<boolean> {
         if (!planId || !dependsOnPlanId || planId === dependsOnPlanId) return false;
+        if (await this.findDependencyCycle(planId, dependsOnPlanId)) return false;
         return this._persistedUpdate(
             'INSERT OR IGNORE INTO plan_dependencies (plan_id, depends_on_plan_id) VALUES (?, ?)',
             [planId, dependsOnPlanId]
@@ -11099,6 +11130,14 @@ FROM plans
 
     public async setPlanDependencies(planId: string, dependsOnPlanIds: string[]): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db || !planId) return false;
+        // Reject the whole write if any proposed edge would close a cycle. All
+        // or nothing: a partially-applied edge set is a silently wrong order,
+        // which is the exact failure the plan says must be reported rather than
+        // guessed at.
+        for (const dep of dependsOnPlanIds) {
+            if (!dep || dep === planId) continue;
+            if (await this.findDependencyCycle(planId, dep)) return false;
+        }
         try {
             this._db.exec('BEGIN');
             this._db.run('DELETE FROM plan_dependencies WHERE plan_id = ?', [planId]);
@@ -11149,7 +11188,7 @@ FROM plans
     public async getMissions(workspaceId: string): Promise<any[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
-            'SELECT id, name, type, goal, ready, run_state, team, max_extra_worktrees, workspace_id, created_at, updated_at FROM missions WHERE workspace_id = ? ORDER BY created_at ASC',
+            'SELECT id, name, type, goal, ready, team, max_extra_worktrees, workspace_id, created_at, updated_at FROM missions WHERE workspace_id = ? ORDER BY created_at ASC',
             [workspaceId]
         );
         const list: any[] = [];
@@ -11162,7 +11201,6 @@ FROM plans
                     type: String(r.type || 'mission'),
                     goal: String(r.goal || ''),
                     ready: Number(r.ready || 0) === 1,
-                    runState: String(r.run_state || 'not-started'),
                     team: String(r.team || ''),
                     maxExtraWorktrees: Number(r.max_extra_worktrees || 0),
                     workspaceId: String(r.workspace_id || ''),
@@ -11185,14 +11223,81 @@ FROM plans
                 if (member.kind === 'feature') m.features.push(member.memberId);
                 else m.plans.push(member.memberId);
             }
+            await this._hydrateDerivedMissionFields(m, members);
         }
         return list;
+    }
+
+    /**
+     * Fill the fields a mission never stores.
+     *
+     * `runState` is DERIVED from member state, never persisted — a stored copy
+     * drifts the first time a run dies unexpectedly and the mission reads
+     * "in-flight" forever. `sequencing` is derived from the persisted dependency
+     * edges, so the Mission Control panel's Sequencing view reflects the map the
+     * analysis actually wrote rather than always rendering its "no stream map
+     * exists" default.
+     */
+    private async _hydrateDerivedMissionFields(
+        m: any,
+        members: Array<{ memberId: string; kind: 'plan' | 'feature' }>
+    ): Promise<void> {
+        m.runState = await this._deriveMissionRunState(members);
+        m.sequencing = await this._deriveMissionSequencing(members);
+    }
+
+    /**
+     * A mission is in flight when any member is held (dispatched) with no
+     * asserted completion; completed when every member has asserted completion;
+     * otherwise not started. Exactly the same asserted-completion fact the queue
+     * pop gates on — no second source of truth.
+     */
+    private async _deriveMissionRunState(
+        members: Array<{ memberId: string; kind: 'plan' | 'feature' }>
+    ): Promise<'not-started' | 'in-flight' | 'completed'> {
+        if (!members.length) return 'not-started';
+        let allComplete = true;
+        for (const member of members) {
+            const plan = await this.getPlanByPlanId(member.memberId);
+            if (!plan) { allComplete = false; continue; }
+            if (!plan.completedAt) {
+                allComplete = false;
+                if (plan.dispatchedAt) return 'in-flight';
+            }
+        }
+        return allComplete ? 'completed' : 'not-started';
+    }
+
+    /**
+     * Render the member set as ordered steps: each member, followed by the
+     * predecessors it waits on. Members with no edges read as concurrent.
+     */
+    private async _deriveMissionSequencing(
+        members: Array<{ memberId: string; kind: 'plan' | 'feature' }>
+    ): Promise<string[]> {
+        const steps: string[] = [];
+        for (const member of members) {
+            const deps = await this.getPlanDependencies(member.memberId);
+            const plan = await this.getPlanByPlanId(member.memberId);
+            const label = plan?.topic || member.memberId;
+            if (!deps.length) {
+                steps.push(`${label} — no prerequisites (may start immediately)`);
+                continue;
+            }
+            const depLabels: string[] = [];
+            for (const depId of deps) {
+                const depPlan = await this.getPlanByPlanId(depId);
+                depLabels.push(depPlan?.topic || depId);
+            }
+            steps.push(`${label} — waits on ${depLabels.join(', ')}`);
+        }
+        return steps;
     }
 
     public async getMissionById(missionId: string): Promise<any | null> {
         if (!(await this.ensureReady()) || !this._db || !missionId) return null;
         const stmt = this._db.prepare(
-            'SELECT id, name, type, goal, ready, run_state, team, max_extra_worktrees, workspace_id, created_at, updated_at FROM missions WHERE id = ?',
+            'SELECT id, name, type, goal, ready, team, max_extra_worktrees, workspace_id, created_at, updated_at FROM missions WHERE id = ?',
             [missionId]
         );
         let m: any = null;
@@ -11205,7 +11310,6 @@ FROM plans
                     type: String(r.type || 'mission'),
                     goal: String(r.goal || ''),
                     ready: Number(r.ready || 0) === 1,
-                    runState: String(r.run_state || 'not-started'),
                     team: String(r.team || ''),
                     maxExtraWorktrees: Number(r.max_extra_worktrees || 0),
                     workspaceId: String(r.workspace_id || ''),
@@ -11227,6 +11331,7 @@ FROM plans
             if (member.kind === 'feature') m.features.push(member.memberId);
             else m.plans.push(member.memberId);
         }
+        await this._hydrateDerivedMissionFields(m, members);
         return m;
     }
 
@@ -11250,8 +11355,8 @@ FROM plans
         const now = new Date().toISOString();
 
         await this._persistedUpdate(
-            `INSERT INTO missions (id, name, type, goal, ready, run_state, team, max_extra_worktrees, workspace_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'not-started', ?, ?, ?, ?, ?)
+            `INSERT INTO missions (id, name, type, goal, ready, team, max_extra_worktrees, workspace_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 type = excluded.type,
@@ -11270,7 +11375,6 @@ FROM plans
         type: string;
         goal: string;
         ready: boolean;
-        runState: string;
         team: string;
         maxExtraWorktrees: number;
     }>): Promise<boolean> {
@@ -11282,15 +11386,14 @@ FROM plans
         const type = updates.type !== undefined ? updates.type : existing.type;
         const goal = updates.goal !== undefined ? updates.goal : existing.goal;
         const ready = updates.ready !== undefined ? (updates.ready ? 1 : 0) : (existing.ready ? 1 : 0);
-        const runState = updates.runState !== undefined ? updates.runState : existing.runState;
         const team = updates.team !== undefined ? updates.team : existing.team;
         let maxExtraWorktrees = updates.maxExtraWorktrees !== undefined ? updates.maxExtraWorktrees : existing.maxExtraWorktrees;
         if (type === 'mission' && maxExtraWorktrees > 1) maxExtraWorktrees = 1;
         if (maxExtraWorktrees < 0) maxExtraWorktrees = 0;
 
         return this._persistedUpdate(
-            `UPDATE missions SET name = ?, type = ?, goal = ?, ready = ?, run_state = ?, team = ?, max_extra_worktrees = ?, updated_at = datetime('now') WHERE id = ?`,
-            [name, type, goal, ready, runState, team, maxExtraWorktrees, missionId]
+            `UPDATE missions SET name = ?, type = ?, goal = ?, ready = ?, team = ?, max_extra_worktrees = ?, updated_at = datetime('now') WHERE id = ?`,
+            [name, type, goal, ready, team, maxExtraWorktrees, missionId]
         );
     }
 

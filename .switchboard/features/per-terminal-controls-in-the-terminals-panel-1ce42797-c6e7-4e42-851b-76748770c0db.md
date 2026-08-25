@@ -18,6 +18,7 @@ Let the operator act on a terminal from where the terminals are, instead of deto
 - [ ] [Bidirectional Link-Up — Both Terminals Get Instructions](../plans/feature_plan_20260819143000_bidirectional-link-up-both-terminals-get-instructions.md) — **PLAN REVIEWED**
 - [ ] [Terminal Notification Toggle — Per-Terminal Completion-Reminder Standing Order](../plans/feature_plan_20260820080022_terminal-notification-toggle-button.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 No hard ordering; three independent controls on the same panel. All three touch the terminal card template and its listeners, so landing them in one sweep avoids three passes over the same code.

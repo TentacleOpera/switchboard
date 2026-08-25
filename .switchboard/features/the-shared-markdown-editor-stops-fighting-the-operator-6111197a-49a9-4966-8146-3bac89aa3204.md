@@ -16,6 +16,7 @@ Make the shared markdown editor usable on long documents in every panel that emb
 - [ ] [Markdown editor toolbar scrolls out of reach on long docs and tickets](../plans/feature_plan_20260817161200_markdown-toolbar-scrolls-away-on-long-docs.md) — **PLAN REVIEWED**
 - [ ] [Markdown Editor Independent Preview Scrolling and Inline Image Sizing](../plans/feature_plan_20260818093003_markdown-editor-independent-preview-scroll-and-image-sizing.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 No functional ordering constraint, but both change the layout of the one shared markdown editor used across the Docs, Design, Project and Tickets panels. Land them together as a single layout pass rather than two conflicting CSS changes to the same component.

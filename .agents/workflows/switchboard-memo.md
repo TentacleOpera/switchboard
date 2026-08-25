@@ -1,5 +1,5 @@
 ---
-description: Memo capture mode — append-only, no analysis. Enter with /switchboard-memo or "start memo capture"; exit with process memo
+description: Memo capture mode — append-only, no analysis; exit with process memo
 ---
 
 

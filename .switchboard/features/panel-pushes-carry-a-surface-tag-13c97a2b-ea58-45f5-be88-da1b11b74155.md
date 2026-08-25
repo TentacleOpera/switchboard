@@ -16,6 +16,7 @@ Stop host-to-UI broadcasts being delivered to every panel in the browser cockpit
 - [ ] [Design panel pushes leak into the Planning panel — tag DesignPanelProvider's broadcasts with a surface](../plans/feature_plan_20260817105257_design-panel-pushes-leak-into-the-planning-panel.md) — **PLAN REVIEWED**
 - [ ] [Kanban and Setup broadcast untagged to every panel — tag them, and fix the dependencies that make the one-liner unsafe](../plans/feature_plan_20260817110713_kanban-and-setup-broadcast-untagged-to-every-panel.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 The Kanban and Setup subtask lands first — it carries the prerequisite work, after which the Design fix reduces to applying the same tag.

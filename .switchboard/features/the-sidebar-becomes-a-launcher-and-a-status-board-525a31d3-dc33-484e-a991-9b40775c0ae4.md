@@ -22,6 +22,7 @@ Stop the narrow sidebar column trying to be everything. Restructure it into name
 - [ ] [Spike: Find Out Whether a VS Code Editor-Area Terminal Grid Is Actually Usable](../plans/vscode-editor-grid-spike.md) — **CREATED**
 - [ ] [The Cockpit Polls a Dead Host Forever Without Saying So](../plans/cockpit-must-say-when-the-host-is-gone.md) — **CREATED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 The spike runs first: it is cheap, and its answer changes what the restructure should target. Then the restructure, then the Status section inside it — the restructure defines the section the Status work fills. The Memo tab and the cockpit offline state are independent of all three and can proceed in parallel.

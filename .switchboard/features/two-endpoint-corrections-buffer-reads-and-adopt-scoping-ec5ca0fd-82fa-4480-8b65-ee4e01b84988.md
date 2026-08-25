@@ -16,6 +16,7 @@ Two corrections to the endpoint surface agents use to observe and register. An e
 - [ ] [Terminal Buffer Snapshot API — `GET /terminals/:name/buffer`](../plans/feature_plan_20260818180000_terminal-buffer-snapshot-api.md) — **PLAN REVIEWED**
 - [ ] [Orchestrator adopt call drops workspaceRoot — orchestrator scopes to the wrong workspace](../plans/fix-orchestrator-adopt-workspace-root.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 No ordering constraints; two independent corrections to the same endpoint surface. Both are consistent with the contract established by **State Is Reached Through Endpoints, and Any Terminal Can Be a Seat**, but neither depends on it.

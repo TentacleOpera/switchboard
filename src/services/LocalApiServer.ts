@@ -1954,10 +1954,78 @@ export class LocalApiServer {
             // watch would never reach its "queue empty → drop silently"
             // gate, and a schedule would dispatch cards the user never
             // staged. An empty STAGING is the session ending normally.
+            // ── Pop-time Dependency Gate (Asserted Completion) ────────
+            // Eligibility, computed BEFORE the filter so it can be part of
+            // `isQueueable` — which is where the pop's own contract says it
+            // belongs ("anything that makes a card ineligible ... belongs in
+            // isQueueable above, as a filter"). It cannot live inside the
+            // predicate body itself because the lookup is async, so the async
+            // work happens here and the predicate reads the result.
+            //
+            // It must NOT be a refusal on the chosen card. Two independent
+            // chains staged together — A→B and X→Y — put B ahead of X the moment
+            // A dispatches; refusing on the head would 409 the whole pop and
+            // never reach X, breaking the plan's invariant that independent
+            // chains dispatch concurrently.
+            //
+            // NULL-inert: with no rows in `plan_dependencies` this is one empty
+            // query per staged card and the queue behaves exactly as before.
+            const dependencyBlockers = new Map<string, string>();
+            if (db.getPlanDependencies) {
+                try {
+                    const boardById = new Map<string, any>();
+                    for (const p of board) {
+                        if (!p) continue;
+                        if (p.planId) boardById.set(String(p.planId), p);
+                        if (p.sessionId) boardById.set(String(p.sessionId), p);
+                    }
+                    // A predecessor row absent from BOTH stores is a stale edge —
+                    // the plan was deleted. Such an edge can never be satisfied,
+                    // so treating it as blocking deadlocks the queue permanently
+                    // with no UI to clear it. Archived predecessors are still
+                    // real, so resolve through the union (hot + cold) first.
+                    const resolveDep = async (depId: string): Promise<any | null | 'absent'> => {
+                        const onBoard = boardById.get(depId);
+                        if (onBoard) return onBoard;
+                        const anyDb: any = db as any;
+                        if (typeof anyDb.getPlanByPlanIdUnion === 'function') {
+                            const unioned = await anyDb.getPlanByPlanIdUnion(depId);
+                            if (unioned) return unioned;
+                        }
+                        if (typeof anyDb.getPlanByPlanId === 'function') {
+                            const hot = await anyDb.getPlanByPlanId(depId);
+                            if (hot) return hot;
+                        }
+                        return 'absent';
+                    };
+                    for (const p of board) {
+                        if (!p || p.kanbanColumn !== 'STAGING') continue;
+                        const depPlanIds = await db.getPlanDependencies(p.planId);
+                        for (const depId of (depPlanIds || [])) {
+                            const dep = await resolveDep(depId);
+                            if (dep === 'absent') {
+                                console.warn(
+                                    `[LocalApiServer] Stale dependency edge: '${p.planId}' depends on '${depId}', which no longer exists. Treating the edge as satisfied.`
+                                );
+                                continue;
+                            }
+                            if (!dep || !dep.completedAt) { dependencyBlockers.set(String(p.planId), depId); break; }
+                        }
+                    }
+                } catch (err) {
+                    // Fail open rather than stalling every team's queue on a
+                    // transient db fault — the posture resolveTeamMembers and
+                    // resolveTeamPacing already take above.
+                    console.warn('[LocalApiServer] Dependency check failed; dispatching without the gate:', err);
+                    dependencyBlockers.clear();
+                }
+            }
+
             const isQueueable = (p: any): boolean =>
                 !!p
                 && (!p.dispatchedAt)
-                && (!p.featureId || p.featureId === '');
+                && (!p.featureId || p.featureId === '')
+                && !dependencyBlockers.has(String(p.planId));
 
             // V63: the queue pop uses the shared precedence resolver so a
             // starred card is picked before any unstarred one, then by
@@ -1974,6 +2042,23 @@ export class LocalApiServer {
                 .sort(byPrecedence);
 
             if (candidates.length === 0) {
+                // Every staged card filtered out by the dependency gate is a
+                // refusal, not an empty queue: the work exists and is ordered,
+                // it just cannot start yet. Name the blocker of the
+                // highest-precedence blocked card so the lead knows what to wait
+                // on. An actually-empty STAGING still reports "queue empty".
+                if (dependencyBlockers.size > 0) {
+                    const blocked = board
+                        .filter((p: any) => p && p.kanbanColumn === 'STAGING' && dependencyBlockers.has(String(p.planId)))
+                        .sort(byPrecedence);
+                    if (blocked.length > 0) {
+                        const planId = String(blocked[0].planId);
+                        const blockedBy = dependencyBlockers.get(planId) || '';
+                        return fail(409, `Dependency predecessor '${blockedBy}' has not completed (completed_at is NULL). Card '${planId}' cannot be dispatched, and no other staged card is unblocked.`, {
+                            dependencyBlocked: { planId, blockedBy }
+                        });
+                    }
+                }
                 return { status: 200, payload: { success: true, dispatched: null, reason: 'queue empty' } };
             }
             // Precedence decides the order; it never decides eligibility. Anything
@@ -1993,34 +2078,24 @@ export class LocalApiServer {
             // predecessors are incomplete"), not a star exception. And a star that
             // silently stops working under a condition the user cannot see is worse
             // than no star. Filter first, then sort, and the two never interact.
-            const next = candidates[0];
-
             // ── Pop-time Dependency Gate (Asserted Completion) ────────
-            // Refuse a card whose dependency predecessors are incomplete (completed_at is NULL).
-            // Gated on asserted completion, evaluated dynamically at pop time.
-            if (db.getPlanDependencies) {
-                try {
-                    const depPlanIds = await db.getPlanDependencies(next.planId);
-                    if (depPlanIds && depPlanIds.length > 0) {
-                        for (const depId of depPlanIds) {
-                            let depPlan = board.find((p: any) => p && (p.planId === depId || p.sessionId === depId));
-                            if (!depPlan && db.getPlanByPlanId) {
-                                depPlan = await db.getPlanByPlanId(depId);
-                            }
-                            if (!depPlan || !depPlan.completedAt) {
-                                return fail(409, `Dependency predecessor '${depId}' has not completed (completed_at is NULL). Card '${next.planId}' cannot be dispatched.`, {
-                                    dependencyBlocked: {
-                                        planId: next.planId,
-                                        blockedBy: depId,
-                                    }
-                                });
-                            }
-                        }
-                    }
-                } catch (err) {
-                    console.warn('[LocalApiServer] Dependency check failed for candidate:', next.planId, err);
-                }
-            }
+            // Eligibility, not ordering: a card whose dependency predecessors
+            // have not asserted completion (`completed_at IS NULL`) is filtered
+            // OUT of the candidate list, exactly as the comment above requires
+            // ("Filter first, then sort, and the two never interact").
+            //
+            // It must not be a refusal on candidates[0]. Two independent chains
+            // staged together — A→B and X→Y — put B ahead of X in queue order the
+            // moment A dispatches. Refusing on the head would 409 the whole pop
+            // and never reach X, which breaks this plan's own invariant that
+            // independent chains dispatch to different teams concurrently.
+            //
+            // Only when EVERY candidate is blocked does the pop refuse, and then
+            // it names the blocker of the highest-precedence blocked card.
+            //
+            // NULL-inert: with no edges in `plan_dependencies` the whole block is
+            // a single empty query and the queue behaves exactly as before.
+            const next = candidates[0];
 
             // ── Dispatch ───────────────────────────────────────────────
             // Detect whether `from` names an external head (non-terminal agent).
@@ -2432,8 +2507,13 @@ export class LocalApiServer {
                 const planId = urlObj.searchParams.get('planId');
                 if (planId) {
                     const deps = await db.getPlanDependencies(planId);
+                    // The fingerprint is returned so the next analysis run can
+                    // recompute it from the current plan files and compare — a
+                    // mismatch means the persisted map is stale. Storage alone
+                    // detects nothing; the comparison is the point.
+                    const mapFingerprint = await db.getMapFingerprint?.(planId) ?? null;
                     res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true, planId, dependencies: deps }));
+                    res.end(JSON.stringify({ success: true, planId, dependencies: deps, mapFingerprint }));
                 } else {
                     const wsId = (await db.getWorkspaceId?.()) || '';
                     const deps = await db.getAllPlanDependencies(wsId);
@@ -2452,18 +2532,57 @@ export class LocalApiServer {
                     return;
                 }
 
-                if (Array.isArray(body?.dependsOn)) {
-                    const ok = await db.setPlanDependencies(planId, body.dependsOn);
-                    res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: ok, planId, dependsOn: body.dependsOn }));
-                } else if (typeof body?.dependsOnPlanId === 'string' && body.dependsOnPlanId.trim()) {
-                    const ok = await db.addPlanDependency(planId, body.dependsOnPlanId.trim());
-                    res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: ok, planId, dependsOnPlanId: body.dependsOnPlanId.trim() }));
-                } else {
+                // The analysis pass sends the map fingerprint alongside the
+                // edges it computed. Accepting it here is what makes staleness
+                // detectable later — the hash of {planId}:{sortedFileSet} pairs
+                // at analysis time, compared against a recomputation on read.
+                if (typeof body?.mapFingerprint === 'string' && body.mapFingerprint.trim()) {
+                    await db.setMapFingerprint?.(planId, body.mapFingerprint.trim());
+                }
+
+                const proposed: string[] | null = Array.isArray(body?.dependsOn)
+                    ? body.dependsOn.map((d: unknown) => String(d || '').trim()).filter(Boolean)
+                    : (typeof body?.dependsOnPlanId === 'string' && body.dependsOnPlanId.trim())
+                        ? [body.dependsOnPlanId.trim()]
+                        : null;
+
+                if (!proposed) {
+                    // A fingerprint-only write is legitimate: a plan can carry a
+                    // map fingerprint with no edges of its own.
+                    if (typeof body?.mapFingerprint === 'string' && body.mapFingerprint.trim()) {
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: true, planId, mapFingerprint: body.mapFingerprint.trim() }));
+                        return;
+                    }
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: false, error: 'Missing dependsOn array or dependsOnPlanId string' }));
+                    return;
                 }
+
+                // Refuse a cycle with the path that closes it, rather than
+                // accepting edges that would 409 every member against every
+                // other member at dispatch with no diagnosis anywhere.
+                if (db.findDependencyCycle) {
+                    for (const dep of proposed) {
+                        if (dep === planId) {
+                            res.writeHead(409, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, error: `Dependency cycle refused: '${planId}' cannot depend on itself.`, cycle: [planId, planId] }));
+                            return;
+                        }
+                        const cycle = await db.findDependencyCycle(planId, dep);
+                        if (cycle) {
+                            res.writeHead(409, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, error: `Dependency cycle refused: ${cycle.join(' -> ')}. Resolve the declared dependencies and re-run the analysis; no partial order was written.`, cycle }));
+                            return;
+                        }
+                    }
+                }
+
+                const ok = Array.isArray(body?.dependsOn)
+                    ? await db.setPlanDependencies(planId, proposed)
+                    : await db.addPlanDependency(planId, proposed[0]);
+                res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: ok, planId, dependsOn: proposed }));
                 return;
             }
         } catch (err) {

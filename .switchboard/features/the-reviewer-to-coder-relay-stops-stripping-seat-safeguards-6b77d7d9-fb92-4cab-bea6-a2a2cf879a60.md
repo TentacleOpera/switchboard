@@ -18,6 +18,7 @@ Fix three defects on one path - the relay that sends a reviewer's fixes back to 
 - [ ] [originLead cross-team guard — drop last-dispatch target when it's not on the reviewer's team](../plans/originlead-cross-team-guard.md) — **PLAN REVIEWED**
 - [ ] [Reviewer Prompt: Inbound Field-Existence Check & Plan-Authority Split](../plans/reviewer-prompt-inbound-field-existence-check.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 No hard ordering; three independent defects on one path.

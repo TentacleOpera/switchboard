@@ -1110,6 +1110,19 @@ jobs:
       - name: Lead task/complete endpoint contract (acceptance clear, idempotency)
         run: npm run test:contract:task-complete
 
+      # `completed_at` is the ONE fact that releases a team and the ONE fact the
+      # pop-time dependency gate evaluates. Its gate was defined in package.json
+      # and never invoked here — the exact "green while incomplete" hole.
+      - name: Completion is asserted, never inferred
+        run: npm run test:contract:completion-asserted-never-inferred
+
+      # Pop-time dependency gate + derived (never stored) mission run state.
+      # The plan asked for this to be its own gate, not folded into the in-flight
+      # 409 path, because it is a new refusal in a critical section maintained
+      # for ~4,000 installs.
+      - name: Pop-time dependency gate contract
+        run: npm run test:contract:dependency-gate
+
       - name: Dispatch preparation curtain + UFO asset contract
         run: npm run test:contract:dispatch-curtain
 

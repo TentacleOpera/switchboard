@@ -18,6 +18,7 @@ Make the tickets auto-sync engine safe to leave switched on, and stop parent tic
 - [ ] [Fix Parent Ticket Card Stuck on 'Checking' Sync Status in Subtasks Sidebar](../plans/feature_plan_20260818103943_fix_parent_ticket_checking_status_subtasks_sidebar.md) — **PLAN REVIEWED**
 - [ ] [Safe Auto-Sync: Suppress Delta-Pull During Edit Mode, Reliable Autopush on Save](../plans/feature_plan_20260818151304_safe-autosync-suppress-delta-pull-during-edit-mode.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+
 ## Dependencies & sequencing
 
 Auto-sync safety lands first: it is the subtask that currently costs users work. The other two are independent of it and of each other.
