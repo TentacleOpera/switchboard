@@ -19,12 +19,17 @@
  *
  * On NULL handling: the plan asks for "NULL yields to the fallback" rather than
  * NULLs-last, but a comparator that resolves manual-vs-NULL by timestamp is not
- * transitive — A(order 5, ts 100) beats B(order 1, ts 50) never, A beats
- * C(NULL, ts 75) by timestamp, C beats B by timestamp, and the cycle makes the
- * sort order-dependent. So a manual position always outranks its absence, in
- * BOTH the resolver and the frontend comparator. The consequence is worth
- * knowing: once a column has been arranged, a card that arrives later with no
- * position of its own lands at the END of that column, not the top.
+ * transitive — A(order 5, ts 100) loses to B(order 1, ts 50) on order, beats
+ * C(NULL, ts 75) on timestamp, and C beats B on timestamp, so the cycle makes
+ * the sorted result depend on input order. A manual position therefore always
+ * outranks its absence, in BOTH the resolver and the frontend comparator.
+ *
+ * That rule alone would send a card arriving from another column to the BOTTOM
+ * of any arranged column, so arrival does not clear the position — it rewrites
+ * it to MIN-1 (KanbanDatabase.setColumnOrderToFront), putting the card at the
+ * front where the board has always put it, with every comparison still
+ * integer-vs-integer. NULL is left to mean only "this column was never
+ * arranged", where date ordering already places a fresh arrival first.
  *
  * STAGING keeps queue_position exclusively — column_order is never read there.
  * Non-STAGING columns read column_order; queue_position is ignored there.
