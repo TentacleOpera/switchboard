@@ -160,27 +160,35 @@ async function run() {
         assert.deepStrictEqual(dispatched, ['next']);
     });
 
-    await check('a just-reviewed card in CODE REVIEWED does NOT make the team in flight', async () => {
-        // The regression the plan calls "the one that matters": after a review
-        // pass the card sits in CODE REVIEWED with dispatchedAt set and
-        // dispatchedTerminal naming the team's REVIEWER. A dispatchedAt-keyed
-        // predicate refuses the head's own legitimate call and the pipeline
-        // stops after card one.
+    await check('a card in any column with completed_at set releases the team', async () => {
         const board = [
-            card('done', 'CODE REVIEWED', { dispatchedAt: '2026-08-18T00:00:00Z', dispatchedTerminal: 'Reviewer' }),
+            card('done', 'CODE REVIEWED', { dispatchedAt: '2026-08-18T00:00:00Z', dispatchedTerminal: 'Coder 1', completedAt: '2026-08-24T12:00:00Z' }),
             card('next', 'STAGING', { queuePosition: 1 }),
         ];
         const { server, dispatched } = makeServer(board, {
-            resolveTeamMembers: async () => ['Coding', 'Reviewer', 'Coder 1'],
+            resolveTeamMembers: async () => ['Coding', 'Coder 1'],
         });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
         assert.strictEqual(out.status, 200, `expected the next card, got ${out.status}: ${out.payload.error || ''}`);
         assert.deepStrictEqual(dispatched, ['next']);
     });
 
-    await check('a team holding a card in a coding column is refused with 409', async () => {
+    await check('a card in any column held by a team member with completed_at NULL refuses the pop with 409', async () => {
         const board = [
-            card('wip', 'CODER CODED', { dispatchedTerminal: 'Coder 1' }),
+            card('wip', 'CODE REVIEWED', { dispatchedTerminal: 'Coder 1', completedAt: null }),
+            card('next', 'STAGING', { queuePosition: 1 }),
+        ];
+        const { server, dispatched } = makeServer(board, {
+            resolveTeamMembers: async () => ['Coding', 'Coder 1'],
+        });
+        const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
+        assert.strictEqual(out.status, 409, 'a card in any column without completed_at is in flight');
+        assert.deepStrictEqual(dispatched, [], 'a refused pop dispatches nothing and consumes no queue position');
+    });
+
+    await check('a team holding a card in a coding column with completed_at NULL is refused with 409', async () => {
+        const board = [
+            card('wip', 'CODER CODED', { dispatchedTerminal: 'Coder 1', completedAt: null }),
             card('next', 'STAGING', { queuePosition: 1 }),
         ];
         const { server, dispatched } = makeServer(board, {
@@ -191,19 +199,19 @@ async function run() {
         assert.deepStrictEqual(dispatched, [], 'a refused pop dispatches nothing and consumes no queue position');
     });
 
-    await check('in-flight is derived from board position, not from dispatchedAt', async () => {
+    await check('in-flight is derived from holder and completion, not from column position or dispatchedAt', async () => {
         // A POST /kanban/queue/done clears dispatchedAt (clearWorkingState) and
         // the staleness sweep clears it too. Neither may make an actively
-        // coding team look free.
+        // held card look free if completed_at is NULL.
         const board = [
-            card('wip', 'INTERN CODED', { dispatchedTerminal: 'Coder 1', dispatchedAt: null }),
+            card('wip', 'INTERN CODED', { dispatchedTerminal: 'Coder 1', dispatchedAt: null, completedAt: null }),
             card('next', 'STAGING', { queuePosition: 1 }),
         ];
         const { server, dispatched } = makeServer(board, {
             resolveTeamMembers: async () => ['Coding', 'Coder 1'],
         });
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
-        assert.strictEqual(out.status, 409, 'a cleared dispatchedAt must not release the in-flight flag');
+        assert.strictEqual(out.status, 409, 'a cleared dispatchedAt must not release the in-flight flag if completedAt is null');
         assert.deepStrictEqual(dispatched, []);
     });
 
@@ -473,6 +481,7 @@ async function run() {
             resolveTeamPacing: async () => 'seat',
             db: {
                 clearWorkingState: async () => { failed.dispatchedAt = null; return true; },
+                releaseDispatchHolder: async () => { failed.dispatchedTerminal = ''; failed.dispatchedAt = null; return true; },
                 getPlanByPlanId: async (planId) => board.find(p => p.planId === planId),
                 updateColumnByPlanFile: async () => { failed.kanbanColumn = 'STAGING'; return true; },
                 setQueuePositions: async (_wsId, ids) => {
@@ -497,6 +506,80 @@ async function run() {
         const retry = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding', pacing: 'seat' });
         assert.strictEqual(retry.status, 200);
         assert.deepStrictEqual(attemptedColumns, ['LEAD CODED', 'LEAD CODED']);
+    });
+
+    await check('escalation round trip: fail -> re-stage -> holder released -> pop dispatches without 409', async () => {
+        const failed = card('failed-card', 'INTERN CODED', {
+            dispatchedAt: '2026-08-20T00:00:00Z',
+            dispatchedTerminal: 'Intern 1',
+            routedTo: 'intern',
+            planFile: '/tmp/failed-card.md',
+            workspaceId: 'ws1',
+        });
+        const board = [failed, card('other', 'STAGING', { queuePosition: 2 })];
+        let holderReleased = false;
+        const { server, dispatched, dispatchOptions } = makeServer(board, {
+            resolveTeamMembers: async () => ['Coding', 'Intern 1', 'Coder 1'],
+            resolveTeamPacing: async () => 'seat',
+            db: {
+                clearWorkingState: async () => { failed.dispatchedAt = null; return true; },
+                releaseDispatchHolder: async () => {
+                    holderReleased = true;
+                    failed.dispatchedTerminal = '';
+                    failed.dispatchedAt = null;
+                    return true;
+                },
+                getPlanByPlanId: async (planId) => board.find(p => p.planId === planId),
+                updateColumnByPlanFile: async () => { failed.kanbanColumn = 'STAGING'; return true; },
+                setQueuePositions: async (_wsId, ids) => {
+                    ids.forEach((id, index) => { const row = board.find(p => p.planId === id); if (row) row.queuePosition = index + 1; });
+                    return true;
+                },
+            },
+        });
+        const doneRes = await server.reportQueueDone({ workspaceRoot: WS, from: 'Intern 1', outcome: 'failed', planId: 'failed-card' });
+        assert.strictEqual(doneRes.status, 200);
+        assert.strictEqual(holderReleased, true, 'releaseDispatchHolder must have been called on failed card');
+        assert.strictEqual(failed.kanbanColumn, 'STAGING');
+        assert.strictEqual(failed.dispatchedTerminal, '');
+        assert.deepStrictEqual(dispatched, ['failed-card'], 'immediately following pop must dispatch the re-staged card');
+        assert.deepStrictEqual(dispatchOptions[0].targetColumn, 'CODER CODED', 'stepped up to coder');
+    });
+
+    await check('a card re-staged by watch (empty holder) is not re-staged a second time by the ladder', async () => {
+        const failed = card('already-restaged', 'STAGING', {
+            dispatchedAt: null,
+            dispatchedTerminal: '',
+            routedTo: 'intern',
+            planFile: '/tmp/already-restaged.md',
+            workspaceId: 'ws1',
+        });
+        const board = [failed, card('next-in-line', 'STAGING', { queuePosition: 1 })];
+        let columnUpdateCalled = false;
+        const { server, dispatched } = makeServer(board, {
+            resolveTeamMembers: async () => ['Coding', 'Intern 1', 'Coder 1'],
+            resolveTeamPacing: async () => 'seat',
+            db: {
+                clearWorkingState: async () => true,
+                getPlanByPlanId: async (planId) => board.find(p => p.planId === planId),
+                updateColumnByPlanFile: async () => { columnUpdateCalled = true; return true; },
+            },
+        });
+        // held pre-read has empty dispatchedTerminal
+        const res = await server.reportQueueDone({ workspaceRoot: WS, from: 'Intern 1', outcome: 'failed', planId: 'already-restaged' });
+        // Since held is not found in board with matching terminal or fresh read has empty holder, it does not double re-stage
+        assert.strictEqual(columnUpdateCalled, false, 'updateColumnByPlanFile must not be called when holder is already released');
+    });
+
+    await check('in-flight predicate in LocalApiServer contains no column comparison', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        const i = src.indexOf('if (isTeamDispatch) {');
+        assert.notStrictEqual(i, -1, 'isTeamDispatch block must exist');
+        const body = src.slice(i, src.indexOf('\n            }', i));
+        assert.ok(!/CODING_COLUMNS/.test(body), 'in-flight predicate must not reference CODING_COLUMNS');
+        assert.ok(!/kanbanColumn/.test(body) || !body.includes('.has('), 'in-flight predicate must not compare kanbanColumn');
+        assert.ok(/!p\.completedAt/.test(body) || /!inFlightCard\.completedAt/.test(body), 'in-flight predicate must check completedAt');
     });
 
     await check('concurrent pops are serialized — one card, one dispatch', async () => {

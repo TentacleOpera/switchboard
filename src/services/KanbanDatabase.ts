@@ -6711,6 +6711,7 @@ export class KanbanDatabase {
             }
             this._db.run('COMMIT');
             await this._persist();
+            await this.flushPersist();
             return true;
         } catch (err) {
             try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
@@ -6769,6 +6770,13 @@ export class KanbanDatabase {
             );
             this._db.run('COMMIT');
             await this._persist();
+            // Force an immediate disk flush — _persist() is debounced 300ms, so the
+            // disk file still has the pre-cascade column when the file watcher fires
+            // on _regenerateFeatureFile's write. If anything triggers _reloadIfStale
+            // in that window (a second IDE window, a backup restore, a stat check),
+            // the stale disk state clobbers the in-memory cascade. Flushing here
+            // closes the race: the disk file is authoritative before control returns.
+            await this.flushPersist();
             return true;
         } catch (err) {
             try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
@@ -10136,6 +10144,29 @@ FROM plans
     }
 
     /**
+     * Release a card's dispatch holder and working state when returning to the queue.
+     * Nulls dispatched_terminal, dispatched_at, last_liveness_at, and blocked_at.
+     * Scoped by plan_file + workspace_id.
+     */
+    public async releaseDispatchHolder(planFile: string, workspaceId: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const normalized = this._ensureRelativePlanFile(planFile);
+        try {
+            this._db.run(
+                'UPDATE plans SET dispatched_terminal = NULL, dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, updated_at = ? ' +
+                'WHERE plan_file = ? AND workspace_id = ?',
+                [new Date().toISOString(), normalized, workspaceId]
+            );
+            const transitioned = this._db.getRowsModified() > 0;
+            if (transitioned) { await this._persist(); }
+            return transitioned;
+        } catch (error) {
+            console.error('[KanbanDatabase] releaseDispatchHolder failed:', error);
+            return false;
+        }
+    }
+
+    /**
      * V60 — clear a card's queue_position when it leaves STAGING (dispatch to
      * a coder, or a drag out to another column). A card that returns to the
      * board later does not carry a stale position and jump the queue on
@@ -10346,6 +10377,10 @@ FROM plans
      * the removed hook route that first introduced it. Empty
      * `dispatched_terminal` never matches (it is written as `''` when the
      * dispatcher had no terminal name — unresolvable, by design).
+     *
+     * Note: Keys on `dispatched_at IS NOT NULL`. A card returning to the queue
+     * has its holder released via `releaseDispatchHolder` (nulling dispatched_terminal
+     * and dispatched_at), so queued cards never match here.
      */
     public async getActiveDispatchedByTerminal(workspaceId: string, terminalName: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db || !workspaceId || !terminalName) return null;
@@ -10452,6 +10487,10 @@ FROM plans
      * live-dispatched plan row for a workspace, newest first. One query, flat in
      * terminal count. No join to worktrees, no `worktree_id` read, no `is_feature`
      * predicate — the resolver and the panel need the same row shape.
+     *
+     * Note: Keys on `dispatched_at IS NOT NULL`. A card returning to the queue
+     * has its holder released via `releaseDispatchHolder` (nulling dispatched_terminal
+     * and dispatched_at), so queued cards never match here.
      */
     public async getLiveDispatchAttribution(workspaceId: string): Promise<LiveDispatchAttributionRow[]> {
         const out: LiveDispatchAttributionRow[] = [];

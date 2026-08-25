@@ -213,12 +213,13 @@ async function run() {
             'REVIEW seat order must not instruct the reviewer to dispatch the feature');
     });
 
-    await check('seat-pacing skip is gone — in-flight scan runs for both pacing modes', async () => {
+    await check('seat-pacing skip is gone — in-flight scan runs for both pacing modes and contains no column check', async () => {
         // The guard must be `if (isTeamDispatch)` — NOT `if (pacing !== 'seat' && isTeamDispatch)`.
-        // The skip existed only because board position never released; the scan
-        // now reads completed_at, so the special case is dead weight.
-        assert.ok(/if \(isTeamDispatch\)\s*\{[\s\S]*?CODING_COLUMNS\.has[\s\S]*?!p\.completedAt/.test(localApiSrc),
+        // The scan reads completed_at and contains no column comparison (CODING_COLUMNS).
+        assert.ok(/if \(isTeamDispatch\)\s*\{[\s\S]*?!p\.completedAt/.test(localApiSrc),
             'in-flight scan must run on `if (isTeamDispatch)` and read `!p.completedAt`');
+        assert.ok(!/if \(isTeamDispatch\)\s*\{[\s\S]*?CODING_COLUMNS/.test(localApiSrc),
+            'in-flight scan must contain no CODING_COLUMNS / column comparison');
         assert.ok(!/pacing !== 'seat' && isTeamDispatch/.test(localApiSrc),
             'the seat-pacing skip (`pacing !== \'seat\' && isTeamDispatch`) must be deleted');
     });

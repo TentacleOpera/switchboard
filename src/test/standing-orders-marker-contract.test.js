@@ -484,55 +484,10 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         tsHeadPrompt.includes('PLAN FILES ARE THE SOURCE OF TRUTH'),
         'NEW_CODING_HEAD_PROMPT must carry the plan-immutability directive'
     );
-    assert.ok(
-        tsHeadPrompt.includes('If your team has a reviewer seat'),
-        'NEW_CODING_HEAD_PROMPT must make CODE REVIEWED dispatch conditional on reviewer seat'
-    );
-    assert.ok(
-        tsHeadPrompt.includes('If your team has NO reviewer seat'),
-        'NEW_CODING_HEAD_PROMPT must specify behavior when team has no reviewer seat'
-    );
-
-    // ── the frozen migration snapshots must stay frozen ──────────────
-    // CURRENT_BUGGY_CODING_HEAD_PROMPT is not a delivered prompt: it is a
-    // byte-exact snapshot of what the first migration already wrote to disk on
-    // installs in the field, matched by `===` in isUntouchedCurrentCodingTeam.
-    // Any new wording swept into it (this exact regression happened once with
-    // the unattended clause) makes the recogniser match ZERO installs and the
-    // second migration silently never fires.
-    const buggyAnchor = /CURRENT_BUGGY_CODING_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
-    assert.ok(buggyAnchor, 'CURRENT_BUGGY_CODING_HEAD_PROMPT not found in teamWiring.ts');
-    const buggySnapshot = readQuotedChain(TEAM_WIRING_SRC, buggyAnchor.index + buggyAnchor[0].length);
-    assert.ok(buggySnapshot, 'could not read CURRENT_BUGGY_CODING_HEAD_PROMPT as a quoted chain');
-    assert.ok(
-        !buggySnapshot.includes('unattended'),
-        'CURRENT_BUGGY_CODING_HEAD_PROMPT is a frozen on-disk snapshot — new prompt wording '
-        + '(here: the unattended escalation clause) must go in NEW_CODING_HEAD_PROMPT only. '
-        + 'Editing the snapshot makes isUntouchedCurrentCodingTeam match no install at all.'
-    );
-    assert.notStrictEqual(
-        buggySnapshot, tsHeadPrompt,
-        'CURRENT_BUGGY_CODING_HEAD_PROMPT must differ from NEW_CODING_HEAD_PROMPT — if they are '
-        + 'equal the migration rewrites installs to the text they already have, forever.'
-    );
-
-    const preRoleBoundaryAnchor = /PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
-    assert.ok(preRoleBoundaryAnchor, 'PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT not found in teamWiring.ts');
-    const preRoleBoundarySnapshot = readQuotedChain(TEAM_WIRING_SRC, preRoleBoundaryAnchor.index + preRoleBoundaryAnchor[0].length);
-    assert.ok(preRoleBoundarySnapshot, 'could not read PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT as a quoted chain');
-    assert.ok(
-        !preRoleBoundarySnapshot.includes('PLAN FILES ARE THE SOURCE OF TRUTH'),
-        'PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT is a frozen snapshot of pre-guardrail text — new prompt wording must go in NEW_CODING_HEAD_PROMPT only'
-    );
-    assert.notStrictEqual(
-        preRoleBoundarySnapshot, tsHeadPrompt,
-        'PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT must differ from NEW_CODING_HEAD_PROMPT'
-    );
 
     // ── commit instruction assertions ───────────────────────────────
     // The durable commit instruction (TEAM_HEAD_COMMIT_INSTRUCTION) is
     // appended to both NEW_CODING_HEAD_PROMPT and NEW_REVIEW_TEAM_HEAD_PROMPT.
-    // The frozen pre-commit-instruction snapshots must NOT contain it.
     const commitInstructionText = 'create a single commit with a descriptive message';
     assert.ok(
         tsHeadPrompt.includes(commitInstructionText),
@@ -543,30 +498,18 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         'NEW_REVIEW_TEAM_HEAD_PROMPT must include the durable commit instruction text'
     );
 
-    const preCommitCodingAnchor = /PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
-    assert.ok(preCommitCodingAnchor, 'PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT not found in teamWiring.ts');
-    const preCommitCodingSnapshot = readQuotedChain(TEAM_WIRING_SRC, preCommitCodingAnchor.index + preCommitCodingAnchor[0].length);
-    assert.ok(preCommitCodingSnapshot, 'could not read PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT as a quoted chain');
+    // ── structural seed & flag migrations survive ───────────────────
     assert.ok(
-        !preCommitCodingSnapshot.includes(commitInstructionText),
-        'PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT is a frozen snapshot — the commit instruction must NOT be in it'
+        TEAM_WIRING_SRC.includes('function isUntouchedOldSeed('),
+        'isUntouchedOldSeed must survive to neutralise the old 3-coder seed'
     );
-    assert.notStrictEqual(
-        preCommitCodingSnapshot, tsHeadPrompt,
-        'PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT must differ from NEW_CODING_HEAD_PROMPT'
-    );
-
-    const preCommitReviewAnchor = /PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT\s*=\s*/.exec(TEAM_WIRING_SRC);
-    assert.ok(preCommitReviewAnchor, 'PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT not found in teamWiring.ts');
-    const preCommitReviewSnapshot = readQuotedChain(TEAM_WIRING_SRC, preCommitReviewAnchor.index + preCommitReviewAnchor[0].length);
-    assert.ok(preCommitReviewSnapshot, 'could not read PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT as a quoted chain');
     assert.ok(
-        !preCommitReviewSnapshot.includes(commitInstructionText),
-        'PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT is a frozen snapshot — the commit instruction must NOT be in it'
+        TEAM_WIRING_SRC.includes('export function isUntouchedSeed('),
+        'isUntouchedSeed must survive for gallery comparison'
     );
-    assert.notStrictEqual(
-        preCommitReviewSnapshot, tsReviewHeadPrompt,
-        'PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT must differ from NEW_REVIEW_TEAM_HEAD_PROMPT'
+    assert.ok(
+        TEAM_WIRING_SRC.includes('export function migrateTeamGroupFlags('),
+        'migrateTeamGroupFlags must survive to flag team groups'
     );
 });
 

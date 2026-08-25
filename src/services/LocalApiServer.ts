@@ -121,11 +121,6 @@ function roleToCodingColumn(role: 'intern' | 'coder' | 'lead'): string {
     return 'LEAD CODED';
 }
 
-/** Coding columns — a team is "in flight" while any of its cards sits in
- *  one of these. Derived from board position, so no plan-file mtime side
- *  effect or staleness sweep can corrupt the predicate. */
-const CODING_COLUMNS: ReadonlySet<string> = new Set(['LEAD CODED', 'CODER CODED', 'INTERN CODED']);
-
 interface LocalApiServerOptions {
     workspaceRoot: string;
     port?: number;
@@ -1896,43 +1891,48 @@ export class LocalApiServer {
             }
 
             // ── In-flight refusal (BOTH PACING MODES) ─────────────────
-            // A team is in flight when any active card belonging to it sits
-            // in a coding column. `dispatched_terminal` is only ever a real
-            // terminal name; an empty value is a card nobody has picked up.
+            // A team is in flight when any card belonging to it is held by
+            // a team member and has no completion post (completed_at is NULL).
             //
-            // The scan keys on the completion FACT (`completed_at`), not on
-            // board position alone. A card releases the team when its
-            // `completed_at` is set (the lead's explicit POST
-            // /kanban/task/complete) OR when it leaves the coding column (the
-            // lead's explicit POST /kanban/dispatch to CODE REVIEWED). "No
-            // fact" — `completed_at` is NULL and the card is still in a coding
-            // column — means busy, the safe direction: a lead that never
-            // posted leaves the team held rather than freed for more work.
+            // Exactly ONE fact releases a team: `completed_at` (the lead's
+            // explicit POST /kanban/task/complete). Board position (kanban_column)
+            // is not part of the predicate — moving a card never releases a team.
+            // A card returning to the queue has its holder cleared via
+            // `releaseDispatchHolder`.
             //
-            // The seat-paced path no longer skips this scan. The skip existed
-            // only because board position never released (cards move on coding
-            // *start* and never on finish); with the scan reading the
-            // completion fact, a posted `completed_at` releases the team under
-            // either pacing mode, so the special case is dead weight. Both
-            // pacing modes now run the byte-for-byte identical check.
-            // Duplicate reports are answered by clearWorkingState's
-            // `IS NOT NULL` gate (no-op).
+            // The scan re-reads the canonical row before refusing to avoid
+            // false 409s from race conditions between board load and completion post.
             if (isTeamDispatch) {
-                const inFlightCard = board.find((p: any) =>
-                    p && CODING_COLUMNS.has(String(p.kanbanColumn || ''))
+                const inFlightCandidate = board.find((p: any) =>
+                    p
                     && !p.completedAt
                     && typeof p.dispatchedTerminal === 'string'
                     && p.dispatchedTerminal.length > 0
                     && teamSet.has(p.dispatchedTerminal)
                 );
-                if (inFlightCard) {
-                    return fail(409, `Team already in flight: card '${inFlightCard.planId}' is in '${inFlightCard.kanbanColumn}' held by '${inFlightCard.dispatchedTerminal}' with no completion post. Post /kanban/task/complete (or hand the feature to review) before asking for the next card.`, {
-                        inFlight: {
-                            planId: inFlightCard.planId,
-                            kanbanColumn: inFlightCard.kanbanColumn,
-                            dispatchedTerminal: inFlightCard.dispatchedTerminal,
+                if (inFlightCandidate) {
+                    let inFlightCard: any = inFlightCandidate;
+                    try {
+                        const fresh: any = await db.getPlanByPlanId?.(inFlightCandidate.planId);
+                        if (fresh) {
+                            inFlightCard = fresh;
                         }
-                    });
+                    } catch { /* fall back to candidate */ }
+                    if (
+                        inFlightCard
+                        && !inFlightCard.completedAt
+                        && typeof inFlightCard.dispatchedTerminal === 'string'
+                        && inFlightCard.dispatchedTerminal.length > 0
+                        && teamSet.has(inFlightCard.dispatchedTerminal)
+                    ) {
+                        return fail(409, `Team already in flight: card '${inFlightCard.planId}' is in '${inFlightCard.kanbanColumn}' held by '${inFlightCard.dispatchedTerminal}' with no completion post. Post /kanban/task/complete before asking for the next card.`, {
+                            inFlight: {
+                                planId: inFlightCard.planId,
+                                kanbanColumn: inFlightCard.kanbanColumn,
+                                dispatchedTerminal: inFlightCard.dispatchedTerminal,
+                            }
+                        });
+                    }
                 }
             }
 
@@ -2440,7 +2440,9 @@ export class LocalApiServer {
 
                     // Find the active card this seat holds: dispatchedTerminal
                     // === from AND dispatched_at set. A seat cannot release
-                    // another seat's card.
+                    // another seat's card. (A card returning to the queue has
+                    // its holder released via releaseDispatchHolder; turn-end
+                    // backstop here uses clearWorkingState).
                     const held = board.find((p: any) =>
                         p && typeof p.dispatchedTerminal === 'string'
                         && p.dispatchedTerminal === from
@@ -2660,37 +2662,36 @@ export class LocalApiServer {
                     if (outcome === 'failed') {
                         const routedTo = String(held.routedTo || '').toLowerCase();
                         // Guard against double re-stage: the watch (subtask 3)
-                        // may have already re-staged this card to STAGING. A
-                        // late `failed` report from the original seat must
-                        // check the card's CURRENT column, not the pre-release
-                        // `held` read (which still shows the coding column).
-                        // Re-read the card; if it is no longer in a coding
-                        // column, the watch (or an operator) already moved it —
-                        // treat as a no-op (same contract as a duplicate
-                        // report). This closes the read-modify-write gap on
-                        // routedTo (re-staging does not update routedTo;
-                        // dispatch does).
-                        let currentColumn = String(held.kanbanColumn || '');
+                        // may have already re-staged this card to STAGING and
+                        // released its holder. A late `failed` report from the
+                        // original seat must check the card's CURRENT holder,
+                        // not the pre-release `held` read.
+                        // Re-read the card; if dispatched_terminal is empty, the
+                        // watch (or an operator) already re-staged it — treat as
+                        // a no-op (same contract as a duplicate report). This
+                        // closes the read-modify-write gap on routedTo
+                        // (re-staging does not update routedTo; dispatch does).
+                        let currentDispatchedTerminal = typeof held.dispatchedTerminal === 'string' ? held.dispatchedTerminal : '';
                         try {
                             const fresh: any = await db.getPlanByPlanId?.(held.planId);
-                            if (fresh && typeof fresh.kanbanColumn === 'string') {
-                                currentColumn = fresh.kanbanColumn;
+                            if (fresh) {
+                                currentDispatchedTerminal = typeof fresh.dispatchedTerminal === 'string' ? fresh.dispatchedTerminal : '';
                             }
                         } catch { /* fall back to held */ }
-                        const stillCoding = CODING_COLUMNS.has(currentColumn);
+                        const stillCoding = currentDispatchedTerminal.length > 0;
                         if (!stillCoding) {
-                            // Card already moved out of its coding column
-                            // (watch re-staged it, or an operator dragged it).
-                            // No re-stage, no park — fall through to the pop.
+                            // Card already released/re-staged (watch re-staged it,
+                            // or an operator dragged it). No re-stage, no park —
+                            // fall through to the pop.
                             escalated = 'none';
                         } else if (routedTo === 'intern' || routedTo === 'coder') {
                             // Step up one rung: re-stage the card into STAGING
                             // at the FRONT so it is the next thing dispatched,
                             // and carry a role override to getFallbackRole so
                             // the next dispatch lands it in the stronger seat's
-                            // coding column. Re-staging is TWO writes: move the
-                            // card's kanban_column back to STAGING (it is
-                            // currently in its coding column), then rewrite the
+                            // coding column. Re-staging is THREE writes: release
+                            // the dispatch holder FIRST, move the card's
+                            // kanban_column back to STAGING, then rewrite the
                             // queue order with the failed card first.
                             // setQueuePositions only sets queue_position — it
                             // does NOT move the column, so without the move the
@@ -2701,7 +2702,11 @@ export class LocalApiServer {
                             // failed card behind every other staged card.
                             const fallbackRole = getFallbackRole(routedTo as 'intern' | 'coder');
                             try {
-                                // 1. Move the card back to STAGING. This is
+                                // 1. Release the dispatch holder FIRST so the holder fact is cleared
+                                // when returning to the queue (contracts #1).
+                                await db.releaseDispatchHolder?.(held.planFile, held.workspaceId || wsId);
+
+                                // 2. Move the card back to STAGING. This is
                                 // legitimate (contracts #1): the card moves
                                 // because it is being dispatched again, not
                                 // because it finished.

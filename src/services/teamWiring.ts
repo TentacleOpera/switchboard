@@ -706,23 +706,6 @@ const OLD_SEEDED_AGENT_GROUP: any = {
 };
 
 /**
- * The PRE-rewrite Coding team `headPrompt` — byte-identical to the shipped
- * definition before this change. The migration recogniser matches against
- * this (not the post-rewrite text) because this is what is on disk on every
- * install that adopted the Coding team before the fix.
- *
- * Stored verbatim — never reconstructed by string-building at match time.
- */
-export const OLD_CODING_HEAD_PROMPT =
-    'You lead this team. When a coder reports a subtask finished and you are '
-    + 'satisfied with it, hand it to review yourself: read the port from '
-    + '.switchboard/api-server-port.txt and POST /kanban/dispatch with '
-    + '{"plan":"<planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — that one '
-    + 'call advances the card and dispatches the reviewer. Do NOT use /kanban/move: it '
-    + 'moves the card and dispatches nobody, so the work stalls unreviewed. Only advance '
-    + 'subtasks this team worked; leave other cards alone. Do not wait to be asked.';
-
-/**
  * Durable commit instruction appended to every team-head standing order.
  * This is NOT the per-dispatch GIT POLICY block (branch/push/safety clauses
  * are composed per-dispatch by buildGitPolicyBlock). This is the durable
@@ -736,186 +719,25 @@ export const TEAM_HEAD_COMMIT_INSTRUCTION =
     + 'descriptive message.';
 
 /**
- * Substring unique to TEAM_HEAD_COMMIT_INSTRUCTION. Used by the
- * standing-orders rewriter's negative check: a team-head row that
- * contains a Coding-team fragment but does NOT contain this marker
- * is pre-commit-instruction and must be rewritten. Exported for the
- * stage-marker-commit-contract test.
- */
-export const COMMIT_INSTRUCTION_MARKER = 'create a single commit with a descriptive message';
-
-/**
- * The PRE-role-boundary Coding team headPrompt — the text that the second
- * migration (CURRENT_BUGGY_CODING_HEAD_PROMPT → NEW_CODING_HEAD_PROMPT) wrote
- * to disk. This is what is on every install that already migrated to the
- * feature-level prompt. The third migration recogniser matches against this
- * exact value and replaces it with the corrected text (role-boundary guardrails:
- * conditional CODE REVIEWED advance + plan-immutability directive).
+ * The POST-rewrite Coding team `headPrompt` — subtask-level, single-action.
+ * The lead never writes a review prompt and never hands work to a reviewer;
+ * it finishes each subtask, commits, posts completion for that subtask, and
+ * asks for the next card via /kanban/queue/next. `{head}` is substituted by
+ * `wireSpawnedTeam` (`:719`) and by the order converter with the live head name.
  *
- * NEVER edit this constant. It is a frozen snapshot of a string already written
- * to ~4000 installs' disks. New prompt wording goes in NEW_CODING_HEAD_PROMPT
- * only.
- */
-export const PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT =
-    'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
-    + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
-    + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
-    + 'ptyListTerminals rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID — role alone '
-    + 'is not a membership test, and a standalone seat of the same role is not yours to drive. Take the '
-    + 'subtask\'s recommendedRole as the routing decision; do not invent complexity tiers. Before sending any '
-    + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
-    + 'review on the same subtask twice, do not send that subtask to it a third time — escalate '
-    + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
-    + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
-    + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-    + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
-    + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
-    + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
-    + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
-    + 'cleared seat before rotation. Do not send anything to the reviewer, and do not write review '
-    + 'instructions — that is not your job. When every subtask of the feature is finished, read the '
-    + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
-    + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
-    + 'pwd> (that read returns one record per subtask, each with its kanbanColumn), then make one call: '
-    + 'POST /kanban/dispatch with '
-    + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}","workspaceRoot":'
-    + '"<your current working directory — run pwd>"} — that one call moves the card and dispatches '
-    + 'the reviewer with the reviewer\'s own prompt. Do NOT use /kanban/move: it moves the card and '
-    + 'dispatches nobody. Only advance the feature your team worked; leave other cards alone. Do '
-    + 'not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
-    + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
-    + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
-    + 'empty and stop.';
-
-/**
- * The PRE-commit-instruction Coding team headPrompt — the text that the
- * role-boundary migration (PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT →
- * NEW_CODING_HEAD_PROMPT) wrote to disk. This is what is on every install
- * that already migrated to the role-boundary prompt. The commit-instruction
- * migration recogniser matches against this exact value and replaces it with
- * the corrected text (NEW_CODING_HEAD_PROMPT with the durable commit
- * instruction appended).
- *
- * NEVER edit this constant. It is a frozen snapshot of a string already
- * written to ~4000 installs' disks. New prompt wording goes in
- * NEW_CODING_HEAD_PROMPT only.
- */
-export const PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT =
-    'You lead this team. Your coders work the subtasks of one feature. '
-    + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
-    + 'Read the plan, dispatch based on it, review against it — never modify its content. '
-    + 'Each subtask carries '
-    + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
-    + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
-    + 'ptyListTerminals rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID — role alone '
-    + 'is not a membership test, and a standalone seat of the same role is not yours to drive. Take the '
-    + 'subtask\'s recommendedRole as the routing decision; do not invent complexity tiers. Before sending any '
-    + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
-    + 'review on the same subtask twice, do not send that subtask to it a third time — escalate '
-    + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
-    + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
-    + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-    + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
-    + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
-    + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
-    + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
-    + 'cleared seat before rotation. Do not send anything to the reviewer, and do not write review '
-    + 'instructions — that is not your job. When every subtask of the feature is finished, read the '
-    + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
-    + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
-    + 'pwd> (that read returns one record per subtask, each with its kanbanColumn). '
-    + 'Check your team roster (the YOUR TEAM block in your prompt or ptyListTerminals) for a seat '
-    + 'with role "reviewer". If your team has a reviewer seat, make one call: '
-    + 'POST /kanban/dispatch with '
-    + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}","workspaceRoot":'
-    + '"<your current working directory — run pwd>"} — that one call moves the card and dispatches '
-    + 'the reviewer with the reviewer\'s own prompt. Do NOT use /kanban/move: it moves the card and '
-    + 'dispatches nobody. Only advance the feature your team worked; leave other cards alone. Do '
-    + 'not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
-    + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
-    + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
-    + 'empty and stop. '
-    + 'If your team has NO reviewer seat, do NOT move the card to CODE REVIEWED — that is not your role. '
-    + 'Post a finished report to .switchboard/mission-control/reports/ naming the feature and its planId, '
-    + 'and stop. The card stays where it is.';
-
-/**
- * The PRE-card-movement-rule Coding team headPrompt — the text that the
- * commit-instruction migration (PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT →
- * NEW_CODING_HEAD_PROMPT) wrote to disk. This is what is on every install
- * that already migrated to the commit-instruction prompt. The card-movement-rule
- * migration recogniser matches against this exact value and replaces it with
- * the corrected text (NEW_CODING_HEAD_PROMPT with restructured card-movement
- * language: hard rules, "triggers review" instead of "moves the card",
- * "advance" removed).
- *
- * NEVER edit this constant. It is a frozen snapshot of a string already
- * written to ~4000 installs' disks. New prompt wording goes in
- * NEW_CODING_HEAD_PROMPT only.
- */
-export const PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT =
-    'You lead this team. Your coders work the subtasks of one feature. '
-    + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
-    + 'Read the plan, dispatch based on it, review against it — never modify its content. '
-    + 'Each subtask carries '
-    + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
-    + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
-    + 'ptyListTerminals rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID — role alone '
-    + 'is not a membership test, and a standalone seat of the same role is not yours to drive. Take the '
-    + 'subtask\'s recommendedRole as the routing decision; do not invent complexity tiers. Before sending any '
-    + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
-    + 'review on the same subtask twice, do not send that subtask to it a third time — escalate '
-    + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
-    + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
-    + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-    + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
-    + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
-    + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
-    + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
-    + 'cleared seat before rotation. Do not send anything to the reviewer, and do not write review '
-    + 'instructions — that is not your job. When every subtask of the feature is finished, read the '
-    + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
-    + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
-    + 'pwd> (that read returns one record per subtask, each with its kanbanColumn). '
-    + 'Check your team roster (the YOUR TEAM block in your prompt or ptyListTerminals) for a seat '
-    + 'with role "reviewer". If your team has a reviewer seat, make one call: '
-    + 'POST /kanban/dispatch with '
-    + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}","workspaceRoot":'
-    + '"<your current working directory — run pwd>"} — that one call moves the card and dispatches '
-    + 'the reviewer with the reviewer\'s own prompt. Do NOT use /kanban/move: it moves the card and '
-    + 'dispatches nobody. Only advance the feature your team worked; leave other cards alone. Do '
-    + 'not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
-    + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
-    + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
-    + 'empty and stop. '
-    + 'If your team has NO reviewer seat, do NOT move the card to CODE REVIEWED — that is not your role. '
-    + 'Post a finished report to .switchboard/mission-control/reports/ naming the feature and its planId, '
-    + 'and stop. The card stays where it is.'
-    + ' When the work is complete, stage the files you changed by explicit path '
-    + '— never `git add -A` or `git add .`. Then create a single commit with a '
-    + 'descriptive message.';
-
-/**
- * The POST-rewrite Coding team `headPrompt` — feature-level, single-action.
- * The lead never writes a review prompt and never hands work to the reviewer
- * directly; it makes one `/kanban/dispatch` call on the FEATURE's planId when
- * every subtask is finished. `{head}` is substituted by `wireSpawnedTeam`
- * (`:719`) and by the order converter with the live head name.
- *
- * Card-movement rules (added by the card-movement-rule migration):
+ * Card-movement rules:
  *  - Never move a card backwards — only Mission Control may do that.
- *  - Never move a card to a new column yourself — with ONE named exception:
- *    the POST /kanban/dispatch call, and only when the team has a reviewer
- *    seat. The exception has to be named in the text: the payload carries
- *    `targetColumn`, so an absolute prohibition reads as "do not make that
- *    call" and the lead stops dispatching for review at all.
+ *  - Never move a card to a new column yourself: card movement is handled
+ *    by the kanban board, not by team leads.
+ *  - Why exceptions must be named explicitly: if an API payload carries
+ *    `targetColumn`, an absolute prohibition reads as "do not make that
+ *    call" and leads stop making legitimate calls. When no exception exists,
+ *    card movement is unconditional.
  *  - "advance" language removed entirely to prevent misinterpretation, and
- *    /kanban/dispatch is described as "triggers review", never as "moves
- *    the card."
+ *    card movement is never described as the lead's role.
  *
  * Byte-identical to the shipped `headPrompt` in `kanban.html`'s Coding entry
- * (the substring assertions in the marker-contract test pin the load-bearing
- * literals).
+ * and `terminals.js`'s `NEW_CODING_HEAD_PROMPT_CLIENT`.
  */
 export const NEW_CODING_HEAD_PROMPT =
     'You lead this team. Your coders work the subtasks of one feature. '
@@ -937,112 +759,18 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
     + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
     + 'cleared seat before rotation. Do not send anything to the reviewer, and do not write review '
-    + 'instructions — that is not your job. When every subtask of the feature is finished, read the '
-    + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
-    + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
-    + 'pwd> (that read returns one record per subtask, each with its kanbanColumn). '
+    + 'instructions — that is not your job. '
     + 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
-    + 'Never move a card to a new column yourself: your only card action is the POST '
-    + '/kanban/dispatch call below, and only when your team has a reviewer seat. '
-    + 'Check your team roster (the YOUR TEAM block in your prompt or ptyListTerminals) for a seat '
-    + 'with role "reviewer". If your team has a reviewer seat, make one call: '
-    + 'POST /kanban/dispatch with '
-    + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}","workspaceRoot":'
-    + '"<your current working directory — run pwd>"} — that one call triggers review by dispatching '
-    + 'the reviewer with the reviewer\'s own prompt. Do NOT use /kanban/move. '
-    + 'Do not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
-    + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
-    + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
-    + 'empty and stop. '
-    + 'If your team has NO reviewer seat, do NOT move the card — that is not your role. '
-    + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the FEATURE planId>","workspaceRoot":'
+    + 'Never move a card to a new column yourself — that is not your role. '
+    + 'When the work is complete, stage the files you changed by explicit path '
+    + '— never `git add -A` or `git add .`. Then create a single commit with a '
+    + 'descriptive message. '
+    + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the subtask\'s planId>","workspaceRoot":'
     + '"<your current working directory>"} against the port in .switchboard/api-server-port.txt. '
-    + 'The card stays where it is. Completion is asserted, never inferred from board position.'
-    + ' When the work is complete, stage the files you changed by explicit path '
-    + '— never `git add -A` or `git add .`. Then create a single commit with a '
-    + 'descriptive message.';
-
-export const OLD_REVIEW_TEAM_HEAD_PROMPT =
-    'You are the reviewer on a review team. When work lands in your terminal, review it '
-    + '(Stage 1: adversarial findings, Stage 2: balanced synthesis). Do NOT fix code yourself — send fix '
-    + 'instructions to your coder at {coder} via POST /terminals/verb/ptySendPrompt with '
-    + '{"name":"{coder}","data":"<fix instructions — name each file, the issue, and the fix needed. '
-    + 'Tell the coder to run verification checks (typecheck/tests as applicable) and include results '
-    + 'in their report.>","clearBeforePrompt":false} against the port in .switchboard/api-server-port.txt. '
-    + 'After the coder reports back, re-review ONLY the coder\'s git diff. If issues remain, send another '
-    + 'round of fix instructions. Loop until satisfied. If after 5 rounds the same critical issues persist, '
-    + 'report to the originating lead that a new plan is needed. When review passes, report to the '
-    + 'originating lead that the feature passed review, then update the plan file.';
-
-/**
- * The PRE-commit-instruction Review team headPrompt — the text before the
- * durable commit instruction was appended. Frozen snapshot of what is on
- * every install that adopted the self-fix Review team headPrompt.
- *
- * NEVER edit this constant. New prompt wording goes in
- * NEW_REVIEW_TEAM_HEAD_PROMPT only.
- */
-export const PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT =
-    'You are the reviewer on a review team. When work lands in your terminal, review it '
-    + '(Stage 1: adversarial findings, Stage 2: balanced synthesis). Apply a fully diagnosed fix set under '
-    + 'approximately 100 lines directly. Delegate larger, broad, or parallelisable sets to your coder at {coder} '
-    + 'via POST /terminals/verb/ptySendPrompt. For mechanical findings, specify the exact fix. For judgment '
-    + 'calls, send the diagnosis and reasoning and let the coder choose the fix. Tell the coder to run verification '
-    + 'checks and include results. After the coder reports back, re-review ONLY the coder\'s git diff. If issues '
-    + 'remain, send another round. If after 5 rounds the same critical issues persist, report to the originating '
-    + 'lead that a new plan is needed. When review passes, report to the originating lead that the feature passed '
-    + 'review, then update the plan file.';
-
-/**
- * The PRE-card-movement-rule Review team headPrompt — the text that the
- * commit-instruction migration (PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT →
- * NEW_REVIEW_TEAM_HEAD_PROMPT) wrote to disk. This is what is on every install
- * that already migrated to the commit-instruction Review prompt. The
- * card-movement-rule migration recogniser matches against this exact value
- * and replaces it with the corrected text (NEW_REVIEW_TEAM_HEAD_PROMPT with
- * the backwards-movement prohibition prepended).
- *
- * NEVER edit this constant. It is a frozen snapshot of a string already
- * written to ~4000 installs' disks. New prompt wording goes in
- * NEW_REVIEW_TEAM_HEAD_PROMPT only.
- */
-export const PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT =
-    'You are the reviewer on a review team. When work lands in your terminal, review it '
-    + '(Stage 1: adversarial findings, Stage 2: balanced synthesis). Apply a fully diagnosed fix set under '
-    + 'approximately 100 lines directly. Delegate larger, broad, or parallelisable sets to your coder at {coder} '
-    + 'via POST /terminals/verb/ptySendPrompt. For mechanical findings, specify the exact fix. For judgment '
-    + 'calls, send the diagnosis and reasoning and let the coder choose the fix. Tell the coder to run verification '
-    + 'checks and include results. After the coder reports back, re-review ONLY the coder\'s git diff. If issues '
-    + 'remain, send another round. If after 5 rounds the same critical issues persist, report to the originating '
-    + 'lead that a new plan is needed. When review passes, report to the originating lead that the feature passed '
-    + 'review, then update the plan file.'
-    + ' When the work is complete, stage the files you changed by explicit path '
-    + '— never `git add -A` or `git add .`. Then create a single commit with a '
-    + 'descriptive message.';
-
-/**
- * The PRE-triage Review team headPrompt — the text before the read-only review
- * pass and lead triage overhaul. Frozen snapshot of what was on disk on
- * installs using the delegation/self-fix Review team headPrompt.
- *
- * NEVER edit this constant. New prompt wording goes in
- * NEW_REVIEW_TEAM_HEAD_PROMPT only.
- */
-export const PRE_TRIAGE_REVIEW_HEAD_PROMPT =
-    'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
-    + 'Never move a card to a new column yourself. '
-    + 'You are the reviewer on a review team. When work lands in your terminal, review it '
-    + '(Stage 1: adversarial findings, Stage 2: balanced synthesis). Apply a fully diagnosed fix set under '
-    + 'approximately 100 lines directly. Delegate larger, broad, or parallelisable sets to your coder at {coder} '
-    + 'via POST /terminals/verb/ptySendPrompt. For mechanical findings, specify the exact fix. For judgment '
-    + 'calls, send the diagnosis and reasoning and let the coder choose the fix. Tell the coder to run verification '
-    + 'checks and include results. After the coder reports back, re-review ONLY the coder\'s git diff. If issues '
-    + 'remain, send another round. If after 5 rounds the same critical issues persist, report to the originating '
-    + 'lead that a new plan is needed. When review passes, report to the originating lead that the feature passed '
-    + 'review, then update the plan file.'
-    + ' When the work is complete, stage the files you changed by explicit path '
-    + '— never `git add -A` or `git add .`. Then create a single commit with a '
-    + 'descriptive message.';
+    + 'The card stays where it is. Completion is asserted, never inferred from board position. '
+    + 'POST /kanban/queue/next with {"from":"{head}"} against the port in .switchboard/api-server-port.txt; '
+    + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
+    + 'empty and stop.';
 
 export const NEW_REVIEW_TEAM_HEAD_PROMPT =
     'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
@@ -1060,35 +788,6 @@ export const NEW_REVIEW_TEAM_HEAD_PROMPT =
     + 'When the review passes, POST /kanban/queue/next with {"from":"{head}"} against the port in '
     + '.switchboard/api-server-port.txt; if it returns a dispatched card, work it; if it returns '
     + 'dispatched: null, report that the queue is empty and stop.';
-
-/**
- * The CURRENT (buggy) Coding team headPrompt — the text that the first migration
- * (OLD_CODING_HEAD_PROMPT → NEW_CODING_HEAD_PROMPT) wrote to disk. This is what
- * is on every install that already migrated. The second migration recogniser
- * matches against this exact value and replaces it with the corrected text.
- */
-export const CURRENT_BUGGY_CODING_HEAD_PROMPT =
-    'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
-    + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
-    + 'no such seat, dispatch to a coder and say why in your status report. Post a status report '
-    + 'to .switchboard/mission-control/reports/ when a subtask is dispatched, and a finished report '
-    + 'when the feature is handed to review. When a seat fails review on the same subtask twice, '
-    + 'do not send that subtask to it a third time — escalate one rung along intern → coder → lead, '
-    + 'name the specific defects in the dispatch, and say in your status report which seat you moved '
-    + 'it to and why; if the seat that failed twice is a lead, or your team has no seat above it, '
-    + 'stop and report to the human instead of dispatching again. When a coder reports a subtask '
-    + 'finished, note it and give that coder the next subtask. Do not send anything to the '
-    + 'reviewer, and do not write review instructions — that is not your job. When every subtask of '
-    + 'the feature is finished, read the port from .switchboard/api-server-port.txt, confirm no '
-    + 'subtask is still outstanding via GET /kanban/feature, then make one call: POST /kanban/dispatch with '
-    + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — '
-    + 'that one call moves the card and dispatches the reviewer with the reviewer\'s own '
-    + 'prompt. Do NOT use /kanban/move: it moves the card and dispatches nobody. Only '
-    + 'advance the feature your team worked; leave other cards alone. Do not wait to be '
-    + 'asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
-    + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
-    + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
-    + 'empty and stop.';
 
 /**
  * Convert existing agent groups to the team shape. Runs on every read
@@ -1144,144 +843,6 @@ export function migrateAgentGroups(groups: any[]): any[] | null {
                 `[teamWiring] Migration: neutralised untouched old seed `
                 + `'${g.id}' (was 3× coder, now member-less Lead team).`
             );
-        }
-
-        // Step 1b: convert an untouched old Coding team forked from the
-        // gallery. The fork carries the old per-subtask `headPrompt` and a
-        // reviewer member with `relationship: 'reviewer'` — the pair that
-        // installs the bypass order on the lead. Flip the reviewer to
-        // `reports-to-head` (member-receives → no pair row, carried by the
-        // team prompt) and replace `headPrompt` with the feature-level text.
-        // Exact-value match on `headPrompt` + the reviewer member's
-        // relationship; an operator-edited group does not match and is left
-        // alone. Preserve every other key on the group and on each member.
-        if (isUntouchedOldCodingTeam(g)) {
-            const convertedReviewerMembers = (Array.isArray(g.members) ? g.members : [])
-                .map((m: any) => {
-                    if (m && m.role === 'reviewer' && m.relationship === 'reviewer') {
-                        return { ...m, relationship: 'reports-to-head' };
-                    }
-                    return m;
-                });
-            g = {
-                ...g,
-                headPrompt: NEW_CODING_HEAD_PROMPT,
-                members: convertedReviewerMembers,
-            };
-            changed = true;
-            console.log(
-                `[teamWiring] Migration: converted untouched old Coding team `
-                + `'${g.id || g.name}' — reviewer relationship → reports-to-head, `
-                + `headPrompt → feature-level dispatch.`
-            );
-        }
-
-        // Step 1c: convert an install that already migrated to the current (buggy)
-        // headPrompt. Exact-value match on CURRENT_BUGGY_CODING_HEAD_PROMPT; an
-        // operator-edited group does not match and is left alone.
-        if (isUntouchedCurrentCodingTeam(g)) {
-            const convertedReviewerMembers = (Array.isArray(g.members) ? g.members : [])
-                .map((m: any) => m); // no member changes — only the headPrompt is wrong
-            g = {
-                ...g,
-                headPrompt: NEW_CODING_HEAD_PROMPT, // now the corrected text
-                members: convertedReviewerMembers,
-            };
-            changed = true;
-            console.log(
-                `[teamWiring] Migration: corrected buggy Coding team headPrompt `
-                + `'${g.id || g.name}' — API endpoint + workspaceRoot + rotation rule.`
-            );
-        }
-
-        // Step 1d: convert an install that already migrated to the feature-level
-        // headPrompt but before the role-boundary guardrails (conditional CODE REVIEWED
-        // advance + plan-immutability directive). Exact-value match on
-        // PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT; an operator-edited group does not match
-        // and is left alone.
-        if (isUntouchedPreRoleBoundaryCodingTeam(g)) {
-            g = {
-                ...g,
-                headPrompt: NEW_CODING_HEAD_PROMPT,
-            };
-            changed = true;
-            console.log(
-                `[teamWiring] Migration: converted pre-role-boundary Coding team `
-                + `'${g.id || g.name}' — headPrompt → role-boundary guardrails.`
-            );
-        }
-
-        // Step 1e: convert an install that already migrated to the
-        // role-boundary headPrompt but before the durable commit instruction
-        // was appended. Exact-value match on
-        // PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT; an operator-edited group
-        // does not match and is left alone.
-        if (isUntouchedPreCommitInstructionCodingTeam(g)) {
-            g = {
-                ...g,
-                headPrompt: NEW_CODING_HEAD_PROMPT,
-            };
-            changed = true;
-            console.log(
-                `[teamWiring] Migration: upgraded pre-commit-instruction Coding team `
-                + `'${g.id || g.name}' — headPrompt → commit instruction + card-movement rules.`
-            );
-        }
-
-        // Step 1f: convert an install that already migrated to the
-        // commit-instruction headPrompt but before the card-movement-rule
-        // restructuring. Exact-value match on
-        // PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT; an operator-edited group
-        // does not match and is left alone.
-        if (isUntouchedPreCardMovementRuleCodingTeam(g)) {
-            g = {
-                ...g,
-                headPrompt: NEW_CODING_HEAD_PROMPT,
-            };
-            changed = true;
-            console.log(
-                `[teamWiring] Migration: restructured card-movement language in Coding team `
-                + `'${g.id || g.name}' — headPrompt → card-movement rules.`
-            );
-        }
-
-        if (g.headRole === 'reviewer' && g.headPrompt === OLD_REVIEW_TEAM_HEAD_PROMPT) {
-            g = { ...g, headPrompt: NEW_REVIEW_TEAM_HEAD_PROMPT };
-            changed = true;
-            console.log(`[teamWiring] Migration: updated untouched Review team '${g.id || g.name}' with self-fix routing.`);
-        }
-
-        // Step 1e (Review): convert an install that already migrated to the
-        // self-fix Review team headPrompt but before the durable commit
-        // instruction was appended. Exact-value match on
-        // PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT; an operator-edited group
-        // does not match and is left alone.
-        if (isUntouchedPreCommitInstructionReviewTeam(g)) {
-            g = { ...g, headPrompt: NEW_REVIEW_TEAM_HEAD_PROMPT };
-            changed = true;
-            console.log(`[teamWiring] Migration: appended commit instruction to Review team '${g.id || g.name}'.`);
-        }
-
-        // Step 1f (Review): convert an install that already migrated to the
-        // commit-instruction Review headPrompt but before the card-movement
-        // rule was prepended. Exact-value match on
-        // PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT; an operator-edited group
-        // does not match and is left alone.
-        if (isUntouchedPreCardMovementRuleReviewTeam(g)) {
-            g = { ...g, headPrompt: NEW_REVIEW_TEAM_HEAD_PROMPT };
-            changed = true;
-            console.log(`[teamWiring] Migration: added card-movement rule to Review team '${g.id || g.name}'.`);
-        }
-
-        // Step 1g (Review): convert an install that already migrated to the
-        // delegation/self-fix Review headPrompt but before the read-only review
-        // turn and triage overhaul. Exact-value match on
-        // PRE_TRIAGE_REVIEW_HEAD_PROMPT; an operator-edited group does not match
-        // and is left alone.
-        if (isUntouchedPreTriageReviewTeam(g)) {
-            g = { ...g, headPrompt: NEW_REVIEW_TEAM_HEAD_PROMPT };
-            changed = true;
-            console.log(`[teamWiring] Migration: upgraded pre-triage Review team '${g.id || g.name}' — headPrompt → read-only triage and fix apportionment.`);
         }
 
         // Step 2: convert member shape — add scope/relationship defaults.
@@ -1475,153 +1036,6 @@ function isUntouchedOldSeed(group: any, oldSeed: any): boolean {
     const osKeys = Object.keys(oldSeed).filter(k => k !== 'members').sort().join(',');
     if (gKeys !== osKeys) { return false; }
     return true;
-}
-
-/**
- * Recognise an untouched old Coding team forked from the shipped gallery.
- *
- * The gallery's USE handler deep-copies the shipped Coding definition into a
- * new group and persists it. From that moment the workspace copy is the
- * source of truth and the shipped definition is never re-read. So an install
- * that pressed USE before this change carries the old per-subtask
- * `headPrompt` and a reviewer member with `relationship: 'reviewer'` — the
- * pair that installs the bypass order on the lead.
- *
- * Match by the discriminating fields the plan names: `headRole === 'lead'`,
- * `headPrompt` byte-identical to `OLD_CODING_HEAD_PROMPT`, and a member with
- * `role === 'reviewer'` and `relationship === 'reviewer'`. A group whose
- * `headPrompt` an operator has edited does not match and is left alone — the
- * operator's text wins. Exact-value matching is the whole safety story,
- * exactly as for `isUntouchedOldSeed`.
- */
-function isUntouchedOldCodingTeam(group: any): boolean {
-    if (!group || group.headRole !== 'lead') { return false; }
-    if (group.headPrompt !== OLD_CODING_HEAD_PROMPT) { return false; }
-    const members = group.members;
-    if (!Array.isArray(members)) { return false; }
-    return members.some((m: any) =>
-        m && m.role === 'reviewer' && m.relationship === 'reviewer');
-}
-
-/**
- * Recognise an install that already migrated from OLD_CODING_HEAD_PROMPT to the
- * first-generation NEW_CODING_HEAD_PROMPT (which contained the GET /kanban/feature
- * error, missing workspaceRoot, and rotation rule).
- *
- * Exact-value match on `headPrompt === CURRENT_BUGGY_CODING_HEAD_PROMPT`. An
- * operator who edited the prompt does not match and is left alone.
- *
- * NEVER edit CURRENT_BUGGY_CODING_HEAD_PROMPT. It is a frozen snapshot of a
- * string already written to ~4000 installs' disks, not a prompt that is
- * delivered to anyone. Adding one word to it (an unattended-mode clause was
- * swept into it once) makes this recogniser match zero installs, and the
- * migration silently stops firing. New prompt wording goes in
- * NEW_CODING_HEAD_PROMPT only.
- */
-function isUntouchedCurrentCodingTeam(group: any): boolean {
-    if (!group || group.headRole !== 'lead') { return false; }
-    return typeof group.headPrompt === 'string'
-        && group.headPrompt === CURRENT_BUGGY_CODING_HEAD_PROMPT;
-}
-
-/**
- * Recognise an install that already migrated to the feature-level
- * NEW_CODING_HEAD_PROMPT (the text before the role-boundary guardrails).
- *
- * Exact-value match on `headPrompt === PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT`.
- * An operator who edited the prompt does not match and is left alone.
- *
- * NEVER edit PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT. It is a frozen snapshot.
- * New prompt wording goes in NEW_CODING_HEAD_PROMPT only.
- */
-function isUntouchedPreRoleBoundaryCodingTeam(group: any): boolean {
-    if (!group || group.headRole !== 'lead') { return false; }
-    return typeof group.headPrompt === 'string'
-        && group.headPrompt === PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT;
-}
-
-/**
- * Recognise an install that already migrated to the role-boundary
- * NEW_CODING_HEAD_PROMPT but before the durable commit instruction was
- * appended.
- *
- * Exact-value match on `headPrompt === PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT`.
- * An operator who edited the prompt does not match and is left alone.
- *
- * NEVER edit PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT. It is a frozen snapshot.
- * New prompt wording goes in NEW_CODING_HEAD_PROMPT only.
- */
-function isUntouchedPreCommitInstructionCodingTeam(group: any): boolean {
-    if (!group || group.headRole !== 'lead') { return false; }
-    return typeof group.headPrompt === 'string'
-        && group.headPrompt === PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT;
-}
-
-/**
- * Recognise an install that already migrated to the self-fix Review team
- * headPrompt but before the durable commit instruction was appended.
- *
- * Exact-value match on `headPrompt === PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT`.
- * An operator who edited the prompt does not match and is left alone.
- *
- * NEVER edit PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT. It is a frozen snapshot.
- * New prompt wording goes in NEW_REVIEW_TEAM_HEAD_PROMPT only.
- */
-function isUntouchedPreCommitInstructionReviewTeam(group: any): boolean {
-    if (!group || group.headRole !== 'reviewer') { return false; }
-    return typeof group.headPrompt === 'string'
-        && group.headPrompt === PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT;
-}
-
-/**
- * Recognise an install that already migrated to the commit-instruction
- * Coding team headPrompt but before the card-movement-rule restructuring
- * (hard rules, "triggers review" instead of "moves the card", "advance"
- * removed).
- *
- * Exact-value match on `headPrompt === PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT`.
- * An operator who edited the prompt does not match and is left alone.
- *
- * NEVER edit PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT. It is a frozen snapshot.
- * New prompt wording goes in NEW_CODING_HEAD_PROMPT only.
- */
-function isUntouchedPreCardMovementRuleCodingTeam(group: any): boolean {
-    if (!group || group.headRole !== 'lead') { return false; }
-    return typeof group.headPrompt === 'string'
-        && group.headPrompt === PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT;
-}
-
-/**
- * Recognise an install that already migrated to the commit-instruction
- * Review team headPrompt but before the card-movement rule (backwards-
- * movement prohibition) was prepended.
- *
- * Exact-value match on `headPrompt === PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT`.
- * An operator who edited the prompt does not match and is left alone.
- *
- * NEVER edit PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT. It is a frozen snapshot.
- * New prompt wording goes in NEW_REVIEW_TEAM_HEAD_PROMPT only.
- */
-function isUntouchedPreCardMovementRuleReviewTeam(group: any): boolean {
-    if (!group || group.headRole !== 'reviewer') { return false; }
-    return typeof group.headPrompt === 'string'
-        && group.headPrompt === PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT;
-}
-
-/**
- * Recognise an install that already migrated to the delegation/self-fix Review team
- * headPrompt but before the read-only review turn and triage overhaul.
- *
- * Exact-value match on `headPrompt === PRE_TRIAGE_REVIEW_HEAD_PROMPT`.
- * An operator who edited the prompt does not match and is left alone.
- *
- * NEVER edit PRE_TRIAGE_REVIEW_HEAD_PROMPT. It is a frozen snapshot.
- * New prompt wording goes in NEW_REVIEW_TEAM_HEAD_PROMPT only.
- */
-function isUntouchedPreTriageReviewTeam(group: any): boolean {
-    if (!group || group.headRole !== 'reviewer') { return false; }
-    return typeof group.headPrompt === 'string'
-        && group.headPrompt === PRE_TRIAGE_REVIEW_HEAD_PROMPT;
 }
 
 /**
@@ -2469,152 +1883,20 @@ export function migrateTeamPairOrders(orders: StandingOrder[]): StandingOrder[] 
 }
 
 /**
- * A substitution-independent fragment unique to the old per-subtask
- * headPrompt. The new feature-level text does not contain it, so a converted
- * row is never re-matched.
+ * Migrate stale Coding-team standing orders on read.
  *
- * **Exported deliberately, and there must be exactly TWO copies of this string
- * in the tree: this one and the `terminals.js` mirror** (which cannot import).
- * A third copy is how the diagnostic surface drifts back out of agreement with
- * delivered behaviour — the defect this whole migration exists to close. Any
- * other module that needs staleness information imports
- * `describeStandingOrderMigrations`, never this literal.
- * `stage-marker-commit-contract.test.js` gates both halves.
- */
-export const OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review yourself';
-
-/**
- * A substitution-independent fragment unique to the FIRST-GENERATION
- * `NEW_CODING_HEAD_PROMPT` — the text `migrateAgentGroups` §1b already wrote to
- * disk on every install that adopted the Coding team from `226b7f09` onward.
- * That text carried the four defects this migration corrects (`GET
- * /kanban/feature`, no `workspaceRoot`, same-coder stacking, a hardcoded
- * Mission Control-report line).
+ * Drops a stale pair-scoped order carrying the resolved `reviewer` preset text
+ * (`parent` = lead, `child` = reviewer) — installed because the old reviewer
+ * member declared `relationship: 'reviewer'` (a `head-receives` preset).
+ * The reviewer is now reached only by a card arriving in CODE REVIEWED.
  *
- * Fixing the group's `headPrompt` alone does not reach those installs:
- * `wireSpawnedTeam` skips the head order when one already exists for the
- * teamId (`if (!headExists)`), so the persisted `team-head` row keeps
- * delivering the buggy text forever. This fragment is what makes the read-path
- * migration see it.
- *
- * Exact-value matching cannot be used here — `{head}` was substituted with the
- * live head name at install time — so this is matched by `indexOf`, exactly
- * like `OLD_HEADPROMPT_FRAGMENT`. The corrected text does not contain it, so a
- * rewritten row is never re-matched.
- *
- * **Two copies only: this one and the `terminals.js` mirror** (which cannot
- * import). `stage-marker-commit-contract.test.js` gates both halves.
- */
-export const BUGGY_HEADPROMPT_FRAGMENT = 'give that coder the next subtask';
-
-/**
- * A substitution-independent fragment unique to the PRE-role-boundary
- * `NEW_CODING_HEAD_PROMPT` — the text before conditional review dispatch and
- * plan-immutability guardrails.
- *
- * Two copies only: this one and the `terminals.js` mirror.
- */
-export const PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT = 'then make one call: ';
-
-/**
- * Substitution-independent fragment present in the pre-commit-instruction
- * Coding team headPrompt. Unlike the three fragments above it is NOT unique to
- * superseded text: the change was append-only, so the old text is a prefix of
- * the new one and the fragment sits in the CURRENT shipped prompt — and in any
- * operator edit that kept the sentence. That is why its recogniser APPENDS
- * `TEAM_HEAD_COMMIT_INSTRUCTION` instead of replacing the instruction, and
- * gates on `COMMIT_INSTRUCTION_MARKER` being absent for idempotence. Replacing
- * would discard an operator's wording, and `loadEffectiveStandingOrders`
- * PERSISTS what the transform returns — so that loss would be on disk, not
- * just in the delivered prompt.
- *
- * Two copies only: this one and the terminals.js mirror.
- * stage-marker-commit-contract.test.js gates both halves.
- */
-export const PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT = 'PLAN FILES ARE THE SOURCE OF TRUTH';
-
-/**
- * Substitution-independent fragment unique to the pre-card-movement-rule
- * Coding team headPrompt (the current NEW_CODING_HEAD_PROMPT before this
- * change). The phrase "Only advance the feature your team worked" is
- * REMOVED from the new text, so this is a traditional positive match —
- * a rewritten row does not contain this fragment and does not re-match.
- *
- * GATED ON COMMIT_INSTRUCTION_MARKER being present: the fragment also
- * appears in PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT (line 733), which
- * does NOT carry the marker. Without the gate, pre-commit-instruction
- * rows would match the replace block and be REPLACED instead of falling
- * through to the append block. The gate ensures only post-commit-instruction
- * rows (marker present) are replaced; pre-commit-instruction rows (no
- * marker) are appended on pass 1 and replaced on pass 2.
- *
- * This fragment also appears in PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT
- * (line 689), but those rows are already matched by
- * PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT ('then make one call: '). The
- * OR conditions mean a row matching both fragments is rewritten once.
- *
- * Two copies only: this one and the terminals.js mirror.
- * stage-marker-commit-contract.test.js gates both halves.
- */
-export const PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT = 'Only advance the feature your team worked';
-
-/**
- * Substring present in team-scoped member prompts that use the callback
- * instruction (AGENT_GROUP_CALLBACK_INSTRUCTION or EXTERNAL_HEAD_CALLBACK_INSTRUCTION).
- * Both contain 'is your head agent'. NOT present in SEAT_QUEUE_DONE_ORDER_BODY
- * or GLOBAL_QUEUE_DONE_ORDER_BODY (seat-paced / standalone orders that already
- * carry the queue/done instruction). Used by the team-order rewriter's
- * negative check: a team-scoped order that contains this fragment but NOT
- * the QUEUE_DONE_MARKER is pre-queue-done-instruction and must be rewritten.
- *
- * Two copies only: this one and the terminals.js mirror.
- * stage-marker-commit-contract.test.js gates both halves.
- */
-export const PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT = 'is your head agent';
-
-/**
- * Substring unique to TEAM_CODER_QUEUE_DONE_INSTRUCTION. Used by the
- * team-order rewriter's negative check for idempotency: a rewritten order
- * contains this marker, so it does not re-match.
- *
- * Two copies only: this one and the terminals.js mirror.
- * stage-marker-commit-contract.test.js gates both halves.
- */
-export const QUEUE_DONE_MARKER = 'POST /kanban/queue/done with';
-
-/**
- * Migrate stale Coding-team standing orders on read — the read-site
- * counterpart to the `migrateAgentGroups` Coding-team step (§1b).
- *
- * Two rows are stale on an already-wired install:
- *  - a pair-scoped order carrying the resolved `reviewer` preset text
- *    (`parent` = lead, `child` = reviewer) — installed because the old
- *    reviewer member declared `relationship: 'reviewer'` (a `head-receives`
- *    preset). It instructs the lead to hand work straight to the reviewer,
- *    bypassing the board.
- *  - a `team-head` order carrying the old per-subtask `headPrompt` (with
- *    `{head}` already substituted with the live head name at install time).
- *
- * Pure: no DB writes. Applied at the standing-orders read sites so the
- * transformation takes effect before `applyStandingOrders` renders — the
- * stale rows stay in the DB but are filtered from the rendered set.
- * Idempotent: a second pass finds nothing left to recognise (the pair row is
- * gone, the team-head row carries the new text).
- *
- * Recognisers match on instruction text — that is what is actually on disk.
- * The pair recogniser reconstructs the expected reviewer preset text from
- * the order's own `parent`/`child` names (so it is install-independent) and
- * compares exactly. The team-head recogniser matches by `indexOf` on a
- * substitution-independent literal fragment of the old `headPrompt` — never
- * a constructed `RegExp`, because the substituted head name may contain
- * regex metacharacters. Every unrecognised row — including operator-edited
- * ad-hoc link-ups — is left untouched.
+ * Pure: no DB writes. Idempotent. Every unrecognised row — including
+ * operator-edited ad-hoc link-ups — is left untouched.
  */
 export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[] {
     if (!Array.isArray(orders) || orders.length === 0) { return orders; }
 
     const drop = new Set<string>();        // order ids to remove
-    const rewritten: StandingOrder[] = []; // replacement team-head rows
     let touched = false;
 
     for (const o of orders) {
@@ -2636,106 +1918,11 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
                 continue;
             }
         }
-
-        // Pre-queue-done-instruction team-scoped order: a team-scoped member
-        // prompt that carries the callback instruction (contains
-        // PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT) but NOT the QUEUE_DONE_MARKER.
-        // APPEND TEAM_CODER_QUEUE_DONE_INSTRUCTION — the change is additive, so
-        // the fragment sits in the current shipped prompt and an operator-edited
-        // row that kept the callback sentence still matches. Appending upgrades
-        // the row without discarding operator wording, exactly like the
-        // pre-commit-instruction headPrompt recogniser below. A rewritten row
-        // carries the marker, so it does not re-match (idempotent).
-        //
-        // Runs AFTER migrateTeamPairOrders (the composition is
-        // migrateCodingTeamOrders(migrateTeamPairOrders(raw))), so newly-created
-        // team-scoped orders from the pair migration are caught here too.
-        if (o.scope === 'team' && typeof o.instruction === 'string') {
-            if (o.instruction.indexOf(PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT) !== -1
-                && o.instruction.indexOf(QUEUE_DONE_MARKER) === -1) {
-                rewritten.push({ ...o, instruction: o.instruction + '\n' + TEAM_CODER_QUEUE_DONE_INSTRUCTION });
-                drop.add(o.id);
-                touched = true;
-                continue;
-            }
-        }
-
-        // Stale team-head row carrying EITHER the old per-subtask headPrompt
-        // (OLD_HEADPROMPT_FRAGMENT), the first-generation feature-level one
-        // (BUGGY_HEADPROMPT_FRAGMENT), the pre-role-boundary one
-        // (PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT), or the pre-card-movement-rule
-        // one (PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT + marker gate) — all
-        // four superseded, so the whole instruction is replaced. The
-        // pre-commit-instruction row
-        // (PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT + negative check on
-        // COMMIT_INSTRUCTION_MARKER) is handled separately below: that change
-        // is additive, so it APPENDS.
-        // {head} was already substituted at install time, so match on a
-        // substitution-independent fragment by indexOf. On a supersession
-        // match, rewrite the instruction to the new feature-level text with
-        // {head} substituted by the order's parent (the head name).
-        if (o.scope === 'team-head' && typeof o.instruction === 'string') {
-            if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1
-                || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1
-                || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1
-                // Pre-card-movement-rule rows. The fragment "Only advance the
-                // feature your team worked" is REMOVED from the new text, so
-                // this is a traditional positive match. GATE ON MARKER PRESENT:
-                // PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT also contains this
-                // fragment (line 733) but lacks COMMIT_INSTRUCTION_MARKER.
-                // Without the gate, pre-commit-instruction rows would match
-                // here and be REPLACED instead of falling through to the append
-                // block below — destroying operator edits on the first pass.
-                // An appended row (marker present + fragment present) IS
-                // matched here and replaced on the NEXT pass.
-                || (o.instruction.indexOf(PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT) !== -1
-                    && o.instruction.indexOf(COMMIT_INSTRUCTION_MARKER) !== -1)) {
-                const newInstruction = NEW_CODING_HEAD_PROMPT
-                    .replace(/\{head\}/g, o.parent || '');
-                rewritten.push({ ...o, instruction: newInstruction });
-                drop.add(o.id);
-                touched = true;
-                continue;
-            }
-            // Pre-commit-instruction rows. The fragment is present in both the
-            // old and the new text, so gate on COMMIT_INSTRUCTION_MARKER being
-            // ABSENT — a migrated row carries the marker and does not re-match.
-            // This is the only recogniser that uses a negative check; it is
-            // required because the change is additive, so no fragment can be
-            // unique to the old text.
-            //
-            // APPEND, do not replace. The four fragments above identify
-            // SUPERSEDED text (content was changed or removed), so replacing the
-            // whole instruction is the migration. This one identifies text that
-            // is merely INCOMPLETE — the new text is the old text plus this
-            // clause — and the fragment sits in the CURRENT shipped prompt, so a
-            // row an operator edited in the Teams tab (`team-head-order-text`)
-            // still matches. Replacing would silently discard their wording; the
-            // docblock's "operator-edited rows are left untouched" promise and
-            // every `migrateAgentGroups` recogniser say the operator's text wins.
-            // Appending upgrades the untouched row to
-            // PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT (the frozen snapshot plus
-            // this constant) and leaves an edited row otherwise intact. On the
-            // next read, the appended row now has the marker AND "Only advance..."
-            // → the replace block above matches → replaces with the new
-            // NEW_CODING_HEAD_PROMPT. Two-pass migration: append (pass 1) →
-            // replace (pass 2).
-            if (o.instruction.indexOf(PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT) !== -1
-                && o.instruction.indexOf(COMMIT_INSTRUCTION_MARKER) === -1) {
-                rewritten.push({ ...o, instruction: o.instruction + TEAM_HEAD_COMMIT_INSTRUCTION });
-                drop.add(o.id);
-                touched = true;
-                continue;
-            }
-        }
     }
 
     if (!touched) { return orders; }
 
-    return [
-        ...orders.filter(o => !drop.has(o.id)),
-        ...rewritten,
-    ];
+    return orders.filter(o => !drop.has(o.id));
 }
 
 /** Additive per-row migration verdict for a persisted standing order. */

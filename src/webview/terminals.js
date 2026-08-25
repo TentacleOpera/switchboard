@@ -11027,25 +11027,10 @@
         'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — commit first, then correct forward. Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — other agents may be working the same tree.';
 
     /**
-     * PRE-rewrite Coding team headPrompt — mirror of OLD_CODING_HEAD_PROMPT
-     * in teamWiring.ts. The order-migration recogniser matches against this
-     * (substitution-independent fragment) because this is what is on disk on
-     * every install that wired the Coding team before the fix.
-     */
-    var OLD_CODING_HEAD_PROMPT_CLIENT =
-        'You lead this team. When a coder reports a subtask finished and you are '
-        + 'satisfied with it, hand it to review yourself: read the port from '
-        + '.switchboard/api-server-port.txt and POST /kanban/dispatch with '
-        + '{"plan":"<planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — that one '
-        + 'call advances the card and dispatches the reviewer. Do NOT use /kanban/move: it '
-        + 'moves the card and dispatches nobody, so the work stalls unreviewed. Only advance '
-        + 'subtasks this team worked; leave other cards alone. Do not wait to be asked.';
-
-    /**
      * POST-rewrite Coding team headPrompt — mirror of NEW_CODING_HEAD_PROMPT
-     * in teamWiring.ts. Feature-level, single-action: the lead makes one
-     * /kanban/dispatch call on the FEATURE's planId when every subtask is
-     * finished. {head} is substituted with the live head name.
+     * in teamWiring.ts. Subtask-level, single-action: the lead finishes each
+     * subtask, commits, posts completion for that subtask, and asks for the
+     * next card via queue/next. {head} is substituted with the live head name.
      */
     var NEW_CODING_HEAD_PROMPT_CLIENT =
         'You lead this team. Your coders work the subtasks of one feature. '
@@ -11067,30 +11052,18 @@
         + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
         + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
         + 'cleared seat before rotation. Do not send anything to the reviewer, and do not write review '
-        + 'instructions — that is not your job. When every subtask of the feature is finished, read the '
-        + 'port from .switchboard/api-server-port.txt, confirm no subtask is still outstanding via GET '
-        + '/kanban/plans?featureId=<the FEATURE planId>&workspaceRoot=<your current working directory — run '
-        + 'pwd> (that read returns one record per subtask, each with its kanbanColumn). '
+        + 'instructions — that is not your job. '
         + 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
-        + 'Never move a card to a new column yourself: your only card action is the POST '
-        + '/kanban/dispatch call below, and only when your team has a reviewer seat. '
-        + 'Check your team roster (the YOUR TEAM block in your prompt or ptyListTerminals) for a seat '
-        + 'with role "reviewer". If your team has a reviewer seat, make one call: '
-        + 'POST /kanban/dispatch with '
-        + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}","workspaceRoot":'
-        + '"<your current working directory — run pwd>"} — that one call triggers review by dispatching '
-        + 'the reviewer with the reviewer\'s own prompt. Do NOT use /kanban/move. '
-        + 'Do not wait to be asked. When the reviewer reports the feature passed, POST /kanban/queue/next with '
-        + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
-        + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
-        + 'empty and stop. '
-        + 'If your team has NO reviewer seat, do NOT move the card — that is not your role. '
-        + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the FEATURE planId>","workspaceRoot":'
-        + '"<your current working directory>"} against the port in .switchboard/api-server-port.txt. '
-        + 'The card stays where it is. Completion is asserted, never inferred from board position.'
-        + ' When the work is complete, stage the files you changed by explicit path '
+        + 'Never move a card to a new column yourself — that is not your role. '
+        + 'When the work is complete, stage the files you changed by explicit path '
         + '— never `git add -A` or `git add .`. Then create a single commit with a '
-        + 'descriptive message.';
+        + 'descriptive message. '
+        + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the subtask\'s planId>","workspaceRoot":'
+        + '"<your current working directory>"} against the port in .switchboard/api-server-port.txt. '
+        + 'The card stays where it is. Completion is asserted, never inferred from board position. '
+        + 'POST /kanban/queue/next with {"from":"{head}"} against the port in .switchboard/api-server-port.txt; '
+        + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
+        + 'empty and stop.';
 
     /**
      * Client-side mirror of migrateTeamPairOrders from teamWiring.ts.
@@ -11176,92 +11149,19 @@
      * Client-side mirror of migrateCodingTeamOrders from teamWiring.ts.
      *
      * Drops the stale reviewer pair row (instruction equals the resolved
-     * reviewer preset text for this parent/child pair) and rewrites the
-     * stale team-head row carrying the old per-subtask headPrompt (matched
-     * by a substitution-independent fragment, since {head} was already
-     * substituted at install time). Unrecognised rows are left untouched.
+     * reviewer preset text for this parent/child pair). Unrecognised rows
+     * are left untouched.
      *
      * Applied INSIDE applyStandingOrdersClient at render time, composed
      * AFTER migrateTeamPairOrdersClient so the pair converter sees the array
      * shape it expects. Pure — does not mutate the input array or the
-     * persisted standingOrders. Idempotent: a second pass finds nothing
-     * left to recognise.
+     * persisted standingOrders. Idempotent.
      */
     function migrateCodingTeamOrdersClient(orders) {
         if (!Array.isArray(orders) || orders.length === 0) { return orders; }
 
         var drop = {};       // order id → true
-        var rewritten = [];  // replacement team-head rows
         var touched = false;
-
-        // Substitution-independent fragment unique to the old per-subtask
-        // headPrompt. The new feature-level text does not contain it.
-        var OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review yourself';
-        // Mirror of BUGGY_HEADPROMPT_FRAGMENT in teamWiring.ts. Recognises the
-        // FIRST-GENERATION feature-level headPrompt (GET /kanban/feature, no
-        // workspaceRoot, same-coder stacking) that is already persisted as a
-        // team-head order on every install that adopted the Coding team before
-        // the fix. wireSpawnedTeam never overwrites an existing head order, so
-        // without this the corrected text reaches only brand-new teams.
-        var BUGGY_HEADPROMPT_FRAGMENT = 'give that coder the next subtask';
-        // Mirror of PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT in teamWiring.ts. Recognises
-        // the feature-level headPrompt before the role-boundary guardrails (conditional
-        // CODE REVIEWED advance + plan-immutability directive). {head} is substituted
-        // on disk, so match by indexOf — same as OLD_HEADPROMPT_FRAGMENT and
-        // BUGGY_HEADPROMPT_FRAGMENT.
-        var PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT = 'then make one call: ';
-        // Mirror of PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT in teamWiring.ts.
-        // Recognises the role-boundary headPrompt before the durable commit
-        // instruction was appended. The fragment is present in both old and new
-        // text, so the rewriter uses a NEGATIVE check: match if the fragment is
-        // present AND COMMIT_INSTRUCTION_MARKER is absent. After appending, the
-        // marker is present, so the row does not re-match.
-        var PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT = 'PLAN FILES ARE THE SOURCE OF TRUTH';
-        // Mirror of PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT in teamWiring.ts.
-        // Recognises the commit-instruction headPrompt before the card-movement
-        // restructuring. The fragment is REMOVED from the new text, so this is
-        // a traditional positive match. GATED ON MARKER PRESENT (same as host):
-        // pre-commit-instruction rows also contain this fragment but lack the
-        // marker — without the gate they would be replaced instead of appended.
-        var PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT = 'Only advance the feature your team worked';
-        // Mirror of COMMIT_INSTRUCTION_MARKER in teamWiring.ts. Substring unique
-        // to TEAM_HEAD_COMMIT_INSTRUCTION — the negative-check gate for the
-        // pre-commit-instruction recogniser.
-        var COMMIT_INSTRUCTION_MARKER = 'create a single commit with a descriptive message';
-        // Mirror of TEAM_HEAD_COMMIT_INSTRUCTION in teamWiring.ts. Appended to a
-        // pre-commit-instruction team-head row rather than replacing it — see the
-        // host comment: that change is additive, and the fragment above sits in
-        // the CURRENT shipped prompt, so a replace would discard an operator's
-        // own wording.
-        var TEAM_HEAD_COMMIT_INSTRUCTION = ' When the work is complete, stage the files you changed by explicit path '
-            + '— never `git add -A` or `git add .`. Then create a single commit with a '
-            + 'descriptive message.';
-        // Mirror of PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT in teamWiring.ts.
-        // Substring present in team-scoped member prompts that use the callback
-        // instruction (AGENT_GROUP_CALLBACK_INSTRUCTION or
-        // EXTERNAL_HEAD_CALLBACK_INSTRUCTION). Both contain 'is your head agent'.
-        // NOT present in SEAT_QUEUE_DONE_ORDER_BODY or GLOBAL_QUEUE_DONE_ORDER_BODY.
-        // Used by the team-order rewriter's negative check: a team-scoped order
-        // that contains this fragment but NOT the QUEUE_DONE_MARKER is
-        // pre-queue-done-instruction and must be rewritten.
-        var PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT = 'is your head agent';
-        // Mirror of QUEUE_DONE_MARKER in teamWiring.ts. Substring unique to
-        // TEAM_CODER_QUEUE_DONE_INSTRUCTION — the negative-check gate for
-        // idempotency: a rewritten order contains this marker, so it does not
-        // re-match.
-        var QUEUE_DONE_MARKER = 'POST /kanban/queue/done with';
-        // Mirror of TEAM_CODER_QUEUE_DONE_INSTRUCTION in teamWiring.ts. Appended
-        // to a pre-queue-done-instruction team-scoped order rather than replacing
-        // it — see the host comment: the change is additive, and the fragment
-        // above sits in the CURRENT shipped prompt, so a replace would discard an
-        // operator's own wording.
-        var TEAM_CODER_QUEUE_DONE_INSTRUCTION =
-            'When you have finished ALL parts of the dispatched plan, POST /kanban/queue/done with '
-            + '{"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. '
-            + 'This signals completion — the system clears your activity light and notifies your lead. '
-            + 'Do NOT post after finishing individual parts — only when ALL work is complete. '
-            + 'If you cannot complete it, call the same endpoint with {"from":"<your terminal name>",'
-            + '"outcome":"failed"} and a one-line reason.';
 
         for (var i = 0; i < orders.length; i++) {
             var o = orders[i];
@@ -11278,78 +11178,6 @@
                     continue;
                 }
             }
-
-            // Pre-queue-done-instruction team-scoped order: a team-scoped
-            // member prompt that carries the callback instruction (contains
-            // PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT) but NOT the QUEUE_DONE_MARKER.
-            // APPEND TEAM_CODER_QUEUE_DONE_INSTRUCTION — the change is additive,
-            // so the fragment sits in the current shipped prompt and an
-            // operator-edited row that kept the callback sentence still matches.
-            // Appending upgrades the row without discarding operator wording,
-            // exactly like the pre-commit-instruction headPrompt recogniser
-            // below. A rewritten row carries the marker, so it does not re-match
-            // (idempotent). Mirrors the host branch in migrateCodingTeamOrders.
-            if (o.scope === 'team' && typeof o.instruction === 'string') {
-                if (o.instruction.indexOf(PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT) !== -1
-                    && o.instruction.indexOf(QUEUE_DONE_MARKER) === -1) {
-                    var qdCopy = {};
-                    for (var qdk in o) {
-                        if (Object.prototype.hasOwnProperty.call(o, qdk)) {
-                            qdCopy[qdk] = o[qdk];
-                        }
-                    }
-                    qdCopy.instruction = o.instruction + '\n' + TEAM_CODER_QUEUE_DONE_INSTRUCTION;
-                    rewritten.push(qdCopy);
-                    drop[o.id] = true;
-                    touched = true;
-                    continue;
-                }
-            }
-
-            // Stale team-head row carrying the old per-subtask headPrompt.
-            // Match by indexOf on a substitution-independent fragment — never
-            // a constructed RegExp (the head name may contain regex
-            // metacharacters). The three fragments below identify SUPERSEDED
-            // text, so rewrite to the new feature-level text with {head}
-            // substituted by the order's parent (the head name).
-            if (o.scope === 'team-head' && typeof o.instruction === 'string') {
-                if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1
-                    || o.instruction.indexOf(BUGGY_HEADPROMPT_FRAGMENT) !== -1
-                    || o.instruction.indexOf(PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT) !== -1
-                    || (o.instruction.indexOf(PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT) !== -1
-                        && o.instruction.indexOf(COMMIT_INSTRUCTION_MARKER) !== -1)) {
-                    var newInstruction = NEW_CODING_HEAD_PROMPT_CLIENT
-                        .replace(/\{head\}/g, o.parent || '');
-                    var copy = {};
-                    for (var k in o) {
-                        if (Object.prototype.hasOwnProperty.call(o, k)) {
-                            copy[k] = o[k];
-                        }
-                    }
-                    copy.instruction = newInstruction;
-                    rewritten.push(copy);
-                    drop[o.id] = true;
-                    touched = true;
-                    continue;
-                }
-                // Pre-commit-instruction row: APPEND the missing clause instead
-                // of replacing, so an operator-edited row keeps its wording.
-                // Mirrors the host branch in migrateCodingTeamOrders.
-                if (o.instruction.indexOf(PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT) !== -1
-                    && o.instruction.indexOf(COMMIT_INSTRUCTION_MARKER) === -1) {
-                    var appended = {};
-                    for (var ak in o) {
-                        if (Object.prototype.hasOwnProperty.call(o, ak)) {
-                            appended[ak] = o[ak];
-                        }
-                    }
-                    appended.instruction = o.instruction + TEAM_HEAD_COMMIT_INSTRUCTION;
-                    rewritten.push(appended);
-                    drop[o.id] = true;
-                    touched = true;
-                    continue;
-                }
-            }
         }
 
         if (!touched) { return orders; }
@@ -11360,7 +11188,7 @@
                 kept.push(orders[j]);
             }
         }
-        return kept.concat(rewritten);
+        return kept;
     }
 
     function applyStandingOrdersClient(prompt, targetName, orders, liveNames) {
