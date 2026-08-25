@@ -9937,9 +9937,19 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const ctx = await this._resolveMissionDb(msg.workspaceRoot);
                 if (!ctx || !msg.missionId) return { success: false, error: 'Invalid arguments' };
                 const memberId = msg.memberId || msg.name;
-                if (memberId) {
-                    await ctx.db.addMissionMember(msg.missionId, memberId, msg.kind === 'feature' ? 'feature' : 'plan');
+                // The panel's "+ add" button posts no member — its own comment says
+                // "the host surfaces a picker", and no picker exists. Refusing is the
+                // honest answer: adding nothing and returning success made the button
+                // a dead control that reported a write it never performed (PRD
+                // contract #6). Programmatic callers that supply a memberId still work,
+                // which is how membership is written today.
+                if (!memberId) {
+                    return {
+                        success: false,
+                        error: 'No member to add — a member picker is not implemented. Add members via POST /kanban/mission/member/add with a memberId.'
+                    };
                 }
+                await ctx.db.addMissionMember(msg.missionId, memberId, msg.kind === 'feature' ? 'feature' : 'plan');
                 await this._postMissions(ctx);
                 return { success: true };
             }

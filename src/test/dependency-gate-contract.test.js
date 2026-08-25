@@ -359,6 +359,142 @@ async function run() {
         }
     });
 
+    // ─── The shipped panel lights up ───────────────────────────────────────
+    // The plan is explicit that nothing else catches this: "A mission model that
+    // satisfies the plan but not this list leaves 43 KB of finished UI rendering
+    // nothing, and no other check catches it." `mission-control.js` was in the
+    // tree before any backend existed, so its field names and verb names are the
+    // contract — not the other way round.
+
+    await check('every mission field the panel reads is produced by the backend', () => {
+        const fs = require('fs');
+        const panel = fs.readFileSync(
+            path.join(process.cwd(), 'src', 'webview', 'mission-control.js'), 'utf8');
+        const dbSrc = fs.readFileSync(
+            path.join(process.cwd(), 'src', 'services', 'KanbanDatabase.ts'), 'utf8');
+
+        // Whatever the panel dereferences off a mission object, the db must emit.
+        const read = new Set();
+        for (const m of panel.matchAll(/\bm\.([a-zA-Z][a-zA-Z0-9]*)/g)) read.add(m[1]);
+        assert.ok(read.size >= 10, `expected the panel to read a mission's fields, found ${read.size}`);
+
+        const missionShape = dbSrc.slice(
+            dbSrc.indexOf('public async getMissions('),
+            dbSrc.indexOf('public async createMission(')
+        );
+        assert.ok(missionShape.length > 0, 'getMissions..createMission block must exist');
+
+        for (const field of read) {
+            // runState/sequencing are filled by the derived-field hydrator, which
+            // lives inside the same block.
+            assert.ok(
+                new RegExp(`\\b${field}\\s*[:=]`).test(missionShape),
+                `the panel reads m.${field} but no mission reader populates it — that field renders blank forever`
+            );
+        }
+    });
+
+    await check('every mc* verb the panel posts has a handler and is in the generated allowlist', () => {
+        const fs = require('fs');
+        const panel = fs.readFileSync(
+            path.join(process.cwd(), 'src', 'webview', 'mission-control.js'), 'utf8');
+        const provider = fs.readFileSync(
+            path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
+        const allowlist = fs.readFileSync(
+            path.join(process.cwd(), 'src', 'generated', 'verbAllowlist.ts'), 'utf8');
+        const schemas = fs.readFileSync(
+            path.join(process.cwd(), 'src', 'services', 'verbSchemas.ts'), 'utf8');
+
+        const posted = new Set();
+        for (const m of panel.matchAll(/type:\s*'(mc[A-Z][A-Za-z]*)'/g)) posted.add(m[1]);
+        // Only the mission verbs — the Schedules tab is owned by the automation plan.
+        const missionVerbs = [...posted].filter(v => /Mission/.test(v));
+        assert.ok(
+            missionVerbs.length >= 8,
+            `expected the panel's mission verbs, found ${missionVerbs.length}: ${missionVerbs.join(', ')}`
+        );
+        missionVerbs.push('mcInit');
+
+        for (const verb of missionVerbs) {
+            assert.ok(
+                provider.includes(`case '${verb}':`),
+                `${verb} is posted by the panel with no handler arm — the button does nothing`
+            );
+            assert.ok(
+                allowlist.includes(`'${verb}'`),
+                `${verb} is missing from the generated allowlist — handleServiceVerb throws on every /kanban/verb/* call while the webview path works fine`
+            );
+            assert.ok(
+                new RegExp(`\\b${verb}:\\s*\\{`).test(schemas),
+                `${verb} has no verb schema — the HTTP path cannot validate it`
+            );
+        }
+    });
+
+    await check('no mc* arm reports a write it did not perform', () => {
+        const fs = require('fs');
+        const provider = fs.readFileSync(
+            path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
+        // A dead control that returns success is worse than one that refuses: the
+        // panel shows no error and the operator believes the member/launch landed.
+        // Every unbuilt mc* arm must refuse in words.
+        for (const verb of ['mcLaunchMission', 'mcStopMission', 'mcAddMissionMember']) {
+            const start = provider.indexOf(`case '${verb}':`);
+            assert.notStrictEqual(start, -1, `${verb} arm must exist`);
+            const body = provider.slice(start, provider.indexOf("\n            case '", start + 10));
+            assert.ok(
+                /not implemented|is not implemented|not implemented yet|No member to add/.test(body),
+                `${verb} must refuse honestly when the behaviour behind it is unbuilt, not return success`
+            );
+        }
+    });
+
+    await check('a mission codename is stable and collision-checked', () => {
+        const { generateCodename } = require(
+            path.join(process.cwd(), 'out', 'services', 'codenameGenerator.js'));
+        const fs = require('fs');
+        const dbSrc = fs.readFileSync(
+            path.join(process.cwd(), 'src', 'services', 'KanbanDatabase.ts'), 'utf8');
+
+        // Stable: the same seed always yields the same name, so a reload cannot
+        // rename a mission the operator already referred to in a handoff.
+        assert.strictEqual(generateCodename('mission-abc'), generateCodename('mission-abc'));
+        assert.notStrictEqual(generateCodename('mission-abc', 0), generateCodename('mission-abc', 1));
+        assert.ok(/^[a-z]+-[a-z]+$/.test(generateCodename('mission-abc')), 'a codename is {adjective}-{noun}');
+
+        // Unique: creation must consult the existing names, not hash once and hope.
+        // ~3,900 combinations collide well before a hundred missions.
+        const create = dbSrc.slice(
+            dbSrc.indexOf('public async createMission('),
+            dbSrc.indexOf('public async updateMission(')
+        );
+        assert.ok(
+            /_uniqueCodename/.test(create),
+            'createMission must route the codename through the collision check — a bare generateCodename() call can name two missions the same thing'
+        );
+        assert.ok(
+            /generateCodename\(seed, salt\)/.test(dbSrc),
+            'the collision check must rehash with a salt, per the plan'
+        );
+    });
+
+    await check('the pop-time gate refuses rather than fails open when a lookup faults', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(
+            path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        const start = src.indexOf('const dependencyBlockers = new Map<string, string>();');
+        assert.notStrictEqual(start, -1, 'the dependency gate block must exist');
+        const block = src.slice(start, src.indexOf('const isQueueable', start));
+        assert.ok(
+            !/dependencyBlockers\.clear\(\)/.test(block),
+            'clearing the blockers on a fault deletes the gate and dispatches unverified dependents — the exact invariant the gate exists to hold'
+        );
+        assert.ok(
+            /dependencyBlockers\.set\(String\(p\.planId\), '\(dependency lookup failed\)'\)/.test(block),
+            'a per-card lookup fault must BLOCK that card; the gate exists to refuse, so its failure mode must be refusal'
+        );
+    });
+
     console.log(`\n${failures === 0 ? 'all dependency-gate contracts passed' : `${failures} contract(s) failed`}\n`);
     process.exit(failures === 0 ? 0 : 1);
 }

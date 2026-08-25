@@ -11257,14 +11257,21 @@ FROM plans
     ): Promise<'not-started' | 'in-flight' | 'completed'> {
         if (!members.length) return 'not-started';
         let allComplete = true;
+        let present = 0;
         for (const member of members) {
             const plan = await this.getPlanByPlanId(member.memberId);
-            if (!plan) { allComplete = false; continue; }
+            // A member whose plan row is gone is ABSENT, not incomplete. Counting
+            // it as incomplete wedges the mission at 'not-started' forever once
+            // any member is deleted — the same reasoning the queue pop applies to
+            // a dangling dependency edge, and the same answer.
+            if (!plan) continue;
+            present++;
             if (!plan.completedAt) {
                 allComplete = false;
                 if (plan.dispatchedAt) return 'in-flight';
             }
         }
+        if (present === 0) return 'not-started';
         return allComplete ? 'completed' : 'not-started';
     }
 
@@ -11335,6 +11342,46 @@ FROM plans
         return m;
     }
 
+    /**
+     * A codename the operator can say out loud without ambiguity.
+     *
+     * `generateCodename` is deterministic on the seed, which makes a name stable
+     * — but two seeds can land on the same adjective-noun pair, and 65x60 is
+     * ~3,900 combinations, so a collision is likely well before a hundred
+     * missions. Rehash with a salt until the workspace has no mission by that
+     * name, exactly as the plan specifies. The salt loop is bounded; if every
+     * attempt collides the id is appended, which is ugly but unique.
+     */
+    private async _uniqueCodename(seed: string, workspaceId: string): Promise<string> {
+        const taken = new Set<string>();
+        for (const m of await this.getMissionNames(workspaceId)) taken.add(m);
+        for (let salt = 0; salt < 64; salt++) {
+            const candidate = generateCodename(seed, salt);
+            if (!taken.has(candidate)) return candidate;
+        }
+        return `${generateCodename(seed)}-${seed.slice(-4)}`;
+    }
+
+    /**
+     * Just the names, for the collision check. `getMissions` hydrates members and
+     * derives run state per mission, which is far too much work to do on the
+     * create path.
+     */
+    public async getMissionNames(workspaceId: string): Promise<string[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare('SELECT name FROM missions WHERE workspace_id = ?', [workspaceId]);
+        const out: string[] = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                if (r.name) out.push(String(r.name));
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
     public async createMission(mission: {
         id?: string;
         name?: string;
@@ -11346,7 +11393,7 @@ FROM plans
         workspaceId: string;
     }): Promise<any> {
         const id = mission.id || `mission-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const name = mission.name || generateCodename(id);
+        const name = mission.name || await this._uniqueCodename(id, mission.workspaceId);
         const type = mission.type || 'mission';
         const goal = mission.goal || '';
         const ready = mission.ready ? 1 : 0;

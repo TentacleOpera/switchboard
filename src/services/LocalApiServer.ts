@@ -2000,24 +2000,38 @@ export class LocalApiServer {
                     };
                     for (const p of board) {
                         if (!p || p.kanbanColumn !== 'STAGING') continue;
-                        const depPlanIds = await db.getPlanDependencies(p.planId);
-                        for (const depId of (depPlanIds || [])) {
-                            const dep = await resolveDep(depId);
-                            if (dep === 'absent') {
-                                console.warn(
-                                    `[LocalApiServer] Stale dependency edge: '${p.planId}' depends on '${depId}', which no longer exists. Treating the edge as satisfied.`
-                                );
-                                continue;
+                        // Per-card, so one card's lookup fault cannot delete the
+                        // gate for every other card. A fault BLOCKS the card it
+                        // happened on: the gate exists to refuse, so its failure
+                        // mode must be refusal. Failing open here would dispatch a
+                        // dependent whose predecessor was never checked, which is
+                        // exactly the invariant this block was written to hold
+                        // ("no card is dispatched while any dependency predecessor
+                        // has not asserted completion"). The team-roster and pacing
+                        // resolvers above also swallow their faults, but both of
+                        // those degrade TOWARD restriction; this one would not.
+                        try {
+                            const depPlanIds = await db.getPlanDependencies(p.planId);
+                            for (const depId of (depPlanIds || [])) {
+                                const dep = await resolveDep(depId);
+                                if (dep === 'absent') {
+                                    console.warn(
+                                        `[LocalApiServer] Stale dependency edge: '${p.planId}' depends on '${depId}', which no longer exists. Treating the edge as satisfied.`
+                                    );
+                                    continue;
+                                }
+                                if (!dep || !dep.completedAt) { dependencyBlockers.set(String(p.planId), depId); break; }
                             }
-                            if (!dep || !dep.completedAt) { dependencyBlockers.set(String(p.planId), depId); break; }
+                        } catch (err) {
+                            console.warn(`[LocalApiServer] Dependency lookup failed for '${p.planId}'; holding the card rather than dispatching it unchecked:`, err);
+                            dependencyBlockers.set(String(p.planId), '(dependency lookup failed)');
                         }
                     }
                 } catch (err) {
-                    // Fail open rather than stalling every team's queue on a
-                    // transient db fault — the posture resolveTeamMembers and
-                    // resolveTeamPacing already take above.
-                    console.warn('[LocalApiServer] Dependency check failed; dispatching without the gate:', err);
-                    dependencyBlockers.clear();
+                    // Only the board index / resolver setup above can reach here.
+                    // Blockers already computed are KEPT — discarding them would
+                    // reintroduce the fail-open the per-card catch exists to avoid.
+                    console.warn('[LocalApiServer] Dependency check setup failed; keeping any blockers already resolved:', err);
                 }
             }
 
