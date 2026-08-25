@@ -159,9 +159,9 @@ export interface KanbanPlanRecord {
      * then createdAt DESC (the board's existing display fallback), so an
      * un-arranged column is ordered exactly as it is today. STAGING keeps
      * queue_position exclusively — column_order is never read or written there.
-     * On a cross-column move the card is renumbered to the FRONT of its new
-     * column (setColumnOrderToFront), never left holding the position it had in
-     * the column it left. Preserved on upsert conflict.
+     * Cleared on every cross-column move — the number is per-column and must
+     * not travel — and nothing is written in its place. Preserved on upsert
+     * conflict.
      */
     columnOrder?: number | null;
 }
@@ -585,8 +585,8 @@ const MIGRATION_V62_SQL = [
 // and sorts after any card that does carry a position, then by
 // column_entered_at DESC then createdAt DESC (the board's existing display
 // fallback), so pre-existing cards — all of them NULL — keep their current
-// position. setColumnOrders assigns 1..N on a drag; a card arriving from
-// another column takes MIN-1 so it lands at the front. STAGING keeps queue_position exclusively — column_order is never
+// position. setColumnOrders assigns 1..N on a drag inside a column; a
+// cross-column move clears it and writes nothing. STAGING keeps queue_position exclusively — column_order is never
 // read or written there. Both columns are also in SCHEMA_TABLES_SQL, so fresh
 // DBs get them at creation and the ALTER is a no-op there. Idempotent under
 // the version gate. Never edit a shipped V51–V62 body.
@@ -10230,48 +10230,31 @@ FROM plans
     }
 
     /**
-     * V63 — place a card at the FRONT of the column it just moved into, by
-     * giving it one less than the smallest column_order already in that column.
-     * Called on every cross-column move, after the column itself has been
-     * updated.
+     * V63 — clear a card's column_order when it moves to a different column
+     * (analogous to clearQueuePosition for STAGING). The number is per-column,
+     * so it must not travel: a card that was 2nd in CREATED would otherwise
+     * land ahead of the cards deliberately placed 3rd and 4th wherever it moves
+     * to. Nothing is written in its place — a column move is a stage change,
+     * not a statement about priority, and it is not this method's business to
+     * invent one.
      *
-     * Why not simply clear it to NULL. Two things are true at once: the old
-     * number is per-column and must not travel (a card that was 2nd in CREATED
-     * would land ahead of the cards you deliberately placed 3rd and 4th in the
-     * column it moves to), AND a card that just arrived belongs at the top,
-     * which is where the board has always put it. Clearing satisfies only the
-     * first: an un-numbered card sorts BELOW every numbered one, so in a column
-     * you had arranged, an arriving card dropped to the bottom — the opposite of
-     * both the intent and the pre-V63 behaviour.
+     * NULL means "not part of this column's arrangement". Such a card sorts
+     * after every card that does carry a position, then by column_entered_at
+     * DESC among the rest. In a column nobody has arranged — every card NULL,
+     * which is every column until someone drags — that is the board's existing
+     * order and the arriving card is at the top. In a column the user HAS
+     * arranged, it sits after their arrangement until they place it, which is
+     * the honest answer: they ordered the cards that were there, and this one
+     * was not.
      *
-     * Sorting NULL by date instead is not an option: comparing "has a position"
-     * against "has a date" is intransitive — A(pos 5, ts 100) loses to B(pos 1,
-     * ts 50) on position, beats C(no pos, ts 75) on date, and C beats B on date,
-     * so the cycle makes the sorted result depend on input order. Giving the
-     * arriving card a real number keeps every comparison integer-vs-integer.
-     *
-     * The subquery returns NULL when no OTHER active card in the target column
-     * carries a position — a column nobody has arranged — and the UPDATE then
-     * writes NULL, which is correct: everything there sorts by
-     * column_entered_at DESC and the arriving card is the freshest, so it is at
-     * the top anyway. That also covers a move INTO STAGING, where nothing ever
-     * writes column_order.
-     *
-     * Numbers may go negative over repeated arrivals. They are sort keys, not
-     * indices, and the next drag in that column renumbers it 1..N via
-     * setColumnOrders. Does NOT touch queue_position — STAGING's order is owned
-     * by clearQueuePosition.
+     * Scoped by plan_id + workspace_id. Idempotent. Does NOT touch
+     * queue_position — STAGING's order is owned by clearQueuePosition.
      */
-    public async setColumnOrderToFront(planId: string, workspaceId: string, targetColumn: string): Promise<boolean> {
-        if (!planId || !workspaceId || !targetColumn) return false;
+    public async clearColumnOrder(planId: string, workspaceId: string): Promise<boolean> {
+        if (!planId || !workspaceId) return false;
         return this._persistedUpdate(
-            `UPDATE plans SET column_order = (
-                 SELECT MIN(column_order) - 1 FROM plans
-                 WHERE workspace_id = ? AND kanban_column = ? AND status = 'active'
-                   AND plan_id != ? AND column_order IS NOT NULL
-             )
-             WHERE plan_id = ? AND workspace_id = ?`,
-            [workspaceId, targetColumn, planId, planId, workspaceId]
+            'UPDATE plans SET column_order = NULL WHERE plan_id = ? AND workspace_id = ?',
+            [planId, workspaceId]
         );
     }
 

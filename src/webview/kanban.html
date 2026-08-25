@@ -10058,11 +10058,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (!targetBody) return;
                     // Build the current rendered order (excluding the dragged set),
                     // then splice the dragged block in at the insertion index.
-                    const stationaryEls = Array.from(targetBody.querySelectorAll('.kanban-card'))
-                        .filter(el => {
-                            const pid = el.dataset.planId || el.dataset.session || '';
-                            return !sameColIds.includes(pid);
-                        });
+                    const allEls = Array.from(targetBody.querySelectorAll('.kanban-card'));
+                    const renderedIds = allEls.map(el => el.dataset.planId || el.dataset.session || '').filter(Boolean);
+                    const stationaryEls = allEls.filter(el => {
+                        const pid = el.dataset.planId || el.dataset.session || '';
+                        return !sameColIds.includes(pid);
+                    });
                     let insertIndex = stationaryEls.length;
                     const pointerY = e.clientY;
                     for (let i = 0; i < stationaryEls.length; i++) {
@@ -10072,6 +10073,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     const stationaryIds = stationaryEls.map(el => el.dataset.planId || el.dataset.session || '').filter(Boolean);
                     const orderedIds = [...stationaryIds.slice(0, insertIndex), ...sameColIds, ...stationaryIds.slice(insertIndex)];
+                    // Nothing actually moved — a card picked up and put back where it
+                    // was. Before V63 that was a no-op; posting reorderColumn for it
+                    // would write column_order across the WHOLE column and flip it from
+                    // "orders itself by column_entered_at" to "frozen in this exact
+                    // arrangement", invisibly, because the frozen order is the order
+                    // already on screen. A user who never wanted manual ordering should
+                    // not acquire it by fumbling a drag. (STAGING's branch needs no such
+                    // guard: every staged card already carries a queue_position, so the
+                    // same redundant write puts the same numbers back.)
+                    const unchanged = orderedIds.length === renderedIds.length
+                        && orderedIds.every((id, i) => id === renderedIds[i]);
+                    if (unchanged) {
+                        document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                        selectedCards.clear();
+                        updateReassignButtonVisibility();
+                        updateFeatureActionButton();
+                        return;
+                    }
                     // Optimistic DOM reorder.
                     targetBody.querySelectorAll('.kanban-card').forEach(el => {
                         const pid = el.dataset.planId || el.dataset.session || '';

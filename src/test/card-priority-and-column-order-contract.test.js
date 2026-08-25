@@ -198,44 +198,29 @@ check('neither column is in the upsert, so a file re-import cannot wipe a star',
         'column_order must stay out of UPSERT_PLAN_SQL — the watcher record does not carry it');
 });
 
-check('a cross-column move renumbers the card to the front, on BOTH sides of STAGING', () => {
-    const idx = provider.indexOf('await db.setColumnOrderToFront(');
-    assert.notStrictEqual(idx, -1,
-        'moveCardToColumnWithReason must renumber to the front — a plain clear sends the card to the BOTTOM of any arranged column, since an un-numbered card sorts below every numbered one');
+check('a cross-column move clears column_order and writes nothing, on BOTH sides of STAGING', () => {
+    const idx = provider.indexOf('await db.clearColumnOrder(');
+    assert.notStrictEqual(idx, -1, 'moveCardToColumnWithReason must clear column_order');
     const guard = provider.slice(provider.lastIndexOf('if (plan &&', idx), idx);
     assert.ok(/plan\.kanbanColumn\s*!==\s*targetColumn/.test(guard), 'it must be gated on an actual column change');
     assert.ok(!/kanbanColumn\s*!==\s*'STAGING'/.test(guard) && !/targetColumn\s*!==\s*'STAGING'/.test(guard),
         'STAGING must NOT be excluded — excluding it left a CREATED → STAGING → CREATED round-trip holding its stale pre-staging position');
-    assert.ok(!/clearColumnOrder/.test(provider) && !/clearColumnOrder/.test(database),
-        'clearColumnOrder must be gone — it is the behaviour setColumnOrderToFront replaced, not a second door to it');
+    assert.ok(!/setColumnOrderToFront/.test(provider) && !/setColumnOrderToFront/.test(database),
+        'a column move must not assign a position. It is a stage change, not a statement about priority, and front-of-column would hand a card the user never placed a slot ahead of the ones they did');
 });
 
-check('setColumnOrderToFront takes MIN-1 of the target column, excluding the arriving card', () => {
-    const fnStart = database.indexOf('public async setColumnOrderToFront(');
-    assert.notStrictEqual(fnStart, -1, 'setColumnOrderToFront must exist');
-    const body = database.slice(fnStart, database.indexOf('\n    /**', fnStart));
-    assert.ok(/MIN\(column_order\)\s*-\s*1/.test(body), 'the new position must be one less than the column minimum');
-    assert.ok(/plan_id\s*!=\s*\?/.test(body),
-        "the card is already in the target column by this point — its own stale value must be excluded from the MIN or it renumbers off itself");
-    assert.ok(/kanban_column\s*=\s*\?/.test(body) && /status\s*=\s*'active'/.test(body),
-        'the MIN must be scoped to the target column and to the cards the board actually renders');
-});
-
-check('a card arriving in an arranged column lands above the arranged block, not below it', () => {
-    // MIN-1 of {1, 2, 3} is 0. The arriving card must outrank every card the
-    // user placed by hand; the clear-to-NULL it replaced put it last instead.
-    const arrived = { id: 'arrived', columnOrder: 0, columnEnteredAt: '2026-08-20T00:00:00Z' };
+check('an arriving card follows an arranged column rather than jumping it', () => {
+    // The arriving card is NULL: it is not part of the arrangement, so it sits
+    // after it until the user places it. Giving it a position here would put a
+    // card nobody positioned ahead of three the user positioned by hand.
+    const arrived = { id: 'arrived', columnEnteredAt: '2026-08-20T00:00:00Z' };
     const arranged = [
         { id: 'hand-1', columnOrder: 1, columnEnteredAt: '2026-08-01T00:00:00Z' },
         { id: 'hand-2', columnOrder: 2, columnEnteredAt: '2026-08-02T00:00:00Z' },
         { id: 'hand-3', columnOrder: 3, columnEnteredAt: '2026-08-03T00:00:00Z' },
     ];
     assert.deepStrictEqual(order([...arranged, arrived], 'CREATED'),
-        ['arrived', 'hand-1', 'hand-2', 'hand-3']);
-    // Repeated arrivals go negative and keep stacking at the front, newest first.
-    const second = { id: 'arrived-2', columnOrder: -1, columnEnteredAt: '2026-08-21T00:00:00Z' };
-    assert.deepStrictEqual(order([...arranged, arrived, second], 'CREATED'),
-        ['arrived-2', 'arrived', 'hand-1', 'hand-2', 'hand-3']);
+        ['hand-1', 'hand-2', 'hand-3', 'arrived']);
 });
 
 check('a card arriving in a column nobody arranged still sorts by date, at the top', () => {
@@ -285,6 +270,17 @@ check('the star control is on the card and does not gate on a confirm', () => {
     assert.ok(/e\.stopPropagation\(\)/.test(body), 'the star click must not reach the card selection handler');
     assert.ok(!/confirm\(/.test(body), 'no confirm gate — project rule, and confirm() is a silent no-op in webviews');
     assert.ok(/type:\s*'setPriorityStarred'/.test(body), 'the handler must post setPriorityStarred');
+});
+
+check('a drag that changed nothing must not arrange the column', () => {
+    const idx = kanbanHtml.indexOf("type: 'reorderColumn'");
+    const branch = kanbanHtml.slice(kanbanHtml.lastIndexOf("if (effectiveTargetColumn !== 'STAGING')", idx), idx);
+    assert.ok(/const unchanged =/.test(branch) && /orderedIds\.every\(\(id, i\) => id === renderedIds\[i\]\)/.test(branch),
+        'the post-drop order must be compared against the rendered order before posting');
+    const guardIdx = branch.indexOf('if (unchanged) {');
+    assert.notStrictEqual(guardIdx, -1, 'an unchanged drop must return without posting');
+    assert.ok(branch.slice(guardIdx, guardIdx + 400).includes('return;'),
+        'the unchanged branch must return — writing column_order for a card put back where it was flips the whole column from self-ordering to frozen, invisibly');
 });
 
 check('a same-column drag outside STAGING persists the order it just showed', () => {

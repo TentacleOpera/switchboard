@@ -8241,28 +8241,31 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
                     if (wsId) { await db.clearQueuePosition(plan.planId, wsId); }
                 }
-                // V63: a card moving to ANY different column is renumbered to the
-                // FRONT of its new column. It must not keep the position it held in
-                // the column it left — that number is per-column, and a card that was
+                // V63: a card moving to ANY different column drops its column_order.
+                // The number is per-column, so it must not travel — a card that was
                 // 2nd in CREATED would otherwise land ahead of the cards deliberately
-                // placed 3rd and 4th wherever it moves to. But it must also not simply
-                // lose its position: an un-numbered card sorts BELOW every numbered
-                // one, so clearing dropped an arriving card to the bottom of any column
-                // the user had arranged — the opposite of the pre-V63 behaviour, where
-                // a fresh column_entered_at put it on top. setColumnOrderToFront does
-                // both: MIN-1 in an arranged column, NULL in one nobody has arranged
-                // (where date ordering already puts it first). See its docblock for why
-                // sorting NULL by date instead would make the comparator intransitive.
+                // placed 3rd and 4th wherever it moves to. Nothing is written in its
+                // place: moving a card between columns is a stage change, not a
+                // statement about priority, and giving it one (front of the new
+                // column, say) would hand a card the user never placed a position
+                // ahead of the ones they did.
                 //
-                // STAGING is NOT excluded on either side. Moving in resolves to NULL
-                // (nothing writes column_order there) and moving out earns a fresh
-                // front position, so a CREATED → STAGING → CREATED round-trip no longer
-                // comes back holding its stale pre-staging slot. Same-column drops never
+                // The card is then NULL — not part of that column's arrangement. It
+                // sorts after any card that carries a position, then by
+                // column_entered_at DESC. In a column nobody has arranged that is the
+                // board's existing order and it appears at top; in an arranged column
+                // it follows the arrangement until the user places it.
+                //
+                // STAGING is NOT excluded on either side: excluding it left a
+                // CREATED → STAGING → CREATED round-trip holding its stale pre-staging
+                // position. STAGING never reads column_order (its order is
+                // queue_position, cleared above), so clearing on the way in is free
+                // and clearing on the way out is required. Same-column drops never
                 // reach this path (the drop handler routes them to reorderColumn).
                 // priority_starred is untouched — a star follows the card.
                 if (plan && plan.kanbanColumn !== targetColumn) {
                     const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-                    if (wsId) { await db.setColumnOrderToFront(plan.planId, wsId, targetColumn); }
+                    if (wsId) { await db.clearColumnOrder(plan.planId, wsId); }
                 }
                 if (plan) {
                     if (plan.isFeature) {

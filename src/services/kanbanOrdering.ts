@@ -24,12 +24,13 @@
  * the sorted result depend on input order. A manual position therefore always
  * outranks its absence, in BOTH the resolver and the frontend comparator.
  *
- * That rule alone would send a card arriving from another column to the BOTTOM
- * of any arranged column, so arrival does not clear the position — it rewrites
- * it to MIN-1 (KanbanDatabase.setColumnOrderToFront), putting the card at the
- * front where the board has always put it, with every comparison still
- * integer-vs-integer. NULL is left to mean only "this column was never
- * arranged", where date ordering already places a fresh arrival first.
+ * So NULL means "not part of this column's arrangement", and a cross-column
+ * move clears the card's position without writing a new one — moving a card
+ * between columns is a stage change, not a statement about priority. In a
+ * column nobody has arranged (every card NULL, which is every column until
+ * someone drags) the fallback is the board's existing order and an arrival is
+ * at the top. In a column the user HAS arranged, an arrival follows the
+ * arrangement until they place it.
  *
  * STAGING keeps queue_position exclusively — column_order is never read there.
  * Non-STAGING columns read column_order; queue_position is ignored there.
