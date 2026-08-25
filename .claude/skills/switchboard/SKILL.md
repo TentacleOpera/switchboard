@@ -92,15 +92,15 @@ BASE="http://127.0.0.1:$PORT"
 
 # SWITCHBOARD_TERMINAL is set for Switchboard-managed fleet seats. Unset elsewhere —
 # send it empty rather than guessing a name.
-curl -s -X POST "$BASE/orchestration/adopt" -H "Content-Type: application/json" \
+curl -s -X POST "$BASE/mission-control/adopt" -H "Content-Type: application/json" \
   -d "{\"terminalName\": \"${SWITCHBOARD_TERMINAL:-}\"}"
 ```
 
 The response carries `prompt` — the pre-flight instruction. **Follow it in this
-session**: read `.agents/skills/switchboard-orchestrator/SKILL.md`, run the pre-flight,
+session**: read `.agents/protocols/switchboard-mission-control/SKILL.md`, run the pre-flight,
 report what you find, propose a goal, and wait for the user to answer *here*.
 
-`POST /orchestration/adopt` **does not arm** and seats no terminal. On the user's
+`POST /mission-control/adopt` **does not arm** and seats no terminal. On the user's
 confirmation, write `.switchboard/orchestrator/session.md` and call
 `POST /orchestration/confirm` — that is the only call that arms.
 

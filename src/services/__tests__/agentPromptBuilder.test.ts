@@ -793,7 +793,23 @@ suite('agentPromptBuilder', () => {
                 reviewerOriginLead: 'Coding-lead'
             });
             assert.ok(prompt.includes('against http://127.0.0.1:58312'), 'fixStep must use injected port');
-            assert.ok(!prompt.includes('.switchboard/api-server-port.txt'), 'fixStep must not reference port file when port is provided');
+            // Scoped to the DELEGATION fix-step, which is what the plan's Layer 3 covers.
+            // A whole-prompt negative cannot hold: COMPLETION_STEP_*/CODING_COMPLETION_REPORT_
+            // DIRECTIVE and the reviewer escalation line are shared constants that must keep
+            // the file reference for the no-port (external / server-down) case. The liveness
+            // directive is what supersedes them at read time — asserted below.
+            const fixStepStart = prompt.indexOf('For valid CRITICAL/MAJOR findings');
+            assert.ok(fixStepStart >= 0, 'delegation fix-step must be present');
+            const fixStepEnd = prompt.indexOf('\n\n', fixStepStart);
+            const fixStep = prompt.slice(fixStepStart, fixStepEnd < 0 ? undefined : fixStepEnd);
+            assert.ok(
+                !fixStep.includes('.switchboard/api-server-port.txt'),
+                'fixStep must not reference port file when port is provided'
+            );
+            assert.ok(
+                prompt.includes('use http://127.0.0.1:58312 and do NOT read that file'),
+                'the liveness directive must supersede every remaining in-prompt port-file reference'
+            );
         });
 
         test('reviewer delegation falls back to port file when apiPort is 0 or undefined', () => {

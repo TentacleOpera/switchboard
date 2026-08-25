@@ -13,6 +13,8 @@ Move cards and query kanban state by running the provided scripts.
 
 ## Resolving Plan IDs (do this FIRST — offline, no script)
 
+> **If your prompt includes a `SWITCHBOARD STATUS: Live` line, use the port from that line for every HTTP call below — do NOT `cat .switchboard/api-server-port.txt`. You were dispatched by Switchboard, so the server is already up and its port is already in your prompt. The `$(cat …)` form below is for external agents connecting independently.**
+
 Every op below is keyed on a **`planId`** (a UUID), but you should not need UUIDs for most ops. Resolve a plan the cheap way when needed, or use the path/slug-addressed APIs below so the server resolves it:
 
 - **Per-column index (fastest, offline):** `.switchboard/kanban-state-<column>.md`. Every plan line ends with `<!-- planId:<uuid> … -->`; subtasks also carry `subtask-of:"<feature>"` and feature cards carry `feature`. One `grep` gives you the ID **and** its feature membership:

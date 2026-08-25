@@ -5764,7 +5764,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const skipPortDirective = portResolved
             ? ' Do NOT read .switchboard/api-server-port.txt (the port is above).'
             : '';
-        const opener = `You are driving this feature through your team seats. Everything you need is below — the port, your team roster, and the FEATURE FILE line are all in this prompt.${skipPortDirective} Do NOT check your own terminal name — you dispatch TO named seats (listed above), and standing orders handle callbacks.`;
+        // The close-out POST is the one instruction in this block that names an
+        // endpoint, so it is where a "read the port file" reference would undo the
+        // opener's prohibition. Point it at $BASE (set from the API line above) when
+        // the port resolved; keep the file reference only in the branch where the
+        // opener does NOT forbid reading it.
+        const closeOutTarget = portResolved
+            ? 'against $BASE'
+            : 'against the port in .switchboard/api-server-port.txt';
+        const opener = `You are driving this feature through your team seats. Everything you need is below — the port, your team roster, and the FEATURE FILE line are all in this prompt.${skipPortDirective} Do NOT check your own terminal name — you dispatch TO named seats (see YOUR TEAM below), and standing orders handle callbacks.`;
 
         const block = [
             opener,
@@ -5781,15 +5789,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead.',
             '',
-            'CLOSE OUT EVERY SUBTASK — ALWAYS, no judgement call. When you are finished with a subtask, commit, then POST /kanban/task/complete with {"from":"<your terminal name>","planId":"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"} against the port in .switchboard/api-server-port.txt. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you post when the subtask is done. Post per subtask, with that subtask\'s planId — never the feature\'s. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next subtask.',
+            `CLOSE OUT EVERY SUBTASK — ALWAYS, no judgement call. When you are finished with a subtask, commit, then POST /kanban/task/complete with {"from":"<your terminal name>","planId":"<that SUBTASK's planId>","workspaceRoot":"<your cwd>"} ${closeOutTarget}. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you post when the subtask is done. Post per subtask, with that subtask's planId — never the feature's. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next subtask.`,
             '',
             'FEATURE WATCH: Armed by the system. You will be nudged if you go idle with subtasks you have not posted completion for. No action needed.',
             '',
             featureFileLine,
             '',
             'RULES:',
-            '- Do NOT rewrite or edit plan files. The plan is the source of truth — read it, dispatch based on it, review against it, never modify its content.',
-            '- Do NOT query kanban.db directly. The plan IDs are in your prompt; use the API for anything else.',
+            '- Do NOT rewrite or edit plan files, and do NOT open individual subtask plans — the FEATURE FILE is what you dispatch and review from. The plan is the source of truth for the coder that receives it; never modify its content.',
+            '- Do NOT query kanban.db directly. The plan IDs are in the FEATURE FILE\'s Subtasks section; use the API for anything else.',
             '- Do NOT verify work before dispatching. The kanban column is the system\'s record, not a coder\'s claim.',
             '- Clear a terminal only when at rest (completion received AND next work goes elsewhere).',
             '- The host auto-clears the full team roster once when a new feature run starts, and clears the accepted coder when you POST /kanban/task/complete. Coder self-report does not clear context — do not manually clear between subtasks or fixes. Manual ptyClearTerminal is for the stand-down case only — a terminal you are putting away without dispatching new work to it.',

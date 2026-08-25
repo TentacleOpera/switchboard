@@ -926,11 +926,23 @@ async function item9() {
     });
 
     await test('teamWiring.ts: NEW_REVIEW_TEAM_HEAD_PROMPT constant exists and contains read-only triage and fix apportionment', () => {
+        // Asserted against the ASSEMBLED value, not the source text. The constant is a
+        // multi-line `+` concatenation, so every phrase that straddles a source-line
+        // boundary ('...to your ' + 'reviewer seats...', 'into four ' + 'categories:')
+        // is absent from the source text while present in the prompt the head reads. A
+        // reflow of the literal then reds this gate with nothing actually broken.
         assert.ok(teamWiringTs.includes('export const NEW_REVIEW_TEAM_HEAD_PROMPT ='));
-        assert.ok(teamWiringTs.includes('You lead this review team'));
-        assert.ok(teamWiringTs.includes('assign its subtask plans to your reviewer seats in batches of up to two'));
-        assert.ok(teamWiringTs.includes('four categories'));
-        assert.ok(teamWiringTs.includes('Apportion categories 2 and 3'));
+        assert.ok(typeof NEW_REVIEW_TEAM_HEAD_PROMPT === 'string' && NEW_REVIEW_TEAM_HEAD_PROMPT.length > 0,
+            'NEW_REVIEW_TEAM_HEAD_PROMPT must be exported as a non-empty string');
+        for (const phrase of [
+            'You lead this review team',
+            'assign its subtask plans to your reviewer seats in batches of up to two per reviewer',
+            'four categories',
+            'Apportion categories 2 and 3',
+        ]) {
+            assert.ok(NEW_REVIEW_TEAM_HEAD_PROMPT.includes(phrase),
+                `NEW_REVIEW_TEAM_HEAD_PROMPT must contain "${phrase}"`);
+        }
     });
 
     await test('migrateAgentGroups repairs structure and never rewrites a persisted head prompt', () => {

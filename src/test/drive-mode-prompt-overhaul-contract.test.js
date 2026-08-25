@@ -146,6 +146,37 @@ async function main() {
     const source = fs.readFileSync(path.join(__dirname, '..', 'services', 'KanbanProvider.ts'), 'utf8');
     const triggerArmCalls = (source.match(/await this\._autoArmDriveModeFeatureWatch\(card, workspaceRoot\);/g) || []).length;
     assert.strictEqual(triggerArmCalls, 2, 'both successful triggerAction dispatch branches must auto-arm exactly once');
+
+    // --- The FEATURE FILE line's promise must be true ---
+    // The prefix now tells the lead "its Subtasks section has plan IDs" and the SUBTASKS
+    // section that used to carry them was deleted from the prompt. If _regenerateFeatureFile
+    // stops emitting the ID, the lead has no plan ID for the `dispatch` field anywhere and
+    // the only recovery is the kanban.db query the prefix forbids — with every other gate
+    // green, because nothing else reads that line.
+    const featureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'feature-regen-'));
+    fs.mkdirSync(path.join(featureDir, '.switchboard', 'features'), { recursive: true });
+    const featureRel = path.join('.switchboard', 'features', 'my-feature.md');
+    fs.writeFileSync(path.join(featureDir, featureRel), '# My Feature\n\n## Goal\n\nDo the thing.\n');
+    const regenDb = {
+        getPlanByPlanId: async () => ({ planId: 'feat-uuid', planFile: featureRel, isFeature: true }),
+        getSubtasksByFeatureId: async () => [
+            { planId: 'sub-uuid-1', planFile: '.switchboard/plans/sub-one.md', topic: 'Sub One', kanbanColumn: 'CREATED', complexity: '3' },
+            { planId: null, planFile: '.switchboard/plans/sub-two.md', topic: 'Sub Two', kanbanColumn: 'CREATED', complexity: '' },
+        ],
+        getWorktrees: async () => [],
+    };
+    await Object.create(KanbanProvider.prototype)._regenerateFeatureFile(featureDir, 'feat-uuid', regenDb);
+    const regenerated = fs.readFileSync(path.join(featureDir, featureRel), 'utf8');
+    assert.ok(
+        regenerated.includes('- [ ] [Sub One](../plans/sub-one.md) — **CREATED** — ID: sub-uuid-1'),
+        'the auto-generated Subtasks line must carry the subtask plan ID'
+    );
+    assert.ok(
+        regenerated.includes('- [ ] [Sub Two](../plans/sub-two.md) — **CREATED**\n'),
+        'a subtask with no planId must emit the line unchanged, not a dangling "— ID:"'
+    );
+    fs.rmSync(featureDir, { recursive: true, force: true });
+
     console.log('Drive-mode prompt overhaul contract PASSED');
 }
 

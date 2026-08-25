@@ -1070,12 +1070,14 @@ export class PlanIngestionEngine {
 
     /**
      * Feature-level stall nudge — one sweep tick's worth. For every armed watch
-     * (config key `kanban.featureWatches`), wake the head ONLY when all four hold:
+     * (config key `kanban.featureWatches`), wake the head ONLY when all five hold:
      *   1. the feature still has at least one un-accepted subtask;
      *   2. the head terminal is live and `active`;
      *   3. the head's own `lastDataAt` is older than `turnEndSilenceMs` (not mid-turn);
      *   4. no dispatch record for any of the feature's seats is outstanding, and
-     *      no turn-end notice for one of them fired on this tick.
+     *      no turn-end notice for one of them fired on this tick;
+     *   5. no member of the head's team has produced output within `nudgeSilenceMs`
+     *      — a head waiting on a live coder is idle on purpose, not stalled.
      * The wake carries evidence (remaining subtasks, their seats, silence, mtime),
      * not a poke. Delivery reuses the turn-end notifier with `outcome: 'stalled'`,
      * `recipientSeat` = the head (skip parent resolution) and `body` = the composed
@@ -1191,28 +1193,6 @@ export class PlanIngestionEngine {
                 continue;
             }
 
-            // Team-liveness: if any team member is actively producing output, the
-            // head is waiting for a coder, not stalled. Suppress the nudge. The
-            // feature head is a team head, so the roster is resolved the same way
-            // the queue nudge's seat-pacing branch resolves it. When the resolver
-            // is absent (headless/test harness), skip this gate — no evidence is
-            // not evidence of a live coder, so fall through to the normal gates.
-            if (this._queueTeamMembersResolver) {
-                try {
-                    const resolved = await this._queueTeamMembersResolver(folder, watch.headTerminal);
-                    const teamSet = new Set(resolved || []);
-                    teamSet.add(watch.headTerminal); // include the head itself
-                    const teamActive = Array.from(teamSet).some(name => {
-                        const entry = livenessByName.get(name);
-                        return entry && entry.lastDataAt > 0 && nowMs - entry.lastDataAt < nudgeSilenceMs;
-                    });
-                    if (teamActive) {
-                        kept.push(watch);
-                        continue;
-                    }
-                } catch { /* resolver failure is no evidence — fall through to normal gates */ }
-            }
-
             // (4b) No turn-end notice for one of the feature's seats fired this tick.
             // A seat that just produced a completed/blocked notice already woke the
             // head this tick — a nudge on top of it is a double-wake about the same stall.
@@ -1229,6 +1209,33 @@ export class PlanIngestionEngine {
             if (headLive.lastDataAt <= 0 || nowMs - headLive.lastDataAt < turnEndSilenceMs) {
                 kept.push(watch);
                 continue;
+            }
+
+            // Team-liveness: if any team member is actively producing output, the
+            // head is waiting for a coder, not stalled. Suppress the nudge. The
+            // feature head is a team head, so the roster is resolved the same way
+            // the queue nudge's seat-pacing branch resolves it. When the resolver
+            // is absent (headless/test harness), skip this gate — no evidence is
+            // not evidence of a live coder, so fall through to the normal gates.
+            // Placed AFTER the head-silence gate deliberately: this is the only gate in
+            // the sweep that costs a DB read (the resolver hits kanban.db), and the head
+            // is mid-turn on nearly every 10s tick — evaluating it earlier bought one
+            // sql.js read per watch per tick for a decision the free gate above already
+            // made. Both gates only `continue`, so the order is observationally identical.
+            if (this._queueTeamMembersResolver) {
+                try {
+                    const resolved = await this._queueTeamMembersResolver(folder, watch.headTerminal);
+                    const teamSet = new Set(resolved || []);
+                    teamSet.add(watch.headTerminal); // include the head itself
+                    const teamActive = Array.from(teamSet).some(name => {
+                        const entry = livenessByName.get(name);
+                        return entry && entry.lastDataAt > 0 && nowMs - entry.lastDataAt < nudgeSilenceMs;
+                    });
+                    if (teamActive) {
+                        kept.push(watch);
+                        continue;
+                    }
+                } catch { /* resolver failure is no evidence — fall through to normal gates */ }
             }
 
             // Pacing: at most one nudge per watch per `nudgeSilenceMs` window.

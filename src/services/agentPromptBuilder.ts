@@ -756,6 +756,18 @@ function freshDispatchId(): string {
  * Phone-a-Friend terminal is silently dropped by the host (non-fatal).
  */
 /**
+ * Liveness + port injection for every dispatched agent. An agent that received its
+ * prompt FROM Switchboard has already proved the server is up, so the port-discovery
+ * and `curl /health` bootstrap the skill files describe is pure waste for it. The
+ * clause covers this prompt as well as the skill files: several shared directives
+ * (the completion-report POST, the reviewer escalation) hardcode a
+ * `.switchboard/api-server-port.txt` reference for the external/no-port case, and the
+ * injected port supersedes it rather than being read alongside it.
+ */
+export const SWITCHBOARD_LIVENESS_DIRECTIVE = (port: number) =>
+  `SWITCHBOARD STATUS: Live (port ${port}). You were dispatched by Switchboard — the LocalApiServer is running at http://127.0.0.1:${port}. Skip any port-discovery or health-check steps described in skill files; those are for external agents connecting independently. Use http://127.0.0.1:${port} for any API call — wherever an instruction in this prompt says "against the port in .switchboard/api-server-port.txt", use http://127.0.0.1:${port} and do NOT read that file.`;
+
+/**
  * `originTerminal` is OMITTED when the builder does not know it, never filled with a
  * placeholder. The host resolves a per-instance override by exact terminal name, so a
  * literal `"unknown"` does not degrade to role resolution — it becomes a real map key
@@ -763,9 +775,6 @@ function freshDispatchId(): string {
  * absent field is the documented backward-compatible payload (older prompts never had
  * it) and falls through to role → singleton resolution.
  */
-export const SWITCHBOARD_LIVENESS_DIRECTIVE = (port: number) =>
-  `SWITCHBOARD STATUS: Live (port ${port}). You were dispatched by Switchboard — the LocalApiServer is running at http://127.0.0.1:${port}. Skip any port-discovery or health-check steps described in skill files; those are for external agents connecting independently. Use http://127.0.0.1:${port} for any API call.`;
-
 export const PHONE_A_FRIEND_DIRECTIVE = (port: number, originRole: string, originTerminal: string | undefined, dispatchId: string) => {
   const fields = [
     `"planFile":"<PLAN_FILE_PATH>"`,
@@ -1331,6 +1340,18 @@ export function buildFeatureSubagentClause(
     return `${worktreeClause}${subagentClause}`;
 }
 
+/**
+ * Commit-timing disambiguation for a Drive-mode head. The `whenDone` git clause the
+ * seat-safeguard symmetry guard forces onto a head says "when you have finished the
+ * task", which a driving lead reads as "this subtask" and commits N times. This
+ * sentence is the negation, and it is ONE constant because three surfaces emit the
+ * drive directive — the feature-orchestration directive, the coder role's
+ * `featureSubagentBlock`, and `buildCustomAgentPrompt`'s `subagentBlock`. Two of the
+ * three carried a hand-copied drive string with no commit clause, which is exactly the
+ * drift this constant removes.
+ */
+export const DRIVE_COMMIT_ONCE_SENTENCE = "Do not commit after each subtask — commit once, as the team's head, when all subtasks are complete and verified.";
+
 export function resolveFeatureOrchestrationDirective(
     featureTopic: string,
     subtaskCount: number,
@@ -1370,7 +1391,7 @@ export function resolveFeatureOrchestrationDirective(
         return `${opener('driving')}\n` +
             `Dispatch each subtask to a seat on your team — do not implement subtasks yourself. ` +
             `Review each coder's diff before accepting its work; resend a fix prompt to the same seat if it falls short. ` +
-            `Do not commit after each subtask — commit once, as the team's head, when all subtasks are complete and verified. ` +
+            `${DRIVE_COMMIT_ONCE_SENTENCE} ` +
             `Read the feature file's Team Dispatch Instructions section for seat assignments, acceptance criteria, and scope constraints per subtask — do not read individual plan files. ` +
             `${unitClause}\n` +
             `Before starting, briefly tell the user how you plan to dispatch the subtasks across your seats.`;
@@ -2210,7 +2231,7 @@ For each plan:
 
             const featureSubagentPolicy = options?.featureUseSubagentsEnabled ? 'useSubagents' : (options?.featureNoSubagentsEnabled ? 'noSubagents' : (options?.featureCustomSubagentName ? 'customSubagent' : 'default'));
             const featureSubagentBlock = options?.driveMode
-                ? `Dispatch each subtask to a seat on your team — do not implement subtasks yourself. Review each coder's diff before accepting its work.`
+                ? `Dispatch each subtask to a seat on your team — do not implement subtasks yourself. Review each coder's diff before accepting its work. ${DRIVE_COMMIT_ONCE_SENTENCE}`
                 : buildFeatureSubagentClause(
                     featureSubagentPolicy,
                     options?.featureCustomSubagentName,
@@ -2564,7 +2585,7 @@ export function buildCustomAgentPrompt(
         // Feature-scoped worktree/subagent levers: route through the shared helper
         // so custom agents emit the same coherent clauses as built-in roles.
         if (addons?.driveMode) {
-            subagentBlock = `Dispatch each subtask to a seat on your team — do not implement subtasks yourself. Review each coder's diff before accepting its work.`;
+            subagentBlock = `Dispatch each subtask to a seat on your team — do not implement subtasks yourself. Review each coder's diff before accepting its work. ${DRIVE_COMMIT_ONCE_SENTENCE}`;
         } else {
             const featureSubagentPolicy = addons?.featureSubagentPolicy || 'default';
             subagentBlock = buildFeatureSubagentClause(
