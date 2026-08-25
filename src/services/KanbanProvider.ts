@@ -12563,7 +12563,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         return { success: true, dispatched: payload.dispatched, from: headTerminal, pacing };
                     }
                     if (status === 409) {
-                        this.postMessage({ type: 'showStatusMessage', message: payload.error || 'Team already in flight — hand the current card to review before asking for the next.', isError: true });
+                        this.postMessage({ type: 'showStatusMessage', message: payload.error || 'Team already in flight — a seat still holds a card with no completion post. POST /kanban/task/complete for it before asking for the next.', isError: true });
                         return { success: false, error: payload.error || 'Team already in flight', inFlight: payload.inFlight };
                     }
                     // 400 / 404 / 500 / 502 / 503 — real failure

@@ -205,3 +205,15 @@ no reviewer roster check, no `/kanban/dispatch`, one ending, subtask planId (not
 planId), and all three copies — `teamWiring.ts`, `terminals.js`, `kanban.html` — verified
 byte-identical by the now-wired gate. Remaining risk: none beyond the plan's stated side effect
 that a reviewer seat placed on a coding team is silently ignored rather than rejected.
+
+### Second reviewer pass
+
+No new defects in the prompt work: `coding-head-prompt-contract` is green and CI-wired, and
+all three copies (`teamWiring.ts`, `terminals.js`, `kanban.html`) are byte-identical with no
+`targetColumn`, no reviewer roster check, no `/kanban/dispatch`, one ending, and the subtask
+planId. One MAJOR fixed that belongs to this subtask's half of the change: both agent-facing
+copies of the `POST /kanban/queue/next` reference table still instructed the head to "call this
+after the reviewer reports the feature passed" — the handoff this plan deleted from the prompt
+survived in the docs the lead actually reads on a 409, so a lead following them would wait on a
+reviewer that receives nothing. Fixed in `.agents/skills/switchboard-orchestration/SKILL.md` and
+`.agents/protocols/switchboard-mission-control-http/SKILL.md`; `mirror:check` green.

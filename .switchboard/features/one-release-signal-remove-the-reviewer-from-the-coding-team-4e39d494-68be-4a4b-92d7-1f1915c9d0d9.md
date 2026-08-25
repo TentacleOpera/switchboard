@@ -81,3 +81,24 @@ of everything touching the changed modules — every remaining failure reproduce
 without these edits. Remaining risk: the predicate now holds a team on ANY active card its
 seats hold with `completed_at` NULL regardless of column, which is the intended contract but
 has no valve, so a lead that never posts blocks its own queue until an operator intervenes.
+
+### Second reviewer pass
+
+No CRITICAL. Four MAJOR fixed: three surfaces still published the release signal this feature
+deletes — `dispatchNextFromQueue`'s own docblock (`LocalApiServer.ts:1755`), the Run button's
+409 message (`KanbanProvider.ts:12566`), and both agent-facing copies of the `queue/next`
+reference table (`.agents/skills/switchboard-orchestration/SKILL.md:134`,
+`.agents/protocols/switchboard-mission-control-http/SKILL.md:134`), all still telling a lead
+or operator to hand the card to review and describing the predicate as column-based; and
+`review-team-triage` was named in a plan's `### Automated` list with no `package.json` script
+and no CI step, its two failures inert (a stale `buildKanbanBatchPrompt` call shape and a
+`'Do not commit'` vs `'Do NOT commit.'` assertion) — fixed and wired, 10/10 green. The
+hypothesis that posting the SUBTASK planId deadlocks a team holding a FEATURE card was tested
+against live board rows and does NOT hold: the feature row carries no holder, the subtask rows
+carry `Coding-coder-1`/`Coding-coder-2`. Validation: compile, compile-tests, lint (0 errors),
+9 static gates, and 17 suites touching the changed modules; `stage-marker-commit` (2),
+`standing-orders-marker` (1) and `team-scoped-routing` (1) remain red at their recorded
+pre-change baselines, each traced to an unrelated earlier commit. Remaining risk unchanged and
+intended: a card held by any team seat in any column with `completed_at` NULL holds that team
+with no valve — the concrete instances today are cards resting in `CODE REVIEWED` under a
+reviewer seat and the `parked` branch, which releases the latch but not the holder.

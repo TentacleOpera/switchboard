@@ -992,6 +992,7 @@
     "test:contract:standing-orders-fleet-root": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-fleet-root-contract.test.js",
     "test:contract:seat-safeguards": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/seat-safeguards-fleet-prompt-path.test.js",
     "test:contract:team-scoped-routing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-scoped-role-routing.test.js",
+    "test:contract:review-team-triage": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/review-team-triage.test.js",
     "test:contract:terminal-groups-key": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-groups-key-unification-contract.test.js",
     "test:contract:terminal-groups-headrole": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-groups-headrole-contract.test.js",
     "test:contract:link-presets-mirror": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/link-presets-mirror-contract.test.js",

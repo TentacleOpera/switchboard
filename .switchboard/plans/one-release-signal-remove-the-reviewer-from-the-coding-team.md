@@ -239,3 +239,24 @@ and the first reproduced the fail-open against the pre-fix build. Verified: `que
 Remaining risk: `releaseDispatchHolder` correctly nulls all four fields, but the `parked` branch
 still leaves a holder on a card resting in a coding column, so the follow-on pop 409s — that is
 pre-existing under both the old and new predicates and out of this plan's scope.
+
+### Second reviewer pass
+
+Three MAJOR residue defects fixed — the predicate itself is correct, but three surfaces
+still published the deleted second release signal. `dispatchNextFromQueue`'s own docblock
+(`LocalApiServer.ts:1755`) still stated the release as "`completed_at` **or** handing the
+feature to review (the card leaves the coding column)" and warned that refusing a
+CODE REVIEWED card held by a reviewer would "deadlock the pipeline after card one" — which
+is precisely what this predicate now does, documented as the outcome to avoid; rewritten to
+state the one fact, the absent valve, and the intended any-column consequence. The Run
+button's 409 message (`KanbanProvider.ts:12566`) told the operator to "hand the current card
+to review before asking for the next", and both agent-facing copies of the `queue/next` table
+(`.agents/skills/switchboard-orchestration/SKILL.md:134`,
+`.agents/protocols/switchboard-mission-control-http/SKILL.md:134`) described the 409 as "still
+sitting in a coding column — hand the feature to review before asking again" and told the head
+to call `queue/next` "after the reviewer reports the feature passed" — the plan required
+dropping that sentence and only the server-side copy was changed. Two comment NITs also fixed
+(the arming skip and `stillCoding` still described in column terms). Verified against live
+board data that the team holder sits on the SUBTASK rows, not the feature row — this feature's
+subtasks read `Coding-coder-1`/`Coding-coder-2` while the feature row carries no holder — so
+the sibling plan's subtask-planId change is correct and does not deadlock.

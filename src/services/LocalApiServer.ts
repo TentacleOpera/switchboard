@@ -1753,22 +1753,37 @@ export class LocalApiServer {
      *   field (subtask 3 writes it; absent reads as `'head'`) → `'head'`.
      *
      * In-flight refusal (BOTH pacing modes — the one-in-one-out contract): a
-     * team is in flight when any active card belonging to that team is sitting
-     * in a coding column (`LEAD CODED` / `CODER CODED` / `INTERN CODED`) with
-     * no completion fact. Team membership is resolved from the card's
+     * team is in flight when any active card HELD by one of its seats has no
+     * completion fact — `dispatched_terminal` names a team member and
+     * `completed_at` is NULL. Team membership is resolved from the card's
      * `dispatched_terminal` through the same path `resolveTeamRoleTerminal`
-     * uses (`resolveTeamMembers`). The flag releases when the lead asserts
-     * completion — either by posting `completed_at` via POST
-     * /kanban/task/complete, or by handing the feature to review (the card
-     * leaves the coding column). Completion is an asserted event, not a trace
-     * derived from board position, so no plan-file `mtime` side effect and no
-     * staleness sweep can corrupt it. Keying the predicate on `dispatched_at`
-     * instead would refuse the head's own legitimate call (the just-reviewed
-     * card sits in `CODE REVIEWED` with `dispatched_at` set and
-     * `dispatched_terminal` naming the reviewer) and deadlock the pipeline
-     * after card one. The seat-paced path no longer skips this scan — the
-     * skip existed only because board position never released, and the
-     * completion fact makes that reason obsolete.
+     * uses (`resolveTeamMembers`).
+     *
+     * EXACTLY ONE fact releases a team: `completed_at`, written by the lead's
+     * POST /kanban/task/complete. `kanban_column` is NOT in the predicate.
+     * Board position records where a card is, never whether a team may take
+     * more work, so moving a card — by the lead, an operator drag, or any
+     * other actor — releases nothing. The second release signal that used to
+     * live here (the card leaving a coding column, which the lead triggered by
+     * dispatching the feature to a reviewer) is deleted: it let the lead pull
+     * its next subtask while a reviewer or a fix round was still editing the
+     * same worktree, landing in the same commit.
+     *
+     * There is deliberately NO release valve for an un-posted card. Any valve
+     * is a second signal under a new name, and restores that concurrency the
+     * moment a lead reaches for it instead of posting. The 409 names the
+     * blocking card's planId, column and seat so the lead can close it out.
+     * The consequence is intended and load-bearing: a card held by a team seat
+     * in ANY column — including one resting in `CODE REVIEWED` — holds the
+     * team until completion is posted for it. A card returning to the queue
+     * has its holder released (`releaseDispatchHolder`), which is what keeps
+     * the escalation ladder from deadlocking on the card it just re-staged.
+     *
+     * Completion is an asserted event, not a trace derived from board
+     * position, so no plan-file `mtime` side effect and no staleness sweep can
+     * corrupt it. The seat-paced path does not skip this scan — the skip
+     * existed only because board position never released, and the completion
+     * fact makes that reason obsolete.
      *
      * `targetTerminalOverride: from` (head pacing) short-circuits the
      * team-scoped resolver, so complexity routing chooses the *column* and the
@@ -1814,7 +1829,7 @@ export class LocalApiServer {
     }
 
     /**
-     * The pop's critical section — select → (in-flight, head pacing only) →
+     * The pop's critical section — select → in-flight (both pacing modes) →
      * dispatch. Extracted from `dispatchNextFromQueue` so the seat-paced
      * `queue/done` handler can enqueue release → clear → pop as one chain
      * operation WITHOUT calling the public method (which re-enqueues on
@@ -3010,8 +3025,12 @@ export class LocalApiServer {
                         // original seat must check the card's CURRENT holder,
                         // not the pre-release `held` read.
                         // Re-read the card; if dispatched_terminal is empty, the
-                        // watch (or an operator) already re-staged it — treat as
-                        // a no-op (same contract as a duplicate report). This
+                        // watch already re-staged it (the ladder releases the holder)
+                        // — treat as a no-op (same contract as a duplicate report).
+                        // A card an operator merely DRAGGED back still names its
+                        // holder, so it re-stages here: that releases the stale
+                        // holder and re-queues it, which is the correct end state
+                        // for a queued card, not a double re-stage. This
                         // closes the read-modify-write gap on routedTo
                         // (re-staging does not update routedTo; dispatch does).
                         let currentDispatchedTerminal = typeof held.dispatchedTerminal === 'string' ? held.dispatchedTerminal : '';
@@ -3151,12 +3170,12 @@ export class LocalApiServer {
                     // (onDispatch) inside _runQueuePop; an empty queue has
                     // nothing staged to watch (do NOT arm — test #10).
                     // NOT armed on the team-in-flight refusal (`inFlight` on the
-                    // pop payload). That 409 means the team still holds a card in
-                    // a coding column — it is not an idle team behind a staged
-                    // queue, which is the only state this watch exists to nudge.
-                    // It is also the NORMAL pop result for a head-paced team
+                    // pop payload). That 409 means a team seat still HOLDS a card
+                    // with no completion post — it is not an idle team behind a
+                    // staged queue, which is the only state this watch exists to
+                    // nudge. It is also the NORMAL pop result for a head-paced team
                     // member reporting done (its own just-released card is still
-                    // resting in its coding column), and arming REBINDS the
+                    // held, wherever it rests), and arming REBINDS the
                     // workspace watch's `headTerminal` to the finishing seat —
                     // so a coder posting done would silently redirect every later
                     // queue-stall nudge from the lead to itself.

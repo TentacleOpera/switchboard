@@ -43,17 +43,20 @@ async function runTests() {
 
     // 1. The review turn cannot write
     test('Invariant 1: The review turn cannot write and git policy prohibits code commits', () => {
-        const prompt = buildKanbanBatchPrompt({
-            role: 'reviewer',
-            plans: [{ planId: 'subtask-1', title: 'Task 1', filePath: '.switchboard/plans/p1.md', absolutePath: '/path/to/p1.md' }],
-            options: {
+        const prompt = buildKanbanBatchPrompt(
+            'reviewer',
+            [{ planId: 'subtask-1', title: 'Task 1', filePath: '.switchboard/plans/p1.md', absolutePath: '/path/to/p1.md' }],
+            {
                 readOnlyReview: true,
                 gitCommitStrategy: 'whenDone'
             }
-        });
+        );
         assert.ok(prompt.includes('READ-ONLY REVIEW TURN'), 'Prompt must indicate read-only review turn');
         assert.ok(prompt.includes('Do NOT fix code during the review turn'), 'Prompt must instruct not to fix code');
-        assert.ok(prompt.includes('Do not commit'), 'Git policy must prohibit code commits during read-only review turn');
+        // The shipped `dontCommit` clause, verbatim (agentPromptBuilder GIT_COMMIT_CLAUSES).
+        // A read-only review turn forces commit: 'dontCommit' regardless of the
+        // caller's gitCommitStrategy, which is what this asserts.
+        assert.ok(prompt.includes('Do NOT commit.'), 'Git policy must prohibit code commits during read-only review turn');
     });
 
     // 2. Context survives the report (context preserved for review until lead acceptance)
@@ -86,16 +89,16 @@ async function runTests() {
 
     // 4. Batch of two, not two dispatches
     test('Invariant 4: Batch of two renders multi-plan reviewer prompt', () => {
-        const prompt = buildKanbanBatchPrompt({
-            role: 'reviewer',
-            plans: [
+        const prompt = buildKanbanBatchPrompt(
+            'reviewer',
+            [
                 { planId: 'p1', title: 'Task 1', filePath: '.switchboard/plans/p1.md', absolutePath: '/path/to/p1.md' },
                 { planId: 'p2', title: 'Task 2', filePath: '.switchboard/plans/p2.md', absolutePath: '/path/to/p2.md' }
             ],
-            options: {
+            {
                 readOnlyReview: true
             }
-        });
+        );
         assert.ok(prompt.includes('each listed plan') || prompt.includes('For each plan'), 'Renders batch multi-plan phrasing');
         assert.ok(prompt.includes('p1') && prompt.includes('p2'), 'Both plans present in batch');
     });

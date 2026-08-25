@@ -227,8 +227,16 @@ jobs:
       - name: Team-scoped reviewer routing (origin precedence, teamRouting, override honoured)
         run: npm run test:contract:team-scoped-routing
 
-      # The roster the previous gate resolves against only exists if the backend and
-      # the terminals panel address the SAME config row. They did not: every panel-side
+      # The standalone Review team is where review LIVES now that the coding team has
+      # no reviewer seat. Pins the read-only review turn, the batch-of-two reviewer
+      # prompt, fix apportionment, and — the reason this gate is wired rather than run
+      # by hand — that migrateAgentGroups repairs structure and NEVER rewrites a
+      # persisted head prompt, the clean break the prompt-snapshot deletion took.
+      - name: Review team triage (read-only turn, apportionment, no prompt rewrite)
+        run: npm run test:contract:review-team-triage
+
+      # The roster the team-scoped routing gate resolves against only exists if the
+      # backend and the terminals panel address the SAME config row. They did not: every panel-side
       # read/write goes through saveSetting/getSetting, which prefix the key, while
       # wireSpawnedTeam wrote the bare `terminals.groups` — two rows, and routing fell
       # back to workspace-wide on every dispatch. Pins the unified key, the shipped

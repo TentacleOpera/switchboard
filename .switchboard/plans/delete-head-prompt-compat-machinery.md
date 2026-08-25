@@ -202,3 +202,20 @@ prose in `teamWiring.ts` and `LocalApiServer.ts` still citing `OLD_HEADPROMPT_FR
 exists to remove. The deletion itself verified correct: `isUntouchedOldSeed`, `isUntouchedSeed`,
 `OLD_SEEDED_AGENT_GROUP`, the `teamGroup` flag migration, `PRE_REWRITE_CALLBACK_INSTRUCTION` and
 `migrateTeamPairOrders` all survive, and the client mirror has no dangling `rewritten` reference.
+
+### Second reviewer pass
+
+One MAJOR gate-wiring hole fixed. `review-team-triage` is named in this plan's `### Automated`
+verification and was edited by the first reviewer pass to drop its `PRE_TRIAGE_REVIEW_HEAD_PROMPT`
+import — yet it had no `package.json` script and no CI step, so nothing ever ran it and its
+Invariant 10 ("`migrateAgentGroups` repairs structure but never rewrites a persisted head
+prompt" — the clean break this deletion took) was gating nothing. Its two remaining failures
+were inert, not real: both `buildKanbanBatchPrompt` calls passed one object where the function
+takes three positional args (so Invariant 4 asserted nothing and crashed), and Invariant 1
+asserted `'Do not commit'` against the shipped `'Do NOT commit.'` clause. Fixed all three, and
+wired `test:contract:review-team-triage` into `package.json` and
+`.github/workflows/integration-tests.yml` next to the team-scoped-routing gate — 10 passed, 0
+failed. Deletion itself re-verified: zero orphaned references to any of the seventeen removed
+identifiers, and `isUntouchedOldSeed` / `isUntouchedSeed` / `OLD_SEEDED_AGENT_GROUP` /
+`migrateTeamGroupFlags` / `PRE_REWRITE_CALLBACK_INSTRUCTION` / `migrateTeamPairOrders` all
+survive on both the host and client sides.
