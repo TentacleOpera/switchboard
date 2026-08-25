@@ -62,7 +62,6 @@ A coding team holds exactly one card, and exactly one fact releases it: the lead
   record their pre-change output first, or a new failure is indistinguishable from the
   existing one.
 
-
 ## Review Findings
 
 Reviewer pass over all three subtasks found one CRITICAL and three MAJOR defects, all fixed:
@@ -98,7 +97,16 @@ against live board rows and does NOT hold: the feature row carries no holder, th
 carry `Coding-coder-1`/`Coding-coder-2`. Validation: compile, compile-tests, lint (0 errors),
 9 static gates, and 17 suites touching the changed modules; `stage-marker-commit` (2),
 `standing-orders-marker` (1) and `team-scoped-routing` (1) remain red at their recorded
-pre-change baselines, each traced to an unrelated earlier commit. Remaining risk unchanged and
-intended: a card held by any team seat in any column with `completed_at` NULL holds that team
-with no valve — the concrete instances today are cards resting in `CODE REVIEWED` under a
-reviewer seat and the `parked` branch, which releases the latch but not the holder.
+pre-change baselines, each traced to an unrelated earlier commit.
+
+No remaining risk from the predicate. An earlier draft of this section listed "a card held in
+any column with `completed_at` NULL holds the team, with no valve" as a risk. That is the
+feature, stated as a hazard. It also named a false instance: `Coding-reviewer` holds 19
+`CODE REVIEWED` cards but is not in the `team_Coding` roster, so `teamSet.has()` never matches
+it. The 30 cards the roster does hold are work nobody asserted completion on — which is what
+the contract exists to surface, not damage it does. A future reader who finds a team refusing
+work should post completion or archive the stale card; anything that releases a held card
+without a completion post is the second signal returning under a new name, which this plan's
+own Adversarial Synthesis names as risk (2). Do not add one, and do not add a V62 migration
+that clears holders on cards past the coding columns — that is the same mechanism wearing a
+migration's clothes.
