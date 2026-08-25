@@ -198,3 +198,7 @@ Existing feature worktrees are untouched. The toggle governs newly staged work. 
 
 - **[user]** Which key does the STAGING toggle write? — proceeding on the assumption that it reuses `feature_worktree_mode` (one source of truth, both surfaces stay in sync via broadcast).
 - Is `useWorktreesPerPlan` still wanted? It is the fourth model, agent-owned, configured in a per-role prompt add-on rather than on the board — so it is invisible next to the other two and cannot be reconciled with them. Not touched by this plan, but it is the remaining overlap.
+
+## Implementation Summary
+
+Consolidated worktree models by adding a STAGING column worktree toggle writing `feature_worktree_mode` and narrowing `#btn-create-worktree` strictly to project and workspace scopes. Feature worktree provisioning was moved from feature creation time to staging time inside `stageForQueue`, ensuring integration branches reflect current default branch state when queued. Added `POST /worktree/merge` route in `LocalApiServer` backed by a shared `getWorktreeMergePrompt` handler in `KanbanProvider`. Deleted dead `subtask_plan_id` / tier resolution branches in merge prompt and worktree cleanup paths so legacy rows fall back cleanly to main checkout merges. Verified contracts against `worktree-strategy-control-contract.test.js`.

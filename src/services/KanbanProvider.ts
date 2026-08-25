@@ -8235,11 +8235,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const plan = await db.getPlanBySessionId(sessionId);
             let outcome: ColumnUpdateOutcome;
             let subtaskSessionIds: string[] = [];
+            let subtaskKeys: string[] = [];  // sessionId or planId — for runsheet fan-out
             if (plan && plan.isFeature) {
                 // Atomic: move feature + all subtasks in one transaction, keyed by plan_id (Class 2).
                 // session_id-keyed cascade silently no-ops for file-based plans (session_id='').
                 const subtasks = await db.getSubtasksByFeatureId(plan.planId);
                 subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
+                subtaskKeys = subtasks.map(st => st.sessionId || st.planId).filter(Boolean);
                 const cascaded = await db.cascadeFeatureByPlanId(plan.planId, targetColumn);
                 outcome = cascaded
                     ? { ok: true }
@@ -8258,6 +8260,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     await Promise.allSettled(
                         subtaskSessionIds.map(sid =>
                             this.queueIntegrationSyncForSession(workspaceRoot, sid, targetColumn)
+                        )
+                    );
+                }
+                // Fan out runsheet events to subtasks so plan_events stay in sync with
+                // the cascaded DB column. Without this, subtask plan_events only show
+                // their original 'unknown' start event, and any code path that calls
+                // deriveKanbanColumn(events) on a subtask sees a stale column — the
+                // root cause of the bounce-back.
+                if (subtaskKeys.length > 0) {
+                    await Promise.allSettled(
+                        subtaskKeys.map(key =>
+                            this._taskViewerProvider?.recordRunSheetForColumnMove(key, targetColumn, 'forward', workspaceRoot)
                         )
                     );
                 }
@@ -8391,6 +8405,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (!db || !(await db.ensureReady())) return { success: false, staged: 0, refused, error: 'Kanban database not ready' };
         const ok = await db.appendQueuePositions(workspaceId, planIds);
         if (!ok) return { success: false, staged: 0, refused, error: 'Failed to write queue positions' };
+        // per-feature mode: provision integration worktree at staging time for any staged features.
+        const featureWorktreeMode = normalizeFeatureWorktreeMode(await db.getConfig('feature_worktree_mode'));
+        if (featureWorktreeMode === 'per-feature') {
+            for (const pid of planIds) {
+                const plan = await db.getPlanByPlanId(pid);
+                if (plan && plan.isFeature) {
+                    await this._ensureFeatureIntegrationWorktree(workspaceRoot, db, plan.planId, plan.topic || plan.planFile);
+                }
+            }
+        }
         // Post a board refresh so the staged cards render in STAGING in order.
         await this._refreshBoard(workspaceRoot);
         // Arm the queue-level stall watch (subtask 3). Staging is the EARLIEST
@@ -9826,6 +9850,102 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 this._markConfigDirty();
                 await this._seams().commands.executeCommand('switchboard.setPairProgrammingModeFromKanban', mode);
+                return { success: true };
+            }
+
+            case 'mcInit': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
+                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
+                const missionsList = db ? await db.getMissions(wsId) : [];
+                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                const config = await GlobalIntegrationConfigService.getSchedulerConfig();
+                this.postMessage({ type: 'updateSchedulerConfig', config });
+                return { success: true, missions: missionsList };
+            }
+            case 'mcNewMission': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
+                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
+                if (!db) return { success: false, error: 'Database unavailable' };
+                const m = await db.createMission({ workspaceId: wsId });
+                const missionsList = await db.getMissions(wsId);
+                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                return { success: true, mission: m };
+            }
+            case 'mcUpdateMission': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
+                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
+                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                const updates: any = {};
+                if (msg.field) updates[msg.field] = msg.value;
+                await db.updateMission(msg.missionId, updates);
+                const missionsList = await db.getMissions(wsId);
+                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                return { success: true };
+            }
+            case 'mcDeleteMission': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
+                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
+                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                await db.deleteMission(msg.missionId);
+                const missionsList = await db.getMissions(wsId);
+                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                return { success: true };
+            }
+            case 'mcReadyMission': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
+                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
+                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                await db.updateMission(msg.missionId, { ready: true });
+                const missionsList = await db.getMissions(wsId);
+                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                return { success: true };
+            }
+            case 'mcLaunchMission': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
+                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
+                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                await db.updateMission(msg.missionId, { runState: 'in-flight' });
+                const missionsList = await db.getMissions(wsId);
+                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                return { success: true };
+            }
+            case 'mcStopMission': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
+                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
+                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                await db.updateMission(msg.missionId, { runState: 'aborted' });
+                const missionsList = await db.getMissions(wsId);
+                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                return { success: true };
+            }
+            case 'mcAddMissionMember': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
+                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
+                if (!db || !msg.missionId) return { success: false, error: 'Invalid arguments' };
+                const memberId = msg.memberId || msg.name;
+                if (memberId) {
+                    await db.addMissionMember(msg.missionId, memberId, msg.kind || 'plan');
+                }
+                const missionsList = await db.getMissions(wsId);
+                this.postMessage({ type: 'mcMissions', missions: missionsList });
+                return { success: true };
+            }
+            case 'mcRemoveMissionMember': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                const db = workspaceRoot ? await this._getDatabase(workspaceRoot) : null;
+                const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
+                if (!db || !msg.missionId || !msg.name) return { success: false, error: 'Invalid arguments' };
+                await db.removeMissionMember(msg.missionId, msg.name);
+                const missionsList = await db.getMissions(wsId);
+                this.postMessage({ type: 'mcMissions', missions: missionsList });
                 return { success: true };
             }
 
@@ -12156,11 +12276,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 return { success: true, sessionId: resolvedSessionId };
             }
             case 'dispatchAnalyze': {
-                // Analyze collects every card currently in PLAN REVIEWED and fires the
+                // Analyze collects every card currently in the target column (PLAN REVIEWED or STAGING) and fires the
                 // existing planner batch-dispatch command with a 'dispatch-analysis'
                 // instruction. The planner prompt arm routes that instruction to the
                 // dispatch-analysis skill, which selects the parallelizable set and
-                // moves it to STAGING. No new launch path — triggerBatchAgentFromKanban
+                // moves it to STAGING with dependency edges. No new launch path — triggerBatchAgentFromKanban
                 // is registered in both hosts (extension.ts / standalone bootstrap.ts).
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
                 if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
@@ -12171,7 +12291,8 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 // them through to _cardMatchesProjectFilter which owns the three-way map.
                 const analysisScope: string | null =
                     msg.initiatorProject === undefined ? null : msg.initiatorProject;
-                const sourceCards = this._visibleColumnCards(workspaceRoot, 'PLAN REVIEWED')
+                const targetColumn = (msg.column === 'STAGING' || msg.targetColumn === 'STAGING') ? 'STAGING' : 'PLAN REVIEWED';
+                const sourceCards = this._visibleColumnCards(workspaceRoot, targetColumn)
                     .filter(card => this._cardMatchesProjectFilter(card, analysisScope));
                 if (sourceCards.length === 0) {
                     const scopeLabel = analysisScope === null || analysisScope === ''
@@ -12179,8 +12300,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         : analysisScope === KanbanDatabase.UNASSIGNED_PROJECT_FILTER
                             ? 'the Unassigned board'
                             : analysisScope;
-                    void this._seams().ui.showInformationMessage(`No Planned plans in ${scopeLabel} to analyze for parallel dispatch.`);
-                    return { success: false, error: 'No Planned plans available to analyze for parallel dispatch.' };
+                    const colLabel = targetColumn === 'STAGING' ? 'Staged' : 'Planned';
+                    void this._seams().ui.showInformationMessage(`No ${colLabel} plans in ${scopeLabel} to analyze for parallel dispatch.`);
+                    return { success: false, error: `No ${colLabel} plans available to analyze for parallel dispatch.` };
                 }
                 const plannedIds = sourceCards.map(card => this._cardId(card));
                 await this._seams().commands.executeCommand(
@@ -13681,63 +13803,17 @@ ${FOCUS_DIRECTIVE}`;
             case 'copyWorktreeMergePrompt': {
                 const { worktreeId, workspaceRoot: msgRoot } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
-                if (!workspaceRoot) return { success: false, error: 'No workspace root resolved' };
-                const db = this._getKanbanDb(workspaceRoot);
-                if (!db || !await db.ensureReady()) return { success: false, error: 'Database unavailable' };
-
-                const allWorktrees = await db.getWorktrees();
-                const wtRow = allWorktrees.find(w => w.id === Number(worktreeId));
-                if (!wtRow) {
-                    this.postMessage({ type: 'mergePromptReady', worktreeId, error: 'Worktree not found' });
-                    return { success: false, error: 'Worktree not found' };
+                if (!workspaceRoot) {
+                    this.postMessage({ type: 'mergePromptReady', worktreeId, error: 'No workspace root resolved' });
+                    return { success: false, error: 'No workspace root resolved' };
                 }
-
-                const defaultBranch = wtRow.base_branch || await this._resolveDefaultBranch(workspaceRoot);
-                let targetPath = workspaceRoot;
-                let targetBranch = defaultBranch;
-                let checkoutLabel = 'main checkout';
-                let note = '';
-                let noTarget = false;
-
-                // subtask/tier worktree → converges into the feature integration worktree
-                if ((wtRow.subtask_plan_id && wtRow.feature_id) || (wtRow.tier && wtRow.feature_id)) {
-                    const integrationWt = allWorktrees.find(w => String(w.feature_id) === String(wtRow.feature_id) && !w.subtask_plan_id && !w.tier && w.status === 'active');
-                    if (integrationWt) {
-                        targetPath = integrationWt.path;
-                        targetBranch = integrationWt.branch;
-                        checkoutLabel = 'feature integration checkout';
-                    } else {
-                        // No integration worktree — do NOT emit a merge command that would
-                        // bypass the integration branch and land the subtask on main directly.
-                        noTarget = true;
-                        note = '*Note: No active feature integration worktree was found for this branch. Do NOT merge into main directly — ask the user which branch to merge into.*';
-                    }
-                } else if (wtRow.feature_id && !wtRow.subtask_plan_id && !wtRow.tier) {
-                    // integration worktree → merges into main; children must converge first
-                    const hasChildren = allWorktrees.some(w => (w.subtask_plan_id || w.tier) && String(w.feature_id) === String(wtRow.feature_id));
-                    if (hasChildren) {
-                        note = '\n> *Note: This is the feature integration worktree. Ensure all child/subtask branches are merged into this branch first.*';
-                    }
+                const result = await this.getWorktreeMergePrompt(workspaceRoot, worktreeId);
+                if (!result.success) {
+                    this.postMessage({ type: 'mergePromptReady', worktreeId, error: result.error });
+                    return result;
                 }
-
-                const steps = noTarget
-                    ? `1. Ensure \`${wtRow.branch}\` has all intended work committed.
-2. Ask the user which branch this should merge into (the integration worktree is missing).
-3. Once the user confirms the target, run the merge there with an explicit \`git -C <target path> merge ${wtRow.branch}\` and resolve any conflicts.
-4. Verify the result builds/tests as appropriate.`
-                    : `1. Ensure \`${wtRow.branch}\` has all intended work committed.
-2. In the ${checkoutLabel} at \`${targetPath}\` (branch \`${targetBranch}\`), run: \`git -C ${targetPath} merge ${wtRow.branch}\`.
-3. If there are conflicts, resolve them (keep both sides' intent; prefer the incoming feature work where they overlap), then commit the merge. Do not run \`git merge --abort\` unless the user tells you to.
-4. Verify the result builds/tests as appropriate.`;
-
-                const prompt = `You are working in the git worktree at \`${wtRow.path}\` on branch \`${wtRow.branch}\`. Merge this branch back into its integration target and resolve any conflicts.
-${note}
-${steps}
-
-After the merge succeeds, **ask the user whether they want you to clean up this worktree in Switchboard.** If they say yes, run the \`worktree-cleanup\` skill (\`.agents/skills/worktree-cleanup/SKILL.md\`) — it calls the Switchboard local API to mark the worktree merged and remove it. Do not clean up without the user's confirmation.`;
-
-                this.postMessage({ type: 'mergePromptReady', worktreeId, prompt });
-                return { success: true, worktreeId, prompt };
+                this.postMessage({ type: 'mergePromptReady', worktreeId: result.worktreeId, prompt: result.prompt });
+                return result;
             }
             case 'cleanupWorktree': {
                 const { worktreeId, workspaceRoot: msgRoot } = msg;
@@ -14346,6 +14422,40 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         await this._pruneWorktrees(workspaceRoot);
     }
 
+    public async getWorktreeMergePrompt(
+        workspaceRoot: string,
+        worktreeId: string | number
+    ): Promise<{ success: boolean; worktreeId?: string | number; prompt?: string; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) return { success: false, error: 'No workspace root resolved' };
+        const db = this._getKanbanDb(resolvedRoot);
+        if (!db || !await db.ensureReady()) return { success: false, error: 'Database unavailable' };
+
+        const allWorktrees = await db.getWorktrees();
+        const wtRow = allWorktrees.find(w => w.id === Number(worktreeId) || w.branch === String(worktreeId));
+        if (!wtRow) {
+            return { success: false, error: 'Worktree not found' };
+        }
+
+        const defaultBranch = wtRow.base_branch || await this._resolveDefaultBranch(resolvedRoot);
+        const targetPath = resolvedRoot;
+        const targetBranch = defaultBranch;
+        const checkoutLabel = 'main checkout';
+
+        const steps = `1. Ensure \`${wtRow.branch}\` has all intended work committed.
+2. In the ${checkoutLabel} at \`${targetPath}\` (branch \`${targetBranch}\`), run: \`git -C ${targetPath} merge ${wtRow.branch}\`.
+3. If there are conflicts, resolve them (keep both sides' intent; prefer the incoming feature work where they overlap), then commit the merge. Do not run \`git merge --abort\` unless the user tells you to.
+4. Verify the result builds/tests as appropriate.`;
+
+        const prompt = `You are working in the git worktree at \`${wtRow.path}\` on branch \`${wtRow.branch}\`. Merge this branch back into its integration target and resolve any conflicts.
+
+${steps}
+
+After the merge succeeds, **ask the user whether they want you to clean up this worktree in Switchboard.** If they say yes, run the \`worktree-cleanup\` skill (\`.agents/skills/worktree-cleanup/SKILL.md\`) — it calls the Switchboard local API to mark the worktree merged and remove it. Do not clean up without the user's confirmation.`;
+
+        return { success: true, worktreeId: wtRow.id, prompt };
+    }
+
     public async cleanupWorktree(workspaceRoot: string, worktreeId: string | number): Promise<{ success: boolean; error?: string }> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !await db.ensureReady()) {
@@ -14366,25 +14476,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         const wtRow = allWorktrees.find(w => w.id === worktreeId);
         if (!wtRow) return;
 
-        // subtask/tier worktree
-        if ((wtRow.subtask_plan_id && wtRow.feature_id) || (wtRow.tier && wtRow.feature_id)) {
-            await this._removeWorktreeRow(workspaceRoot, db, wtRow, 'merged');
-            await this._pruneWorktrees(workspaceRoot);
-            vscode.window.showInformationMessage(`Cleaned up worktree: ${wtRow.branch}`);
-            return;
-        }
-
-        // integration worktree
-        const isIntegration = wtRow.feature_id && !wtRow.subtask_plan_id && !wtRow.tier &&
-            allWorktrees.some(w => (w.subtask_plan_id || w.tier) && String(w.feature_id) === String(wtRow.feature_id));
-        if (isIntegration && wtRow.feature_id) {
-            await this._removeWorktreeRow(workspaceRoot, db, wtRow, 'merged');
-            await this._cleanupFeatureWorktrees(workspaceRoot, db, wtRow.feature_id, 'merged');
-            vscode.window.showInformationMessage(`Cleaned up feature integration worktrees.`);
-            return;
-        }
-
-        // plain/project worktree
+        // plain/project worktree (all worktrees now cleaned up directly)
         await this._removeWorktreeRow(workspaceRoot, db, wtRow, 'merged');
         await this._pruneWorktrees(workspaceRoot);
         vscode.window.showInformationMessage(`Cleaned up worktree: ${wtRow.branch}`);
@@ -15184,17 +15276,6 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         // the DB record is already committed above with is_feature=1.
         GlobalPlanWatcherService.registerPendingCreation(featurePath);
         await fs.promises.writeFile(featurePath, featureContent, 'utf8');
-
-        // per-feature mode: provision ONE shared worktree for the whole feature at
-        // creation time, off the resolved default branch. Every subtask routes into
-        // this single worktree — no per-subtask splitting. Mode is read ONLY at
-        // feature-creation time; a later toggle is inert for already-created features.
-        // Snapshot once so a mode toggle mid-creation can't split the feature between
-        // two provisioning behaviors.
-        const featureWorktreeModeSnapshot = normalizeFeatureWorktreeMode(await db.getConfig('feature_worktree_mode'));
-        if (featureWorktreeModeSnapshot === 'per-feature') {
-            await this._ensureFeatureIntegrationWorktree(workspaceRoot, db, effectiveFeaturePlanId, featureName);
-        }
 
         for (const st of subtasks) {
             // Use planId (not sessionId) — file-watcher-imported plans have session_id=''

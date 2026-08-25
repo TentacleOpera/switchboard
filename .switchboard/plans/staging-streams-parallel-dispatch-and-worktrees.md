@@ -288,3 +288,7 @@ So the mission model this plan builds is **not** free to choose its own field na
 - Does anything today read `queue_position` in a way that assumes uniqueness? Proceeding on the assumption that `queue_position` consumers treat it as a sort key only.
 
 **Routing: Complexity 3 → Send to Intern.**
+
+## Implementation Summary
+
+Implemented pop-time dependency gating in `LocalApiServer._runQueuePop` evaluating prerequisite completion (`completed_at IS NOT NULL`) with a 409 refusal for uncompleted blockers. Added `plan_dependencies`, `missions`, `mission_members` tables, `map_fingerprint` column, and V64 migration in `KanbanDatabase`. Added Analyze button to STAGING column header in `kanban.html` and updated `dispatchAnalyze` to target STAGING or Planned. Updated `dispatch-analysis/SKILL.md` for graph edge emission, cycle reporting, map fingerprint calculation, and whole-set staging. Added `codenameGenerator` and wired `mc*` mission control verb handlers into `KanbanProvider`, `LocalApiServer`, and `verbSchemas`.

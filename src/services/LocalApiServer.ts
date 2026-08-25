@@ -471,6 +471,10 @@ interface LocalApiServerOptions {
         workspaceRoot: string,
         worktreeId: string | number
     ) => Promise<{ success: boolean; error?: string }>;
+    mergeWorktree?: (
+        workspaceRoot: string,
+        worktreeId: string | number
+    ) => Promise<{ success: boolean; worktreeId?: string | number; prompt?: string; error?: string }>;
     /**
      * Phone-a-Friend dispatch — reached by a coding agent's `curl` when it finishes a
      * plan batch. The host resolves the Phone-a-Friend terminal, sends `/clear` + a
@@ -1991,6 +1995,33 @@ export class LocalApiServer {
             // than no star. Filter first, then sort, and the two never interact.
             const next = candidates[0];
 
+            // ── Pop-time Dependency Gate (Asserted Completion) ────────
+            // Refuse a card whose dependency predecessors are incomplete (completed_at is NULL).
+            // Gated on asserted completion, evaluated dynamically at pop time.
+            if (db.getPlanDependencies) {
+                try {
+                    const depPlanIds = await db.getPlanDependencies(next.planId);
+                    if (depPlanIds && depPlanIds.length > 0) {
+                        for (const depId of depPlanIds) {
+                            let depPlan = board.find((p: any) => p && (p.planId === depId || p.sessionId === depId));
+                            if (!depPlan && db.getPlanByPlanId) {
+                                depPlan = await db.getPlanByPlanId(depId);
+                            }
+                            if (!depPlan || !depPlan.completedAt) {
+                                return fail(409, `Dependency predecessor '${depId}' has not completed (completed_at is NULL). Card '${next.planId}' cannot be dispatched.`, {
+                                    dependencyBlocked: {
+                                        planId: next.planId,
+                                        blockedBy: depId,
+                                    }
+                                });
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.warn('[LocalApiServer] Dependency check failed for candidate:', next.planId, err);
+                }
+            }
+
             // ── Dispatch ───────────────────────────────────────────────
             // Detect whether `from` names an external head (non-terminal agent).
             // An external head is not a live terminal, so targetTerminalOverride: from
@@ -2379,6 +2410,157 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanTaskComplete error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanTaskComplete failed' }));
+        }
+    }
+
+    private async _handleKanbanDependencies(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const urlObj = new URL(req.url || '', 'http://127.0.0.1');
+            const workspaceRoot = urlObj.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '';
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Database unavailable' }));
+                return;
+            }
+
+            if (req.method === 'GET') {
+                const planId = urlObj.searchParams.get('planId');
+                if (planId) {
+                    const deps = await db.getPlanDependencies(planId);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, planId, dependencies: deps }));
+                } else {
+                    const wsId = (await db.getWorkspaceId?.()) || '';
+                    const deps = await db.getAllPlanDependencies(wsId);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, dependencies: deps }));
+                }
+                return;
+            }
+
+            if (req.method === 'POST') {
+                const body = await this._parseJsonBody(req);
+                const planId = String(body?.planId || '').trim();
+                if (!planId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Missing required field: planId' }));
+                    return;
+                }
+
+                if (Array.isArray(body?.dependsOn)) {
+                    const ok = await db.setPlanDependencies(planId, body.dependsOn);
+                    res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: ok, planId, dependsOn: body.dependsOn }));
+                } else if (typeof body?.dependsOnPlanId === 'string' && body.dependsOnPlanId.trim()) {
+                    const ok = await db.addPlanDependency(planId, body.dependsOnPlanId.trim());
+                    res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: ok, planId, dependsOnPlanId: body.dependsOnPlanId.trim() }));
+                } else {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Missing dependsOn array or dependsOnPlanId string' }));
+                }
+                return;
+            }
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanDependencies error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanDependencies failed' }));
+        }
+    }
+
+    private async _handleKanbanMissionRoute(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const urlObj = new URL(req.url || '', 'http://127.0.0.1');
+            const workspaceRoot = urlObj.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '';
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Database unavailable' }));
+                return;
+            }
+
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+
+            if (pathname === '/kanban/missions' && req.method === 'GET') {
+                const list = await db.getMissions(wsId);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, missions: list }));
+                return;
+            }
+
+            if (pathname === '/kanban/mission/create' && req.method === 'POST') {
+                const body = await this._parseJsonBody(req);
+                const m = await db.createMission({ ...body, workspaceId: wsId });
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, mission: m }));
+                return;
+            }
+
+            if (pathname === '/kanban/mission/update' && req.method === 'POST') {
+                const body = await this._parseJsonBody(req);
+                const missionId = String(body?.missionId || '').trim();
+                const ok = await db.updateMission(missionId, body);
+                res.writeHead(ok ? 200 : 404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: ok, missionId }));
+                return;
+            }
+
+            if (pathname === '/kanban/mission/delete' && req.method === 'POST') {
+                const body = await this._parseJsonBody(req);
+                const missionId = String(body?.missionId || '').trim();
+                const ok = await db.deleteMission(missionId);
+                res.writeHead(ok ? 200 : 404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: ok, missionId }));
+                return;
+            }
+
+            if (pathname === '/kanban/mission/member/add' && req.method === 'POST') {
+                const body = await this._parseJsonBody(req);
+                const missionId = String(body?.missionId || '').trim();
+                const memberId = String(body?.memberId || '').trim();
+                const kind = (body?.kind === 'feature' ? 'feature' : 'plan') as 'plan' | 'feature';
+                const ok = await db.addMissionMember(missionId, memberId, kind);
+                res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: ok, missionId, memberId }));
+                return;
+            }
+
+            if (pathname === '/kanban/mission/member/remove' && req.method === 'POST') {
+                const body = await this._parseJsonBody(req);
+                const missionId = String(body?.missionId || '').trim();
+                const memberId = String(body?.memberId || '').trim();
+                const ok = await db.removeMissionMember(missionId, memberId);
+                res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: ok, missionId, memberId }));
+                return;
+            }
+
+            // Expose streams/dependencies map: GET /kanban/mission/{planId}/streams
+            if (pathname.startsWith('/kanban/mission/') && pathname.endsWith('/streams') && req.method === 'GET') {
+                const parts = pathname.split('/');
+                const targetId = parts[3];
+                const deps = await db.getPlanDependencies(targetId);
+                const dependents = await db.getPlanDependents(targetId);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, planId: targetId, dependencies: deps, dependents }));
+                return;
+            }
+
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: `Unknown mission route: ${pathname}` }));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanMissionRoute error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanMissionRoute failed' }));
         }
     }
 
@@ -3913,6 +4095,39 @@ export class LocalApiServer {
             console.error('[LocalApiServer] _handleWorktreeCleanup error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'worktree cleanup failed' }));
+        }
+    }
+
+    private async _handleWorktreeMerge(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        const mergeWorktree = this._options.mergeWorktree;
+        if (!mergeWorktree) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Worktree merge not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const worktreeId = body?.worktreeId || body?.branch;
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            if (worktreeId === undefined) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: worktreeId' }));
+                return;
+            }
+
+            const result = await mergeWorktree(workspaceRoot, worktreeId);
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] _handleWorktreeMerge error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'worktree merge failed' }));
         }
     }
 
@@ -6687,6 +6902,10 @@ export class LocalApiServer {
                 await this._handleKanbanQueueNext(req, res);
             } else if (pathname === '/kanban/queue/done' && req.method === 'POST') {
                 await this._handleKanbanQueueDone(req, res);
+            } else if (pathname === '/kanban/dependencies' && (req.method === 'GET' || req.method === 'POST')) {
+                await this._handleKanbanDependencies(req, res);
+            } else if (pathname.startsWith('/kanban/mission') && (req.method === 'GET' || req.method === 'POST')) {
+                await this._handleKanbanMissionRoute(pathname, req, res);
             } else if (pathname === '/kanban/task/complete' && req.method === 'POST') {
                 await this._handleKanbanTaskComplete(req, res);
             } else if (pathname === '/kanban/move' && req.method === 'POST') {
@@ -6798,6 +7017,8 @@ export class LocalApiServer {
                 await this._handleDeletePlan(req, res);
             } else if (pathname === '/worktree/cleanup' && req.method === 'POST') {
                 await this._handleWorktreeCleanup(req, res);
+            } else if (pathname === '/worktree/merge' && req.method === 'POST') {
+                await this._handleWorktreeMerge(req, res);
             } else if (pathname === '/comment' && req.method === 'POST') {
                 await this._handlePostComment(req, res);
             } else if (pathname === '/phone-a-friend' && req.method === 'POST') {

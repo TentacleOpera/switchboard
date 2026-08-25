@@ -3938,6 +3938,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
             },
+            mergeWorktree: async (wsRoot, worktreeId) => {
+                if (!this._kanbanProvider) {
+                    return { success: false, error: 'Kanban provider not available' };
+                }
+                try {
+                    return await this._kanbanProvider.getWorktreeMergePrompt(wsRoot, worktreeId);
+                } catch (err) {
+                    return { success: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
             kanbanVerb: async (verb, payload, wsRoot) => {
                 if (!this._kanbanProvider) {
                     return { success: false, error: 'Kanban provider not available' };

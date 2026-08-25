@@ -385,6 +385,68 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
         fields: {
             workspaceRoot: { type: 'string' },
             initiatorProject: { type: 'string' },
+            column: { type: 'string' },
+            targetColumn: { type: 'string' },
+        },
+    },
+    // Mission Control (V64)
+    mcInit: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    mcNewMission: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    mcUpdateMission: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            missionId: { type: 'string', required: true },
+            field: { type: 'string' },
+            value: { type: ['string', 'number', 'boolean'] },
+        },
+    },
+    mcDeleteMission: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            missionId: { type: 'string', required: true },
+        },
+    },
+    mcReadyMission: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            missionId: { type: 'string', required: true },
+        },
+    },
+    mcLaunchMission: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            missionId: { type: 'string', required: true },
+        },
+    },
+    mcStopMission: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            missionId: { type: 'string', required: true },
+        },
+    },
+    mcAddMissionMember: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            missionId: { type: 'string', required: true },
+            memberId: { type: 'string' },
+            name: { type: 'string' },
+            kind: { type: 'string' },
+        },
+    },
+    mcRemoveMissionMember: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            missionId: { type: 'string', required: true },
+            name: { type: 'string' },
+            kind: { type: 'string' },
         },
     },
     // V60 session queue. Permissive and field-accurate per PRD contract #5:

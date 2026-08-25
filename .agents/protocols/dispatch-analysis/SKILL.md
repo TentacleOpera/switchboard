@@ -96,38 +96,36 @@ it parallel-safe, so it does not go to Staging. Name it in the report (step 6) w
 reason. Never guess at its file set, and never promote it on the assumption that an
 unreadable plan touches nothing.
 
-### 3. Build a file-overlap graph
+### 3. Build a file-overlap and dependency graph
 
-For each pair of plans, check whether their file sets intersect:
-- If two plans modify the **same file**, they are **conflicting** (cannot run in parallel safely)
-- If two plans have **no file overlap**, they are **compatible** (can run in parallel)
+For each candidate plan, analyze concurrency and ordering constraints:
+- **File Overlap (undirected):** If two plans modify the **same file**, they are **conflicting** (cannot run in parallel concurrently).
+- **Logical Dependencies (directed):** If plan A declares a dependency on plan B, record a directed dependency edge: `A -> dependsOn -> B`. Plan A cannot start until B has asserted completion (`completed_at IS NOT NULL`).
 
-Also check for logical dependencies:
-- If plan A declares a dependency on plan B, A cannot start until B completes
-- Dependent plans are **conflicting** even with zero file overlap
+### 4. Validate dependency graph and compute fingerprint
 
-### 4. Select the largest non-conflicting subset
+1. **Cycle Detection:** Check directed dependency edges for cycles (e.g. A depends on B and B depends on A).
+   - If a cycle exists: **Report all cycle members and declared edges as input errors** in the summary report (step 6).
+   - Leave all cycle members in **Planned** (do not stage them, and do not emit a partial order).
+2. **Compute Map Fingerprint:** Compute a SHA-256 hash of concatenated `{planId}:{sortedFileSet}` pairs for all candidates. This fingerprint validates map freshness across subsequent runs and detects edits to candidate plan files.
 
-This is a maximum independent set problem on the conflict graph. Use a greedy approach:
-1. Sort plans by fewest conflicts (most isolated plans first)
-2. Add plans one by one, skipping any that conflict with an already-selected plan
-3. Continue until no more plans can be added
+### 5. Persist dependency edges and stage candidates
 
-The result is the **dispatch set** — the largest parallelizable subset.
+Persisting dependency edges allows all unblocked and sequential candidates to stage together in one run without losing dependency constraints.
 
-### 5. Announce the set, then move it — reporting as you go
+**5a. Persist dependency edges via the API:**
+For each plan with dependencies, call:
+```
+POST http://localhost:{API_PORT}/kanban/dependencies
+{
+  "workspaceRoot": "{WORKSPACE_ROOT}",
+  "planId": "{planId}",
+  "dependsOn": ["{dependsOnPlanId1}", "{dependsOnPlanId2}"]
+}
+```
 
-Card moves write to the board database. A silent run that only reports once every write has
-landed gives the user no chance to see what is happening and no way to tell a correct run
-from a wrong one until it is already done.
-
-**5a. Print the intended set before the first move.** One line per plan: plan ID, topic, and
-the file set that made it safe. Print the held-back plans and their conflict reasons in the
-same breath, so the whole decision is visible before anything is written.
-
-**5b. Move one card at a time, and print the outcome of each move as it returns.** Never
-batch the moves into a single loop that reports only at the end.
-
+**5b. Move cards to STAGING, one at a time:**
+Stage all valid candidates (both stream heads and dependent successors):
 ```
 POST http://localhost:{API_PORT}/kanban/move
 {
@@ -136,46 +134,25 @@ POST http://localhost:{API_PORT}/kanban/move
   "targetColumn": "STAGING"
 }
 ```
-
-After each call, print `moved <planId> — <topic> → STAGING` on success, or the error on
-failure. **A failed move does not abort the run** — carry on with the rest and list the
-failures in the report.
-
-Use the `switchboard-linear` skill's API call pattern if available, or call the endpoint
-directly via `curl` / the API proxy.
+After each call, print `moved <planId> — <topic> → STAGING` on success, or the error on failure.
 
 ### 6. Report
 
 Output a summary:
 - Scope analysed: the project (or `PLANS TO PROCESS` list) the candidates came from
 - Total Planned plans analyzed: N
-- Plans moved to Staging (parallel-safe): list with plan IDs and brief descriptions
-- Plans remaining in Planned (conflicts): list with plan IDs and the conflict reason
-- Moves that failed, if any, with the error
-- Recommended next step: "Send Staging plans to coder" or "Resolve conflicts and re-analyze"
+- Dependency edges persisted: list of `{planId} -> depends on -> {predecessorId}`
+- Dependency cycles / input errors, if any: list cycle members and declared edges
+- Plans moved to Staging: list with plan IDs, roles/streams, and brief descriptions
+- Plans remaining in Planned: list with plan IDs and reason
+- Moves that failed, if any, with error
+- Recommended next step: "Run queue or launch mission from STAGING"
 
 ## Rules
 
-- **Never modify plan files.** This is a read-only analysis pass — the only writes are
-  card moves via the API.
-- **Stay inside the board's scope.** The `/kanban/board` endpoint returns every project;
-  the column the user pressed Analyze on does not. Scope per step 1 before analysing
-  anything, and name the scope in the report.
-- **Re-query the board, but only within scope.** The plan list in the prompt is a snapshot;
-  late additions must be included — late additions *to the same project*, not to the
-  workspace at large.
-- **A feature is one unit.** Analyse it as the union of its subtasks, move the feature card
-  and let the cascade carry them, and never promote a subtask on its own. See step 1a.
-- **Report before you write, and after every write.** Card moves hit the database; the user
-  must be able to watch them land, not just read about them afterwards. See step 5.
-- **Prefer larger sets.** The goal is maximum parallelism — if removing one plan would
-  allow two others to join, and the two are larger in scope, prefer the swap.
-- **Conservative on conflicts.** When uncertain about file overlap (e.g. a plan says
-  "various files" without listing them), treat it as conflicting with everything. A false
-  positive (plan left in Planned) is recoverable; a false negative (two plans clobbering
-  the same file in parallel) is not.
-- **Resolve `planFile`, never synthesize it.** See step 2 — a made-up `<planId>.md` path
-  turns every plan into an "unreadable" one and empties the dispatch set.
-- **Unprovable stays in Planned.** A missing or unreadable plan file is never promoted.
-- **One shot.** Report and exit. Do not stay running, do not poll the board, and do not
-  edit any plan file.
+- **Never modify plan files.** This is a read-only analysis pass — writes are card moves and dependency edges via the API.
+- **Stay inside the board's scope.** Scope per step 1 before analysing anything, and name scope in report.
+- **A feature is one unit.** Analyse it as union of subtasks, attach dependencies to feature card only, and never promote subtasks on their own.
+- **Report cycles as input errors.** Do not silently break cycles or guess execution order.
+- **Persist edges.** Record dependency edges in kanban DB so pop-time evaluation gates dispatch dynamically on asserted completion.
+- **One shot.** Report and exit. Do not stay running, do not poll board, do not edit plan files.

@@ -162,7 +162,7 @@ test('every mode read routes through the normaliser', () => {
     ).length - 1;
     assert.strictEqual(
         normalized, 2,
-        `expected both reads (_sendWorktreeConfig broadcast + createFeatureFromPlanIds provisioning snapshot) to clamp, found ${normalized}`
+        `expected both reads (_sendWorktreeConfig broadcast + stageForQueue provisioning snapshot) to clamp, found ${normalized}`
     );
 });
 

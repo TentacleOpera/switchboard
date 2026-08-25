@@ -6,6 +6,7 @@ import * as path from 'path';
 import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
+import { generateCodename } from './codenameGenerator';
 import {
     DEFAULT_KANBAN_COLUMNS,
     parseCustomAgents,
@@ -164,6 +165,11 @@ export interface KanbanPlanRecord {
      * conflict.
      */
     columnOrder?: number | null;
+    /**
+     * V64: hash fingerprint of candidate plan file contents at analysis time.
+     * Used to detect stale dependency maps without relying on noisy mtimes.
+     */
+    mapFingerprint?: string | null;
 }
 
 export interface ImportedDocEntry {
@@ -256,7 +262,32 @@ CREATE TABLE IF NOT EXISTS plans (
     column_entered_at TEXT DEFAULT NULL,
     completed_at      TEXT DEFAULT NULL,
     priority_starred  INTEGER DEFAULT 0,
-    column_order      INTEGER DEFAULT NULL
+    column_order      INTEGER DEFAULT NULL,
+    map_fingerprint   TEXT DEFAULT NULL
+);
+CREATE TABLE IF NOT EXISTS plan_dependencies (
+    plan_id            TEXT NOT NULL,
+    depends_on_plan_id TEXT NOT NULL,
+    PRIMARY KEY (plan_id, depends_on_plan_id)
+);
+CREATE TABLE IF NOT EXISTS missions (
+    id                  TEXT PRIMARY KEY,
+    name                TEXT NOT NULL,
+    type                TEXT NOT NULL DEFAULT 'mission',
+    goal                TEXT DEFAULT '',
+    ready               INTEGER DEFAULT 0,
+    run_state           TEXT DEFAULT 'not-started',
+    team                TEXT DEFAULT '',
+    max_extra_worktrees INTEGER DEFAULT 0,
+    workspace_id        TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mission_members (
+    mission_id  TEXT NOT NULL,
+    member_id   TEXT NOT NULL,
+    member_kind TEXT NOT NULL,
+    PRIMARY KEY (mission_id, member_id)
 );
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -336,6 +367,9 @@ const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plans_notion_page ON plans(workspace_id, notion_page_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_dependencies_depends ON plan_dependencies(depends_on_plan_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_mission_members_mission ON mission_members(mission_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_missions_workspace ON missions(workspace_id)`,
 ];
 
 // Migration SQL to add new columns to existing databases
@@ -593,6 +627,19 @@ const MIGRATION_V62_SQL = [
 const MIGRATION_V63_SQL = [
     `ALTER TABLE plans ADD COLUMN priority_starred INTEGER DEFAULT 0`,
     `ALTER TABLE plans ADD COLUMN column_order INTEGER DEFAULT NULL`,
+];
+
+// V64: plan_dependencies + plans.map_fingerprint + missions & mission_members.
+// Persists dependency edges emitted by dispatch analysis, map validity fingerprint,
+// and mission containers for STAGING queue. Additive; idempotent under version gate.
+const MIGRATION_V64_SQL = [
+    `ALTER TABLE plans ADD COLUMN map_fingerprint TEXT DEFAULT NULL`,
+    `CREATE TABLE IF NOT EXISTS plan_dependencies (plan_id TEXT NOT NULL, depends_on_plan_id TEXT NOT NULL, PRIMARY KEY(plan_id, depends_on_plan_id))`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_dependencies_depends ON plan_dependencies(depends_on_plan_id)`,
+    `CREATE TABLE IF NOT EXISTS missions (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'mission', goal TEXT DEFAULT '', ready INTEGER DEFAULT 0, run_state TEXT DEFAULT 'not-started', team TEXT DEFAULT '', max_extra_worktrees INTEGER DEFAULT 0, workspace_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS mission_members (mission_id TEXT NOT NULL, member_id TEXT NOT NULL, member_kind TEXT NOT NULL, PRIMARY KEY (mission_id, member_id))`,
+    `CREATE INDEX IF NOT EXISTS idx_mission_members_mission ON mission_members(mission_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_missions_workspace ON missions(workspace_id)`,
 ];
 
 
@@ -977,7 +1024,7 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
                        dispatched_terminal, dispatched_at, last_liveness_at, blocked_at,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
                        workspace_name, project_id, queue_position, column_entered_at, completed_at,
-                       priority_starred, column_order`;
+                       priority_starred, column_order, map_fingerprint`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -8693,6 +8740,16 @@ export class KanbanDatabase {
             await this.setMigrationVersion(63);
             console.log('[KanbanDatabase] V63 migration completed: priority_starred + column_order columns added to plans');
         }
+
+        // V64: plan_dependencies + plans.map_fingerprint + missions & mission_members.
+        const v64 = await this.getMigrationVersion();
+        if (v64 < 64) {
+            for (const sql of MIGRATION_V64_SQL) {
+                try { this._db.exec(sql); } catch { /* column or table already exists */ }
+            }
+            await this.setMigrationVersion(64);
+            console.log('[KanbanDatabase] V64 migration completed: plan_dependencies + map_fingerprint + missions added');
+        }
     }
 
     /**
@@ -10772,7 +10829,9 @@ FROM plans
                     // Absent from SELECT lists that predate V63 → undefined → 0 (unstarred).
                     priorityStarred: row.priority_starred !== null && row.priority_starred !== undefined ? Number(row.priority_starred) : 0,
                     // Absent from SELECT lists that predate V63 → undefined → null (unarranged).
-                    columnOrder: row.column_order !== null && row.column_order !== undefined ? Number(row.column_order) : null
+                    columnOrder: row.column_order !== null && row.column_order !== undefined ? Number(row.column_order) : null,
+                    // Absent from SELECT lists that predate V64 → undefined → null.
+                    mapFingerprint: row.map_fingerprint !== null && row.map_fingerprint !== undefined ? String(row.map_fingerprint) : null
                 });
             }
         } finally {
@@ -10965,6 +11024,311 @@ FROM plans
             }
         }
         return deleted;
+    }
+
+    // ── Plan Dependencies & Map Fingerprint (V64) ──
+
+    public async getPlanDependencies(planId: string): Promise<string[]> {
+        if (!(await this.ensureReady()) || !this._db || !planId) return [];
+        const stmt = this._db.prepare('SELECT depends_on_plan_id FROM plan_dependencies WHERE plan_id = ?', [planId]);
+        const out: string[] = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                if (r.depends_on_plan_id) out.push(String(r.depends_on_plan_id));
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
+    public async getPlanDependents(planId: string): Promise<string[]> {
+        if (!(await this.ensureReady()) || !this._db || !planId) return [];
+        const stmt = this._db.prepare('SELECT plan_id FROM plan_dependencies WHERE depends_on_plan_id = ?', [planId]);
+        const out: string[] = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                if (r.plan_id) out.push(String(r.plan_id));
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
+    public async getAllPlanDependencies(workspaceId?: string): Promise<Array<{ planId: string; dependsOnPlanId: string }>> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        let sql = 'SELECT pd.plan_id, pd.depends_on_plan_id FROM plan_dependencies pd';
+        const params: any[] = [];
+        if (workspaceId) {
+            sql += ' JOIN plans p ON pd.plan_id = p.plan_id WHERE p.workspace_id = ?';
+            params.push(workspaceId);
+        }
+        const stmt = this._db.prepare(sql, params);
+        const out: Array<{ planId: string; dependsOnPlanId: string }> = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                if (r.plan_id && r.depends_on_plan_id) {
+                    out.push({ planId: String(r.plan_id), dependsOnPlanId: String(r.depends_on_plan_id) });
+                }
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
+    public async addPlanDependency(planId: string, dependsOnPlanId: string): Promise<boolean> {
+        if (!planId || !dependsOnPlanId || planId === dependsOnPlanId) return false;
+        return this._persistedUpdate(
+            'INSERT OR IGNORE INTO plan_dependencies (plan_id, depends_on_plan_id) VALUES (?, ?)',
+            [planId, dependsOnPlanId]
+        );
+    }
+
+    public async removePlanDependency(planId: string, dependsOnPlanId: string): Promise<boolean> {
+        if (!planId || !dependsOnPlanId) return false;
+        return this._persistedUpdate(
+            'DELETE FROM plan_dependencies WHERE plan_id = ? AND depends_on_plan_id = ?',
+            [planId, dependsOnPlanId]
+        );
+    }
+
+    public async setPlanDependencies(planId: string, dependsOnPlanIds: string[]): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db || !planId) return false;
+        try {
+            this._db.exec('BEGIN');
+            this._db.run('DELETE FROM plan_dependencies WHERE plan_id = ?', [planId]);
+            for (const dep of dependsOnPlanIds) {
+                if (dep && dep !== planId) {
+                    this._db.run('INSERT OR IGNORE INTO plan_dependencies (plan_id, depends_on_plan_id) VALUES (?, ?)', [planId, dep]);
+                }
+            }
+            this._db.exec('COMMIT');
+            await this._persist();
+            return true;
+        } catch (err) {
+            try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+            console.error('[KanbanDatabase] setPlanDependencies failed:', err);
+            return false;
+        }
+    }
+
+    public async clearPlanDependencies(planId: string): Promise<boolean> {
+        if (!planId) return false;
+        return this._persistedUpdate('DELETE FROM plan_dependencies WHERE plan_id = ?', [planId]);
+    }
+
+    public async setMapFingerprint(planId: string, fingerprint: string | null): Promise<boolean> {
+        if (!planId) return false;
+        return this._persistedUpdate(
+            'UPDATE plans SET map_fingerprint = ?, updated_at = datetime(\'now\') WHERE plan_id = ?',
+            [fingerprint, planId]
+        );
+    }
+
+    public async getMapFingerprint(planId: string): Promise<string | null> {
+        if (!(await this.ensureReady()) || !this._db || !planId) return null;
+        const stmt = this._db.prepare('SELECT map_fingerprint FROM plans WHERE plan_id = ?', [planId]);
+        try {
+            if (stmt.step()) {
+                const r = stmt.getAsObject();
+                return r.map_fingerprint !== null && r.map_fingerprint !== undefined ? String(r.map_fingerprint) : null;
+            }
+        } finally {
+            stmt.free();
+        }
+        return null;
+    }
+
+    // ── Missions & Mission Members (V64) ──
+
+    public async getMissions(workspaceId: string): Promise<any[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            'SELECT id, name, type, goal, ready, run_state, team, max_extra_worktrees, workspace_id, created_at, updated_at FROM missions WHERE workspace_id = ? ORDER BY created_at ASC',
+            [workspaceId]
+        );
+        const list: any[] = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                list.push({
+                    id: String(r.id),
+                    name: String(r.name || ''),
+                    type: String(r.type || 'mission'),
+                    goal: String(r.goal || ''),
+                    ready: Number(r.ready || 0) === 1,
+                    runState: String(r.run_state || 'not-started'),
+                    team: String(r.team || ''),
+                    maxExtraWorktrees: Number(r.max_extra_worktrees || 0),
+                    workspaceId: String(r.workspace_id || ''),
+                    createdAt: String(r.created_at || ''),
+                    updatedAt: String(r.updated_at || ''),
+                    plans: [] as string[],
+                    features: [] as string[],
+                    teams: [] as string[],
+                    sequencing: [] as string[],
+                    log: [] as Array<{ time: string; text: string }>,
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+
+        for (const m of list) {
+            const members = await this.getMissionMembers(m.id);
+            for (const member of members) {
+                if (member.kind === 'feature') m.features.push(member.memberId);
+                else m.plans.push(member.memberId);
+            }
+        }
+        return list;
+    }
+
+    public async getMissionById(missionId: string): Promise<any | null> {
+        if (!(await this.ensureReady()) || !this._db || !missionId) return null;
+        const stmt = this._db.prepare(
+            'SELECT id, name, type, goal, ready, run_state, team, max_extra_worktrees, workspace_id, created_at, updated_at FROM missions WHERE id = ?',
+            [missionId]
+        );
+        let m: any = null;
+        try {
+            if (stmt.step()) {
+                const r = stmt.getAsObject();
+                m = {
+                    id: String(r.id),
+                    name: String(r.name || ''),
+                    type: String(r.type || 'mission'),
+                    goal: String(r.goal || ''),
+                    ready: Number(r.ready || 0) === 1,
+                    runState: String(r.run_state || 'not-started'),
+                    team: String(r.team || ''),
+                    maxExtraWorktrees: Number(r.max_extra_worktrees || 0),
+                    workspaceId: String(r.workspace_id || ''),
+                    createdAt: String(r.created_at || ''),
+                    updatedAt: String(r.updated_at || ''),
+                    plans: [] as string[],
+                    features: [] as string[],
+                    teams: [] as string[],
+                    sequencing: [] as string[],
+                    log: [] as Array<{ time: string; text: string }>,
+                };
+            }
+        } finally {
+            stmt.free();
+        }
+        if (!m) return null;
+        const members = await this.getMissionMembers(m.id);
+        for (const member of members) {
+            if (member.kind === 'feature') m.features.push(member.memberId);
+            else m.plans.push(member.memberId);
+        }
+        return m;
+    }
+
+    public async createMission(mission: {
+        id?: string;
+        name?: string;
+        type?: string;
+        goal?: string;
+        ready?: boolean;
+        team?: string;
+        maxExtraWorktrees?: number;
+        workspaceId: string;
+    }): Promise<any> {
+        const id = mission.id || `mission-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const name = mission.name || generateCodename(id);
+        const type = mission.type || 'mission';
+        const goal = mission.goal || '';
+        const ready = mission.ready ? 1 : 0;
+        const team = mission.team || '';
+        const maxExtraWorktrees = Math.min(type === 'mission' ? 1 : 99, Math.max(0, mission.maxExtraWorktrees ?? 0));
+        const now = new Date().toISOString();
+
+        await this._persistedUpdate(
+            `INSERT INTO missions (id, name, type, goal, ready, run_state, team, max_extra_worktrees, workspace_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'not-started', ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                type = excluded.type,
+                goal = excluded.goal,
+                ready = excluded.ready,
+                team = excluded.team,
+                max_extra_worktrees = excluded.max_extra_worktrees,
+                updated_at = excluded.updated_at`,
+            [id, name, type, goal, ready, team, maxExtraWorktrees, mission.workspaceId, now, now]
+        );
+        return await this.getMissionById(id);
+    }
+
+    public async updateMission(missionId: string, updates: Partial<{
+        name: string;
+        type: string;
+        goal: string;
+        ready: boolean;
+        runState: string;
+        team: string;
+        maxExtraWorktrees: number;
+    }>): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db || !missionId) return false;
+        const existing = await this.getMissionById(missionId);
+        if (!existing) return false;
+
+        const name = updates.name !== undefined ? updates.name : existing.name;
+        const type = updates.type !== undefined ? updates.type : existing.type;
+        const goal = updates.goal !== undefined ? updates.goal : existing.goal;
+        const ready = updates.ready !== undefined ? (updates.ready ? 1 : 0) : (existing.ready ? 1 : 0);
+        const runState = updates.runState !== undefined ? updates.runState : existing.runState;
+        const team = updates.team !== undefined ? updates.team : existing.team;
+        let maxExtraWorktrees = updates.maxExtraWorktrees !== undefined ? updates.maxExtraWorktrees : existing.maxExtraWorktrees;
+        if (type === 'mission' && maxExtraWorktrees > 1) maxExtraWorktrees = 1;
+        if (maxExtraWorktrees < 0) maxExtraWorktrees = 0;
+
+        return this._persistedUpdate(
+            `UPDATE missions SET name = ?, type = ?, goal = ?, ready = ?, run_state = ?, team = ?, max_extra_worktrees = ?, updated_at = datetime('now') WHERE id = ?`,
+            [name, type, goal, ready, runState, team, maxExtraWorktrees, missionId]
+        );
+    }
+
+    public async deleteMission(missionId: string): Promise<boolean> {
+        if (!missionId) return false;
+        await this._persistedUpdate('DELETE FROM mission_members WHERE mission_id = ?', [missionId]);
+        return this._persistedUpdate('DELETE FROM missions WHERE id = ?', [missionId]);
+    }
+
+    public async addMissionMember(missionId: string, memberId: string, kind: 'plan' | 'feature' = 'plan'): Promise<boolean> {
+        if (!missionId || !memberId) return false;
+        return this._persistedUpdate(
+            'INSERT OR IGNORE INTO mission_members (mission_id, member_id, member_kind) VALUES (?, ?, ?)',
+            [missionId, memberId, kind]
+        );
+    }
+
+    public async removeMissionMember(missionId: string, memberId: string): Promise<boolean> {
+        if (!missionId || !memberId) return false;
+        return this._persistedUpdate(
+            'DELETE FROM mission_members WHERE mission_id = ? AND member_id = ?',
+            [missionId, memberId]
+        );
+    }
+
+    public async getMissionMembers(missionId: string): Promise<Array<{ memberId: string; kind: 'plan' | 'feature' }>> {
+        if (!(await this.ensureReady()) || !this._db || !missionId) return [];
+        const stmt = this._db.prepare('SELECT member_id, member_kind FROM mission_members WHERE mission_id = ?', [missionId]);
+        const out: Array<{ memberId: string; kind: 'plan' | 'feature' }> = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                out.push({ memberId: String(r.member_id), kind: (String(r.member_kind) === 'feature' ? 'feature' : 'plan') });
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
     }
 
     private static async _loadSqlJs(): Promise<SqlJsStatic> {
