@@ -324,3 +324,30 @@ should exist at all, not whether to surface it. `fix-silent-nudge-noise-to-team-
 and `feature_plan_20260816170000_head-agent-wake-safeguard.md` (whose own risk list includes "the
 nudge interrupting a working head, turning a safeguard into the cause of a broken turn") are the
 right place to settle that. It is explicitly **not** in scope here.
+
+## Corroboration and reuse notes from a plan sweep
+
+*Appended after a sweep of existing plans.*
+
+**The hook point was built for exactly this reason.**
+`add-a-task-complete-endpoint-for-the-lead.md` is the plan that created
+`POST /kanban/task/complete`, and its stated goal is this plan's premise in different words: give
+the lead an explicit endpoint "so completion is an asserted signal rather than a file write the
+orchestrator may or may not read, or a board state inferred from column position." Hooking that
+route is therefore reading a signal designed to be authoritative, not inferring one — which is the
+distinction the withdrawn stall event failed.
+
+**Reuse the existing outbound/inbound discipline rather than writing new plumbing.**
+`retire-comment-delta-dispatch.md` records that the comment-polling machinery is well built and
+worth keeping even as the dispatch it feeds is retired: `authoredBySelf` against feedback loops, a
+capped seen-set in the DB `config` table (against Notion's inclusive, minute-rounded cursor), and
+at-least-once delivery that deliberately stalls the cursor on failure (`:909-912`). This plan's
+dedupe requirement — durable, shared across two instances, safe across the retries the 409 flow
+encourages — is the same problem that machinery already solves. Use it.
+
+**Note the neighbouring retirement.** That plan removes comment-driven *dispatch*, not comment
+polling, and is explicit that polling stays if any consumer needs it. This plan is a new outbound
+consumer and does not depend on inbound dispatch, so the two do not conflict — but they touch the
+same seam, and `orchestrator-instructions-column.md` is the designated inbound channel going
+forward. If this plan's notifications ever want a reply affordance, that column is where it belongs,
+not a revived comment trigger.

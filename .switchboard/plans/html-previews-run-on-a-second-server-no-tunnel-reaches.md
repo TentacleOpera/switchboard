@@ -267,3 +267,27 @@ panels on both hosts, plus one fewer listening port on the host.
     `grep -rn "listen(0, '127.0.0.1'" src/` returns nothing for preview servers.
 11. **Guards unchanged.** `loopback-hostname-contract` green; `curl -H 'Host: evil.example'` →
     403; a LAN peer → 403.
+
+## Sweep findings: siblings and a prior service-worker fix
+
+*Appended after a sweep of existing plans.*
+
+**The Planning ancestor is real, and there are more callers than two.** This plan's scope-completeness
+check (grep `listen(0, '127.0.0.1'` across `src/`) is confirmed necessary: `_createHtmlServer` or the
+preview-server pattern is referenced by `design-panel-extraction-and-stitch-integration.md`,
+`planning-panel-cleanup.md`, and `feature_plan_20260626140002_planning_html_tab_with_independent_folders.md`
+as well as `standalone-remote-access-story.md`. Read those before moving the server — the Planning
+panel's copy is the one `DesignPanelProvider.ts:2184` describes itself as "ported from".
+
+**A prior fix in this exact subsystem constrains the design.**
+`brain_21e1909a…md` ("Webview HTML Preview Rendering Security and Service Worker Fix") solved a
+blank-white-screen failure by **bypassing the VS Code Service Worker for HTML content delivery**,
+which is part of why previews are served from a real `http://127.0.0.1` origin rather than through
+`asWebviewUri` or `srcdoc`. That is a second reason for the separate origin, additional to the CSP
+and relative-path reason recorded at `DesignPanelProvider.ts:2184`.
+
+**Consequence for the proposed `preview.localhost` design:** the new origin must still bypass the
+webview service worker on the extension host, not merely satisfy the CSP. Verify against that
+failure mode explicitly — a blank iframe in VS Code is the symptom, and it is the same symptom that
+plan already fixed once. Add it to the verification plan as a named regression rather than trusting
+step 3's general "local extension host unregressed".

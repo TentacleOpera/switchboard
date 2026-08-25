@@ -229,3 +229,33 @@ None — a new route and page. No shipped state, file, setting or format changes
    and a non-loopback Host still 403. This plan must be exposure-neutral.
 9. **Capability gating.** Serve the route on a host without `node-pty` and confirm the
    terminal-message control states its precondition rather than 503-ing on tap.
+
+## Cross-reference: a read-only board already travels without the host
+
+*Appended after a sweep of existing plans.*
+
+`board-anywhere-cloud-mobile-snapshot.md` publishes a self-contained, pre-rendered `board.html`
+alongside `board.json`/`board.md` on the `switchboard/board` orphan branch, via
+`BoardSnapshotPublisher` (which already debounces, hash-dedupes, single-flights and force-pushes on
+every board mutation). It is viewable on a phone through static hosting of that branch **with the
+local machine off entirely** — no tunnel, no terminator, no exposure of the host at all.
+
+That is strictly better than this plan for *looking* at the board, and it does not compete with it:
+this route exists to **act** — dispatch, build and start missions, memo, message a seat — which a
+published snapshot cannot do.
+
+**Two consequences worth carrying:**
+
+- **Do not add board-viewing to this route's scope.** If the operator's need turns out to be mostly
+  "what's the state", the snapshot answers it more cheaply and more safely, and this route's
+  justification narrows to the action set. Keep the read-only status display here minimal — enough
+  context to act, not a board.
+- **It weakens the access plan, not this one.** `a-phone-on-the-tailnet-has-nothing-to-connect-to.md`
+  spends guard 2's protective effect against tailnet peers. If viewing is the main want, that
+  spend buys little, because the snapshot already delivers viewing at zero exposure. The access plan
+  is justified only by the *acting* half — which is this plan. Worth re-reading that trade with the
+  snapshot in mind before committing to it.
+
+One more finding from that plan, relevant to earlier discussion of artifact-based surfaces: "Claude
+artifacts run under a strict CSP that blocks all network requests, so an artifact can never poll
+`localhost` or any API." An artifact can render a snapshot; it can never be a live cockpit.

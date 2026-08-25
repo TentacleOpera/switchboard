@@ -265,3 +265,56 @@ No detector, no threshold, no badge. The human is the detector — which is what
 
 **Reduced scope:** complexity 4 → 3. One route change, one resolution rule, one relay call, and an
 honest report when the seat is gone.
+
+## Collision: comment dispatch is being retired, and this plan's baseline was wrong
+
+*Appended after a sweep of existing plans.*
+
+**The baseline stated above is incorrect and understates the problem.** This plan says an inbound
+comment is "routed to the card's current column agent". `retire-comment-delta-dispatch.md` records
+what actually happens: `RemoteControlService:883` polls comments and calls `onComment`, resolving to
+`KanbanProvider._remoteDispatchComment` (`:3077`), which appends the comment into the plan file and
+then calls `_remoteDispatchColumnAgent` — `switchboard.triggerAgentFromKanban`, **"the same command
+a manual drag uses"**. So:
+
+> So a comment re-dispatches the whole column role. Not an incremental nudge to a running agent — a
+> fresh dispatch. **A comment on a card mid-code starts the coder again.**
+
+That is worse than this plan assumed. Replying on an in-flight card today does not fail to reach the
+worker; it restarts it.
+
+**And that path is slated for removal**, on the grounds that trackers are for bulk moves and queued
+work, "not per-card micro-control", that ClickUp cannot do it at all
+(`ClickUpRemoteProvider.fetchCommentDeltas` is a hardcoded stub returning empty deltas), and that its
+useful case has a better home: `orchestrator-instructions-column.md` — "add an instructions column
+whose cards are messages, not work" — which works identically on all three providers.
+
+### What this means for this plan
+
+The plan is **not** extending a working path; it is proposing something adjacent to a path being
+deleted. Whether it survives turns on one question the retirement plan almost answers:
+
+Its own words distinguish exactly what comment-dispatch was **not**: *"Not an incremental nudge to a
+running agent — a fresh dispatch."* This plan **is** the incremental nudge — relay into the seat,
+`clearBeforePrompt: false` hardcoded, context preserved. So it is arguably the missing capability
+that retirement leaves behind, not a duplicate of it.
+
+**Decide before building, in this order:**
+
+1. **Does waking a seat belong to the instructions column instead?** A note in that column reaches
+   the project-management layer, which could then relay to the seat itself — one channel, no new
+   inbound routing, and it "replies where the tracker's own notifications fire". If so, this plan
+   collapses into an instruction for that layer and is barely code.
+2. **If a direct path is still wanted, it must not resurrect what is being retired.** The
+   distinction to hold is fresh-dispatch versus nudge. A per-card comment that relays is defensible;
+   one that re-triggers a column role is the thing being deleted.
+3. **Sequence after the retirement, not before.** Building inbound comment routing while another
+   plan removes inbound comment dispatch invites two people editing the same seam in opposite
+   directions.
+
+**Reuse, do not reinvent, the polling discipline.** The retirement plan is explicit that the
+machinery around comment polling is sound and worth keeping: `authoredBySelf` against feedback
+loops, a capped seen-set in the DB `config` table against Notion's inclusive minute-rounded cursor,
+and at-least-once delivery that deliberately stalls the cursor on failure (`:909-912`). It says that
+is "the shape the instructions column should reuse". Whatever inbound path this plan ends up on
+should reuse it too.
