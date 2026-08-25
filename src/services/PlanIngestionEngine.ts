@@ -1388,10 +1388,6 @@ export class PlanIngestionEngine {
             if (entry.friendlyName) livenessByName.set(entry.friendlyName, { lastDataAt: entry.lastDataAt, status: entry.status });
         }
 
-        // Coding columns — a team is "in flight" while any of its cards sits in
-        // one of these. Matches subtask 1's CODING_COLUMNS exactly.
-        const CODING_COLUMNS = new Set(['LEAD CODED', 'CODER CODED', 'INTERN CODED']);
-
         let mutated = false;
         const kept: QueueWatchRecord[] = [];
         for (const watch of watches) {
@@ -1720,8 +1716,14 @@ export class PlanIngestionEngine {
             // (5) Any card in flight for this team → keep, stay silent, and
             // reset nudge state. The lead just dispatched — a fresh stall
             // window starts from this dispatch. The in-flight predicate is
-            // subtask 1's column-scoped one: a card in a coding column held
-            // by the head's team. Team membership is resolved via
+            // `dispatchNextFromQueue`'s, verbatim: a card HELD by a team seat
+            // (`dispatched_terminal`) with NO completion fact (`completed_at`
+            // is NULL). Board position is NOT an input — completion is asserted
+            // via POST /kanban/task/complete and never inferred from a column.
+            // Keying on the column instead would muzzle this sweep permanently:
+            // a completed card keeps its holder and stays in its coding column,
+            // so a column-scoped predicate reads "in flight" forever and the
+            // head is never nudged again. Team membership is resolved via
             // `_queueTeamMembersResolver` (the same resolver the seat-pacing
             // branch and `dispatchNextFromQueue` use), so a card dispatched to
             // any team member counts as in-flight — not just one held by the
@@ -1740,7 +1742,7 @@ export class PlanIngestionEngine {
             }
             const headTeamSet = headTeamMembers ?? new Set([watch.headTerminal]);
             const inFlight = board.some(p =>
-                p && CODING_COLUMNS.has(String(p.kanbanColumn || ''))
+                p && !p.completedAt
                 && typeof p.dispatchedTerminal === 'string'
                 && p.dispatchedTerminal.length > 0
                 && headTeamSet.has(p.dispatchedTerminal)

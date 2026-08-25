@@ -224,6 +224,24 @@ async function run() {
             'the seat-pacing skip (`pacing !== \'seat\' && isTeamDispatch`) must be deleted');
     });
 
+    await check('no in-flight consumer derives completion from a kanban column', async () => {
+        // The rule is a CATEGORY, not a site. Asserting it against
+        // LocalApiServer alone is what let the queue-watch stall sweep keep a
+        // column-scoped copy of the predicate: a completed card keeps its
+        // holder and stays in its coding column, so that copy read "in flight"
+        // forever and the head was never nudged again — silence halted, and
+        // the sweep that says so was muzzled. Every consumer, or none.
+        assert.ok(!/CODING_COLUMNS/.test(planEngineSrc),
+            'PlanIngestionEngine must not carry a CODING_COLUMNS in-flight predicate — '
+            + 'key on `completed_at` (the asserted fact) and the dispatch holder, never on board position');
+        // The queue-watch sweep's in-flight predicate must read the fact.
+        assert.ok(/const inFlight = board\.some\(p =>\s*\n\s*p && !p\.completedAt/.test(planEngineSrc),
+            'the queue-watch in-flight predicate must read `!p.completedAt`');
+        // The feature sweep's remaining-subtask filter must read it too.
+        assert.ok(/kanbanColumn !== 'COMPLETED' && !s\.completedAt/.test(planEngineSrc),
+            'the feature sweep must treat a subtask as remaining only until its completion post');
+    });
+
     await check('stopReason field exists on AutobanConfigState and is normalised', async () => {
         assert.ok(/stopReason\?:\s*string/.test(autobanStateSrc),
             'AutobanConfigState must declare an optional stopReason field');

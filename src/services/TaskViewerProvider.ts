@@ -14058,6 +14058,15 @@ Each plan file must include:
         // Mission Control can be armed simultaneously, and both call the
         // queue pop. The pop's 409 arbitrates between them.
         this._stopAutobanEngine();
+
+        // Starting clears any recorded halt reason. `stopReason` explains an OFF
+        // state; carrying the last halt's reason into a running schedule would
+        // make the reason a permanent fixture — set once, never absent again —
+        // and its display home (the schedules Logs view) would report a halt for
+        // a live engine. Absent reads as "no recorded reason", which is correct
+        // for an engine that is running.
+        delete this._autobanState.stopReason;
+
         const { batchSize } = this._autobanState;
 
         // The schedule calls the queue pop on each tick.

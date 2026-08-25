@@ -14,9 +14,9 @@ Make an explicit completion post the only way the system learns that work finish
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add a task-complete endpoint the lead posts to](../plans/add-a-task-complete-endpoint-for-the-lead.md) — **CODER CODED**
-- [ ] [Completion is asserted, never inferred — and silence halts](../plans/completion-is-asserted-never-inferred.md) — **CODER CODED**
-- [ ] [Revise the in-flight plans for asserted completion](../plans/revise-the-in-flight-plans-for-asserted-completion.md) — **CODER CODED**
+- [ ] [Add a task-complete endpoint the lead posts to](../plans/add-a-task-complete-endpoint-for-the-lead.md) — **CODE REVIEWED**
+- [ ] [Completion is asserted, never inferred — and silence halts](../plans/completion-is-asserted-never-inferred.md) — **CODE REVIEWED**
+- [ ] [Revise the in-flight plans for asserted completion](../plans/revise-the-in-flight-plans-for-asserted-completion.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -66,3 +66,7 @@ Hard chain: the endpoint lands first, then the anchor.
   - Each amendment states why the premise changed, not merely what changed.
 - **Scope constraints:** Deliverable is edited plan files, not code. Does NOT amend `add-a-task-complete-endpoint-for-the-lead.md` (precondition relationship already recorded in the anchor's Dependencies). Does NOT perform the streams plan split (records it as a recommendation only).
 
+
+## Review Findings
+
+Reviewed all three subtasks in place; no CRITICAL findings — the schema is additive, `PLAN_COLUMNS`/`_readRows` are single-sourced, both plan UPSERTs omit `completed_at` from `DO UPDATE SET` (so the plan-file watcher cannot clobber it), and `setCompletedAt` has exactly one caller. Four MAJOR findings were fixed: `PlanIngestionEngine.ts` kept a second, column-scoped copy of the in-flight predicate that read a completed card as in-flight forever and permanently muzzled the queue-watch stall nudge (`src/services/PlanIngestionEngine.ts:1743`, now keyed on `!p.completedAt` with the orphaned `CODING_COLUMNS` const removed); `stopReason` was never cleared, so a recorded halt survived re-arming (`src/services/TaskViewerProvider.ts` `_startAutobanEngine`); the CI-wired gate `test:contract:standing-orders-marker` was RED at HEAD because it still pinned the deleted `/kanban/dispatch` + `CODE REVIEWED` head-order contract (now repointed at `POST /kanban/task/complete`, 64 passed / 0 failed); and the category assertion was scoped to `LocalApiServer.ts` alone, which is why the second consumer shipped green — it now covers every in-flight consumer and was mutation-tested to confirm it fails on the pre-fix source. Verification: `npm run compile-tests` exit 0, and `task-complete`, `completion-asserted-never-inferred`, `queue-pipeline`, `coding-head-prompt`, `standing-orders-marker`, `autoban-state`, `dependency-gate`, `atomic-team-lifecycle` all green; gate-wiring audit confirms all three of this feature's gates are real `run:` steps in `.github/workflows/integration-tests.yml` (:920, :1131, :1137). Remaining risks: five suites are red at HEAD for unrelated reasons, verified pre-existing by running them against HEAD's own source (`stage-marker-commit` and `mission-control-tick` trace to the Aug-23 standing-orders-library commits `73ec9cfb`/`8bdccde3`; `terminal-plan-attribution` pins a `turnEndSilenceMs` literal the source renamed to `nudgeSilenceMs`; plus `feature-file-subtask-link` and `staging-column`), and two deferred NITs — a `plan_events` completion row is lost permanently if `appendPlanEventByPlanId` throws after `completed_at` is written, and `task/complete` bumps `updated_at` so it silently reorders the `updated_at DESC` board with no refresh broadcast.

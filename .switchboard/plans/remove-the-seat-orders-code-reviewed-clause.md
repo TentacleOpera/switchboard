@@ -40,16 +40,12 @@ The head holds both, because `applyTeamQueueOrders` installs the seat body at `t
 > Previously, because the system lacked an explicit completion signal, consumers attempted to guess completion from whatever durable trace was available. The seat order looked at board position ("all subtasks are in `LEAD CODED`") and inferred "The feature is complete — hand it to review." But cards move to coding columns on coding *start*, not finish, so that clause named an assignment state as an attestation and manufactured a "probably done" state out of silence.
 > 
 > With `completion-is-asserted-never-inferred.md` establishing explicit asserted completion and silence-halts semantics, all inference paths are eliminated as a category rather than site-by-site. This plan lands alongside the anchor plan (`completion-is-asserted-never-inferred.md`) as its first application.
+>
+> **Division of labour:** the anchor plan retires the report-file instruction in the head order and repoints the in-flight predicate at `completed_at`; this plan removes the seat order's board-position clause. Together they close all three inference sites the anchor identifies. Landing them together is what keeps the category rule and its first application from disagreeing in the interim.
 
 ### Root Cause
 
 The clause was written to solve a real problem — how does a *feature* (as opposed to a subtask) get advanced when its last subtask finishes? — and solved it with the information a seat had to hand: the board. The headPrompt later solved the same problem correctly, with the roster check and the reviewer-seat condition. The seat version was never removed, so both shipped.
-
-### Why the premise changed: this is the first application of the category rule
-
-> **Premise change (citing `completion-is-asserted-never-inferred.md`):** This plan was originally scoped as a local cleanup — one contradictory clause at one site. With the anchor plan's decision that completion is an asserted event (`POST /kanban/task/complete` writes `completed_at`), this plan is recognisably the **first application of the category rule**: no consumer derives completion from a kanban column. The clause it removes is one instance of that pattern — inferring "the feature is complete" from "all subtasks are in `LEAD CODED`" — and the anchor plan makes the pattern explicit so the next consumer does not re-derive it.
->
-> This plan should land alongside the anchor plan (`completion-is-asserted-never-inferred.md`) so the category rule and its first application do not disagree in the interim. The anchor plan retires the report-file instruction in the head order and repoints the in-flight predicate at `completed_at`; this plan removes the seat order's board-position clause. Together they close all three inference sites identified by the anchor.
 
 ## Metadata
 
