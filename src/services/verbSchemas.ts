@@ -322,6 +322,10 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
         fields: {
             featureId: { type: 'string', required: true },
             headTerminal: { type: 'string' },
+            // Accepted and discarded. The nudge keys on each subtask's completion
+            // post, not on column position. Kept in the schema so callers persisted
+            // before that change are not rejected — dropping it would turn a
+            // harmless stale field into a 400.
             stopColumns: { type: 'array' },
             workspaceRoot: { type: 'string' },
         },

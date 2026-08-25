@@ -127,7 +127,15 @@ async function main() {
     const watches = teamDb.store['kanban.featureWatches'];
     assert.deepStrictEqual(watches.map(watch => watch.featureId).sort(), ['existing', 'feature-1', 'feature-2']);
     for (const watch of watches.filter(item => item.featureId.startsWith('feature-'))) {
-        assert.deepStrictEqual(watch.stopColumns, ['CODE REVIEWED']);
+        // NO stopColumns. The nudge keys on each subtask's completion post
+        // (`completed_at`), never on kanbanColumn: a card enters a column when it
+        // reaches the team and does not leave while the team works it, so the column
+        // is CONSTANT for the whole run. Arming with ['CODE REVIEWED'] emptied the
+        // watch's remaining-work set on the first tick for any feature whose subtasks
+        // already sat there, so the one backstop for a lead that never posts deleted
+        // itself before observing anything.
+        assert.strictEqual(watch.stopColumns, undefined,
+            'the auto-arm must not carry a column — acceptance is the lead\'s post, not a board position');
         assert.strictEqual(watch.headTerminal, 'Coding-lead');
     }
 

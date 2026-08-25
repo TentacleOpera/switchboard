@@ -3766,12 +3766,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
     /**
      * Auto-arm a feature watch when a drive-mode FEATURE card is dispatched to a
-     * lead. The `stopColumns` value is deterministic for drive-mode leads —
-     * `["CODE REVIEWED"]` — because a drive-mode lead hands each subtask to the
-     * reviewer at CODE REVIEWED and its job per subtask ends there. Arming the
-     * watch here (instead of leaving it to the agent) removes the false stall
-     * notice that fired when an agent omitted the optional `stopColumns` line and
-     * the watch treated CODE REVIEWED subtasks as un-accepted.
+     * lead. Arming here rather than leaving it to the agent means the backstop
+     * does not depend on the lead remembering to ask for it.
+     *
+     * No `stopColumns`: the sweep keys on each subtask's `completed_at` — the
+     * lead's asserted completion post. An earlier revision passed
+     * `["CODE REVIEWED"]` here to stop a false stall notice, on the model that a
+     * drive-mode lead hands each subtask to the reviewer at CODE REVIEWED and its
+     * job ends there. That model does not hold: a card enters a column when it
+     * reaches the team and does not leave while the team works it, so the column
+     * was constant and the watch dropped itself on the first tick. The false
+     * notice it was patching came from having no per-subtask assertion to key on;
+     * the completion post is that assertion.
      *
      * Same DB write the `watchFeature` verb performs (filter-then-push replaces,
      * so re-arming is idempotent and never stacks duplicates). No-op when the
@@ -3807,7 +3813,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 armedAt: Date.now(),
                 lastNudgedAt: 0,
                 nudgeCount: 0,
-                stopColumns: ['CODE REVIEWED'],
             };
             await db.updateConfigJson<FeatureWatchRecord[]>(WATCH_KEY, [], watches => [
                 ...watches.filter(w => w.featureId !== featurePlanId),
@@ -5750,9 +5755,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
             '  -d \'{"name":"<seat>","data":"Implement the plan at <path>. This subtask only.","clearBeforePrompt":false,"dispatch":{"planId":"<id>","role":"coder"}}\'',
             '',
-            'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Post POST /kanban/task/complete only after accepting the work (acceptance clears the coder). Escalate after two failures on the same subtask: intern → coder → lead.',
+            'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead.',
             '',
-            'FEATURE WATCH: Armed by the system (stopColumns: CODE REVIEWED). You will be nudged if you go idle with un-accepted subtasks. No action needed.',
+            'CLOSE OUT EVERY SUBTASK — ALWAYS, no judgement call. When you are finished with a subtask, commit, then POST /kanban/task/complete with {"from":"<your terminal name>","planId":"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"} against the port in .switchboard/api-server-port.txt. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you post when the subtask is done. Post per subtask, with that subtask\'s planId — never the feature\'s. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next subtask.',
+            '',
+            'FEATURE WATCH: Armed by the system. You will be nudged if you go idle with subtasks you have not posted completion for. No action needed.',
             '',
             featureFileLine,
             '',
@@ -5761,9 +5768,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- Do NOT query kanban.db directly. The plan IDs are in your prompt; use the API for anything else.',
             '- Do NOT verify work before dispatching. The kanban column is the system\'s record, not a coder\'s claim.',
             '- Clear a terminal only when at rest (completion received AND next work goes elsewhere).',
-            '- The host auto-clears the full team roster once when a new feature run starts, and clears an accepted coder upon POST /kanban/task/complete. Coder self-report does not clear context — do not manually clear between subtasks or fixes before acceptance. Manual ptyClearTerminal is for the stand-down case only — a terminal you are putting away without dispatching new work to it. Clear at rest, always — the auto-clear enforces this at the system level; the manual clear enforces it for the stand-down path.',
+            '- The host auto-clears the full team roster once when a new feature run starts, and clears the accepted coder when you POST /kanban/task/complete. Coder self-report does not clear context — do not manually clear between subtasks or fixes. Manual ptyClearTerminal is for the stand-down case only — a terminal you are putting away without dispatching new work to it.',
+            '- You do NOT move cards. A card enters a column when it reaches this team and stays there while the team works it. Column position records nothing about your progress — your completion posts do.',
             '- clearBeforePrompt stays false on every dispatch — the host overrides it to true automatically when the plan changes. The caller\'s contract is unchanged.',
-            '- Every new feature run gets a fresh team context. Context is preserved across coder reports, review, fixes, and handoffs until lead acceptance clears the accepted coder.',
+            '- Every new feature run gets a fresh team context. Context is preserved across coder reports, review, fixes, and handoffs until your completion post clears the coder.',
             '- When a seat reports, its context is preserved for review. If standing the terminal down without new work, ptyClearTerminal it.',
             '- One subtask per terminal at a time. Use a second terminal for concurrency.',
             '- Every finding cites a plan clause. Quote the section or line the diff violates. A defect you cannot cite is a question report, not a dispatch.',
@@ -9970,7 +9978,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
                             }
                             // Auto-arm a feature watch for drive-mode feature
-                            // dispatches (stopColumns: CODE REVIEWED). No-op for
+                            // dispatches. No-op for
                             // non-drive or non-feature cards.
                             await this._autoArmDriveModeFeatureWatch(card, workspaceRoot);
                         }
@@ -10076,7 +10084,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 }
                             }
                             // Auto-arm a feature watch for drive-mode feature
-                            // dispatches to a lead (stopColumns: CODE REVIEWED).
+                            // dispatches to a lead.
                             // No-op for non-drive or non-feature cards. Separate
                             // from the pair-programming gate above so a feature
                             // dispatched to a non-LEAD-CODED lead column still arms.
@@ -11628,7 +11636,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (!featureId || !headTerminal) {
                     return { success: false, error: 'featureId and headTerminal are required' };
                 }
-                const stopColumns: string[] = Array.isArray(msg.stopColumns) ? msg.stopColumns : [];
+                // `msg.stopColumns` is accepted and DISCARDED. Callers persisted before
+                // the column read was removed still send it; the sweep keys on the lead's
+                // completion post now, so there is nothing to key it to. Reading it back
+                // off a stored watch record is likewise a no-op — the field is ignored,
+                // not rejected, so old `kanban.featureWatches` rows load unchanged.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
                     return { success: false, error: 'workspaceRoot could not be resolved' };
@@ -11645,7 +11657,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         armedAt: Date.now(),
                         lastNudgedAt: 0,
                         nudgeCount: 0,
-                        stopColumns: stopColumns.length > 0 ? stopColumns : undefined,
                     };
                     // Arming twice for the same feature REPLACES the watch rather
                     // than stacking — a head that re-arms after a restart must not

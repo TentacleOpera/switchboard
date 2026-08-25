@@ -204,29 +204,19 @@ export async function sendPromptToPty(
  * swallowed: a PTY that died between the active-check and the write has no
  * context left to reset, so the clear has effectively succeeded.
  *
- * `opts.awaitReadiness` makes the returned promise settle only once the cleared
- * CLI is actually ready for input, using the same detector sendPromptToPty uses.
- * The atomic-team preparation barrier REQUIRES it: without it the barrier resolves
- * ~70ms after writing `/clear` and the first prompt lands on a Devin seat that is
- * still tearing its session down — the exact race the detector exists to fix.
- * Left off by default so the fire-and-forget callers (the Clear button,
- * ptyClearAllTerminals) keep their current latency.
+ * Deliberately fire-and-forget, with NO readiness detection. Every caller of this
+ * function is a standalone clear — the Clear button, ptyClearAllTerminals, the
+ * team roster reset, the accepted-coder clear on lead acceptance. In each case
+ * the next write to that seat is minutes away (a lead has to read a diff and
+ * compose a prompt), so detecting the CLI's return to readiness buys nothing and
+ * stalls the caller behind the slowest seat. Readiness detection belongs to
+ * sendPromptToPty, the ONE path where a prompt follows the clear with no gap.
  */
-export async function clearPty(
-    handle: ExtendedTerminalHandle,
-    opts?: PromptDeliveryOptions & { awaitReadiness?: boolean }
-): Promise<ClearReadinessResult | undefined> {
-    return withTerminalLock(handle.name, async (): Promise<ClearReadinessResult | undefined> => {
+export async function clearPty(handle: ExtendedTerminalHandle): Promise<void> {
+    return withTerminalLock(handle.name, async () => {
         try {
-            if (opts?.awaitReadiness) {
-                return await clearAndAwaitReadinessLocked(handle, opts);
-            }
             await writeSlashCommandLocked(handle, '/clear');
-            return undefined;
-        } catch {
-            /* PTY died between check and write — nothing to clear */
-            return undefined;
-        }
+        } catch { /* PTY died between check and write — nothing to clear */ }
     });
 }
 

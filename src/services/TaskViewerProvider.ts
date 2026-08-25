@@ -510,21 +510,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (verb === 'ptyCloseTerminal' && typeof payload?.name === 'string') {
             this._lastDispatchedPlanByTerminal.delete(payload.name);
             this._lastWorkContextByTerminal.delete(payload.name);
-            // Closing a member invalidates the roster the run barrier was measured
-            // against. Dropping the team's run key makes the next dispatch re-barrier
-            // the whole live roster — which is what gives a seat that JOINS mid-run
-            // its clear before it is handed work. Worst case is one redundant barrier;
-            // the alternative is a new member inheriting the run with someone else's
-            // context. Mirrors bootstrap.ts's ptyCloseTerminal arm.
-            try {
-                const closedWsRoot = payload.workspaceRoot || this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '';
-                const closedDb = await this._getKanbanDb(closedWsRoot);
-                const closedTeam = await resolveTeamGroupForTerminal(closedDb, payload.name);
-                if (closedTeam?.id) {
-                    this._lastWorkContextByTeam.delete(closedTeam.id);
-                    this._teamPreparationChains.delete(closedTeam.id);
-                }
-            } catch { /* best effort — a stale key costs one extra barrier */ }
         }
         const seatCacheDropName =
             (verb === 'ptyClearTerminal' || verb === 'ptyRenameTerminal'
@@ -722,7 +707,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                     .filter((t: any) => t.status === 'active')
                                     .map((t: any) => t.friendlyName)
                             );
-                            const activeMembers = roster.filter(name => liveActiveNames.has(name));
+                            // SIBLINGS ONLY. The destination is excluded: it is about to receive
+                            // a prompt, so its clear belongs to the delivery path, which is the one
+                            // place a clear is followed by a write with no gap. Mirrors bootstrap.ts.
+                            const activeMembers = roster.filter(name => liveActiveNames.has(name) && name !== payload.name);
                             if (activeMembers.length > 0) {
                                 // Arm the curtain on EVERY roster pane before any clear I/O
                                 // starts. Without this the extension host runs a multi-second
@@ -783,7 +771,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         this._teamPreparationChains.set(teamId, prepPromise.catch(() => {}));
                         try {
                             await prepPromise;
-                            payload = { ...payload, clearBeforePrompt: false };
+                            // The destination clears itself through the delivery path, WITH readiness
+                            // — the prompt follows immediately. Suppressing it here was the hole: the
+                            // roster clear had already fired, so nothing waited for anything.
+                            payload = { ...payload, clearBeforePrompt: true };
                         } catch (prepErr) {
                             return {
                                 success: false,
@@ -10775,10 +10766,13 @@ Each plan file must include:
                             data: '',
                             clearBeforePrompt: true,
                             clearBeforePromptDelayMs: ptyPolicy.mode === 'manual' ? ptyPolicy.delayMs : ptyPolicy.unknownDelayMs,
-                            // _ptyHostVerb bypasses the HTTP-boundary injection block, so the
-                            // mode has to be carried explicitly — omitting it silently downgrades
-                            // a Manual operator to Auto detection on every acceptance clear.
-                            clearReadinessMode: ptyPolicy.mode,
+                            // Explicitly MANUAL, never the operator's Auto policy. This is a
+                            // standalone clear — the accepted coder, a reporting seat, a roster
+                            // reset — and the next write to it is minutes away. Running the
+                            // detector here would hold this call for up to 15s on a Devin seat to
+                            // learn something nothing is waiting on. The fixed delay is still
+                            // needed: _deliverStandingOrdersAfterClear writes immediately after.
+                            clearReadinessMode: 'manual',
                             // Empty payload — this is a pure /clear, no prompt.
                             addonsComposed: true
                         });

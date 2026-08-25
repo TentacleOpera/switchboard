@@ -117,10 +117,6 @@ export interface FeatureWatchRecord {
      *  finishes gets a fresh nudge. Old persisted records without this field
      *  are treated as 0 (not yet nudged) — `undefined >= 1` is false. */
     nudgeCount: number;
-    /** Optional kanban columns the head treats as "accepted" beyond COMPLETED
-     *  (e.g. CODE REVIEWED). A subtask parked in one of these counts as accepted
-     *  and does not keep the watch alive. */
-    stopColumns?: string[];
 }
 
 /**
@@ -1124,7 +1120,6 @@ export class PlanIngestionEngine {
 
         const originals = new Map(watches.map(watch => [watch.featureId, {
             ...watch,
-            stopColumns: watch.stopColumns ? [...watch.stopColumns] : undefined,
         }]));
         let mutated = false;
         const kept: FeatureWatchRecord[] = [];
@@ -1141,10 +1136,22 @@ export class PlanIngestionEngine {
                 continue;
             }
 
-            // (1) Feature still has ≥1 un-accepted subtask. getSubtasksByFeatureId
-            // filters status = 'active'; reaching COMPLETED sets status = 'completed',
-            // so "no rows" = the feature is done. A subtask parked in a `stopColumns`
-            // entry counts as accepted too (plain string compare on kanbanColumn).
+            // (1) Feature still has >=1 subtask with no completion post.
+            //
+            // Keyed on `completed_at` — the lead's asserted POST /kanban/task/complete —
+            // and NEVER on kanbanColumn. A card enters a column when it reaches the team
+            // and does not leave while the team works it, so `kanbanColumn` is CONSTANT
+            // for the whole run: as a termination condition it is either true on the
+            // first tick or never true, and it carries no progress information at all.
+            // The previous `stopColumns` check (default ['CODE REVIEWED']) emptied
+            // `remaining` on tick one for any feature whose subtasks were already in
+            // that column, so this watch — the only backstop for a lead that never
+            // posts — deleted itself before observing anything. Do not reintroduce a
+            // column read here.
+            //
+            // getSubtasksByFeatureId filters status = 'active'; reaching COMPLETED sets
+            // status = 'completed', so those rows are already absent. `completed_at` is
+            // on every row the query returns.
             let subtasks: KanbanPlanRecord[] = [];
             try {
                 subtasks = await db.getSubtasksByFeatureId(watch.featureId);
@@ -1154,11 +1161,10 @@ export class PlanIngestionEngine {
                 kept.push(watch);
                 continue;
             }
-            const stopSet = watch.stopColumns ? new Set(watch.stopColumns) : null;
-            const remaining = subtasks.filter(s => s.kanbanColumn !== 'COMPLETED' && (!stopSet || !stopSet.has(s.kanbanColumn)));
+            const remaining = subtasks.filter(s => s.kanbanColumn !== 'COMPLETED' && !s.completedAt);
             if (remaining.length === 0) {
                 this._host.logger.appendLine(
-                    `[GlobalPlanWatcher] Feature nudge: dropping watch for feature ${watch.featureId} — no un-accepted subtasks remain.`
+                    `[GlobalPlanWatcher] Feature nudge: dropping watch for feature ${watch.featureId} — every subtask has a completion post.`
                 );
                 mutated = true;
                 continue;

@@ -644,6 +644,33 @@ interface LocalApiServerOptions {
     };
 }
 
+/**
+ * The lead's completion post, rendered as a call it can execute — not as the name
+ * of an endpoint.
+ *
+ * This is the message that arrives at the exact moment a completion post becomes
+ * possible, addressed to the lead, and it is the only place that knows this
+ * subtask's real planId. Naming the endpoint in prose and leaving the lead to
+ * reconstruct `from` / `planId` / `workspaceRoot` from its standing orders is why
+ * the post is skipped: the only complete example anywhere else carries the
+ * FEATURE planId, so a lead that copies it completes the wrong row.
+ *
+ * `planId` is the SUBTASK's. Falls back to naming the field when the caller has
+ * no id to substitute, rather than emitting a call that would 400.
+ */
+function composeAcceptanceInstruction(
+    leadName: string,
+    planId: string | undefined,
+    workspaceRoot: string
+): string {
+    const idPart = planId ? JSON.stringify(planId) : '"<this subtask\'s planId>"';
+    return ' When you are done with this subtask, commit, then POST /kanban/task/complete with '
+        + `{"from":${JSON.stringify(leadName)},"planId":${idPart},"workspaceRoot":${JSON.stringify(workspaceRoot)}} `
+        + 'against the port in .switchboard/api-server-port.txt. Post every time — you reject by sending '
+        + `a fix round first, not by withholding the post. Until you post, the seat is not cleared and you `
+        + 'cannot be handed the next subtask.';
+}
+
 export class LocalApiServer {
     private _server: http.Server | null = null;
     private _port: number;
@@ -2579,7 +2606,8 @@ export class LocalApiServer {
                             + `${composeCompletionEvidence(held, Date.now())}.`
                             + ` ${TURN_END_VERIFY_INSTRUCTION}`
                             + (isTeamMember
-                                ? ` The system preserves ${from}'s context for review and fix requests. Accept with POST /kanban/task/complete to clear.`
+                                ? ` The system preserves ${from}'s context for review and fix requests.`
+                                    + composeAcceptanceInstruction(relayHead, relayPlanId, workspaceRoot)
                                 : ` The system is clearing ${from} and dispatching the next card.`);
                         try {
                             // ptySendPrompt reports a dead or unknown recipient
@@ -4546,7 +4574,8 @@ export class LocalApiServer {
                     // block is pure inflation on the relay path).
                     const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
                         + (planId ? ` (plan ${planId})` : '')
-                        + `. The system preserves ${from}'s context for review and fix requests. Accept with POST /kanban/task/complete to clear.`;
+                        + `. The system preserves ${from}'s context for review and fix requests.`
+                        + composeAcceptanceInstruction(headName, planId, workspaceRoot);
                     if (this._options.terminalVerb) {
                         try {
                             await this._options.terminalVerb('ptySendPrompt', {

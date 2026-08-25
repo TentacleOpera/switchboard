@@ -257,3 +257,22 @@ Implemented atomic team work-context lifecycle keyed by canonical `featureId ?? 
 ## Review Findings
 
 Reviewed and fixed. **Files changed:** `src/standalone/bootstrap.ts`, `src/services/TaskViewerProvider.ts`, `src/services/LocalApiServer.ts`, `src/services/workContextResolver.ts`, `src/standalone/ptyPromptDelivery.ts`, `src/test/host-auto-clear-on-plan-change.test.js`, `src/test/atomic-team-feature-run-context-lifecycle.test.js`, `package.json`, `.github/workflows/integration-tests.yml`. Five defects, in severity order: the standalone roster barrier called `clearPty()`, which returns ~70ms after writing `/clear` and never waits for readiness — so the barrier released while a Devin seat was still rebuilding and the first prompt then went out with `clearBeforePrompt:false`, i.e. with no detector at all, reproducing the original race on the team path (`clearPty` now takes `awaitReadiness`); `resolveTeamGroupForTerminal` matched any `terminals.groups` row instead of calling `isSpawnedTeamGroup`, so a hand-saved terminal *selection* containing the dispatched seat would `/clear` every other terminal in it; the non-team compare OR-ed `lastPlanId !== planId` back in beside the work-context compare, which clears a solo seat between two subtasks of one feature — exactly what this plan removes; `task/complete`'s "canonical dispatch event" fallback scanned `plan_events` for `role` + `terminal` rows that no writer produces (the only writers are this handler's own `completed` event and SessionActionLog's `workflow_event`), so it was dead code wearing the shape of evidence — replaced with a live-fleet role lookup that covers the real case where `attributePasteDispatch` moves `dispatched_terminal` without touching `routed_to`; and `isTeamMember` was resolved twice in `queue/done`, letting the relay text and the clear decision disagree. Also added the plan's missing team-key teardown on member close (both hosts) so a seat joining mid-run gets its clear. **Validation:** `compile-tests`, `compile`, `lint` (0 errors) clean; `atomic-team-lifecycle`, `task-complete`, `host-auto-clear`, `queue-done-relay`, `pty-route-surface`, `pty-prompt-delivery-framing`, `clear-readiness` all green, and the first three are newly invoked by CI (they had no npm script at all). **Remaining risks:** the standalone host still wires no `clearTerminalContext`, so lead acceptance clears nothing there — pre-existing, not introduced here, and it needs its own plan; and `_lastDispatchedPlanByTerminal` is now write-only in both hosts, kept only for its map-maintenance contract.
+
+### Correction (post-review, operator direction)
+
+The readiness barrier described above is withdrawn. Within a team the clear is
+always separated from the next write by lead latency — the lead has to read a
+diff and compose a prompt — so detecting CLI readiness on a roster clear or an
+acceptance clear buys nothing and stalls the run behind the slowest seat.
+Readiness detection is now confined to `sendPromptToPty`, the one path where a
+prompt follows the clear with no gap; `clearPty` is fire-and-forget again, the
+roster clear covers siblings only, and the destination clears itself through the
+delivery path. The real defect this plan should have addressed is that the
+lead's completion post was optional in practice: it was described in three
+inconsistent places (the only complete example carried the FEATURE planId), and
+both mechanisms that could have caught its absence — the feature nudge and the
+team in-flight 409 — key on `kanbanColumn`, which is CONSTANT while a team works
+a card and therefore carries no progress information. The post is now
+unconditional in the lead's orders, rendered as an executable call in the
+queue/done relay with the subtask's real planId, and the nudge keys on
+`completed_at`; `stopColumns` is removed end to end.

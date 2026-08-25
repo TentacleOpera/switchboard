@@ -1594,21 +1594,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const ok = ptyFleetService.kill(payload.name);
                     lastDispatchedPlanByTerminal.delete(payload.name);
                     lastWorkContextByTerminal.delete(payload.name);
-                    // Closing a member invalidates the roster the run barrier was
-                    // measured against. Dropping the team's run key makes the next
-                    // dispatch re-barrier the whole live roster — which is what
-                    // gives a seat that JOINS mid-run its clear before it is handed
-                    // work. Worst case is one redundant barrier; the alternative is
-                    // a new member inheriting the run with someone else's context.
-                    if (typeof payload?.name === 'string') {
-                        try {
-                            const closedTeam = await resolveTeamGroupForTerminal(db, payload.name);
-                            if (closedTeam?.id) {
-                                lastWorkContextByTeam.delete(closedTeam.id);
-                                teamPreparationChains.delete(closedTeam.id);
-                            }
-                        } catch { /* best effort — a stale key costs one extra barrier */ }
-                    }
                     return { success: ok };
                 }
 
@@ -1833,7 +1818,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     }
                                     const active = ptyFleetService.listActive();
                                     const activeNames = new Set(active.map(t => t.friendlyName));
-                                    const activeMembers = roster.filter(name => activeNames.has(name));
+                                    // SIBLINGS ONLY. The destination is deliberately excluded: it is about
+                                    // to receive a prompt, so its clear belongs to sendPromptToPty, which
+                                    // is the one place a clear is followed by a write with no gap and
+                                    // therefore the one place readiness detection is worth paying for.
+                                    const activeMembers = roster.filter(name => activeNames.has(name) && name !== payload.name);
                                     if (activeMembers.length > 0) {
                                         const teamOpId = `team-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
                                         const handles = activeMembers.map(name => ptyFleetService.get(name)).filter(Boolean);
@@ -1850,36 +1839,29 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                                 }, SURFACES.terminals);
                                             } catch { /* best effort */ }
                                         }
+                                        // Fire and forget. NOT a readiness barrier: a sibling does not
+                                        // receive work until the lead reads a diff and composes a prompt
+                                        // for it, which is minutes, not milliseconds. Detecting readiness
+                                        // here buys nothing and stalls the run behind the slowest seat.
                                         let teamErr: Error | null = null;
-                                        let readinessResults: Array<ClearReadinessResult | undefined> = [];
                                         try {
-                                            // awaitReadiness is load-bearing: a bare clearPty resolves ~70ms
-                                            // after writing /clear, so the barrier would release while a Devin
-                                            // seat is still rebuilding its session — and the first prompt then
-                                            // goes out with clearBeforePrompt:false, i.e. with NO detector at
-                                            // all. That is the original bug, reproduced on the team path.
-                                            readinessResults = await Promise.all(handles.map(h => clearPty(h!, {
-                                                awaitReadiness: true,
-                                                clearReadinessMode: deliveryDefaults.clearReadinessMode,
-                                                clearBeforePromptDelayMs: deliveryDefaults.clearBeforePromptDelayMs,
-                                                cliFamily: h!.cliFamily,
-                                            })));
+                                            await Promise.all(handles.map(h => clearPty(h!)));
                                         } catch (err: any) {
                                             teamErr = err;
                                             throw err;
                                         } finally {
-                                            handles.forEach((h, i) => {
+                                            for (const h of handles) {
                                                 try {
                                                     server.broadcastWs('terminalDispatchFinished', {
                                                         type: 'terminalDispatchFinished',
                                                         operationId: teamOpId,
                                                         terminalName: h!.friendlyName,
                                                         success: !teamErr,
-                                                        reason: teamErr ? 'error' : (readinessResults[i]?.reason || 'fallback'),
+                                                        reason: teamErr ? 'error' : 'signal',
                                                         elapsedMs: Math.max(0, Date.now() - startAt),
                                                     }, SURFACES.terminals);
                                                 } catch { /* best effort */ }
-                                            });
+                                            }
                                         }
                                     }
                                     lastWorkContextByTeam.set(teamId, workContextKey);
@@ -1887,7 +1869,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 teamPreparationChains.set(teamId, prepPromise.catch(() => {}));
                                 try {
                                     await prepPromise;
-                                    payload.clearBeforePrompt = false;
+                                    // The destination clears itself, through the delivery path, WITH
+                                    // readiness — the prompt follows immediately, so this is the gap
+                                    // that actually needs detecting. Suppressing it here was the hole:
+                                    // the roster clear had already fired, so nothing waited for anything.
+                                    payload.clearBeforePrompt = true;
                                 } catch (prepErr) {
                                     return {
                                         success: false,
