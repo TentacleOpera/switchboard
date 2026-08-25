@@ -237,3 +237,70 @@ byte-identical to today.
     marker; assert neither changes what the agent is told to do.
 12. **Latency stated.** Assert the documented poll interval matches observed behaviour, so nobody
     debugs a delay that is by design.
+
+## Status-dispatch is not legacy — decision 1 revised
+
+*Appended after review. This supersedes the recommendation in User Review decision 1.*
+
+Decision 1 recommended shipping assignment beside status-dispatch and then retiring status-dispatch,
+on the grounds that two dispatch gestures is the clunkiness this work exists to remove. **That is
+wrong, and the reason matters.**
+
+**Status-dispatch is Switchboard's programmatic surface inside Linear.** Assignment is a gesture a
+*human* performs. A status change is something *anything in the workspace* can perform — Linear's
+own automations, other integrations, and in particular **Linear's native agent**, which is included
+rather than paid for and can take actions inside Linear. Retiring status-dispatch would close the
+only door Linear-side automation can come through.
+
+**Which enables a third layer neither of the other two provides.** A launch playbook can be written
+as instructions the native agent follows, and the operator writes `@linear launch` on a mission
+card. The native agent performs the Linear-side moves; Switchboard's existing status poll picks them
+up and does the local work. The interpretation happens in Linear's cloud, so it does not depend on
+the operator's machine being awake — only the execution does.
+
+**And the playbook already has a home.** Switchboard syncs a "Switchboard Project Context" document
+onto the Linear project, regenerated from `project.html` on every sync — the remote skill records
+that it must never be edited on the tracker because it is overwritten. That makes it exactly the
+right carrier for a machine-readable launch playbook: authored locally, published outward, always
+current, and readable by an agent operating inside Linear.
+
+### The three layers, and why three is not clunky
+
+| Layer | Gesture | Driven by |
+|---|---|---|
+| Status | move a card | anything Linear-side, including the native agent |
+| Assignment | assign to Switchboard | a human, directly |
+| Natural language | `@linear launch` on a card | a human, via the native agent |
+
+Clunkiness was never a count of mechanisms — it was *two mechanisms for one job, distinguishable
+only by which object you happened to be looking at*. These have distinct owners: a mechanical API, a
+direct human action, and a language layer that drives the API. Each is the obvious choice in its own
+context.
+
+### The risk this introduces, and how to shape it
+
+`retire-comment-delta-dispatch.md` states the principle directly: "staging is mechanical, and no
+judgement belongs in the correctness path of the one mechanism whose value is having none." An LLM
+in front of status-dispatch reintroduces judgement into exactly that mechanism, and the failure is
+not a wrong label — it is **coders dispatched onto the wrong work**.
+
+Three mitigations, none of which requires new machinery:
+
+1. **A narrow, enumerable action set in the playbook.** Not "decide what to launch" but "move every
+   card carrying milestone X from the staging status to the coding status". The playbook's value is
+   that it removes discretion, not that it grants it.
+2. **Dedupe indifferent to who moved the card.** This plan already requires dispatch dedupe keyed on
+   existing dispatch state; the native-agent path makes it load-bearing rather than defensive. A
+   playbook that half-completes and is re-run must not double-dispatch.
+3. **Capture the actor on inbound moves.** A card moved by the native agent is indistinguishable
+   from one moved by the operator. Recording which allows a surprising dispatch to be traced to a
+   sentence someone wrote rather than a drag someone made — and it is the only way to audit a
+   language-driven action after the fact.
+
+### Revised recommendation
+
+**Keep all three, permanently.** Ship assignment as an addition, not a replacement. Do not deprecate
+status-dispatch, and do not treat its column mappings as legacy — they are the contract the native
+agent and every other Linear-side actor depends on, which raises rather than lowers the importance
+of `_mapColumnsToStates` being correct and of an unmapped column not failing silently at
+`LinearSyncService.ts:2230`.
