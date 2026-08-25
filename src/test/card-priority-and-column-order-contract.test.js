@@ -280,6 +280,17 @@ check('setColumnOrders writes 1..N inside one transaction', () => {
         'concurrent reorders must not interleave — one transaction, rolled back on failure');
 });
 
+check('the queue pop has no star exception — eligibility is a filter, ordering is the sort', () => {
+    assert.ok(!/checkStagePredecessor|_starRefusal|starRefusal/.test(apiServer),
+        'the star-yields-to-stage-order branch must stay deleted. Missions live only in STAGING and membership is containment, so a plan dropped onto a mission is not a board card at all — there are no loose sequenced cards here to conflict. The dependency gate is universal and owned by the streams plan (`queue/next must refuse a card whose dependency predecessors are incomplete`), not a star exception. A star that silently stops working under an invisible condition is worse than no star.');
+    const popIdx = apiServer.indexOf('const candidates = board');
+    const body = apiServer.slice(popIdx, apiServer.indexOf('── Dispatch', popIdx));
+    assert.ok(/const next = candidates\[0\]/.test(body),
+        'the pop must take the first candidate outright — anything that makes a card ineligible belongs in isQueueable');
+    assert.ok(!/if \(next\?\.priorityStarred\)/.test(apiServer),
+        'nothing may branch on priorityStarred outside the comparator');
+});
+
 check('both new verbs are in the generated allowlist (the browser cockpit rail)', () => {
     assert.ok(/'setPriorityStarred'/.test(allowlist),
         "setPriorityStarred missing from KANBAN_VERBS — handleServiceVerb throws on it, so the star is dead over /kanban/verb/*. Run `npm run catalog:generate`.");

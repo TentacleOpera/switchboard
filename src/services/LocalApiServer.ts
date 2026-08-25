@@ -43,29 +43,6 @@ import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQ
 import { composeCompletedTurnEndBody, composeCompletionEvidence, TURN_END_VERIFY_INSTRUCTION } from './PlanIngestionEngine';
 import { compareByPrecedence } from './kanbanOrdering';
 
-/**
- * V63 — Check whether a starred STAGING card has an incomplete stage predecessor.
- * Returns a stated refusal reason if the star should yield to dependency order,
- * or null if the star applies normally (no predecessor, or predecessor complete,
- * or no stage map exists yet — the streams plan has not landed).
- *
- * This is a forward-compatible hook: when the streams plan lands and cards carry
- * a stage map, this function reads it to determine predecessor state. Until then
- * it is a no-op (returns null) because no card has a stage map.
- */
-function checkStagePredecessor(_card: any, _candidates: any[], _board: any[]): string | null {
-    // The stage map field (e.g. card.stageMap / card.stageOrder) does not exist
-    // yet — it is owned by the staging-streams-parallel-dispatch-and-worktrees
-    // plan. When it lands, this function will:
-    //   1. Read the card's stage map to find its predecessor in the stream.
-    //   2. Check whether that predecessor is complete (completedAt set, or not
-    //      in STAGING / not dispatched).
-    //   3. If incomplete, return a stated reason like:
-    //      `starred card ${card.planId} has incomplete predecessor ${predId} in stage N`
-    // Until then, no card has a stage map → no predecessor → star applies normally.
-    return null;
-}
-
 /** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
  *  'lead_coded' / 'Lead Coded' all → 'LEAD CODED'. */
 function _canonColumnRef(s: string): string {
@@ -1968,35 +1945,24 @@ export class LocalApiServer {
             if (candidates.length === 0) {
                 return { status: 200, payload: { success: true, dispatched: null, reason: 'queue empty' } };
             }
-            let next = candidates[0];
-
-            // V63: a starred card yields to dependency/stage order in STAGING.
-            // Mission streams sequence work so a card cuts from its predecessor's
-            // result; a starred card jumping ahead of an incomplete predecessor
-            // produces exactly the conflict the stage map exists to prevent. If
-            // the top candidate is starred AND has an incomplete stage predecessor,
-            // refuse the star's precedence with a stated reason and fall back to
-            // the non-starred order (the next candidate by queue_position).
+            // Precedence decides the order; it never decides eligibility. Anything
+            // that makes a card ineligible — already dispatched, a subtask, and (when
+            // the streams plan lands) a dependency predecessor that has not asserted
+            // completion — belongs in isQueueable above, as a filter. The plan's own
+            // rule: "In-progress exclusion stays a filter, never a sort."
             //
-            // The stage map is owned by the streams plan (staging-streams-parallel-
-            // dispatch-and-worktrees). If that plan has not landed, no card carries
-            // a stage map, so there is no predecessor to check — the star applies
-            // normally. This guard is the forward-compatible hook: when the stage
-            // map lands, the check reads it; until then it is a no-op.
-            if (next?.priorityStarred) {
-                const stageRefusal = checkStagePredecessor(next, candidates, board);
-                if (stageRefusal) {
-                    // Fall back to the first non-starred candidate (normal queue_position order).
-                    const fallback = candidates.find((c: any) => !c.priorityStarred);
-                    if (fallback) {
-                        next = fallback;
-                    }
-                    // The refusal reason is surfaced in the response payload below
-                    // (added to the dispatch result) so Mission Control / the UI can
-                    // show why the star was refused.
-                    (next as any)._starRefusal = stageRefusal;
-                }
-            }
+            // An earlier revision special-cased this: a starred card with an
+            // incomplete predecessor was refused and the star handed to the next
+            // candidate. That was wrong three ways. Missions live only in STAGING and
+            // membership is containment — a plan dropped onto a mission stops being a
+            // board card at all (staging-streams-parallel-dispatch-and-worktrees.md,
+            // "Missions live only in STAGING"), so there are no loose sequenced cards
+            // in this column to conflict. The dependency gate is universal and already
+            // owned by that plan ("queue/next must refuse a card whose dependency
+            // predecessors are incomplete"), not a star exception. And a star that
+            // silently stops working under a condition the user cannot see is worse
+            // than no star. Filter first, then sort, and the two never interact.
+            const next = candidates[0];
 
             // ── Dispatch ───────────────────────────────────────────────
             // Detect whether `from` names an external head (non-terminal agent).
@@ -2107,15 +2073,7 @@ export class LocalApiServer {
             }
             return {
                 status: 200,
-                payload: {
-                    success: true,
-                    dispatched: outcome.payload,
-                    from,
-                    // V63: surface the star-yields-to-stage-order refusal reason
-                    // (if any) so Mission Control / the UI can show why a starred
-                    // card was not dispatched ahead of its predecessor.
-                    ...(next._starRefusal ? { starRefusal: next._starRefusal } : {})
-                }
+                payload: { success: true, dispatched: outcome.payload, from }
             };
         } catch (err) {
             console.error('[LocalApiServer] _runQueuePop error:', err);
