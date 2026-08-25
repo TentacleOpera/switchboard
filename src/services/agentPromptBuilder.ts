@@ -187,6 +187,8 @@ export interface PromptBuilderOptions {
     reviewerCompactPlanUpdateEnabled?: boolean;
     /** When true (default), the reviewer prompt forbids creating separate .md review artifact files. */
     noSeparateReviewArtifactsEnabled?: boolean;
+    /** When true, the reviewer appends remaining risks as entries to .switchboard/memo.md for later triage. */
+    reviewerRisksToMemoEnabled?: boolean;
     /** When true, reviewer runs in read-only mode (no code fixes or commits). */
     readOnlyReview?: boolean;
     /** Distinct phase for review team turns: 'review' (read-only) or 'fix' (write-enabled). */
@@ -993,6 +995,7 @@ If all four sections already exist with substantive content, leave them untouche
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
 export const NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE = `NO SEPARATE REVIEW ARTIFACTS: Do NOT create separate review artifact files (review.md, review_notes.md, review_artifact.md, grumpy_critique.md, balanced_review.md, or any similarly-named new file) at any point in this task. Omit the review-artifact creation step entirely. Record your findings in your response and in the existing target plan file, per the COMPLETION REPORT step. A new .md file in the workspace is imported as a duplicate card on the kanban board.`;
+export const REVIEWER_RISKS_TO_MEMO_DIRECTIVE = `REMAINING RISKS TO MEMO: After completing your review, append each remaining risk as a separate entry to the workspace root's .switchboard/memo.md (create the file if it does not exist). If a MEMO FILE line follows this paragraph, that absolute path is authoritative — use it verbatim. Otherwise resolve .switchboard/memo.md against the main workspace checkout, never a worktree-local .switchboard/ — a worktree's copy is discarded on cleanup, which loses the risks. Separate each entry from the preceding content by a blank line so the memo parser can split them into distinct entries. Each entry should be a concise, actionable description of the risk (1-3 sentences) — enough context for a future planning pass to understand the issue without re-reading the review. If there are no remaining risks, skip this step. Do NOT clear or truncate existing memo content — append only.`;
 export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: After completing each subtask, append a brief summary (3-5 sentences) to a ## Implementation Notes section at the END of the feature overview file — the feature file is the entry tagged [FEATURE: ...] Plan File: in PLANS TO PROCESS above. Place the ## Implementation Notes section AFTER the auto-generated Subtasks and Worktrees blocks; if it does not exist, create it. For each subtask note include: what you implemented, files changed, and any issues or decisions the next subtask's agent needs to know. These notes are a context relay — they let the next subtask pick up where you left off without re-reading your code changes. If you are handling subtasks in parallel via subagents/worktrees, do NOT have parallel subtasks append individually — instead, after all subtasks complete and their worktrees merge back, append a single consolidated note for the batch. If the feature file is not present, skip this step. This is in addition to the per-plan completion POST (POST /kanban/queue/done, which signals task completion to the kanban board); do not skip either. Do NOT skip this step.`;
 // CODING_COMPLETION_REPORT_DIRECTIVE is the completion-protocol handshake. It
 // tells the dispatched agent to POST /kanban/queue/done when ALL work is complete.
@@ -1628,6 +1631,7 @@ export function buildKanbanBatchPrompt(
     const reviewerConciseModeEnabled = options?.reviewerConciseModeEnabled ?? false;
     const reviewerCompactPlanUpdateEnabled = options?.reviewerCompactPlanUpdateEnabled ?? false;
     const noSeparateReviewArtifactsEnabled = options?.noSeparateReviewArtifactsEnabled ?? true;
+    const reviewerRisksToMemoEnabled = options?.reviewerRisksToMemoEnabled ?? true;
     const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
     // Granular git policy strategies. The config layer (KanbanProvider._getPromptsConfig)
     // owns the work-on-main defaults for built-in code roles; `undefined` here means
@@ -1982,6 +1986,19 @@ UNATTENDED IMPROVER CONTRACT:
             ? NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE
             : '';
 
+        // §Memo path — the absolute memo path is rendered HERE, at build time, for the
+        // same reason apiPort is plumbed in rather than read from a file: a reviewer
+        // running in a worktree CWD resolves a bare `.switchboard/memo.md` against the
+        // worktree, whose copy is discarded on cleanup — losing exactly the risks this
+        // directive exists to preserve. The reviewer prompt carries no `WORKSPACE_ROOT=`
+        // line (only the dispatch-analysis and Mission Control prompts emit one), so
+        // the path cannot be resolved from the prompt unless it is written out.
+        const reviewerRisksToMemoBlock = reviewerRisksToMemoEnabled
+            ? (options?.workspaceRoot
+                ? `${REVIEWER_RISKS_TO_MEMO_DIRECTIVE}\nMEMO FILE: ${path.join(options.workspaceRoot, '.switchboard', 'memo.md')}`
+                : REVIEWER_RISKS_TO_MEMO_DIRECTIVE)
+            : '';
+
         // REVIEW UNIT — names the coded commit(s) the reviewer is reviewing, so review
         // runs against a bounded diff instead of whatever sits in a shared working tree.
         // The CALLER resolves the shas (KanbanProvider dispatch path, git log --all-match);
@@ -2000,7 +2017,8 @@ UNATTENDED IMPROVER CONTRACT:
             featureDirectiveBlock,
             reviewUnitBlock,
             `PLANS TO PROCESS:\n${planList}`,
-            noSeparateReviewArtifactsBlock
+            noSeparateReviewArtifactsBlock,
+            reviewerRisksToMemoBlock
         ].filter(Boolean).join('\n\n');
 
         return normalizeNewlines(promptParts);
@@ -2614,6 +2632,7 @@ export function buildCustomAgentPrompt(
     if (addons?.pairProgrammingEnabled) prompt += `\n\nPAIR PROGRAMMING NOTE: Focus only on Complex / Risky (Band B) implementation steps. A separate Coder agent is handling Routine (Band A) tasks.`;
     if (addons?.aggressivePairProgramming) prompt += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
     if (addons?.advancedReviewerEnabled) prompt += '\n\n' + ADVANCED_REVIEWER_DIRECTIVE;
+    if (addons?.reviewerRisksToMemoEnabled) prompt += '\n\n' + REVIEWER_RISKS_TO_MEMO_DIRECTIVE;
 
     if (addons?.ticketUpdateMode && addons.ticketUpdateMode !== 'disabled') {
         const directive = addons.ticketUpdateMode === 'refine-ticket'

@@ -13,6 +13,7 @@ import {
     SWITCHBOARD_LIVENESS_DIRECTIVE
 } from '../agentPromptBuilder';
 import { buildReconcilePrompt } from '../schedulerPresets';
+import { AgentSkillExporter } from '../AgentSkillExporter';
 
 suite('agentPromptBuilder', () => {
     const makePlans = (count: number) =>
@@ -189,6 +190,79 @@ suite('agentPromptBuilder', () => {
             });
             assert.ok(prompt.includes('NO SEPARATE REVIEW ARTIFACTS'), 'Should include noSeparateReviewArtifacts directive');
             assert.ok(prompt.includes('COMPLETION REPORT:'), 'Should include completion report directive');
+        });
+
+        test('reviewerRisksToMemo directive is injected by default for reviewer', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes('REMAINING RISKS TO MEMO'), 'Should include reviewerRisksToMemo directive by default');
+        });
+
+        test('reviewerRisksToMemoEnabled: false omits reviewerRisksToMemo directive', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                reviewerRisksToMemoEnabled: false,
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(!prompt.includes('REMAINING RISKS TO MEMO'), 'Should omit reviewerRisksToMemo directive when disabled');
+        });
+
+        test('reviewerRisksToMemo default does not leak into non-reviewer roles', () => {
+            for (const role of ['coder', 'lead', 'intern', 'tester', 'planner']) {
+                const prompt = buildKanbanBatchPrompt(role, makePlans(1), {
+                    switchboardSafeguardsEnabled: false,
+                    gitProhibitionEnabled: false
+                });
+                assert.ok(!prompt.includes('REMAINING RISKS TO MEMO'), `${role} prompt must not include reviewerRisksToMemo directive`);
+            }
+        });
+
+        test('reviewerRisksToMemo renders an absolute MEMO FILE path from workspaceRoot', () => {
+            // The reviewer prompt carries no WORKSPACE_ROOT= line, so the memo path has
+            // to be rendered at build time or a reviewer in a worktree CWD writes its
+            // risks into the worktree's .switchboard/, which cleanup discards.
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                workspaceRoot: '/tmp/ws-root',
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes('MEMO FILE: /tmp/ws-root/.switchboard/memo.md'), 'Should render the absolute memo path');
+            assert.ok(!prompt.includes('WORKSPACE_ROOT from the dispatch context'), 'Must not point at a WORKSPACE_ROOT line the reviewer prompt never emits');
+        });
+
+        test('reviewerRisksToMemo omits the MEMO FILE line when no workspaceRoot is supplied', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes('REMAINING RISKS TO MEMO'), 'Directive still present');
+            assert.ok(!prompt.includes('MEMO FILE:'), 'No dangling MEMO FILE line without a workspace root');
+        });
+
+        test('reviewerRisksToMemoEnabled flows through buildCustomAgentPrompt', () => {
+            const on = buildCustomAgentPrompt(makePlans(1), 'Review things.', { reviewerRisksToMemoEnabled: true });
+            assert.ok(on.includes('REMAINING RISKS TO MEMO'), 'Custom agent with the addon must carry the directive');
+
+            const off = buildCustomAgentPrompt(makePlans(1), 'Review things.', {});
+            assert.ok(!off.includes('REMAINING RISKS TO MEMO'), 'Custom agents stay explicit opt-in — no reviewer default inheritance');
+        });
+
+        test('AgentSkillExporter.normalizeBuiltinAddons role-gates the risks-to-memo default', () => {
+            // The role gate is the riskiest line in this feature: normalizeBuiltinAddons
+            // runs for EVERY built-in role, so a bare `?? true` would render a
+            // "Risks to Memo" section into coder/tester/planner skill exports.
+            const normalize = (AgentSkillExporter as any).normalizeBuiltinAddons.bind(AgentSkillExporter);
+
+            assert.strictEqual(normalize({ switchboardSafeguards: true }, 'reviewer').reviewerRisksToMemoEnabled, true,
+                'reviewer defaults ON when the key is absent');
+            assert.strictEqual(normalize({ reviewerRisksToMemo: false }, 'reviewer').reviewerRisksToMemoEnabled, false,
+                'explicit false is honoured for the reviewer');
+            for (const role of ['coder', 'lead', 'intern', 'tester', 'planner', 'analyst']) {
+                assert.strictEqual(normalize({ switchboardSafeguards: true }, role).reviewerRisksToMemoEnabled, false,
+                    `${role} must not inherit the reviewer default`);
+            }
         });
 
         test('cavemanOutputEnabled: true injects caveman directive', () => {

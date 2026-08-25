@@ -8,7 +8,8 @@ import {
     WORKTREES_PER_PLAN_DIRECTIVE,
     CAVEMAN_OUTPUT_DIRECTIVE,
     SUPPRESS_WALKTHROUGH_DIRECTIVE,
-    NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE
+    NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE,
+    REVIEWER_RISKS_TO_MEMO_DIRECTIVE
 } from './agentPromptBuilder';
 
 export class AgentSkillExporter {
@@ -92,6 +93,10 @@ export class AgentSkillExporter {
         if (builtinAddons.reviewerConciseMode !== undefined) out.reviewerConciseModeEnabled = !!builtinAddons.reviewerConciseMode;
         if (builtinAddons.reviewerCompactPlanUpdate !== undefined) out.reviewerCompactPlanUpdateEnabled = !!builtinAddons.reviewerCompactPlanUpdate;
         out.noSeparateReviewArtifactsEnabled = builtinAddons.noSeparateReviewArtifacts ?? true;
+        // Default ON for the reviewer, but role-gated: normalizeBuiltinAddons is
+        // called for every built-in role, and a bare `?? true` would render the
+        // Risks-to-Memo section into coder/tester/planner skill exports too.
+        out.reviewerRisksToMemoEnabled = role === 'reviewer' ? (builtinAddons.reviewerRisksToMemo ?? true) : false;
         if (builtinAddons.leadChallenge !== undefined) out.includeInlineChallenge = !!builtinAddons.leadChallenge;
         if (builtinAddons.accurateCoding !== undefined) out.accurateCodingEnabled = !!builtinAddons.accurateCoding;
         if (builtinAddons.pairProgramming !== undefined) out.pairProgrammingEnabled = !!builtinAddons.pairProgramming;
@@ -256,6 +261,13 @@ export class AgentSkillExporter {
             lines.push('### No Separate Review Artifacts');
             lines.push('```');
             lines.push(NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE);
+            lines.push('```');
+            lines.push('');
+        }
+        if (addons.reviewerRisksToMemoEnabled) {
+            lines.push('### Risks to Memo');
+            lines.push('```');
+            lines.push(REVIEWER_RISKS_TO_MEMO_DIRECTIVE);
             lines.push('```');
             lines.push('');
         }
