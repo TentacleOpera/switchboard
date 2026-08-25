@@ -3,7 +3,7 @@
 ## Goal
 
 Reduce the WORKTREES tab from a five-section console with three creation forms,
-two settings blocks and a 90-word essay to one list of worktrees with per-row
+two settings blocks and 140 words of prose to one list of worktrees with per-row
 actions. Creation belongs to the two controls the consolidation settled on — the
 STAGING toggle for features, the strip button for projects — and the tab's job is
 to show what exists and let you merge or clean it up.
@@ -43,7 +43,7 @@ shape that lets one drift from the other two — the per-row Merge prompt button
 exists in `renderWorktreeRow`, so it is shared, but everything wrapping it is
 triplicated.
 
-**3. Prose where a column would do.** The tab opens with a paragraph explaining
+**3. Prose where the row already answers it.** The tab opens with a paragraph explaining
 "Routing order: feature worktree → project worktree → main repo", and the
 suppress checkbox carries a second 50-word paragraph. Both describe behaviour the
 list could simply show: a worktree's scope is a fact about the row, and routing
@@ -88,17 +88,18 @@ and the tab kept its copies of both.
 
 ### Routine
 
-- Collapsing three list sections into one list with a scope column.
+- Collapsing three list sections into one list (the rows already carry a scope chip).
 - Deleting the project creation form and the unbound create button.
 - Cutting the two prose paragraphs down to one line each.
 
 ### Complex / Risky
 
-- **`renderWorktreeRow` is shared and must not be touched.** The per-row Merge
-  prompt button (`copyWorktreeMergePrompt`) and the per-row Agent-terminals
-  checkbox (`toggleWorktreeAgentsOpenWithGrid`) live in it, and the merge button
-  is now one of only two callers of the merge endpoint (the other being
-  `POST /worktree/merge`). Collapse the *sections*, not the row renderer.
+- **`renderWorktreeRow` is shared and must not be touched.** It owns the scope
+  chip, the status badge, the branch, the created date, four buttons — Open
+  terminals, Merge prompt, Clean up, Abandon — and the Agent-terminals checkbox
+  (`toggleWorktreeAgentsOpenWithGrid`). The Merge prompt button is now one of only
+  two callers of the merge endpoint (the other being `POST /worktree/merge`).
+  Collapse the *sections*; the row is already the finished article.
 - **The optimistic-removal guard is in `renderWorktreeList`.** `:12855-12857`
   skips rows in `window._removingWorktreeIds` during an in-flight abandon. A
   rewrite that drops this makes an abandoned worktree flicker back into the list
@@ -107,10 +108,6 @@ and the tab kept its copies of both.
   create button.** That gate is the no-dead-click rule (PRD contract #6) and it
   is duplicated per form. Deleting the forms deletes the duplication; do not
   delete the gate from the one create path that remains reachable elsewhere.
-- **The tab has no CSS of its own.** Everything is inline `style.cssText`. A
-  scope column wants a real class, and `kanban.html` is a self-contained webview
-  — the rule goes in its own inline `<style>`, not in a shared stylesheet
-  (`shared-tabs.css` is dead; panels inline their own).
 - **No confirm gates.** Project rule, and `confirm()` is a silent no-op in a VS
   Code webview. Abandon and cleanup already execute immediately; keep them that
   way.
@@ -176,21 +173,27 @@ rather than trusting the rewrite.
 `renderWorktreeList(subset, emptyMessage)`.
 
 **Logic:** Replace the three sections with one `WORKTREES` list rendered from the
-full `worktrees` array. Each row gains a scope cell — the feature topic, the
-project name, or `—` — derived from the same `w.featureTopic` / `w.project`
-fields the three filters read today. Sort by scope, then branch, so features
-group without needing a section to group them.
+full `worktrees` array. **The row already states its own scope** —
+`renderWorktreeRow` builds a chip reading `Feature: <topic>`, `Project: <name>`
+or `Unbound` (`kanban.html:12704-12718`), with a `title` giving the long form.
+That is the entire justification for the three sections, already present on every
+row, which makes them redundancy rather than the only place scope is visible.
+Sort by scope then branch so features still group, without a section to group
+them.
 
 **Implementation:**
 - Delete the `featureWTs` / `projectWTs` / `unboundWTs` filters (`:13010-13013`)
   and the three section blocks that consume them.
 - Render one `createSubsection('WORKTREES')` containing
   `renderWorktreeList(worktrees, 'No worktrees.')`.
-- In `renderWorktreeRow`, add the scope cell. Do not change the existing action
-  buttons or the checkbox.
+- **Do not touch `renderWorktreeRow` at all.** The scope chip, the four action
+  buttons and the Agent-terminals checkbox are already correct; this change lives
+  entirely above the row renderer.
 - Carry the `window._removingWorktreeIds` skip into the single list unchanged.
 
-**Edge Cases:** An empty list renders one "No worktrees." line, not three.
+**Edge Cases:** An empty list renders one "No worktrees." line, not three. The
+scope sort must be stable, so a re-render does not reshuffle equal-scope rows
+under the pointer.
 
 ### 2. Delete the project creation form — `src/webview/kanban.html`
 
@@ -267,9 +270,11 @@ None.
   post. Three separate assertions, named, so removing two and missing one fails.
 - **One list, not three:** assert exactly one `renderWorktreeList(` call inside
   `renderWorktreesTab`, and that it is passed the unfiltered array.
-- **Scope is on the row:** assert `renderWorktreeRow` emits a scope cell, and
-  that a row with neither `featureTopic` nor `project` renders the placeholder
-  rather than an empty cell.
+- **The row renderer is untouched:** assert `renderWorktreeRow` still emits the
+  scope chip for all three cases (`Feature:`, `Project:`, `Unbound`) and still
+  wires all four action buttons plus the Agent-terminals checkbox. The chip is
+  what makes one list sufficient, so a rewrite that "tidies" it away removes the
+  only thing replacing the three section headers.
 - **The optimistic-removal guard survives:** assert `renderWorktreeList` still
   consults `window._removingWorktreeIds`. This is the assertion that catches the
   rewrite regression, and nothing else can see it.
