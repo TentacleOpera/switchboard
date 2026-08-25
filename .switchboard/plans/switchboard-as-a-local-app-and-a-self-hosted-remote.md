@@ -145,3 +145,71 @@ No existing install affected; the VSIX is unchanged and stays a first-class clie
 - For remote-board-local-agents, does the local host reach the remote's *store* (a tunnelled sqld or sidecar) or does that mode effectively require a libSQL target? The first keeps everything self-hosted; the second is simpler to build.
 - Should the remote run the plan scanner against repositories it can see, or is scanning strictly client-side? This decides whether the remote needs access to code at all.
 - Is the fourth combination — board local, agents remote — worth supporting, or explicitly refused? It is coherent (laptop holds the board, the mini executes) but doubles the mode matrix.
+
+## Tunnel lifecycle is not this app's job — decisions 2 and 4 revisited
+
+*Appended rather than rewritten, so the original reasoning stands. This section revises two of
+the four User Review decisions; everything else in the plan is unaffected.*
+
+Two things have happened since the decisions were written, and both point the same way.
+
+**An IDE over Remote-SSH already establishes, monitors and re-establishes the forward.** For any
+client machine with an IDE — which is every laptop case this plan contemplates — the tunnel
+lifecycle is solved by software the operator already runs. A plain `ssh -L` covers the rest.
+Decision 4 recommended "manage it — establish, monitor, re-establish, and show its state", on the
+grounds that "a mode picker that silently depends on a tunnel the operator maintains by hand is
+the discoverability failure this plan exists to fix". That argument still holds for *visibility*
+and no longer holds for *management*: the tunnel is not maintained by hand, it is maintained by
+the IDE, and a tray app that also establishes one is a second thing competing for the same job.
+
+**And the phone case, which was the only client with no SSH available, resolved elsewhere.** It
+is covered by three plans grouped as the feature *Command Switchboard From a Phone*
+(`1bf7a3ba-465b-4f4d-8cf6-54e8a6e675cc`): a narrow `/command` route, a return path for terminal
+messages, and a verified `tailscale serve` terminator scoped to that route. Critically,
+`tailscale serve` is **host state configured once with the `tailscale` CLI** — it persists across
+board launches, reboots and reinstalls, and is owned by the operator's Tailscale configuration,
+not by Switchboard. It is not a lifecycle a tray app should establish, and attempting to would
+mean shelling out to reconfigure a tool that is already managing itself.
+
+### Revised recommendations
+
+- **Decision 2 — tunnel transport.** The original recommendation ("support both SSH and
+  Tailscale, detect what is present, and never implement our own tunnel") keeps its last clause,
+  which was always the important one. Drop the detect-and-support machinery. There is nothing to
+  support: SSH is the operator's client, Tailscale is the operator's network, and neither wants a
+  Switchboard integration. What remains is **documenting which posture is recommended for which
+  client**, which `docs/REMOTE_ACCESS.md` is the right home for.
+- **Decision 4 — does the app manage tunnel lifecycle, or just document and detect it?** Revised
+  from **manage it** to **observe and report it**. Do not establish, do not re-establish, do not
+  own a tunnel process. Do surface, in the Database panel alongside mode and store ownership:
+  whether the board is currently reachable from anything other than loopback, which port a
+  terminator is pointed at if one is configured, and whether that port is the board's *current*
+  port. That last one is a real failure the phone plan names — a board restarting onto a
+  different ephemeral port while a terminator still points at the old one, which presents to the
+  phone as a blank page. Reporting it is cheap; managing it is not this plan's problem.
+
+### What this changes downstream in this plan
+
+- **Proposed change 3 (the pairing flow)** shrinks substantially. "Detect SSH or Tailscale,
+  establish the tunnel, provision the credential through it, verify, remember the peer" becomes
+  "point the client at a reachable host and provision the durable credential over a connection
+  the operator already established". The plan's key guardrail survives untouched and matters more
+  than the mechanism: **the Switchboard credential is provisioned only through an
+  already-authenticated channel, and no second trust system is invented beside SSH keys or
+  Tailscale identity.**
+- **Proposed change 5 (tunnel lifecycle management)** narrows to the health/status reporting
+  above, and the "disconnected state distinct from empty on every dependent surface" requirement
+  stays exactly as written — that was never about owning the tunnel, and it is the part operators
+  actually feel.
+- **The durable session token becomes more load-bearing, not less.** With the app no longer
+  establishing anything, a stable credential is the entire pairing story. `cli.ts:1081` already
+  advertises `npx switchboard token rotate` as the way to get a token that "survives restarts and
+  can enrol a second device", which is precisely this.
+
+### What is unaffected
+
+Everything else stands: the loopback-invariance contract test (still the regression test for this
+plan's own first draft), mode-transition semantics and per-terminal host labels, the store
+ownership lock, version-skew refusal, unattended legibility, capability gating, and the credential
+scoping and branch-protection guidance. Sequencing is unchanged — this revision reduces the
+plan's scope; it does not reorder it.
