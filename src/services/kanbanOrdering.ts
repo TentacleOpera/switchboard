@@ -11,9 +11,10 @@
  * Precedence (highest first):
  *   1. starred first  (priority_starred: 1 before 0)
  *   2. manual order   (queue_position in STAGING, column_order elsewhere)
- *                      ASC; a card that HAS one sorts before a card that does
- *                      not, and cards that both lack one fall through to
- *                      step 3.
+ *                      ASC. Cards that both lack one fall through to step 3.
+ *                      Where only one has one, NULL goes LAST in STAGING
+ *                      (NULL = never staged) and FIRST everywhere else
+ *                      (NULL = just arrived) — see the note below.
  *   3. column_entered_at DESC  (most recently moved to column first)
  *   4. createdAt DESC          (final stable tiebreaker)
  *
@@ -24,13 +25,19 @@
  * the sorted result depend on input order. A manual position therefore always
  * outranks its absence, in BOTH the resolver and the frontend comparator.
  *
- * So NULL means "not part of this column's arrangement", and a cross-column
- * move clears the card's position without writing a new one — moving a card
- * between columns is a stage change, not a statement about priority. In a
- * column nobody has arranged (every card NULL, which is every column until
- * someone drags) the fallback is the board's existing order and an arrival is
- * at the top. In a column the user HAS arranged, an arrival follows the
- * arrangement until they place it.
+ * That rules out sorting NULL against a number BY DATE. It says nothing about
+ * which side NULL falls on when the two are compared directly, and NULLs-first
+ * is exactly as transitive as NULLs-last. The choice is therefore about meaning,
+ * not soundness, and the two fields mean opposite things: a NULL queue_position
+ * is a card that was never staged (end of the queue), a NULL column_order is a
+ * card that just arrived (top of the column). Carrying V60's NULLs-last rule
+ * across to column_order sent freshly dragged cards to the bottom, which is
+ * neither what the board did before V63 nor what anyone asked for.
+ *
+ * A cross-column move therefore just clears the position and writes nothing —
+ * moving a card between columns is a stage change, not a statement about
+ * priority. The card is then NULL, and NULL is the top. An arrangement orders
+ * the cards that were arranged; it does not outrank a new arrival.
  *
  * STAGING keeps queue_position exclusively — column_order is never read there.
  * Non-STAGING columns read column_order; queue_position is ignored there.
@@ -72,10 +79,18 @@ export function compareByPrecedence(a: OrderableCard, b: OrderableCard, column: 
     if (!oaNull && !obNull) {
         const d = (oa as number) - (ob as number);
         if (d !== 0) return d;
-    } else if (!oaNull && obNull) {
-        return -1; // a has manual order, b doesn't → a first
-    } else if (oaNull && !obNull) {
-        return 1;  // b has manual order, a doesn't → b first
+    } else if (oaNull !== obNull) {
+        // Exactly one side carries a position. Which way NULL goes depends on
+        // what NULL MEANS in that field, and it means opposite things:
+        //   STAGING     — queue_position NULL is "never staged", so it belongs
+        //                 at the END of the queue (the V60 rule, unchanged).
+        //   every other — column_order NULL is "just arrived / not part of this
+        //   column        column's arrangement", so it belongs at the TOP, which
+        //                 is where the board has always put a card that just
+        //                 landed. An arrangement orders the cards that were
+        //                 arranged; it does not outrank a new arrival.
+        if (isStaging) return oaNull ? 1 : -1;
+        return oaNull ? -1 : 1;
     }
     // Both null (or equal manual order) → fall through to column_entered_at.
 

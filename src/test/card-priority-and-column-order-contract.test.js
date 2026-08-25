@@ -58,8 +58,11 @@ function compareByPrecedence(a, b, column) {
     if (!oaNull && !obNull) {
         const d = oa - ob;
         if (d !== 0) { return d; }
-    } else if (!oaNull && obNull) { return -1; }
-    else if (oaNull && !obNull) { return 1; }
+    } else if (oaNull !== obNull) {
+        // STAGING: NULL = never staged → last. Elsewhere: NULL = just arrived → first.
+        if (isStaging) { return oaNull ? 1 : -1; }
+        return oaNull ? -1 : 1;
+    }
     const ms = (t) => { if (!t) { return null; } const v = new Date(t).getTime(); return isNaN(v) ? null : v; };
     const ca = ms(a.columnEnteredAt) ?? ms(a.lastActivity) ?? ms(a.createdAt) ?? 0;
     const cb = ms(b.columnEnteredAt) ?? ms(b.lastActivity) ?? ms(b.createdAt) ?? 0;
@@ -127,8 +130,13 @@ check('manual-vs-absent is not resolved by timestamp — the comparator stays tr
     const C = { id: 'C', columnEnteredAt: '2026-08-05T00:00:00Z' };
     const permutations = [[A, B, C], [A, C, B], [B, A, C], [B, C, A], [C, A, B], [C, B, A]];
     for (const p of permutations) {
-        assert.deepStrictEqual(order(p, 'CREATED'), ['B', 'A', 'C'],
+        assert.deepStrictEqual(order(p, 'CREATED'), ['C', 'B', 'A'],
             `permutation ${p.map(c => c.id).join('')} produced a different order — the comparator is not transitive`);
+    }
+    // NULLs-first is exactly as sound as NULLs-last; what the cycle rules out is
+    // ranking a NULL against a number BY DATE, not the direction NULL falls.
+    for (const p of permutations) {
+        assert.deepStrictEqual(order(p, 'STAGING').length, 3);
     }
 });
 
@@ -209,10 +217,12 @@ check('a cross-column move clears column_order and writes nothing, on BOTH sides
         'a column move must not assign a position. It is a stage change, not a statement about priority, and front-of-column would hand a card the user never placed a slot ahead of the ones they did');
 });
 
-check('an arriving card follows an arranged column rather than jumping it', () => {
-    // The arriving card is NULL: it is not part of the arrangement, so it sits
-    // after it until the user places it. Giving it a position here would put a
-    // card nobody positioned ahead of three the user positioned by hand.
+check('a card dragged into a column goes to the TOP, arranged column or not', () => {
+    // The single rule the board has always followed. A NULL column_order means
+    // "just arrived", not "unranked", so it leads — an arrangement orders the
+    // cards that were arranged, it does not outrank a new arrival. Carrying
+    // V60's NULLs-last rule (correct for queue_position, where NULL means
+    // "never staged") across to column_order is what sent arrivals to the bottom.
     const arrived = { id: 'arrived', columnEnteredAt: '2026-08-20T00:00:00Z' };
     const arranged = [
         { id: 'hand-1', columnOrder: 1, columnEnteredAt: '2026-08-01T00:00:00Z' },
@@ -220,7 +230,22 @@ check('an arriving card follows an arranged column rather than jumping it', () =
         { id: 'hand-3', columnOrder: 3, columnEnteredAt: '2026-08-03T00:00:00Z' },
     ];
     assert.deepStrictEqual(order([...arranged, arrived], 'CREATED'),
-        ['hand-1', 'hand-2', 'hand-3', 'arrived']);
+        ['arrived', 'hand-1', 'hand-2', 'hand-3']);
+    // A second arrival leads on recency, and the arrangement stays intact below.
+    const later = { id: 'arrived-2', columnEnteredAt: '2026-08-21T00:00:00Z' };
+    assert.deepStrictEqual(order([...arranged, arrived, later], 'CREATED'),
+        ['arrived-2', 'arrived', 'hand-1', 'hand-2', 'hand-3']);
+});
+
+check('STAGING keeps the opposite NULL rule — never-staged goes to the END', () => {
+    // queue_position NULL means "never staged", so it belongs at the end of the
+    // queue (V60). The two fields mean opposite things and must not share a rule.
+    const cards = [
+        { id: 'unstaged', columnEnteredAt: '2026-08-20T00:00:00Z' },
+        { id: 'q1', queuePosition: 1, columnEnteredAt: '2026-08-01T00:00:00Z' },
+        { id: 'q2', queuePosition: 2, columnEnteredAt: '2026-08-02T00:00:00Z' },
+    ];
+    assert.deepStrictEqual(order(cards, 'STAGING'), ['q1', 'q2', 'unstaged']);
 });
 
 check('a card arriving in a column nobody arranged still sorts by date, at the top', () => {

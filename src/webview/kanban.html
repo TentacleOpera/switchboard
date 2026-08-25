@@ -9069,10 +9069,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         if (!an && !bn) {
                             const d = ap - bp;
                             if (d !== 0) return d;
-                        } else if (!an && bn) {
-                            return -1; // a has manual order, b doesn't → a first
-                        } else if (an && !bn) {
-                            return 1;  // b has manual order, a doesn't → b first
+                        } else if (an !== bn) {
+                            // NULL column_order means "just arrived / not part of
+                            // this column's arrangement", so it sorts FIRST — the
+                            // top, where the board has always put a card that just
+                            // landed. Opposite of STAGING above, where a NULL
+                            // queue_position means "never staged" and goes last.
+                            return an ? -1 : 1;
                         }
                         // both null → fall through to column_entered_at
                     }
