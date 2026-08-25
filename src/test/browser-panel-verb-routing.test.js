@@ -23,9 +23,11 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const WEBVIEW_DIR = path.join(REPO_ROOT, 'src', 'webview');
 const ALLOWLIST_PATH = path.join(REPO_ROOT, 'src', 'generated', 'verbAllowlist.ts');
 const PLANNING_PROVIDER_PATH = path.join(REPO_ROOT, 'src', 'services', 'PlanningPanelProvider.ts');
+const API_SERVER_PATH = path.join(REPO_ROOT, 'src', 'services', 'LocalApiServer.ts');
 
 const allowlistSource = fs.readFileSync(ALLOWLIST_PATH, 'utf8');
 const planningProviderSource = fs.readFileSync(PLANNING_PROVIDER_PATH, 'utf8');
+const apiServerSource = fs.readFileSync(API_SERVER_PATH, 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -176,6 +178,61 @@ function run() {
                 `${p.file} posts verbs not reachable on its route: ${offenders.join(', ')}.`);
         });
     }
+
+    // mission-control.js → /mission-control/verb/* → KanbanService.
+    //
+    // The panel was added without being added here, and that is how a whole
+    // feature shipped dead: `transport.js` derives the route from
+    // `document.body.dataset.panel`, so the panel posted to
+    // /mission-control/verb/*, which had no route at all. The handlers existed,
+    // the allowlist and catalog agreed, every other gate was green, and every
+    // mission verb 404'd. A hardcoded panel list cannot see a new panel — so any
+    // new panel MUST be appended here.
+    //
+    // The Schedules and Control tabs are a different plan's deliverable
+    // (`the-automation-model-four-things-not-a-mode-axis.md`) and are genuinely
+    // unbuilt: no handlers, absent from the allowlist. They are ratcheted below
+    // by exact name so they cannot be mistaken for working, and so an ELEVENTH
+    // unreachable verb — in particular a new mission verb — still fails.
+    const MC_UNBUILT_AUTOMATION_VERBS = new Set([
+        'mcNewSchedule', 'mcUpdateSchedule', 'mcDeleteSchedule',
+        'mcStartSchedule', 'mcStopSchedule', 'mcScheduleLoadLog',
+        'mcScheduleExternalCopy',
+        'mcControllerStop', 'mcControllerRestart', 'mcControllerAck',
+    ]);
+
+    test('mission-control.js: every mission verb it posts is reachable on /mission-control/verb/*', () => {
+        const src = readWebview('mission-control.js');
+        const posted = extractPostedVerbs(src);
+        assert.ok(posted.size > 0, 'mission-control.js must post at least one verb (else the test is vacuous).');
+        const offenders = [];
+        for (const verb of posted) {
+            if (KANBAN_VERBS.has(verb)) { continue; }
+            if (MC_UNBUILT_AUTOMATION_VERBS.has(verb)) { continue; }
+            offenders.push(verb);
+        }
+        assert.strictEqual(offenders.length, 0,
+            `mission-control.js posts verbs that reach no handler: ${offenders.join(', ')}. `
+            + 'Add the handler and run `npm run catalog:generate`, or — only if it belongs to the '
+            + 'unbuilt Schedules/Control tabs — name it in MC_UNBUILT_AUTOMATION_VERBS.');
+    });
+
+    test('the mission-control panel has a verb route at all', () => {
+        assert.match(apiServerSource, /pathname\.startsWith\('\/mission-control\/verb\/'\)/,
+            'LocalApiServer must route /mission-control/verb/* — transport.js derives the route from '
+            + 'data-panel, so without this arm every mc* verb 404s while every other gate stays green.');
+    });
+
+    test('the unbuilt-automation ratchet holds at exactly ten verbs', () => {
+        // A ratchet, not an allowlist: this set may only ever shrink. Growing it
+        // is how "the panel does not work" becomes a permanently green test.
+        assert.strictEqual(MC_UNBUILT_AUTOMATION_VERBS.size, 10,
+            'MC_UNBUILT_AUTOMATION_VERBS must only shrink — build the handler instead of naming another verb here.');
+        for (const verb of MC_UNBUILT_AUTOMATION_VERBS) {
+            assert.ok(!KANBAN_VERBS.has(verb),
+                `${verb} is now in KANBAN_VERBS — it is built, so remove it from MC_UNBUILT_AUTOMATION_VERBS.`);
+        }
+    });
 
     // kanban.html inline script → /kanban → KANBAN_VERBS.
     test('kanban.html inline script: every posted verb is in KANBAN_VERBS', () => {

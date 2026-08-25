@@ -437,15 +437,51 @@ async function run() {
             path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
         // A dead control that returns success is worse than one that refuses: the
         // panel shows no error and the operator believes the member/launch landed.
-        // Every unbuilt mc* arm must refuse in words.
-        for (const verb of ['mcLaunchMission', 'mcStopMission', 'mcAddMissionMember']) {
+        //
+        // This originally asserted the arms said "not implemented", which pinned a
+        // placeholder refusal. Launch, stop and add-member are now built, so the
+        // durable form of the same contract is: no arm may return success on a path
+        // where nothing was written.
+        const arm = (verb) => {
             const start = provider.indexOf(`case '${verb}':`);
             assert.notStrictEqual(start, -1, `${verb} arm must exist`);
-            const body = provider.slice(start, provider.indexOf("\n            case '", start + 10));
-            assert.ok(
-                /not implemented|is not implemented|not implemented yet|No member to add/.test(body),
-                `${verb} must refuse honestly when the behaviour behind it is unbuilt, not return success`
-            );
+            return provider.slice(start, provider.indexOf("\n            case '", start + 10));
+        };
+
+        // add-member: a missing member id must refuse, not silently succeed.
+        const add = arm('mcAddMissionMember');
+        assert.ok(/No member to add/.test(add),
+            'mcAddMissionMember must refuse when there is no member id — it used to return success '
+            + 'having written nothing');
+        assert.ok(/added \? \{ success: true \}/.test(add),
+            'mcAddMissionMember must report the db result, not assume it');
+        assert.ok(/member picker is not implemented/.test(add),
+            'the refusal must say WHY — a picker does not exist, and the programmatic route does');
+
+        // launch / stop: delegate, and pass the real outcome back.
+        const launch = arm('mcLaunchMission');
+        assert.ok(/launchMission\(/.test(launch) && /return result/.test(launch),
+            'mcLaunchMission must return launchMission\'s actual result rather than fabricating success');
+        const stop = arm('mcStopMission');
+        assert.ok(/released > 0/.test(stop),
+            'mcStopMission must refuse when it released nothing — otherwise Stop reports success on a '
+            + 'mission that is not running');
+
+        // and launchMission itself must refuse on every non-dispatching path.
+        const li = provider.indexOf('public async launchMission(');
+        assert.notStrictEqual(li, -1, 'launchMission must exist');
+        const body = provider.slice(li, provider.indexOf('\n    public ', li + 50));
+        for (const [label, pattern] of [
+            ['no members', /has no members/],
+            ['already in flight', /already in flight/],
+            ['already completed', /already completed/],
+            ['worktrees requested but unbuilt', /provisioning is not built/],
+            ['no seated team', /No coding terminal is live/],
+            ['dispatch refused', /Dispatch refused/],
+        ]) {
+            assert.ok(pattern.test(body),
+                `launchMission must refuse in words when ${label} — a launch that dispatches nothing `
+                + 'must not report success');
         }
     });
 
@@ -493,6 +529,108 @@ async function run() {
             /dependencyBlockers\.set\(String\(p\.planId\), '\(dependency lookup failed\)'\)/.test(block),
             'a per-card lookup fault must BLOCK that card; the gate exists to refuse, so its failure mode must be refusal'
         );
+    });
+
+    // ── Missions: reachable, produced, contained, launchable ──────────────
+
+    await check('the Mission Control panel has a verb route', () => {
+        const fs = require('fs');
+        const api = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        assert.ok(/pathname\.startsWith\('\/mission-control\/verb\/'\)/.test(api),
+            'transport.js derives a panel route from data-panel, so the panel posts to '
+            + '/mission-control/verb/*. Without that arm every mc* verb 404s while the handlers, '
+            + 'the allowlist and the catalog all look correct.');
+    });
+
+    await check('staging always joins a mission — no card stages outside one', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
+        const i = src.indexOf('public async stageForQueue(');
+        assert.notStrictEqual(i, -1, 'stageForQueue must exist');
+        const body = src.slice(i, src.indexOf('\n    public ', i + 50));
+        assert.ok(/resolveOrCreateOpenMission/.test(body),
+            'stageForQueue must resolve or create a mission — item 10, "a drag into STAGING always '
+            + 'succeeds; the only question is which mission receives it". Without it STAGING holds '
+            + 'loose cards belonging to no mission and the missions table stays empty.');
+        assert.ok(/addMissionMember/.test(body),
+            'each staged card must be added as a member');
+        assert.ok(/appendQueuePositions/.test(body),
+            'queue_position must still be written — it is the intra-mission order');
+    });
+
+    await check('staging provisions no worktrees', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
+        const i = src.indexOf('public async stageForQueue(');
+        const body = src.slice(i, src.indexOf('\n    public ', i + 50));
+        assert.ok(!/_ensureFeatureIntegrationWorktree|_createSafetyWorktree/.test(body),
+            'staging must cut no branch. One worktree per staged feature put sibling branches off '
+            + 'the default branch that could not see each other, and contradicted item 8c '
+            + '("0 by default ... may never exceed 1").');
+        assert.ok(!/_ensureFeatureIntegrationWorktree/.test(src),
+            'the per-feature provisioning helper must be gone, not merely uncalled');
+    });
+
+    await check('a board card carries its mission, resolved in ONE place', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
+        const i = src.indexOf('private async _buildBoardCards(');
+        assert.notStrictEqual(i, -1, '_buildBoardCards must exist');
+        const body = src.slice(i, i + 6000);
+        assert.ok(/missionByMember/.test(body),
+            'mission identity must be resolved in _buildBoardCards — every surface renders through '
+            + 'it, so resolving anywhere else is how one site gets missed and a member leaks back '
+            + 'onto the board as a loose card');
+        assert.ok(/missionId:/.test(body) && /missionName:/.test(body),
+            'cards must carry missionId and missionName');
+    });
+
+    await check('STAGING renders members grouped under their mission', () => {
+        const fs = require('fs');
+        const html = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'kanban.html'), 'utf8');
+        assert.ok(/mission-group-label/.test(html), 'the STAGING column must label each mission group');
+        assert.ok(/\.mission-group-label\s*\{/.test(html),
+            'kanban.html is a self-contained webview — the rule belongs in its own inline style');
+    });
+
+    await check('launch is idempotent and derived, never a stored flag', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
+        const i = src.indexOf('public async launchMission(');
+        assert.notStrictEqual(i, -1, 'launchMission must exist');
+        const body = src.slice(i, src.indexOf('\n    public ', i + 50));
+        assert.ok(/runState === 'in-flight'/.test(body),
+            'launch must refuse an in-flight mission — item 8d, pressing Launch twice must not '
+            + 'double-dispatch. The guard reads the DERIVED state, so button and badge cannot disagree.');
+        assert.ok(/dispatchNextFromQueue/.test(body),
+            'launch must fan out through the queue pop — one dispatch path, so the pop-time '
+            + 'dependency gate applies to a mission launch too');
+        assert.ok(/maxExtraWorktrees/.test(body),
+            'launch must honour maxExtraWorktrees rather than silently ignoring it');
+        assert.ok(!/updateMission\([^)]*runState/.test(body),
+            'launch must not write a run state — it is derived');
+    });
+
+    await check('stop releases the holder rather than writing a status', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
+        const i = src.indexOf("case 'mcStopMission'");
+        const body = src.slice(i, i + 2200);
+        assert.ok(/releaseDispatchHolder\(plan\.planFile/.test(body),
+            'releaseDispatchHolder is keyed by plan FILE + workspace id. Passing a plan id no-ops '
+            + 'silently, which is a Stop button that reports success and stops nothing.');
+    });
+
+    await check('the operator can ask which mission it oversees', () => {
+        const fs = require('fs');
+        const api = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        assert.ok(/'\/kanban\/mission\/active'/.test(api),
+            'an operation is supervised, so the operator must be able to resolve WHICH mission — '
+            + 'adopt/start/confirm/handoff all take only { workspaceRoot }');
+        const i = api.indexOf("'/kanban/mission/active'");
+        const body = api.slice(i, i + 1200);
+        assert.ok(/type === 'operation'/.test(body),
+            "the response must distinguish supervised ('operation') from unsupervised ('mission')");
     });
 
     console.log(`\n${failures === 0 ? 'all dependency-gate contracts passed' : `${failures} contract(s) failed`}\n`);

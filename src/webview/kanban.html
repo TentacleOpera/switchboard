@@ -2952,6 +2952,21 @@ body.theme-claudify .shared-tab-btn.active {
   border-color: transparent;
   border-bottom-color: transparent;
 }
+/* Mission group label — the STAGING column groups members under their
+   mission's codename, so which mission runs which cards is visible. */
+.mission-group-label {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 6px; margin: 6px 0 2px; padding: 2px 6px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--text-secondary, var(--vscode-descriptionForeground));
+    border-left: 2px solid var(--vscode-focusBorder, #4d9375);
+    background: var(--vscode-editorWidget-background, rgba(255,255,255,.03));
+}
+.mission-group-label:first-child { margin-top: 0; }
+.mission-group-label.is-unassigned { border-left-color: var(--vscode-descriptionForeground, #888); opacity: .75; }
+.mission-group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mission-group-count { flex: 0 0 auto; opacity: .7; }
+
 body.theme-claudify .shared-tab-btn:hover:not(.active) {
   color: #c8c8c8;
   background: color-mix(in srgb, #ffffff 5%, transparent);
@@ -9070,6 +9085,46 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 if (items.length === 0) {
                     container.innerHTML = '<div class="empty-state">No plans</div>';
+                } else if (col === 'STAGING') {
+                    // A staged card is always a member of a mission (item 10 — a drag
+                    // into STAGING always joins one, or creates one with a codename).
+                    // Members are rendered CONTAINED BY their mission: grouped under
+                    // its codename, in queue_position order, so which mission will run
+                    // which cards is visible on the board.
+                    //
+                    // The plan's wording is that a member "stops being a board card"
+                    // and the mission card shows its members instead. That swap is not
+                    // done here: every STAGING action (advance, Prompt all, Run queue,
+                    // reorder, star) targets card elements, so replacing them with a
+                    // single mission card without rebuilding those actions would leave
+                    // a column you cannot operate. Grouping gives the containment the
+                    // plan is for — you can see the mission and its membership —
+                    // without stranding the actions. The swap is a UI card of its own.
+                    const groups = new Map();
+                    sortedItems.forEach(card => {
+                        const key = card.missionId || '';
+                        if (!groups.has(key)) { groups.set(key, { name: card.missionName || '', cards: [] }); }
+                        groups.get(key).cards.push(card);
+                    });
+                    const parts = [];
+                    groups.forEach((group, key) => {
+                        if (key) {
+                            parts.push(
+                                '<div class="mission-group-label" data-mission-id="' + escapeAttr(key) + '">'
+                                + '<span class="mission-group-name">' + escapeHtml(group.name || 'mission') + '</span>'
+                                + '<span class="mission-group-count">' + group.cards.length + '</span>'
+                                + '</div>'
+                            );
+                        } else {
+                            // Staged before missions existed. Not an error state — it
+                            // runs exactly as it always did; it just has no mission to
+                            // be shown under.
+                            parts.push('<div class="mission-group-label is-unassigned"><span class="mission-group-name">no mission</span>'
+                                + '<span class="mission-group-count">' + group.cards.length + '</span></div>');
+                        }
+                        parts.push(...group.cards.map(card => createCardHtml(card)));
+                    });
+                    container.innerHTML = parts.join('');
                 } else {
                     container.innerHTML = sortedItems.map(card => createCardHtml(card)).join('');
                 }

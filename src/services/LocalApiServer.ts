@@ -2675,6 +2675,36 @@ export class LocalApiServer {
                 return;
             }
 
+            // GET /kanban/mission/active — which mission is the operator overseeing?
+            //
+            // Format 1 ("operation": the user defines the mission, the operator
+            // oversees it) had no way to answer this. The Mission Control session
+            // routes — adopt/start/confirm/handoff/stop — all take { workspaceRoot }
+            // and nothing else, so a persona had no idea which mission it was for,
+            // could not scope itself to that mission's membership, and could not
+            // report against it.
+            //
+            // The operator asks, rather than being told: threading a mission id down
+            // the adopt/start callback chain into the prompt builder is the other
+            // half of this and is not done. In-flight wins over open, because that
+            // is the run actually happening; `runState` is derived, so this cannot
+            // disagree with the badge in the panel.
+            if (pathname === '/kanban/mission/active' && req.method === 'GET') {
+                const list = await db.getMissions(wsId);
+                const active = list.find((m: any) => m.runState === 'in-flight')
+                    || list.filter((m: any) => m.runState === 'not-started').pop()
+                    || null;
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    mission: active,
+                    // Stated explicitly so a caller does not infer oversight from a
+                    // mission merely existing: only an 'operation' is supervised.
+                    supervised: active ? active.type === 'operation' : false,
+                }));
+                return;
+            }
+
             // Expose streams/dependencies map: GET /kanban/mission/{planId}/streams
             if (pathname.startsWith('/kanban/mission/') && pathname.endsWith('/streams') && req.method === 'GET') {
                 const parts = pathname.split('/');
@@ -7071,6 +7101,17 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/kanban/verb/') && req.method === 'POST') {
                 // A2b per-verb burn-down rail: /kanban/verb/<name> → KanbanService.
                 const verb = decodeURIComponent(pathname.slice('/kanban/verb/'.length));
+                await this._handleKanbanVerb(verb, req, res);
+            } else if (pathname.startsWith('/mission-control/verb/') && req.method === 'POST') {
+                // The Mission Control panel's verbs are KANBAN verbs — the `mc*` arms
+                // live in KanbanProvider and are registered in KANBAN_VERBS. But
+                // `transport.js` derives a panel's route from `document.body.dataset.panel`
+                // ("/${panel}/verb"), so the panel posts to /mission-control/verb/*.
+                // Without this arm every mission verb 404s: the panel is served, the
+                // handlers exist, the allowlist and catalog agree, and nothing works.
+                // Two cards each complete against their own plan, with the namespace
+                // between them owned by neither.
+                const verb = decodeURIComponent(pathname.slice('/mission-control/verb/'.length));
                 await this._handleKanbanVerb(verb, req, res);
             } else if (pathname.startsWith('/planning/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/planning/verb/'.length));

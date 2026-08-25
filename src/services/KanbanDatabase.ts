@@ -11466,6 +11466,59 @@ FROM plans
         );
     }
 
+    /**
+     * The mission a staged card joins, creating one if none is open.
+     *
+     * "Open" means not launched — derived, never stored, from member state (see
+     * `_deriveMissionRunState`). A launched mission is a sealed set, so a card
+     * arriving after launch starts the next mission rather than being refused:
+     * `staging-streams-parallel-dispatch-and-worktrees.md` item 10, "A drag into
+     * STAGING always succeeds; the only question is which mission receives it."
+     *
+     * This is what makes a mission exist at all. Before it, `stageForQueue` wrote
+     * `queue_position` and nothing else, so STAGING held loose cards belonging to
+     * no mission, the `missions` table stayed empty, and `maxExtraWorktrees` had
+     * nothing to be a property of.
+     */
+    public async resolveOrCreateOpenMission(workspaceId: string): Promise<any | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const missions = await this.getMissions(workspaceId);
+        // getMissions returns created_at ASC, so the newest open mission is the
+        // last one — a card joins the mission most recently being assembled.
+        for (let i = missions.length - 1; i >= 0; i--) {
+            if (missions[i].runState === 'not-started') return missions[i];
+        }
+        return await this.createMission({ workspaceId });
+    }
+
+    /** Every mission id the given plan is a member of (normally zero or one). */
+    public async getMissionsForMember(memberId: string): Promise<string[]> {
+        if (!(await this.ensureReady()) || !this._db || !memberId) return [];
+        const stmt = this._db.prepare('SELECT mission_id FROM mission_members WHERE member_id = ?', [memberId]);
+        const out: string[] = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                if (r.mission_id) out.push(String(r.mission_id));
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
+    /**
+     * True when this plan belongs to a mission — the containment predicate.
+     *
+     * The mission analogue of `featureId && !isFeature`: a member is contained by
+     * its mission and must not also render as a loose board card. It stays
+     * QUEUEABLE, though — the members are the work, and excluding them from the
+     * pop the way subtasks are excluded would dispatch nothing at all.
+     */
+    public async isMissionMember(memberId: string): Promise<boolean> {
+        return (await this.getMissionsForMember(memberId)).length > 0;
+    }
+
     public async getMissionMembers(missionId: string): Promise<Array<{ memberId: string; kind: 'plan' | 'feature' }>> {
         if (!(await this.ensureReady()) || !this._db || !missionId) return [];
         const stmt = this._db.prepare('SELECT member_id, member_kind FROM mission_members WHERE mission_id = ?', [missionId]);

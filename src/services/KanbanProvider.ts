@@ -143,6 +143,11 @@ export interface KanbanCard {
     columnEnteredAt?: string | null; // V61: when the card entered its current column (board sort key)
     priorityStarred?: number; // V63: 0/1 priority flag; starred cards sort first in every consumer
     columnOrder?: number | null; // V63: 1-based manual order for non-STAGING columns; NULL = unarranged (yields to columnEnteredAt DESC)
+    // V64: the mission this card belongs to. A staged card ALWAYS has one —
+    // staging resolves-or-creates a mission (item 10). Absent on unstaged cards
+    // and on rows staged before this landed.
+    missionId?: string;
+    missionName?: string; // the mission's codename, for the group label
 }
 
 // Activity-light window default. A card is `working` while dispatched_at is set and
@@ -2162,6 +2167,23 @@ export class KanbanProvider implements vscode.Disposable {
         // any assigned project while the board shows "__unassigned__") are excluded and
         // every feature renders "0 SUBTASKS". See getSubtaskCountsByFeature.
         const subtaskCountMap = typeof db.getSubtaskCountsByFeature === 'function' ? await db.getSubtaskCountsByFeature(workspaceId) : new Map();
+        // Mission identity, resolved once for the whole board rather than per card.
+        // Every surface (kanban, sidebar, browser cockpit) renders from this one
+        // mapper, so a member carries its mission everywhere or nowhere — the
+        // "one missed site and a member leaks back as a loose card" failure the
+        // plan names is only avoidable by resolving it here.
+        const missionByMember = new Map<string, { id: string; name: string }>();
+        try {
+            if (typeof db.getMissions === 'function') {
+                for (const mission of await db.getMissions(workspaceId)) {
+                    for (const memberId of [...(mission.plans || []), ...(mission.features || [])]) {
+                        missionByMember.set(String(memberId), { id: mission.id, name: mission.name });
+                    }
+                }
+            }
+        } catch (missionErr) {
+            console.warn('[KanbanProvider] _buildBoardCards: mission lookup failed:', missionErr);
+        }
         const featureWorkingMap = typeof db.getFeatureWorkingStates === 'function' ? await db.getFeatureWorkingStates(workspaceId, timeoutMs, blockedTimeoutMs) : new Map<string, { working: boolean; blocked: boolean }>();
 
         // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
@@ -2190,6 +2212,8 @@ export class KanbanProvider implements vscode.Disposable {
                 columnEnteredAt: row.columnEnteredAt ?? null,
                 priorityStarred: row.priorityStarred ?? 0,
                 columnOrder: row.columnOrder ?? null,
+                missionId: missionByMember.get(row.planId)?.id,
+                missionName: missionByMember.get(row.planId)?.name,
             };
         });
 
@@ -8394,7 +8418,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
     public async stageForQueue(
         workspaceRoot: string,
         ids: string[]
-    ): Promise<{ success: boolean; staged: number; refused: number; error?: string }> {
+    ): Promise<{ success: boolean; staged: number; refused: number; error?: string; missionId?: string }> {
         if (!workspaceRoot) return { success: false, staged: 0, refused: 0, error: 'No workspace root resolved' };
         if (!Array.isArray(ids) || ids.length === 0) return { success: false, staged: 0, refused: 0, error: 'No plans selected to stage' };
         const { planIds, refused, workspaceId } = await this._resolveStageablePlanIds(workspaceRoot, ids);
@@ -8405,6 +8429,33 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (!db || !(await db.ensureReady())) return { success: false, staged: 0, refused, error: 'Kanban database not ready' };
         const ok = await db.appendQueuePositions(workspaceId, planIds);
         if (!ok) return { success: false, staged: 0, refused, error: 'Failed to write queue positions' };
+
+        // Staging is always into a mission. There is no such thing as a card
+        // sitting in STAGING that belongs to none — item 10: "A drag into STAGING
+        // always succeeds; the only question is which mission receives it."
+        //
+        // The open mission receives it, or one is created with a codename. A
+        // launched mission is a sealed set, so a card arriving after launch starts
+        // the next one rather than being refused. `queue_position` (written just
+        // above) remains the intra-mission order: cards joining later take higher
+        // positions, so a mission's sequence is the order it was assembled in, and
+        // item 12 holds — the board's star does not reach inside.
+        let missionId: string | null = null;
+        try {
+            const mission = await db.resolveOrCreateOpenMission(workspaceId);
+            if (mission) {
+                missionId = mission.id;
+                for (const pid of planIds) {
+                    const plan = await db.getPlanByPlanId(pid);
+                    await db.addMissionMember(mission.id, pid, plan?.isFeature ? 'feature' : 'plan');
+                }
+            }
+        } catch (missionErr) {
+            // Staging must not fail because mission bookkeeping did — the queue
+            // position is already written and the card belongs in STAGING either
+            // way. A card without a mission renders as it did before.
+            console.warn('[KanbanProvider] stageForQueue: mission membership failed:', missionErr);
+        }
         // Staging provisions NO worktrees. This loop used to cut one integration
         // worktree per staged feature whenever feature_worktree_mode was
         // 'per-feature', and that is the defect, not the timing:
@@ -8450,7 +8501,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         } catch (armErr) {
             console.warn('[KanbanProvider] armQueueWatch from stageForQueue failed:', armErr);
         }
-        return { success: true, staged: planIds.length, refused };
+        return { success: true, staged: planIds.length, refused, missionId: missionId || undefined };
     }
 
     /**
@@ -9923,28 +9974,38 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'mcLaunchMission': {
                 const ctx = await this._resolveMissionDb(msg.workspaceRoot);
                 if (!ctx || !msg.missionId) return { success: false, error: 'Invalid arguments' };
-                const mission = await ctx.db.getMissionById(msg.missionId);
-                if (!mission) return { success: false, error: 'Mission not found' };
-                // Launch is not implemented: the fan-out (seat teams, stage,
-                // dispatch each unblocked stream head) and its idempotency guard
-                // are items 8c/8d of staging-streams-parallel-dispatch-and-worktrees.md
-                // and were never built. Refusing is the honest answer — writing a
-                // `runState` string here would report a launch that did not happen
-                // and would persist launched-ness the plan forbids storing.
-                return {
-                    success: false,
-                    error: 'Launch is not implemented yet — the mission fan-out (seat teams, stage, dispatch stream heads) is unbuilt. Use Run queue in the STAGING column.'
-                };
+                const result = await this.launchMission(ctx.workspaceRoot, msg.missionId);
+                await this._postMissions(ctx);
+                return result;
             }
             case 'mcStopMission': {
                 const ctx = await this._resolveMissionDb(msg.workspaceRoot);
                 if (!ctx || !msg.missionId) return { success: false, error: 'Invalid arguments' };
-                // Nothing to stop until launch exists, and there is no stored
-                // run state to clear — status is derived from member state.
-                return {
-                    success: false,
-                    error: 'Stop is not implemented yet — nothing launches a mission, so there is no run to stop.'
-                };
+                // A launched mission is stopped by releasing its in-flight member,
+                // not by writing a status: `runState` is derived, so clearing the
+                // holder is what makes the mission read not-started again. The
+                // release path is the queue's own (`releaseDispatchHolder`), so
+                // stop and a failed dispatch converge on one mechanism.
+                const mission = await ctx.db.getMissionById(msg.missionId);
+                if (!mission) return { success: false, error: 'Mission not found' };
+                const members = [...(mission.plans || []), ...(mission.features || [])];
+                let released = 0;
+                for (const memberId of members) {
+                    const plan = await ctx.db.getPlanByPlanId(memberId);
+                    // releaseDispatchHolder is keyed by PLAN FILE + workspace id, not
+                    // by plan id. Passing the member id would no-op silently, which is
+                    // how a Stop button reports success and stops nothing.
+                    if (plan && plan.planFile && plan.dispatchedAt && !plan.completedAt) {
+                        if (await ctx.db.releaseDispatchHolder(plan.planFile, ctx.wsId)) {
+                            released++;
+                        }
+                    }
+                }
+                await this._refreshBoard(ctx.workspaceRoot);
+                await this._postMissions(ctx);
+                return released > 0
+                    ? { success: true, released }
+                    : { success: false, error: 'Mission is not in flight — nothing to stop.' };
             }
             case 'mcAddMissionMember': {
                 const ctx = await this._resolveMissionDb(msg.workspaceRoot);
@@ -9962,9 +10023,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         error: 'No member to add — a member picker is not implemented. Add members via POST /kanban/mission/member/add with a memberId.'
                     };
                 }
-                await ctx.db.addMissionMember(msg.missionId, memberId, msg.kind === 'feature' ? 'feature' : 'plan');
+                const added = await ctx.db.addMissionMember(msg.missionId, memberId, msg.kind === 'feature' ? 'feature' : 'plan');
                 await this._postMissions(ctx);
-                return { success: true };
+                return added ? { success: true } : { success: false, error: 'Failed to add mission member.' };
             }
             case 'mcRemoveMissionMember': {
                 const ctx = await this._resolveMissionDb(msg.workspaceRoot);
@@ -14396,6 +14457,78 @@ ${FOCUS_DIRECTIVE}`;
             await this._removeWorktreeRow(workspaceRoot, db, wt, finalStatus);
         }
         await this._pruneWorktrees(workspaceRoot);
+    }
+
+    /**
+     * Launch a mission: dispatch its unblocked head onto the seated coding team.
+     *
+     * Item 8c — "performs the column move and the fan-out as one action: seat
+     * teams, stage, dispatch each unblocked stream head." Members are already in
+     * STAGING with `queue_position` (staging is what created the mission), so the
+     * fan-out is the dispatch, and it goes through `dispatchNextFromQueue` — the
+     * SAME path `POST /kanban/queue/next` and the Run queue button use. One
+     * dispatch path, so the pop-time dependency gate applies here too: a member
+     * whose predecessor has not asserted completion is skipped, not dispatched.
+     *
+     * Item 8d — idempotent. Pressing Launch twice must not double-dispatch. The
+     * guard is derived, not a stored flag: a mission with a member already held
+     * (dispatchedAt set, completedAt null) is in flight and refuses. That is the
+     * same fact `_deriveMissionRunState` reads, so the button and the badge can
+     * never disagree.
+     */
+    public async launchMission(
+        workspaceRoot: string,
+        missionId: string
+    ): Promise<{ success: boolean; error?: string; dispatched?: string | null }> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return { success: false, error: 'Database unavailable' };
+        const mission = await db.getMissionById(missionId);
+        if (!mission) return { success: false, error: 'Mission not found' };
+
+        const members = [...(mission.plans || []), ...(mission.features || [])];
+        if (members.length === 0) return { success: false, error: 'Mission has no members to launch.' };
+
+        // Idempotency (item 8d), derived from member state.
+        if (mission.runState === 'in-flight') {
+            return { success: false, error: `Mission '${mission.name}' is already in flight.` };
+        }
+        if (mission.runState === 'completed') {
+            return { success: false, error: `Mission '${mission.name}' has already completed.` };
+        }
+
+        // A mission carries `maxExtraWorktrees` — extra trees on top of the one it
+        // starts in, 0 by default and never above 1 for a mission. Provisioning is
+        // not built (per-feature provisioning was removed because it cut one branch
+        // per feature off the default branch and clashed). Refusing a launch that
+        // asks for a tree is better than silently ignoring the field and running
+        // somewhere the operator did not choose.
+        if ((mission.maxExtraWorktrees || 0) > 0) {
+            return {
+                success: false,
+                error: `Mission '${mission.name}' asks for ${mission.maxExtraWorktrees} extra worktree(s), and run provisioning is not built. Set Max extra worktrees to 0 to run in the current tree.`
+            };
+        }
+
+        const apiServer: any = this._apiServer;
+        if (!apiServer || typeof apiServer.dispatchNextFromQueue !== 'function') {
+            return { success: false, error: 'Queue dispatch is not available in this host.' };
+        }
+
+        let headTerminal = (await this.resolveCodingHeadFromGroups(workspaceRoot)) || '';
+        if (!headTerminal) {
+            const codingTerminals = this._taskViewerProvider?.getAliveCodingTerminalNames() ?? [];
+            if (codingTerminals.length > 0) { headTerminal = codingTerminals[0]; }
+        }
+        if (!headTerminal) {
+            return { success: false, error: 'No coding terminal is live — seat a team before launching.' };
+        }
+
+        const pop = await apiServer.dispatchNextFromQueue({ workspaceRoot, from: headTerminal });
+        if (!pop || pop.status !== 200) {
+            return { success: false, error: pop?.payload?.error || 'Dispatch refused.' };
+        }
+        await this._refreshBoard(workspaceRoot);
+        return { success: true, dispatched: pop.payload?.dispatched ?? null };
     }
 
     /**
