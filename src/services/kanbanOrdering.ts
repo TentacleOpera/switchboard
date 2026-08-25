@@ -9,7 +9,11 @@
  * defect this resolver exists to fix.
  *
  * Precedence (highest first):
- *   1. starred first  (priority_starred: 1 before 0)
+ *   1. starred first  (priority_starred: 1 before 0) — OUTSIDE STAGING ONLY.
+ *                      A mission is not the kanban board; board priority does
+ *                      not apply inside one. A card added to a mission joins
+ *                      the end of its queue and runs in queue_position order,
+ *                      starred or not.
  *   2. manual order   (queue_position in STAGING, column_order elsewhere)
  *                      ASC. Cards that both lack one fall through to step 3.
  *                      Where only one has one, NULL goes LAST in STAGING
@@ -63,15 +67,22 @@ export interface OrderableCard {
  *               every other column uses column_order.
  */
 export function compareByPrecedence(a: OrderableCard, b: OrderableCard, column: string): number {
-    // 1. Starred first.
-    const sa = a.priorityStarred ? 1 : 0;
-    const sb = b.priorityStarred ? 1 : 0;
-    if (sa !== sb) return sb - sa; // starred (1) before unstarred (0) → descending
+    const isStaging = column === 'STAGING';
+
+    // 1. Starred first — on the BOARD only. A mission is not the board, and
+    //    kanban priority does not reach inside one: a card added to a mission
+    //    joins the end of its queue and runs in queue_position order, starred
+    //    or not. Letting the star jump a mission's queue would let board-level
+    //    urgency reorder a sequence the mission already committed to.
+    if (!isStaging) {
+        const sa = a.priorityStarred ? 1 : 0;
+        const sb = b.priorityStarred ? 1 : 0;
+        if (sa !== sb) return sb - sa; // starred (1) before unstarred (0) → descending
+    }
 
     // 2. Manual order: queue_position (STAGING) or column_order (elsewhere).
     //    ASC; a card that has one outranks a card that does not (see the NULL
     //    note in the header — the alternative is an intransitive comparator).
-    const isStaging = column === 'STAGING';
     const oa = isStaging ? (a.queuePosition ?? null) : (a.columnOrder ?? null);
     const ob = isStaging ? (b.queuePosition ?? null) : (b.columnOrder ?? null);
     const oaNull = oa === null;

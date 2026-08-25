@@ -9043,10 +9043,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // the screen and the system agree on which card is next.
                 const queueOrdered = (col === 'STAGING');
                 const sortedItems = [...items].sort((a, b) => {
-                    // 1. Starred first (priority_starred: 1 before 0).
-                    const sa = a.priorityStarred ? 1 : 0;
-                    const sb = b.priorityStarred ? 1 : 0;
-                    if (sa !== sb) return sb - sa;
+                    // 1. Starred first — on the BOARD only. A mission is not the
+                    //    board and kanban priority does not reach inside one: a
+                    //    card added to a mission joins the end of its queue and
+                    //    runs in queue_position order, starred or not. Matches
+                    //    compareByPrecedence, which skips this step for STAGING.
+                    if (!queueOrdered) {
+                        const sa = a.priorityStarred ? 1 : 0;
+                        const sb = b.priorityStarred ? 1 : 0;
+                        if (sa !== sb) return sb - sa;
+                    }
 
                     // 2. Manual order: queue_position (STAGING) or column_order
                     //    (elsewhere), ASC. A card that HAS a position outranks one

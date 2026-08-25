@@ -47,10 +47,12 @@ function check(name, fn) {
 // without a compile step, and compiling one file to test four lines of ordering
 // is more machinery than the guarantee is worth.
 function compareByPrecedence(a, b, column) {
-    const sa = a.priorityStarred ? 1 : 0;
-    const sb = b.priorityStarred ? 1 : 0;
-    if (sa !== sb) { return sb - sa; }
     const isStaging = column === 'STAGING';
+    if (!isStaging) {
+        const sa = a.priorityStarred ? 1 : 0;
+        const sb = b.priorityStarred ? 1 : 0;
+        if (sa !== sb) { return sb - sa; }
+    }
     const oa = isStaging ? (a.queuePosition ?? null) : (a.columnOrder ?? null);
     const ob = isStaging ? (b.queuePosition ?? null) : (b.columnOrder ?? null);
     const oaNull = oa === null;
@@ -235,6 +237,21 @@ check('a card dragged into a column goes to the TOP, arranged column or not', ()
     const later = { id: 'arrived-2', columnEnteredAt: '2026-08-21T00:00:00Z' };
     assert.deepStrictEqual(order([...arranged, arrived, later], 'CREATED'),
         ['arrived-2', 'arrived', 'hand-1', 'hand-2', 'hand-3']);
+});
+
+check('the star does NOT reach inside a mission — STAGING runs in queue_position order', () => {
+    // A mission is not the kanban board. A card added to a mission joins the end
+    // of its queue; board-level urgency must not reorder a sequence the mission
+    // already committed to. V63 originally applied starred-first here, which let
+    // a card staged mid-run jump everything already queued.
+    const cards = [
+        { id: 'q1', queuePosition: 1 },
+        { id: 'q2', queuePosition: 2 },
+        { id: 'q3-starred', queuePosition: 3, priorityStarred: 1 },
+    ];
+    assert.deepStrictEqual(order(cards, 'STAGING'), ['q1', 'q2', 'q3-starred']);
+    // The same star DOES apply on the board.
+    assert.deepStrictEqual(order(cards, 'CREATED')[0], 'q3-starred');
 });
 
 check('STAGING keeps the opposite NULL rule — never-staged goes to the END', () => {

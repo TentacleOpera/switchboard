@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-08-25T01:56:21.170Z",
+  "generatedAt": "2026-08-25T02:53:49.237Z",
   "summary": {
     "totalArms": 638,
     "totalVerbs": 549,
@@ -21888,7 +21888,7 @@
       "verb": "showInfo",
       "direction": "request",
       "file": "src/webview/kanban.html",
-      "line": 9707,
+      "line": 9713,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21899,7 +21899,7 @@
       "verb": "showInfo",
       "direction": "request",
       "file": "src/webview/kanban.html",
-      "line": 9719,
+      "line": 9725,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
