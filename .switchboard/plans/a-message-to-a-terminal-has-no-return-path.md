@@ -241,3 +241,47 @@ starts claiming phone questions.
     nor claims a phone question — or sees it deliberately, matching whatever the plan decided.
 12. **Guards unchanged.** Re-run `loopback-hostname-contract`; confirm a non-loopback peer and
     a non-loopback Host still 403.
+
+## Scope reduced to the no-tracker case — revision after review
+
+*Appended rather than rewritten. The analysis of why a synchronous or connection-scoped reply
+cannot work on a phone stands, and is worth keeping: it is the reasoning that validates the
+mechanism already shipping.*
+
+**This plan's headline premise is wrong for the remote case.** It claims "the one function a phone
+most needs is one-way". For a card-scoped conversation it is not one-way, and has not been:
+
+- `postManagedComment(issueId, body)` (`LinearSyncService.ts:1444`) is a host-side comment
+  primitive with a self-marker applied host-side only (`commentMarker.ts:9`), reached by agents
+  through the `/comment` route (`LocalApiServer.ts:1436`) so they "cannot break the feedback-loop
+  guard". Implemented for Notion and ClickUp too, behind `RemoteProvider`.
+- `REMOTE_MODE_DIRECTIVE` (`agentPromptBuilder.ts:839`), injected into **all roles** when the
+  board is under remote control (`KanbanProvider.ts:3202`, `:6080`), tells the agent: the user is
+  not at the terminal, post questions and blockers as a comment on the linked issue, do not wait on
+  terminal input, continue with what you can.
+- `fetchIssueUpdates` reads state and recent comments back with an author flag, so the operator's
+  reply returns and Switchboard's own comments are filtered by the marker.
+
+That is durable, asynchronous, survives a dropped connection, and delivers while the phone is in a
+pocket — precisely the shape this plan argued for. It was already built.
+
+**What genuinely remains, and it is much narrower:**
+
+1. **A relay to a named terminal that is not a card's agent.** `POST /terminals/relay` targets any
+   live terminal by name; the comment loop is scoped to a card and reaches that card's current
+   column agent. Asking a specific terminal something, with no card involved, still has no return
+   path.
+2. **The no-tracker case.** Everything above requires remote control configured and a board mapped
+   to Linear, Notion or ClickUp. An operator with no tracker has no reply channel at all.
+3. **Latency.** The comment loop costs a tracker poll (30-120s). Irrelevant on a phone; noticeable
+   at a desk over a tunnel.
+
+**Recommendation: do not build this for the phone.** Its phone justification is gone, and it was
+the reason this plan sat in the *Command Switchboard From a Phone* feature. Either drop it from the
+feature and keep it as a low-priority local-convenience plan, or withdraw it. If it is ever built,
+it should follow the comment primitive's design — host-side marking, agents never touching the
+guard — rather than the inbox-and-watermark scheme sketched above.
+
+**Do not treat this plan's Verification Plan as a spec for the shipping loop.** Those tests were
+written for a mechanism that was never built; the shipping loop is `postManagedComment` plus
+`REMOTE_MODE_DIRECTIVE`, and testing it means testing those.

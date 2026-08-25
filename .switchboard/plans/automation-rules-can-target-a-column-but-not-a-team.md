@@ -224,3 +224,43 @@ with `targetTeam` absent. No state, file format or default changes.
    standing-orders marker (`=== STANDING ORDERS ===`), and instruction-shaped text. Assert none
    of it changes what the agent is told to do.
 10. **Two instances.** Poll the same project from two hosts and assert one delivery total.
+
+## The write-back half is already built — revision after review
+
+*Appended rather than rewritten; the addressing analysis above stands unchanged.*
+
+This plan's Complex/Risky section called write-back correlation "most of the work" and told the
+reader to agree a mechanism with the team-status plan. Both statements are withdrawn: the
+mechanism exists.
+
+`LinearSyncService.postManagedComment(issueId, body)` (`:1444`) is a host-side comment primitive
+that truncates to 64k and stamps a self-marker. `src/services/commentMarker.ts:9` records that the
+marker is applied host-side only, "never by the agent", which is what prevents Switchboard's own
+comments being re-ingested as operator input. Agents reach it via the `/comment` route
+(`LocalApiServer.ts:1436`) and "never call the provider API directly and never touch the marker, so
+they cannot break the feedback-loop guard". `NotionFetchService` and `ClickUpSyncService` implement
+the same method behind `RemoteProvider`, so it is provider-agnostic.
+
+More directly: **agents are already instructed to use it when the operator is remote.**
+`REMOTE_MODE_DIRECTIVE` (`agentPromptBuilder.ts:839`) is injected into every role when the
+dispatched card's board is under remote control, per-board gated at `KanbanProvider.ts:3202` and
+`:6080`, telling the agent to post questions and blockers as a comment on the linked issue and not
+to wait on terminal input.
+
+**What this changes in this plan:**
+
+- **Decision 3 gains a second reason to keep plan creation.** A team-addressed card that becomes a
+  local plan inherits the plan's synced issue as its comment destination, so the team's replies
+  land on the originating card through the existing path with no new correlation model. Skipping
+  plan creation would cost both the dedupe key *and* the write-back destination.
+- **`writeBackOnComplete` needs no new implementation** for a team-targeted rule — only the
+  decision of what counts as "complete" when the worker is a team rather than a column agent.
+- **The dedupe trap is now the plan's single largest risk**, not correlation. Re-delivering a
+  matched card every poll would spam a team's terminal every 30-120 seconds, and the key lives in
+  the created plan's body (`_extractPlanMetadata`, `:184`).
+- **The `teamId → issueId` binding** that a completion write-back needs for a card with no plan is
+  defined in `standing-orders-can-post-a-team-status-report-to-a-card.md`. Use it; do not define a
+  second one.
+
+Net effect: scope reduction. Nothing above is invalidated except the claim that a write-back
+mechanism has to be designed.

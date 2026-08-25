@@ -304,3 +304,40 @@ following, so do not offer them, and say plainly that they are desk-only if aske
 When the operator asks for one of these, the honest answer is that it needs the board, plus an
 offer to have an agent post the specific thing they want as a comment. Do not speculate about
 local state you cannot see — the sync's silence is not evidence that nothing is happening.
+
+## 11. Remote mode is what makes agents talk to you
+
+This is the most important operational fact in this skill, and it is a **pre-flight item**, not a
+detail.
+
+When a board is under remote control, `REMOTE_MODE_DIRECTIVE` is injected into **every** agent
+role on dispatch. Its text:
+
+> REMOTE MODE: You are running under remote control — the user is NOT at the terminal. If you need
+> to ask the user anything or report a blocker, post it as a comment on the linked issue using
+> `.agents/protocols/linear-api/SKILL.md` (or `.agents/protocols/clickup-api/SKILL.md`). Do NOT
+> wait on terminal input. Continue with any work you can do without the answer.
+
+So the question-and-answer loop already exists and is bidirectional:
+
+- **Agent → operator.** The agent posts through the host-side comment bridge. Comments are
+  stamped with a self-marker **host-side**, never by the agent, which is what stops Switchboard's
+  own comments from being re-ingested as operator input. Agents never call the tracker API
+  directly.
+- **Operator → agent.** Your comment on the issue is routed to that card's current column agent as
+  input, with the marker filtering Switchboard's own comments out.
+
+**Why this matters when you are driving remotely:**
+
+- **Confirm remote control is actually ON for the board you are working**, per the pre-flight in
+  section 6. It is gated per board. With it off, a dispatched agent that hits a question **blocks
+  on terminal input nobody is watching** — the work stalls silently and no comment ever appears.
+  If cards seem to stop mid-flight with no explanation, this is the first thing to check.
+- **A quiet card is not necessarily a stuck card.** The directive tells agents to continue with
+  whatever does not need the answer, so silence can mean "still working". Read the comments before
+  concluding anything.
+- **Answer in the thread, not by editing the description.** A reply is a comment; the description
+  is the plan body and rewriting it mid-flight fights the poll.
+- **Do not design around this loop's absence.** If asked how to get an answer back from an agent,
+  the answer is "it already comes back as a comment" — not a tunnel, not a port, not a new
+  channel.
