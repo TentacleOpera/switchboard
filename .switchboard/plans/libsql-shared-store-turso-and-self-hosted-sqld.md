@@ -14,7 +14,13 @@ Let an operator point the shared tier at a libSQL server — Turso, or sqld they
 - **Loss of offline operation** — an embedded replica keeps a local SQLite file as the read path. Offline is the default mode, not a degraded one.
 - **Mandatory migration across 4,000 installs** — there is none. Local file stays the default; this is opt-in per install.
 
-What the rejection correctly kills is Postgres. It does not reach libSQL, and the feature's paragraph needs amending to say which of the two it meant.
+What the rejection correctly kills is a *foreign-dialect local engine*. It does not reach libSQL, and the feature's paragraph has been amended to say so.
+
+> **Amended — the rejection does not kill a foreign-dialect REMOTE either, and this plan should not claim it does.** The paragraph above establishes that the three clauses miss libSQL. Re-run them against the shared tier and they miss a foreign remote for the same reasons: the 52 dialect sites execute against the local store, which stays SQLite here by construction; offline is a property of the two-tier split (local store is the read path) rather than of the remote's engine; and no install is migrated because local stays the default and any remote is opt-in. The tier this plan targets is roughly sixteen scalar fields per card changing at human pace — `split-shared-board-state-from-machine-local-runtime.md` measures it six orders of magnitude below the machine-local write volume. Nothing about holding sixteen fields requires SQLite semantics.
+>
+> The sibling target settles it: `git-carried-shared-board-state.md` proposes `board.json` on an orphan branch for the *same* tier — not SQLite, not SQL, not a database. A dialect argument that admits a JSON blob cannot exclude Postgres.
+>
+> This plan's case for libSQL therefore rests on the two reasons that actually survive, and it should be argued on those alone: **schema symmetry**, so the shared tier needs no mapping layer in either direction and the local-side conversion is a no-op; and **no sync engine to write**, because the embedded replica supplies one. Both are real. Neither is a dialect-compatibility requirement, and a competing proposal that pays for a mapping layer and its own sync is not disqualified — it is a different trade.
 
 **Why a remote and not just a hot local DB.** The remote's job is **arbitration and durability**, not query serving. A shared store is authoritative because it *orders* writes: two machines write, the server serialises, and the loser can tell it lost. That property is what a backup, a mirror, or a Notion database cannot supply at any price — and it is the only reason to accept a network dependency at all.
 
@@ -29,7 +35,7 @@ Board state was designed as single-machine state, so the only distribution chann
 - A Switchboard-hosted service. There is no SaaS and no Switchboard-operated database, now or planned. Every target is infrastructure the operator owns.
 - Access control. Switchboard cannot enforce what it does not operate; see the security section for what this means and what it does not.
 - Moving the local tier remote. Only the shared tier travels (`split-shared-board-state-from-machine-local-runtime.md`).
-- Postgres, MySQL, or any foreign dialect. The storage feature's rejection stands for those.
+- Postgres, MySQL, or any foreign dialect **as the local engine**. The storage feature's rejection stands there, on the 52 dialect sites, offline operation and forced migration. It is *not* a non-goal of the wider storage topology to consider a foreign-dialect remote for the shared tier — that would be an operational choice (auth, hosting, cost, concurrency, mapping-layer ownership), and this plan does not pre-empt it. What this plan asserts is narrower: libSQL is a good target because of schema symmetry and a supplied sync engine, not because rival dialects are ineligible.
 
 ## Metadata
 
