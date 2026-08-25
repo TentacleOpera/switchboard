@@ -341,3 +341,12 @@ So the question-and-answer loop already exists and is bidirectional:
 - **Do not design around this loop's absence.** If asked how to get an answer back from an agent,
   the answer is "it already comes back as a comment" — not a tunnel, not a port, not a new
   channel.
+
+### Planned change — where a comment goes
+
+The statements above that a comment is routed to the card's **current column agent** describe
+today's behaviour and are correct as written. A planned change
+(`a-card-comment-cannot-reach-the-seat-holding-the-work.md`) routes a comment on an **in-flight**
+card to the seat actually holding it — the card's `dispatched_terminal` — and leaves column routing
+in place for every other card. Until that ships, assume column routing. After it ships, this section
+is what to update.

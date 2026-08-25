@@ -249,16 +249,26 @@ tracker, or with remote control off, behave exactly as they do today.
     zero comments and zero API calls.
 12. **All three providers** reached through `RemoteProvider`.
 
-## Outstanding Question — waking a quiet lead
+## Resolved — waking a quiet lead is its own plan
+
+*Was an Outstanding Question; answered after review.*
 
 The operator's workflow ends with "ping to wake up the lead or controller if it goes suspiciously
-quiet", and that half is **not** solved by this plan or by anything shipping. An inbound comment
-routes to the card's *current column agent*, which is not necessarily the lead that holds the work,
-and on a feature card may be nobody.
+quiet". That is now specified in
+`a-card-comment-cannot-reach-the-seat-holding-the-work.md`, using the card's
+`plans.dispatched_terminal` (V57, `KanbanDatabase.ts:8673`) as the address and `POST /terminals/relay`
+as the delivery — so the operator replies on the card and never names a terminal. `teamWiring.ts:2183`
+guarantees that field "is only ever a real name", and the relay validates against the live fleet, so
+a stale seat fails cleanly.
 
-Options, none costed here: route a comment on a card with an in-flight team to that team's lead
-rather than the column agent; or reuse `POST /terminals/relay`, which already delivers into a named
-live terminal without clearing its context, with the card's dispatched terminal
-(`dispatchedTerminal`, visible in the 409 at `:1932`) as the target. The second looks closer to
-free and reuses a guarded path. Either way it is a separate plan — this one makes the silence
-visible, which is the prerequisite for wanting to break it.
+That plan also carries a **fourth event type for this bridge**: the feature-stall evidence
+`PlanIngestionEngine` (`:1256-1270`) already composes — each remaining subtask, its seat, how long
+that seat has been silent, and how long ago its plan file was written — surfaced as a comment on the
+engine's existing one-nudge cadence. It should reuse this plan's gating, toggles, dedupe, best-effort
+delivery and mention handling rather than building a parallel path.
+
+Worth noting why that event matters more than it first appears: the engine nudges a stalled head
+**once** and then deliberately stops (`:1246-1250`, "A head that didn't respond to the first nudge
+won't respond to a second"). So by the system's own design the next escalation is a human — and today
+that human is never told the stall happened, that evidence was gathered, or that an automatic attempt
+was already spent.
