@@ -2,11 +2,24 @@
 
 ## Goal
 
-Reduce the WORKTREES tab from a five-section console with three creation forms,
-two settings blocks and 140 words of prose to one list of worktrees with per-row
-actions. Creation belongs to the two controls the consolidation settled on — the
-STAGING toggle for features, the strip button for projects — and the tab's job is
-to show what exists and let you merge or clean it up.
+Reduce the WORKTREES tab from a five-section console to **one list plus one
+creation row**. The tab keeps the ability to create a project worktree and an
+unbound one — the strip button is convenient but the tab is where a user who
+thinks in worktrees will look, and two ways to reach one verb is the existing
+pattern, not a duplication to remove. What goes is the *chrome*: three sections
+that differ only by a filter, each with its own "Manual Creation" header above
+its own form above its own "Active …" header, and 140 words of prose explaining
+what the rows already show.
+
+**Feature creation does not come back.** It was removed deliberately: cutting a
+worktree for any feature at any time, off whatever the default branch happened to
+be, for work that may never be staged, is how two features end up on branches
+that cannot see each other with nothing recording that one needed the other.
+Feature worktrees are provisioned at STAGING time by the Worktrees toggle, which
+is the moment the work is actually about to run. Project and unbound worktrees
+have no such ordering problem — they are long-lived trees a user picks
+deliberately, not per-unit-of-work — which is exactly why they keep their
+buttons.
 
 ### Problem Analysis
 
@@ -24,24 +37,21 @@ around 330 lines, in this order:
 
 **Three problems, in order of how much they cost the user.**
 
-**1. The tab has three ways to create a worktree and the board has two more.**
-The feature form has just been removed (feature worktrees are cut by the STAGING
-toggle at staging time). What remains is a project dropdown + button that
-duplicates the strip button's project scope exactly, and an "Unbound" button that
-creates a worktree bound to nothing — a scope no other surface offers, no plan
-routes work into, and nothing in `_resolveWorktreeForPlan` can select. So of the
-three creation affordances the tab still shows, one is a duplicate and one is a
-dead end.
+**1. Each creator is wrapped in its own section.** The two surviving creators —
+a project dropdown + button posting `createWorktreeForProject`, and an "Unbound"
+button posting `createWorktree` — are not the problem; the packaging is. Each sits
+inside a `createSubsection` with a "Manual Creation" sub-header above it and an
+"Active …" sub-header below it, so two controls that would fit on one row cost
+four headers and two sections. The feature form that used to make a third has
+already been removed.
 
-**2. Three sections that differ only by a filter.** `FEATURES`, `PROJECTS` and
-`UNBOUND` each render `createSubsection(...)` + a "Manual Creation" sub-header +
-a creation form + an "Active …" sub-header + `renderWorktreeList(subset, …)`.
-The only real difference is which of `featureWTs` / `projectWTs` / `unboundWTs`
-they pass. The subsets are computed by three sibling filters at `:13010-13013`
-on `w.featureTopic` and `w.project`. Three near-identical 35-line blocks is the
-shape that lets one drift from the other two — the per-row Merge prompt button
-exists in `renderWorktreeRow`, so it is shared, but everything wrapping it is
-triplicated.
+**2. Three lists that differ only by a filter.** `FEATURES`, `PROJECTS` and
+`UNBOUND` each end in `renderWorktreeList(subset, …)`, and the only difference is
+which of `featureWTs` / `projectWTs` / `unboundWTs` they pass — three sibling
+filters at `:13010-13013` on `w.featureTopic` and `w.project`. The rows inside
+are identical, produced by the same `renderWorktreeRow`. Three near-identical
+wrappers is the shape that lets one drift from the other two, and the `FEATURES`
+section is now a header over a list with no control of its own at all.
 
 **3. Prose where the row already answers it.** The tab opens with a paragraph explaining
 "Routing order: feature worktree → project worktree → main repo", and the
@@ -65,14 +75,17 @@ and the tab kept its copies of both.
 
 ## User Review Required
 
-- **The `UNBOUND` scope is proposed for deletion, not preservation.** A worktree
-  with neither `feature_id` nor `project` is unreachable by plan routing: it can
-  only be reached by the per-row "Agent terminals" checkbox, which opens
-  terminals in it manually. If that manual-checkout case is wanted, it is a
-  *checkout*, not a worktree the dispatch model knows about, and it should be
-  said so rather than presented as a third peer scope. Existing unbound rows are
-  listed and cleanable either way — deletion removes the *create* button, never a
-  row.
+- **Settled: both creators stay — project and unbound.** An earlier revision of
+  this plan proposed deleting them, on the grounds that the strip button already
+  covers project scope and that an unbound worktree is unreachable by plan
+  routing. The user rejected both: the strip button is fine, but some users will
+  go to the tab, and an unbound tree is a legitimate scratch checkout reached by
+  the per-row *Agent terminals* checkbox. Two callers of one verb is the pattern
+  the codebase already uses (`/kanban/move` is the API path a human's click
+  takes), not a defect. **This plan removes chrome, not capability.**
+- **Settled: feature creation does not return.** See the Goal. The
+  `createWorktreeForFeature` verb stays in the allowlist and the provider as the
+  programmatic path; no UI in this tab may post it.
 - **Settled: the strategy radio stays in this tab.** It is pinned by
   `worktree-strategy-control-contract.test.js` ("the control renders exactly the
   two modes the verb arm accepts", "checked state derives from the broadcast").
@@ -89,7 +102,7 @@ and the tab kept its copies of both.
 ### Routine
 
 - Collapsing three list sections into one list (the rows already carry a scope chip).
-- Deleting the project creation form and the unbound create button.
+- Moving the project form and the unbound button into one creation row above it.
 - Cutting the two prose paragraphs down to one line each.
 
 ### Complex / Risky
@@ -105,9 +118,11 @@ and the tab kept its copies of both.
   rewrite that drops this makes an abandoned worktree flicker back into the list
   until the next broadcast. Carry it over verbatim.
 - **`config.controlPlaneMode === 'explicit' && repos.length === 0` disables every
-  create button.** That gate is the no-dead-click rule (PRD contract #6) and it
-  is duplicated per form. Deleting the forms deletes the duplication; do not
-  delete the gate from the one create path that remains reachable elsewhere.
+  create button.** That gate is the no-dead-click rule (PRD contract #6), and
+  because both creators survive it must survive on both of them. Moving a button
+  is exactly the edit that drops the disabled state and its `title`, and the
+  symptom — a button that does nothing when no repo is detected — is invisible
+  until someone is in that state.
 - **No confirm gates.** Project rule, and `confirm()` is a silent no-op in a VS
   Code webview. Abandon and cleanup already execute immediately; keep them that
   way.
@@ -119,10 +134,10 @@ schema, no config key, no stored state. No worktree is created or destroyed.
 
 **Security.** None. No new path resolution, no new verb.
 
-**Side effects.** Removing the project creation form changes a shipped
-affordance. The strip button already covers it with the same verb
-(`createWorktreeForProject`), so the capability does not disappear — worth a
-release note line, not a migration.
+**Side effects.** None to capability: both creators survive, the row is untouched,
+and both settings stay. The only visible change is layout — two buttons on one row
+instead of two sections — so there is nothing to migrate and nothing to warn about
+in a release note beyond "the WORKTREES tab is tidier".
 
 **Ordering.** After `worktree-models-consolidate-and-a-staging-toggle.md`, which
 narrowed the strip button and moved feature provisioning to staging. That plan's
@@ -131,8 +146,9 @@ review removed the tab's feature creation form; this plan finishes the tab.
 ## Dependencies
 
 - **Requires** `worktree-models-consolidate-and-a-staging-toggle.md` (landed) —
-  the two-control model is what makes the tab's forms redundant rather than
-  load-bearing.
+  it removed the tab's feature-creation form and moved feature provisioning to
+  STAGING time, which is what leaves the `FEATURES` section as a bare header over
+  a list and makes the collapse possible.
 - **Must not break** `worktree-strategy-control-contract.test.js`, which pins the
   strategy radio's markup shape and its broadcast-derived checked state.
 - Independent of the mission and dependency-edge work.
@@ -145,28 +161,41 @@ worktrees, which is exactly what a single list with per-row merge, cleanup,
 abandon and agent-terminals gives you. Creation was never what made it canonical;
 it was the only surface, so it accumulated creation too.
 
-**"Three sections make scope obvious at a glance."** A scope column makes it
-obvious in less space, and it sorts. Three sections make scope obvious *and*
-make an empty scope occupy three lines of chrome saying nothing.
+**"Three sections make scope obvious at a glance."** The row's scope chip already
+does that, in less space, and one list sorts. Three sections make scope obvious
+*and* make an empty scope occupy three lines of chrome saying nothing.
 
-**"Keep the unbound button — someone might want a scratch worktree."** Then it is
-a scratch checkout and should be labelled as one. Presenting it as a third peer
-scope implies the dispatch model routes work into it, and it does not.
+**"If the tab keeps creating worktrees, what has actually improved?"** The tab
+stops repeating itself. Two controls replace two sections and four sub-headers;
+one list replaces three; one line replaces 140 words. Nothing a user could do
+before becomes impossible, which is the point — the previous revision of this
+plan tried to fix over-complication by removing capability, and removing
+capability is not the same as removing complication.
+
+**"Then delete the strip button instead, so there is one control."** No. The
+strip button is on the board, where you are when you decide you want a project
+tree; the tab is where you are when you are looking at trees. Same verb, two
+entry points, matching the `/kanban/move` precedent. The consolidation this
+follows was about collapsing four *models* to two, not about collapsing every
+model to a single button.
 
 ### Risk Summary
 
 Key risks: (1) a rewrite of `renderWorktreesTab` silently drops the
-optimistic-removal guard or the no-dead-click gate, both of which are invisible
-until an abandon flickers or a button does nothing; (2) touching the strategy
-radio's markup breaks a contract test that exists because a crash once left a
-forced value in place; (3) collapsing sections tempts a rewrite of
-`renderWorktreeRow`, which owns the surviving merge caller. Mitigations: name all
-three as do-not-touch, and assert the guard and the gate in the plan's tests
-rather than trusting the rewrite.
+optimistic-removal guard or the no-dead-click gate, both invisible until an
+abandon flickers or a button does nothing in a repo-less control plane;
+(2) touching the strategy radio's markup breaks a contract test that exists
+because a crash once left a forced value in place; (3) collapsing sections tempts
+a rewrite of `renderWorktreeRow`, which owns the surviving merge caller and the
+scope chip; (4) a coder reading "simplify the tab" re-derives the deleted
+feature-creation form as part of "restoring" creation to the tab. Mitigations:
+name all three as do-not-touch, assert the guard and the gate rather than
+trusting the rewrite, and assert `createWorktreeForFeature` is absent from the
+tab as its own named test.
 
 ## Proposed Changes
 
-### 1. One list, with a scope column — `src/webview/kanban.html`
+### 1. One list, not three — `src/webview/kanban.html`
 
 **Context:** `renderWorktreesTab` currently builds `FEATURES`, `PROJECTS` and
 `UNBOUND` as three `createSubsection` blocks, each ending in
@@ -195,36 +224,52 @@ them.
 scope sort must be stable, so a re-render does not reshuffle equal-scope rows
 under the pointer.
 
-### 2. Delete the project creation form — `src/webview/kanban.html`
+### 2. One creation row, above the list — `src/webview/kanban.html`
 
-**Context:** `:13052-13109` renders a "Manual Creation" header, a project
-dropdown and a create button posting `createWorktreeForProject` — the same verb
-the strip button posts for the same scope.
+**Context:** The two surviving creators live in separate sections. The project
+form is at `:13052-13109` — a "Manual Creation" header, a project `<select>` and
+a button posting `createWorktreeForProject`. The unbound button is at
+`:13125-13140`, posting `createWorktree`. Between and around them sit four
+sub-headers and two `createSubsection` wrappers.
 
-**Logic:** Remove the form. The strip button is the project creation control.
+**Logic:** Keep both controls, exactly as they behave. Put them on one row above
+the list: the project selector with its **Create project worktree** button, and a
+**Create unbound worktree** button beside it. No headers, no sections — a single
+`flex` row, the same shape the STAGING column header uses for its own controls.
 
-**Implementation:** Delete the block and its locals (`manualProjHeader`,
-`projForm`, `projLabel`, the select, the button). Leave the verb, its schema and
-its `KanbanProvider` arm — the strip button and the API still use them.
+**Implementation:**
+- Move the project `<select>` and its button, and the unbound button, into one
+  container appended before the list.
+- **Carry the disabled state and its `title` on BOTH buttons**
+  (`config.controlPlaneMode === 'explicit' && repos.length === 0`). This is the
+  edit most likely to lose it.
+- Keep the project select's option-building and its "Please select a project
+  first" guard, and keep the 5-second re-enable timeout on each button — they
+  exist so a double-click cannot fire two creates.
+- Delete only the wrapper chrome: `manualProjHeader`, the "Manual Creation" and
+  "Active …" sub-headers, `unboundCreationContainer`, and the three
+  `createSubsection` calls.
 
-**Edge Cases:** The strip button's project scope must stay reachable with nothing
-selected, which is what its narrowing already established.
+**Edge Cases:** With no projects defined, the project select is empty — the
+existing "select a project first" guard already covers the click, so the button
+stays enabled and says so rather than being mysteriously dead. The unbound button
+never depends on projects.
 
-### 3. Delete the unbound create button, keep unbound rows — `src/webview/kanban.html`
+### 3. No feature creation in this tab — `src/webview/kanban.html`
 
-**Context:** `:13125-13140` renders "Create Worktree (Unbound)" posting
-`createWorktree`.
+**Context:** The feature dropdown and "Create Feature Worktree" button were
+removed when the STAGING toggle landed; a comment at `:13020-13032` records why.
 
-**Logic:** Remove the button. Rows with neither scope still list, with `—` in the
-scope cell, and remain mergeable and cleanable.
+**Logic:** It stays removed. Feature worktrees are cut at STAGING time by the
+toggle, off the default branch as it is *then*.
 
-**Implementation:** Delete `unboundCreationContainer` and `createUnboundBtn`.
-Check whether `createWorktree` retains any other caller; if it does not, leave
-the verb in place (the API path) and say so in a comment rather than deleting a
-catalogued verb.
+**Implementation:** No code change. The comment is the deliverable — it is what
+stops a coder "restoring creation to the tab" from putting three buttons on the
+new creation row instead of two. Keep it, and keep it next to the row.
 
-**Edge Cases:** Existing unbound worktrees are untouched — this removes a way to
-make more, never a way to see or remove the ones that exist.
+**Edge Cases:** The `createWorktreeForFeature` verb remains in the allowlist,
+`verbSchemas` and the `KanbanProvider` arm as the programmatic path. Narrowing is
+UI-only.
 
 ### 4. Cut the prose to one line each — `src/webview/kanban.html`
 
@@ -256,18 +301,27 @@ None.
 
 ### Goal Invariants
 
-- The WORKTREES tab creates nothing. Every create affordance in it is gone.
+- The tab creates **project and unbound** worktrees, and never a feature one.
 - Every worktree that exists is listed exactly once, with its scope visible.
+- Both create buttons carry the no-dead-click disabled state.
 - The strategy radio and the suppress checkbox are unchanged in id, markup shape
   and broadcast-derived state.
 - Merge and cleanup remain reachable per row.
 - An in-flight abandon does not flicker its row back.
+- No capability the tab had before this plan is missing after it.
 
 ### Automated Tests
 
-- **The tab creates nothing:** assert `renderWorktreesTab`'s source contains no
-  `createWorktreeForFeature`, `createWorktreeForProject` or `createWorktree`
-  post. Three separate assertions, named, so removing two and missing one fails.
+- **Both creators survive, and only those two:** assert `renderWorktreesTab`
+  posts `createWorktreeForProject` exactly once and `createWorktree` exactly
+  once. Three separate assertions, named — this is the test that catches a
+  "simplification" that quietly drops a button the user asked to keep.
+- **Feature creation stays out:** assert `renderWorktreesTab` contains no
+  `createWorktreeForFeature` post. Its own named assertion, because the failure
+  mode is a coder re-adding it while restoring the other two.
+- **Neither create button is a dead click:** assert both buttons read the
+  `controlPlaneMode === 'explicit' && repos.length === 0` gate. Moving a button
+  is what loses this, and nothing else can see it.
 - **One list, not three:** assert exactly one `renderWorktreeList(` call inside
   `renderWorktreesTab`, and that it is passed the unfiltered array.
 - **The row renderer is untouched:** assert `renderWorktreeRow` still emits the
@@ -286,18 +340,25 @@ None.
   `config.suppressMainTerminals`, not from a click assumption.
 - **No confirm gate:** assert the tab's source contains no `confirm(` call.
 - **Merge stays reachable:** assert the per-row merge button still posts
-  `copyWorktreeMergePrompt` — after this plan it and `POST /worktree/merge` are
-  the only two callers, so losing it loses the UI path entirely.
+  `copyWorktreeMergePrompt` — it and `POST /worktree/merge` are the only two
+  callers, so losing it loses the UI path entirely.
+- **The chrome is actually gone:** assert `renderWorktreesTab` contains no
+  "Manual Creation" string and at most one `createSubsection(` call. Without this
+  the plan can be "done" with every section intact and two buttons moved.
 
 ### Manual Verification
 
 - Open the tab with a feature worktree, a project worktree and an unbound one;
   confirm three rows in one list with correct scopes.
+- Create a project worktree from the tab, and one from the strip button; confirm
+  both land identically.
+- Create an unbound worktree from the tab; confirm it lists with the `Unbound`
+  chip and can be cleaned up.
 - Confirm merge and cleanup work from a row.
 - Confirm the strategy radio and the STAGING toggle still agree after toggling
   either one.
-- Confirm no button in the tab creates a worktree, and the strip button still
-  creates a project one.
+- Confirm no control in the tab creates a *feature* worktree, and that staging a
+  feature with the toggle on still cuts one.
 
 ## Outstanding Questions
 
