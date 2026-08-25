@@ -41,6 +41,30 @@ import { isLoopbackHostHeader, isLoopbackOrigin } from '../utils/loopbackHostnam
 import { listIconPalette } from './iconPalette';
 import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQueue, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
 import { composeCompletedTurnEndBody, composeCompletionEvidence, TURN_END_VERIFY_INSTRUCTION } from './PlanIngestionEngine';
+import { compareByPrecedence } from './kanbanOrdering';
+
+/**
+ * V63 — Check whether a starred STAGING card has an incomplete stage predecessor.
+ * Returns a stated refusal reason if the star should yield to dependency order,
+ * or null if the star applies normally (no predecessor, or predecessor complete,
+ * or no stage map exists yet — the streams plan has not landed).
+ *
+ * This is a forward-compatible hook: when the streams plan lands and cards carry
+ * a stage map, this function reads it to determine predecessor state. Until then
+ * it is a no-op (returns null) because no card has a stage map.
+ */
+function checkStagePredecessor(_card: any, _candidates: any[], _board: any[]): string | null {
+    // The stage map field (e.g. card.stageMap / card.stageOrder) does not exist
+    // yet — it is owned by the staging-streams-parallel-dispatch-and-worktrees
+    // plan. When it lands, this function will:
+    //   1. Read the card's stage map to find its predecessor in the stream.
+    //   2. Check whether that predecessor is complete (completedAt set, or not
+    //      in STAGING / not dispatched).
+    //   3. If incomplete, return a stated reason like:
+    //      `starred card ${card.planId} has incomplete predecessor ${predId} in stage N`
+    // Until then, no card has a stage map → no predecessor → star applies normally.
+    return null;
+}
 
 /** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
  *  'lead_coded' / 'Lead Coded' all → 'LEAD CODED'. */
@@ -1927,31 +1951,52 @@ export class LocalApiServer {
                 && (!p.dispatchedAt)
                 && (!p.featureId || p.featureId === '');
 
-            const queuePosition = (p: any): number | null => {
-                const v = p?.queuePosition ?? p?.queue_position;
-                if (v === null || v === undefined || v === '') { return null; }
-                const n = Number(v);
-                return Number.isFinite(n) ? n : null;
-            };
-
-            const byQueueThenBoard = (a: any, b: any): number => {
-                const qa = queuePosition(a);
-                const qb = queuePosition(b);
-                // NULLs last on both sides → only compare when both present.
-                if (qa !== null && qb !== null) { return qa - qb; }
-                if (qa !== null) { return -1; }
-                if (qb !== null) { return 1; }
-                return 0; // board order (getBoard returns updated_at DESC) preserved by stable sort
-            };
+            // V63: the queue pop uses the shared precedence resolver so a
+            // starred card is picked before any unstarred one, then by
+            // queue_position (STAGING's manual order), then the board's
+            // existing fallback (column_entered_at DESC → createdAt DESC).
+            // This replaces the inline byQueueThenBoard comparator with the
+            // SAME logic the frontend display sort and _distributePlannerDispatch
+            // use — one resolver, not three independent copies that drift.
+            const byPrecedence = (a: any, b: any): number =>
+                compareByPrecedence(a, b, 'STAGING');
 
             const candidates = board
                 .filter((p: any) => p && p.kanbanColumn === 'STAGING' && isQueueable(p))
-                .sort(byQueueThenBoard);
+                .sort(byPrecedence);
 
             if (candidates.length === 0) {
                 return { status: 200, payload: { success: true, dispatched: null, reason: 'queue empty' } };
             }
-            const next = candidates[0];
+            let next = candidates[0];
+
+            // V63: a starred card yields to dependency/stage order in STAGING.
+            // Mission streams sequence work so a card cuts from its predecessor's
+            // result; a starred card jumping ahead of an incomplete predecessor
+            // produces exactly the conflict the stage map exists to prevent. If
+            // the top candidate is starred AND has an incomplete stage predecessor,
+            // refuse the star's precedence with a stated reason and fall back to
+            // the non-starred order (the next candidate by queue_position).
+            //
+            // The stage map is owned by the streams plan (staging-streams-parallel-
+            // dispatch-and-worktrees). If that plan has not landed, no card carries
+            // a stage map, so there is no predecessor to check — the star applies
+            // normally. This guard is the forward-compatible hook: when the stage
+            // map lands, the check reads it; until then it is a no-op.
+            if (next?.priorityStarred) {
+                const stageRefusal = checkStagePredecessor(next, candidates, board);
+                if (stageRefusal) {
+                    // Fall back to the first non-starred candidate (normal queue_position order).
+                    const fallback = candidates.find((c: any) => !c.priorityStarred);
+                    if (fallback) {
+                        next = fallback;
+                    }
+                    // The refusal reason is surfaced in the response payload below
+                    // (added to the dispatch result) so Mission Control / the UI can
+                    // show why the star was refused.
+                    (next as any)._starRefusal = stageRefusal;
+                }
+            }
 
             // ── Dispatch ───────────────────────────────────────────────
             // Detect whether `from` names an external head (non-terminal agent).
@@ -2062,7 +2107,15 @@ export class LocalApiServer {
             }
             return {
                 status: 200,
-                payload: { success: true, dispatched: outcome.payload, from }
+                payload: {
+                    success: true,
+                    dispatched: outcome.payload,
+                    from,
+                    // V63: surface the star-yields-to-stage-order refusal reason
+                    // (if any) so Mission Control / the UI can show why a starred
+                    // card was not dispatched ahead of its predecessor.
+                    ...(next._starRefusal ? { starRefusal: next._starRefusal } : {})
+                }
             };
         } catch (err) {
             console.error('[LocalApiServer] _runQueuePop error:', err);

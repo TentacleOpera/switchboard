@@ -1160,6 +1160,23 @@
             justify-content: center;
         }
 
+        /* V63: priority star toggle */
+        .card-btn.star-btn {
+            padding: 2px;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+        }
+        .card-btn.star-btn.starred {
+            color: var(--vscode-editorWarning-foreground, #cca700);
+        }
+        .card-btn.star-btn:hover {
+            color: var(--vscode-editorWarning-foreground, #cca700);
+        }
+
         /* Card Copy Button Success Animation */
         @keyframes copyFlash {
             0% { background-color: var(--vscode-testing-iconPassed, #73c991); color: #ffffff; }
@@ -3028,6 +3045,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <button class="strip-btn is-teal" id="btn-project-manager" data-tooltip="Activate the Switchboard management console in the Project Manager agent terminal. If none is running, the prompt is copied to your clipboard instead — paste it into any agent chat.">MANAGE</button>
                 <button class="strip-btn is-teal" id="btn-feature-action" data-tooltip="Convert selected plans to feature or manage existing feature" disabled>PROMOTE TO FEATURE</button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
+                <div id="starred-count" style="display:none; font-size:10px; color:var(--vscode-editorWarning-foreground, #cca700); align-items:center; gap:3px;" data-tooltip="Number of priority-starred cards. Starring everything is the same as starring nothing — the count surfaces the degenerate state.">
+                    <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linejoin="round"><path d="M8 1.5l2 4.5 5 .4-3.8 3.3 1.2 4.9L8 12l-4.4 2.6 1.2-4.9L1 6.4l5-.4z"/></svg>
+                    <span id="starred-count-text">0 starred</span>
+                </div>
                 <div id="wt-indicator" style="display:none; margin-left:auto; align-items:center; gap:4px; font-size:10px; color:var(--text-secondary);">
                     <span class="sb-icon sb-icon-sm sb-icon-branch" style="opacity:0.6;" aria-hidden="true"></span>
                     <span id="wt-indicator-branch" style="font-family:monospace;"></span>
@@ -7948,7 +7969,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function buildBoardSignature(cards) {
             if (!Array.isArray(cards) || cards.length === 0) return '';
             return cards
-                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isFeature ? '1' : '0'}|${card.subtaskCount || 0}|${card.featureId || ''}|${card.working ? '1' : '0'}|${card.blocked ? '1' : '0'}|${card.columnEnteredAt || ''}`)
+                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isFeature ? '1' : '0'}|${card.subtaskCount || 0}|${card.featureId || ''}|${card.working ? '1' : '0'}|${card.blocked ? '1' : '0'}|${card.columnEnteredAt || ''}|${card.priorityStarred ? '1' : '0'}|${card.columnOrder ?? ''}`)
                 .sort()
                 .join('||');
         }
@@ -8828,6 +8849,33 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (countEl) countEl.textContent = String(counts[col] || 0);
             });
             updateStagingViewInfo();
+            updateStarredCount();
+        }
+
+        // V63: starred-count indicator. Surfaces the number of priority-starred
+        // cards so a degenerate all-starred board is visible rather than felt as
+        // "ordering stopped working". Reads from the unfiltered allCards cache
+        // (same source as occupancy counts) so hidden-project stars are counted.
+        // When all non-completed cards are starred, appends "(all)".
+        function updateStarredCount() {
+            const cards = allCards.length ? allCards : currentCards;
+            if (!Array.isArray(cards) || cards.length === 0) {
+                const el = document.getElementById('starred-count');
+                if (el) el.style.display = 'none';
+                return;
+            }
+            const eligible = cards.filter(c => c.column !== 'COMPLETED' && !c.featureId);
+            const starred = eligible.filter(c => c.priorityStarred).length;
+            const el = document.getElementById('starred-count');
+            const textEl = document.getElementById('starred-count-text');
+            if (!el || !textEl) return;
+            if (starred === 0) {
+                el.style.display = 'none';
+            } else {
+                el.style.display = 'flex';
+                const allStarred = eligible.length > 0 && starred === eligible.length;
+                textEl.textContent = allStarred ? `${starred} starred (all)` : `${starred} starred`;
+            }
         }
 
         // Staged-plan count for the STAGING column header.
@@ -8987,23 +9035,52 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // once) sort deterministically rather
                 // than randomly — see the plan's Race Conditions note. Every
                 // other column keeps the ts-descending render it always had.
+                // V63: the shared precedence applies to EVERY column — starred
+                // first, then manual order (queue_position in STAGING,
+                // column_order elsewhere) ASC with NULL yielding to the
+                // fallback, then column_entered_at DESC, then createdAt DESC.
+                // This matches the consumer resolver (compareByPrecedence) so
+                // the screen and the system agree on which card is next.
                 const queueOrdered = (col === 'STAGING');
                 const sortedItems = [...items].sort((a, b) => {
+                    // 1. Starred first (priority_starred: 1 before 0).
+                    const sa = a.priorityStarred ? 1 : 0;
+                    const sb = b.priorityStarred ? 1 : 0;
+                    if (sa !== sb) return sb - sa;
+
+                    // 2. Manual order: queue_position (STAGING) or column_order
+                    //    (elsewhere), ASC. A card that HAS a position outranks one
+                    //    that does not; cards that both lack one fall through to
+                    //    column_entered_at. This matches compareByPrecedence exactly
+                    //    (see its header for why manual-vs-NULL cannot be resolved
+                    //    by timestamp without an intransitive comparator).
                     if (queueOrdered) {
                         const ap = a.queuePosition, bp = b.queuePosition;
                         const an = (ap === null || ap === undefined), bn = (bp === null || bp === undefined);
-                        if (an && !bn) return 1;   // NULL sorts last
+                        if (an && !bn) return 1;   // NULL sorts last in STAGING (V60 precedent)
                         if (!an && bn) return -1;
                         if (!an && !bn) {
                             const d = ap - bp;
                             if (d !== 0) return d;
                         }
+                    } else {
+                        const ap = a.columnOrder, bp = b.columnOrder;
+                        const an = (ap === null || ap === undefined), bn = (bp === null || bp === undefined);
+                        if (!an && !bn) {
+                            const d = ap - bp;
+                            if (d !== 0) return d;
+                        } else if (!an && bn) {
+                            return -1; // a has manual order, b doesn't → a first
+                        } else if (an && !bn) {
+                            return 1;  // b has manual order, a doesn't → b first
+                        }
+                        // both null → fall through to column_entered_at
                     }
-                    // V61: sort by column_entered_at DESC (most recently moved
+                    // 3. V61: sort by column_entered_at DESC (most recently moved
                     // to column first), then createdAt DESC as tiebreaker.
                     const colTsDiff = (b._colTs || 0) - (a._colTs || 0);
                     if (colTsDiff !== 0) return colTsDiff;
-                    // Secondary tiebreaker: createdAt descending
+                    // 4. Secondary tiebreaker: createdAt descending
                     let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
                     let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
                     if (isNaN(createdA)) createdA = 0;
@@ -9020,6 +9097,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
 
             updateStagingViewInfo();
+            updateStarredCount();
 
             // Attach card-level event listeners
             document.querySelectorAll('.kanban-card').forEach(el => {
@@ -9128,6 +9206,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         // Fallback if DOM traversal fails
                         postKanbanMessage({ type: 'completePlan', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
                     }
+                });
+            });
+
+            // V63: priority star toggle — one click on, one click off, no confirm
+            // gate (project rule). stopPropagation prevents the click from reaching
+            // the card's drag-selection / click-to-open handlers. The backend
+            // refresh re-renders the card with the updated star state.
+            document.querySelectorAll('.card-btn.star-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const planId = btn.dataset.planId || btn.dataset.session || '';
+                    const workspaceRoot = btn.dataset.workspaceRoot || '';
+                    const currentlyStarred = btn.dataset.starred === '1';
+                    postKanbanMessage({
+                        type: 'setPriorityStarred',
+                        planId,
+                        sessionId: btn.dataset.session || '',
+                        starred: !currentlyStarred,
+                        workspaceRoot
+                    });
                 });
             });
 
@@ -9460,12 +9559,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const t = card.lastActivity ? new Date(card.lastActivity).getTime() : 0;
             const tsVal = isNaN(t) ? 0 : t;
             const qpVal = (card.queuePosition === null || card.queuePosition === undefined) ? '' : String(card.queuePosition);
+            // V63: priority star — one click toggles, no confirm gate (project rule).
+            // Filled star when starred, outline when not. stopPropagation prevents
+            // the click from triggering card selection or drag initiation.
+            const isStarred = !!card.priorityStarred;
+            const starBtn = isCompleted ? '' : `<button class="card-btn icon-btn star-btn${isStarred ? ' starred' : ''}" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-starred="${isStarred ? '1' : '0'}" data-tooltip="${isStarred ? 'Remove priority star' : 'Set priority star (overrides order)'}">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="${isStarred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5l2 4.5 5 .4-3.8 3.3 1.2 4.9L8 12l-4.4 2.6 1.2-4.9L1 6.4l5-.4z"/></svg>
+            </button>`;
             return `
                 <div class="kanban-card${completedClass}${featureClass}${workingClass}${blockedClass}${droppedClass}" draggable="true"${stateTitle} data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}" data-ts="${tsVal}" data-queue-position="${escapeAttr(qpVal)}">
                     <div class="card-topic">${featureBadge}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
-                        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                        <div style="display: flex; gap: 4px; flex-wrap: wrap; align-items: center;">
+                            ${starBtn}
                             ${primaryActionBtn}
                         </div>
                         <div style="display: flex; gap: 4px;">
@@ -9930,6 +10037,59 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // Nothing stageable and nothing to reorder (e.g. every dragged
                 // card sits in a coded/reviewed column the backend would refuse).
                 return;
+            }
+
+            // V63: same-column reorder for non-STAGING columns. A drag where
+            // EVERY dragged card is already in the target column (and the
+            // target is not STAGING, which has its own reorderQueue handler
+            // above) computes the insertion index from the pointer Y and posts
+            // reorderColumn to persist column_order. This mirrors the STAGING
+            // same-column reorder branch exactly, just writing column_order
+            // instead of queue_position. Mixed drags (some cards from other
+            // columns) fall through to the forward/backward move path below —
+            // they are NOT same-column reorders.
+            if (effectiveTargetColumn !== 'STAGING') {
+                const sameColIds = sessionIds.filter(id => {
+                    const card = currentCards.find(c => (c.planId || c.sessionId) === id);
+                    return card && card.column === effectiveTargetColumn;
+                });
+                if (sameColIds.length === sessionIds.length && sameColIds.length > 0) {
+                    const targetBody = document.getElementById('col-' + targetColumn);
+                    if (!targetBody) return;
+                    // Build the current rendered order (excluding the dragged set),
+                    // then splice the dragged block in at the insertion index.
+                    const stationaryEls = Array.from(targetBody.querySelectorAll('.kanban-card'))
+                        .filter(el => {
+                            const pid = el.dataset.planId || el.dataset.session || '';
+                            return !sameColIds.includes(pid);
+                        });
+                    let insertIndex = stationaryEls.length;
+                    const pointerY = e.clientY;
+                    for (let i = 0; i < stationaryEls.length; i++) {
+                        const rect = stationaryEls[i].getBoundingClientRect();
+                        const midpoint = rect.top + rect.height / 2;
+                        if (pointerY < midpoint) { insertIndex = i; break; }
+                    }
+                    const stationaryIds = stationaryEls.map(el => el.dataset.planId || el.dataset.session || '').filter(Boolean);
+                    const orderedIds = [...stationaryIds.slice(0, insertIndex), ...sameColIds, ...stationaryIds.slice(insertIndex)];
+                    // Optimistic DOM reorder.
+                    targetBody.querySelectorAll('.kanban-card').forEach(el => {
+                        const pid = el.dataset.planId || el.dataset.session || '';
+                        if (sameColIds.includes(pid)) el.classList.add('card-dropped');
+                    });
+                    const emptyState = targetBody.querySelector('.empty-state');
+                    if (emptyState) emptyState.remove();
+                    orderedIds.forEach(id => {
+                        const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
+                        if (cardEl) targetBody.appendChild(cardEl);
+                    });
+                    document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                    selectedCards.clear();
+                    updateReassignButtonVisibility();
+                    updateFeatureActionButton();
+                    postKanbanMessage({ type: 'reorderColumn', sessionIds: orderedIds, workspaceRoot });
+                    return;
+                }
             }
 
             sessionIds.forEach(id => {
@@ -10468,6 +10628,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                         cur.blocked = nc.blocked;
                                         cur.lastActivity = nc.lastActivity;
                                         cur.columnEnteredAt = nc.columnEnteredAt;
+                                        cur.priorityStarred = nc.priorityStarred;
+                                        cur.columnOrder = nc.columnOrder;
                                     }
                                 });
                                 lastBoardSignature = buildBoardSignature(currentCards);

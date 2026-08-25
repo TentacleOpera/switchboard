@@ -1076,6 +1076,19 @@ jobs:
       - name: Drive-mode prompt overhaul contract
         run: npm run test:contract:drive-mode-prompt-overhaul
 
+      # Board ordering has one precedence and three readers (the display sort, the
+      # queue pop, the planner fan-out). A reader that keeps its own sort agrees
+      # with the screen until the day it does not, and "two surfaces disagree about
+      # which card is next" is near-undiagnosable from the board — so this pins that
+      # each reader CALLS the shared resolver, not just that it happens to agree.
+      # It also pins the comparator's one subtle property (a manual position
+      # outranks its absence; resolving that by timestamp is intransitive and makes
+      # the sort depend on input order) and that both new verbs reached the
+      # generated allowlist — a missed `catalog:generate` leaves the star working in
+      # the VS Code webview and throwing on /kanban/verb/* in the browser cockpit.
+      - name: Card priority star + manual column order contract
+        run: npm run test:contract:card-priority-order
+
       - name: Run integration suite
         run: npm run test:integration:all
 

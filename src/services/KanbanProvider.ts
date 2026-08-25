@@ -24,6 +24,7 @@ import { deriveAgentDisplayName } from './cliIdentity';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
+import { compareByPrecedence } from './kanbanOrdering';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
@@ -140,6 +141,8 @@ export interface KanbanCard {
     blocked?: boolean; // V59: true while the agent reported itself blocked / waiting on the operator (hook-emitted)
     queuePosition?: number | null; // V60: 1-based STAGING session queue position; NULL = not staged (sorts last)
     columnEnteredAt?: string | null; // V61: when the card entered its current column (board sort key)
+    priorityStarred?: number; // V63: 0/1 priority flag; starred cards sort first in every consumer
+    columnOrder?: number | null; // V63: 1-based manual order for non-STAGING columns; NULL = unarranged (yields to columnEnteredAt DESC)
 }
 
 // Activity-light window default. A card is `working` while dispatched_at is set and
@@ -2163,6 +2166,8 @@ export class KanbanProvider implements vscode.Disposable {
                 blocked: cardState.blocked,
                 queuePosition: row.queuePosition ?? null,
                 columnEnteredAt: row.columnEnteredAt ?? null,
+                priorityStarred: row.priorityStarred ?? 0,
+                columnOrder: row.columnOrder ?? null,
             };
         });
 
@@ -2180,7 +2185,9 @@ export class KanbanProvider implements vscode.Disposable {
             isFeature: !!rec.isFeature,
             featureId: rec.featureId || undefined,
             subtaskCount: rec.isFeature ? (subtaskCountMap.get(rec.planId) || 0) : undefined,
-            columnEnteredAt: rec.columnEnteredAt ?? null
+            columnEnteredAt: rec.columnEnteredAt ?? null,
+            priorityStarred: rec.priorityStarred ?? 0,
+            columnOrder: rec.columnOrder ?? null,
         })));
 
         return cards;
@@ -3998,6 +4005,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         blocked: cardState2.blocked,
                         queuePosition: row.queuePosition ?? null,
                         columnEnteredAt: row.columnEnteredAt ?? null,
+                        priorityStarred: row.priorityStarred ?? 0,
+                        columnOrder: row.columnOrder ?? null,
                     };
                 });
 
@@ -4017,7 +4026,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     isFeature: !!rec.isFeature,
                     featureId: rec.featureId || undefined,
                     subtaskCount: rec.isFeature ? (subtaskCountMap2.get(rec.planId) || 0) : undefined,
-                    columnEnteredAt: rec.columnEnteredAt ?? null
+                    columnEnteredAt: rec.columnEnteredAt ?? null,
+                    priorityStarred: rec.priorityStarred ?? 0,
+                    columnOrder: rec.columnOrder ?? null,
                 })));
             } else if (workspaceId) {
                 console.warn(`[KanbanProvider] Kanban DB unavailable: ${db.lastInitError || 'unknown error'}`);
@@ -4232,6 +4243,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     blocked: cardState3.blocked,
                     queuePosition: row.queuePosition ?? null,
                     columnEnteredAt: row.columnEnteredAt ?? null,
+                    priorityStarred: row.priorityStarred ?? 0,
+                    columnOrder: row.columnOrder ?? null,
                 };
             });
 
@@ -4246,7 +4259,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 complexity: rec.complexity || 'Unknown',
                 workspaceRoot: resolvedWorkspaceRoot,
                 project: rec.project || '',
-                columnEnteredAt: rec.columnEnteredAt ?? null
+                columnEnteredAt: rec.columnEnteredAt ?? null,
+                priorityStarred: rec.priorityStarred ?? 0,
+                columnOrder: rec.columnOrder ?? null,
             })));
 
             const agentNames = await this._getAgentNames(resolvedWorkspaceRoot);
@@ -6861,6 +6876,26 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
+    /**
+     * V63 — the in-flight cards an ordering-driven dispatch must skip, shaped as
+     * moveCardsFailed entries. `working` (dispatched_at set and inside the
+     * liveness window) is the "already being worked on" predicate that the old
+     * oldest-first sort was standing in for; once the sort follows user intent
+     * the predicate has to be tested outright. Reporting rather than silently
+     * dropping matters because the webview already optimistically moved every
+     * selected card: an unreported skip leaves that move on screen and its
+     * optimistic-guard ledger entry armed.
+     */
+    private _inFlightSkipFailures(cards: KanbanCard[]): { id: string; sourceColumn: string; reason: string }[] {
+        return cards
+            .filter(c => c.working)
+            .map(c => ({
+                id: this._cardId(c),
+                sourceColumn: c.column,
+                reason: 'already dispatched and still working — not re-dispatched'
+            }));
+    }
+
     private async _distributePlannerDispatch(
         workspaceRoot: string,
         sourceCards: KanbanCard[],
@@ -6885,10 +6920,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot, { allowPtyFleet: true });
         if (terminals.length === 0) {
             // No live planner terminals — fall back to single trigger via default resolution
+            // V63: filter in-flight cards (same guard as the multi-terminal path).
+            const dispatchable = sourceCards.filter(c => !c.working);
             const movedIds: string[] = [];
             const dispatchIds: string[] = [];
-            const failures: { id: string; sourceColumn: string; reason: string }[] = [];
-            for (const card of sourceCards) {
+            const failures: { id: string; sourceColumn: string; reason: string }[] = this._inFlightSkipFailures(sourceCards);
+            for (const card of dispatchable) {
                 const sid = this._cardId(card);
                 const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
                 if (outcome.ok) {
@@ -6910,17 +6947,35 @@ This step is what moves the plan forward in the Switchboard pipeline.
             return;
         }
 
-        // Oldest-first ordering (lastActivity is ISO timestamp string)
-        const ordered = [...sourceCards].sort((a, b) =>
-            (a.lastActivity || '').localeCompare(b.lastActivity || '')
-        );
+        // V63: filter in-flight cards BEFORE sorting. `working` is the derived
+        // in-flight flag (dispatched_at set and within the timeout window) — the
+        // exact "not currently being worked on" condition age was standing in
+        // for. Without this filter, changing the sort from oldest-first to user
+        // intent would let automation pick up work already underway. The filter
+        // is applied here (the source set) rather than in the resolver because
+        // !dispatchedAt is a predicate, not a sort key — see the plan's
+        // Complexity Audit. The resolver then sorts the filtered set by the
+        // shared precedence (starred → manual order → column_entered_at DESC →
+        // createdAt DESC), replacing the former lastActivity ASC sort which was
+        // a proxy for this very filter and added nothing once the filter exists.
+        const dispatchable = sourceCards.filter(c => !c.working);
+        const sortColumn = dispatchable[0]?.column || '';
+        const ordered = [...dispatchable].sort((a, b) => compareByPrecedence(a, b, sortColumn));
+        // The webview optimistically moved EVERY selected card on drop. A card the
+        // in-flight filter drops is never named in the moveCards echo, so without
+        // this its optimistic move is never reverted and its guard-ledger entry
+        // never resolves — the card sits in the wrong column until an unrelated
+        // push repaints the board. Report it through the same moveCardsFailed
+        // channel a failed write uses, which reverts it and states why.
+        const skipFailures = this._inFlightSkipFailures(sourceCards);
 
         // Limit: only oldest N plans (N = live terminal count), one per terminal
         const limit = !options?.skipLimit && await tvp.getLimitDispatchToTerminals('planner', workspaceRoot);
         const plans = limit ? ordered.slice(0, terminals.length) : ordered;
 
         if (plans.length === 0) {
-            this.postMessage({ type: 'showStatusMessage', message: 'No plans to dispatch.', isError: false });
+            if (skipFailures.length > 0) { this.postMessage({ type: 'moveCardsFailed', failures: skipFailures }); }
+            else { this.postMessage({ type: 'showStatusMessage', message: 'No plans to dispatch.', isError: false }); }
             return;
         }
 
@@ -6930,7 +6985,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // gone).
         const dispatchedIds = plans.map(c => this._cardId(c));
         const movedIds: string[] = [];
-        const failures: { id: string; sourceColumn: string; reason: string }[] = [];
+        const failures: { id: string; sourceColumn: string; reason: string }[] = [...skipFailures];
         for (const card of plans) {
             const sid = this._cardId(card);
             const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
@@ -8186,6 +8241,27 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
                     if (wsId) { await db.clearQueuePosition(plan.planId, wsId); }
                 }
+                // V63: a card moving to ANY different column drops its column_order
+                // so it does not carry a stale manual position into the new column.
+                // STAGING is NOT excluded on either side: excluding it left a card
+                // that round-tripped CREATED → STAGING → CREATED holding its
+                // pre-staging position, so it reappeared mid-column instead of as an
+                // unarranged card. STAGING itself never reads column_order (its order
+                // is queue_position, cleared above), so clearing on the way in is
+                // free and clearing on the way out is required.
+                //
+                // A cleared (NULL) column_order means "not manually arranged in this
+                // column": the card sorts AFTER every card that DOES carry one, then
+                // by column_entered_at DESC among the other unarranged cards. In a
+                // column nobody has arranged, that is the board's existing order and
+                // the card appears at top; in an arranged column it lands at the end
+                // until the user drags it. Same-column drops never reach this path
+                // (the drop handler routes them to reorderColumn).
+                // priority_starred is NOT cleared — a star follows the card.
+                if (plan && plan.kanbanColumn !== targetColumn) {
+                    const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                    if (wsId) { await db.clearColumnOrder(plan.planId, wsId); }
+                }
                 if (plan) {
                     if (plan.isFeature) {
                         await this._regenerateFeatureFile(workspaceRoot, plan.planId, db);
@@ -8350,6 +8426,67 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
         if (!workspaceId) return false;
         return db.clearQueuePosition(planId, workspaceId);
+    }
+
+    /**
+     * V63 — rewrite the manual order of a non-STAGING column from the
+     * post-drop id list. Analogous to reorderQueue but writes column_order
+     * via setColumnOrders (one transaction, 1..N). The webview's same-column
+     * drop handler computes the insertion index and sends the full ordered
+     * list. STAGING is excluded — its order is queue_position (reorderQueue).
+     */
+    public async reorderColumn(
+        workspaceRoot: string,
+        orderedIds: string[]
+    ): Promise<{ success: boolean; reordered: number; error?: string }> {
+        if (!workspaceRoot) return { success: false, reordered: 0, error: 'No workspace root resolved' };
+        if (!Array.isArray(orderedIds) || orderedIds.length === 0) return { success: false, reordered: 0, error: 'No column order supplied' };
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return { success: false, reordered: 0, error: 'Kanban database not ready' };
+        const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+        if (!workspaceId) return { success: false, reordered: 0, error: 'No workspace id resolved' };
+        // Resolve planId|sessionId ids to plan_ids in order, dropping any that
+        // do not resolve (a card dragged out between render and drop).
+        const planIds: string[] = [];
+        for (const id of orderedIds) {
+            let plan = await db.getPlanByPlanId(id);
+            if (!plan) { plan = await db.getPlanBySessionId(id); }
+            if (plan) planIds.push(plan.planId);
+        }
+        if (planIds.length === 0) return { success: false, reordered: 0, error: 'No plans resolved' };
+        const ok = await db.setColumnOrders(workspaceId, planIds);
+        if (!ok) return { success: false, reordered: 0, error: 'Failed to rewrite column order' };
+        await this._refreshBoard(workspaceRoot);
+        return { success: true, reordered: planIds.length };
+    }
+
+    /**
+     * V63 — toggle a card's priority star. A starred card overrides all other
+     * ordering in every consumer. NOT cleared on column moves. No confirm gate
+     * (project rule). Idempotent.
+     */
+    public async setPriorityStarred(
+        workspaceRoot: string,
+        planId: string,
+        starred: boolean
+    ): Promise<{ success: boolean; error?: string }> {
+        if (!workspaceRoot || !planId) return { success: false, error: 'Missing planId or workspaceRoot' };
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return { success: false, error: 'Kanban database not ready' };
+        const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+        if (!workspaceId) return { success: false, error: 'No workspace id resolved' };
+        // The card's DOM id is `planId || sessionId`, so a card carrying only a
+        // session_id arrives here as `planId`. setPriorityStarred keys on plan_id
+        // and _persistedUpdate reports success on zero rows changed, so an
+        // unresolved id would report a star that was never written. Resolve the
+        // same way reorderQueue/reorderColumn do.
+        let plan = await db.getPlanByPlanId(planId);
+        if (!plan) { plan = await db.getPlanBySessionId(planId); }
+        if (!plan) return { success: false, error: `No plan found for '${planId}'` };
+        const ok = await db.setPriorityStarred(plan.planId, workspaceId, starred);
+        if (!ok) return { success: false, error: 'Failed to set priority star' };
+        await this._refreshBoard(workspaceRoot);
+        return { success: true };
     }
 
     public async moveCardToColumnByPlanFileWithReason(
@@ -9002,6 +9139,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     ...isWorkingState(plan.dispatchedAt, timeoutMs, plan.lastLivenessAt, plan.blockedAt, blockedTimeoutMs),
                     queuePosition: plan.queuePosition ?? null,
                     columnEnteredAt: plan.columnEnteredAt ?? null,
+                    priorityStarred: plan.priorityStarred ?? 0,
+                    columnOrder: plan.columnOrder ?? null,
                 });
             }
         }
@@ -12050,6 +12189,34 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 const result = await this.reorderQueue(workspaceRoot, orderedIds);
                 if (!result.success) {
                     this.postMessage({ type: 'showStatusMessage', message: result.error || 'Failed to reorder queue', isError: true });
+                }
+                return result;
+            }
+            case 'reorderColumn': {
+                // V63: rewrite a non-STAGING column's manual order from the
+                // post-drop id list. Analogous to reorderQueue but writes
+                // column_order. The webview's same-column drop handler
+                // computes the insertion index and sends the full ordered list.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const orderedIds: string[] = Array.isArray(msg.sessionIds) ? msg.sessionIds : [];
+                const result = await this.reorderColumn(workspaceRoot, orderedIds);
+                if (!result.success) {
+                    this.postMessage({ type: 'showStatusMessage', message: result.error || 'Failed to reorder column', isError: true });
+                }
+                return result;
+            }
+            case 'setPriorityStarred': {
+                // V63: toggle a card's priority star. One click on, one click
+                // off, no confirm gate (project rule). A starred card overrides
+                // all other ordering in every consumer.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const planId: string = String(msg.planId || msg.sessionId || '');
+                const starred: boolean = !!msg.starred;
+                const result = await this.setPriorityStarred(workspaceRoot, planId, starred);
+                if (!result.success) {
+                    this.postMessage({ type: 'showStatusMessage', message: result.error || 'Failed to set priority star', isError: true });
                 }
                 return result;
             }

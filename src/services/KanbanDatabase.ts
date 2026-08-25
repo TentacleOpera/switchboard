@@ -14,6 +14,7 @@ import {
     CustomAgentConfig,
     CustomKanbanColumnConfig
 } from './agentConfig';
+import { deriveAgentDisplayName } from './cliIdentity';
 import { BoardSnapshotPublisher, BOARD_SNAPSHOT_MODE } from './BoardSnapshotPublisher';
 import type { HostPathConfigProvider } from './hostSeams';
 
@@ -143,6 +144,24 @@ export interface KanbanPlanRecord {
      * never by file re-import or column move.
      */
     completedAt?: string | null;
+    /**
+     * V63: boolean priority flag (0 = unstarred, 1 = starred). Overrides all
+     * other ordering in every consumer — a starred card is picked before any
+     * unstarred one. NOT cleared on column moves (a star is a persistent flag
+     * that follows the card). Defaults to 0; preserved on upsert conflict.
+     */
+    priorityStarred?: number;
+    /**
+     * V63: 1-based sort key for non-STAGING columns, analogous to
+     * queue_position but scoped to the card's current non-STAGING column.
+     * NULL means "never manually arranged in this column": such a card sorts
+     * after every card that carries a position, then by column_entered_at DESC
+     * then createdAt DESC (the board's existing display fallback), so an
+     * un-arranged column is ordered exactly as it is today. STAGING keeps
+     * queue_position exclusively — column_order is never read or written there.
+     * Cleared on every cross-column move. Preserved on upsert conflict.
+     */
+    columnOrder?: number | null;
 }
 
 export interface ImportedDocEntry {
@@ -233,7 +252,9 @@ CREATE TABLE IF NOT EXISTS plans (
     project_id        INTEGER DEFAULT NULL,
     queue_position    INTEGER DEFAULT NULL,
     column_entered_at TEXT DEFAULT NULL,
-    completed_at      TEXT DEFAULT NULL
+    completed_at      TEXT DEFAULT NULL,
+    priority_starred  INTEGER DEFAULT 0,
+    column_order      INTEGER DEFAULT NULL
 );
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -552,6 +573,23 @@ const MIGRATION_V61_SQL = [
 // and the ALTER is a no-op there. Idempotent under the version gate.
 const MIGRATION_V62_SQL = [
     `ALTER TABLE plans ADD COLUMN completed_at TEXT DEFAULT NULL`,
+];
+
+// V63: plans.priority_starred + plans.column_order — board-wide priority and
+// manual ordering. priority_starred is a boolean (0/1) flag that overrides all
+// other ordering in every consumer (starred cards first). column_order is a
+// 1-based sort key for non-STAGING columns, analogous to queue_position but
+// scoped to the card's current non-STAGING column; NULL means "never manually
+// arranged" and sorts after any card that does carry a position, then by
+// column_entered_at DESC then createdAt DESC (the board's existing display
+// fallback), so pre-existing cards — all of them NULL — keep their current
+// position. STAGING keeps queue_position exclusively — column_order is never
+// read or written there. Both columns are also in SCHEMA_TABLES_SQL, so fresh
+// DBs get them at creation and the ALTER is a no-op there. Idempotent under
+// the version gate. Never edit a shipped V51–V62 body.
+const MIGRATION_V63_SQL = [
+    `ALTER TABLE plans ADD COLUMN priority_starred INTEGER DEFAULT 0`,
+    `ALTER TABLE plans ADD COLUMN column_order INTEGER DEFAULT NULL`,
 ];
 
 
@@ -935,7 +973,8 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
                        dispatched_terminal, dispatched_at, last_liveness_at, blocked_at,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
-                       workspace_name, project_id, queue_position, column_entered_at, completed_at`;
+                       workspace_name, project_id, queue_position, column_entered_at, completed_at,
+                       priority_starred, column_order`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -8633,6 +8672,16 @@ export class KanbanDatabase {
             await this.setMigrationVersion(62);
             console.log('[KanbanDatabase] V62 migration completed: completed_at column added to plans');
         }
+
+        // V63: plans.priority_starred + plans.column_order (board-wide priority + manual ordering).
+        const v63 = await this.getMigrationVersion();
+        if (v63 < 63) {
+            for (const sql of MIGRATION_V63_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(63);
+            console.log('[KanbanDatabase] V63 migration completed: priority_starred + column_order columns added to plans');
+        }
     }
 
     /**
@@ -9261,17 +9310,7 @@ FROM plans
         }
         const cmd = (mergedCommands[role] || '').trim();
         if (!cmd) return null;
-        const binary = cmd.split(/\s+/)[0];
-        const base = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
-        // Brand-name overrides must stay in step with TaskViewerProvider.CLI_BRAND_NAMES
-        // so the kanban column subline and the terminals sidebar never disagree.
-        const CLI_BRAND_NAMES: Record<string, string> = {
-            agy: 'Antigravity CLI',
-            antigravity: 'Antigravity CLI',
-        };
-        if (CLI_BRAND_NAMES[base]) { return CLI_BRAND_NAMES[base]; }
-        const name = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase();
-        return `${name} CLI`;
+        return deriveAgentDisplayName(cmd);
     }
 
     private async _writeLocalBoardMirror(): Promise<void> {
@@ -10188,6 +10227,77 @@ FROM plans
     }
 
     /**
+     * V63 — clear a card's column_order when it moves to a different column
+     * (analogous to clearQueuePosition for STAGING). A card that lands in a new
+     * column has no manual position there yet. NULL means "not manually
+     * arranged here": the card sorts after every card in that column that DOES
+     * carry a position, then by column_entered_at DESC among the rest — so in a
+     * column nobody has arranged it appears at top (the board's existing order),
+     * and in an arranged column it lands at the end until the user drags it.
+     * Scoped by plan_id + workspace_id. Idempotent (NULL → NULL is a no-op).
+     * Does NOT touch queue_position — STAGING's order is owned by its own clear.
+     */
+    public async clearColumnOrder(planId: string, workspaceId: string): Promise<boolean> {
+        if (!planId || !workspaceId) return false;
+        return this._persistedUpdate(
+            'UPDATE plans SET column_order = NULL WHERE plan_id = ? AND workspace_id = ?',
+            [planId, workspaceId]
+        );
+    }
+
+    /**
+     * V63 — rewrite column_order for the given ordered plan ids in ONE
+     * transaction, assigning 1..N in the caller's order. Analogous to
+     * setQueuePositions but for non-STAGING columns. The caller passes the
+     * full ordered id list (the post-drop order). Cards not in the list keep
+     * their positions. A partial rewrite leaves duplicate positions, which the
+     * render comparator tie-breaks on column_entered_at DESC (the board's
+     * existing order) rather than randomly — see the plan's Race Conditions
+     * note. The transaction wraps all writes so a failure rolls back to the
+     * prior order. Does NOT touch queue_position.
+     */
+    public async setColumnOrders(workspaceId: string, orderedPlanIds: string[]): Promise<boolean> {
+        if (!workspaceId || !Array.isArray(orderedPlanIds) || orderedPlanIds.length === 0) return false;
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            this._db.exec('BEGIN');
+            try {
+                let pos = 0;
+                for (const planId of orderedPlanIds) {
+                    pos += 1;
+                    this._db.run(
+                        'UPDATE plans SET column_order = ? WHERE plan_id = ? AND workspace_id = ?',
+                        [pos, planId, workspaceId]
+                    );
+                }
+                this._db.exec('COMMIT');
+            } catch (inner) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                throw inner;
+            }
+            await this._persist();
+            return true;
+        } catch (error) {
+            console.error('[KanbanDatabase] setColumnOrders failed:', error);
+            return false;
+        }
+    }
+
+    /**
+     * V63 — set a card's priority_starred flag (0 = unstarred, 1 = starred).
+     * A starred card overrides all other ordering in every consumer. NOT
+     * cleared on column moves — a star is a persistent flag that follows the
+     * card. Scoped by plan_id + workspace_id. Idempotent.
+     */
+    public async setPriorityStarred(planId: string, workspaceId: string, starred: boolean): Promise<boolean> {
+        if (!planId || !workspaceId) return false;
+        return this._persistedUpdate(
+            'UPDATE plans SET priority_starred = ? WHERE plan_id = ? AND workspace_id = ?',
+            [starred ? 1 : 0, planId, workspaceId]
+        );
+    }
+
+    /**
      * Blocked-state writer (V59). Sets `blocked_at` to the given ISO timestamp
      * (or NULL to clear) WITHOUT touching `dispatched_at` — the card stays lit
      * as working/blocked; only the blocked overlay flips. The derive layer
@@ -10606,7 +10716,11 @@ FROM plans
                     projectId: row.project_id !== null && row.project_id !== undefined ? Number(row.project_id) : null,
                     // Absent from SELECT lists that predate V61 → undefined → null.
                     columnEnteredAt: row.column_entered_at !== null && row.column_entered_at !== undefined ? String(row.column_entered_at) : null,
-                    completedAt: row.completed_at !== null && row.completed_at !== undefined ? String(row.completed_at) : null
+                    completedAt: row.completed_at !== null && row.completed_at !== undefined ? String(row.completed_at) : null,
+                    // Absent from SELECT lists that predate V63 → undefined → 0 (unstarred).
+                    priorityStarred: row.priority_starred !== null && row.priority_starred !== undefined ? Number(row.priority_starred) : 0,
+                    // Absent from SELECT lists that predate V63 → undefined → null (unarranged).
+                    columnOrder: row.column_order !== null && row.column_order !== undefined ? Number(row.column_order) : null
                 });
             }
         } finally {
