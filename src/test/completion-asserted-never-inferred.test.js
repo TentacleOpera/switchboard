@@ -181,6 +181,84 @@ async function run() {
             'head order must instruct using POST /kanban/task/complete');
     });
 
+    // ── The lead's team-queue order is the LEAD's, not the members' ──────
+    // TEAM_QUEUE_DONE_ORDER_BODY was installed at both `team` and `team-head`
+    // scope, so the head was handed coder text: it names task/complete only in
+    // the third person ("your lead clears it when it posts completion") and
+    // promises a relay "to your team lead" — the head IS the lead.
+
+    await check('the team-head body tells the LEAD to post task/complete itself', async () => {
+        const { TEAM_HEAD_QUEUE_DONE_ORDER_BODY } = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
+        const head = TEAM_HEAD_QUEUE_DONE_ORDER_BODY('test-group');
+        assert.ok(head.includes('POST /kanban/task/complete'),
+            'the lead\'s own order must name POST /kanban/task/complete');
+        assert.ok(head.includes('"from":"<your terminal name>"'),
+            'the post must be addressed FROM the lead — first person, not a description of what somebody else does');
+        assert.ok(!head.includes('your lead clears it'),
+            'the member sentence about what "your lead" does must not survive in the head body');
+        assert.ok(!head.includes('relay your completion report to your team lead'),
+            'the head has no lead to relay to — the member relay sentence must be gone');
+        assert.ok(head.includes('/terminals/teams/test-group/queue/done'),
+            'the head still advances the team queue, so queue/done must survive with the groupId baked in');
+    });
+
+    await check('applyTeamQueueOrders installs a different body at team-head than at team', async () => {
+        const tw = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
+        let stored = [];
+        const db = {
+            getConfigJson: async () => stored,
+            setConfigJson: async (_k, v) => { stored = v; },
+        };
+        await tw.applyTeamQueueOrders({
+            db, groupId: 'g1', headName: 'lead-1', roster: ['lead-1', 'coder-1'], enabled: true,
+        });
+        const member = stored.find(o => o.id === 'team-queue-done:g1:team');
+        const head = stored.find(o => o.id === 'team-queue-done:g1:team-head');
+        assert.ok(member && head, 'both the team and team-head orders must be installed in auto mode');
+        assert.notStrictEqual(head.instruction, member.instruction,
+            'the head must not be handed the member body');
+        assert.ok(head.instruction.includes('POST /kanban/task/complete'),
+            'the installed head order must carry the lead\'s own task/complete obligation');
+        assert.strictEqual(head.parent, 'lead-1', 'team-head delivery is keyed on parent === head name');
+    });
+
+    await check('a head row still carrying the member body is rewritten on read', async () => {
+        const tw = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
+        // A team wired by an older build: head row, member body.
+        const stale = [{
+            id: 'team-queue-done:g1:team-head',
+            parent: 'lead-1',
+            child: '',
+            scope: 'team-head',
+            teamId: 'g1',
+            instruction: tw.TEAM_QUEUE_DONE_ORDER_BODY('g1'),
+        }];
+        const healed = tw.migrateCodingTeamOrders(stale);
+        assert.notStrictEqual(healed, stale, 'the transform must recognise the stale head row');
+        assert.strictEqual(healed[0].instruction, tw.TEAM_HEAD_QUEUE_DONE_ORDER_BODY('g1'),
+            'the stale head row must be rewritten to the head body');
+        assert.strictEqual(healed[0].id, 'team-queue-done:g1:team-head',
+            'the id must survive the rewrite so delete-by-id and the idempotent install keep working');
+    });
+
+    await check('migrateCodingTeamOrders returns its input by reference when nothing is stale', async () => {
+        const tw = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
+        // describeStandingOrderMigrations uses an === check against the input as
+        // its "nothing is stale" test, so a gratuitous copy would mark every row
+        // stale in the UI and make loadEffectiveStandingOrders persist on every
+        // prompt.
+        const fresh = [{
+            id: 'team-queue-done:g1:team-head',
+            parent: 'lead-1',
+            child: '',
+            scope: 'team-head',
+            teamId: 'g1',
+            instruction: tw.TEAM_HEAD_QUEUE_DONE_ORDER_BODY('g1'),
+        }];
+        assert.strictEqual(tw.migrateCodingTeamOrders(fresh), fresh,
+            'an already-migrated set must come back by reference');
+    });
+
     // ── Source-text invariants (no compilation required) ─────────────────
     // The remaining acceptance criteria are source-text invariants: they pin
     // the shape of the code, not a runtime result. Scanning the .ts source

@@ -373,6 +373,41 @@ export function REVIEW_TEAM_QUEUE_DONE_ORDER_BODY(groupId: string): string {
 }
 
 /**
+ * The `team-head` half of the team-queue standing order — the lead's own.
+ *
+ * {@link TEAM_QUEUE_DONE_ORDER_BODY} was previously installed at BOTH scopes,
+ * which handed the lead text written for a coder. That body names
+ * `/kanban/task/complete` only in the THIRD person ("your lead clears it when
+ * it posts completion") and promises the reader its report will be relayed "to
+ * your team lead" — the head IS the lead. A head reading it is told what
+ * somebody else owes and never what it owes itself, while the only first-person
+ * instruction it carries is `queue/done`.
+ *
+ * States the lead's two posts instead: `task/complete` per accepted subtask,
+ * then `queue/done` to take the next queued item. Says "seat", not "coder", so
+ * it reads correctly for a review team's head as well.
+ *
+ * Wording is deliberately in step with `KanbanProvider._buildDrivePrefix`'s
+ * CLOSE OUT clause and `LocalApiServer`'s `composeAcceptanceInstruction` —
+ * three surfaces, one contract. Commit policy is NOT restated here: the head
+ * prompt preset owns it, and a per-subtask commit rule stated here would
+ * contradict "a team commits once, as its head".
+ */
+export function TEAM_HEAD_QUEUE_DONE_ORDER_BODY(groupId: string): string {
+    return 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
+        + 'with it, POST /kanban/task/complete with {"from":"<your terminal name>","planId":'
+        + '"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"} against the port in '
+        + '.switchboard/api-server-port.txt. Post per subtask, with that subtask\'s planId — never '
+        + 'the feature\'s. Accepting and rejecting are not two different endings: you reject by '
+        + 'sending a fix round first, then you post when the subtask is done. Until you post, that '
+        + 'seat is not cleared and you cannot be handed the next subtask. '
+        + 'When every subtask of the item you were dispatched is closed out, POST /terminals/teams/'
+        + `${groupId}/queue/done with {"from":"<your terminal name>"} against the same port to take `
+        + 'the next queued item. You are the lead — there is nobody to relay your report to. '
+        + 'If there are no more items, the team is done with queued work.';
+}
+
+/**
  * Deterministic id prefix for the team-queue completion-driven orders, so they
  * can be found and removed without scanning instruction text. One order per
  * scope (`team`, `team-head`) per team — the prefix + groupId + scope is unique.
@@ -410,6 +445,10 @@ export async function applyTeamQueueOrders(opts: {
     if (!db || !groupId) return;
     const members = roster.filter(n => typeof n === 'string' && n.length > 0 && n !== headName);
     const body = isReviewTeam ? REVIEW_TEAM_QUEUE_DONE_ORDER_BODY(groupId) : TEAM_QUEUE_DONE_ORDER_BODY(groupId);
+    // The head gets its OWN body, not the member text. Both team types' heads
+    // owe the same two posts, so there is one head body rather than a review
+    // variant.
+    const headBody = TEAM_HEAD_QUEUE_DONE_ORDER_BODY(groupId);
     await mutateStandingOrders(db, async (orders) => {
         const next = orders.filter((o: StandingOrder) =>
             !(typeof o.id === 'string' && o.id.startsWith(TEAM_QUEUE_ORDER_ID_PREFIX + groupId + ':'))
@@ -437,7 +476,7 @@ export async function applyTeamQueueOrders(opts: {
         }
         if (!hasHead) {
             next.push(makeStandingOrder(
-                headName, '', body, 'team-head', groupId,
+                headName, '', headBody, 'team-head', groupId,
             ));
             next[next.length - 1] = { ...next[next.length - 1], id: headId };
         }
@@ -1897,6 +1936,7 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
     if (!Array.isArray(orders) || orders.length === 0) { return orders; }
 
     const drop = new Set<string>();        // order ids to remove
+    const rewrite = new Map<string, string>();  // order id → replacement instruction
     let touched = false;
 
     for (const o of orders) {
@@ -1918,11 +1958,38 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
                 continue;
             }
         }
+
+        // A team's head row still carrying the MEMBER body. applyTeamQueueOrders
+        // runs only on the auto/manual toggle, so a team already in auto mode
+        // would keep the coder-facing text until an operator happened to toggle
+        // it. Rewrite on read instead: loadEffectiveStandingOrders persists this
+        // once (after backupOnce) and delivery uses the result, so every install
+        // heals on its next prompt with no operator action.
+        if (scope === 'team-head' && typeof o.id === 'string'
+            && o.id.startsWith(TEAM_QUEUE_ORDER_ID_PREFIX)) {
+            const sep = o.id.lastIndexOf(':');
+            const groupId = sep > TEAM_QUEUE_ORDER_ID_PREFIX.length - 1
+                ? o.id.slice(TEAM_QUEUE_ORDER_ID_PREFIX.length, sep)
+                : '';
+            // Both member variants are recognised: `isReviewTeam` is not passed
+            // at the shipped call site today, but an older build that passed it
+            // would have installed the review body on a head row.
+            if (groupId && (o.instruction === TEAM_QUEUE_DONE_ORDER_BODY(groupId)
+                || o.instruction === REVIEW_TEAM_QUEUE_DONE_ORDER_BODY(groupId))) {
+                rewrite.set(o.id, TEAM_HEAD_QUEUE_DONE_ORDER_BODY(groupId));
+                touched = true;
+            }
+        }
     }
 
     if (!touched) { return orders; }
 
-    return orders.filter(o => !drop.has(o.id));
+    return orders
+        .filter(o => !drop.has(o.id))
+        .map(o => {
+            const replacement = o && typeof o.id === 'string' ? rewrite.get(o.id) : undefined;
+            return replacement ? { ...o, instruction: replacement } : o;
+        });
 }
 
 /** Additive per-row migration verdict for a persisted standing order. */
