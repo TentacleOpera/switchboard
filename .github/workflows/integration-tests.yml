@@ -263,6 +263,18 @@ jobs:
       - name: Stage marker commit contract (trailers are readable, dead controls are not shippable)
         run: npm run test:contract:stage-marker-commit
 
+      # The coding team's head prompt exists in THREE copies (teamWiring.ts, the
+      # terminals.js mirror, and kanban.html's shipped preset). A one-sided edit
+      # hands the extension and the browser different orders — silent, with every
+      # other gate green. This pins byte-identity across all three plus the
+      # content invariants the reviewer-removal work established: no targetColumn,
+      # no reviewer roster check, no /kanban/dispatch, and a completion post that
+      # carries the SUBTASK's planId (the FEATURE planId sets completed_at on the
+      # wrong row and holds the team forever under the single-release-signal
+      # predicate).
+      - name: Coding head prompt contract (three copies byte-identical, one ending)
+        run: npm run test:contract:coding-head-prompt
+
       # Named in two plans' Automated verification but never wired to a gate until now.
       - name: Minimal prompt shape (directive spacing, no triple newlines)
         run: npm run test:contract:minimal-prompt

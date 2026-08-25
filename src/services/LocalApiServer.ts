@@ -1907,28 +1907,26 @@ export class LocalApiServer {
             // The scan re-reads the canonical row before refusing to avoid
             // false 409s from race conditions between board load and completion post.
             if (isTeamDispatch) {
-                const inFlightCandidate = board.find((p: any) =>
-                    p
+                const heldByTeam = (p: any): boolean =>
+                    !!p
                     && !p.completedAt
                     && typeof p.dispatchedTerminal === 'string'
                     && p.dispatchedTerminal.length > 0
-                    && teamSet.has(p.dispatchedTerminal)
-                );
-                if (inFlightCandidate) {
-                    let inFlightCard: any = inFlightCandidate;
+                    && teamSet.has(p.dispatchedTerminal);
+                // EVERY candidate is re-read, not just the first. A stale board
+                // row whose fresh read shows a completion must not end the scan:
+                // the team can hold a second card, and skipping it would release
+                // the team on a card nobody posted — the fail-open this gate
+                // exists to close.
+                for (const candidate of board.filter(heldByTeam)) {
+                    let inFlightCard: any = candidate;
                     try {
-                        const fresh: any = await db.getPlanByPlanId?.(inFlightCandidate.planId);
+                        const fresh: any = await db.getPlanByPlanId?.(candidate.planId);
                         if (fresh) {
                             inFlightCard = fresh;
                         }
                     } catch { /* fall back to candidate */ }
-                    if (
-                        inFlightCard
-                        && !inFlightCard.completedAt
-                        && typeof inFlightCard.dispatchedTerminal === 'string'
-                        && inFlightCard.dispatchedTerminal.length > 0
-                        && teamSet.has(inFlightCard.dispatchedTerminal)
-                    ) {
+                    if (heldByTeam(inFlightCard)) {
                         return fail(409, `Team already in flight: card '${inFlightCard.planId}' is in '${inFlightCard.kanbanColumn}' held by '${inFlightCard.dispatchedTerminal}' with no completion post. Post /kanban/task/complete before asking for the next card.`, {
                             inFlight: {
                                 planId: inFlightCard.planId,
@@ -4506,7 +4504,7 @@ export class LocalApiServer {
      *
      * Those markers come from `describeStandingOrderMigrations`, which runs the
      * SAME pure transforms delivery runs. Re-deriving them here from a local copy
-     * of a recogniser (or of `OLD_HEADPROMPT_FRAGMENT`) is the defect this
+     * of a recogniser (or of a matching fragment) is the defect this
      * endpoint exists to close: the one surface you would use to ask "what is
      * this agent actually told?" must not be able to drift from the answer.
      *

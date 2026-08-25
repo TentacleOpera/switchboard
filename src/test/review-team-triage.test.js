@@ -19,7 +19,6 @@ const {
     TEAM_QUEUE_DONE_ORDER_BODY,
     REVIEW_TEAM_QUEUE_DONE_ORDER_BODY,
     NEW_REVIEW_TEAM_HEAD_PROMPT,
-    PRE_TRIAGE_REVIEW_HEAD_PROMPT,
     migrateAgentGroups,
 } = require('../../out/services/teamWiring');
 const { buildKanbanBatchPrompt } = require('../../out/services/agentPromptBuilder');
@@ -209,20 +208,28 @@ async function runTests() {
         assert.ok(OFFERED_TEAM_DEFINITIONS.includes(OFFERED_REVIEW_TEAM_GROUP), 'OFFERED_REVIEW_TEAM_GROUP must be in OFFERED_TEAM_DEFINITIONS');
     });
 
-    // 10. Pre-triage Review team headPrompt migration
-    test('Invariant 10: migrateAgentGroups converts pre-triage Review team to NEW_REVIEW_TEAM_HEAD_PROMPT', () => {
-        const preTriageGroup = {
+    // 10. Structural repair survives; prompt-text migration is gone.
+    // The frozen snapshots and their recognisers were deleted — spawned teams
+    // have never shipped, so a persisted stale prompt is a clean break, not a
+    // migration target. The member-shape repair must still fire.
+    test('Invariant 10: migrateAgentGroups repairs structure but never rewrites a persisted head prompt', () => {
+        const persisted = {
             id: 'g-review',
             name: 'Review',
             headRole: 'reviewer',
-            headPrompt: PRE_TRIAGE_REVIEW_HEAD_PROMPT,
-            members: [{ role: 'reviewer', count: 3, scope: 'per-team', relationship: 'reports-to-head' }]
+            headPrompt: 'a stale persisted review head prompt',
+            members: [{ role: 'reviewer', count: 3 }]
         };
 
-        const migrated = migrateAgentGroups([preTriageGroup]);
-        assert.ok(migrated, 'Must migrate pre-triage Review team');
-        assert.strictEqual(migrated[0].headPrompt, NEW_REVIEW_TEAM_HEAD_PROMPT, 'Head prompt updated to NEW_REVIEW_TEAM_HEAD_PROMPT');
+        const migrated = migrateAgentGroups([persisted]);
+        assert.ok(migrated, 'Structural member-shape repair must still fire');
+        assert.strictEqual(migrated[0].headPrompt, persisted.headPrompt,
+            'Prompt text is never rewritten — the snapshots were deleted deliberately');
+        assert.strictEqual(migrated[0].members[0].scope, 'per-team');
+        assert.strictEqual(migrated[0].members[0].relationship, 'reports-to-head');
         assert.strictEqual(migrateAgentGroups(migrated), null, 'Idempotent: second pass returns null');
+        assert.ok(OFFERED_REVIEW_TEAM_GROUP.headPrompt === NEW_REVIEW_TEAM_HEAD_PROMPT,
+            'A recreated Review team gets the live prompt — the clean-break replacement path');
     });
 
     console.log(`\nReview Team Triage Tests: ${passed} passed, ${failed} failed.\n`);

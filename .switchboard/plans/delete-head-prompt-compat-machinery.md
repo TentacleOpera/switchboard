@@ -187,3 +187,18 @@ the next reader repeats the inference this subtask exists to prevent.
 ## Implementation Summary
 
 Deleted all fifteen frozen head prompt text snapshots, fragments, and gate markers (`OLD_CODING_HEAD_PROMPT`, `PRE_ROLE_BOUNDARY_CODING_HEAD_PROMPT`, `PRE_COMMIT_INSTRUCTION_CODING_HEAD_PROMPT`, `PRE_CARD_MOVEMENT_RULE_CODING_HEAD_PROMPT`, `OLD_REVIEW_TEAM_HEAD_PROMPT`, `PRE_COMMIT_INSTRUCTION_REVIEW_HEAD_PROMPT`, `PRE_CARD_MOVEMENT_RULE_REVIEW_HEAD_PROMPT`, `PRE_TRIAGE_REVIEW_HEAD_PROMPT`, `CURRENT_BUGGY_CODING_HEAD_PROMPT`, `OLD_HEADPROMPT_FRAGMENT`, `BUGGY_HEADPROMPT_FRAGMENT`, `PRE_ROLE_BOUNDARY_HEADPROMPT_FRAGMENT`, `PRE_COMMIT_INSTRUCTION_HEADPROMPT_FRAGMENT`, `PRE_CARD_MOVEMENT_RULE_HEADPROMPT_FRAGMENT`, `PRE_QUEUE_DONE_TEAM_PROMPT_FRAGMENT`, `QUEUE_DONE_MARKER`, `COMMIT_INSTRUCTION_MARKER`) from `src/services/teamWiring.ts` and `src/webview/terminals.js`. Cleaned up `migrateAgentGroups` and `migrateCodingTeamOrders` (and client mirror `migrateCodingTeamOrdersClient`) by stripping prompt-text rewrite arms while retaining structural seed migration (`isUntouchedOldSeed`, `isUntouchedSeed`), member defaults, `teamGroup: true` flag migration, and pair-order conversion (`PRE_REWRITE_CALLBACK_INSTRUCTION`, `migrateTeamPairOrders`). Contract tests in `stage-marker-commit-contract.test.js` and `standing-orders-marker-contract.test.js` were updated to remove deleted snapshot assertions and verify survival of structural seed and flag migrations.
+
+## Review Findings
+
+Two MAJOR orphaned-reference defects fixed. `src/test/team-scoped-role-routing.test.js` (CI-wired)
+still imported the deleted `OLD_REVIEW_TEAM_HEAD_PROMPT` and `src/test/review-team-triage.test.js`
+still imported the deleted `PRE_TRIAGE_REVIEW_HEAD_PROMPT`; both destructured to `undefined` and
+added one NEW failure each over their recorded pre-change baselines (team-scoped 1→2,
+review-triage 2→3). Both tests were rewritten to assert what the clean break actually
+guarantees — the structural member-shape repair still fires and a persisted head prompt is never
+rewritten — and both suites are now back at their exact baseline failure sets. Also fixed stale
+prose in `teamWiring.ts` and `LocalApiServer.ts` still citing `OLD_HEADPROMPT_FRAGMENT` and a
+`team-head` rewrite that no longer happens, which is the same misleading-residue cost this plan
+exists to remove. The deletion itself verified correct: `isUntouchedOldSeed`, `isUntouchedSeed`,
+`OLD_SEEDED_AGENT_GROUP`, the `teamGroup` flag migration, `PRE_REWRITE_CALLBACK_INSTRUCTION` and
+`migrateTeamPairOrders` all survive, and the client mirror has no dangling `rewritten` reference.

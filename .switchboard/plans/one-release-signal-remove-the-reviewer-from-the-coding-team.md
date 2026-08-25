@@ -221,3 +221,21 @@ Replaced the in-flight predicate in `LocalApiServer.ts` with a column-free check
 
 All three subtasks implemented and committed. The coding team head prompt no longer references `targetColumn`, a reviewer roster check, or `/kanban/dispatch`; it states one ending — commit, post `task/complete` with the subtask's planId, then `queue/next`. The in-flight predicate in `LocalApiServer.ts` is column-free, keying on `!completedAt && dispatchedTerminal && teamSet.has()` with canonical row re-reads. `releaseDispatchHolder` clears the holder on re-stage so the escalation ladder does not deadlock. Fifteen frozen prompt snapshots, nine recognisers, `COMMIT_INSTRUCTION_MARKER`, and all fragment-based migration arms were deleted from `teamWiring.ts` and `terminals.js`; structural seed and pair-order migrations retained. New `coding-head-prompt-contract.test.js` pins the cross-file byte-identity and content invariants.
 
+
+## Review Findings
+
+Two defects fixed. MAJOR: the in-flight scan in `LocalApiServer.ts` found only the first
+candidate via `board.find`, re-read it, and if that row came back completed it abandoned the
+scan entirely — a team still holding a second un-posted card was released, a fail-open the
+pre-change code did not have; it now filters all candidates and re-reads each, refusing on the
+first still-held row. CRITICAL: `queue-pipeline-contract` (CI-wired) went green→red because its
+column-free assertion sliced the whole `isTeamDispatch` block, catching the `kanbanColumn` the
+409 message deliberately reports; the assertion is now scoped to the decision, before
+`return fail(409`. Two behavioural regression tests were added (stale-completed first candidate
+still refuses on the second held card; a candidate that re-reads as completed does not block),
+and the first reproduced the fail-open against the pre-fix build. Verified: `queue-pipeline`,
+`queue-done-relay`, `task-complete`, `atomic-team-lifecycle`, `completion-asserted`,
+`dependency-gate` all green; compile, compile-tests, lint (0 errors), 9 static gates green.
+Remaining risk: `releaseDispatchHolder` correctly nulls all four fields, but the `parked` branch
+still leaves a holder on a card resting in a coding column, so the follow-on pop 409s — that is
+pre-existing under both the old and new predicates and out of this plan's scope.

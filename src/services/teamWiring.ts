@@ -1939,13 +1939,13 @@ export interface StandingOrderMigrationNote {
  * Per-`id` migration verdict for the rows persisted at
  * `terminals.standingOrders`, derived by running **the same pure transforms
  * delivery runs** and diffing by id — never by re-implementing a recogniser.
- * That is the whole point: a second hand-rolled copy of a recogniser (or of
- * `OLD_HEADPROMPT_FRAGMENT`) is how `GET /terminals/standing-orders` drifted
- * out of agreement with what an agent is actually told.
+ * That is the whole point: a second hand-rolled copy of a recogniser (or of a
+ * matching fragment) is how `GET /terminals/standing-orders` drifted out of
+ * agreement with what an agent is actually told.
  *
- * Covers BOTH transforms — the pair-fold's dropped `(member, head)` rows, the
- * Coding reviewer pair row, and the rewritten `team-head` row — because it
- * diffs the composed result rather than pattern-matching row shapes.
+ * Covers BOTH transforms — the pair-fold's dropped `(member, head)` rows and
+ * the Coding reviewer pair row — because it diffs the composed result rather
+ * than pattern-matching row shapes.
  *
  * Identity-safe: rows the pair migration *mints* carry a fresh
  * `crypto.randomUUID()` and have no on-disk counterpart, so they appear in no

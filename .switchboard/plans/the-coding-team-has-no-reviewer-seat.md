@@ -193,3 +193,15 @@ signal reachable by any other card mover.
 
 Removed reviewer seat check, reviewer dispatch call, and card-movement exception from `NEW_CODING_HEAD_PROMPT` in `src/services/teamWiring.ts`, `src/webview/terminals.js`, and `src/webview/kanban.html`. Replaced completion post target with the subtask's planId rather than the feature planId, and retained unconditional card movement rules. Added contract test `src/test/coding-head-prompt-contract.test.js` validating cross-file byte identity and prompt invariants.
 
+
+## Review Findings
+
+One MAJOR gate-wiring defect fixed. The new `src/test/coding-head-prompt-contract.test.js` was
+named in this plan's `### Automated` verification, exists, and passes — but had no
+`package.json` script and no `.github/workflows/integration-tests.yml` step, so nothing ever ran
+it; the exact "green while incomplete" hole. Added `test:contract:coding-head-prompt` and a CI
+step next to the stage-marker-commit gate. The prompt work itself is correct: no `targetColumn`,
+no reviewer roster check, no `/kanban/dispatch`, one ending, subtask planId (not FEATURE
+planId), and all three copies — `teamWiring.ts`, `terminals.js`, `kanban.html` — verified
+byte-identical by the now-wired gate. Remaining risk: none beyond the plan's stated side effect
+that a reviewer seat placed on a coding team is silently ignored rather than rejected.

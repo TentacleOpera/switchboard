@@ -576,10 +576,72 @@ async function run() {
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
         const i = src.indexOf('if (isTeamDispatch) {');
         assert.notStrictEqual(i, -1, 'isTeamDispatch block must exist');
-        const body = src.slice(i, src.indexOf('\n            }', i));
-        assert.ok(!/CODING_COLUMNS/.test(body), 'in-flight predicate must not reference CODING_COLUMNS');
-        assert.ok(!/kanbanColumn/.test(body) || !body.includes('.has('), 'in-flight predicate must not compare kanbanColumn');
-        assert.ok(/!p\.completedAt/.test(body) || /!inFlightCard\.completedAt/.test(body), 'in-flight predicate must check completedAt');
+        const blockEnd = src.indexOf('\n            }', i);
+        assert.notStrictEqual(blockEnd, -1, 'isTeamDispatch block must be closed');
+        // Scope the assertion to the DECISION, not the whole block. The 409
+        // message deliberately NAMES the blocking card's column (the plan's
+        // release contract: the refusal must be diagnosable), so a check over
+        // the whole block would forbid the diagnostic rather than the
+        // comparison. Everything before `return fail(409` is the decision.
+        const refusal = src.indexOf('return fail(409', i);
+        assert.ok(refusal !== -1 && refusal < blockEnd, 'the in-flight block must refuse with a 409');
+        const predicate = src.slice(i, refusal);
+        assert.ok(!/CODING_COLUMNS/.test(predicate), 'in-flight predicate must not reference CODING_COLUMNS');
+        assert.ok(!/kanbanColumn/.test(predicate), 'in-flight predicate must not compare kanbanColumn');
+        assert.ok(/!p\.completedAt/.test(predicate) || /!inFlightCard\.completedAt/.test(predicate) || /!\w+\.completedAt/.test(predicate),
+            'in-flight predicate must check completedAt');
+    });
+
+    await check('a stale-completed first candidate does not release a team still holding a second card', async () => {
+        // The scan re-reads each candidate against the canonical row. A board
+        // row that reads as held but re-reads as completed must not END the
+        // scan: the team can hold a second card, and skipping it releases the
+        // team on work nobody posted — the fail-open this gate exists to close.
+        const board = [
+            card('stale', 'CODE REVIEWED', { dispatchedTerminal: 'Coder 1', completedAt: null }),
+            card('wip', 'CODER CODED', { dispatchedTerminal: 'Coder 2', completedAt: null }),
+            card('next', 'STAGING', { queuePosition: 1 }),
+        ];
+        const { server, dispatched } = makeServer(board, {
+            resolveTeamMembers: async () => ['Coding', 'Coder 1', 'Coder 2'],
+            db: {
+                // Canonical read: 'stale' was completed after the board snapshot.
+                getPlanByPlanId: async (planId) => {
+                    const row = board.find(p => p.planId === planId);
+                    if (!row) { return null; }
+                    return planId === 'stale'
+                        ? { ...row, completedAt: '2026-08-25T00:00:00Z' }
+                        : { ...row };
+                },
+            },
+        });
+        const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
+        assert.strictEqual(out.status, 409, 'the second held card must still refuse the pop');
+        assert.strictEqual(out.payload.inFlight && out.payload.inFlight.planId, 'wip',
+            'the refusal must name the card that is actually still held');
+        assert.deepStrictEqual(dispatched, [], 'a refused pop dispatches nothing');
+    });
+
+    await check('a candidate that re-reads as completed does not block the pop', async () => {
+        const board = [
+            card('stale', 'CODE REVIEWED', { dispatchedTerminal: 'Coder 1', completedAt: null }),
+            card('next', 'STAGING', { queuePosition: 1 }),
+        ];
+        const { server, dispatched } = makeServer(board, {
+            resolveTeamMembers: async () => ['Coding', 'Coder 1'],
+            db: {
+                getPlanByPlanId: async (planId) => {
+                    const row = board.find(p => p.planId === planId);
+                    if (!row) { return null; }
+                    return planId === 'stale'
+                        ? { ...row, completedAt: '2026-08-25T00:00:00Z' }
+                        : { ...row };
+                },
+            },
+        });
+        const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
+        assert.strictEqual(out.status, 200, `expected the next card, got ${out.status}: ${out.payload.error || ''}`);
+        assert.deepStrictEqual(dispatched, ['next'], 'a completion posted after the board read releases the team');
     });
 
     await check('concurrent pops are serialized — one card, one dispatch', async () => {

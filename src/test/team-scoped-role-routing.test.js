@@ -28,7 +28,6 @@ const {
     resolveTeamScopedRoleTerminal,
     plausibleOriginTerminal,
     migrateAgentGroups,
-    OLD_REVIEW_TEAM_HEAD_PROMPT,
     NEW_REVIEW_TEAM_HEAD_PROMPT,
 } = require('../../out/services/teamWiring');
 const { buildKanbanBatchPrompt, PHONE_A_FRIEND_DONE_DIRECTIVE } = require('../../out/services/agentPromptBuilder');
@@ -934,14 +933,28 @@ async function item9() {
         assert.ok(teamWiringTs.includes('Apportion categories 2 and 3'));
     });
 
-    await test('review team migration replaces only the untouched shipped head prompt', () => {
-        const untouched = { id: 'review-team', headRole: 'reviewer', headPrompt: OLD_REVIEW_TEAM_HEAD_PROMPT, members: [] };
-        const migrated = migrateAgentGroups([untouched]);
-        assert.ok(migrated);
-        assert.strictEqual(migrated[0].headPrompt, NEW_REVIEW_TEAM_HEAD_PROMPT);
-        const customized = { ...untouched, headPrompt: `${OLD_REVIEW_TEAM_HEAD_PROMPT} custom` };
-        const customResult = migrateAgentGroups([customized]);
-        assert.ok(!customResult || customResult[0].headPrompt === customized.headPrompt);
+    await test('migrateAgentGroups repairs structure and never rewrites a persisted head prompt', () => {
+        // The frozen review-prompt snapshots and their recognisers were deleted:
+        // spawned teams have never shipped, so a dev install carrying a stale
+        // persisted prompt keeps it until the team is recreated (clean break).
+        // What must still fire is the STRUCTURAL member-shape repair.
+        const persisted = {
+            id: 'review-team',
+            headRole: 'reviewer',
+            headPrompt: 'a stale persisted review head prompt',
+            members: [{ role: 'reviewer', count: 3 }],
+        };
+        const migrated = migrateAgentGroups([persisted]);
+        assert.ok(migrated, 'the structural member-shape repair must still fire');
+        assert.strictEqual(migrated[0].headPrompt, persisted.headPrompt,
+            'prompt text is never rewritten — deleting the snapshots was the point');
+        assert.strictEqual(migrated[0].members[0].scope, 'per-team');
+        assert.strictEqual(migrated[0].members[0].relationship, 'reports-to-head');
+        assert.strictEqual(migrateAgentGroups(migrated), null, 'idempotent: a second pass changes nothing');
+        assert.ok(!teamWiringTs.includes('OLD_REVIEW_TEAM_HEAD_PROMPT'),
+            'the frozen review-prompt snapshot must stay deleted');
+        assert.ok(!teamWiringTs.includes('PRE_TRIAGE_REVIEW_HEAD_PROMPT'),
+            'the pre-triage review-prompt snapshot must stay deleted');
     });
 
     await test('kanban.html: Review team preset exists in SHIPPED_TEAM_TYPES with reviewer headRole and reviewer members', () => {

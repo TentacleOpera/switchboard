@@ -26,9 +26,9 @@ A coding team holds exactly one card, and exactly one fact releases it: the lead
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [A queued card has no holder; only completed_at releases a team](../plans/one-release-signal-remove-the-reviewer-from-the-coding-team.md) — **CODER CODED**
-- [ ] [The coding team has no reviewer seat](../plans/the-coding-team-has-no-reviewer-seat.md) — **CODER CODED**
-- [ ] [Delete the head-prompt compat machinery for an unreleased surface](../plans/delete-head-prompt-compat-machinery.md) — **CODER CODED**
+- [ ] [A queued card has no holder; only completed_at releases a team](../plans/one-release-signal-remove-the-reviewer-from-the-coding-team.md) — **CODE REVIEWED**
+- [ ] [The coding team has no reviewer seat](../plans/the-coding-team-has-no-reviewer-seat.md) — **CODE REVIEWED**
+- [ ] [Delete the head-prompt compat machinery for an unreleased surface](../plans/delete-head-prompt-compat-machinery.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -62,3 +62,22 @@ A coding team holds exactly one card, and exactly one fact releases it: the lead
   record their pre-change output first, or a new failure is indistinguishable from the
   existing one.
 
+
+## Review Findings
+
+Reviewer pass over all three subtasks found one CRITICAL and three MAJOR defects, all fixed:
+`queue-pipeline-contract` (CI-wired) was green before the feature and red after — its own
+column-free-predicate assertion swept the 409's diagnostic message, so it forbade the
+diagnostic rather than the comparison; the in-flight scan re-read only the FIRST candidate
+and released the team when that one read as completed, ignoring every other held card;
+`coding-head-prompt-contract.test.js` shipped with no `package.json` script and no CI step;
+and `team-scoped-role-routing` / `review-team-triage` still imported the deleted
+`OLD_REVIEW_TEAM_HEAD_PROMPT` / `PRE_TRIAGE_REVIEW_HEAD_PROMPT`, adding one new failure each.
+Files changed: `src/services/LocalApiServer.ts`, `src/services/teamWiring.ts` (comment),
+`src/test/queue-pipeline-contract.test.js`, `src/test/team-scoped-role-routing.test.js`,
+`src/test/review-team-triage.test.js`, `package.json`, `.github/workflows/integration-tests.yml`.
+Validation: compile, compile-tests, lint (0 errors), 9 static gates green, and a 44-suite sweep
+of everything touching the changed modules — every remaining failure reproduces at HEAD
+without these edits. Remaining risk: the predicate now holds a team on ANY active card its
+seats hold with `completed_at` NULL regardless of column, which is the intended contract but
+has no valve, so a lead that never posts blocks its own queue until an operator intervenes.
