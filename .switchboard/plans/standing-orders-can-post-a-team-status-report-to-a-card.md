@@ -207,3 +207,33 @@ nothing.
     change; assert identical behaviour and no dropped keys.
 11. **All three providers.** Verify through `RemoteProvider` against Linear, and confirm the
     Notion and ClickUp implementations are reached by the same path.
+
+## Largely superseded — read this before building it
+
+*Appended after review.*
+
+`the-queue-is-invisible-unless-an-agent-remembers-to-narrate-it.md` answers this plan's actual
+question — "how does the operator see status from a phone" — by a better route: Switchboard hooks
+`POST /kanban/dispatch` and `POST /kanban/task/complete` host-side and posts the lifecycle events
+itself, on the plan's own synced card.
+
+That approach beats this one on three counts:
+
+- **No compliance dependency.** This plan's largest risk was that a lead may not follow a standing
+  order to report. Host-observed events have no such risk, and `LocalApiServer.ts:647` documents
+  that leads *do* skip posts they are merely asked in prose to make.
+- **No binding needed.** A plan already has a synced issue. The `teamId → issueId` map this plan
+  introduces exists only because a *team* has no card — but the operator's question is almost
+  always about a card's progress, not a team's aggregate.
+- **Event-driven, not periodic.** A dispatch followed by silence is legible; a periodic status
+  report that stops is ambiguous with a lead that simply had nothing to add.
+
+**What survives here:** team-level status for work that has no plan card, and a lead's own
+narrative summary as distinct from lifecycle events. Both are real but neither is the need that
+motivated this plan.
+
+**Recommendation: do not build this until the notification plan has shipped and been lived with.**
+If lifecycle events on plan cards turn out to be enough — which is likely — this plan is
+unnecessary and the `teamId → issueId` binding is never needed. If a genuine team-level gap remains
+after that, the binding here is still the right design for it, and the label-to-team plan can then
+take it as a dependency as its revision notes.
