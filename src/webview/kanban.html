@@ -8140,15 +8140,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                            </button>`
                         : '';
                     // STAGING column has its own button set: advance/prompt (complexity
-                    // routing to coder columns) + Run queue + info span + worktrees toggle.
+                    // routing to coder columns) + Run queue + info span.
+                    // No worktrees toggle: staging provisions no worktrees. See
+                    // stageForQueue — per-feature provisioning cut one branch per
+                    // staged feature off the default branch, which clashes, and
+                    // contradicts item 8c ("0 by default ... may never exceed 1").
                     const stagingStagedNow = isStaging ? stagingCount() : 0;
-                    const stagingWorktreesChecked = (lastWorktreeConfig && lastWorktreeConfig.featureWorktreeMode) === 'per-feature';
                     const stagingViewControls = isStaging
                         ? `<span id="staging-view-info" class="dispatch-view-info" style="font-size:11px; margin-right:auto; color:var(--vscode-descriptionForeground);">0 plans · 0 coder terminals</span>
-                           <label style="display:inline-flex; align-items:center; gap:4px; font-size:11px; cursor:pointer; color:var(--vscode-descriptionForeground);" data-tooltip="Cut integration worktrees for features staged in queue">
-                               <input type="checkbox" id="toggle-staging-worktrees" style="margin:0; cursor:pointer;"${stagingWorktreesChecked ? ' checked' : ''}>
-                               <span>Worktrees</span>
-                           </label>
                            <button class="column-icon-btn" id="btn-add-coder-terminal" data-action="addCoderTerminal" data-column="${escapeAttr(def.id)}" data-tooltip="${(dispatchAnalyzeAvailable && terminalCreateAvailable) ? 'Add a coder terminal' : 'Creating terminals requires a terminal host (unavailable here)'}"${(dispatchAnalyzeAvailable && terminalCreateAvailable) ? '' : ' disabled'} style="font-size:12px; width:22px;">+</button>
                            <button class="column-icon-btn" id="btn-run-queue" data-action="runQueue" data-column="${escapeAttr(def.id)}" data-tooltip="${(stagingStagedNow === 0 || !dispatchAnalyzeAvailable) ? 'Run the queue in order — stage plans and seat a coder first' : (!(lastCodingHeadLive || lastAnyCodingTerminalLive) ? 'Run the queue — no coding terminal is live; open a coder terminal first' : 'Run the queue: dispatch the first staged plan to a coding terminal, completion pulls the rest in order')}" style="width:auto; padding:0 8px; font-size:10px;"${(stagingStagedNow === 0 || !dispatchAnalyzeAvailable || !(lastCodingHeadLive || lastAnyCodingTerminalLive)) ? ' disabled' : ''}>Run queue</button>`
                         : '';
@@ -8184,14 +8183,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             document.getElementById('btn-toggle-backlog')?.addEventListener('click', () => {
                 postKanbanMessage({ type: 'toggleBacklogView' });
-            });
-            document.getElementById('toggle-staging-worktrees')?.addEventListener('change', (e) => {
-                const isChecked = e.target.checked;
-                postKanbanMessage({
-                    type: 'setFeatureWorktreeMode',
-                    mode: isChecked ? 'per-feature' : 'none',
-                    workspaceRoot: currentWorkspaceRoot
-                });
             });
             updateStagingViewInfo();
 
@@ -8873,10 +8864,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const info = document.getElementById('staging-view-info');
             const addBtn = document.getElementById('btn-add-coder-terminal');
             const runBtn = document.getElementById('btn-run-queue');
-            const wtToggle = document.getElementById('toggle-staging-worktrees');
-            if (wtToggle) {
-                wtToggle.checked = (lastWorktreeConfig && lastWorktreeConfig.featureWorktreeMode) === 'per-feature';
-            }
             if (!info) return;
             const n = stagingCount();
             const m = lastCoderTerminalCount;
@@ -10779,7 +10766,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     renderWorktreesTab();
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
-                    updateStagingViewInfo();
                     break;
                 }
                 case 'worktreeStatuses': {

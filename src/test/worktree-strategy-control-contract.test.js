@@ -160,9 +160,16 @@ test('every mode read routes through the normaliser', () => {
     const normalized = kanbanProviderSource.split(
         "normalizeFeatureWorktreeMode(await db.getConfig('feature_worktree_mode'))"
     ).length - 1;
+    // One read: the `_sendWorktreeConfig` broadcast. The creation-time snapshot
+    // went when provisioning moved to staging, and the staging read went when
+    // per-feature provisioning was removed outright — it cut one branch per
+    // staged feature off the default branch, which clashes, and contradicts
+    // `staging-streams-parallel-dispatch-and-worktrees.md` item 8c ("0 by
+    // default ... may never exceed 1"). Nothing auto-provisions a feature
+    // worktree now, so nothing else reads the mode.
     assert.strictEqual(
-        normalized, 2,
-        `expected both reads (_sendWorktreeConfig broadcast + stageForQueue provisioning snapshot) to clamp, found ${normalized}`
+        normalized, 1,
+        `expected exactly one read (_sendWorktreeConfig broadcast) to clamp, found ${normalized}`
     );
 });
 

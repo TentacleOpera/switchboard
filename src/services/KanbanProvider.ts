@@ -8405,16 +8405,29 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (!db || !(await db.ensureReady())) return { success: false, staged: 0, refused, error: 'Kanban database not ready' };
         const ok = await db.appendQueuePositions(workspaceId, planIds);
         if (!ok) return { success: false, staged: 0, refused, error: 'Failed to write queue positions' };
-        // per-feature mode: provision integration worktree at staging time for any staged features.
-        const featureWorktreeMode = normalizeFeatureWorktreeMode(await db.getConfig('feature_worktree_mode'));
-        if (featureWorktreeMode === 'per-feature') {
-            for (const pid of planIds) {
-                const plan = await db.getPlanByPlanId(pid);
-                if (plan && plan.isFeature) {
-                    await this._ensureFeatureIntegrationWorktree(workspaceRoot, db, plan.planId, plan.topic || plan.planFile);
-                }
-            }
-        }
+        // Staging provisions NO worktrees. This loop used to cut one integration
+        // worktree per staged feature whenever feature_worktree_mode was
+        // 'per-feature', and that is the defect, not the timing:
+        //
+        //   - Stage two features and you get two sibling branches off the default
+        //     branch. Neither can see the other's work, and nothing recorded that
+        //     one needed the other — the exact clash the consolidation existed to
+        //     remove. The dependency edges that would have said so are persisted
+        //     in plan_dependencies and this path never read them.
+        //   - It contradicts the mission design in the same feature:
+        //     staging-streams-parallel-dispatch-and-worktrees.md item 8c —
+        //     "It does not provision a worktree per stream. A mission carries a
+        //     `maxExtraWorktrees` field ... which is 0 by default and which a
+        //     mission of type `mission` may never exceed 1." Per-unit-of-work
+        //     provisioning is precisely what that forbids.
+        //   - Once the toggle was on it was mandatory and unbounded. Worktrees are
+        //     opt-in, and the opt-in carries a COUNT, not a per-feature rule.
+        //
+        // Opt-in provisioning belongs on the mission (`maxExtraWorktrees`, 0 by
+        // default, capped at 1), which needs the mission to exist for a staged run
+        // — items 10-12, unbuilt. Until then nothing here cuts a branch, and a
+        // worktree is created only when a user explicitly asks for one: the strip
+        // button (project/workspace) or the WORKTREES tab (project, unbound).
         // Post a board refresh so the staged cards render in STAGING in order.
         await this._refreshBoard(workspaceRoot);
         // Arm the queue-level stall watch (subtask 3). Staging is the EARLIEST
@@ -14339,55 +14352,6 @@ ${FOCUS_DIRECTIVE}`;
         return 'main';
     }
 
-    /**
-     * Lazy-create (idempotent) the feature integration worktree for `per-feature` mode.
-     * Mirrors the "feature already has an active worktree" guard from `createWorktreeForFeature`
-     * (check-then-create against `getWorktrees()`) so two near-simultaneous calls racing to
-     * provision the integration worktree converge on the same row instead of creating
-     * two. Returns the existing or newly-created worktree row.
-     */
-    private async _ensureFeatureIntegrationWorktree(
-        workspaceRoot: string,
-        db: KanbanDatabase,
-        featurePlanId: string,
-        featureTopic: string
-    ): Promise<WorktreeRow | undefined> {
-        const allWorktrees = await db.getWorktrees();
-        // The integration worktree is the one with neither subtask_plan_id nor tier set.
-        // (per-subtask/high-low modes were removed; no new rows carry these columns, but
-        // the exclusion is kept defensive so a legacy dev-only row can't be mistaken for
-        // the integration worktree.)
-        const existing = allWorktrees.find(w => String(w.feature_id) === String(featurePlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
-        if (existing) return existing;
-
-        try {
-            const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
-            const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, featureTopic, undefined, defaultBranch);
-            await db.addWorktree(branch, wtPath, featurePlanId, undefined, undefined, defaultBranch);
-            if (this._taskViewerProvider) {
-                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                const activeAgents = Object.entries(visibleAgents)
-                    .filter(([_, enabled]) => enabled)
-                    .map(([role]) => role);
-                await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents, false, true);
-            }
-            return await db.getWorktreeByBranch(branch);
-        } catch (e: any) {
-            console.error(`[KanbanProvider] _ensureFeatureIntegrationWorktree: failed to create integration worktree for feature ${featurePlanId}:`, e);
-            // Race fallback: another near-simultaneous call may have created it first.
-            const retried = await db.getWorktrees();
-            return retried.find(w => String(w.feature_id) === String(featurePlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
-        }
-    }
-
-    /**
-     * Remove a worktree's on-disk directory + branch and mark it abandoned/merged in the
-     * DB. Log-and-continue on failure rather than throwing — callers that walk multiple
-     * worktrees (feature merge/abandon cleanup) must not let one failure abort the rest.
-     * Still marks the DB row even if the filesystem removal fails, so a dangling worktree
-     * doesn't also show as "active" on the board; `git worktree prune` (called separately
-     * by the caller after the walk) catches the filesystem straggler.
-     */
     private async _removeWorktreeRow(workspaceRoot: string, db: KanbanDatabase, wt: WorktreeRow, finalStatus: 'merged' | 'abandoned'): Promise<void> {
         const execFileAsync = promisify(cp.execFile);
         if (this._taskViewerProvider && wt.path) {
