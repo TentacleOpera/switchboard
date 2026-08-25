@@ -471,18 +471,24 @@ function post(port, pathname, body) {
         // second argument. Hence a second key, and hence this partition assertion.
         const provider = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
         const kanban = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'KanbanProvider.ts'), 'utf8');
+        // The resolver was extracted out of TaskViewerProvider into its own module so
+        // the standalone host reads the SAME precedence rule. "ONE place" is now that
+        // module — assert against it, not against wherever it used to be inlined.
+        const resolver = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'ptyClearPolicy.ts'), 'utf8');
 
         assert.ok(
-            /function resolvePtyClearDelay\(/.test(provider),
-            'resolvePtyClearDelay must exist — the fallback rule has to live in ONE place'
+            /export function resolvePtyClearDelay\(/.test(resolver)
+            && /export function resolvePtyClearPolicy\(/.test(resolver),
+            'resolvePtyClearDelay/resolvePtyClearPolicy must live in ptyClearPolicy.ts — '
+            + 'the fallback rule has to live in ONE place'
+        );
+        assert.ok(
+            /from '\.\/ptyClearPolicy'/.test(provider),
+            'TaskViewerProvider must consume the shared resolver, not re-declare its own'
         );
         // inspect(), not get(): get() cannot tell "operator set 2000" from "contributed
         // default is 2000", and `!== undefined` rather than a truthy test because both
         // keys allow an explicit 0.
-        const resolver = provider.slice(
-            provider.indexOf('function resolvePtyClearDelay('),
-            provider.indexOf('export class TaskViewerProvider')
-        );
         assert.ok(
             /\.inspect<number>\('terminal\.ptyClearBeforePromptDelay'\)/.test(resolver)
             && /\.inspect<number>\('terminal\.clearBeforePromptDelay'\)/.test(resolver),
@@ -495,13 +501,28 @@ function post(port, pathname, body) {
             + 'sets 0 would read as unset under a truthy check'
         );
 
-        // Every ptySendPrompt arm resolves through the new key…
-        const ptyArms = (provider.match(/clearBeforePromptDelayMs:\s*payload\.clearBeforePromptDelayMs \?\? resolvePtyClearDelay\(/g) || []).length;
+        // Every ptySendPrompt arm resolves through the policy — never a bare literal.
+        // `defaultDelay` is the local binding the injection block derives from
+        // resolvePtyClearPolicy(); the arms must read it, and must also carry the
+        // Auto/Manual mode, or the child falls back to Auto for a Manual operator.
+        assert.ok(
+            /const policy = resolvePtyClearPolicy\(/.test(provider)
+            && /const defaultDelay = policy\.mode === 'manual' \? policy\.delayMs : policy\.unknownDelayMs;/.test(provider),
+            'the ptySendPrompt injection block must derive its delay from resolvePtyClearPolicy'
+        );
+        const ptyArms = (provider.match(/clearBeforePromptDelayMs:\s*payload\.clearBeforePromptDelayMs \?\? defaultDelay,/g) || []).length;
         assert.ok(
             ptyArms >= 2,
-            `both ptySendPrompt injection arms must call resolvePtyClearDelay, found ${ptyArms}. `
+            `both ptySendPrompt injection arms must resolve the delay from the policy, found ${ptyArms}. `
             + 'The omitted-field branch is a second PTY-channel read; moving only the first '
             + 'leaves part of the path on 2000ms with every check green.'
+        );
+        const modeArms = (provider.match(/clearReadinessMode:/g) || []).length;
+        assert.ok(
+            modeArms >= 3,
+            `every ptySendPrompt arm must carry clearReadinessMode, found ${modeArms}. `
+            + 'An arm that omits it silently downgrades a Manual operator to Auto detection '
+            + 'in the child, with every gate green.'
         );
         // …and the vscode.Terminal sites keep the legacy key and its 2000ms default.
         const legacyReads = (provider.match(/get<number>\('terminal\.clearBeforePromptDelay',\s*2000\)/g) || []).length;

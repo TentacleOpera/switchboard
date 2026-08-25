@@ -201,7 +201,7 @@ async function run() {
             `relay must carry the held card's planId, got: ${sent[0].payload.data}`);
     });
 
-    await check('the relay precedes the seat clear and the pop', async () => {
+    await check('the relay fires on team queue/done and preserves team member context', async () => {
         const { server, calls } = makeServer(boardHeldBy('Coder 1'), {
             groups: [group('Coding', ['Coder 1'])],
             resolveTeamMembers: async () => ['Coding', 'Coder 1'],
@@ -212,10 +212,19 @@ async function run() {
         const clearAt = calls.findIndex(c => c.kind === 'clear');
         const dispatchAt = calls.findIndex(c => c.kind === 'dispatch');
         assert.ok(relayAt >= 0, 'the relay must fire');
-        assert.ok(clearAt >= 0, 'the finishing seat must still be cleared');
-        assert.ok(relayAt < clearAt, 'the relay must precede the clear — a cleared lead may lose the report');
+        assert.strictEqual(clearAt, -1, 'the team member must preserve context — no clear on queue/done');
         assert.ok(dispatchAt === -1 || relayAt < dispatchAt,
             'the relay must precede the pop — the next dispatch must not overwrite the lead\'s context first');
+    });
+
+    await check('standalone seat queue/done clears the finishing seat', async () => {
+        const { server, calls } = makeServer(boardHeldBy('StandaloneCoder'), {
+            resolveTeamMembers: async () => null,
+            getRegisteredTerminals: () => ['StandaloneCoder'],
+        });
+        await server.reportQueueDone({ workspaceRoot: WS, from: 'StandaloneCoder' });
+        const clearAt = calls.findIndex(c => c.kind === 'clear' && c.name === 'StandaloneCoder');
+        assert.ok(clearAt >= 0, 'standalone seat must be cleared on queue/done');
     });
 
     await check('the head\'s OWN completion does not relay to itself', async () => {
@@ -269,7 +278,7 @@ async function run() {
         assert.deepStrictEqual(relays(calls), [], 'a failure must not relay a completion to the lead');
     });
 
-    await check('a relay that throws does not abort the clear or the pop', async () => {
+    await check('a relay that throws does not abort the pop', async () => {
         const { server, calls } = makeServer(boardHeldBy('Coder 1'), {
             groups: [group('Coding', ['Coder 1'])],
             resolveTeamMembers: async () => ['Coding', 'Coder 1'],
@@ -282,7 +291,7 @@ async function run() {
         });
         const out = await server.reportQueueDone({ workspaceRoot: WS, from: 'Coder 1' });
         assert.strictEqual(out.status, 200, `a relay failure must not fail the completion, got ${out.status}`);
-        assert.ok(calls.some(c => c.kind === 'clear'), 'the finishing seat must still be cleared');
+        assert.ok(calls.some(c => c.kind === 'dispatch'), 'the pop and dispatch must still occur');
     });
 
     await check('the head comes from the group, not from a fleet parent chain', async () => {

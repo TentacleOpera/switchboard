@@ -162,6 +162,11 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                     worktreePath: t.worktreePath,
                     cwd: t.cwd,
                     lastDataAt: t.lastDataAt,
+                    // Host-resolved CLI family. The dispatch curtain names the CLI
+                    // from THIS field ("Devin is resetting context."), never from the
+                    // request payload — a caller-supplied family is not evidence.
+                    // Omitting it left every curtain on the generic "CLI" label.
+                    cliFamily: t.cliFamily,
                 }));
                 return {
                     success: true,
@@ -266,7 +271,7 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
                 if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
                 try {
-                    await sendPromptToPty(handle, payload.data || '', {
+                    const readiness = await sendPromptToPty(handle, payload.data || '', {
                         clearBeforePrompt: payload.clearBeforePrompt === true,
                         clearBeforePromptDelayMs: typeof payload.clearBeforePromptDelayMs === 'number'
                             ? payload.clearBeforePromptDelayMs
@@ -275,7 +280,10 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                             ? payload.clearReadinessMode
                             : undefined,
                     });
-                    return { success: true };
+                    // Carry the readiness OUTCOME back over the wire. Without it the
+                    // extension host has no way to tell a real ready signal from a
+                    // 15s fallback, and its dispatch-lifecycle event has to invent one.
+                    return { success: true, readiness: readiness || undefined };
                 } catch (err) {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }

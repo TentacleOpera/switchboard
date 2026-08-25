@@ -8,7 +8,7 @@
  * Pure and host-agnostic — usable by extension host, standalone host, and LocalApiServer.
  */
 
-import { TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { TERMINALS_GROUPS_KEY, isSpawnedTeamGroup, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
 
 export interface WorkContextResolution {
     planId: string;
@@ -75,8 +75,16 @@ export async function resolveWorkContext(
 }
 
 /**
- * Resolve the registered team group that includes the specified terminal name
+ * Resolve the registered SPAWNED TEAM that includes the specified terminal name
  * (either as head or roster member).
+ *
+ * Membership is decided by `isSpawnedTeamGroup` — the single seam every
+ * "is this a real team?" branch has to use. `terminals.groups` also holds
+ * hand-saved terminal SELECTIONS, which carry neither `teamKind` nor a `team_`
+ * id. Matching those would make an ordinary saved pane grouping behave like an
+ * atomic team: one dispatch to any seat in it would `/clear` every other
+ * terminal in the selection, each with a full readiness wait. Do not relax this
+ * to a bare `teamGroup` test.
  */
 export async function resolveTeamGroupForTerminal(
     db: any,
@@ -116,9 +124,13 @@ export async function resolveTeamGroupForTerminal(
         return roster.filter((n: unknown): n is string => typeof n === 'string' && n.length > 0);
     };
 
-    // Preferred: group headed by terminal
+    const teams = groups.filter(isSpawnedTeamGroup);
+
+    // Preferred: the team this terminal HEADS. `head` is the declared field
+    // (teamHeadName); the id form is the same derivation wireSpawnedTeam uses and
+    // covers legacy rows written before `head` was stamped.
     const headId = 'team_' + encodeURIComponent(terminalName).replace(/[^a-zA-Z0-9_]/g, '_');
-    const headGroup = groups.find(g => g && g.id === headId);
+    const headGroup = teams.find(g => g && (teamHeadName(g) === terminalName || g.id === headId));
     if (headGroup) {
         const roster = rosterOf(headGroup);
         if (roster.length) {
@@ -132,8 +144,8 @@ export async function resolveTeamGroupForTerminal(
         }
     }
 
-    // Otherwise: first group containing terminalName
-    for (const g of groups) {
+    // Otherwise: first team containing terminalName
+    for (const g of teams) {
         if (!g) continue;
         const roster = rosterOf(g);
         if (roster.includes(terminalName)) {

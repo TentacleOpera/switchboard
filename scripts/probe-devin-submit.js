@@ -23,16 +23,23 @@ const options = {
     busyPrompt: '',
     busyDelay: 1200,
     busyFirstGap: 400,
+    resizeAt: -1,
+    resizeSequence: '',
+    payloadPadding: 0,
+    clearBefore: 0,
+    clearSettle: 600,
+    clearReady: '',
+    clearReadyQuiet: 100,
 };
 
 for (let i = 2; i < process.argv.length; i++) {
     const key = process.argv[i].replace(/^--/, '');
     const value = process.argv[++i];
-    if (key === 'binary' || key === 'framing' || key === 'payload' || key === 'success-text' || key === 'busy-prompt') {
-        const target = { 'success-text': 'successText', 'busy-prompt': 'busyPrompt' }[key] || key;
+    if (key === 'binary' || key === 'framing' || key === 'payload' || key === 'success-text' || key === 'busy-prompt' || key === 'resize-sequence' || key === 'clear-ready') {
+        const target = { 'success-text': 'successText', 'busy-prompt': 'busyPrompt', 'resize-sequence': 'resizeSequence', 'clear-ready': 'clearReady' }[key] || key;
         options[target] = value;
-    } else if (key === 'gap' || key === 'cr-count' || key === 'confirm-gap' || key === 'ready-idle' || key === 'observe' || key === 'resize-storm' || key === 'bash-mode' || key === 'bash-mode-settle' || key === 'output-quiet' || key === 'busy-delay' || key === 'busy-first-gap') {
-        const target = { 'cr-count': 'crCount', 'confirm-gap': 'confirmGap', 'ready-idle': 'readyIdle', 'resize-storm': 'resizeStorm', 'bash-mode': 'bashMode', 'bash-mode-settle': 'bashModeSettle', 'output-quiet': 'outputQuiet', 'busy-delay': 'busyDelay', 'busy-first-gap': 'busyFirstGap' }[key] || key;
+    } else if (key === 'gap' || key === 'cr-count' || key === 'confirm-gap' || key === 'ready-idle' || key === 'observe' || key === 'resize-storm' || key === 'bash-mode' || key === 'bash-mode-settle' || key === 'output-quiet' || key === 'busy-delay' || key === 'busy-first-gap' || key === 'resize-at' || key === 'payload-padding' || key === 'clear-before' || key === 'clear-settle' || key === 'clear-ready-quiet') {
+        const target = { 'cr-count': 'crCount', 'confirm-gap': 'confirmGap', 'ready-idle': 'readyIdle', 'resize-storm': 'resizeStorm', 'bash-mode': 'bashMode', 'bash-mode-settle': 'bashModeSettle', 'output-quiet': 'outputQuiet', 'busy-delay': 'busyDelay', 'busy-first-gap': 'busyFirstGap', 'resize-at': 'resizeAt', 'payload-padding': 'payloadPadding', 'clear-before': 'clearBefore', 'clear-settle': 'clearSettle', 'clear-ready-quiet': 'clearReadyQuiet' }[key] || key;
         options[target] = Number(value);
     } else {
         throw new Error(`Unknown argument --${key}`);
@@ -60,6 +67,11 @@ let observeTimer;
 let quietTimer;
 let firstCrSent = false;
 let payloadDelivered = false;
+let clearReadyBuffer = '';
+let clearReadyTimer;
+let clearFallbackTimer;
+let clearWaiting = false;
+let workloadStarted = false;
 
 const child = pty.spawn(options.binary, [], {
     name: 'xterm-256color',
@@ -86,6 +98,31 @@ function scheduleTrial() {
 function runTrial() {
     if (sent || finished) { return; }
     sent = true;
+    if (options.clearBefore) {
+        write('\x15', 'clear-input');
+        setTimeout(() => {
+            write('/clear', 'clear-command');
+            setTimeout(() => {
+                write('\r', 'clear-cr');
+                if (options.clearReady === 'devin') {
+                    clearWaiting = true;
+                    clearFallbackTimer = setTimeout(beginWorkload, options.clearSettle);
+                } else {
+                    setTimeout(beginWorkload, options.clearSettle);
+                }
+            }, 40);
+        }, 30);
+    } else {
+        beginWorkload();
+    }
+}
+
+function beginWorkload() {
+    if (workloadStarted || finished) { return; }
+    workloadStarted = true;
+    clearWaiting = false;
+    clearTimeout(clearReadyTimer);
+    clearTimeout(clearFallbackTimer);
     if (options.busyPrompt) {
         write('\x1b[200~', 'busy-paste-open');
         write(options.busyPrompt, `busy-payload:${options.busyPrompt}`);
@@ -117,12 +154,29 @@ function deliverPayload() {
         }, 2);
         setTimeout(() => clearInterval(resizeTimer), options.resizeStorm);
     }
+    const effectivePayload = options.payload + (options.payloadPadding > 0 ? ` #${'x'.repeat(options.payloadPadding)}` : '');
     if (options.framing === 'paste') {
         write('\x1b[200~', 'paste-open');
-        write(options.payload, `payload:${options.payload}`);
+        write(effectivePayload, `payload:${effectivePayload}`);
         write('\x1b[201~', 'paste-close');
     } else {
-        write(options.payload, `payload:${options.payload}`);
+        write(effectivePayload, `payload:${effectivePayload}`);
+    }
+    if (options.resizeAt >= 0) {
+        setTimeout(() => {
+            record('input', 'resize:101x31');
+            child.resize(101, 31);
+        }, options.resizeAt);
+    }
+    if (options.resizeSequence) {
+        options.resizeSequence.split(',').map(Number).filter(Number.isFinite).forEach((offset, index) => {
+            setTimeout(() => {
+                const cols = 101 + index % 2;
+                const rows = 30 + index % 2;
+                record('input', `resize:${cols}x${rows}`);
+                child.resize(cols, rows);
+            }, offset);
+        });
     }
     payloadDelivered = true;
     if (options.outputQuiet === 0) {
@@ -152,6 +206,16 @@ function sendFirstCr() {
 child.onData(data => {
     raw += data;
     record('output', data);
+    if (clearWaiting) {
+        clearTimeout(clearReadyTimer);
+        clearReadyBuffer += data;
+        const disabledAt = clearReadyBuffer.lastIndexOf('\x1b[?2004l');
+        const enabledAt = clearReadyBuffer.lastIndexOf('\x1b[?2004h');
+        const afterEnable = enabledAt >= 0 ? clearReadyBuffer.slice(enabledAt) : '';
+        if (disabledAt >= 0 && enabledAt > disabledAt && afterEnable.includes('\x1b[?25h') && afterEnable.includes('\x1b[?2026l')) {
+            clearReadyTimer = setTimeout(beginWorkload, options.clearReadyQuiet);
+        }
+    }
     if (options.outputQuiet > 0 && payloadDelivered && !firstCrSent) {
         armQuietTimer();
     }
@@ -170,6 +234,8 @@ function finish(reason, extra = {}) {
     clearTimeout(readyTimer);
     clearTimeout(observeTimer);
     clearTimeout(quietTimer);
+    clearTimeout(clearReadyTimer);
+    clearTimeout(clearFallbackTimer);
     try { child.kill(); } catch {}
     const outputPath = path.join(os.tmpdir(), `devin-submit-probe-${path.basename(path.dirname(path.dirname(options.binary)))}-${options.framing}-${options.gap}ms-${options.crCount}cr-${process.pid}-${Date.now()}.json`);
     const result = {

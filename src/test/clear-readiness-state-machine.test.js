@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const path = require('path');
+require('./bootstrap/tsResolveHook').installTsResolveHook();
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const READINESS_FILE = path.join(REPO_ROOT, 'src', 'standalone', 'clearReadiness.ts');
@@ -65,7 +66,7 @@ function createMockHandle(overrides = {}) {
     console.log('\n── Clear readiness state machine tests ──');
 
     const { deriveCliIdentity, deriveCliFamily, deriveAgentDisplayName } = await import(path.join('file://', IDENTITY_FILE));
-    const { createClearReadinessTracker, resolvePtyTimingPolicy } = await import(path.join('file://', READINESS_FILE));
+    const { createClearReadinessTracker } = await import(path.join('file://', READINESS_FILE));
     const { sendPromptToPty } = await import(path.join('file://', DELIVERY_FILE));
 
     // 1. CLI Identity derivation
@@ -86,26 +87,25 @@ function createMockHandle(overrides = {}) {
         assert.strictEqual(deriveAgentDisplayName(''), '');
     });
 
-    // 2. Timing Policy Resolution
-    await test('resolvePtyTimingPolicy adheres to the 5 resolution rules', () => {
-        // 1. Explicit Auto
-        assert.deepStrictEqual(resolvePtyTimingPolicy({ mode: 'auto' }), { mode: 'auto', delayMs: 600 });
-        assert.deepStrictEqual(resolvePtyTimingPolicy({ mode: 'auto', explicitPtyDelay: 400 }), { mode: 'auto', delayMs: 400 });
-
-        // 2. Explicit Manual
-        assert.deepStrictEqual(resolvePtyTimingPolicy({ mode: 'manual' }), { mode: 'manual', delayMs: 600 });
-        assert.deepStrictEqual(resolvePtyTimingPolicy({ mode: 'manual', explicitPtyDelay: 350 }), { mode: 'manual', delayMs: 350 });
-        assert.deepStrictEqual(resolvePtyTimingPolicy({ mode: 'manual', explicitPtyDelay: 0 }), { mode: 'manual', delayMs: 0 });
-        assert.deepStrictEqual(resolvePtyTimingPolicy({ mode: 'manual', explicitLegacyDelay: 2000 }), { mode: 'manual', delayMs: 2000 });
-
-        // 3. No mode + explicit PTY delay -> compatibility Manual
-        assert.deepStrictEqual(resolvePtyTimingPolicy({ explicitPtyDelay: 300 }), { mode: 'manual', delayMs: 300 });
-
-        // 4. No mode/PTY value + explicit legacy delay -> compatibility Manual
-        assert.deepStrictEqual(resolvePtyTimingPolicy({ explicitLegacyDelay: 2000 }), { mode: 'manual', delayMs: 2000 });
-
-        // 5. No explicit values -> Auto with 600ms fallback
-        assert.deepStrictEqual(resolvePtyTimingPolicy({}), { mode: 'auto', delayMs: 600 });
+    // 2. The timing policy lives in ONE module
+    await test('clearReadiness does not carry a second copy of the timing policy', () => {
+        const fs = require('fs');
+        const readiness = fs.readFileSync(READINESS_FILE, 'utf8');
+        // A duplicate resolver lived here and DISAGREED with the real one
+        // (explicit Auto + an explicit legacy VS Code delay resolved the unknown-CLI
+        // fallback to the legacy value instead of 600). It had no production caller;
+        // its only consumer was this file, so every precedence assertion passed while
+        // pinning behaviour nothing shipped.
+        assert.ok(
+            !/resolvePtyTimingPolicy/.test(readiness),
+            'clearReadiness.ts must not re-declare the PTY timing policy — ptyClearPolicy.ts owns it'
+        );
+        const policySrc = fs.readFileSync(
+            path.join(REPO_ROOT, 'src', 'services', 'ptyClearPolicy.ts'), 'utf8');
+        assert.ok(
+            /export function resolvePtyClearPolicyFromExplicit\(/.test(policySrc),
+            'the single precedence ladder must live in ptyClearPolicy.ts'
+        );
     });
 
     // 3. Devin Auto profile state machine
@@ -182,17 +182,42 @@ function createMockHandle(overrides = {}) {
     });
 
     // 4. Claude and Antigravity profiles
-    await test('Claude / Antigravity Auto profile: live output followed by quiet resolves signal', async () => {
+    await test('Claude / Antigravity Auto profile: live output after submit followed by quiet resolves signal', async () => {
         const handle = createMockHandle({ cliFamily: 'claude' });
         const tracker = createClearReadinessTracker(handle, {
             mode: 'auto',
             timeouts: { claudeQuietMs: 20, claudeTimeoutMs: 1000 },
         });
 
+        tracker.markSubmitted();
         handle.emitData('\x1b[2J\x1b[H');
         const res = await tracker.promise;
         assert.strictEqual(res.reason, 'signal');
         assert.strictEqual(handle.dataListenerCount(), 0);
+    });
+
+    await test('Claude / Antigravity Auto profile: the ECHO of the clear command cannot resolve readiness', async () => {
+        // The tracker is armed BEFORE `/clear` is typed (Devin needs the old session's
+        // paste-disable). For an output-settled profile that means the CLI echoing the
+        // typed characters back is the first "post-clear output" it sees — and a quiet
+        // window measured from the echo fires before the clear has begun. markSubmitted()
+        // is the boundary; nothing before it counts.
+        const handle = createMockHandle({ cliFamily: 'claude' });
+        const tracker = createClearReadinessTracker(handle, {
+            mode: 'auto',
+            timeouts: { claudeQuietMs: 20, claudeTimeoutMs: 400 },
+        });
+
+        handle.emitData('/clear');            // the echo, pre-submit
+        let resolvedEarly = false;
+        tracker.promise.then(() => { resolvedEarly = true; });
+        await new Promise(r => setTimeout(r, 60));   // 3x the quiet window
+        assert.strictEqual(resolvedEarly, false, 'echo must not satisfy the quiet window');
+
+        tracker.markSubmitted();
+        handle.emitData('\x1b[2J\x1b[H');
+        const res = await tracker.promise;
+        assert.strictEqual(res.reason, 'signal');
     });
 
     // 5. Unknown profile

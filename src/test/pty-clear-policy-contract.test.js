@@ -77,116 +77,21 @@ test('package.json contributes ptyClearReadinessMode enum and updated descriptio
     assert.ok(props['switchboard.terminal.ptyClearBeforePromptDelay'].description.includes('Manual PTY delay'));
 });
 
-// 2. Policy resolution evaluation
-// Transpile or simulate ptyClearPolicy pure logic
-function evalResolvers() {
-    function explicitScopeValue(i) {
-        return i?.workspaceFolderValue ?? i?.workspaceValue ?? i?.globalValue;
-    }
-    function clampDelay(val, defaultVal) {
-        if (val === undefined || Number.isNaN(val)) return defaultVal;
-        return Math.min(Math.max(val, 0), 10000);
-    }
-    function resolvePtyClearPolicy(cfg) {
-        const rawMode = explicitScopeValue(cfg.inspect('terminal.ptyClearReadinessMode'));
-        const explicitMode = rawMode === 'auto' || rawMode === 'manual' ? rawMode : undefined;
+// 2. Policy resolution — the REAL module, not a copy of it.
+// An earlier revision re-implemented both resolvers inline in this file and asserted
+// against the copy. Every precedence case passed while proving nothing: the copy and
+// src/services/ptyClearPolicy.ts could drift arbitrarily and this gate stayed green.
+// `out/` is produced by `npm run compile-tests`, which CI runs before this step.
+const { resolvePtyClearPolicy, resolveStandalonePtyClearPolicy } =
+    require(path.join(__dirname, '..', '..', 'out', 'services', 'ptyClearPolicy.js'));
 
-        const explicitPtyDelayRaw = explicitScopeValue(cfg.inspect('terminal.ptyClearBeforePromptDelay'));
-        const explicitPtyDelay = explicitPtyDelayRaw !== undefined ? clampDelay(explicitPtyDelayRaw, 600) : undefined;
+// The source text still has to be read for the "one place" assertions below.
+assert.ok(
+    /export function resolvePtyClearPolicy\(/.test(PTY_POLICY_SRC)
+    && /export function resolveStandalonePtyClearPolicy\(/.test(PTY_POLICY_SRC),
+    'both host resolvers must live in src/services/ptyClearPolicy.ts'
+);
 
-        const explicitLegacyDelayRaw = explicitScopeValue(cfg.inspect('terminal.clearBeforePromptDelay'));
-        const explicitLegacyDelay = explicitLegacyDelayRaw !== undefined ? clampDelay(explicitLegacyDelayRaw, 2000) : undefined;
-
-        if (explicitMode === 'auto') {
-            return {
-                mode: 'auto',
-                unknownDelayMs: explicitPtyDelay !== undefined ? explicitPtyDelay : 600,
-                source: 'mode-explicit',
-            };
-        }
-        if (explicitMode === 'manual') {
-            const delayMs = explicitPtyDelay !== undefined
-                ? explicitPtyDelay
-                : (explicitLegacyDelay !== undefined ? explicitLegacyDelay : 600);
-            return {
-                mode: 'manual',
-                delayMs,
-                source: 'mode-explicit',
-            };
-        }
-        if (explicitPtyDelay !== undefined) {
-            return {
-                mode: 'manual',
-                delayMs: explicitPtyDelay,
-                source: 'pty-explicit',
-            };
-        }
-        if (explicitLegacyDelay !== undefined) {
-            return {
-                mode: 'manual',
-                delayMs: explicitLegacyDelay,
-                source: 'legacy-explicit',
-            };
-        }
-        return {
-            mode: 'auto',
-            unknownDelayMs: 600,
-            source: 'default',
-        };
-    }
-
-    function resolveStandalonePtyClearPolicy(configProvider) {
-        const rawMode = configProvider.getConfigString('terminal.ptyClearReadinessMode', '');
-        const explicitMode = rawMode === 'auto' || rawMode === 'manual' ? rawMode : undefined;
-
-        const ptyDelayRaw = configProvider.getConfigNumber('terminal.ptyClearBeforePromptDelay', Number.NaN);
-        const explicitPtyDelay = !Number.isNaN(ptyDelayRaw) ? clampDelay(ptyDelayRaw, 600) : undefined;
-
-        const legacyDelayRaw = configProvider.getConfigNumber('terminal.clearBeforePromptDelay', Number.NaN);
-        const explicitLegacyDelay = !Number.isNaN(legacyDelayRaw) ? clampDelay(legacyDelayRaw, 2000) : undefined;
-
-        if (explicitMode === 'auto') {
-            return {
-                mode: 'auto',
-                unknownDelayMs: explicitPtyDelay !== undefined ? explicitPtyDelay : 600,
-                source: 'mode-explicit',
-            };
-        }
-        if (explicitMode === 'manual') {
-            const delayMs = explicitPtyDelay !== undefined
-                ? explicitPtyDelay
-                : (explicitLegacyDelay !== undefined ? explicitLegacyDelay : 600);
-            return {
-                mode: 'manual',
-                delayMs,
-                source: 'mode-explicit',
-            };
-        }
-        if (explicitPtyDelay !== undefined) {
-            return {
-                mode: 'manual',
-                delayMs: explicitPtyDelay,
-                source: 'pty-explicit',
-            };
-        }
-        if (explicitLegacyDelay !== undefined) {
-            return {
-                mode: 'manual',
-                delayMs: explicitLegacyDelay,
-                source: 'legacy-explicit',
-            };
-        }
-        return {
-            mode: 'auto',
-            unknownDelayMs: 600,
-            source: 'default',
-        };
-    }
-
-    return { resolvePtyClearPolicy, resolveStandalonePtyClearPolicy };
-}
-
-const { resolvePtyClearPolicy, resolveStandalonePtyClearPolicy } = evalResolvers();
 
 test('No explicit settings resolves Auto mode with default 600ms unknown fallback', () => {
     const cfg = createMockConfig({});

@@ -57,13 +57,13 @@ async function runTests() {
         assert.ok(prompt.includes('Do not commit'), 'Git policy must prohibit code commits during read-only review turn');
     });
 
-    // 2. Context survives the report (clear-on-done omitted for review teams)
-    test('Invariant 2: Review team standing orders omit the clear-on-done fragment', () => {
+    // 2. Context survives the report (context preserved for review until lead acceptance)
+    test('Invariant 2: Team standing orders preserve context across review until lead acceptance', () => {
         const standardOrder = TEAM_QUEUE_DONE_ORDER_BODY('team-coding');
-        assert.ok(standardOrder.includes('clear your terminal, '), 'Standard team queue done order includes clear fragment');
+        assert.ok(standardOrder.includes('context is preserved for review'), 'Standard team queue done order preserves context for review');
+        assert.ok(standardOrder.includes('POST /kanban/task/complete'), 'Standard team queue done order mentions task complete acceptance');
 
         const reviewTeamOrder = REVIEW_TEAM_QUEUE_DONE_ORDER_BODY('team-review');
-        assert.ok(!reviewTeamOrder.includes('clear your terminal, '), 'Review team queue done order omits clear fragment');
         assert.ok(reviewTeamOrder.includes('relay your completion report to your team lead and dispatch'), 'Review team order preserves context relay');
     });
 

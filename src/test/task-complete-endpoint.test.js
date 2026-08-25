@@ -74,6 +74,8 @@ function makeServer(opts = {}) {
         ...(opts.db || {}),
     };
 
+    const clears = [];
+
     const server = new LocalApiServer({
         clickupMetadataPath: '',
         linearMetadataPath: '',
@@ -87,6 +89,10 @@ function makeServer(opts = {}) {
         resolveTeamMembers: opts.resolveTeamMembers || (async () => ['Coding', 'Coder-1']),
         resolveTeamPacing: opts.resolveTeamPacing || (async () => 'head'),
         getRegisteredTerminals: opts.getRegisteredTerminals,
+        clearTerminalContext: opts.clearTerminalContext || (async (_ws, term) => {
+            clears.push(term);
+            return { cleared: true };
+        }),
         armQueueWatch: async () => {},
     });
 
@@ -95,7 +101,7 @@ function makeServer(opts = {}) {
         return { status: 200, payload: { success: true, planId, dispatched: true } };
     };
 
-    return { server, plans, events, dispatched, fakeDb };
+    return { server, plans, events, dispatched, clears, fakeDb };
 }
 
 /** Make an HTTP request to the server's task/complete endpoint. */
@@ -244,6 +250,61 @@ async function run() {
         const out = await server.dispatchNextFromQueue({ workspaceRoot: WS, from: 'Coding' });
         assert.strictEqual(out.status, 409, 'pop refused — uncompleted card pins the team');
         assert.deepStrictEqual(dispatched, [], 'nothing dispatched while team is in flight');
+    });
+
+    // ── Accepted coder clearing on completion ───────────────────────────
+
+    await check('first task-complete clears the host-resolved accepted coder once', async () => {
+        const { server, plans, clears } = makeServer();
+        plans.set('plan-coder-1', card('plan-coder-1', 'CODER CODED', {
+            dispatchedTerminal: 'Coder-1',
+            routedTo: 'coder'
+        }));
+
+        const r1 = await postComplete(server, { from: 'Coding', planId: 'plan-coder-1' }, 'test-token');
+        assert.strictEqual(r1.status, 200);
+        assert.strictEqual(r1.body.success, true);
+        assert.strictEqual(r1.body.cleared, true);
+        assert.strictEqual(r1.body.acceptedCodingSeat, 'Coder-1');
+        assert.deepStrictEqual(clears, ['Coder-1'], 'Coder-1 was cleared on first completion');
+
+        // Duplicate call does not clear again
+        const r2 = await postComplete(server, { from: 'Coding', planId: 'plan-coder-1' }, 'test-token');
+        assert.strictEqual(r2.status, 200);
+        assert.strictEqual(r2.body.idempotent, true);
+        assert.deepStrictEqual(clears, ['Coder-1'], 'No additional clear on duplicate postComplete');
+    });
+
+    await check('task-complete never clears the lead named in from', async () => {
+        const { server, plans, clears } = makeServer();
+        // Even if routedTo was lead or dispatchedTerminal was Coding, never clear Coding
+        plans.set('plan-lead-card', card('plan-lead-card', 'LEAD CODED', {
+            dispatchedTerminal: 'Coding',
+            routedTo: 'lead'
+        }));
+
+        const r = await postComplete(server, { from: 'Coding', planId: 'plan-lead-card' }, 'test-token');
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(r.body.cleared, false);
+        assert.strictEqual(r.body.acceptedCodingSeat, undefined);
+        assert.deepStrictEqual(clears, [], 'The lead in from is never cleared');
+    });
+
+    await check('clear failure does not roll back completed_at', async () => {
+        const { server, plans } = makeServer({
+            clearTerminalContext: async () => ({ cleared: false, error: 'PTY busy' })
+        });
+        plans.set('plan-fail-clear', card('plan-fail-clear', 'CODER CODED', {
+            dispatchedTerminal: 'Coder-1',
+            routedTo: 'coder'
+        }));
+
+        const r = await postComplete(server, { from: 'Coding', planId: 'plan-fail-clear' }, 'test-token');
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(r.body.success, true);
+        assert.strictEqual(r.body.cleared, false);
+        assert.strictEqual(r.body.clearError, 'PTY busy');
+        assert.ok(plans.get('plan-fail-clear').completedAt, 'completed_at was still recorded');
     });
 
     // ── Plan not found ───────────────────────────────────────────────────

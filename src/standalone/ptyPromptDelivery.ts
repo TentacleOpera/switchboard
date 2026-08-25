@@ -1,6 +1,6 @@
 import type { ExtendedTerminalHandle } from './ptyFleetService';
 import type { CliFamily } from '../services/cliIdentity';
-import { createClearReadinessTracker, type ClearReadinessResult, type ClearReadinessMode } from './clearReadiness.ts';
+import { createClearReadinessTracker, type ClearReadinessResult, type ClearReadinessMode } from './clearReadiness';
 
 const CHUNK_SIZE = 256;
 // 30ms was inherited from the VS Code sendText path, where each chunk crosses an
@@ -55,8 +55,14 @@ export async function writeSlashCommand(handle: ExtendedTerminalHandle, command:
     return withTerminalLock(handle.name, () => writeSlashCommandLocked(handle, command));
 }
 
-/** Lock-free body. Callers must already hold the terminal lock. */
-export async function writeSlashCommandLocked(handle: ExtendedTerminalHandle, command: string): Promise<void> {
+/**
+ * Lock-free body. Callers must already hold the terminal lock.
+ *
+ * `onSubmitted` fires the instant the submitting CR is written — the readiness
+ * tracker uses it to tell the CLI's echo of the typed command apart from its
+ * post-clear re-render.
+ */
+export async function writeSlashCommandLocked(handle: ExtendedTerminalHandle, command: string, onSubmitted?: () => void): Promise<void> {
     handle.write(CLEAR_INPUT_LINE);
     await new Promise(r => setTimeout(r, CLEAR_INPUT_SETTLE_MS));
     // The submitting CR is its OWN write, after a real delay — NEVER concatenated
@@ -71,6 +77,33 @@ export async function writeSlashCommandLocked(handle: ExtendedTerminalHandle, co
     handle.write(command.replace(/[\r\n]+$/, ''));
     await new Promise(r => setTimeout(r, SUBMIT_SETTLE_MS));
     handle.write('\r');
+    onSubmitted?.();
+}
+
+/**
+ * Write `/clear` and wait until the cleared CLI's input editor is actually ready.
+ * The tracker is created BEFORE the write — subscribing afterwards can miss the
+ * OLD session's bracketed-paste disable, which is the transition Devin's state
+ * machine anchors on. Caller must already hold the terminal lock.
+ *
+ * Returns the readiness result so callers can report the REAL reason
+ * (signal / fallback / manual / exit) instead of assuming one.
+ */
+async function clearAndAwaitReadinessLocked(
+    handle: ExtendedTerminalHandle,
+    opts?: PromptDeliveryOptions
+): Promise<ClearReadinessResult> {
+    const tracker = createClearReadinessTracker(handle, {
+        mode: opts?.clearReadinessMode,
+        fallbackDelayMs: Math.min(10000, Math.max(0, opts?.clearBeforePromptDelayMs ?? DEFAULT_CLEAR_SETTLE_MS)),
+        cliFamily: opts?.cliFamily || handle.cliFamily,
+    });
+    try {
+        await writeSlashCommandLocked(handle, '/clear', tracker.markSubmitted);
+        return await tracker.promise;
+    } finally {
+        tracker.dispose();
+    }
 }
 
 export interface PromptDeliveryOptions {
@@ -80,31 +113,27 @@ export interface PromptDeliveryOptions {
     cliFamily?: CliFamily;
 }
 
+/**
+ * Deliver a prompt to a directly-owned pty.
+ *
+ * Returns the clear-readiness result when a clear ran, so the caller can report
+ * the REAL reason ('signal' | 'fallback' | 'manual' | 'exit') on the dispatch
+ * lifecycle event. `undefined` means no clear was performed.
+ */
 export async function sendPromptToPty(
     handle: ExtendedTerminalHandle,
     text: string,
     opts?: PromptDeliveryOptions
-): Promise<void> {
-    return withTerminalLock(handle.name, async () => {
+): Promise<ClearReadinessResult | undefined> {
+    return withTerminalLock(handle.name, async (): Promise<ClearReadinessResult | undefined> => {
+        let readiness: ClearReadinessResult | undefined;
         if (opts?.clearBeforePrompt) {
             if (handle.status === 'exited') {
-                return;
+                return undefined;
             }
-            const tracker = createClearReadinessTracker(handle, {
-                mode: opts.clearReadinessMode,
-                fallbackDelayMs: opts.clearBeforePromptDelayMs ?? DEFAULT_CLEAR_SETTLE_MS,
-                cliFamily: opts.cliFamily || handle.cliFamily,
-            });
-            let readinessResult: ClearReadinessResult;
-            try {
-                await writeSlashCommandLocked(handle, '/clear');
-                readinessResult = await tracker.promise;
-            } finally {
-                tracker.dispose();
-            }
-
-            if (readinessResult.reason === 'exit' || (handle.status as string) === 'exited') {
-                return;
+            readiness = await clearAndAwaitReadinessLocked(handle, opts);
+            if (readiness.reason === 'exit' || (handle.status as string) === 'exited') {
+                return readiness;
             }
         }
 
@@ -163,6 +192,7 @@ export async function sendPromptToPty(
         // Confirm Enter — see rule 2 above. Unconditional by design.
         await new Promise(r => setTimeout(r, CONFIRM_ENTER_DELAY_MS));
         handle.write('\r');
+        return readiness;
     });
 }
 
@@ -173,12 +203,30 @@ export async function sendPromptToPty(
  * issued outside it can splice into an in-flight chunked paste. Write errors are
  * swallowed: a PTY that died between the active-check and the write has no
  * context left to reset, so the clear has effectively succeeded.
+ *
+ * `opts.awaitReadiness` makes the returned promise settle only once the cleared
+ * CLI is actually ready for input, using the same detector sendPromptToPty uses.
+ * The atomic-team preparation barrier REQUIRES it: without it the barrier resolves
+ * ~70ms after writing `/clear` and the first prompt lands on a Devin seat that is
+ * still tearing its session down — the exact race the detector exists to fix.
+ * Left off by default so the fire-and-forget callers (the Clear button,
+ * ptyClearAllTerminals) keep their current latency.
  */
-export async function clearPty(handle: ExtendedTerminalHandle): Promise<void> {
-    return withTerminalLock(handle.name, async () => {
+export async function clearPty(
+    handle: ExtendedTerminalHandle,
+    opts?: PromptDeliveryOptions & { awaitReadiness?: boolean }
+): Promise<ClearReadinessResult | undefined> {
+    return withTerminalLock(handle.name, async (): Promise<ClearReadinessResult | undefined> => {
         try {
+            if (opts?.awaitReadiness) {
+                return await clearAndAwaitReadinessLocked(handle, opts);
+            }
             await writeSlashCommandLocked(handle, '/clear');
-        } catch { /* PTY died between check and write — nothing to clear */ }
+            return undefined;
+        } catch {
+            /* PTY died between check and write — nothing to clear */
+            return undefined;
+        }
     });
 }
 

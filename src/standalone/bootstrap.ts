@@ -39,6 +39,7 @@ import { MISSION_CONTROL_TERMINAL_NAME } from '../services/autobanState';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 import { TerminalWsGateway } from './terminalWsGateway';
 import { sendPromptToPty, clearPty, modelPty, writeSlashCommand } from './ptyPromptDelivery';
+import type { ClearReadinessResult } from './clearReadiness';
 import { extractDispatchIdentity } from '../services/dispatchIdentity';
 import { resolveStandalonePtyClearDelay, resolveStandalonePtyClearPolicy } from '../services/ptyClearPolicy';
 import {
@@ -426,8 +427,13 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             } catch { /* best effort broadcast */ }
         }
         let sendErr: Error | null = null;
+        // The REAL readiness outcome, straight from the detector. Reporting a
+        // hardcoded 'signal' would make a 15s fallback and a genuine ready signal
+        // indistinguishable on the wire — the curtain would claim the detector
+        // worked on exactly the seats where it timed out.
+        let readiness: ClearReadinessResult | undefined;
         try {
-            await sendPromptToPty(handle, out, opts);
+            readiness = await sendPromptToPty(handle, out, opts);
         } catch (err: any) {
             sendErr = err;
             throw err;
@@ -439,7 +445,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         operationId,
                         terminalName: handle.friendlyName,
                         success: !sendErr,
-                        reason: sendErr ? 'error' : (handle.status === 'exited' ? 'exit' : 'signal'),
+                        reason: sendErr
+                            ? 'error'
+                            : (readiness?.reason || (handle.status === 'exited' ? 'exit' : 'signal')),
                         elapsedMs: Math.max(0, Date.now() - startAt),
                     }, SURFACES.terminals);
                 } catch { /* best effort broadcast */ }
@@ -1586,6 +1594,21 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const ok = ptyFleetService.kill(payload.name);
                     lastDispatchedPlanByTerminal.delete(payload.name);
                     lastWorkContextByTerminal.delete(payload.name);
+                    // Closing a member invalidates the roster the run barrier was
+                    // measured against. Dropping the team's run key makes the next
+                    // dispatch re-barrier the whole live roster — which is what
+                    // gives a seat that JOINS mid-run its clear before it is handed
+                    // work. Worst case is one redundant barrier; the alternative is
+                    // a new member inheriting the run with someone else's context.
+                    if (typeof payload?.name === 'string') {
+                        try {
+                            const closedTeam = await resolveTeamGroupForTerminal(db, payload.name);
+                            if (closedTeam?.id) {
+                                lastWorkContextByTeam.delete(closedTeam.id);
+                                teamPreparationChains.delete(closedTeam.id);
+                            }
+                        } catch { /* best effort — a stale key costs one extra barrier */ }
+                    }
                     return { success: ok };
                 }
 
@@ -1828,24 +1851,35 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                             } catch { /* best effort */ }
                                         }
                                         let teamErr: Error | null = null;
+                                        let readinessResults: Array<ClearReadinessResult | undefined> = [];
                                         try {
-                                            await Promise.all(handles.map(h => clearPty(h!)));
+                                            // awaitReadiness is load-bearing: a bare clearPty resolves ~70ms
+                                            // after writing /clear, so the barrier would release while a Devin
+                                            // seat is still rebuilding its session — and the first prompt then
+                                            // goes out with clearBeforePrompt:false, i.e. with NO detector at
+                                            // all. That is the original bug, reproduced on the team path.
+                                            readinessResults = await Promise.all(handles.map(h => clearPty(h!, {
+                                                awaitReadiness: true,
+                                                clearReadinessMode: deliveryDefaults.clearReadinessMode,
+                                                clearBeforePromptDelayMs: deliveryDefaults.clearBeforePromptDelayMs,
+                                                cliFamily: h!.cliFamily,
+                                            })));
                                         } catch (err: any) {
                                             teamErr = err;
                                             throw err;
                                         } finally {
-                                            for (const h of handles) {
+                                            handles.forEach((h, i) => {
                                                 try {
                                                     server.broadcastWs('terminalDispatchFinished', {
                                                         type: 'terminalDispatchFinished',
                                                         operationId: teamOpId,
                                                         terminalName: h!.friendlyName,
                                                         success: !teamErr,
-                                                        reason: teamErr ? 'error' : 'signal',
+                                                        reason: teamErr ? 'error' : (readinessResults[i]?.reason || 'fallback'),
                                                         elapsedMs: Math.max(0, Date.now() - startAt),
                                                     }, SURFACES.terminals);
                                                 } catch { /* best effort */ }
-                                            }
+                                            });
                                         }
                                     }
                                     lastWorkContextByTeam.set(teamId, workContextKey);
@@ -1865,9 +1899,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 }
                             }
                         } else if (payload.name) {
+                            // Compare the WORK CONTEXT key (featureId ?? planId), never planId:
+                            // two subtasks of one feature are one work context. See the
+                            // matching comment in TaskViewerProvider.
                             const lastWorkKey = lastWorkContextByTerminal.get(payload.name);
-                            const lastPlanId = lastDispatchedPlanByTerminal.get(payload.name);
-                            if ((lastWorkKey && lastWorkKey !== workContextKey) || (lastPlanId && lastPlanId !== parsed.value.planId)) {
+                            if (lastWorkKey && lastWorkKey !== workContextKey) {
                                 payload.clearBeforePrompt = true;
                             }
                             lastWorkContextByTerminal.set(payload.name, workContextKey);

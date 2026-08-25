@@ -14,6 +14,45 @@ function clampDelay(val: number | undefined, defaultVal: number): number {
 }
 
 /**
+ * The ONE precedence rule, expressed over already-extracted EXPLICIT values.
+ * Both host entry points below delegate here so the two can never drift — an
+ * earlier revision carried the ladder twice and a third copy in a test.
+ *
+ * `undefined` means "the operator never set this"; `0` is a real, explicit value
+ * and must survive every branch.
+ */
+export function resolvePtyClearPolicyFromExplicit(
+    explicitMode: 'auto' | 'manual' | undefined,
+    explicitPtyDelay: number | undefined,
+    explicitLegacyDelay: number | undefined
+): PtyClearPolicy {
+    if (explicitMode === 'auto') {
+        return {
+            mode: 'auto',
+            unknownDelayMs: explicitPtyDelay !== undefined ? explicitPtyDelay : 600,
+            source: 'mode-explicit',
+        };
+    }
+
+    if (explicitMode === 'manual') {
+        const delayMs = explicitPtyDelay !== undefined
+            ? explicitPtyDelay
+            : (explicitLegacyDelay !== undefined ? explicitLegacyDelay : 600);
+        return { mode: 'manual', delayMs, source: 'mode-explicit' };
+    }
+
+    if (explicitPtyDelay !== undefined) {
+        return { mode: 'manual', delayMs: explicitPtyDelay, source: 'pty-explicit' };
+    }
+
+    if (explicitLegacyDelay !== undefined) {
+        return { mode: 'manual', delayMs: explicitLegacyDelay, source: 'legacy-explicit' };
+    }
+
+    return { mode: 'auto', unknownDelayMs: 600, source: 'default' };
+}
+
+/**
  * PTY clear timing policy resolution for VS Code extension host.
  *
  * Precedence:
@@ -33,46 +72,7 @@ export function resolvePtyClearPolicy(cfg: vscode.WorkspaceConfiguration): PtyCl
     const explicitLegacyDelayRaw = explicitScopeValue(cfg.inspect<number>('terminal.clearBeforePromptDelay'));
     const explicitLegacyDelay = explicitLegacyDelayRaw !== undefined ? clampDelay(explicitLegacyDelayRaw, 2000) : undefined;
 
-    if (explicitMode === 'auto') {
-        return {
-            mode: 'auto',
-            unknownDelayMs: explicitPtyDelay !== undefined ? explicitPtyDelay : 600,
-            source: 'mode-explicit',
-        };
-    }
-
-    if (explicitMode === 'manual') {
-        const delayMs = explicitPtyDelay !== undefined
-            ? explicitPtyDelay
-            : (explicitLegacyDelay !== undefined ? explicitLegacyDelay : 600);
-        return {
-            mode: 'manual',
-            delayMs,
-            source: 'mode-explicit',
-        };
-    }
-
-    if (explicitPtyDelay !== undefined) {
-        return {
-            mode: 'manual',
-            delayMs: explicitPtyDelay,
-            source: 'pty-explicit',
-        };
-    }
-
-    if (explicitLegacyDelay !== undefined) {
-        return {
-            mode: 'manual',
-            delayMs: explicitLegacyDelay,
-            source: 'legacy-explicit',
-        };
-    }
-
-    return {
-        mode: 'auto',
-        unknownDelayMs: 600,
-        source: 'default',
-    };
+    return resolvePtyClearPolicyFromExplicit(explicitMode, explicitPtyDelay, explicitLegacyDelay);
 }
 
 export function resolvePtyClearDelay(cfg: vscode.WorkspaceConfiguration): number {
@@ -92,52 +92,15 @@ export function resolveStandalonePtyClearPolicy(configProvider: StandaloneConfig
     const rawMode = configProvider.getConfigString('terminal.ptyClearReadinessMode', '');
     const explicitMode = rawMode === 'auto' || rawMode === 'manual' ? rawMode : undefined;
 
+    // NaN sentinel, not a real default: the standalone store has no contributed-
+    // default layer, so "absent" has to be expressible. An explicit 0 survives.
     const ptyDelayRaw = configProvider.getConfigNumber('terminal.ptyClearBeforePromptDelay', Number.NaN);
     const explicitPtyDelay = !Number.isNaN(ptyDelayRaw) ? clampDelay(ptyDelayRaw, 600) : undefined;
 
     const legacyDelayRaw = configProvider.getConfigNumber('terminal.clearBeforePromptDelay', Number.NaN);
     const explicitLegacyDelay = !Number.isNaN(legacyDelayRaw) ? clampDelay(legacyDelayRaw, 2000) : undefined;
 
-    if (explicitMode === 'auto') {
-        return {
-            mode: 'auto',
-            unknownDelayMs: explicitPtyDelay !== undefined ? explicitPtyDelay : 600,
-            source: 'mode-explicit',
-        };
-    }
-
-    if (explicitMode === 'manual') {
-        const delayMs = explicitPtyDelay !== undefined
-            ? explicitPtyDelay
-            : (explicitLegacyDelay !== undefined ? explicitLegacyDelay : 600);
-        return {
-            mode: 'manual',
-            delayMs,
-            source: 'mode-explicit',
-        };
-    }
-
-    if (explicitPtyDelay !== undefined) {
-        return {
-            mode: 'manual',
-            delayMs: explicitPtyDelay,
-            source: 'pty-explicit',
-        };
-    }
-
-    if (explicitLegacyDelay !== undefined) {
-        return {
-            mode: 'manual',
-            delayMs: explicitLegacyDelay,
-            source: 'legacy-explicit',
-        };
-    }
-
-    return {
-        mode: 'auto',
-        unknownDelayMs: 600,
-        source: 'default',
-    };
+    return resolvePtyClearPolicyFromExplicit(explicitMode, explicitPtyDelay, explicitLegacyDelay);
 }
 
 export function resolveStandalonePtyClearDelay(configProvider: StandaloneConfigProviderLike): number {

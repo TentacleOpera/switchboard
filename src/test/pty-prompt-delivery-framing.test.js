@@ -45,6 +45,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+require('./bootstrap/tsResolveHook').installTsResolveHook();
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SOURCE_FILE = path.join(REPO_ROOT, 'src', 'standalone', 'ptyPromptDelivery.ts');

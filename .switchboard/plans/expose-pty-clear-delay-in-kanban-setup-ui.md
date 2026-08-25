@@ -1,104 +1,272 @@
-# Expose PTY clear-before-prompt delay in the kanban setup UI
+# Expose VS Code clear delay and PTY readiness mode in Kanban Setup
 
 ## Goal
 
-The kanban board's "Terminal Context" setup section has a "Clear before prompt" toggle and a single delay slider (0–10000ms, default 2000). That slider controls `terminal.clearBeforePromptDelay`, which **only applies to VS Code terminal seats** — the indirect clipboard/focus/IPC path in `terminalUtils.ts`.
+Make the Kanban “Terminal Context” setup UI accurately control two different delivery systems: an exact fixed delay for indirect VS Code terminals, and Automatic CLI readiness versus a manual fixed-delay override for directly-owned PTY seats. Preserve existing explicit values and make the effective compatibility source visible instead of allowing a 600ms slider to silently defeat known-CLI readiness detection.
 
-A **second, separate delay** — `terminal.ptyClearBeforePromptDelay` (default 600ms) — governs the **PTY fleet seats** (the browser cockpit's terminal grid and the standalone host). That path writes straight to the pty master fd with no clipboard round trip, so it needs far less settle time. It is contributed in `package.json` but **not exposed anywhere in the kanban UI** — an operator must edit `settings.json` by hand to tune it.
+> **Superseded:** Expose both delays as independent, unconditional sliders: VS Code terminals at 2000ms and PTY fleet/browser seats at 600ms.
+> **Reason:** `.switchboard/plans/bracketed-paste-submit-cr-not-firing-on-devin-3000-5-20-under-load.md` proved that Devin can require roughly 8.85 seconds and multiple enable/disable cycles before it is actually ready after `/clear`. Treating 600ms as the active PTY delay for a known Devin seat recreates the exact race the readiness detector fixes.
+> **Replaced with:** Keep the VS Code exact-delay slider; replace the PTY unconditional slider with Auto/Manual policy plus a manual-delay control.
 
-### Problem & root cause
+### Problem Analysis
 
-When dispatching primarily to PTY fleet terminals (the user's case), moving the kanban slider does nothing visible — the PTY path is on its own 600ms default that the UI never touches. The `resolvePtyClearDelay` resolver in `TaskViewerProvider.ts` honors an *explicitly-set* legacy `clearBeforePromptDelay` for the PTY path (respect-operator-intent), but the contributed default of 2000ms does **not** flow through — `inspect()` distinguishes "you set 2000" from "the default is 2000." So an operator who never touched the legacy key before the split sees the PTY path sit at 600ms regardless of the slider.
+The existing `terminal.clearBeforePromptDelay` setting belongs to indirect `vscode.Terminal` delivery. Those paths use clipboard paste, focus acquisition, `terminal.sendText()`, and extension-host IPC. The stable VS Code terminal API does not expose the raw TUI output stream needed to prove that `/clear` finished, so a configured fixed wait remains necessary.
 
-### Why two delays (not one)
+The direct PTY path is different: `ExtendedTerminalHandle.onData` exposes raw output and supports CLI-specific readiness detection. The related readiness plan adds profiles for Devin, Claude, Antigravity, and unknown/custom CLIs.
 
-The code explicitly warns against unifying: *"The indirect path keeps 2000ms via terminal.clearBeforePromptDelay — do NOT unify the two, they are different physics on the same-named operation."* (`ptyPromptDelivery.ts:10-13`). VS Code terminals need ~2000ms (clipboard round trip + focus acquisition + extension-host IPC); PTY writes go straight to the master fd and only need ~600ms. Unifying would either over-wait PTY terminals or under-wait VS Code terminals.
+The old UI plan would clash with that runtime in two ways:
 
-### Solution
+1. It presents 600ms as the PTY path’s active timing even when automatic readiness should own a known CLI.
+2. It persists any slider change as an explicit PTY value, causing the current resolver to treat that number as authoritative and bypass automatic behavior.
 
-Expose **both** delays in the kanban setup UI, each independently tunable and clearly labeled. The existing slider is relabeled "VS Code terminals"; a new slider is added for "PTY fleet / browser" seats. Both are gated by the same shared "Clear before prompt" toggle (the toggle controls *whether* `/clear` is sent at all, on both paths).
+A second compatibility trap already exists: `resolvePtyClearDelay` falls back to an explicitly-set legacy `terminal.clearBeforePromptDelay` when the PTY key is unset. Simply deleting/unsetting the PTY value cannot select Auto while retaining the still-needed VS Code value.
+
+### Setting Ownership
+
+| Setting | Owner | Semantics |
+|---|---|---|
+| `terminal.clearBeforePrompt` | Both paths | Whether automatic `/clear` is allowed |
+| `terminal.clearBeforePromptDelay` | VS Code terminals | Exact fixed post-clear wait, 0–10000ms |
+| `terminal.ptyClearReadinessMode` | PTY fleet | Explicit `auto` or `manual`; absence means compatibility inference |
+| `terminal.ptyClearBeforePromptDelay` | PTY fleet | Manual delay override, or unknown/custom fallback while Auto |
+
+### PTY Compatibility Resolution
+
+Runtime and UI must use one source-aware policy:
+
+```ts
+type PtyClearPolicy =
+    | { mode: 'auto'; unknownDelayMs: number; source: 'mode-explicit' | 'default' }
+    | { mode: 'manual'; delayMs: number; source: 'mode-explicit' | 'pty-explicit' | 'legacy-explicit' };
+```
+
+Resolution order:
+
+1. Explicit mode `auto` → readiness profiles for known CLIs; PTY delay/default only for `unknown`.
+2. Explicit mode `manual` → explicit PTY delay, else explicit legacy VS Code delay, else 600ms.
+3. No explicit mode + explicit PTY delay → compatibility manual mode.
+4. No explicit mode or PTY delay + explicit legacy VS Code delay → compatibility manual mode.
+5. No explicit mode and no explicit delay → Auto; unknown/custom fallback 600ms.
+
+This preserves explicit `0`, historical operator tuning, and the distinction between a contributed default and an actual user value. A user can explicitly select Auto without deleting the VS Code delay because the mode key overrides compatibility inference.
 
 ## Metadata
 
-**Complexity:** 3
-**Tags:** frontend, ui, ux, backend
+**Tags:** backend, frontend, ui, ux, reliability
+**Complexity:** 5
 **Project:** Browser Switchboard
 
-## Affected files
+> **Superseded:** `**Complexity:** 3` for adding one mirrored PTY delay slider.
+> **Reason:** The UI now controls a compatibility-sensitive policy union, must distinguish explicit/default sources, can remove neither shipped delay key, and must stay synchronized with the readiness runtime on extension and standalone hosts.
+> **Replaced with:** `**Complexity:** 5`.
 
-| File | Change |
-|------|--------|
-| `src/webview/kanban.html` | Add second delay input (PTY), JS state var, event wiring, message handling; relabel existing delay input |
-| `src/services/KanbanProvider.ts` | Add `_clearTerminalBeforePromptPtyDelay` field, load from config, new message handler, push PTY delay to webview, persist |
-| `package.json` | Update `terminal.clearBeforePromptDelay` description to clarify "VS Code terminal seats only" |
-| `protocol-catalog.json` | Register new `updateClearTerminalBeforePromptPtyDelay` verb and `clearTerminalBeforePromptPtyDelayState` push |
+## User Review Required
 
-## Implementation
+None. The operator explicitly confirmed that VS Code terminals still need a fixed delay because clear completion cannot be observed there, while PTY known-CLI profiles should use readiness detection unless manually overridden.
 
-### 1. Backend — `KanbanProvider.ts`
+## Complexity Audit
 
-**1a. New state field** (near line 309, next to `_clearTerminalBeforePromptDelay`):
-- Add `private _clearTerminalBeforePromptPtyDelay: number;`
+### Routine
 
-**1b. Load from config** (near line 538, next to the existing delay load):
-- Load from `terminal.ptyClearBeforePromptDelay`, clamped 0–10000, default 600.
-- Use the same `Math.min(Math.max(...), 10000)` clamp pattern as the existing delay.
+- Relabel the existing VS Code delay input.
+- Add PTY Auto/Manual controls and helper text.
+- Persist a new enum setting through the existing path-config seam.
+- Extend the existing Terminal Context state push.
 
-**1c. Push to webview** — extend the existing `clearTerminalBeforePromptState` push (lines 2380, 4091, 10251) to include `ptyDelay: this._clearTerminalBeforePromptPtyDelay` alongside the existing `delay` field. This avoids adding a separate push message for the initial load — both delays arrive in one state blob.
+### Complex / Risky
 
-**1d. New message handler** — add `case 'updateClearTerminalBeforePromptPtyDelay':` (mirroring `updateClearTerminalBeforePromptDelay` at line 10258):
-- Clamp to 0–10000.
-- Set `this._clearTerminalBeforePromptPtyDelay`.
-- `_markConfigDirty()`.
-- Persist via `_seams().pathConfig.updateConfigGlobal('terminal.ptyClearBeforePromptDelay', clamped)`.
-- Push `clearTerminalBeforePromptPtyDelayState` back to the webview (mirrors the existing `clearTerminalBeforePromptDelayState` push at line 10270).
+- Explicit/default detection must use `inspect()` and preserve explicit zero.
+- Auto selection must override an inherited legacy delay without deleting the VS Code value.
+- Standalone lacks VS Code contributed defaults, so its `NaN`/presence checks must produce the same policy/source as the extension host.
+- UI must not show “600ms active” when a known CLI detector owns timing.
 
-### 2. Webview — `kanban.html`
+## Edge-Case & Dependency Audit
 
-**2a. JS state** (near line 6221):
-- Add `let clearTerminalBeforePromptPtyDelay = 600;`
+### Race Conditions
 
-**2b. UI — second delay input** (in the `clear-delay-container` div, ~line 3135):
-- Restructure the container to hold two labeled rows:
-  - Row 1: label "VS Code terminals:" + the existing `clear-terminal-delay-input` (unchanged id, unchanged 0–10000/step 100/default 2000).
-  - Row 2: label "PTY fleet / browser:" + new `clear-terminal-pty-delay-input` (0–10000, step 100, default 600).
-- Keep the container's show/hide bound to the existing toggle (`clearTerminalBeforePrompt`).
+- State response carries mode, delay, and source together so live config refresh cannot display a mode from one read and delay from another.
+- A mode change and delay change should be persisted sequentially from one UI action; Manual must not become active before its clamped delay is stored.
 
-**2c. Update `updateClearTerminalBeforePromptUi()`** (line 7467):
-- After setting the existing `delayInput.value`, also set `clear-terminal-pty-delay-input.value` to `String(clearTerminalBeforePromptPtyDelay)`.
+### Security
 
-**2d. Message handling** (line 10764):
-- In the `clearTerminalBeforePromptState` case: read `msg.ptyDelay` into `clearTerminalBeforePromptPtyDelay` (alongside the existing `msg.delay`).
-- Add a new `clearTerminalBeforePromptPtyDelayState` case that updates `clearTerminalBeforePromptPtyDelay` and the PTY delay input element (mirrors the existing `clearTerminalBeforePromptDelayState` case at line 10772).
+- Mode is a fixed enum; reject unknown strings.
+- Delay remains clamped 0–10000ms.
+- No terminal command, prompt, or CLI family is accepted from this settings surface.
 
-**2e. Event wiring** (after line 11573):
-- Add a `change` listener on `clear-terminal-pty-delay-input` that clamps 0–10000, updates `clearTerminalBeforePromptPtyDelay`, and posts `{ type: 'updateClearTerminalBeforePromptPtyDelay', delay: clamped }`. Exact mirror of the existing `clear-terminal-delay-input` listener at line 11565.
+### Side Effects
 
-### 3. Settings descriptions — `package.json`
+- Existing users with an explicit PTY delay remain in compatibility Manual mode until they choose Auto.
+- Existing users with only an explicit legacy VS Code delay remain compatibility Manual for PTY, preserving old intent.
+- Fresh installs with neither explicit value use Auto for known PTY CLIs and 600ms only for unknown/custom PTY CLIs.
+- VS Code terminal behavior is unchanged: its delay remains exact and independently tunable.
 
-- Update `terminal.clearBeforePromptDelay` description (line 338) to append: "Applies to VS Code terminal seats only. PTY fleet seats use terminal.ptyClearBeforePromptDelay."
-- The `terminal.ptyClearBeforePromptDelay` description (line 345) already documents the split — no change needed.
-- Update the toggle description (line 331) to mention both delays are configurable.
+### Dependencies & Conflicts
 
-### 4. Protocol catalog — `protocol-catalog.json`
+- Depends on `.switchboard/plans/bracketed-paste-submit-cr-not-firing-on-devin-3000-5-20-under-load.md` for `PtyClearPolicy`, readiness profiles, and runtime consumption.
+- This plan owns the Kanban settings control and state transport; the readiness plan owns PTY detection and prompt sequencing.
+- The two plans should land together or runtime first. Shipping this UI first is safe only if Auto degrades to the existing fixed-delay path until the policy consumer exists.
 
-- Add `updateClearTerminalBeforePromptPtyDelay` to the kanban verb list (near line 184) and the verb-detail section (near line 418, with `line` pointing to the new handler).
-- Add `clearTerminalBeforePromptPtyDelayState` to the push-message registry (near line 7492), with `payloadKeys: ["type", "delay"]`.
-- Add `ptyDelay` to the `clearTerminalBeforePromptState` payloadKeys (line 7499 area).
+## Dependencies
 
-## Edge cases & constraints
+- `bracketed-paste-submit-cr-not-firing-on-devin-3000-5-20-under-load.md` — PTY clear policy and readiness runtime.
 
-- **Shared toggle:** The "Clear before prompt" boolean (`terminal.clearBeforePrompt`) gates *whether* `/clear` is sent on both paths. Both delay inputs are shown/hidden by this single toggle. No second toggle needed.
-- **Respect-operator-intent fallback preserved:** `resolvePtyClearDelay` in `TaskViewerProvider.ts` still falls back to an explicitly-set legacy `clearBeforePromptDelay` when `ptyClearBeforePromptDelay` is unset. Once the operator sets the PTY delay via the new UI, `ptyClearBeforePromptDelay` is explicitly set and the legacy fallback is preempted. No change to the resolver.
-- **Standalone host:** The standalone host (`bootstrap.ts`) reads `terminal.ptyClearBeforePromptDelay` from `.switchboard/config.json` via its own `configProvider`, NOT from VS Code's settings.json. The kanban UI persist writes to VS Code config, so the standalone host will not pick up a change made in the VS Code kanban board. This is acceptable for the user's primary use case (browser cockpit PTY fleet, which runs in the VS Code extension context and reads via `resolvePtyClearDelay` → VS Code config). The standalone host operator edits `.switchboard/config.json` directly, as today.
-- **sc-/mc- mirror toggles:** The `sc-clear-terminal-before-prompt-toggle` and `mc-clear-terminal-before-prompt-toggle` only mirror the boolean toggle — they have no delay inputs. No change needed there; `updateClearTerminalBeforePromptUi` already handles them and will continue to.
-- **No confirmation dialogs** (per project rules). The delay inputs apply on `change`, same as the existing slider.
+## Adversarial Synthesis
 
-## Verification plan
+Key risk: a seemingly harmless PTY slider can override the detector and restore the clear race, while silently ignoring old explicit values destroys operator intent. The solution is an explicit policy mode with compatibility inference, separate VS Code ownership, and UI copy that reports whether timing is automatic, manually overridden, inherited from the legacy key, or using the unknown-CLI fallback.
 
-1. **Build:** `npm run compile` — no type errors.
-2. **UI check:** Open the kanban board → setup → Terminal Context. Enable "Clear before prompt." Confirm two delay rows appear: "VS Code terminals" (default 2000) and "PTY fleet / browser" (default 600). Both gated by the toggle.
-3. **Persist round-trip:** Change the PTY delay to 900. Reload the board. Confirm the PTY delay field shows 900. Check VS Code settings.json has `terminal.ptyClearBeforePromptDelay: 900`.
-4. **Live dispatch:** Dispatch a plan to a PTY fleet terminal with "Clear before prompt" on. Confirm the `/clear`-to-prompt settle delay matches the PTY delay value set in the UI (use console timing or observable cadence).
-5. **Independence:** Change the VS Code delay to 5000. Confirm the PTY delay field is unaffected (still 900). Change the PTY delay to 300. Confirm the VS Code delay field is unaffected.
-6. **Existing tests:** Run `npm test` — the `pty-route-surface-contract.test.js` partition assertion (which checks `resolvePtyClearDelay` exists and uses `inspect()` for both keys) must still pass. No resolver changes, so this is a regression guard only.
+## Proposed Changes
+
+### 1. `package.json` — preserve delays and add PTY mode
+
+Add:
+
+```json
+"switchboard.terminal.ptyClearReadinessMode": {
+  "type": "string",
+  "enum": ["auto", "manual"],
+  "description": "Controls directly-owned PTY clear timing. Auto uses known-CLI readiness detection and the PTY delay only for unknown/custom CLIs. Manual always waits terminal.ptyClearBeforePromptDelay. If unset, existing explicit delay settings are preserved through compatibility inference."
+}
+```
+
+Do not give the mode setting a contributed default that is treated as explicit. Resolver logic must use `inspect()`/presence.
+
+Update descriptions:
+
+- `terminal.clearBeforePromptDelay`: “Exact wait for VS Code terminal seats; PTY fleet uses readiness mode.”
+- `terminal.ptyClearBeforePromptDelay`: “Manual PTY delay, or unknown/custom fallback in Auto mode. Known CLI profiles ignore it in Auto.”
+- Boolean toggle: mention VS Code delay and PTY readiness/manual policy.
+
+### 2. Shared source-aware resolver
+
+**Files:**
+
+- Runtime location selected by the readiness plan (shared helper preferred)
+- `src/services/TaskViewerProvider.ts`
+- `src/standalone/bootstrap.ts`
+
+Replace number-only `resolvePtyClearDelay` / `resolveStandalonePtyClearDelay` with `PtyClearPolicy` resolution. Keep `explicitScopeValue`, `inspect()`, explicit-zero handling, and standalone `NaN` presence checks.
+
+Do not delete the legacy fallback. It remains a compatibility source only when no explicit mode overrides it.
+
+### 3. `src/services/KanbanProvider.ts` — state and handlers
+
+Track:
+
+- VS Code exact delay.
+- PTY effective mode.
+- PTY manual/fallback delay.
+- PTY effective source.
+
+Extend `clearTerminalBeforePromptState` with:
+
+```ts
+{
+  enabled,
+  delay,
+  ptyMode,
+  ptyDelay,
+  ptySource
+}
+```
+
+Add handlers:
+
+- `updateClearTerminalBeforePromptPtyMode`
+- `updateClearTerminalBeforePromptPtyDelay`
+
+Mode handler validates `auto|manual` and persists `terminal.ptyClearReadinessMode`. Delay handler retains 0–10000 clamp and persists `terminal.ptyClearBeforePromptDelay`.
+
+When switching to Manual from Auto, persist the clamped delay before or atomically with mode activation. When switching to Auto, preserve delay values; mode explicitly prevents them from disabling known-family detection.
+
+### 4. `src/webview/kanban.html` — accurate Terminal Context controls
+
+Replace the proposed unconditional two-slider structure with:
+
+#### VS Code terminals
+
+- Label: **“VS Code terminals — clear settle delay”**
+- Existing 0–10000ms slider/input.
+- Helper text: fixed wait required because terminal output readiness is not observable through the stable VS Code API.
+
+#### PTY fleet / browser
+
+- Radio/select segmented control:
+  - **Automatic CLI readiness (recommended)**
+  - **Manual delay override**
+- Delay slider enabled only in Manual.
+- Auto helper text:
+  - Known Devin/Claude/Antigravity seats use tailored readiness profiles.
+  - Unknown/custom CLIs use the displayed PTY fallback.
+- Effective-source text when mode was inferred:
+  - “Manual compatibility: explicit PTY value”
+  - “Manual compatibility: inherited VS Code value”
+  - “Automatic: no explicit override”
+
+Both sections remain gated by the shared Clear-before-prompt boolean.
+
+### 5. Protocol catalog and push contracts
+
+Register:
+
+- `updateClearTerminalBeforePromptPtyMode`
+- `updateClearTerminalBeforePromptPtyDelay`
+- State payload keys `ptyMode`, `ptyDelay`, `ptySource`
+
+Do not add a second clear toggle.
+
+### 6. Tests
+
+Add source/policy/UI contracts for:
+
+- VS Code exact delay remains independent.
+- Explicit PTY `0` resolves Manual 0.
+- Explicit PTY value with no mode resolves compatibility Manual.
+- Explicit legacy value with no PTY/mode resolves compatibility Manual.
+- Explicit Auto overrides stored explicit delay for known CLI profiles without deleting values.
+- Explicit Manual uses PTY→legacy→600 fallback order.
+- No explicit values resolves Auto; unknown delay is 600.
+- UI disables manual slider in Auto.
+- UI displays effective source.
+- Mode enum rejects invalid values.
+- State round-trip preserves mode/source/delay.
+
+## Verification Plan
+
+### Automated Tests
+
+- New `PtyClearPolicy` resolver tests for all precedence combinations and explicit zero.
+- Kanban Terminal Context message/state tests.
+- Existing PTY route and config partition tests.
+- Readiness-plan tests proving Auto known-family ignores fixed delay and Manual uses it.
+
+### Goal Invariants
+
+- `terminal.clearBeforePromptDelay` remains an exact VS Code-only wait.
+- `terminal.ptyClearReadinessMode` supports only `auto|manual`.
+- Explicit Auto can coexist with stored legacy/PTTY delays and still selects known-CLI detection.
+- Explicit Manual selects fixed PTY delay.
+- Unset mode preserves explicit PTY/legacy values through compatibility Manual.
+- Fresh/default state selects Auto for known PTY CLIs.
+- UI never labels 600ms as Devin’s active clear delay while Auto is selected.
+
+### Manual Verification
+
+1. Fresh config: UI shows PTY Auto; Devin dispatch uses readiness curtain/detector; VS Code slider remains 2000ms exact.
+2. Select PTY Manual 900ms: reload; mode and value persist; PTY uses exact 900ms.
+3. Select Auto again: stored 900 remains but known Devin uses detector; unknown CLI uses configured fallback as documented.
+4. Existing explicit legacy VS Code delay with no PTY/mode: UI reports inherited Manual compatibility; VS Code behavior unchanged.
+5. Explicit zero: Manual mode sends with no additional PTY settle, proving falsy values survive.
+6. Change VS Code delay: PTY Auto remains Auto and does not inherit the new value once explicit mode is set.
+
+## Recommendation
+
+Send to Coder after—or together with—the Lead Coder readiness/curtain plan.
+
+## Implementation Summary
+
+Implemented source-aware PTY clear readiness policy and updated the Kanban setup UI. Added `switchboard.terminal.ptyClearReadinessMode` enum to `package.json` and unified resolution logic in `src/services/ptyClearPolicy.ts` for both extension and standalone hosts. Updated `KanbanProvider.ts` to push effective mode, delay, and compatibility source, and handle `updateClearTerminalBeforePromptPtyMode` and `updateClearTerminalBeforePromptPtyDelay`. Configured `kanban.html` with distinct VS Code settle delay and PTY Auto/Manual segmented controls with source status indicators. Regenerated the protocol catalog and allowlist, and added contract test coverage.
+
+
+## Review Findings
+
+Reviewed and fixed. **Files changed:** `src/services/ptyClearPolicy.ts`, `src/services/KanbanProvider.ts`, `package.json`, `.github/workflows/integration-tests.yml`, `src/test/pty-clear-policy-contract.test.js`. Two defects: `KanbanProvider._getPtyClearPolicy()` called the extension-host resolver unconditionally, but the standalone `vscode` shim's `inspect()` returns all layers undefined by design — so the browser cockpit's Terminal Context panel reported `{auto, 600, source:'default'}` to every headless operator regardless of their actual config, and writing from that panel would then overwrite a real Manual setting (now host-split on the contributed-default discriminator, falling through to `resolveStandalonePtyClearPolicy` over the shim's own config.json reads, the same source bootstrap's runtime resolution uses); and `pty-clear-policy-contract.test.js` hand-reimplemented both resolvers inline and asserted against the copy, so it could never detect drift in the real file (now requires `out/services/ptyClearPolicy.js`). Also collapsed the duplicated precedence ladder into one `resolvePtyClearPolicyFromExplicit`, so the two host entry points cannot diverge. **Validation:** `test:contract:pty-clear-policy` green against the real module and now invoked by CI (it was defined in `package.json` and called by no workflow step — the exact green-while-incomplete hole); `catalog:check`, `parity:check`, `compile`, `lint` clean. **Remaining risk:** none material; the kanban.html controls were verified by source contract only, not by CDP against a live panel.

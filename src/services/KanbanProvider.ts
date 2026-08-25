@@ -69,7 +69,7 @@ import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { importPlanFiles } from './PlanFileImporter';
 import { matchWorktreePath } from './worktreeResolver';
 import { listIconPalette, validateTeamIcon, type IconPaletteEntry } from './iconPalette';
-import { resolvePtyClearPolicy, type PtyClearPolicy } from './ptyClearPolicy';
+import { resolvePtyClearPolicy, resolveStandalonePtyClearPolicy, type PtyClearPolicy } from './ptyClearPolicy';
 
 /**
  * Feature workflow mode directives, prepended at position-zero of a feature prompt
@@ -584,10 +584,32 @@ export class KanbanProvider implements vscode.Disposable {
         }
     }
 
+    /**
+     * The effective PTY clear policy for the panel's Terminal Context state.
+     *
+     * Host-split by necessity. The standalone `vscode` shim's `inspect()` returns
+     * ALL layers undefined by design (there is no VS Code settings store behind it),
+     * so the extension-host resolver would report `{auto, 600, source:'default'}` on
+     * every headless install — the panel would show "Automatic: no explicit override"
+     * to an operator who had actually configured Manual 900ms, and writing from that
+     * panel would then overwrite their choice. The discriminator is the CONTRIBUTED
+     * default: real VS Code always reports `defaultValue` for a key declared in
+     * package.json (600 here, pinned by the pty-route-surface contract); the shim
+     * never does. When it is absent we are headless, and the shim's own
+     * `get(key, NaN)` reads `.switchboard/config.json` — the same source
+     * bootstrap.ts's runtime resolution uses, so UI and runtime agree.
+     */
     private _getPtyClearPolicy(): PtyClearPolicy {
-        return resolvePtyClearPolicy(vscode.workspace.getConfiguration('switchboard'));
+        const cfg = vscode.workspace.getConfiguration('switchboard');
+        const contributed = cfg.inspect<number>('terminal.ptyClearBeforePromptDelay');
+        if (contributed && contributed.defaultValue !== undefined) {
+            return resolvePtyClearPolicy(cfg);
+        }
+        return resolveStandalonePtyClearPolicy({
+            getConfigString: (key: string, defaultValue?: string) => cfg.get<string>(key, defaultValue ?? ''),
+            getConfigNumber: (key: string, defaultValue?: number) => cfg.get<number>(key, defaultValue as number),
+        });
     }
-
 
     /** Check if a card matches any ID in the given array (planId-primary, sessionId-legacy). */
     private _cardMatchesIds(card: KanbanCard, ids: string[]): boolean {
@@ -2407,15 +2429,15 @@ export class KanbanProvider implements vscode.Disposable {
                 type: 'collapseCodersState',
                 enabled: this._collapseCodersEnabled
             });
-            const ptyPolicy2380 = this._getPtyClearPolicy();
-            const ptyDelay2380 = ptyPolicy2380.mode === 'manual' ? ptyPolicy2380.delayMs : ptyPolicy2380.unknownDelayMs;
+            const boardPushPolicy = this._getPtyClearPolicy();
+            const boardPushPtyDelay = boardPushPolicy.mode === 'manual' ? boardPushPolicy.delayMs : boardPushPolicy.unknownDelayMs;
             this.postMessage({
                 type: 'clearTerminalBeforePromptState',
                 enabled: this._clearTerminalBeforePrompt,
                 delay: this._clearTerminalBeforePromptDelay,
-                ptyMode: ptyPolicy2380.mode,
-                ptyDelay: ptyDelay2380,
-                ptySource: ptyPolicy2380.source
+                ptyMode: boardPushPolicy.mode,
+                ptyDelay: boardPushPtyDelay,
+                ptySource: boardPushPolicy.source
             });
 
             let agentNames: Record<string, string> = {};
@@ -4127,15 +4149,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 type: 'collapseCodersState',
                 enabled: this._collapseCodersEnabled
             });
-            const ptyPolicy4091 = this._getPtyClearPolicy();
-            const ptyDelay4091 = ptyPolicy4091.mode === 'manual' ? ptyPolicy4091.delayMs : ptyPolicy4091.unknownDelayMs;
+            const refreshPolicy = this._getPtyClearPolicy();
+            const refreshPtyDelay = refreshPolicy.mode === 'manual' ? refreshPolicy.delayMs : refreshPolicy.unknownDelayMs;
             this.postMessage({
                 type: 'clearTerminalBeforePromptState',
                 enabled: this._clearTerminalBeforePrompt,
                 delay: this._clearTerminalBeforePromptDelay,
-                ptyMode: ptyPolicy4091.mode,
-                ptyDelay: ptyDelay4091,
-                ptySource: ptyPolicy4091.source
+                ptyMode: refreshPolicy.mode,
+                ptyDelay: refreshPtyDelay,
+                ptySource: refreshPolicy.source
             });
 
             this.postMessage({ type: 'updateAgentNames', agentNames });

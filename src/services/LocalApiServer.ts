@@ -2265,33 +2265,38 @@ export class LocalApiServer {
                 return;
             }
 
-            // Resolve accepted coding seat from host evidence:
-            // Prefer current dispatchedTerminal when dispatch role is coder/intern;
-            // otherwise use latest canonical coding dispatch event for this plan.
+            // Resolve the accepted coding seat from HOST evidence only — never from
+            // the request body, and never `from` (the lead posting the acceptance).
+            //
+            // Two host sources, in order:
+            //   1. The plan row's own dispatch record (`routedTo` + `dispatchedTerminal`).
+            //   2. The live fleet's role for `dispatchedTerminal`. This second source is
+            //      load-bearing, not belt-and-braces: `attributePasteDispatch` updates
+            //      `dispatched_terminal` WITHOUT touching `routed_to`, so a subtask a lead
+            //      pasted to a coder seat carries the coder's terminal under the ORIGINAL
+            //      routed role. Source 1 alone silently declines to clear it.
+            //
+            // There is deliberately no plan_events scan here: `plan_events` has no
+            // dispatch row carrying role + terminal. Its only writers are this handler's
+            // own `completed` event and SessionActionLog's `workflow_event` (a plan-file
+            // events[] mirror). A scan over it can never resolve a seat — it would just
+            // look like evidence.
+            const CODING_ROLES = new Set(['coder', 'intern']);
             let acceptedCodingSeat: string | undefined;
-            const currentRole = String(existing.routedTo || '').toLowerCase();
-            if (existing.dispatchedTerminal && (currentRole === 'coder' || currentRole === 'intern')) {
-                acceptedCodingSeat = existing.dispatchedTerminal;
-            } else if (typeof db.getPlanEventsByPlanId === 'function') {
+            const dispatchedSeat = String(existing.dispatchedTerminal || '').trim();
+            const rowRole = String(existing.routedTo || '').toLowerCase();
+            if (dispatchedSeat && CODING_ROLES.has(rowRole)) {
+                acceptedCodingSeat = dispatchedSeat;
+            } else if (dispatchedSeat && this._options.terminalVerb) {
                 try {
-                    const events = await db.getPlanEventsByPlanId(planId);
-                    for (let i = events.length - 1; i >= 0; i--) {
-                        const ev = events[i];
-                        if (!ev) continue;
-                        let p: any = null;
-                        if (typeof ev.payload === 'string') {
-                            try { p = JSON.parse(ev.payload); } catch {}
-                        } else if (ev.payload && typeof ev.payload === 'object') {
-                            p = ev.payload;
-                        }
-                        const role = String(p?.role || ev.role || '').toLowerCase();
-                        const term = String(p?.terminal || p?.terminalName || p?.dispatchedTerminal || ev.terminal || '').trim();
-                        if ((role === 'coder' || role === 'intern') && term) {
-                            acceptedCodingSeat = term;
-                            break;
-                        }
+                    const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
+                    const seat = (listed?.terminals || []).find((t: any) => t && t.friendlyName === dispatchedSeat);
+                    if (seat && CODING_ROLES.has(String(seat.role || '').toLowerCase())) {
+                        acceptedCodingSeat = dispatchedSeat;
                     }
-                } catch { /* best-effort event scan */ }
+                } catch (roleErr) {
+                    console.warn('[LocalApiServer] task/complete seat role lookup failed:', roleErr);
+                }
             }
 
             // Never clear the lead in `from`, planner, or reviewer
@@ -2555,6 +2560,12 @@ export class LocalApiServer {
                     // is the load-bearing part: on this board completion is
                     // asserted by the seat that did the work and never inferred,
                     // so the lead must read the diff before it advances anything.
+                    // Resolved ONCE, above the relay: the relay text and the clear
+                    // decision must agree. Two independent resolutions of the same
+                    // question can disagree — and then the lead is told context was
+                    // preserved while the seat was in fact wiped.
+                    const isTeamMember = !!(relayHead || (await this._resolveTeamGroupForSeat(workspaceRoot, from)));
+
                     if (relayHead && this._options.terminalVerb) {
                         // held.planId, not the request's optional planId: every
                         // shipped standing order POSTs {"from":"<seat>"} with no
@@ -2562,7 +2573,6 @@ export class LocalApiServer {
                         // tells the lead "somebody finished something". The
                         // mismatch guard above already proved they agree when
                         // the caller supplies one.
-                        const isTeamMember = !!(relayHead || (await this._resolveTeamGroupForSeat(workspaceRoot, from)));
                         const relayPlanId = held.planId || planId;
                         const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
                             + (relayPlanId ? ` (plan ${relayPlanId})` : '')
@@ -2596,7 +2606,6 @@ export class LocalApiServer {
                     // Team members preserve context across coder report, review,
                     // and fixes until lead acceptance via POST /kanban/task/complete.
                     // Non-team seats clear on completion.
-                    const isTeamMember = !!(relayHead || (await this._resolveTeamGroupForSeat(workspaceRoot, from)));
                     let cleared = false;
                     let clearError: string | undefined;
                     if (!isTeamMember && this._options.clearTerminalContext) {

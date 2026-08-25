@@ -1089,6 +1089,30 @@ jobs:
       - name: Card priority star + manual column order contract
         run: npm run test:contract:card-priority-order
 
+      # PTY clear readiness + atomic team lifecycle. These four ran green on the
+      # coder's machine and were invoked by nothing: three had no npm script at all
+      # and pty-clear-policy had a script no workflow step called. That is the exact
+      # green-while-incomplete hole — the timing policy, the Devin state machine, the
+      # acceptance clear and the curtain assets are all source-text/behaviour
+      # contracts whose only detector is this gate.
+      - name: PTY clear readiness state machine + CLI identity
+        run: npm run test:contract:clear-readiness
+
+      - name: PTY clear policy + Kanban setup Terminal Context contract
+        run: npm run test:contract:pty-clear-policy
+
+      - name: Host auto-clear on work-context change contract
+        run: npm run test:contract:host-auto-clear
+
+      - name: Atomic team feature-run context lifecycle contract
+        run: npm run test:contract:atomic-team-lifecycle
+
+      - name: Lead task/complete endpoint contract (acceptance clear, idempotency)
+        run: npm run test:contract:task-complete
+
+      - name: Dispatch preparation curtain + UFO asset contract
+        run: npm run test:contract:dispatch-curtain
+
       - name: Run integration suite
         run: npm run test:integration:all
 

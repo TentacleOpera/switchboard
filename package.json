@@ -910,7 +910,7 @@
     "test:contract:render-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-render-guard-contract.test.js",
     "test:contract:kanban-view-plan-removal": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-view-plan-removal-regression.test.js",
     "test:contract:dispatch-view": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-view-contract.test.js",
-  "test:contract:staging-column": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/staging-column-contract.test.js",
+    "test:contract:staging-column": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/staging-column-contract.test.js",
     "test:contract:drag-confirm-order": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-drag-confirm-before-dispatch.test.js",
     "test:contract:tickets-sidebar-scoping": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-sidebar-list-scoping.test.js",
     "test:contract:tickets-delta-sweep-gate": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-delta-sweep-gate-regression.test.js",
@@ -1009,7 +1009,12 @@
     "test:contract:feature-drive-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/feature-drive-prompt-reframe-contract.test.js",
     "test:contract:drive-mode-prompt-overhaul": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/drive-mode-prompt-overhaul-contract.test.js",
     "test:contract:card-priority-order": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/card-priority-and-column-order-contract.test.js",
-  "test:contract:pty-clear-policy": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-clear-policy-contract.test.js"
+    "test:contract:pty-clear-policy": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-clear-policy-contract.test.js",
+    "test:contract:clear-readiness": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/clear-readiness-state-machine.test.js",
+    "test:contract:dispatch-curtain": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-curtain-and-ufo-contract.test.js",
+    "test:contract:atomic-team-lifecycle": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/atomic-team-feature-run-context-lifecycle.test.js",
+    "test:contract:task-complete": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/task-complete-endpoint.test.js",
+    "test:contract:host-auto-clear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/host-auto-clear-on-plan-change.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

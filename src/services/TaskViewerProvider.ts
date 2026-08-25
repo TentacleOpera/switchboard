@@ -510,6 +510,21 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (verb === 'ptyCloseTerminal' && typeof payload?.name === 'string') {
             this._lastDispatchedPlanByTerminal.delete(payload.name);
             this._lastWorkContextByTerminal.delete(payload.name);
+            // Closing a member invalidates the roster the run barrier was measured
+            // against. Dropping the team's run key makes the next dispatch re-barrier
+            // the whole live roster — which is what gives a seat that JOINS mid-run
+            // its clear before it is handed work. Worst case is one redundant barrier;
+            // the alternative is a new member inheriting the run with someone else's
+            // context. Mirrors bootstrap.ts's ptyCloseTerminal arm.
+            try {
+                const closedWsRoot = payload.workspaceRoot || this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '';
+                const closedDb = await this._getKanbanDb(closedWsRoot);
+                const closedTeam = await resolveTeamGroupForTerminal(closedDb, payload.name);
+                if (closedTeam?.id) {
+                    this._lastWorkContextByTeam.delete(closedTeam.id);
+                    this._teamPreparationChains.delete(closedTeam.id);
+                }
+            } catch { /* best effort — a stale key costs one extra barrier */ }
         }
         const seatCacheDropName =
             (verb === 'ptyClearTerminal' || verb === 'ptyRenameTerminal'
@@ -709,12 +724,58 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             );
                             const activeMembers = roster.filter(name => liveActiveNames.has(name));
                             if (activeMembers.length > 0) {
-                                const results = await Promise.all(
-                                    activeMembers.map(name => this.clearTerminalContext(dispatchWsRoot, name))
+                                // Arm the curtain on EVERY roster pane before any clear I/O
+                                // starts. Without this the extension host runs a multi-second
+                                // Devin barrier with a dead-looking board, while the standalone
+                                // host shows it — the two-front-doors drift this panel keeps
+                                // producing. One operation ID covers the whole roster so a
+                                // finish for one seat cannot tear down another's curtain.
+                                const teamOpId = `ext-team-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                                const teamStartAt = Date.now();
+                                const cliFamilyByName = new Map<string, string>(
+                                    (listed?.terminals || []).map((t: any) => [t.friendlyName, t.cliFamily || 'unknown'])
                                 );
-                                const failed = results.find(r => r && r.cleared === false && r.error);
-                                if (failed) {
-                                    throw new Error(`Team preparation clear failed for '${failed.error}': aborting dispatch.`);
+                                for (const name of activeMembers) {
+                                    const prepMsg = {
+                                        type: 'terminalDispatchPreparing',
+                                        operationId: teamOpId,
+                                        terminalName: name,
+                                        cliFamily: cliFamilyByName.get(name) || 'unknown',
+                                        teamName: teamId,
+                                        phase: 'clearing',
+                                    };
+                                    this.postMessage(prepMsg, SURFACES.terminals);
+                                    this._broadcaster?.push(prepMsg, SURFACES.terminals);
+                                }
+                                let results: Array<{ cleared: boolean; error?: string; reason?: string }> = [];
+                                let teamErr: Error | null = null;
+                                try {
+                                    results = await Promise.all(
+                                        activeMembers.map(name => this.clearTerminalContext(dispatchWsRoot, name))
+                                    );
+                                    const failed = results.find(r => r && r.cleared === false && r.error);
+                                    if (failed) {
+                                        teamErr = new Error(`Team preparation clear failed for '${failed.error}': aborting dispatch.`);
+                                        throw teamErr;
+                                    }
+                                } catch (err: any) {
+                                    teamErr = teamErr || err;
+                                    throw err;
+                                } finally {
+                                    activeMembers.forEach((name, i) => {
+                                        const finishMsg = {
+                                            type: 'terminalDispatchFinished',
+                                            operationId: teamOpId,
+                                            terminalName: name,
+                                            success: !teamErr && results[i]?.cleared !== false,
+                                            reason: teamErr || results[i]?.cleared === false
+                                                ? 'error'
+                                                : (results[i]?.reason || 'fallback'),
+                                            elapsedMs: Math.max(0, Date.now() - teamStartAt),
+                                        };
+                                        this.postMessage(finishMsg, SURFACES.terminals);
+                                        this._broadcaster?.push(finishMsg, SURFACES.terminals);
+                                    });
                                 }
                             }
                             this._lastWorkContextByTeam.set(teamId, workContextKey);
@@ -734,10 +795,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                     }
                 } else if (payload.name) {
-                    // Non-team terminal: compare terminal workContextKey and clear destination when changed
+                    // Non-team terminal: compare terminal workContextKey and clear destination
+                    // when changed. The comparison is on the WORK CONTEXT key
+                    // (featureId ?? planId), never on planId: two subtasks of one feature are
+                    // one work context, and OR-ing a planId compare back in here would clear
+                    // between them — the per-subtask reset this feature exists to remove.
                     const lastWorkKey = this._lastWorkContextByTerminal.get(payload.name);
-                    const lastPlanId = this._lastDispatchedPlanByTerminal.get(payload.name);
-                    if ((lastWorkKey && lastWorkKey !== workContextKey) || (lastPlanId && lastPlanId !== planId)) {
+                    if (lastWorkKey && lastWorkKey !== workContextKey) {
                         payload = { ...payload, clearBeforePrompt: true };
                     }
                     this._lastWorkContextByTerminal.set(payload.name, workContextKey);
@@ -3476,7 +3540,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     type: 'terminalDispatchPreparing',
                     operationId: opId,
                     terminalName: payload.name,
-                    cliFamily: payload.cliFamily || 'unknown',
+                    // NOT payload.cliFamily — that field is caller-supplied and this
+                    // verb is reachable by anything holding the API token. The panel
+                    // resolves the family from its own fleet list (ptyListTerminals,
+                    // host-resolved) when the event does not name one.
+                    cliFamily: 'unknown',
                     phase: 'clearing',
                 };
                 this.postMessage(prepMsg, SURFACES.terminals);
@@ -3492,7 +3560,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         operationId: opId,
                         terminalName: payload.name,
                         success: result && result.success !== false,
-                        reason: result && result.success === false ? 'error' : 'signal',
+                        // The child's own detector result — never a hardcoded 'signal'.
+                        // A 15s Devin fallback and a real ready signal must not look
+                        // identical on this event.
+                        reason: result && result.success === false
+                            ? 'error'
+                            : (result?.readiness?.reason || 'fallback'),
                         elapsedMs: Math.max(0, Date.now() - startAt),
                     };
                     this.postMessage(finishMsg, SURFACES.terminals);
@@ -10669,17 +10742,21 @@ Each plan file must include:
     public async clearTerminalContext(
         workspaceRoot: string,
         terminalName: string
-    ): Promise<{ cleared: boolean; error?: string }> {
+    ): Promise<{ cleared: boolean; error?: string; reason?: string }> {
         const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
         if (!clearBeforePrompt) {
             return { cleared: false };
         }
-        // Drop the last-dispatched-plan entry so the next dispatch doesn't
-        // redundantly auto-clear an already-clean terminal (optimization —
-        // a redundant clear is harmless but wastes the settle window).
+        // Drop the last-dispatched-plan and work-context entries so the next
+        // dispatch doesn't redundantly auto-clear an already-clean terminal
+        // (optimization — a redundant clear is harmless but wastes the settle
+        // window). The work-context entry is the one the auto-clear compare
+        // actually reads; dropping only the plan entry left it inert.
         this._lastDispatchedPlanByTerminal.delete(terminalName);
+        this._lastWorkContextByTerminal.delete(terminalName);
         const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
         const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
+        const ptyPolicy = resolvePtyClearPolicy(vscode.workspace.getConfiguration('switchboard'));
 
         // PTY fleet first — same precedence as _attemptDirectTerminalPush. A
         // PTY clear goes through ptySendPrompt with an empty payload and
@@ -10697,13 +10774,17 @@ Each plan file must include:
                             name: target.friendlyName,
                             data: '',
                             clearBeforePrompt: true,
-                            clearBeforePromptDelayMs: resolvePtyClearDelay(vscode.workspace.getConfiguration('switchboard')),
+                            clearBeforePromptDelayMs: ptyPolicy.mode === 'manual' ? ptyPolicy.delayMs : ptyPolicy.unknownDelayMs,
+                            // _ptyHostVerb bypasses the HTTP-boundary injection block, so the
+                            // mode has to be carried explicitly — omitting it silently downgrades
+                            // a Manual operator to Auto detection on every acceptance clear.
+                            clearReadinessMode: ptyPolicy.mode,
                             // Empty payload — this is a pure /clear, no prompt.
                             addonsComposed: true
                         });
                         if (clearRes?.success) {
                             this._deliverStandingOrdersAfterClear(target.friendlyName);
-                            return { cleared: true };
+                            return { cleared: true, reason: clearRes?.readiness?.reason };
                         }
                         return { cleared: false, error: clearRes?.error || 'ptySendPrompt clear reported failure' };
                     }

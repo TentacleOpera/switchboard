@@ -32,17 +32,6 @@ export interface ClearReadinessTerminalTarget {
     onExit?: (cb: (code?: number) => void) => { dispose?: () => void } | void | (() => void);
 }
 
-export interface PtyTimingPolicyInputs {
-    mode?: string | null;
-    explicitPtyDelay?: number | null;
-    explicitLegacyDelay?: number | null;
-}
-
-export interface ResolvedPtyTimingPolicy {
-    mode: ClearReadinessMode;
-    delayMs: number;
-}
-
 export const DEVIN_DEFAULT_TIMEOUT_MS = 15000;
 export const DEVIN_DEFAULT_QUIET_MS = 100;
 export const CLAUDE_DEFAULT_TIMEOUT_MS = 3000;
@@ -51,43 +40,19 @@ export const ANTIGRAVITY_DEFAULT_TIMEOUT_MS = 3000;
 export const ANTIGRAVITY_DEFAULT_QUIET_MS = 100;
 export const DEFAULT_FALLBACK_DELAY_MS = 600;
 
-/**
- * Resolves the effective PTY clear timing policy and delay.
- *
- * Rules:
- * 1. Explicit Auto -> mode 'auto', unknown fallback uses resolved PTY delay.
- * 2. Explicit Manual -> mode 'manual', delay is PTY explicit, else explicit legacy VS Code delay, else 600ms.
- * 3. No mode + explicit PTY delay -> compatibility mode 'manual', delay is explicit PTY delay.
- * 4. No mode/PTY value + explicit legacy delay -> compatibility mode 'manual', delay is explicit legacy delay.
- * 5. No explicit values -> mode 'auto', fallback delay is 600ms.
- */
-export function resolvePtyTimingPolicy(inputs: PtyTimingPolicyInputs): ResolvedPtyTimingPolicy {
-    const rawMode = (inputs.mode || '').trim().toLowerCase();
-    const hasExplicitPty = inputs.explicitPtyDelay !== undefined && inputs.explicitPtyDelay !== null && !Number.isNaN(inputs.explicitPtyDelay);
-    const hasExplicitLegacy = inputs.explicitLegacyDelay !== undefined && inputs.explicitLegacyDelay !== null && !Number.isNaN(inputs.explicitLegacyDelay);
-
-    const explicitPty = hasExplicitPty ? inputs.explicitPtyDelay! : undefined;
-    const explicitLegacy = hasExplicitLegacy ? inputs.explicitLegacyDelay! : undefined;
-
-    const fallbackDelay = explicitPty !== undefined ? explicitPty : (explicitLegacy !== undefined ? explicitLegacy : DEFAULT_FALLBACK_DELAY_MS);
-
-    if (rawMode === 'auto') {
-        return { mode: 'auto', delayMs: fallbackDelay };
-    }
-    if (rawMode === 'manual') {
-        return { mode: 'manual', delayMs: fallbackDelay };
-    }
-
-    // Compatibility inference when mode is unset
-    if (explicitPty !== undefined || explicitLegacy !== undefined) {
-        return { mode: 'manual', delayMs: fallbackDelay };
-    }
-
-    return { mode: 'auto', delayMs: DEFAULT_FALLBACK_DELAY_MS };
-}
-
 export interface ClearReadinessTracker {
     readonly promise: Promise<ClearReadinessResult>;
+    /**
+     * Called by the delivery path the instant the clear command's submitting CR
+     * is written. Everything before that point is the CLI ECHOING the typed
+     * `/clear` back — for the output-settled profiles (Claude/Antigravity) that
+     * echo is indistinguishable from the post-clear re-render, so a quiet window
+     * measured from it resolves ready before the clear has even begun. Devin's
+     * profile is unaffected: it matches on terminal-mode transitions and needs
+     * the pre-submit bytes to see the OLD session's bracketed-paste disable.
+     */
+    markSubmitted(): void;
+    /** Pure teardown: drops listeners and timers. Never resolves the promise. */
     dispose(): void;
 }
 
@@ -147,10 +112,13 @@ export function createClearReadinessTracker(
         resolvePromise({ reason, elapsedMs });
     }
 
+    let submitted = false;
+    const markSubmitted = (): void => { submitted = true; };
+
     // Check if already exited
     if (target.status === 'exited') {
         finish('exit');
-        return { promise, dispose: cleanup };
+        return { promise, markSubmitted, dispose: cleanup };
     }
 
     // Attach exit listener if available
@@ -165,14 +133,14 @@ export function createClearReadinessTracker(
 
     if (mode === 'manual') {
         mainTimer = setTimeout(() => finish('manual'), fallbackDelay);
-        return { promise, dispose: () => finish('manual') };
+        return { promise, markSubmitted, dispose: cleanup };
     }
 
     const family = options?.cliFamily || target.cliFamily || 'unknown';
 
     if (family === 'unknown') {
         mainTimer = setTimeout(() => finish('fallback'), fallbackDelay);
-        return { promise, dispose: () => finish('fallback') };
+        return { promise, markSubmitted, dispose: cleanup };
     }
 
     if (family === 'devin') {
@@ -213,7 +181,7 @@ export function createClearReadinessTracker(
                 // If subscription failed, fallback timer handles it
             }
         }
-        return { promise, dispose: () => finish('fallback') };
+        return { promise, markSubmitted, dispose: cleanup };
     }
 
     if (family === 'claude' || family === 'antigravity') {
@@ -230,6 +198,8 @@ export function createClearReadinessTracker(
             try {
                 dataSub = target.onData(() => {
                     if (resolved) return;
+                    // Ignore the echo of the clear command itself — see markSubmitted().
+                    if (!submitted) return;
                     if (quietTimer) {
                         clearTimeout(quietTimer);
                         quietTimer = null;
@@ -240,10 +210,10 @@ export function createClearReadinessTracker(
                 // If subscription failed, fallback timer handles it
             }
         }
-        return { promise, dispose: () => finish('fallback') };
+        return { promise, markSubmitted, dispose: cleanup };
     }
 
     // Default fallback
     mainTimer = setTimeout(() => finish('fallback'), fallbackDelay);
-    return { promise, dispose: () => finish('fallback') };
+    return { promise, markSubmitted, dispose: cleanup };
 }

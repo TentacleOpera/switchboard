@@ -1,12 +1,13 @@
 'use strict';
 
 /**
- * Contract: Host-enforced auto-clear on plan change.
+ * Contract: Host-enforced auto-clear on WORK-CONTEXT change.
  *
- * When a ptySendPrompt with a dispatch field references a DIFFERENT planId
- * than the terminal's last dispatched plan, the host overrides
- * clearBeforePrompt to true so /clear is written before the prompt.
- * Same-planId resends preserve false (context kept for fix prompts).
+ * When a ptySendPrompt with a dispatch field references a DIFFERENT work
+ * context (featureId ?? planId) than the terminal's last dispatch, the host
+ * overrides clearBeforePrompt to true so /clear is written before the prompt.
+ * Same-context resends preserve false — that covers both a fix resend of one
+ * plan AND the next subtask of the same feature (atomic-team lifecycle).
  *
  * Source-level contract tests — read source text, assert on patterns.
  * Mirrors the style of terminal-coder-dispatch-contract.test.js.
@@ -63,10 +64,18 @@ test('standalone has lastDispatchedPlanByTerminal as a Map', () => {
 
 // --- 3. Extension host overrides clearBeforePrompt on plan change ---
 
-test('extension host overrides clearBeforePrompt on plan change', () => {
+test('extension host overrides clearBeforePrompt on work-context change', () => {
+    // The compare key is the WORK CONTEXT (featureId ?? planId), not planId.
+    // Comparing planId here clears between two subtasks of ONE feature — the
+    // per-subtask reset the atomic-team lifecycle exists to remove. An OR of the
+    // two compares is the same defect wearing the new map's name.
     assert.ok(
-        /lastPlanId\s*&&\s*lastPlanId\s*!==\s*planId/.test(PTY_HOST_VERB_SRC),
-        '_ptyHostVerb must compare lastPlanId !== planId before overriding'
+        /lastWorkKey\s*&&\s*lastWorkKey\s*!==\s*workContextKey/.test(PTY_HOST_VERB_SRC),
+        '_ptyHostVerb must compare lastWorkKey !== workContextKey before overriding'
+    );
+    assert.ok(
+        !/lastPlanId\s*&&\s*lastPlanId\s*!==\s*planId/.test(PTY_HOST_VERB_SRC),
+        'the superseded planId compare must NOT survive alongside the work-context compare'
     );
     assert.ok(
         /clearBeforePrompt:\s*true/.test(PTY_HOST_VERB_SRC),
@@ -76,10 +85,14 @@ test('extension host overrides clearBeforePrompt on plan change', () => {
 
 // --- 4. Standalone overrides clearBeforePrompt on plan change ---
 
-test('standalone overrides clearBeforePrompt on plan change', () => {
+test('standalone overrides clearBeforePrompt on work-context change', () => {
     assert.ok(
-        /lastPlanId\s*&&\s*lastPlanId\s*!==\s*parsed\.value\.planId/.test(SEND_PROMPT_SRC),
-        'ptySendPrompt case must compare lastPlanId !== parsed.value.planId before overriding'
+        /lastWorkKey\s*&&\s*lastWorkKey\s*!==\s*workContextKey/.test(SEND_PROMPT_SRC),
+        'ptySendPrompt case must compare lastWorkKey !== workContextKey before overriding'
+    );
+    assert.ok(
+        !/lastPlanId\s*&&\s*lastPlanId\s*!==\s*parsed\.value\.planId/.test(SEND_PROMPT_SRC),
+        'the superseded planId compare must NOT survive alongside the work-context compare'
     );
     assert.ok(
         /payload\.clearBeforePrompt\s*=\s*true/.test(SEND_PROMPT_SRC),
@@ -182,37 +195,37 @@ test('standalone renames map entry on ptyRenameTerminal', () => {
 
 // --- 9. Same-planId dispatch does NOT override clearBeforePrompt ---
 
-test('extension host checks lastPlanId !== planId (not just existence)', () => {
-    // The condition must include the !== check, so a same-plan resend
+test('extension host checks lastWorkKey !== workContextKey (not just existence)', () => {
+    // The condition must include the !== check, so a same-feature resend
     // preserves false.
     assert.ok(
-        /lastPlanId\s*!==\s*planId/.test(PTY_HOST_VERB_SRC),
-        '_ptyHostVerb must check lastPlanId !== planId so same-plan resends preserve false'
+        /lastWorkKey\s*!==\s*workContextKey/.test(PTY_HOST_VERB_SRC),
+        '_ptyHostVerb must check lastWorkKey !== workContextKey so same-feature resends preserve false'
     );
 });
 
-test('standalone checks lastPlanId !== parsed.value.planId (not just existence)', () => {
+test('standalone checks lastWorkKey !== workContextKey (not just existence)', () => {
     assert.ok(
-        /lastPlanId\s*!==\s*parsed\.value\.planId/.test(SEND_PROMPT_SRC),
-        'ptySendPrompt case must check lastPlanId !== parsed.value.planId so same-plan resends preserve false'
+        /lastWorkKey\s*!==\s*workContextKey/.test(SEND_PROMPT_SRC),
+        'ptySendPrompt case must check lastWorkKey !== workContextKey so same-feature resends preserve false'
     );
 });
 
 // --- 10. First dispatch does NOT override clearBeforePrompt ---
 
-test('extension host checks lastPlanId existence before overriding', () => {
-    // The condition must check lastPlanId is truthy before comparing, so a
+test('extension host checks lastWorkKey existence before overriding', () => {
+    // The condition must check lastWorkKey is truthy before comparing, so a
     // fresh terminal (no entry) is not redundantly cleared.
     assert.ok(
-        /lastPlanId\s*&&\s*lastPlanId\s*!==\s*planId/.test(PTY_HOST_VERB_SRC),
-        '_ptyHostVerb must check lastPlanId existence so first dispatch does not auto-clear'
+        /lastWorkKey\s*&&\s*lastWorkKey\s*!==\s*workContextKey/.test(PTY_HOST_VERB_SRC),
+        '_ptyHostVerb must check lastWorkKey existence so first dispatch does not auto-clear'
     );
 });
 
-test('standalone checks lastPlanId existence before overriding', () => {
+test('standalone checks lastWorkKey existence before overriding', () => {
     assert.ok(
-        /lastPlanId\s*&&\s*lastPlanId\s*!==\s*parsed\.value\.planId/.test(SEND_PROMPT_SRC),
-        'ptySendPrompt case must check lastPlanId existence so first dispatch does not auto-clear'
+        /lastWorkKey\s*&&\s*lastWorkKey\s*!==\s*workContextKey/.test(SEND_PROMPT_SRC),
+        'ptySendPrompt case must check lastWorkKey existence so first dispatch does not auto-clear'
     );
 });
 
