@@ -48,8 +48,12 @@ The analysis was built to answer the safe question — "which of these can I fir
 
 This plan historically accumulated multiple distinct concerns across data modeling, board UI, and worktree mechanics. The architectural recommendation is to separate them:
 1. **Persisting dependency edges and pop-time completion gating** (backend queue execution engine) — the primary scope of this plan.
-2. **Mission card data model, drag behaviors, and Mission Control panel integration** — belongs with `the-automation-model-four-things-not-a-mode-axis.md` and `mission-control-panel-ui-specification.md`.
-3. **Worktree provisioning and multi-checkout merge-back topology** — belongs with `worktree-models-consolidate-and-a-staging-toggle.md`.
+2. **Mission Control panel layout and its tabs** — belongs with `mission-control-panel-ui-specification.md`.
+3. **Worktree provisioning and multi-checkout merge-back topology** — belongs with `worktree-models-consolidate-and-a-staging-toggle.md`. *(Performed: old item 6, `base_branch` derivation, was removed from Proposed Changes below.)*
+
+> **Amended:** item 2 previously read *"Mission card data model, drag behaviors, and Mission Control panel integration — belongs with `the-automation-model-four-things-not-a-mode-axis.md` and `mission-control-panel-ui-specification.md`."*
+> **Reason:** both named recipients are shipped or reviewed and neither defines a mission card. `the-automation-model` consumes *"the mission's membership"* as its selector target; the panel spec lists missions and derives their status, with no membership, containment or drag-onto behaviour anywhere in it. The deferral had no receiver, and the mission card data model is already item 7 of THIS plan's Proposed Changes — so the note contradicted the plan it sits in. Membership is what that card holds; it belongs here with it.
+> **Replaced with:** only the panel's own layout is deferred. The mission card, its membership, and the drag that forms it stay in this plan.
 
 *Note: As instructed, this split is recorded here as a recommendation only and is not performed in this plan file.*
 
@@ -191,7 +195,7 @@ Key risks: (1) the pop-time dependency gate is a new refusal in the `_runQueuePo
 8c. **Launch mission** in the panel performs the column move and the fan-out as one action: seat teams, provision worktrees, stage, dispatch each unblocked stream head.
 8d. **Launch is idempotent.** Moving the card twice must not double-seat teams or double-dispatch. This is the one behaviour on the board where a card's move fans out beyond itself, so it needs an explicit guard rather than relying on the user not doing it.
 8e. **Expose the map to the operator**: a read path (`GET /kanban/mission/{planId}/streams` or equivalent) returning dependency chains, their depth, and each card's dependency edges.
-9. **Sequential stays the default; the handoff sequence generalises from one team to N.** `## The handoff sequence` (`:252-266`) is already scope → launch → stage → dispatch card one → report and exit. For parallel streams it becomes:
+8. **Sequential stays the default; the handoff sequence generalises from one team to N.** `## The handoff sequence` (`:252-266`) is already scope → launch → stage → dispatch card one → report and exit. For parallel streams it becomes:
    1. **Scope** — read the dependency map.
    2. **Advise and stop** — parallel chains available, what running several costs, where the map is weakest. The user confirms which streams to run. *(The only genuinely new step.)*
    3. **Launch** — seat one team per confirmed stream.
@@ -200,7 +204,14 @@ Key risks: (1) the pop-time dependency gate is a new refusal in the `_runQueuePo
    6. **Dispatch the head of each confirmed stream** — one `queue/next` per team. The per-team in-flight refusal and dependency completion check serialises this correctly.
    7. **Report and exit** — `POST /orchestration/handoff`, whose `409` on a dead head or empty queue becomes an N-team check.
    Steps 3–7 are what it already does, once per stream instead of once.
-10. **Operator detects and reports** dependency violations. It never writes strategy, reorders work, or cuts branches.
+9. **Operator detects and reports** dependency violations. It never writes strategy, reorders work, or cuts branches.
+10. **Membership is containment, and the drag is what forms it.** Dragging a plan into STAGING adds it to the workspace's open mission, creating one if none is open, so the gesture that works today keeps working and nobody has to author a mission first. The target mission resolves ONCE per drop, not once per card — a five-card drag is one gesture and must produce one mission. `plans.mission_id` (TEXT, nullable) carries it; keep it OUT of `UPSERT_PLAN_SQL` like `queue_position` and `priority_starred`, or a file re-import drops membership.
+11. **A member stops being a board card.** Reuse the subtask containment predicate rather than writing a second one: `featureId && !isFeature` is already applied in `_resolveStageablePlanIds`, in the staged-count contract, and in the queue pop's `isQueueable`. Mission members need the same treatment at the same sites. A second, differently-shaped predicate is how one site gets missed and a member leaks back onto the board as a loose card.
+12. **Membership closes at launch, refused at the drop.** A launched mission accepts no new members, and the refusal happens when the card is dropped — never at the pop, or a card that cannot join has already landed in the queue. Launched-ness is DERIVED, never stored (`mission-control-panel-ui-specification.md`: *"a stored status is a second source of truth that drifts the first time a run dies unexpectedly"*), with one implementation read by both this refusal and the panel. The refusal must return the refused ids through the existing `moveCardsFailed` channel, which reverts the webview's optimistic move and resolves its guard-ledger entry — a status message alone leaves the card stranded in STAGING until an unrelated push repaints the board.
+
+> **Amended:** the numbering ran 1,2,3,4,5,6,7,9,10 — old item 6 (`base_branch` derivation) was removed and the renumber stopped halfway, leaving items 9 and 10 on their original numbers and no item 8.
+> **Reason:** a gap reads as a lost deliverable. No content was missing; the two tail items are unchanged and are now 8 and 9.
+> **Replaced with:** contiguous 1–12, the last three being the membership items this plan described in *"Missions live only in STAGING, and membership is a containment gesture"* but never turned into work.
 
 ### Migration
 
@@ -226,6 +237,14 @@ Key risks: (1) the pop-time dependency gate is a new refusal in the `_runQueuePo
 - **Dependency cycle reported:** declare A→B→A; assert an input error, not an arbitrary order.
 - **Features stay whole:** a feature with subtasks gets dependency edges on the feature card and none on subtasks; assert no subtask is staged independently.
 - **Empty dependency edges are inert:** with no dependencies, the queue behaves byte-identically to today.
+- **Membership removes from the board:** drop a plan into STAGING; assert it is a member and renders nowhere as a loose card — checked at every site the subtask predicate is applied, enumerated by name. One missed site is the whole failure mode, and it passes every behavioural check that only looks at one surface.
+- **One drag, one mission:** drop five cards into an empty STAGING column; assert exactly one mission is created holding five members, not five missions.
+- **A launched mission refuses new members:** launch a mission, drop a plan; assert the drop is refused with the mission's codename in the reason, and that `mission_id` was not written.
+- **The refusal reverts the optimistic move:** assert refused ids come back through `moveCardsFailed`, not a bare status message. A message-only refusal passes a behavioural check and still strands the card in STAGING with its guard-ledger entry armed.
+- **Launched-ness has one implementation:** assert the drop refusal and the Mission Control panel both call the same derivation rather than deriving locally. Two derivations agree until the first time they do not, and the symptom — the drop refusing what the panel shows as open — is very hard to read from the board.
+- **Status is never stored:** assert no column or config key persists launched-ness; kill a run mid-flight and assert the mission does not remain launched.
+- **Membership survives a file re-import:** re-import a member's plan file; assert `mission_id` is preserved, i.e. it is absent from `UPSERT_PLAN_SQL`'s column list and its ON CONFLICT SET list.
+- **Existing staged cards migrate intact:** a board with staged cards and no missions migrates to one unlaunched mission per workspace, membership in `queue_position` order, nothing lost from the board and nothing swept into a mission the user never made.
 - **No confirm gate, and the modal is not `confirm()`:** assert the launch path contains no `window.confirm(`/`confirm(` call and that the modal is a real in-webview element.
 - **Launch is idempotent:** press Launch twice; assert one set of teams, one set of worktrees, one dispatch per stream.
 - **A board move launches nothing and persists nothing:** drag a mission card to another column; assert the panel opens, the card's stored column is unchanged, and no team was seated.
