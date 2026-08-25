@@ -264,3 +264,34 @@ to wait on terminal input.
 
 Net effect: scope reduction. Nothing above is invalidated except the claim that a write-back
 mechanism has to be designed.
+
+## Make the destination a kind, not a growing set of sibling fields
+
+*Appended after review.*
+
+This plan proposes `targetTeam` alongside `targetColumn`, with normalization refusing a rule that
+sets both. A third destination is already wanted — a `sb:memo`-style label whose matched card is
+captured as a memo rather than imported as a plan — and there will be others.
+
+Two sibling fields with a hand-enforced "exactly one" rule is the shape that becomes four fields and
+a tangle of pairwise checks. Model the destination as a **kind** instead:
+
+```
+destination: { kind: 'column', column: string }
+            | { kind: 'team',   team: string }
+            | { kind: 'memo' }
+```
+
+One discriminated union, one exhaustive switch in the poll, one normalizer, and an unknown kind
+refused at load rather than silently ignored. Adding a destination later is a case, not a new field
+plus a new pairwise rule.
+
+**Migration is the reason to do it now rather than later.** Automation rules ship today with
+`targetColumn` on stored configs. `normalizeLinearAutomationRules` must map a stored
+`targetColumn` to `{ kind: 'column', column }` on load and keep writing whatever shape the config
+version requires, preserving unknown keys. Doing that once, while there is exactly one legacy shape,
+is straightforward; doing it after `targetTeam` has also shipped means migrating two.
+
+The memo destination itself is out of scope here — it needs its own decision about what a captured
+memo contains and where it lands. What this plan owes it is a destination model that does not have
+to be reworked to accommodate it.
