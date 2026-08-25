@@ -73,7 +73,7 @@ plan covers: a remote operator as the escalation target after the automatic atte
 
 ## Metadata
 
-**Complexity:** 4
+**Complexity:** 3
 **Tags:** backend, feature, reliability, ux, api
 
 ## User Review Required
@@ -233,3 +233,35 @@ routing changes only for in-flight cards under remote control.
 11. **Liveness has one definition.** Assert the stall comment's "silent Ns" comes from the engine's
     snapshot, not a second computation.
 12. **Two instances, one comment.** Assert no duplicate stall alerts.
+
+## Stall surfacing withdrawn — the manual path stands, the automatic one does not
+
+*Appended after review.*
+
+This plan carried two halves. The **inbound wake-up** — an operator's comment routed to the card's
+`dispatched_terminal` through the relay — stands unchanged, and is now the whole plan. It is
+operator-initiated, keyed on a field written by the dispatch path, and involves no inference
+whatsoever.
+
+**Proposed change 5 is withdrawn**: surfacing `PlanIngestionEngine`'s stall evidence as a comment.
+Its inputs are PTY silence and plan-file mtime, both of which the project has decided against —
+see the companion notification plan's appended section for the citations, chiefly that silence
+"cries wolf" and that an mtime advance cannot be distinguished from a mid-work edit. Pushing that
+to a phone is worse than the board badge being removed, not better.
+
+**What this simplifies.** The plan no longer touches `PlanIngestionEngine` at all:
+
+- No dependency on `livenessByName` or `lastDataAt`, so no second definition of "silent".
+- No coupling to the engine's `nudgeCount` cadence — the risk about "one stall comment per stall,
+  not one per poll window" disappears with the event.
+- No plan-file `stat` calls.
+- Verification steps 7, 8 and 11 (one-comment-per-stall, stall-suppressed-by-completion, liveness
+  has one definition) are withdrawn along with it.
+
+**The escalation story is unchanged and simpler.** The notification plan makes dispatch and
+completion visible; the operator reads a dispatch followed by silence and decides for themselves
+that it is suspicious; this plan gives them a way to act on that judgement by replying on the card.
+No detector, no threshold, no badge. The human is the detector — which is what was asked for.
+
+**Reduced scope:** complexity 4 → 3. One route change, one resolution rule, one relay call, and an
+honest report when the seat is gone.

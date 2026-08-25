@@ -272,3 +272,55 @@ Worth noting why that event matters more than it first appears: the engine nudge
 won't respond to a second"). So by the system's own design the next escalation is a human — and today
 that human is never told the stall happened, that evidence was gathered, or that an automatic attempt
 was already spent.
+
+## The stall event is withdrawn — silence and mtime are both retired inputs
+
+*Appended after review. This supersedes the "Resolved — waking a quiet lead" section above, which
+specified a fourth event type that must not be built.*
+
+That section proposed surfacing `PlanIngestionEngine`'s feature-stall evidence — each remaining
+subtask, its seat, how long that seat has been silent, and its plan-file mtime — as a comment that
+mentions the operator. **Withdrawn.** Both of its inputs are inference the project has already
+decided against, and pushing them to a phone is a worse version of a signal being removed from the
+board.
+
+**Silence.** `feature_plan_20260819160000_remove-silence-based-blocked-state-from-kanban.md` removes
+the PTY-silence-driven "Waiting on you" badge, and its reasoning applies verbatim here: "Silence is
+ambiguous — it cannot distinguish 'agent asked a question' from 'agent is thinking,' 'agent is
+running a build,' 'agent crashed'… The result is a board that cries wolf." It records the operator's
+own verdict: *"I don't want to be spammed with a hundred different bling."* A phone push is a louder
+bling than a yellow ring, so the objection is stronger here, not weaker.
+
+**mtime.** The four-part feature "Replace mtime-based completion detection with explicit API-based
+completion" has landed for its main path — `PlanIngestionEngine.ts:623` now reads "mtime-based
+completion detection is retired — the API POST…", and `POST /kanban/queue/done` is live at
+`LocalApiServer.ts:7022`. `remove-mtime-based-completion-detection.md` states why: the assumption
+that an mtime advance means completion "is wrong — the agent can edit the plan file mid-work for
+many reasons (partial completion reports, plan updates, notes). The file watcher has no way to
+distinguish a mid-work edit from a completion edit."
+
+### What this leaves, and why it is better
+
+The events this plan actually posts are **assertions, not inferences**. `POST /kanban/dispatch` is a
+dispatch happening. `POST /kanban/task/complete` and `POST /kanban/queue/done` are a lead asserting
+completion. There is no threshold to tune, no false-positive class, and nothing to mute.
+
+And the silence problem solves itself without a detector: "dispatched X" followed by an hour of
+nothing is legible to the operator precisely *because* the positive events are reliable. The human
+is the detector, which is what the original requirement said — see a suspicious quiet, then ping.
+Adding a machine detector was scope this plan invented, and it would have converted a clean signal
+into a noisy one.
+
+**No stall event, no liveness read, no mtime, no thresholds.** Dispatch and completion only.
+
+### A finding worth its own decision
+
+The mtime removal retired mtime as a *completion signal* but left it as *evidence in the stall
+wake* (`PlanIngestionEngine.ts:98`, `:1253`, `:1261`, `:1269`, `:1079`). That is a defensible scope
+boundary for that feature and a residue of a mechanism the project has otherwise abandoned. Given
+the operator's position that the nudges were not worth their cost — the observed plan failure rate
+being far lower than the machinery assumed — the live question is whether the feature-stall nudge
+should exist at all, not whether to surface it. `fix-silent-nudge-noise-to-team-lead-in-team-coding-mode.md`
+and `feature_plan_20260816170000_head-agent-wake-safeguard.md` (whose own risk list includes "the
+nudge interrupting a working head, turning a safeguard into the cause of a broken turn") are the
+right place to settle that. It is explicitly **not** in scope here.
