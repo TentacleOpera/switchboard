@@ -191,15 +191,24 @@ Key risks: (1) the pop-time dependency gate is a new refusal in the `_runQueuePo
 6. **Analyze control in the STAGING header** as well as Planned.
 7. **The mission card is the carrier.** Analysis writes it as a plan file (file tier, works sandboxed) or via the API; it holds the dependency map. Members are linked by dependency edges, never re-parented. A new card kind — not a feature, no cascade, no derived complexity. **Codename generator**: a mission card gets a stable codename on creation — a two-word `{adjective}-{noun}` pair drawn from two small word lists (~50 adjectives, ~50 nouns, ~2,500 combinations) embedded as constants in `KanbanDatabase.ts` or a sibling module. The pair is chosen by hashing the mission's `plan_id` into the adjective × noun space, so the same card always gets the same codename without a stored field. Collision is checked at creation time; a collision rehashes with a salt suffix. No external word-list file, no network dependency.
 8a. **Panel UI deferred to `mission-control-panel-ui-specification.md`.** That plan specifies `mission-control.html` + `mission-control.js` with a Missions tab (sidebar list + detail), registered in `getPanelsManifest` as `mission-control`, a `getPanelHtmlById` case, and a `LocalApiServer` route. This plan defines the data model and behaviours the panel hosts; it does not create the panel files.
+
+**The panel is already built — do not rebuild it, and do not invent a mission shape.** `src/webview/mission-control.html` (27 KB) and `src/webview/mission-control.js` (43 KB) are in the tree and its card is in CODE REVIEWED. What is missing is the backend behind it: `grep maxExtraWorktrees src/services/` returns nothing, there is no missions table, no `mission_id`, no reader and no writer. The UI renders a mission object nothing produces, which is why its Missions tab is inert.
+
+So the mission model this plan builds is **not** free to choose its own field names. It must satisfy the shape the shipped panel already reads, or the panel stays dead and the work ships twice:
+
+- **Fields on a mission** (`mission-control.js`): `id`, `name`, `type`, `goal`, `ready`, `runState`, `team`, `teams`, `plans`, `features`, `sequencing`, `log`, `maxExtraWorktrees`.
+- **Verbs it posts** and therefore needs handled: `mcInit`, `mcNewMission`, `mcUpdateMission`, `mcDeleteMission`, `mcReadyMission`, `mcLaunchMission`, `mcStopMission`, `mcAddMissionMember`, `mcRemoveMissionMember`.
+- `ready` is a flag, not a status — `mission-control-panel-ui-specification.md` is explicit that a scheduler must not take an unready mission, and that `runState` is **derived**, never stored.
+- New verbs must be regenerated into the allowlist (`npm run catalog:generate`) or `handleServiceVerb` throws on every one of them over `/kanban/verb/*` while working fine in the VS Code webview.
 8b. **Board move = navigate.** A drag on a mission card is intercepted before the optimistic path (`optimisticMoveUntil`, `kanban.html:6300`), opens the Mission Control panel, and writes nothing. The card keeps its column until Launch.
-8c. **Launch mission** in the panel performs the column move and the fan-out as one action: seat teams, provision worktrees, stage, dispatch each unblocked stream head.
+8c. **Launch mission** in the panel performs the column move and the fan-out as one action: seat teams, stage, dispatch each unblocked stream head. **It does not provision a worktree per stream.** A mission carries a `maxExtraWorktrees` field — *extra*, on top of the tree it starts in — which is **0 by default** and which a mission of type `mission` may never exceed **1** (`mission-control-panel-ui-specification.md:110`, and already shipped in `mission-control.js:465`). Launch honours that field; most missions add nothing and run in the tree they started in.
 8d. **Launch is idempotent.** Moving the card twice must not double-seat teams or double-dispatch. This is the one behaviour on the board where a card's move fans out beyond itself, so it needs an explicit guard rather than relying on the user not doing it.
 8e. **Expose the map to the operator**: a read path (`GET /kanban/mission/{planId}/streams` or equivalent) returning dependency chains, their depth, and each card's dependency edges.
 8. **Sequential stays the default; the handoff sequence generalises from one team to N.** `## The handoff sequence` (`:252-266`) is already scope → launch → stage → dispatch card one → report and exit. For parallel streams it becomes:
    1. **Scope** — read the dependency map.
    2. **Advise and stop** — parallel chains available, what running several costs, where the map is weakest. The user confirms which streams to run. *(The only genuinely new step.)*
    3. **Launch** — seat one team per confirmed stream.
-   4. **Provision** — one worktree per stream, host-owned as today. *(The only step needing a run parameter.)*
+   4. **Provision, only if the mission asks for it** — `maxExtraWorktrees` extra trees, 0 by default and capped at 1 for a mission. Not one per stream. *(The only step needing a run parameter.)*
    5. **Stage** — in dependency order with edges persisted.
    6. **Dispatch the head of each confirmed stream** — one `queue/next` per team. The per-team in-flight refusal and dependency completion check serialises this correctly.
    7. **Report and exit** — `POST /orchestration/handoff`, whose `409` on a dead head or empty queue becomes an N-team check.
@@ -237,6 +246,8 @@ Key risks: (1) the pop-time dependency gate is a new refusal in the `_runQueuePo
 - **Dependency cycle reported:** declare A→B→A; assert an input error, not an arbitrary order.
 - **Features stay whole:** a feature with subtasks gets dependency edges on the feature card and none on subtasks; assert no subtask is staged independently.
 - **Empty dependency edges are inert:** with no dependencies, the queue behaves byte-identically to today.
+- **The shipped panel lights up:** assert every field `mission-control.js` reads off a mission is populated by the backend, and that every `mc*` mission verb it posts has a handler and is present in the generated allowlist. A mission model that satisfies the plan but not this list leaves 43 KB of finished UI rendering nothing, and no other check catches it.
+- **Launch honours the worktree cap, and does not provision per stream:** launch a three-stream mission with `maxExtraWorktrees` at its default; assert zero extra worktrees are created. Set it to 1; assert one. Assert a mission of type `mission` cannot be launched above 1.
 - **Membership removes from the board:** drop a plan into STAGING; assert it is a member and renders nowhere as a loose card — checked at every site the subtask predicate is applied, enumerated by name. One missed site is the whole failure mode, and it passes every behavioural check that only looks at one surface.
 - **One drag, one mission:** drop five cards into an empty STAGING column; assert exactly one mission is created holding five members, not five missions.
 - **A launched mission starts a new one:** launch a mission, drop a plan onto it; assert a NEW mission is created holding that plan, that the launched mission's membership is unchanged, and that nothing is refused or errored.
@@ -248,7 +259,7 @@ Key risks: (1) the pop-time dependency gate is a new refusal in the `_runQueuePo
 - **Membership survives a file re-import:** re-import a member's plan file; assert `mission_id` is preserved, i.e. it is absent from `UPSERT_PLAN_SQL`'s column list and its ON CONFLICT SET list.
 - **Existing staged cards migrate intact:** a board with staged cards and no missions migrates to one unlaunched mission per workspace, membership in `queue_position` order, nothing lost from the board and nothing swept into a mission the user never made.
 - **No confirm gate, and the modal is not `confirm()`:** assert the launch path contains no `window.confirm(`/`confirm(` call and that the modal is a real in-webview element.
-- **Launch is idempotent:** press Launch twice; assert one set of teams, one set of worktrees, one dispatch per stream.
+- **Launch is idempotent:** press Launch twice; assert one set of teams and one dispatch per stream.
 - **A board move launches nothing and persists nothing:** drag a mission card to another column; assert the panel opens, the card's stored column is unchanged, and no team was seated.
 - **Panel registered in both hosts:** assert `/mission-control` serves the panel over HTTP and the rail renders its icon from the manifest, with no `shell.html` edit.
 - **Missions are STAGING-only:** assert a mission card cannot be created in, or moved to, any other column.
