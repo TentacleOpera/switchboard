@@ -111,17 +111,22 @@ Yes — four decisions.
 
 ## Adversarial Synthesis
 
-Key risks: the codebase already shipped and withdrew an OAuth mode, and the cause is unestablished — PKCE only answers the client-secret half; the standalone host's loopback callback cannot be reached when the browser is remote, which presents as a hang rather than an error; a silent attribution fallback would leave the operator believing comments are attributed when they are not; and the `createAsUser` semantics this plan rests on come from a single unverified source. Mitigations: establish the Stitch cause before implementing; refuse the flow when the browser is not local with an explicit message; fail loudly rather than degrade on the attribution path; verify the API fields first; and keep PAT as the default with a one-action fallback.
+Key risks: the seat identity does not reach the write path today, so the OAuth layer can exist and comments still post unattributed on the agent path — the plan's own success check passes for a hardcoded seat while the real goal is unmet; `graphqlRequest` is the single auth chokepoint and it assumes a raw PAT (`Authorization: <raw token>`), so the mode switch must branch the header format and host refresh-on-401 there or every call site drifts; the codebase already shipped and withdrew an OAuth mode (Stitch — Google ~2h expiry), and whether Linear issues a durable non-interactive refresh token is the disqualifying question, not a detail; the standalone host's loopback callback cannot be reached when the browser is remote, which presents as a hang rather than an error; a silent attribution fallback would leave the operator believing comments are attributed when they are not; and the `createAsUser` semantics this plan rests on come from a single unverified source. Mitigations: thread the seat through `/comment` → `postManagedComment` → `commentCreate` and through `_applyStateMirror` → `postComment` before building the OAuth layer; branch auth in `graphqlRequest` alone; answer the Linear refresh question before any OAuth work; refuse the flow when the browser is not local; fail loudly rather than degrade on the attribution path; verify the API fields first; and keep PAT as the default with a one-action fallback.
 
 ## Proposed Changes
 
-0. **First, and independent of everything else: prefix managed comment bodies with the seat name.** No auth change, no flow, works today, and it is the fallback if the refresh answer below is bad.
-1. **A PKCE OAuth flow** with `actor=app`, only if non-interactive refresh is confirmed: challenge/verifier, `state` validation, token exchange without a client secret.
-2. **Per-host callback:** `vscode://` URI handler for the extension; a transient loopback listener for the standalone host, closed after exchange; explicit refusal when the browser is not local.
-3. **Per-lead attribution:** `createAsUser` and `displayIconUrl` derived from the seat's role and team, threaded through `postManagedComment` and issue creation.
-4. **Refresh and revocation:** single-flight refresh, a distinct reauthorize-required state, no prompt loops.
-5. **Loud failure on attribution:** never silently post unattributed when app mode is selected.
-6. **Opt-in with a fallback:** PAT remains default; one action returns to PAT mode retaining the existing token.
+0. **First, and independent of everything else: thread the seat identity and prefix managed comment bodies with it.** This is the prerequisite both the cheap version and the OAuth upgrade depend on, and it works today under the existing PAT.
+   - **`LocalApiServer._handlePostComment` (`:1408`):** extend the parsed body from `{ provider, id, body }` to accept an optional `actor`/`seat` string; pass it through to `postManagedComment`.
+   - **`LinearSyncService.postManagedComment` (`:1444`):** add an optional `seat?: string` param; when present, prefix the truncated body with `**<seat>** — ` before `stampMarker`. When absent, behaviour is unchanged (no prefix) so existing callers and tests do not break.
+   - **`ClickUpSyncService.postManagedComment` (`:1790`) and `NotionFetchService.postManagedComment` (`:235`):** accept the same optional param for interface symmetry; ClickUp can prefix the body, Notion already carries `From = Switchboard` and can set it to the seat.
+   - **Agent contract:** the agent posting via `/comment` includes its seat (role + team, e.g. `Review Lead · fleet-2`) in the request body. The seat is already in the agent's dispatch prompt; this is a payload addition, not a new source of truth.
+   - **Host-side dispatch ack (`RemoteControlService._applyStateMirror:807` → `provider.postComment`):** the orchestrator knows the target column, not a named seat. For the prefix version, derive a seat label from the column (e.g. `Lead Coder` for LEAD CODED) and pass it; full per-lead naming waits for the OAuth layer's `createAsUser`.
+1. **A PKCE OAuth flow** with `actor=app`, only if non-interactive refresh is confirmed: challenge/verifier, `state` validation, token exchange without a client secret. Store the access token, refresh token, and expiry in a new secret (e.g. `switchboard.linear.appToken`) beside the existing PAT — never in `settings.json`.
+2. **Per-host callback:** `vscode://` URI handler for the extension (`registerUriHandler` — absent today); a transient loopback listener for the standalone host, closed after exchange; explicit refusal when the browser is not local. `LocalApiServer` already binds `127.0.0.1` (`:723`) and could host the transient callback, but it must not become a permanent route.
+3. **Per-lead attribution:** `createAsUser` and `displayIconUrl` derived from the seat's role and team, threaded through `postManagedComment` (`:1444`) → `addIssueComment` (`:1359`) → the `commentCreate` mutation (`:1393`, add `createAsUser`/`displayIconUrl` to `inputFields`), and through the issue-creation path. The seat param added in step 0 is the carrier.
+4. **Refresh, revocation, and auth-mode branching — all in `graphqlRequest` (`LinearSyncService.ts:1951`):** this is the single funnel for every Linear call. (a) Mode-aware token selection: read the app token when in OAuth mode, the PAT otherwise. (b) Header format: `Bearer <token>` for OAuth, raw `<token>` for PAT (`:1980` today is raw — correct for PAT only). (c) Single-flight refresh on a 401, with a distinct reauthorize-required state versus a Linear outage; no prompt loops. (d) The `getApiToken()` cache (`:1898`) must invalidate on mode switch and on refresh.
+5. **Loud failure on attribution:** never silently post unattributed when app mode is selected — if `createAsUser` is rejected or the mode is misconfigured, the write fails visibly rather than falling back to the operator.
+6. **Opt-in with a fallback:** PAT remains default; one action returns to PAT mode retaining the existing token. A capability flag (e.g. `switchboard.linear.authMode`) distinguishes the modes in UI; there is no such config today (confirmed: no `linear.authMode`/`linear.oauthMode`/`linear.actorMode` exists).
 7. **Update the `linear-api` protocol** and any connected-state UI to distinguish the two modes.
 
 ### Migration
@@ -131,8 +136,11 @@ Additive and opt-in. No behaviour changes until an app is authorized, and return
 ## Verification Plan
 
 - **Body prefix, first and separately:** assert a managed comment names its seat, under the existing token, with no auth change — the deliverable that does not depend on any OAuth answer.
+- **Seat threading (agent path):** POST `/comment` with an `actor` field; assert the posted Linear comment body begins with `**<seat>** — ` and still carries the `<!-- switchboard -->` marker. POST without `actor`; assert no prefix and no regression (existing callers unchanged).
+- **Seat threading (host path):** trigger a remote status change that dispatches a column; assert the dispatch-ack comment names the seat derived from the column, not just the column name.
 - **Non-interactive refresh, before any OAuth work:** run an authorized app past its access-token lifetime with no human present. Assert the poller keeps working. If it cannot, the OAuth half of this plan is dropped, not worked around — that is the Stitch failure repeating.
 - **PKCE end to end:** authorize, exchange without a client secret, and assert a working token. Assert the verifier never appears in logs and `state` mismatch is rejected.
+- **Auth-header branching:** in PAT mode assert `graphqlRequest` sends `Authorization: <raw>`; in OAuth mode assert `Authorization: Bearer <token>`. Assert a 401 in OAuth mode triggers exactly one refresh attempt, not a prompt loop.
 - **Per-lead attribution:** post comments from two different seats; assert Linear shows two distinct actors with the expected names and icons, and that neither appears as the operator.
 - **No seat consumed:** assert workspace seat count is unchanged after authorizing.
 - **Attribution failure is loud:** simulate `createAsUser` being rejected; assert the write fails visibly rather than posting unattributed.
@@ -141,9 +149,31 @@ Additive and opt-in. No behaviour changes until an app is authorized, and return
 - **Fallback:** switch back to PAT mode; assert the original token still works and no data was lost.
 - **Both hosts:** run the whole suite under the extension and the standalone host.
 
+### Goal Invariants
+
+- Assert `postManagedComment` (`LinearSyncService.ts:1444`) accepts a `seat` parameter and, when it is a non-empty string, the body passed to `addIssueComment` starts with `**<seat>** — `.
+- Assert `LocalApiServer._handlePostComment` (`:1408`) reads an `actor`/`seat` field from the request body and forwards it to `postManagedComment`.
+- Assert `graphqlRequest` (`LinearSyncService.ts:1951`) sends `Authorization: Bearer <token>` when the active auth mode is OAuth and `Authorization: <raw token>` when it is PAT.
+- Assert no `client_secret` is present in the extension's bundled source or shipped configuration (PKCE-only).
+- Assert the app OAuth token is stored in SecretStorage (not `settings.json`); assert `switchboard.linear.apiToken` (the PAT) is retained and untouched after authorizing the app.
+- Negative: assert that in OAuth mode, a rejected/missing `createAsUser` causes the comment write to **fail** (return `{ success: false }`), not to post unattributed — i.e. no silent fallback to the operator identity.
+
+## Uncertain Assumptions
+
+The following are external API/platform behaviours that cannot be resolved by reading this repo. The user was advised to run web research (prompt supplied in the chat summary) to confirm them before implementation.
+
+- **Linear OAuth refresh-token durability.** Does Linear issue a refresh token, is it exchangeable without user interaction, and does the refresh token itself expire? This is the plan's viability condition — if refresh is interactive on any cadence, the OAuth half is dropped in favour of the body-prefix approach.
+- **Linear access-token lifetime.** Needed to size the refresh window and to write the verification that runs a token past its lifetime.
+- **`createAsUser` / `displayIconUrl` exact semantics.** Whether `createAsUser` produces a mentionable/notifiable actor or a display-only label, and how it interacts with `actor=app` mode — verified against Linear's API reference, not a single reported source.
+
 ## Outstanding Questions
 
 - **Resolved:** Stitch OAuth was withdrawn because Google tokens expired in ~2 hours, requiring re-authentication every session. A Google property, not an OAuth one — but it defines the blocking question for Linear.
-- What is Linear's access-token lifetime, does it issue refresh tokens, and do those refresh tokens themselves expire? The third part is what actually killed Stitch-style integrations elsewhere.
-- Does `createAsUser` produce a mentionable/notifiable actor, or a display-only label? It changes whether a lead can be @-mentioned in a reply.
+- **[research]** What is Linear's access-token lifetime, does it issue refresh tokens, and do those refresh tokens themselves expire? The third part is what actually killed Stitch-style integrations elsewhere. — proceeding on the assumption that Linear issues a non-expiring refresh token (the common OAuth-2.0 pattern); if research says otherwise, the OAuth half is dropped and the body-prefix from step 0 is the shipped attribution.
+- **[research]** Does `createAsUser` produce a mentionable/notifiable actor, or a display-only label? It changes whether a lead can be @-mentioned in a reply. — proceeding on the assumption that it is display-only until the API reference confirms otherwise.
+- **[user]** `route-linear-issues-to-team-leads-by-label.md` is referenced as the inbound-routing plan but is not present in `.switchboard/plans/`. Is it unwritten, renamed, or dropped? — proceeding on the assumption that routing is independent of auth mode regardless of whether that plan exists.
 - Should Notion and ClickUp follow if this works, or is Linear's app-actor model unusual enough that the pattern does not transfer?
+
+---
+
+**Recommendation:** Complexity 7 → Send to Lead Coder. The body-prefix + seat-threading half (step 0) is Coder-safe and shippable independently; the OAuth half is Lead-Coder territory (new auth pattern, PKCE, refresh state machine, two-host callback, security-sensitive token handling) and is gated on the refresh-token research above.

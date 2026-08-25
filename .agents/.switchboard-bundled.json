@@ -1,7 +1,7 @@
 {
   "generator": "SwitchboardControlPlane",
   "version": "1.7.13",
-  "generatedAt": "2026-08-24T20:49:22.672Z",
+  "generatedAt": "2026-08-25T20:07:14.519Z",
   "files": [
     "skills/_lib/sb_api_call.sh",
     "skills/_lib/workspace-root.js",
