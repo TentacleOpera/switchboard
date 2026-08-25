@@ -508,7 +508,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // terminal, not clears it), but the last-dispatched-plan entry must be
         // dropped too — the terminal is gone.
         if (verb === 'ptyCloseTerminal' && typeof payload?.name === 'string') {
-            this._lastDispatchedPlanByTerminal.delete(payload.name);
             this._lastWorkContextByTerminal.delete(payload.name);
         }
         const seatCacheDropName =
@@ -522,22 +521,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     this._seatBlockCache.delete(id);
                 }
             }
-            // Last-dispatched-plan and work-context map maintenance: drop on clear / write /clear,
+            // Work-context map maintenance: drop on clear / write /clear,
             // rename on ptyRenameTerminal (get before delete, then set new key).
             // Individual terminal clear does not clear the team run key.
             if (verb === 'ptyRenameTerminal' && typeof payload?.alias === 'string') {
-                const oldPlan = this._lastDispatchedPlanByTerminal.get(payload.name);
-                this._lastDispatchedPlanByTerminal.delete(payload.name);
-                if (oldPlan) {
-                    this._lastDispatchedPlanByTerminal.set(payload.alias, oldPlan);
-                }
                 const oldWorkKey = this._lastWorkContextByTerminal.get(payload.name);
                 this._lastWorkContextByTerminal.delete(payload.name);
                 if (oldWorkKey) {
                     this._lastWorkContextByTerminal.set(payload.alias, oldWorkKey);
                 }
             } else {
-                this._lastDispatchedPlanByTerminal.delete(payload.name);
                 this._lastWorkContextByTerminal.delete(payload.name);
             }
             // Restore a coder's callback standing order when it is cleared.
@@ -554,7 +547,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         } else if (verb === 'ptyClearAllTerminals') {
             this._seatBlockCache.clear();
-            this._lastDispatchedPlanByTerminal.clear();
             this._lastWorkContextByTerminal.clear();
             this._lastWorkContextByTeam.clear();
             this._teamPreparationChains.clear();
@@ -601,10 +593,27 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         let parsedDispatchRole = '';
         if (verb === 'ptySendPrompt' && typeof payload?.data === 'string') {
             const hasDispatch = payload?.dispatch !== undefined && payload?.dispatch !== null;
+            // The identity the work-context lifecycle keys off, from EITHER source.
+            // The explicit `dispatch` field is not the only way a plan reaches a
+            // seat: no internal caller sets it. The board's card trigger, its batch
+            // trigger and the configured-column dispatch all land in
+            // _attemptDirectTerminalPush, which sends `name`/`data`/`clearBeforePrompt`
+            // and nothing else. Keying the team barrier on `dispatch` alone left the
+            // card-move gesture — the one the team-clear plan is named after — with
+            // no barrier at all, and left the atomic-lifecycle plan's "batch
+            // dispatches sharing one feature coalesce onto one barrier" unimplemented.
+            let contextIdentity: { planId?: string; planFile?: string } | null = null;
             if (!hasDispatch) {
                 parsedDispatchIdentity = extractDispatchIdentity(payload.data);
                 if (parsedDispatchIdentity) {
                     parsedDispatchedAt = new Date().toISOString();
+                    // First id/file wins: a batch is M plans in ONE prompt to ONE
+                    // terminal, so it has one work context, and a feature dispatch
+                    // lists the feature card first — both resolve to the same key.
+                    contextIdentity = {
+                        planId: parsedDispatchIdentity.planIds[0],
+                        planFile: parsedDispatchIdentity.planFiles[0]
+                    };
                 }
             }
             if (hasDispatch) {
@@ -668,15 +677,29 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 directivesAttached = missionControlActive
                     ? ['COMPLETION REPORT', 'MISSION CONTROL REPORT']
                     : ['COMPLETION REPORT'];
+                contextIdentity = { planId, planFile };
+            }
 
+            if (contextIdentity) {
                 // Atomic work context lifecycle:
                 // Resolve workContextKey = record.featureId || record.planId
                 const dispatchWsRoot = payload.workspaceRoot || this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '';
                 const dispatchDb = await this._getKanbanDb(dispatchWsRoot);
-                const workCtx = await resolveWorkContext(dispatchDb, { planId, planFile });
-                const workContextKey = workCtx ? workCtx.workContextKey : (planId || '');
+                const workCtx = await resolveWorkContext(dispatchDb, contextIdentity);
+                // A planFile that resolves to no plan row leaves no key. Storing
+                // '' as a team's work context is worse than storing nothing: the
+                // next unresolvable dispatch would MATCH it and skip the barrier.
+                // No key, no lifecycle decision — the caller's own
+                // clearBeforePrompt stands, which is what both branches below
+                // gate on.
+                const workContextKey = workCtx ? workCtx.workContextKey : (contextIdentity.planId || '');
+                // The operator's switch, read ONCE for the whole decision. The
+                // roster barrier already honoured it; the destination override
+                // did not, so a disabled clear-before-prompt still cleared the
+                // one seat the dispatch was aimed at.
+                const clearEnabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
 
-                const teamInfo = typeof payload?.name === 'string'
+                const teamInfo = (workContextKey && typeof payload?.name === 'string')
                     ? await resolveTeamGroupForTerminal(dispatchDb, payload.name)
                     : null;
 
@@ -695,8 +718,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             if (this._lastWorkContextByTeam.get(teamId) === workContextKey) {
                                 return;
                             }
-                            const clearBeforePromptEnabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
-                            if (!clearBeforePromptEnabled) {
+                            if (!clearEnabled) {
                                 this._lastWorkContextByTeam.set(teamId, workContextKey);
                                 return;
                             }
@@ -741,9 +763,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                     results = await Promise.all(
                                         activeMembers.map(name => this.clearTerminalContext(dispatchWsRoot, name))
                                     );
-                                    const failed = results.find(r => r && r.cleared === false && r.error);
-                                    if (failed) {
-                                        teamErr = new Error(`Team preparation clear failed for '${failed.error}': aborting dispatch.`);
+                                    // Correlate by INDEX: the result objects carry
+                                    // {cleared,error,reason} and no seat name, so
+                                    // interpolating `failed.error` into the slot
+                                    // labelled for a terminal told the operator the
+                                    // error text twice and the seat never.
+                                    const failedIdx = results.findIndex(r => r && r.cleared === false && r.error);
+                                    if (failedIdx >= 0) {
+                                        teamErr = new Error(`Team preparation clear failed for '${activeMembers[failedIdx]}': ${results[failedIdx].error}. Aborting dispatch.`);
                                         throw teamErr;
                                     }
                                 } catch (err: any) {
@@ -774,31 +801,30 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             // The destination clears itself through the delivery path, WITH readiness
                             // — the prompt follows immediately. Suppressing it here was the hole: the
                             // roster clear had already fired, so nothing waited for anything.
-                            payload = { ...payload, clearBeforePrompt: true };
+                            if (clearEnabled) {
+                                payload = { ...payload, clearBeforePrompt: true };
+                            }
                         } catch (prepErr) {
                             return {
                                 success: false,
                                 attributed: 0,
-                                skipped: (planId || planFile ? 1 : 0),
+                                skipped: (contextIdentity.planId || contextIdentity.planFile ? 1 : 0),
                                 directivesAttached: [],
                                 error: prepErr instanceof Error ? prepErr.message : String(prepErr)
                             };
                         }
                     }
-                } else if (payload.name) {
+                } else if (workContextKey && payload.name) {
                     // Non-team terminal: compare terminal workContextKey and clear destination
                     // when changed. The comparison is on the WORK CONTEXT key
                     // (featureId ?? planId), never on planId: two subtasks of one feature are
                     // one work context, and OR-ing a planId compare back in here would clear
                     // between them — the per-subtask reset this feature exists to remove.
                     const lastWorkKey = this._lastWorkContextByTerminal.get(payload.name);
-                    if (lastWorkKey && lastWorkKey !== workContextKey) {
+                    if (clearEnabled && lastWorkKey && lastWorkKey !== workContextKey) {
                         payload = { ...payload, clearBeforePrompt: true };
                     }
                     this._lastWorkContextByTerminal.set(payload.name, workContextKey);
-                    if (planId) {
-                        this._lastDispatchedPlanByTerminal.set(payload.name, planId);
-                    }
                 }
             }
 
@@ -1404,12 +1430,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _ptyHiddenTerminalNames: string[] = [];
     private _unattendedPlannerCursor = 0;
     private _seatBlockCache = new Map<string, { name: string; block: string }>();
-    // Terminal friendlyName → last dispatched planId. Used by the auto-clear
-    // logic: when a dispatch references a DIFFERENT planId than the terminal's
-    // last dispatched plan, the host overrides clearBeforePrompt to true so
-    // sendPromptToPty writes /clear before the prompt. In-memory only — on
-    // host restart, terminals are fresh pty processes with no stale context.
-    private _lastDispatchedPlanByTerminal = new Map<string, string>();
     private _lastWorkContextByTerminal = new Map<string, string>();
     private _lastWorkContextByTeam = new Map<string, string>();
     private _teamPreparationChains = new Map<string, Promise<void>>();
@@ -10748,12 +10768,9 @@ Each plan file must include:
         if (!clearBeforePrompt) {
             return { cleared: false };
         }
-        // Drop the last-dispatched-plan and work-context entries so the next
-        // dispatch doesn't redundantly auto-clear an already-clean terminal
-        // (optimization — a redundant clear is harmless but wastes the settle
-        // window). The work-context entry is the one the auto-clear compare
-        // actually reads; dropping only the plan entry left it inert.
-        this._lastDispatchedPlanByTerminal.delete(terminalName);
+        // Drop the work-context entry so the next dispatch doesn't redundantly
+        // auto-clear an already-clean terminal (optimization — a redundant
+        // clear is harmless but wastes the settle window).
         this._lastWorkContextByTerminal.delete(terminalName);
         const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
         const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);

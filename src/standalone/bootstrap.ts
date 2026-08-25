@@ -230,12 +230,6 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
     let taskViewerProvider: TaskViewerProvider | null = null;
     const seatBlockCache = new Map<string, string>();
-    // Terminal friendlyName → last dispatched planId. Used by the auto-clear
-    // logic: when a dispatch references a DIFFERENT planId than the terminal's
-    // last dispatched plan, the host sets clearBeforePrompt to true so
-    // deliverPrompt writes /clear before the prompt. In-memory only — on
-    // host restart, terminals are fresh pty processes with no stale context.
-    const lastDispatchedPlanByTerminal = new Map<string, string>();
     const lastWorkContextByTerminal = new Map<string, string>();
     const lastWorkContextByTeam = new Map<string, string>();
     const teamPreparationChains = new Map<string, Promise<void>>();
@@ -1592,7 +1586,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
 
                 case 'ptyCloseTerminal': {
                     const ok = ptyFleetService.kill(payload.name);
-                    lastDispatchedPlanByTerminal.delete(payload.name);
                     lastWorkContextByTerminal.delete(payload.name);
                     return { success: ok };
                 }
@@ -1674,12 +1667,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         } catch (err) {
                             console.warn('[bootstrap] Standing-orders rename rewrite failed:', err);
                         }
-                        // Rename the last-dispatched-plan map entry (old → new).
-                        const oldPlan = lastDispatchedPlanByTerminal.get(payload.name);
-                        if (oldPlan) {
-                            lastDispatchedPlanByTerminal.delete(payload.name);
-                            lastDispatchedPlanByTerminal.set(payload.alias, oldPlan);
-                        }
                         const oldWorkKey = lastWorkContextByTerminal.get(payload.name);
                         if (oldWorkKey) {
                             lastWorkContextByTerminal.delete(payload.name);
@@ -1695,7 +1682,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (handle.agentInstanceId) {
                         seatBlockCache.delete(handle.agentInstanceId);
                     }
-                    lastDispatchedPlanByTerminal.delete(payload.name);
                     lastWorkContextByTerminal.delete(payload.name);
                     if (handle.status === 'active') { await clearPty(handle); }
                     return { success: true };
@@ -1740,13 +1726,24 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // boundary strip as TaskViewerProvider.handlePtyVerb.
                     // `addonsComposed` and `seatBlock` are host-settable only;
                     // an HTTP caller supplying them would opt a seat out of its
-                    // own safety block. The standalone board path calls
-                    // deliverPrompt directly (never through this case), so it
-                    // bypasses this strip — which is the point.
+                    // own safety block. The board path does NOT bypass this
+                    // strip: TaskViewerProvider._ptyHostVerb routes through
+                    // setHeadlessRuntime's ptyVerb into handlePtyVerb, so a
+                    // pre-composed relay loses its marker here and gets a second
+                    // seat block appended — the known, accepted consequence
+                    // recorded at the setHeadlessRuntime wiring below.
                     if (payload.addonsComposed !== undefined) { delete payload.addonsComposed; }
                     if (payload.seatBlock !== undefined) { delete payload.seatBlock; }
                     let foldedAttributionResult: { attributed: number; skipped: number } | null = null;
                     let directivesAttached: string[] = [];
+                    // The identity the work-context lifecycle keys off, from EITHER
+                    // source. No internal caller sets `dispatch`: the board's card
+                    // trigger, batch trigger and configured-column dispatch all land
+                    // in TaskViewerProvider._attemptDirectTerminalPush, which sends
+                    // `name`/`data`/`clearBeforePrompt` and nothing else. Keying the
+                    // team barrier on `dispatch` alone left the card-move gesture
+                    // with no barrier at all on this host too.
+                    let contextIdentity: { planId?: string; planFile?: string } | null = null;
                     if (payload.dispatch !== undefined && payload.dispatch !== null) {
                         // Shape-validate before the field reaches a DB UPDATE — reject,
                         // never coerce (see validateDispatchPayload).
@@ -1787,13 +1784,32 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             };
                         }
                         directivesAttached = ['COMPLETION REPORT', 'MISSION CONTROL REPORT'];
+                        contextIdentity = { planId, planFile };
+                    } else if (typeof payload.data === 'string') {
+                        const ident = extractDispatchIdentity(payload.data);
+                        if (ident) {
+                            // First id/file wins: a batch is M plans in ONE prompt to
+                            // ONE terminal, so it has one work context.
+                            contextIdentity = { planId: ident.planIds[0], planFile: ident.planFiles[0] };
+                        }
+                    }
 
+                    if (contextIdentity) {
                         // Atomic work context lifecycle:
                         const dispatchDb = db;
-                        const workCtx = await resolveWorkContext(dispatchDb, parsed.value);
-                        const workContextKey = workCtx ? workCtx.workContextKey : (parsed.value.planId || '');
+                        const workCtx = await resolveWorkContext(dispatchDb, contextIdentity);
+                        // A planFile that resolves to no plan row leaves no key.
+                        // Storing '' as a team's work context is worse than storing
+                        // nothing: the next unresolvable dispatch would MATCH it and
+                        // skip the barrier. No key, no lifecycle decision.
+                        const workContextKey = workCtx ? workCtx.workContextKey : (contextIdentity.planId || '');
+                        // The operator's switch, read ONCE for the whole decision.
+                        // The roster barrier already honoured it; the destination
+                        // override did not, so a disabled clear-before-prompt still
+                        // cleared the one seat the dispatch was aimed at.
+                        const clearEnabled = getPromptDeliveryOptions().clearBeforePrompt;
 
-                        const teamInfo = typeof payload?.name === 'string'
+                        const teamInfo = (workContextKey && typeof payload?.name === 'string')
                             ? await resolveTeamGroupForTerminal(dispatchDb, payload.name)
                             : null;
 
@@ -1810,8 +1826,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     if (lastWorkContextByTeam.get(teamId) === workContextKey) {
                                         return;
                                     }
-                                    const deliveryDefaults = getPromptDeliveryOptions();
-                                    const clearEnabled = deliveryDefaults.clearBeforePrompt;
                                     if (!clearEnabled) {
                                         lastWorkContextByTeam.set(teamId, workContextKey);
                                         return;
@@ -1873,29 +1887,28 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     // readiness — the prompt follows immediately, so this is the gap
                                     // that actually needs detecting. Suppressing it here was the hole:
                                     // the roster clear had already fired, so nothing waited for anything.
-                                    payload.clearBeforePrompt = true;
+                                    if (clearEnabled) {
+                                        payload.clearBeforePrompt = true;
+                                    }
                                 } catch (prepErr) {
                                     return {
                                         success: false,
                                         attributed: 0,
-                                        skipped: (parsed.value.planId || parsed.value.planFile ? 1 : 0),
+                                        skipped: (contextIdentity.planId || contextIdentity.planFile ? 1 : 0),
                                         directivesAttached: [],
                                         error: prepErr instanceof Error ? prepErr.message : String(prepErr)
                                     };
                                 }
                             }
-                        } else if (payload.name) {
+                        } else if (workContextKey && payload.name) {
                             // Compare the WORK CONTEXT key (featureId ?? planId), never planId:
                             // two subtasks of one feature are one work context. See the
                             // matching comment in TaskViewerProvider.
                             const lastWorkKey = lastWorkContextByTerminal.get(payload.name);
-                            if (lastWorkKey && lastWorkKey !== workContextKey) {
+                            if (clearEnabled && lastWorkKey && lastWorkKey !== workContextKey) {
                                 payload.clearBeforePrompt = true;
                             }
                             lastWorkContextByTerminal.set(payload.name, workContextKey);
-                            if (parsed.value.planId) {
-                                lastDispatchedPlanByTerminal.set(payload.name, parsed.value.planId);
-                            }
                         }
                     }
                     try {
@@ -1932,7 +1945,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
 
                 case 'ptyClearAllTerminals': {
                     seatBlockCache.clear();
-                    lastDispatchedPlanByTerminal.clear();
                     lastWorkContextByTerminal.clear();
                     lastWorkContextByTeam.clear();
                     teamPreparationChains.clear();
