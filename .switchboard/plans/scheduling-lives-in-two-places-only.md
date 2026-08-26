@@ -18,7 +18,6 @@ surfaces:
 | `TaskViewerProvider` autoban run sheet (`:12520`, `:12528`, `:12578`, `:12592`, plus `:14105`/`:14113`) | Interval/cron clock popping the board queue with `batchSize` | **Delete** — owned by `retire-autoban-and-batch-size.md` |
 | `_autobanEmptyColumnSweepTimer` (`:12600`, `:14120`) | Stops the engine when no valid tickets remain | **Delete** with it |
 | `PipelineOrchestrator` (`:242`, instantiated at `:1516`) | 1-second tick counting down to an interval, then `_advance()` — dispatches a next stage per run sheet, by role | **Delete** — see below |
-| Setup → **Plan Scanner** (`setup.html:894`, timer at `TaskViewerProvider.ts:18568`) | Enabled + interval select + presets + chat destinations + custom sources, running `_planScannerSweep` | **Decide** — see below |
 | `_survivorJobsTimer` (`:28103`) → `runSchedulerJob` | The 60s poll over `ScheduledJob[]` | **Keep** — this is the engine *behind* both sanctioned surfaces |
 
 **`PipelineOrchestrator` is a fully-built dispatcher that nothing drives.** It ticks every
@@ -48,6 +47,11 @@ idea's timer. Four dispatchers, one of them dead, none of them named as the sanc
 
 ## The rule this plan installs
 
+0. **The test is "does it dispatch work", not "does it have an interval".** A timer that
+   ingests data, polls an external system for changes, refreshes a view, evicts a cache or
+   keeps a socket alive is infrastructure, however configurable its period. Only a timer that
+   *starts work* — dispatches a card, prompts an agent, launches a mission — is scheduling and
+   falls under this rule. Getting this test wrong pulls in half the timers in the tree.
 1. **Recurring work is dispatched by exactly one runner** — the `ScheduledJob` poll
    (`_survivorJobsTimer` → `runSchedulerJob`).
 2. **It has exactly two front ends** — team automations (Terminals tab) and the Mission
@@ -70,7 +74,10 @@ These are recurring but dispatch no work, and this plan must not touch them. Lis
 the sweep does not over-reach: `wsHub` ping (`:177`), `KanbanDatabase` cache eviction
 (`:1878`), `ContinuousSyncService` idle check (`:101`), `AutoArchiveService` sweep (`:140`),
 `DesignPanelProvider` external file poll (`:4428`), `PlanIngestionEngine` periodic rescan
-(`:507`), `TicketsPanelProvider` poll (`:984`), the API server watchdog (`:4295`), the Jules
+(`:507`), the **Plan Scanner** sweep (`:18568` → `_planScannerSweep`, which calls
+`_syncFilesAndRefreshRunSheets` — an external-plan rescan and board refresh; it imports plan
+files and dispatches nothing, so its Setup interval control stays exactly as it is),
+`TicketsPanelProvider` poll (`:984`), the API server watchdog (`:4295`), the Jules
 status poll (`:1821` — its second install at `:24350` is correctly guarded on
 `!this._julesStatusPollTimer` and is not a duplicate), `RemoteControlService` tracker poll
 (`:425`), and the standalone gateway's flush/drain/ping intervals.
@@ -87,20 +94,9 @@ wrong it becomes a third surface and the rule above needs amending, not quietly 
    `verbSchemas.ts` entries, and the allowlist entries (regenerate, do not hand-edit).
    Check `getNextStage` and the run-sheet types for other consumers before deleting them
    too — `_advance` may be their only caller, or may not.
-2. **Decide the Plan Scanner's schedule.** The scanner itself is useful; its *schedule* is a
-   third scheduling surface in a third place, with its own interval UI in Setup. Two coherent
-   answers:
-   - **(a) Make it a `ScheduledJob`** with `source: 'plan-scan'`, its presets and destinations
-     in `sourceConfig`. Setup keeps the configuration of *what* it scans; *when* moves to the
-     sanctioned surfaces. This satisfies the rule.
-   - **(b) Keep it as an infrastructure poll** and declare it not-scheduling, like
-     `PlanIngestionEngine`'s rescan — which would mean removing the operator-facing interval
-     control, since an operator-set interval is what makes something a schedule.
-   Recommendation: **(a)**. It has presets, destinations and custom sources — it is a job, not
-   a heartbeat.
-3. **Remove the autoban clock** — owned by `retire-autoban-and-batch-size.md`; this plan only
+2. **Remove the autoban clock** — owned by `retire-autoban-and-batch-size.md`; this plan only
    asserts it is gone and that no timer replaced it.
-4. **Name the runner.** Add the rule as a header comment on `_tickSurvivorSchedulerJobs` and
+3. **Name the runner.** Add the rule as a header comment on `_tickSurvivorSchedulerJobs` and
    `runSchedulerJob`: this is the one recurring dispatcher; new recurring work is a
    `ScheduledJob`; the two front ends are team automations and the Mission Control Schedules
    tab.
@@ -130,6 +126,6 @@ wrong it becomes a third surface and the rule above needs amending, not quietly 
 4. Team automations still create, edit, enable, `RUN NOW` and fire on interval.
 5. A schedule saved from the Mission Control tab with each action fires — specifically test an
    action whose id is not in the old survivor set, which is the silent-skip case.
-6. Plan Scanner still scans on whatever cadence option (a) or (b) leaves it with, and its
-   presets/destinations/custom sources still work.
+6. Plan Scanner is untouched — same interval control in Setup, same presets, destinations and
+   custom sources, same cadence.
 7. Both hosts.
