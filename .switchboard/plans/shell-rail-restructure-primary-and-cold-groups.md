@@ -97,19 +97,16 @@ silently vanishes in one host. Diff the two calls by hand; no gate catches this.
      Keep it if the team slots' start-failure path uses it (they do, in the team-slots
      plan); otherwise delete it with the button.
 
-8. **The Mission Control panel must gain a start control — this is a hard prerequisite,
-   not a nicety.** `POST /mission-control/start` has exactly one UI caller in the
-   codebase: the dimmed UFO at `shell.js:440`. `kanban.html:11362` records that its own
-   handler was deliberately removed and points at the rail as the replacement: *"Start
-   feedback now comes from the shell rail, which reads the /mission-control/start
-   response directly."* `mission-control.html` has `mc-start-schedule` (starts a
-   *schedule*) and `btn-controller-restart`, neither of which starts a session. Deleting
-   the UFO without adding a session-start control to the Mission Control panel makes
-   Mission Control unstartable from the UI. The panel's start control must handle both
-   response modes the endpoint returns — `mode: 'terminal'` (a pty was created and the
-   persona prompt delivered) and `mode: 'clipboard'` (copy the `/switchboard` launcher
-   text) — since the rail was the only consumer of that branch. **No confirmation
-   dialog** (CLAUDE.md).
+8. **Nothing replaces the UFO in the rail.** Its start function moves to the agent dock,
+   which already shares the controller's seat identity — see
+   `opening-the-dock-starts-mission-control.md`. Two notes so the deletion is not
+   misread as orphaning:
+   - `POST /mission-control/start` keeps a live non-UI caller: the `/switchboard-manage`
+     skill (`LocalApiServer.ts:550`). Do **not** delete the endpoint or its
+     `missionControlStart` option along with the button.
+   - The lit-click behaviour (navigate to Terminals, post `switchToController`) is not
+     replaced. The Mission Control panel and the Terminals panel both already reach the
+     controller; a rail shortcut to it is what is being given up, deliberately.
 
 9. **Simplify `applyBottomAnchor`.** With a declared cold group, the anchor is one rule:
    `margin-top: auto` on the first cold-group icon, nothing else. Delete the runtime
@@ -154,8 +151,7 @@ silently vanishes in one host. Diff the two calls by hand; no gate catches this.
 5. Spawn three ungrouped terminals; confirm zero new rail buttons and that all three are
    present and usable in the Terminals panel.
 6. Deep-link each of `/#setup`, `/#memo`, `/#connections` and confirm the panel opens.
-7. **Start a Mission Control session from the Mission Control panel**, in both response
-   modes. This is the acceptance test for the UFO deletion — if it cannot be started from
-   the UI, the deletion is not shippable.
+7. Confirm `POST /mission-control/start` still answers and the `/switchboard-manage` skill
+   path still works after the button is gone — the endpoint outlives its caller here.
 8. Grep for `missionControlState`, `ensureMissionControlIcon` and `strip-mission-control`
    and confirm zero live references remain in either host.

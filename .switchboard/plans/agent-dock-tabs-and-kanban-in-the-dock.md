@@ -73,6 +73,11 @@ not add compat shims. CLAUDE.md's migration rule is waived for this release.
 3. **Tab strip in `#dock-header`,** ahead of the existing `#dock-role-btn`, `#dock-title`
    and `#dock-close`. The role picker is **agent-tab-specific** and must hide on the kanban
    tab; leaving it visible makes the header lie about what it configures.
+   - **Conditional on a decision in `opening-the-dock-starts-mission-control.md`:** that
+     plan proposes retiring the role picker entirely, on the grounds that the dock is the
+     controller's terminal rather than a general agent launcher. If it is retired, this
+     item is moot — there is nothing to hide. Whichever plan lands second should check
+     before implementing this.
 4. **`#dock-title` per occupant.** Agent tab: the seat's friendly name, treated as an opaque
    server-returned string (edge case 4). Kanban tab: the column or active project the pane
    is showing.
