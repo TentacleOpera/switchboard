@@ -608,7 +608,20 @@ export class TransferBundleService {
             // linkFeatureSubtasksByPaths use — never duplicate the matching.
             const existing = await db.getPlanByPlanFile(planFile, workspaceId);
             if (!existing) {
-                cardsSkipped.push({ planFile, matched: false, reason: 'plan file not in this checkout' });
+                // Two different failures, two different fixes, and blaming the
+                // wrong one sends the user hunting a git problem they do not
+                // have. No row AND no file means the plan was never committed or
+                // pushed. No row but the file IS on disk means the plan watcher
+                // has not ingested it yet — the import simply ran too early,
+                // which is what the first-run flow's deferred import avoids.
+                const onDisk = fs.existsSync(path.join(root, planFile));
+                cardsSkipped.push({
+                    planFile,
+                    matched: false,
+                    reason: onDisk
+                        ? 'plan file is on disk but not yet imported by the plan watcher — the board had not ingested it when this ran'
+                        : 'plan file not in this checkout',
+                });
                 continue;
             }
 

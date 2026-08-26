@@ -200,12 +200,37 @@ async function run() {
         assert.strictEqual(ghostResult.success, true);
         assert.strictEqual(ghostResult.cardsSkipped.length, 1, 'the unmatched card is collected');
         assert.strictEqual(ghostResult.cardsSkipped[0].planFile, '.switchboard/plans/never-committed.md');
-        assert.ok(ghostResult.cardsSkipped[0].reason, 'the skip carries a reason');
+        assert.match(ghostResult.cardsSkipped[0].reason, /not in this checkout/,
+            'a card with no file on disk is reported as missing from the checkout');
         assert.strictEqual((await dest.db.getBoard(WORKSPACE_ID)).length, before,
             'import is update-only — a card with no file behind it is NEVER created');
         assert.strictEqual(
             await dest.db.getPlanByPlanFile('.switchboard/plans/never-committed.md', WORKSPACE_ID), null);
-        console.log('Pass 7: an unmatched planFile is skipped and reported, never created');
+        // A file that IS on disk but has no row yet is a DIFFERENT failure: the
+        // plan watcher had not ingested it. Reporting that as "not in this
+        // checkout" sends the user hunting a git problem they do not have.
+        const notIngestedWs = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sb-transfer-not-ingested-'));
+        try {
+            await fs.promises.mkdir(path.join(notIngestedWs, '.switchboard', 'plans'), { recursive: true });
+            for (const name of [...PLANS, FEATURE]) {
+                await fs.promises.writeFile(path.join(notIngestedWs, '.switchboard', 'plans', `${name}.md`), `# ${name}\n`, 'utf8');
+            }
+            const emptyDb = KanbanDatabase.forWorkspace(notIngestedWs);
+            await emptyDb.createIfMissing();
+            await emptyDb.setWorkspaceId(WORKSPACE_ID);
+            const early = await service(emptyDb, notIngestedWs).importBundle(bundlePath);
+            assert.strictEqual(early.success, true);
+            assert.strictEqual(early.cardsUpdated, 0,
+                'an import that runs before ingestion matches NOTHING — this is why the first-run import is deferred');
+            for (const skip of early.cardsSkipped) {
+                assert.match(skip.reason, /not yet imported by the plan watcher/,
+                    'a file present on disk with no row is reported as not-yet-ingested, not as missing from the checkout');
+            }
+        } finally {
+            await KanbanDatabase.invalidateWorkspace(notIngestedWs);
+            await fs.promises.rm(notIngestedWs, { recursive: true, force: true });
+        }
+        console.log('Pass 7: unmatched cards are skipped, never created, and the two skip reasons are distinguished');
 
         // ── 6. The credential guard REFUSES, and names the key. Asserting the
         // refusal (not merely a clean bundle) is what fails when the guard is gone.
@@ -283,6 +308,36 @@ async function run() {
         const excludeSrc = await fs.promises.readFile(path.join(process.cwd(), 'src', 'services', 'WorkspaceExcludeService.ts'), 'utf8');
         assert.ok(excludeSrc.includes('switchboard-transfer*.json'), 'the gitignore template must ignore a bundle in the tree');
         console.log('Pass 11: host parity — both roots, both routes, both palette entries, gitignore template');
+
+        // ── The CLI surface. The standalone host is the likelier DESTINATION, so
+        // a bundle it can only import via a hand-rolled curl defeats the point.
+        const cliSrc = await fs.promises.readFile(path.join(process.cwd(), 'src', 'standalone', 'cli.ts'), 'utf8');
+        for (const marker of ["process.argv[2] === 'export'", "process.argv[2] === 'import'"]) {
+            assert.ok(cliSrc.includes(marker), `cli.ts must dispatch ${marker}`);
+        }
+        assert.ok(/npx switchboard export/.test(cliSrc) && /npx switchboard import/.test(cliSrc),
+            'both subcommands must appear in the usage text');
+        assert.ok(cliSrc.includes('firstRunDatabaseMenu'), 'cli.ts must offer the first-run database menu');
+        // The menu MUST be TTY-gated: a blocking prompt in a detached child, a
+        // cron run or a piped invocation would hang the boot instead of serving.
+        assert.ok(/process\.stdin\.isTTY/.test(cliSrc), 'the first-run menu must be gated on a TTY');
+        assert.ok(/isDetachedChildProcess\(\)/.test(cliSrc), 'the first-run menu must never run in a detached child');
+        // Option 3 cannot import inline — the plan files are not rows yet.
+        assert.ok(cliSrc.includes('runPendingBundleImport'), 'option 3 must defer its import');
+        const deferIdx = cliSrc.indexOf('await runPendingBundleImport');
+        const bootIdx = cliSrc.indexOf('await startHeadlessSwitchboard(');
+        assert.ok(deferIdx > -1 && bootIdx > -1 && deferIdx > bootIdx,
+            'the deferred import must run AFTER the host boots, or it matches nothing');
+        assert.ok(cliSrc.includes("childArgv.push('--import-bundle'"),
+            'a deferred import chosen in the parent must cross the --detach fork');
+        // Resolution must not construct a KanbanDatabase: forWorkspace caches the
+        // path at construction, so a pre-menu instance would ignore a db-pointer
+        // written by option 2 for the rest of the process.
+        assert.ok(/readDbPointer\(workspaceRoot\)/.test(cliSrc),
+            'the board-existence check must resolve the path statically, not via forWorkspace');
+        assert.ok(!cliSrc.slice(0, cliSrc.indexOf('function boardExists')).includes('KanbanDatabase.forWorkspace('),
+            'nothing before boardExists may construct a KanbanDatabase');
+        console.log('Pass 12: CLI surface — export/import subcommands, TTY-gated menu, deferred import, detach hand-off');
 
         console.log('\nAll transfer-bundle contract tests passed successfully.');
     } finally {

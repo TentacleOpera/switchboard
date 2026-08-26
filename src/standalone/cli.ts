@@ -6,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as util from 'util';
 import { spawn } from 'child_process';
-import { startHeadlessSwitchboard } from './bootstrap';
+import type { HeadlessSwitchboardOptions, HeadlessSwitchboardInstance } from './bootstrap';
 import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackHostname';
 
 function usage(): string {
@@ -25,6 +25,8 @@ function usage(): string {
        npx switchboard token set <value>
        npx switchboard token rotate
        npx switchboard token clear
+       npx switchboard export [--out <path>] [--workspace <path>]
+       npx switchboard import <bundle.json> [--workspace <path>]
 
 Aliases for secrets commands:
   clickup   -> switchboard.clickup.apiToken
@@ -35,6 +37,11 @@ Aliases for secrets commands:
 
 Options:
   --workspace <path>   Workspace root to serve or init (default: cwd)
+  --out <path>         export: bundle destination (default: ~/.switchboard/transfer/)
+  --import-bundle <p>  start: import a transfer bundle once the plan files have
+                       been ingested. This is what the interactive first-run
+                       menu's option 3 passes through; use it directly for a
+                       non-interactive first run.
   --port <number>      Preferred port; 0 for ephemeral (default: 7777)
   --hostname <name>    Hostname for the board URL (default: ${DEFAULT_DISPLAY_HOSTNAME},
                        falling back to 127.0.0.1 if that name is unreachable).
@@ -82,11 +89,13 @@ function resolveSecretKey(inputKey: string): string {
     process.exit(1);
 }
 
-function parseArgs(argv: string[]): { workspace?: string; port?: number; hostname?: string; noOpen: boolean; open: boolean; detach: boolean; help: boolean } {
+function parseArgs(argv: string[]): { workspace?: string; port?: number; hostname?: string; noOpen: boolean; open: boolean; detach: boolean; help: boolean; out?: string; importBundle?: string } {
     const args = { noOpen: false, open: false, detach: false, help: false, port: 7777 } as any;
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--workspace') { args.workspace = argv[++i]; }
+        else if (a === '--out') { args.out = argv[++i]; }
+        else if (a === '--import-bundle') { args.importBundle = argv[++i]; }
         else if (a === '--port') { args.port = parseInt(argv[++i], 10); }
         else if (a === '--hostname') { args.hostname = argv[++i]; }
         else if (a === '--no-open') { args.noOpen = true; }
@@ -360,6 +369,222 @@ async function waitForHealth(port: number, timeoutMs = 10000): Promise<void> {
     throw new Error(`Health check timed out on port ${port}`);
 }
 
+/**
+ * The transfer bundle's CLI surface. `export`/`import` are the same
+ * TransferBundleService the extension's palette commands and the two
+ * `/kanban/transfer/*` routes drive — the CLI is a third caller of one service,
+ * not a fourth implementation. See
+ * `.switchboard/plans/hand-a-workspace-to-another-machine.md`.
+ */
+
+/** The board's DB path, resolved WITHOUT constructing a KanbanDatabase.
+ *
+ * `forWorkspace()` caches one instance per workspace root and resolves the path
+ * once, at construction. Calling it here to answer "does a board exist?" would
+ * cache an instance pinned to the default path, and a db-pointer written
+ * afterwards (menu option 2) would then be ignored for the whole process. Both
+ * helpers used here are static and side-effect-free.
+ */
+function resolveBoardDbPath(workspaceRoot: string): string {
+    const { KanbanDatabase } = require('../services/KanbanDatabase');
+    return KanbanDatabase.readDbPointer(workspaceRoot)
+        || path.join(workspaceRoot, '.switchboard', 'kanban.db');
+}
+
+/** A 0-byte file is not a board: standalone pre-creates the file and lets
+ *  `_initialize()` populate it, so size is the only honest existence test. */
+function boardExists(workspaceRoot: string): boolean {
+    try {
+        const st = fs.statSync(resolveBoardDbPath(workspaceRoot));
+        return st.isFile() && st.size > 0;
+    } catch {
+        return false;
+    }
+}
+
+async function openBoardDatabase(workspaceRoot: string): Promise<any> {
+    const { KanbanDatabase } = require('../services/KanbanDatabase');
+    const db = KanbanDatabase.forWorkspace(workspaceRoot);
+    if (!(await db.ensureReady())) {
+        throw new Error(`No Switchboard board at ${db.dbPath}. Start the board once (npx switchboard) before transferring it.`);
+    }
+    return db;
+}
+
+function makeTransferService(db: any, workspaceRoot: string): any {
+    const { TransferBundleService } = require('../services/TransferBundleService');
+    return new TransferBundleService({
+        db,
+        getWorkspaceRoot: () => workspaceRoot,
+        log: (msg: string) => console.error(msg),
+    });
+}
+
+/** Print an import result. The exclusion list is reported whenever it is
+ *  non-empty — for a bundle this version wrote it is empty by construction,
+ *  because the export already filtered and reports its own exclusions. */
+function printImportResult(result: any): void {
+    console.log(`  ✓ ${result.cardsUpdated} cards matched   ✓ ${result.settingsApplied.length} settings applied`);
+    if (result.cardsSkipped.length > 0) {
+        console.log(`  – ${result.cardsSkipped.length} card(s) skipped (plan file not in this checkout):`);
+        for (const c of result.cardsSkipped) { console.log(`      ${c.planFile} — ${c.reason}`); }
+    }
+    if (result.partialFailures.length > 0) {
+        console.log(`  – ${result.partialFailures.length} card(s) partially applied:`);
+        for (const c of result.partialFailures) { console.log(`      ${c.planFile} — ${c.reason}`); }
+    }
+    if (result.settingsExcluded.length > 0) {
+        console.log(`  – ${result.settingsExcluded.length} setting(s) excluded (machine-local): ${result.settingsExcluded.join(', ')}`);
+    }
+    console.log('  Secrets do not travel in a bundle — re-authenticate on this machine, or copy');
+    console.log('  ~/.switchboard/secrets.enc and ~/.switchboard/.master-key over a secure channel.');
+}
+
+/** Detached children have stdio 'ignore', so they must never prompt. */
+function isDetachedChildProcess(): boolean {
+    return process.env.SWITCHBOARD_DETACHED === '1';
+}
+
+/**
+ * One readline interface for a whole interactive block, not one per question.
+ * A per-question interface attaches and detaches its stdin listeners around each
+ * prompt, so anything typed (or piped into a pty) between two questions is
+ * dropped on the floor — the answer is read by nobody and the prompt repeats.
+ */
+function openPrompter(): { ask: (question: string) => Promise<string | null>; close: () => void } {
+    const readline = require('readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    let closed = false;
+    rl.on('close', () => { closed = true; });
+    return {
+        // Resolves to null when stdin closes without an answer (Ctrl-D). Without
+        // this the question callback simply never fires, the promise never
+        // settles, and the process exits with no message and no server — a
+        // silent death at a prompt the user was staring at.
+        ask: (question: string) => new Promise<string | null>((resolve) => {
+            if (closed) { resolve(null); return; }
+            rl.once('close', () => resolve(null));
+            rl.question(question, (answer: string) => resolve(String(answer || '').trim()));
+        }),
+        close: () => { try { rl.close(); } catch { /* already closed */ } },
+    };
+}
+
+/** Expand a leading `~` and resolve, so a pasted path from another machine's
+ *  instructions behaves the way the shell would have. */
+function resolveUserPath(input: string): string {
+    return path.resolve(input.replace(/^~(?=$|[/\\])/, os.homedir()));
+}
+
+/**
+ * First-run database menu. Shown only when there is no board AND stdin is a TTY:
+ * a blocking prompt in a detached child, a cron run or a piped invocation would
+ * hang the boot, so a non-interactive first run keeps today's behaviour exactly
+ * (bootstrap creates the board and the server comes up).
+ *
+ * Returns a bundle path when option 3 is chosen. The import CANNOT run here —
+ * it is update-only and the plan files have not been ingested yet, so every card
+ * would resolve to nothing and the transfer would report success having done
+ * nothing. It is deferred until after the ingestion startup scan settles.
+ */
+async function firstRunDatabaseMenu(workspaceRoot: string): Promise<{ pendingBundlePath?: string; cancelled?: boolean }> {
+    const { KanbanDatabase } = require('../services/KanbanDatabase');
+    const defaultDbPath = path.join(workspaceRoot, '.switchboard', 'kanban.db');
+    const prompter = openPrompter();
+
+    console.log('No Switchboard database found.');
+    console.log(`  1) Create a new board       (${defaultDbPath})`);
+    console.log('  2) Use an existing database (path)');
+    console.log('  3) Import a transfer bundle (path)');
+
+    try {
+        for (;;) {
+            const choice = await prompter.ask('> ');
+            if (choice === null) { return { cancelled: true }; }
+            if (choice === '' || choice === '1') {
+                // Nothing to do: bootstrap creates the file and _initialize populates it.
+                console.log(`[switchboard] Creating a new board at ${defaultDbPath}`);
+                return {};
+            }
+            if (choice === '2') {
+                const answer = await prompter.ask('  Path to an existing kanban.db: ');
+                if (answer === null) { return { cancelled: true }; }
+                if (!answer) { console.log('  Enter a path, or 1 to start a new board.'); continue; }
+                const resolved = resolveUserPath(answer);
+                if (!fs.existsSync(resolved)) { console.log(`  Not found: ${resolved}`); continue; }
+                KanbanDatabase.writeDbPointer(workspaceRoot, resolved);
+                console.log(`[switchboard] This workspace now points at ${resolved}`);
+                return {};
+            }
+            if (choice === '3') {
+                const answer = await prompter.ask('  Path to switchboard-transfer.json: ');
+                if (answer === null) { return { cancelled: true }; }
+                if (!answer) { console.log('  Enter a path, or 1 to start a new board.'); continue; }
+                const resolved = resolveUserPath(answer);
+                if (!fs.existsSync(resolved)) { console.log(`  Not found: ${resolved}`); continue; }
+                console.log(`[switchboard] Creating a new board at ${defaultDbPath}, then importing ${resolved}`);
+                return { pendingBundlePath: resolved };
+            }
+            console.log('  Enter 1, 2 or 3.');
+        }
+    } finally {
+        prompter.close();
+    }
+}
+
+/**
+ * Run a deferred bundle import once the plan watcher's startup scan has settled.
+ *
+ * `PlanIngestionEngine.initialize()` fires `_runStartupScan()` as
+ * `void (async () => …)()` and returns immediately, so "the host has booted" does
+ * NOT mean "the plan files are rows". The import is update-only and keys on
+ * plan_file, so running it early is the plan's named silent failure: every card
+ * lands in the skipped list and the transfer reports success having done nothing.
+ * Waiting for the row count to stop changing is the "upsert-and-wait" arm of that
+ * requirement — a count that never moves off zero is still honoured after the
+ * timeout, because a workspace with no committed plan files is legitimate and the
+ * skip report is then the true answer.
+ */
+async function runPendingBundleImport(workspaceRoot: string, bundlePath: string): Promise<void> {
+    const SETTLE_POLL_MS = 400;
+    const SETTLE_STABLE_READS = 3;
+    const SETTLE_TIMEOUT_MS = 30000;
+
+    console.log(`\n[switchboard] Importing transfer bundle: ${bundlePath}`);
+    try {
+        const db = await openBoardDatabase(workspaceRoot);
+        const workspaceId = await db.getWorkspaceId();
+        if (!workspaceId) {
+            console.error('[switchboard] Transfer import failed: no workspace ID resolved.');
+            return;
+        }
+
+        let lastCount = -1;
+        let stableReads = 0;
+        const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+        while (Date.now() < deadline && stableReads < SETTLE_STABLE_READS) {
+            const count = (await db.getBoard(workspaceId)).length;
+            stableReads = count === lastCount ? stableReads + 1 : 0;
+            lastCount = count;
+            if (stableReads < SETTLE_STABLE_READS) {
+                await new Promise(r => setTimeout(r, SETTLE_POLL_MS));
+            }
+        }
+        if (stableReads < SETTLE_STABLE_READS) {
+            console.warn(`[switchboard] Plan ingestion had not settled after ${SETTLE_TIMEOUT_MS / 1000}s — importing against ${lastCount} card(s) as they stand.`);
+        }
+
+        const result = await makeTransferService(db, workspaceRoot).importBundle(bundlePath);
+        if (!result.success) {
+            console.error(`[switchboard] Transfer import failed: ${result.error || 'unknown error'}`);
+            return;
+        }
+        printImportResult(result);
+    } catch (err) {
+        console.error(`[switchboard] Transfer import failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+}
+
 async function main() {
     const args = parseArgs(process.argv.slice(2));
     if (args.help) {
@@ -541,6 +766,61 @@ async function main() {
         }
     }
 
+
+    if (process.argv[2] === 'export') {
+        try {
+            const db = await openBoardDatabase(workspaceRoot);
+            const result = await makeTransferService(db, workspaceRoot).exportBundle({ outPath: args.out });
+            if (!result.success) {
+                console.error(`[switchboard] Transfer export failed: ${result.error || 'unknown error'}`);
+                process.exit(1);
+            }
+            console.log(`Wrote ${result.path}`);
+            console.log(`  ${result.cardCount} cards · ${result.settingCount} settings · 0 credentials`);
+            if (result.settingsExcluded.length > 0) {
+                console.log(`  – ${result.settingsExcluded.length} setting(s) excluded (machine-local): ${result.settingsExcluded.join(', ')}`);
+            }
+            if (result.untrackedPlanFiles.length > 0 || result.unpushedCommits > 0) {
+                console.log(`  ⚠ ${result.untrackedPlanFiles.length} untracked plan/feature file(s) and ${result.unpushedCommits} unpushed commit(s) — push first or those`);
+                console.log('    cards will not resolve on the destination.');
+                for (const f of result.untrackedPlanFiles) { console.log(`      ${f}`); }
+            }
+            if (result.scpLine) {
+                console.log(`\nMove it across, then import on the destination:\n  ${result.scpLine}`);
+                console.log('  npx switchboard import switchboard-transfer.json');
+            }
+            process.exit(0);
+        } catch (err) {
+            console.error(`[switchboard] Transfer export failed: ${err instanceof Error ? err.message : String(err)}`);
+            process.exit(1);
+        }
+    }
+
+    if (process.argv[2] === 'import') {
+        const bundleArg = process.argv[3];
+        if (!bundleArg || bundleArg.startsWith('-')) {
+            console.error('Usage: npx switchboard import <bundle.json> [--workspace <path>]');
+            process.exit(1);
+        }
+        const bundlePath = resolveUserPath(bundleArg);
+        if (!fs.existsSync(bundlePath)) {
+            console.error(`[switchboard] Bundle not found: ${bundlePath}`);
+            process.exit(1);
+        }
+        try {
+            const db = await openBoardDatabase(workspaceRoot);
+            const result = await makeTransferService(db, workspaceRoot).importBundle(bundlePath);
+            if (!result.success) {
+                console.error(`[switchboard] Transfer import failed: ${result.error || 'unknown error'}`);
+                process.exit(1);
+            }
+            printImportResult(result);
+            process.exit(0);
+        } catch (err) {
+            console.error(`[switchboard] Transfer import failed: ${err instanceof Error ? err.message : String(err)}`);
+            process.exit(1);
+        }
+    }
 
     if (process.argv[2] === 'init') {
         const { __setStandaloneWorkspaceRoot } = require('./vscodeShim');
@@ -960,6 +1240,23 @@ async function main() {
 
     const hostname = resolveHostname(args.hostname);
 
+    // ── First run: no board yet ────────────────────────────────────
+    //
+    // Runs BEFORE the detach fork, so the prompt lands on the parent's TTY and
+    // never on a child whose stdio is 'ignore'. Options 1 and 2 are pure file
+    // side effects (the board file, or a db-pointer), so the child inherits them
+    // with no plumbing; option 3's import has to be deferred until the plan files
+    // are ingested, so it travels to the child as --import-bundle.
+    let pendingBundlePath = args.importBundle;
+    if (!pendingBundlePath && !boardExists(workspaceRoot) && process.stdin.isTTY && !isDetachedChildProcess()) {
+        const menu = await firstRunDatabaseMenu(workspaceRoot);
+        if (menu.cancelled) {
+            console.log('\n[switchboard] Cancelled — no board was created.');
+            process.exit(1);
+        }
+        pendingBundlePath = menu.pendingBundlePath;
+    }
+
     // ── --detach: spawn a child, wait for health, exit ─────────────
     //
     // The parent re-spawns itself without --detach, with stdio ignored and
@@ -979,6 +1276,11 @@ async function main() {
         const childArgv = process.argv.slice(2).filter(a => a !== '--detach');
         if (!args.open && !childArgv.includes('--no-open')) {
             childArgv.push('--no-open');
+        }
+        // The menu ran in this process; the child is the one that boots the
+        // ingestion engine, so the deferred import has to cross the fork.
+        if (pendingBundlePath && !childArgv.includes('--import-bundle')) {
+            childArgv.push('--import-bundle', pendingBundlePath);
         }
 
         const child = spawn(process.execPath, [__filename, ...childArgv], {
@@ -1036,7 +1338,7 @@ async function main() {
     // In detached mode (SWITCHBOARD_DETACHED=1), stdout is /dev/null so only the
     // file is written. This must happen before startHeadlessSwitchboard so the
     // bootstrap log() calls are captured.
-    const isDetachedChild = process.env.SWITCHBOARD_DETACHED === '1';
+    const isDetachedChild = isDetachedChildProcess();
     const logsDir = path.join(switchboardDir, 'logs');
     fs.mkdirSync(logsDir, { recursive: true });
     const logFile = path.join(logsDir, 'server.log');
@@ -1058,6 +1360,14 @@ async function main() {
         console.warn(`[switchboard] Port ${listenPort} is in use, falling back to an ephemeral port.`);
         listenPort = 0;
     }
+    // Loaded here rather than at module scope: every non-serving subcommand
+    // (export, import, token, secrets, status, stop, logs) would otherwise pull in
+    // the entire host graph — sync services, the PTY backend, node-pty probing —
+    // to print one line. `import type` above is erased, so nothing loads until a
+    // board is actually being served.
+    const { startHeadlessSwitchboard } = require('./bootstrap') as {
+        startHeadlessSwitchboard: (opts: HeadlessSwitchboardOptions) => Promise<HeadlessSwitchboardInstance>;
+    };
     const instance = await startHeadlessSwitchboard({
         workspaceRoot,
         port: listenPort,
@@ -1091,6 +1401,10 @@ async function main() {
         console.log('Running detached. Use \'npx switchboard stop\' to shut down.\n');
     } else {
         console.log('Press Ctrl+C to stop.\n');
+    }
+
+    if (pendingBundlePath) {
+        await runPendingBundleImport(workspaceRoot, pendingBundlePath);
     }
 
     if (!args.noOpen) {
