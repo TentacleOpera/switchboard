@@ -74,7 +74,6 @@ import {
     DefaultPromptOverride,
     reweightSequence
 } from './agentConfig';
-import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import {
     BatchPromptPlan,
     partitionPlansByFeature,
@@ -5787,16 +5786,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return (await db.getBoard(workspaceId)).find(entry => entry.sessionId === sessionId || entry.planId === sessionId);
     }
 
-    private _getEffectiveKanbanColumnForSession(
-        sheet: any,
-        customAgents: CustomAgentConfig[],
-        row?: KanbanPlanRecord
-    ): string {
-        const events: any[] = Array.isArray(sheet?.events) ? sheet.events : [];
-        const derivedColumn = this._normalizeLegacyKanbanColumn(deriveKanbanColumn(events, customAgents));
-        return this._normalizeLegacyKanbanColumn(row?.kanbanColumn || derivedColumn);
-    }
-
     private async _refreshKanbanMetadataFromSheet(workspaceRoot: string, sheet: any): Promise<void> {
         if (!sheet?.sessionId) return;
         const db = await this._getKanbanDb(workspaceRoot);
@@ -5883,6 +5872,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (existing) {
                     return {
                         ...baseRecord,
+                        kanbanColumn: existing.kanbanColumn || 'CREATED',
                         project: existing.project || '',
                         projectId: existing.projectId ?? null,
                         clickupTaskId: existing.clickupTaskId || '',

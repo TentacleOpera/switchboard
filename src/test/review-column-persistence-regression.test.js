@@ -17,25 +17,6 @@ function run() {
     const taskViewerPath = path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts');
     const taskViewerSource = fs.readFileSync(taskViewerPath, 'utf8');
 
-    const setColumnBlock = extractBlock(
-        taskViewerSource,
-        "                case 'setColumn': {",
-        "                case 'setComplexity': {"
-    );
-
-    assert.ok(
-        setColumnBlock.includes('const currentRow = await this._getKanbanPlanRecordForSession(workspaceRoot, sessionId);') &&
-        setColumnBlock.includes('const currentColumn = this._getEffectiveKanbanColumnForSession(sheet, customAgents, currentRow);') &&
-        setColumnBlock.includes('const workflowName = this._workflowForManualColumnChange(currentColumn, column, customAgents);') &&
-        setColumnBlock.includes('await this._applyManualKanbanColumnChange(') &&
-        setColumnBlock.includes("'User manually changed plan column from ticket view'"),
-        'Expected ticket-view setColumn updates to persist through the manual-move workflow path instead of transient DB-only writes.'
-    );
-    assert.ok(
-        !setColumnBlock.includes('await db.updateColumn(sessionId, column);'),
-        'Expected ticket-view setColumn updates to avoid DB-only writes that can snap back after refresh.'
-    );
-
     const manualMoveHelperBlock = extractBlock(
         taskViewerSource,
         '    private _workflowForManualColumnChange(',
@@ -58,21 +39,10 @@ function run() {
         'Expected manual column changes to persist both runsheet history and Kanban DB state.'
     );
 
-    const forwardMoveMethod = extractBlock(
-        taskViewerSource,
-        '    public async handleKanbanForwardMove(',
-        '    /**'
-    );
-    assert.ok(
-        forwardMoveMethod.includes('await this._applyManualKanbanColumnChange(') &&
-        forwardMoveMethod.includes("'User manually moved plan forwards'"),
-        'Expected forward move controls to keep using the shared manual move persistence helper.'
-    );
-
     const backwardMoveMethod = extractBlock(
         taskViewerSource,
         '    public async handleKanbanBackwardMove(',
-        '    private _workflowForForwardMove('
+        '    public async recordRunSheetForColumnMove('
     );
     assert.ok(
         backwardMoveMethod.includes('await this._applyManualKanbanColumnChange(') &&

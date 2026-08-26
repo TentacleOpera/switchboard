@@ -7358,7 +7358,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             return [];
         }
         const log = this._getSessionLog(resolvedWorkspaceRoot);
-        const customAgents = await this._getCustomAgents(resolvedWorkspaceRoot);
+        const db = this._getKanbanDb(resolvedWorkspaceRoot);
         const eligible: string[] = [];
 
         for (const sessionId of sessionIds) {
@@ -7366,8 +7366,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
             if (!sheet || sheet.completed === true) {
                 continue;
             }
-            const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-            const currentColumn = deriveKanbanColumn(events, customAgents);
+            const plan = await db.getPlanBySessionId(sessionId);
+            const currentColumn = plan?.kanbanColumn || 'CREATED';
             if (currentColumn === expectedColumn) {
                 eligible.push(sessionId);
             }
@@ -7382,6 +7382,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             return [];
         }
         const log = this._getSessionLog(resolvedWorkspaceRoot);
+        const db = this._getKanbanDb(resolvedWorkspaceRoot);
         const customAgents = await this._getCustomAgents(resolvedWorkspaceRoot);
         // Return {sessionId, targetColumn} pairs (not bare ids) so batch callers can emit
         // a per-target-column moveCards delta instead of forcing a full board refresh.
@@ -7392,8 +7393,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
             if (!sheet || sheet.completed === true) {
                 continue;
             }
-            const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-            const currentColumn = deriveKanbanColumn(events, customAgents);
+            const plan = await db.getPlanBySessionId(sessionId);
+            const currentColumn = plan?.kanbanColumn || 'CREATED';
             if (currentColumn !== expectedColumn) {
                 continue;
             }
@@ -7770,32 +7771,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // Gating here made the cockpit's Automation tab stale until a full reload.
         this.postMessage({ type: 'updateAutobanConfig', state });
         this.postMessage({ type: 'updatePairProgrammingMode', mode: state.pairProgrammingMode });
-    }
-
-    /**
-     * Map a runsheet to a Kanban card by inspecting its events array.
-     */
-    private _sheetToCard(workspaceRoot: string, sheet: any, complexity: string = 'Unknown', customAgents: CustomAgentConfig[] = []): KanbanCard {
-        const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-        const column = deriveKanbanColumn(events, customAgents);
-        let lastActivity = sheet.createdAt || '';
-        for (const e of events) {
-            if (e.timestamp && e.timestamp > lastActivity) {
-                lastActivity = e.timestamp;
-            }
-        }
-
-        return {
-            planId: sheet.planId || sheet.sessionId || '',
-            sessionId: sheet.sessionId || '',
-            topic: sheet.topic || sheet.planFile || 'Untitled',
-            planFile: sheet.planFile || '',
-            column,
-            lastActivity,
-            createdAt: sheet.createdAt || '',
-            complexity,
-            workspaceRoot
-        };
     }
 
     /**

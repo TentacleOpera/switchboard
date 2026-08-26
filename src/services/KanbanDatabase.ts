@@ -2682,6 +2682,7 @@ export class KanbanDatabase {
             );
             affected = this._db.getRowsModified();   // NO await between run() and this line
             await this._persist();
+            await this.flushPersist();
         } catch (error) {
             console.error('[KanbanDatabase] updateColumnByPlanFile failed:', error);
             return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
