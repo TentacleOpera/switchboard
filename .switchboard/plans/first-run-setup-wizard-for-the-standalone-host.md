@@ -130,7 +130,25 @@ Three outcomes from the probe:
 
 - **one candidate** → adopt it, say which, no prompt;
 - **several** → list them and ask which (or `--db`);
-- **none** → ask: use an existing database (path), a transfer bundle, or create a new one — and if new, where: `~/.switchboard/kanban.db` (recommended — survives `git clean`, a fresh clone, and ephemeral checkouts), in the repo, or a named path.
+- **none** → ask: use an existing database (path), a transfer bundle, or create a new one — and if new, where.
+
+**Outside the repo is the default, not a recommendation.** `~/.switchboard/kanban.db` is pre-selected and accepted by pressing enter. A named external path is the second option. **In-repo is last, and choosing it requires typing the choice, not accepting a default** — and the prompt states what it costs in one line rather than leaving the user to discover it.
+
+The cost is not a matter of taste, and the withdrawn `db-location-chosen-at-install.md` had already assembled the evidence:
+
+> `git clean -xdf` deletes the board. So does a fresh clone, so does deleting and re-cloning a repo, so does any ephemeral checkout — a cloud session, a CI job, a container. A read-only or mounted-in repo cannot host a writable board at all. Synced folders corrupt it.
+
+That plan was withdrawn as superseded by the consolidation work, but the argument survives its withdrawal and nothing has shipped that answers it.
+
+**And the backups do not rescue it, because they are in the repo too.** `writeDbBackup` derives its target from the *workspace root*, not from the database's own location (`KanbanDatabase.ts:7306`):
+
+```ts
+const backupDir = path.join(this._workspaceRoot, '.switchboard', 'dbbackup');
+```
+
+So `git clean -xdf` takes the board and every snapshot of it in the same stroke. In this workspace that directory is **29 MB across 4 files** — four whole copies of a 7.3 MB database, sitting inside the repository, protecting nothing against the failure mode most likely to destroy the original.
+
+Worse, it does not follow the database. A user who moves the DB to `~/.switchboard/kanban.db` still gets backups written into `<repo>/.switchboard/dbbackup/` — so the recommended choice silently keeps one foot in the repo. **Fix this alongside the default:** derive `backupDir` from `path.dirname(this.dbPath)`, so backups live wherever the database lives. Without it, "store it outside the repo" is only half true and the half that fails is the recovery half.
 
 Non-TTY with no candidate and no `--db` exits with instructions and creates nothing.
 
@@ -145,6 +163,12 @@ The terminal prints the URL once and does not ask about any of them.
 ### 4. The scaffolding probe (panel-side)
 
 Driven by an **artifact probe** — `.switchboard/`, `.agents/`, `.claude/` at the repo root *and* at any configured external root. Report what was found and where; treat "none yet" as a first-class answer with a recommendation, not as a detector returning empty. Do **not** call `detectCandidateParent`: it is gated on two or more git repos and answers "should you consolidate a control plane", a different question with a different trigger.
+
+### 4a. Backups follow the database
+
+Change `writeDbBackup`'s `backupDir` from `<workspaceRoot>/.switchboard/dbbackup` to `<dirname(dbPath)>/dbbackup`. Existing in-repo backup directories are left alone — not migrated, not deleted — since they are recovery artifacts and deleting them is the opposite of the point. New snapshots land beside the database.
+
+This is small, independently shippable, and it is the difference between the recommended location being genuinely outside the repo and being outside the repo except for its backups. `kanban-db-backup-retention-deletes-the-wrong-files.md` (CODE REVIEWED) owns retention *within* the directory and is unaffected by where the directory is.
 
 ### 4b. The seed table
 
