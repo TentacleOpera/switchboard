@@ -19,7 +19,7 @@ directory `SKILL.md` form in the July 11 migration. The stated goal was reducing
 prompt's `<available_skills>` block **from 91 entries to 4**. After `abd3659` it is back to roughly
 91, with 22 skill names appearing twice — once flat, once as a directory.
 
-**The line responsible.** `src/extension.ts:363`, the second branch of the content-hash seed loop:
+**The line responsible.** `src/extension.ts:364-372`, the second branch of the content-hash seed loop:
 
 ```js
 } catch {
