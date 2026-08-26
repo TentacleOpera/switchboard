@@ -4,7 +4,7 @@
 
 `npx switchboard` on a fresh machine writes a 0-byte `kanban.db` into the repo, runs 64 schema migrations against it, and hands back a board the user may not want in a location they were never asked about. If they already have a database — a copy from another machine, a global store, a sibling repo — it is ignored, and the first thing they do is delete what the tool just spent a minute building.
 
-Give the standalone host a first-run flow: **probe in the terminal, decide in the browser.** The terminal detects before creating and hands off a URL; the existing Setup panel — which already ships Database, Control Plane, Multi-Repo and Agents tabs, and which standalone already serves — collects the answers. Standalone is increasingly the **first** contact with Switchboard, before the VS Code extension, so first run has to stand on its own; it does not have to do so in a second UI idiom.
+Give the standalone host a first-run flow split at the natural seam: **the database question in the terminal, everything else in the browser.** The location of the database is the precondition for the server, so the terminal asks it; scaffolding, CLIs, roles and teams all have working panel UI already, so the panel asks those. Standalone is increasingly the **first** contact with Switchboard, before the VS Code extension, so first run has to stand on its own; it does not have to do so in a second UI idiom.
 
 ### Problem Analysis
 
@@ -73,7 +73,7 @@ None.
 
 ### Routine
 
-- `node:readline/promises` for prompting — built-in, no dependency, and the standalone bundle must stay dependency-light.
+- `node:readline/promises` for the single database prompt — built-in, no dependency, and the standalone bundle must stay dependency-light.
 - Reading and writing config keys that already exist (`kanban.dbPath`, `controlPlaneRoot`, `startupCommands`, `visibleAgents`).
 - Adding flag equivalents to `cli.ts`'s existing argv parsing.
 
@@ -82,7 +82,7 @@ None.
 - **Extracting `SHIPPED_TEAM_TYPES` out of `kanban.html`.** It is a self-contained webview by design, and two contract tests (`team-scoped-role-routing.test.js:972`, `standing-orders-marker-contract.test.js:315`) read the constant *out of the HTML source text*. Moving it breaks both unless they are retargeted in the same change. The extraction must leave the webview consuming the shared module rather than keeping a copy — a copy is the drift this plan exists to avoid.
 - **Extracting the CLI list out of `terminals.js`.** Same shape: a webview-local map that the CLI needs. The brand-icon mapping and the launch-command mapping are different concerns and should not be fused into one object just because both are keyed by CLI name.
 - **The `startupCommands` wipe guard.** `GlobalIntegrationConfigService` explicitly refuses an empty or all-blank `startupCommands` write ("WIPE GUARD: never let an empty/all-blank startupCommands or visibleAgents…"). A wizard that writes partial selections must not trip it, and must not be *rescued* by it either — a guard silently discarding the wizard's write looks identical to success.
-- **TTY detection.** `npx switchboard` runs in CI, in containers, and under process managers. Prompting where there is no TTY hangs a start that used to complete. The wizard must gate on `process.stdin.isTTY` and fall through to flags.
+- **TTY detection.** `npx switchboard` runs in CI, in containers, and under process managers. Prompting where there is no TTY hangs a start that used to complete. The one prompt must gate on `process.stdin.isTTY` and fall through to `--db`.
 
 ## Edge-Case & Dependency Audit
 
@@ -116,32 +116,35 @@ Key risks. (1) Building the wizard while `bootstrap.ts` still creates unconditio
 
 In `bootstrap.ts`, before the `writeFileSync(dbPath, Buffer.alloc(0))`, resolve candidates in the order above. One candidate → adopt and report it. Several → prompt (TTY) or list-and-exit (non-TTY). None → run the wizard (TTY) or exit with instructions (non-TTY). Creation moves *after* the answer.
 
-### 2. A DB-less setup-mode server
+### 2. Ask the bootstrap question in the terminal
 
-The load-bearing question for this design: today `bootstrap.ts` creates the database at `:467` and constructs `LocalApiServer` at `:2910`, so the DB precedes the server. For the browser to collect the answers, the server has to boot **without** one.
+The database location is the **one** question that must be answered before anything else can run, and it is the one question with no panel to duplicate — because the panel cannot render until it is answered. Ask it in the terminal.
 
-Add a setup mode: when the probe resolves no database and none is adopted, start the HTTP server with a null DB, serve only the Setup panel and the routes it needs, and print the URL. Everything DB-dependent stays unconstructed. On save, the panel's existing handlers create or adopt the database, and boot continues into the normal path — no restart.
+> **Superseded:** a DB-less "setup mode" server, booting `LocalApiServer` with a null DB so the browser could collect the database location too.
+>
+> **Reason:** that was infrastructure invented to avoid a single `readline` prompt. Today the database is built at `bootstrap.ts:467` and the server at `:2910`; making the server boot without a database, serve a restricted route set, and then continue into normal boot without a restart is a substantial new piece — and its entire purpose would be to ask one question that a terminal can ask in three lines. The webview argument is a duplication argument, and it does not apply to a question whose answer is the precondition for the webview existing.
+>
+> **Replaced with:** one terminal prompt, `node:readline/promises`, gated on `process.stdin.isTTY`, with `--db <path>` as the flag equivalent. Once answered, boot proceeds exactly as it does today and the panel serves normally.
 
-This is the only genuinely new infrastructure in the plan, and it is what removes the need for terminal prompting entirely.
+Three outcomes from the probe:
 
-### 3. Terminal output, not terminal prompting
+- **one candidate** → adopt it, say which, no prompt;
+- **several** → list them and ask which (or `--db`);
+- **none** → ask: use an existing database (path), a transfer bundle, or create a new one — and if new, where: `~/.switchboard/kanban.db` (recommended — survives `git clean`, a fresh clone, and ephemeral checkouts), in the repo, or a named path.
 
-With setup mode available, the terminal's whole job is three lines:
+Non-TTY with no candidate and no `--db` exits with instructions and creates nothing.
 
-- one candidate found → adopt, say which, continue (no interaction);
-- several found → list them and print the URL, create nothing;
-- none found → print the URL, create nothing.
+That collapses the first three of the five questions into one exchange, because "are you migrating?", "do you have an existing database?" and "where should it live?" are the same decision asked three ways.
 
-No `readline`, no TTY gating on the happy path, no flag-equivalent matrix for five questions. `--db <path>` remains for scripted use, and a non-TTY run with no candidate exits with the URL and instructions rather than building a database nobody asked for.
+### 3. Everything else is the panel that already exists
 
-### 4. First-run panel state and the two probes
+Scaffolding location, CLI selection, role seating and the three teams all have working UI in `setup.html` and the Agents tab, and standalone already serves them. They are asked **after** boot, in a first-run panel mode shaped like the extension's onboarding (`extension.ts:4238-4270`): a condition, an offer, a remembered dismissal.
 
-The Setup panel gains a first-run mode — the same shape as the extension's onboarding (`extension.ts:4238-4270`): a condition, an offer, and a remembered dismissal, not an interrogation. It sequences tabs that already exist rather than adding new UI:
+The terminal prints the URL once and does not ask about any of them.
 
-- **Database** tab, pre-populated with the probe's candidates and a recommendation of `~/.switchboard/kanban.db` (survives `git clean`, a fresh clone, and ephemeral checkouts).
-- **Scaffolding**, driven by an **artifact probe** — look for `.switchboard/`, `.agents/`, `.claude/` at the repo root *and* at any configured external root. Report what was found and where; treat "none yet" as a first-class answer with a recommendation, not as a detector returning empty. Do **not** call `detectCandidateParent` for this: it is gated on two or more git repos and answers "should you consolidate a control plane", which is a different question with a different trigger.
-- **Agents**, with the CLI multi-select. Selecting CLIs seeds `agents.startupCommands` and `agents.visibleAgents` for the core roles and instantiates the three shipped teams.
-- **Migrating from another machine?** offered first; taking it routes to the transfer bundle importer (`hand-a-workspace-to-another-machine.md`) and skips the rest, because the bundle carries those settings.
+### 4. The scaffolding probe (panel-side)
+
+Driven by an **artifact probe** — `.switchboard/`, `.agents/`, `.claude/` at the repo root *and* at any configured external root. Report what was found and where; treat "none yet" as a first-class answer with a recommendation, not as a detector returning empty. Do **not** call `detectCandidateParent`: it is gated on two or more git repos and answers "should you consolidate a control plane", a different question with a different trigger.
 
 ### 4b. The seed table
 
@@ -157,8 +160,8 @@ A subcommand that reopens the first-run panel on demand, so the flow is reachabl
 
 1. `npm run compile-tests` — clean.
 2. New: **probe-before-create.** Given a workspace with no DB and a candidate at `~/.switchboard/kanban.db`, assert the candidate is adopted and **no file is written** at `<root>/.switchboard/kanban.db`. Assert the absence — a test that only checks the board loads passes today.
-3. New: **no-candidate start creates nothing.** With no candidate and no `--db`, assert the server enters setup mode, prints a URL, and **no database file is written** anywhere.
-4. New: **setup mode boots DB-less.** Assert the server starts and serves the Setup panel with a null DB, and that no DB-dependent service is constructed until a location is chosen.
+3. New: **no-candidate, non-TTY start creates nothing.** With `isTTY` false, no candidate and no `--db`, assert a non-zero exit with instructions and **no database file written** anywhere. Assert the absence — a test that only checks the board loads passes today.
+4. New: **flag equivalence.** `--db <path>` produces the same adoption and the same config write as answering the prompt, and suppresses the prompt entirely.
 4b. New: **scaffolding probe.** Given `.agents/` at the repo root and nothing external, assert the probe reports repo-local; given neither, assert "none yet" rather than an empty result; assert `detectCandidateParent` is **not** on this path.
 5. New: **wipe-guard interaction.** A partial CLI selection writes `startupCommands` successfully; assert the values are present afterward, not merely that the write was attempted.
 6. New: **single source for presets.** Assert `kanban.html` no longer defines `SHIPPED_TEAM_TYPES` inline and that the extracted module is the only definition; same for the CLI list in `terminals.js`.
@@ -169,13 +172,13 @@ A subcommand that reopens the first-run panel on demand, so the flow is reachabl
 
 ### Manual
 
-9. Fresh machine, no `~/.switchboard`: run `npx switchboard`, follow the printed URL, complete the panel, confirm the board comes up with the chosen DB location, the chosen scaffold root, core roles seated with startup commands, and the three teams present — and that boot continued without a restart.
+9. Fresh machine, no `~/.switchboard`: run `npx switchboard`, answer the database prompt, then follow the printed URL and complete the panel. Confirm the board comes up with the chosen DB location, the chosen scaffold root, core roles seated with startup commands, and the three teams present.
 10. Same, answering "migrating" at question 1 with a transfer bundle: confirm 3–5 are skipped and the imported settings are in effect.
 11. With an existing `~/.switchboard/kanban.db`: confirm it is adopted, the adoption is reported, and no new file appears in the repo.
 12. Two candidates present: confirm both are listed and neither is chosen silently.
-13. `npx switchboard` piped (no TTY): confirm it prints the URL and creates nothing.
+13. `npx switchboard` piped (no TTY), no candidate, no `--db`: confirm it exits with instructions and creates nothing. With `--db`, confirm it boots unattended exactly as today.
 14. Single-repo user (the case `detectCandidateParent` returns nothing for): confirm scaffolding is still probed and answered.
 
 ## Recommendation
 
-Send to Coder, and **ship change 1 on its own first**. Probe-before-create is a contained fix to the reported symptom and needs neither the setup-mode server nor the extractions. The rest is gated on one genuinely new piece of infrastructure — a server that boots without a database — and that is the part to design before writing any panel code.
+Send to Coder, and **ship change 1 on its own first**. Probe-before-create is a contained fix to the reported symptom and needs neither the setup-mode server nor the extractions. The rest is a first-run mode over panels that already exist, plus two extractions; nothing in it is new infrastructure.
