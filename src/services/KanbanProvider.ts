@@ -34,7 +34,7 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, applySeatPacingOrders, mutateTerminalGroups, describeStandingOrderMigrations } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, applySeatPacingOrders, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead } from './teamWiring';
 import { mutateStandingOrders, makeStandingOrder, validateInstruction, STANDING_ORDERS_CONFIG_KEY, type StandingOrder, type StandingOrderScope } from './standingOrders';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
@@ -4721,6 +4721,13 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 featureId: rec.featureId ?? undefined,
                 isFeature,
                 project: rec.project || undefined,   // REQUIRED — drives per-project PRD injection in generateUnifiedPrompt
+                column: rec.kanbanColumn,
+                priorityStarred: rec.priorityStarred,
+                queuePosition: rec.queuePosition,
+                columnOrder: rec.columnOrder,
+                columnEnteredAt: rec.columnEnteredAt,
+                createdAt: rec.createdAt,
+                lastActivity: (rec as any).lastActivity || rec.updatedAt,
                 ...(isFeature ? { featureTopic: rec.topic || 'Untitled' } : {}),   // primary feature gets [FEATURE: …] label
             });
             if (isFeature && hasDb && rec.planId) {
@@ -6269,6 +6276,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             ...resolvedOptions,
             ...overrides,
         };
+        let orderedPlans = [
+            ...partition.featureGroups.flatMap(g => [g.feature, ...g.subtasks]),
+            ...partition.loosePlans,
+        ];
+
         if (totalFeatureGroups > 0) {
             const featureTopics = partition.featureGroups.map(g => g.feature.topic || 'Untitled');
             batchOptions.featureMode = true;
@@ -6287,6 +6299,25 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (['lead', 'coder', 'intern'].includes(role) && await resolveDrive()) {
                 batchOptions.driveMode = true;
             }
+        } else if (plans.length > 1 && ['lead', 'coder', 'intern'].includes(role)) {
+            const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+            const vis = visibleAgents[role];
+            const originName = typeof vis === 'string' && vis ? vis : role;
+            const teamRoster = await resolveTeamMembersForHead({ db, originName });
+            const isTeamHead = (overrides as any)?.isTeamHead ?? (role === 'lead' && !!(teamRoster && teamRoster.length > 0));
+            if (isTeamHead || overrides?.driveMode) {
+                const sortColumn = partition.loosePlans[0]?.column || '';
+                const sortedLoose = [...partition.loosePlans].sort((a, b) => compareByPrecedence(a, b, sortColumn));
+                const cappedLoose = sortedLoose.slice(0, 5);
+                orderedPlans = cappedLoose;
+                batchOptions.featureMode = true;
+                batchOptions.driveMode = true;
+                batchOptions.batchMode = true;
+                batchOptions.featureTopic = 'Batch send';
+                batchOptions.subtaskCount = cappedLoose.length;
+            } else {
+                batchOptions.featureMode = false;
+            }
         } else {
             batchOptions.featureMode = false;
         }
@@ -6302,12 +6333,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }
         }
 
-        // Feature groups first (each feature immediately followed by its subtasks), then
-        // loose plans — the order the concatenated segments used to produce.
-        const orderedPlans = [
-            ...partition.featureGroups.flatMap(g => [g.feature, ...g.subtasks]),
-            ...partition.loosePlans,
-        ];
         // Empty plan array: keep the existing preamble behavior (used by the autoban
         // scheduler) rather than returning an empty string.
         const built = buildKanbanBatchPrompt(role, orderedPlans, batchOptions);

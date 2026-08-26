@@ -48,6 +48,13 @@ export interface BatchPromptPlan {
     hasOwnWorktree?: boolean;
     /** The plan's assigned project name (from KanbanCard.project / KanbanPlanRecord.project). Drives per-plan PRD resolution. */
     project?: string;
+    column?: string;
+    priorityStarred?: number | null;
+    queuePosition?: number | null;
+    columnOrder?: number | null;
+    columnEnteredAt?: string | null;
+    createdAt?: string;
+    lastActivity?: string;
 }
 
 /**
@@ -315,6 +322,8 @@ export interface PromptBuilderOptions {
      *  is also true. The enriched drive prefix (built by KanbanProvider's
      *  _buildDrivePrefix) is prepended; this flag reframes the prompt body to match. */
     driveMode?: boolean;
+    /** When true, a batch of loose plans is dispatched to a team lead with driveMode. */
+    batchMode?: boolean;
     /** The feature's topic/title for directive injection. With several features batched, the first one — `featureTopics` carries the full set. */
     featureTopic?: string;
     /**
@@ -445,8 +454,11 @@ function buildReviewerExecutionIntro(planCount: number): string {
 }
 
 /** Build a plan-count-aware intro sentence. Fixes "1 plans" → "1 plan". */
-function buildExecutionIntro(verb: string, plans: BatchPromptPlan[], featureMode?: boolean, driveMode?: boolean): string {
+function buildExecutionIntro(verb: string, plans: BatchPromptPlan[], featureMode?: boolean, driveMode?: boolean, batchMode?: boolean): string {
     if (featureMode) {
+        if (batchMode) {
+            return `Please drive the batch of ${plans.length} plans below through your team seats.`;
+        }
         return driveMode
             ? `Please drive the feature described below through your team seats.`
             : `Please ${verb} the feature described below.`;
@@ -1362,7 +1374,8 @@ export function resolveFeatureOrchestrationDirective(
     role?: string,
     /** Every feature topic in the batch. Length > 1 selects the plural opener. */
     featureTopics?: string[],
-    driveMode?: boolean
+    driveMode?: boolean,
+    batchMode?: boolean
 ): string {
     // Several features batched into ONE prompt: the opener has to name them all rather
     // than claim the batch is a single feature. subtaskCount is the total across them.
@@ -1370,7 +1383,7 @@ export function resolveFeatureOrchestrationDirective(
     const quoted = multiTopics ? multiTopics.map(t => `"${t}"`).join(', ') : '';
     const opener = (verb: string) => multiTopics
         ? `FEATURE MODE: You are ${verb} ${multiTopics.length} features — ${quoted} — comprising ${subtaskCount} subtask(s) in total.`
-        : `FEATURE MODE: You are ${verb} the feature "${featureTopic}" which consists of ${subtaskCount} subtask(s).`;
+        : (batchMode ? `BATCH MODE: You are driving a batch of ${subtaskCount} independent plan(s) through your team seats.` : `FEATURE MODE: You are ${verb} the feature "${featureTopic}" which consists of ${subtaskCount} subtask(s).`);
     const unitClause = multiTopics
         ? `The subtasks of each feature are a single delivery unit — do not treat them as independent tickets, and do not interleave work across features.`
         : `All subtasks are part of a single delivery unit — do not treat them as independent tickets.`;
@@ -1389,6 +1402,16 @@ export function resolveFeatureOrchestrationDirective(
             `Before starting, briefly tell the user how you are handling these subtasks (e.g. order, grouping, and any review/verification pass you plan to run).`;
     }
     if (driveMode) {
+        if (batchMode) {
+            const batchClause = `The plans in this batch are independent and possibly unrelated. Before dispatching, review the plan files for file overlap and declared dependencies; sequence any plans that collide, and dispatch non-colliding plans in parallel.`;
+            return `${opener('driving')}\n` +
+                `Dispatch each subtask to a seat on your team — do not implement subtasks yourself. ` +
+                `Review each coder's diff before accepting its work; resend a fix prompt to the same seat if it falls short. ` +
+                `${DRIVE_COMMIT_ONCE_SENTENCE} ` +
+                `Read the individual plan files below for requirements, seat assignments, and scope constraints — there is no feature file for a batch. ` +
+                `${batchClause}\n` +
+                `Before starting, briefly tell the user how you plan to dispatch the subtasks across your seats.`;
+        }
         return `${opener('driving')}\n` +
             `Dispatch each subtask to a seat on your team — do not implement subtasks yourself. ` +
             `Review each coder's diff before accepting its work; resend a fix prompt to the same seat if it falls short. ` +
@@ -1779,7 +1802,8 @@ export function buildKanbanBatchPrompt(
             options.featureCustomSubagentName,
             role,
             options.featureTopics,
-            options?.driveMode
+            options?.driveMode,
+            options?.batchMode
         );
         featureDirectiveBlock = directive;
         if (options?.featurePromptTemplate) {
@@ -1805,7 +1829,7 @@ export function buildKanbanBatchPrompt(
         : `AUTHORIZATION: These plans are pre-approved — begin implementation immediately; do not produce a separate planning document first.`;
 
     if (role === 'planner') {
-        const isFeatureTarget = options?.featureMode === true || plans.some(p => p.isFeature);
+        const isFeatureTarget = (options?.featureMode === true && !options?.batchMode) || plans.some(p => p.isFeature);
         const workflowPath = isFeatureTarget
             ? (options?.plannerFeatureWorkflowPath || DEFAULT_FEATURE_PLANNER_WORKFLOW)
             : (options?.plannerWorkflowPath || DEFAULT_PLANNER_WORKFLOW);
@@ -2153,7 +2177,7 @@ For each plan:
         const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
         const suppressWalkthroughBlock = isDriveMode ? '' : (suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '');
         const promptParts = [
-            buildExecutionIntro('execute', plans, options?.featureMode, options?.driveMode),
+            buildExecutionIntro('execute', plans, options?.featureMode, options?.driveMode, options?.batchMode),
             executionDirective,
             batchRulesForLead,
             baseInstructions,
@@ -2236,7 +2260,7 @@ For each plan:
             const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
             const suppressWalkthroughBlock = isDriveMode ? '' : (suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '');
             const promptParts = [
-                buildExecutionIntro('execute', plans, options?.featureMode, options?.driveMode),
+                buildExecutionIntro('execute', plans, options?.featureMode, options?.driveMode, options?.batchMode),
                 featureExecutionBlock,
                 baseInstructions,
                 suffixBlock,
@@ -2253,7 +2277,7 @@ For each plan:
         }
 
         // Non-feature coder dispatch — standard per-plan enumeration path.
-        const intro = buildExecutionIntro('execute', plans, options?.featureMode, options?.driveMode);
+        const intro = buildExecutionIntro('execute', plans, options?.featureMode, options?.driveMode, options?.batchMode);
         // §3/§4 — Gate batch rules on actual batches; suppress in feature mode (handled above).
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? `${effectiveBatchExecutionRules}\n\n${challengeBlock}`.trim()
@@ -2324,7 +2348,7 @@ For each plan:
         const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
-            buildExecutionIntro('process', plans, options?.featureMode, options?.driveMode),
+            buildExecutionIntro('process', plans, options?.featureMode, options?.driveMode, options?.batchMode),
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
@@ -2357,7 +2381,7 @@ For each plan:
         });
 
         const promptParts = [
-            buildExecutionIntro('process', plans, options?.featureMode, options?.driveMode),
+            buildExecutionIntro('process', plans, options?.featureMode, options?.driveMode, options?.batchMode),
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
