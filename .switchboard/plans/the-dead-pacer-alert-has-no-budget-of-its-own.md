@@ -70,7 +70,7 @@ It fires repeatedly only when that release does not land:
 
 - `taskViewerProvider._localApiServer` is unset — the wiring at
   `extension.ts:1136` duck-types it and silently no-ops if absent.
-- `reportQueueDone` throws — caught and discarded at `extension.ts:1139`.
+- `reportQueueDone` throws — caught and discarded at `extension.ts:1140`.
 - `clearWorkingState` fails — caught and logged at `LocalApiServer.ts:2834`.
 - the lookup misses `from`, e.g. a terminal rename changed the recorded
   `dispatchedTerminal` after dispatch.
@@ -213,6 +213,14 @@ one-shot notice naming what could not be released, rather than repeating a
 now-false claim. Requires touching the seam (`:417`), the extension wiring
 (`extension.ts:1134–1141`), and `reportQueueDone`'s return handling.
 
+*Clarification:* `reportQueueDone` already returns
+`Promise<{ status: number; payload: any }>` where `payload.cleared` is `true`
+when `clearWorkingState` made a real non-NULL→NULL transition and `false` on a
+duplicate/no-op (`LocalApiServer.ts:2780`, `:2832`, `:2841`). The extension
+wiring at `:1134–1141` discards this return today. B2 does not require
+`reportQueueDone` to change — it requires the wiring to *return*
+`result.payload.cleared` and the seam to *carry* it as `Promise<boolean>`.
+
 *Cost:* the largest change here, and it is the only option that fixes the
 underlying failure rather than muting its symptom. A `Promise<void>` seam where
 "did nothing" and "worked" are the same value is the reason this was invisible.
@@ -220,7 +228,7 @@ underlying failure rather than muting its symptom. A `Promise<void>` seam where
 **Option C — decouple `nudgeCount` (required under every option above).**
 
 Remove `watch.nudgeCount = (watch.nudgeCount ?? 0) + 1` from **both** alert
-blocks (`:1509` no-pacer, `:1553` dead-pacer). `nudgeCount` is the agent nudge's
+blocks (`:1510` no-pacer, `:1554` dead-pacer). `nudgeCount` is the agent nudge's
 one-shot budget, read by the gate-(8) guard; an operator alert must not spend it.
 Each alert already has, or gains, its own stamp: `escalatedAt` for no-pacer,
 `deadPacerAlertedFor` for dead-pacer. Keep the `lastNudgedAt = nowMs` writes —
@@ -342,7 +350,7 @@ with the resolvers stubbed, not through the shim.
 
 ## Verification Plan
 
-### Automated
+### Automated Tests
 
 1. `npm run compile-tests` — the new optional field must not make any
    `QueueWatchRecord` literal invalid.
@@ -366,23 +374,47 @@ with the resolvers stubbed, not through the shim.
    - old persisted record with no `deadPacerAlertedFor` → alerts once.
 4. `npm run test:contract:mission-control-tick` — unchanged, regression check on
    the shared `notifiedSeatsThisTick` set.
+5. **If B2 ships:** contract-test assertion that
+   `setQueueEscalationRecorder`'s type signature is `Promise<boolean>` (not
+   `Promise<void>`), and that the extension wiring at `extension.ts:1134–1141`
+   returns the `reportQueueDone` result's `payload.cleared` (or equivalent)
+   rather than discarding it. A `Promise<void>` seam where "did nothing" and
+   "worked" are the same value is the exact hole B2 exists to close — the test
+   must assert the boolean is *carried*, not just that the signature changed.
 
 **Gate wiring:** `test:contract:queue-pipeline` and
 `test:contract:mission-control-tick` are both invoked by
-`.github/workflows/integration-tests.yml` (lines 920 and 901). Any new test file
+`.github/workflows/integration-tests.yml` (lines 929 and 910). Any new test file
 must be added to `package.json` **and** to that workflow — a script defined but
 not invoked is the green-while-incomplete hole.
 
+### Goal Invariants
+
+- `deadPacerAlertedFor?: string` exists on `QueueWatchRecord` at
+  `src/services/PlanIngestionEngine.ts` (the interface at `:135`).
+- The dead-pacer block (`:1528`) contains a guard comparing
+  `watch.deadPacerAlertedFor` to a `${pacerSeat}:${planId}` key before
+  notifying.
+- Neither the no-pacer block (`:1476`) nor the dead-pacer block (`:1528`)
+  contains `watch.nudgeCount = (watch.nudgeCount ?? 0) + 1` — the increment is
+  absent from both alert blocks (Option C).
+- `armQueueWatch`'s `onDispatch` branch (`:322`) contains
+  `delete rearmed.deadPacerAlertedFor` alongside the existing
+  `delete rearmed.escalatedAt` and `delete rearmed.noHeadNotifiedAt`.
+- The `continue` at the dead-pacer block's tail is reached on every tick where
+  the pacer is dead, regardless of whether the alert guard suppressed the
+  notice — it is outside the guard, not inside it.
+
 ### Manual
 
-5. Seat-paced team, extension host. Dispatch a card to a seat, kill that
+6. Seat-paced team, extension host. Dispatch a card to a seat, kill that
    terminal. Confirm exactly one operator notice naming the seat and the card,
    and that the card is re-staged.
-6. Same, with the release path broken (temporarily unset
+7. Same, with the release path broken (temporarily unset
    `taskViewerProvider._localApiServer`). Confirm one notice, not one per 10s —
    and under B2, that the notice says the card could not be released rather than
    that it will be re-staged.
-7. After a dead-pacer event, dispatch a fresh card to a live seat and let it go
+8. After a dead-pacer event, dispatch a fresh card to a live seat and let it go
    idle past `nudgeSilenceMs`. Confirm the pacer nudge fires — today it does not.
 
 ## Recommendation
@@ -391,3 +423,21 @@ Send to Coder. The diff is small but it turns on the semantics of a shared
 persisted field with four writers and two readers, and the two ways to get it
 wrong (`continue` inside the guard, required-instead-of-optional field) both
 leave every gate green.
+
+## Implementation Summary
+
+Implemented Option B + B2 + C. Added `deadPacerAlertedFor?: string` to
+`QueueWatchRecord` — keyed on `${pacerSeat}:${planId}`, absent reads as
+unnotified. The dead-pacer block now guards on that key before notifying, with
+the `continue` outside the guard so every dead-pacer tick short-circuits the
+gates. Widened `setQueueEscalationRecorder` from `Promise<void>` to
+`Promise<boolean>`; both host wirings (extension + standalone) now return
+`!!(result?.payload?.cleared)` instead of discarding the `reportQueueDone`
+result. The dead-pacer notice branches on the release boolean: "will be
+re-staged" when true, "could not be released" when false. Removed
+`nudgeCount` increments from both alert blocks (Option C) — the agent nudge's
+one-shot budget is no longer spent by operator alerts. `armQueueWatch`'s
+onDispatch branch clears `deadPacerAlertedFor` alongside the existing stamps.
+Seven new contract-test assertions pin the guard, the `nudgeCount` decoupling,
+the `continue` placement (brace-depth walker), the seam signature, both host
+wirings, and the notice branching.

@@ -1012,6 +1012,161 @@ async function run() {
             'integration-tests.yml must run host-seam-parity:check — defining the script without the workflow step is the green-while-incomplete hole');
     });
 
+    // ── Dead-pacer alert budget (Option B + B2 + C) ──────────────────────
+    //
+    // The dead-pacer alert had no one-shot guard of its own and spent the
+    // agent nudge's `nudgeCount` budget. Option B gives it a budget keyed on
+    // (seat, card); B2 widens the recorder seam to Promise<boolean> so a
+    // silent release failure is distinguishable from success; C decouples
+    // `nudgeCount` from both operator alerts. These assertions pin all three.
+
+    await check('the dead-pacer block is guarded by deadPacerAlertedFor', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'PlanIngestionEngine.ts'), 'utf8');
+        const i = src.indexOf('private async _runQueueNudgeSweep(');
+        assert.notStrictEqual(i, -1, '_runQueueNudgeSweep must exist');
+        const body = src.slice(i, src.indexOf('\n    private ', i + 10));
+        // The dead-pacer block is the one containing pacerLive.status ===
+        // 'exited'. It must compare watch.deadPacerAlertedFor to a
+        // `${pacerSeat}:${planId}` key before notifying.
+        const exitedIdx = body.indexOf("pacerLive.status === 'exited'");
+        assert.notStrictEqual(exitedIdx, -1, 'dead-pacer block (pacerLive.status === exited) must exist');
+        // Grab from the exited check to the next continue after it — that
+        // span covers the whole dead-pacer block including the guard.
+        const blockEnd = body.indexOf('continue;', exitedIdx);
+        const block = body.slice(exitedIdx, blockEnd);
+        assert.ok(/deadPacerAlertedFor/.test(block),
+            'the dead-pacer block must compare watch.deadPacerAlertedFor to a (seat, card) key before notifying — Option B');
+        assert.ok(/`\$\{pacerSeat\}:\$\{heldCard\.planId\}`/.test(block),
+            'the dead-pacer key must be `${pacerSeat}:${heldCard.planId}` — keyed on identity, not a shared boolean');
+    });
+
+    await check('neither operator alert block increments nudgeCount (Option C)', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'PlanIngestionEngine.ts'), 'utf8');
+        const i = src.indexOf('private async _runQueueNudgeSweep(');
+        assert.notStrictEqual(i, -1, '_runQueueNudgeSweep must exist');
+        const body = src.slice(i, src.indexOf('\n    private ', i + 10));
+        // The no-pacer block: from "No pacer" comment to its continue.
+        const noPacerStart = body.indexOf('// (3 re-pointed) No pacer');
+        assert.notStrictEqual(noPacerStart, -1, 'no-pacer block must exist');
+        const noPacerEnd = body.indexOf('continue;', noPacerStart);
+        const noPacerBlock = body.slice(noPacerStart, noPacerEnd);
+        assert.ok(!/nudgeCount\s*=/.test(noPacerBlock),
+            'the no-pacer alert block must not increment nudgeCount — it is the agent nudge budget, not the operator alert budget (Option C)');
+        // The dead-pacer block: from pacerLive.status === 'exited' to its
+        // continue (the one OUTSIDE the guard).
+        const deadStart = body.indexOf("pacerLive.status === 'exited'");
+        const deadEnd = body.indexOf('continue;', deadStart);
+        const deadBlock = body.slice(deadStart, deadEnd);
+        assert.ok(!/nudgeCount\s*=/.test(deadBlock),
+            'the dead-pacer alert block must not increment nudgeCount — it is the agent nudge budget, not the operator alert budget (Option C)');
+    });
+
+    await check('armQueueWatch onDispatch deletes deadPacerAlertedFor alongside escalatedAt and noHeadNotifiedAt', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'PlanIngestionEngine.ts'), 'utf8');
+        const armIdx = src.indexOf('public async armQueueWatch(');
+        assert.notStrictEqual(armIdx, -1, 'armQueueWatch must exist');
+        const armBody = src.slice(armIdx, src.indexOf('\n    private ', armIdx + 10));
+        const onDispatchIdx = armBody.indexOf('if (opts?.onDispatch)');
+        assert.notStrictEqual(onDispatchIdx, -1, 'onDispatch branch must exist');
+        const onDispatchBlock = armBody.slice(onDispatchIdx, onDispatchIdx + 400);
+        assert.ok(/delete rearmed\.escalatedAt/.test(onDispatchBlock),
+            'onDispatch must delete escalatedAt');
+        assert.ok(/delete rearmed\.noHeadNotifiedAt/.test(onDispatchBlock),
+            'onDispatch must delete noHeadNotifiedAt');
+        assert.ok(/delete rearmed\.deadPacerAlertedFor/.test(onDispatchBlock),
+            'onDispatch must delete deadPacerAlertedFor alongside the other one-shot stamps — a dispatch re-arms all alert budgets');
+    });
+
+    await check('the dead-pacer continue is outside the alert guard, not inside it', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'PlanIngestionEngine.ts'), 'utf8');
+        const i = src.indexOf('private async _runQueueNudgeSweep(');
+        assert.notStrictEqual(i, -1, '_runQueueNudgeSweep must exist');
+        const body = src.slice(i, src.indexOf('\n    private ', i + 10));
+        const exitedIdx = body.indexOf("pacerLive.status === 'exited'");
+        assert.notStrictEqual(exitedIdx, -1, 'dead-pacer block must exist');
+        // The guard is `if (watch.deadPacerAlertedFor !== deadPacerKey)`.
+        // The `continue` must come AFTER the guard's closing brace, not
+        // inside it. If the continue is inside the guard, a suppressed
+        // alert falls through to gates 6/7/8 and nudges a dead terminal.
+        const guardIdx = body.indexOf('watch.deadPacerAlertedFor !== deadPacerKey', exitedIdx);
+        assert.notStrictEqual(guardIdx, -1, 'the dead-pacer guard must exist');
+        // Walk brace depth from the guard's opening `{` to find its matching
+        // close — a naive indexOf('}') hits a nested block.
+        const openBrace = body.indexOf('{', guardIdx);
+        let depth = 0;
+        let guardClose = -1;
+        for (let j = openBrace; j < body.length; j++) {
+            if (body[j] === '{') depth++;
+            else if (body[j] === '}') { depth--; if (depth === 0) { guardClose = j; break; } }
+        }
+        assert.notStrictEqual(guardClose, -1, 'the dead-pacer guard block must have a matching close brace');
+        // The guard's own block must NOT contain a bare continue.
+        const guardBlock = body.slice(guardIdx, guardClose + 1);
+        assert.ok(!/\bcontinue\b/.test(guardBlock),
+            'the alert guard block must not contain a continue — the continue belongs outside so every dead-pacer tick short-circuits the gates');
+        // After the guard closes, kept.push(watch) and continue must follow.
+        const afterGuard = body.slice(guardClose + 1);
+        const keptIdx = afterGuard.indexOf('kept.push(watch)');
+        const continueIdx = afterGuard.indexOf('continue;', keptIdx);
+        assert.ok(keptIdx !== -1 && continueIdx !== -1 && continueIdx > keptIdx,
+            'kept.push(watch) and continue must appear after the guard closes — the continue is outside the guard');
+    });
+
+    await check('the escalation recorder seam is Promise<boolean>, not Promise<void> (B2)', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'PlanIngestionEngine.ts'), 'utf8');
+        // The field declaration and the setter must both be Promise<boolean>.
+        assert.ok(/_queueEscalationRecorder\?\:\s*\(workspaceRoot:\s*string,\s*planId:\s*string,\s*fromSeat:\s*string\)\s*=>\s*Promise<boolean>/.test(src),
+            'the _queueEscalationRecorder field must be typed Promise<boolean> — a Promise<void> seam where "did nothing" and "worked" are the same value is the hole B2 closes');
+        assert.ok(/setQueueEscalationRecorder\(fn:\s*\(workspaceRoot:\s*string,\s*planId:\s*string,\s*fromSeat:\s*string\)\s*=>\s*Promise<boolean>\)/.test(src),
+            'the setQueueEscalationRecorder setter must accept Promise<boolean>');
+    });
+
+    await check('both host wirings return payload.cleared, not discard the result (B2)', () => {
+        const fs = require('fs');
+        // Extension wiring.
+        const ext = fs.readFileSync(path.join(process.cwd(), 'src', 'extension.ts'), 'utf8');
+        const extIdx = ext.indexOf('setQueueEscalationRecorder(');
+        assert.notStrictEqual(extIdx, -1, 'extension must wire setQueueEscalationRecorder');
+        const extBody = ext.slice(extIdx, ext.indexOf('});', extIdx) + 3);
+        assert.ok(/payload\.cleared/.test(extBody),
+            'extension wiring must return result.payload.cleared — discarding the reportQueueDone result is the Promise<void> failure mode');
+        assert.ok(/return\s+!!\(result\?\.payload\?\.cleared\)/.test(extBody),
+            'extension wiring must return a boolean (!!payload.cleared), not void');
+        // Standalone wiring.
+        const sa = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        const saIdx = sa.indexOf('setQueueEscalationRecorder(');
+        assert.notStrictEqual(saIdx, -1, 'standalone must wire setQueueEscalationRecorder');
+        const saBody = sa.slice(saIdx, sa.indexOf('});', saIdx) + 3);
+        assert.ok(/payload\.cleared/.test(saBody),
+            'standalone wiring must return result.payload.cleared — byte-symmetric with extension (parity)');
+        assert.ok(/return\s+!!\(result\?\.payload\?\.cleared\)/.test(saBody),
+            'standalone wiring must return a boolean (!!payload.cleared), not void');
+    });
+
+    await check('the dead-pacer notice text branches on the release result (B2)', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'PlanIngestionEngine.ts'), 'utf8');
+        const i = src.indexOf('private async _runQueueNudgeSweep(');
+        assert.notStrictEqual(i, -1, '_runQueueNudgeSweep must exist');
+        const body = src.slice(i, src.indexOf('\n    private ', i + 10));
+        const exitedIdx = body.indexOf("pacerLive.status === 'exited'");
+        const deadEnd = body.indexOf('continue;', exitedIdx);
+        const block = body.slice(exitedIdx, deadEnd);
+        // The notice body must branch on `released` — true says "will be
+        // re-staged", false says "could not be released".
+        assert.ok(/released\s*\?/.test(block),
+            'the dead-pacer notice body must branch on the release result — true and false carry different text (B2)');
+        assert.ok(/will be re-staged/.test(block),
+            'the released=true notice must say "will be re-staged to a stronger seat"');
+        assert.ok(/could not be released/.test(block),
+            'the released=false notice must say "could not be released" — the now-false "will be re-staged" claim must not repeat');
+    });
+
     console.log('');
     if (failures > 0) {
         console.error(`${failures} contract(s) failed.`);

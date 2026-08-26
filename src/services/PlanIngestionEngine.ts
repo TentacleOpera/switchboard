@@ -147,6 +147,13 @@ export interface QueueWatchRecord {
      *  Cleared by a real dispatch (the `onDispatch` re-arm and the in-flight
      *  gate), so a queue that stalls again after progress escalates again. */
     escalatedAt?: number;
+    /** `${pacerSeat}:${planId}` of the last dead-pacer alert. The alert is
+     *  about a specific seat holding a specific card, so the one-shot budget
+     *  is keyed on that pair, not on the shared `escalatedAt` boolean: a
+     *  re-stage to a second seat that also dies is new information, and a
+     *  repeat about the same dead seat and card is not. Absent (old records,
+     *  first alert) reads as "not yet alerted" — the safe direction. */
+    deadPacerAlertedFor?: string;
 }
 
 export interface PlanIngestionHost {
@@ -326,6 +333,7 @@ export class PlanIngestionEngine {
                     // proves a head exists, so a later absence is news again).
                     delete rearmed.escalatedAt;
                     delete rearmed.noHeadNotifiedAt;
+                    delete rearmed.deadPacerAlertedFor;
                 }
                 existing[idx] = rearmed;
                 await db.setConfigJson(WATCH_KEY, existing);
@@ -412,9 +420,9 @@ export class PlanIngestionEngine {
      * in which case the escalation still fires (operator notified) but the
      * card is not re-staged until subtask 2's branch exists.
      */
-    private _queueEscalationRecorder?: (workspaceRoot: string, planId: string, fromSeat: string) => Promise<void>;
+    private _queueEscalationRecorder?: (workspaceRoot: string, planId: string, fromSeat: string) => Promise<boolean>;
 
-    public setQueueEscalationRecorder(fn: (workspaceRoot: string, planId: string, fromSeat: string) => Promise<void>): void {
+    public setQueueEscalationRecorder(fn: (workspaceRoot: string, planId: string, fromSeat: string) => Promise<boolean>): void {
         this._queueEscalationRecorder = fn;
     }
 
@@ -1507,7 +1515,6 @@ export class PlanIngestionEngine {
                         );
                         watch.escalatedAt = nowMs;
                         watch.lastNudgedAt = nowMs;
-                        watch.nudgeCount = (watch.nudgeCount ?? 0) + 1;
                         mutated = true;
                     }
                     kept.push(watch);
@@ -1526,33 +1533,59 @@ export class PlanIngestionEngine {
                 // new pacer.
                 const pacerLive = livenessByName.get(pacerSeat);
                 if (!pacerLive || pacerLive.status === 'exited') {
-                    const body = `[switchboard:turn-end] Queue stall (seat pacing) — seat '${pacerSeat}' holding card '${heldCard.planId}' is ${!pacerLive ? 'absent' : 'exited'}. ${queueCards.length} card(s) remain staged. The card will be re-staged to a stronger seat.`;
-                    try {
-                        this._turnEndNotifier({
-                            seatName: pacerSeat,
-                            planFile: heldCard.planFile || '',
-                            outcome: 'stalled',
-                            workspaceRoot: folder,
-                            body,
-                        });
-                    } catch (cbErr) {
-                        this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge seat-pacing dead-pacer notifier failed: ${cbErr}`);
+                    // The dead-pacer alert has its OWN one-shot budget, keyed on
+                    // the (seat, card) pair it is about — not the shared
+                    // `escalatedAt` boolean the no-pacer alert uses. A re-stage
+                    // to a second seat that also dies is new information (the
+                    // message names a specific seat and card); a repeat about
+                    // the same dead seat and card is not. Absent reads as "not
+                    // yet alerted" — the safe direction for old records.
+                    const deadPacerKey = `${pacerSeat}:${heldCard.planId}`;
+                    if (watch.deadPacerAlertedFor !== deadPacerKey) {
+                        // B2: attempt the release FIRST — the notice text
+                        // depends on whether the card could be released. The
+                        // recorder seam carries a boolean (true = the latch
+                        // made a real non-NULL→NULL transition, false = no-op
+                        // or failure) so a silent no-op is no longer
+                        // indistinguishable from success. When the release
+                        // fails the repeated text ("will be re-staged") is
+                        // false by then — say what is true, once.
+                        let released = false;
+                        if (this._queueEscalationRecorder) {
+                            try { released = await this._queueEscalationRecorder(folder, heldCard.planId, pacerSeat); }
+                            catch (recErr) { this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge escalation recorder failed: ${recErr}`); }
+                        }
+                        const body = released
+                            ? `[switchboard:turn-end] Queue stall (seat pacing) — seat '${pacerSeat}' holding card '${heldCard.planId}' is ${!pacerLive ? 'absent' : 'exited'}. ${queueCards.length} card(s) remain staged. The card will be re-staged to a stronger seat.`
+                            : `[switchboard:turn-end] Queue stall (seat pacing) — seat '${pacerSeat}' holding card '${heldCard.planId}' is ${!pacerLive ? 'absent' : 'exited'}. ${queueCards.length} card(s) remain staged. The card could not be released (the seat may have been renamed, or the release silently failed). Re-stage it manually.`;
+                        try {
+                            this._turnEndNotifier({
+                                seatName: pacerSeat,
+                                planFile: heldCard.planFile || '',
+                                outcome: 'stalled',
+                                workspaceRoot: folder,
+                                body,
+                            });
+                        } catch (cbErr) {
+                            this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge seat-pacing dead-pacer notifier failed: ${cbErr}`);
+                        }
+                        this._host.logger.appendLine(
+                            `[GlobalPlanWatcher] Queue nudge (seat pacing): pacer '${pacerSeat}' is ${!pacerLive ? 'absent' : 'exited'} for ${watch.workspaceRoot} — recording failed attempt for card '${heldCard.planId}' (${queueCards.length} card(s) staged).`
+                        );
+                        watch.deadPacerAlertedFor = deadPacerKey;
+                        // `lastNudgedAt` is the shared pacing floor —
+                        // legitimately shared across both alert blocks. It is
+                        // NOT `nudgeCount`: the agent nudge's one-shot budget
+                        // (gate 8) must not be spent by an operator alert.
+                        watch.lastNudgedAt = nowMs;
+                        mutated = true;
                     }
-                    this._host.logger.appendLine(
-                        `[GlobalPlanWatcher] Queue nudge (seat pacing): pacer '${pacerSeat}' is ${!pacerLive ? 'absent' : 'exited'} for ${watch.workspaceRoot} — recording failed attempt for card '${heldCard.planId}' (${queueCards.length} card(s) staged).`
-                    );
-                    // Step 7: feed subtask 2's counter so the dead seat
-                    // escalates up the ladder. Best-effort — absent recorder
-                    // means subtask 2 has not landed; the operator is still
-                    // notified.
-                    if (this._queueEscalationRecorder) {
-                        try { await this._queueEscalationRecorder(folder, heldCard.planId, pacerSeat); }
-                        catch (recErr) { this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge escalation recorder failed: ${recErr}`); }
-                    }
-                    watch.escalatedAt = nowMs;
-                    watch.lastNudgedAt = nowMs;
-                    watch.nudgeCount = (watch.nudgeCount ?? 0) + 1;
-                    mutated = true;
+                    // The `continue` stays OUTSIDE the alert guard: every
+                    // tick where the pacer is dead must short-circuit the
+                    // rest of the gates, alert or no alert. Moving it inside
+                    // the guard makes a suppressed alert fall through to
+                    // gates 6/7/8 and deliver the pacer nudge to the dead
+                    // terminal it just declined to alert about.
                     kept.push(watch);
                     continue;
                 }
