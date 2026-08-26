@@ -44,6 +44,7 @@ Standalone was built as a second front door onto a product whose configuration s
 - **A migration engine.** "Are you migrating?" routes to the transfer bundle (`hand-a-workspace-to-another-machine.md`), it does not reimplement import.
 - **Consolidating databases.** The N-to-1 merge is `single-global-database-in-home-store.md`. This wizard *adopts* an existing DB; it never merges two.
 - **Non-interactive regression.** Every question must have a flag equivalent, and a non-TTY invocation must behave exactly as it does today minus the unconditional create.
+- **Installing any system state.** The flow configures — where the board lives, where scaffolding goes, which CLIs seat which roles. It never installs a service, a `launchd`/`systemd` unit, a login item, an autostart entry or an app bundle, and it never offers to. `npx switchboard` is the try-it path and must leave nothing behind but the files the user chose a location for. A launcher is a tier-3 artifact the operator downloads deliberately — see the distribution-tier note in `switchboard-as-a-local-app-and-a-self-hosted-remote.md`. First run is precisely where "…and install the app?" would feel natural and be wrong.
 
 ## Metadata
 
@@ -125,6 +126,8 @@ The database location is the **one** question that must be answered before anyth
 > **Reason:** that was infrastructure invented to avoid a single `readline` prompt. Today the database is built at `bootstrap.ts:467` and the server at `:2910`; making the server boot without a database, serve a restricted route set, and then continue into normal boot without a restart is a substantial new piece — and its entire purpose would be to ask one question that a terminal can ask in three lines. The webview argument is a duplication argument, and it does not apply to a question whose answer is the precondition for the webview existing.
 >
 > **Replaced with:** one terminal prompt, `node:readline/promises`, gated on `process.stdin.isTTY`, with `--db <path>` as the flag equivalent. Once answered, boot proceeds exactly as it does today and the panel serves normally.
+>
+> **Keep the decision separable from the prompt.** The probe and the resolution belong in a function that returns a decision; `readline` is one caller, `--db` a second, and a launcher's first-run screen a third. `switchboard-as-a-local-app-and-a-self-hosted-remote.md` (New, complexity 9) makes "where the board lives" one axis of its mode picker — the same question this prompt asks, generalised to two machines — so a second caller is already foreseeable. Welding the logic into the prompt buys a rewrite later for nothing saved now.
 
 Three outcomes from the probe:
 

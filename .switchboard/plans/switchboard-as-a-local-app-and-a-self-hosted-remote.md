@@ -119,6 +119,31 @@ Key risks: the first draft's proposal to unbind from loopback would have dismant
 8. **Version-skew refusal** between client and remote — refuse, never downgrade.
 9. **A loopback-invariance contract test** asserting the bind address is unconditional and no configuration path can alter it.
 
+### Distribution tiers — nothing persistent may leak into `npx`
+
+> **Note added by review, not a rewrite of the changes above.** Change 2
+> (`switchboard remote install|start|stop|status` writing a `launchd`/`systemd`
+> unit) already has the right shape: system state behind a verb the operator
+> typed. Change 1 (the tray/menubar launcher) has **no stated distribution
+> path**, and the Migration note below addresses only the VSIX. That silence is
+> how a launcher ends up installed as a side effect of first run, because first
+> run is the convenient place to offer it.
+>
+> Three tiers, and nothing may leak upward:
+>
+> | Tier | May persist |
+> |---|---|
+> | `npx switchboard` | **Nothing.** No service, no autostart, no login item, no app bundle. It is the try-it path and its contract is fetch, run, leave nothing behind. |
+> | `switchboard remote install` | A unit file — the operator typed `install`. |
+> | A real app artifact (`.dmg` / `.exe` / `brew install` / package manager) | Everything, because the operator downloaded an application. |
+>
+> **The tray launcher belongs in tier 3.** It may be *offered* — a link, a
+> printed instruction — from tiers 1 and 2, never installed by them. A
+> first-run flow that installs it is the same violation one layer up; see the
+> matching non-goal in `first-run-setup-wizard-for-the-standalone-host.md`.
+>
+> This is a constraint on how changes 1 and 2 ship, not a change to what they do.
+
 ### Migration
 
 No existing install affected; the VSIX is unchanged and stays a first-class client. Board relocation uses the already-specified adoption and rollback flows.
