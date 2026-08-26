@@ -43,6 +43,21 @@ jobs:
       - name: Standalone kanban fork-detector
         run: npm run standalone-fork:check
 
+      # Host seam-parity guard — composition-root wiring. The standalone and
+      # extension hosts share the same PlanIngestionEngine, whose public
+      # set<Name>(...) seams each composition root wires with host-specific
+      # callbacks. A seam wired in one root but not the other is a silent
+      # divergence: the engine treats an unset seam as "no evidence", so the
+      # missing host degrades quietly — no compile error, no test failure. This
+      # is exactly how the four queue seams shipped in extension.ts only. Verb
+      # reachability audits cannot catch it (bootstrap.ts's default: arm
+      # delegates every unmatched verb). This guard compares the seams each
+      # root WIRES, not the verbs it answers. An allowlist (not a ratcheted
+      # count, not a hard diff) makes the default for any new seam "must be
+      # wired in both" and forces a human sentence for each exception.
+      - name: Host seam-parity guard
+        run: npm run host-seam-parity:check
+
       - name: Kanban dispatch callers guard
         run: npm run kanban-dispatch-callers:check
 

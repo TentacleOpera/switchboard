@@ -945,6 +945,7 @@
     "push-routing:check": "node scripts/check-push-routing.js",
     "standalone-parity:check": "node scripts/check-standalone-push-parity.js",
     "standalone-fork:check": "node src/test/standalone-kanban-fork-detector.test.js",
+    "host-seam-parity:check": "node scripts/check-host-seam-parity.js",
     "kanban-dispatch-callers:check": "node scripts/check-kanban-dispatch-callers.js",
     "verb-returns:check": "node scripts/check-verb-return-contract.js",
     "verb-returns:baseline": "node scripts/check-verb-return-contract.js --write",

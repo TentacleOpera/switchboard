@@ -881,6 +881,137 @@ async function run() {
         assert.ok(/team-queue-done:/.test(wiring));
     });
 
+    // ── Standalone host: the four queue seams + armQueueWatch ─────────────
+    //
+    // The standalone (npx) host shared the same PlanIngestionEngine but never
+    // wired the four queue seams or supplied armQueueWatch. The seams resolved
+    // to nothing and no watch was ever armed — the sweep read an empty list
+    // every tick. These assertions pin the wiring so a future refactor cannot
+    // silently drop it (the host-seam-parity guard catches the cross-root
+    // divergence; these assertions catch a within-standalone regression).
+
+    await check('standalone bootstrap wires all four queue seams on ingestionEngine', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        for (const seam of [
+            'setQueueHeadResolver',
+            'setQueuePacingResolver',
+            'setQueueTeamMembersResolver',
+            'setQueueEscalationRecorder',
+        ]) {
+            assert.ok(
+                new RegExp(`ingestionEngine\\.${seam}\\s*\\(`).test(src),
+                `bootstrap.ts must wire ingestionEngine.${seam}(...) — without it the queue nudge sweep has no resolver and degrades silently`
+            );
+        }
+    });
+
+    await check('standalone bootstrap supplies armQueueWatch in the LocalApiServer options', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        // The options object is passed to `new LocalApiServer(options)`. The
+        // armQueueWatch field's body must call ingestionEngine.armQueueWatch —
+        // without it the dispatch (:2231) and release (:3183) arm sites are
+        // both inert (behind `if (this._options.armQueueWatch)`) and
+        // kanban.queueWatches is never written. Layer 2 of the gap.
+        assert.ok(/armQueueWatch\s*:/.test(src),
+            'bootstrap.ts must define an armQueueWatch field in the LocalApiServer options');
+        assert.ok(/ingestionEngine\.armQueueWatch\s*\(/.test(src),
+            'the armQueueWatch callback must call ingestionEngine.armQueueWatch(...) — the single arming route');
+    });
+
+    await check('standalone bootstrap does NOT reference _globalPlanWatcher (one arming route per host)', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        // Strip comments first. The invariant is about CODE — naming the
+        // extension-only field in a comment that explains why standalone does
+        // not use it is the opposite of a violation, and a raw substring scan
+        // cannot tell the two apart.
+        const code = src
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/(^|[^:])\/\/.*$/gm, '$1');
+        assert.ok(!/_globalPlanWatcher/.test(code),
+            'bootstrap.ts must not reference _globalPlanWatcher — the extension-only indirection path. One arming route per host; two that can disagree is the thing to avoid.');
+    });
+
+    await check('standalone escalation recorder resolves server lazily at call time, not wiring time', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        // The escalation recorder is wired before `new LocalApiServer(options)`
+        // runs, so `server` is declared but unassigned at wiring time. The
+        // callback must reference `server` INSIDE the async body (call-time
+        // resolution), not capture it in a local at wiring time. Capturing at
+        // wiring time binds undefined and silently no-ops forever — the exact
+        // Promise<void> failure mode this plan exists to close.
+        const i = src.indexOf('ingestionEngine.setQueueEscalationRecorder(');
+        assert.notStrictEqual(i, -1, 'setQueueEscalationRecorder call must exist');
+        // Grab the callback body — from the call to the closing `});`
+        const bodyStart = src.indexOf('=>', i);
+        const bodyEnd = src.indexOf('});', i);
+        assert.notStrictEqual(bodyStart, -1, 'escalation recorder callback body start must be found');
+        assert.notStrictEqual(bodyEnd, -1, 'escalation recorder callback body end must be found');
+        const body = src.slice(bodyStart, bodyEnd);
+        assert.ok(/\bserver\b/.test(body),
+            'the escalation recorder callback must reference `server` inside the async body (lazy call-time resolution)');
+        // The truthiness check is load-bearing — `server` is undefined at
+        // wiring time and only assigned at `new LocalApiServer(options)`.
+        assert.ok(/if\s*\(\s*server\b/.test(body),
+            'the escalation recorder must guard on `server` truthiness before dereferencing — the check is load-bearing, not defensive noise');
+    });
+
+    await check('standalone team-members resolver uses taskViewerProvider.resolveTeamMembers with a null guard', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        // Byte-symmetric with extension.ts:1126, plus the null guard standalone
+        // needs (taskViewerProvider is `TaskViewerProvider | null`). The
+        // positive assertion confirms the provider method is used; the null-
+        // guard assertion confirms `taskViewerProvider` is checked for
+        // truthiness before dereferencing.
+        const i = src.indexOf('ingestionEngine.setQueueTeamMembersResolver(');
+        assert.notStrictEqual(i, -1, 'setQueueTeamMembersResolver call must exist');
+        const bodyStart = src.indexOf('=>', i);
+        const bodyEnd = src.indexOf('});', i);
+        const body = src.slice(bodyStart, bodyEnd);
+        assert.ok(/taskViewerProvider\.resolveTeamMembers/.test(body),
+            'the team-members resolver must call taskViewerProvider.resolveTeamMembers — byte-symmetric with extension.ts:1126');
+        assert.ok(/taskViewerProvider\s*\?/.test(body) || /if\s*\(\s*taskViewerProvider\b/.test(body),
+            'the team-members resolver must null-guard taskViewerProvider before dereferencing — it is `TaskViewerProvider | null` in standalone');
+    });
+
+    await check('standalone arms the watch on stageForQueue, not only on dispatch/release', () => {
+        const fs = require('fs');
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        // KanbanProvider.stageForQueue's own arm resolves the engine through
+        // `_globalPlanWatcher`, which standalone never sets — so the shared
+        // provider's staging arm is inert in this host. The LocalApiServer
+        // dispatch (:2231) and release (:3183) arms cover a queue that RAN;
+        // neither covers a queue staged and never run, which is the case the
+        // staging arm exists for ("every staging path arms the watch" above).
+        // bootstrap must arm on the stageForQueue verb through the same
+        // ingestionEngine.armQueueWatch route.
+        const i = src.indexOf(`verb === 'stageForQueue'`);
+        assert.notStrictEqual(i, -1,
+            'bootstrap.ts must arm the queue watch on the stageForQueue verb — dispatch-only arming leaves a staged-but-never-run queue unwatched in standalone');
+        const body = src.slice(i, i + 900);
+        assert.ok(/ingestionEngine\.armQueueWatch\s*\(/.test(body),
+            'the staging arm must go through ingestionEngine.armQueueWatch — the same route the dispatch and release arms use, not a second one that can disagree');
+        assert.ok(/resolveCodingHeadFromGroups\s*\(/.test(body),
+            'the staging arm must resolve the head from terminals.groups, matching KanbanProvider.stageForQueue — not getAliveRoleTerminalNames (deprecated state.json)');
+    });
+
+    await check('the host-seam-parity guard script exists and is wired into CI', () => {
+        const fs = require('fs');
+        const scriptPath = path.join(process.cwd(), 'scripts', 'check-host-seam-parity.js');
+        assert.ok(fs.existsSync(scriptPath),
+            'scripts/check-host-seam-parity.js must exist — the composition-root parity guard');
+        const pkg = fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8');
+        assert.ok(/"host-seam-parity:check"\s*:\s*"node scripts\/check-host-seam-parity\.js"/.test(pkg),
+            'package.json must define host-seam-parity:check — a script without a workflow step is the green-while-incomplete hole');
+        const workflow = fs.readFileSync(path.join(process.cwd(), '.github', 'workflows', 'integration-tests.yml'), 'utf8');
+        assert.ok(/host-seam-parity:check/.test(workflow),
+            'integration-tests.yml must run host-seam-parity:check — defining the script without the workflow step is the green-while-incomplete hole');
+    });
+
     console.log('');
     if (failures > 0) {
         console.error(`${failures} contract(s) failed.`);

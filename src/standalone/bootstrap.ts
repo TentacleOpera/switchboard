@@ -1478,6 +1478,29 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // Coalesced: the arm may already have fired refreshUI for this same
                         // mutation. Not awaited — the push is additive to the HTTP body.
                         if (!isReadOnly) { schedulePushFullState(); }
+                        // Staging arms the queue-level stall watch. In the extension this
+                        // happens INSIDE KanbanProvider.stageForQueue (:8542), which resolves
+                        // the engine through `_globalPlanWatcher` — a field standalone never
+                        // sets and deliberately never will (see the queue-seam wiring below:
+                        // one arming route per host). So the shared provider's own arm is
+                        // inert here, and the LocalApiServer's dispatch/release arms cannot
+                        // cover the case staging exists to cover: a queue staged and never
+                        // run. That is the earliest moment a silent night becomes possible,
+                        // not an exempt one — the invariant `queue-pipeline-contract`'s
+                        // "every staging path arms the watch" pins for the extension.
+                        // This calls the SAME ingestionEngine.armQueueWatch the dispatch and
+                        // release sites call, so it is one route reached from a second
+                        // moment, not a second route that can disagree. Re-arming is
+                        // idempotent and does not reset nudgeCount. Best-effort: a failure
+                        // here must not turn a successful stage into a failed verb.
+                        if (verb === 'stageForQueue') {
+                            try {
+                                const headTerminal = await kanbanProvider.resolveCodingHeadFromGroups(root);
+                                await ingestionEngine.armQueueWatch(root, headTerminal);
+                            } catch (armErr) {
+                                log(opts, `armQueueWatch (stageForQueue) failed: ${armErr instanceof Error ? armErr.message : String(armErr)}`);
+                            }
+                        }
                         return result;
                     } catch (err) {
                         const msg = err instanceof Error ? err.message : String(err);
@@ -2543,6 +2566,54 @@ Each plan file must include:
     };
     ingestionEngine.setTurnEndNotifier(handleTurnEndNotify);
 
+    // Queue-head resolver seam (host parity with extension.ts:1110): the queue
+    // nudge sweep calls this to resolve the live coding head (lead first, then
+    // coder) when a watch's headTerminal is null — the "staged with no head"
+    // state. Reads from terminals.groups in the DB config via the shared
+    // provider. Returns null when no head is live; the sweep then notifies the
+    // operator. Swallow-and-default, never throw into the sweep.
+    ingestionEngine.setQueueHeadResolver(async (wsRoot) => {
+        try { return await kanbanProvider.resolveCodingHeadFromGroups(wsRoot); }
+        catch { /* groups unavailable — null, sweep notifies the operator */ }
+        return null;
+    });
+    // Queue pacing resolver seam (host parity with extension.ts:1120): the
+    // sweep resolves pacing per-tick so a flip between ticks is picked up on
+    // the next tick. Delegates to kanbanProvider.resolveTeamPacing, which reads
+    // the `pacing` field from the registered terminals.groups row. Absent →
+    // 'head' (install-base compat).
+    ingestionEngine.setQueuePacingResolver(async (wsRoot, headTerminal) => {
+        try { return await kanbanProvider.resolveTeamPacing(wsRoot, headTerminal); }
+        catch { /* groups unavailable — head pacing is the compat default */ }
+        return 'head' as const;
+    });
+    // Queue team-members resolver seam (host parity with extension.ts:1126,
+    // plus the null guard standalone needs — taskViewerProvider is
+    // `TaskViewerProvider | null`, assigned at :1008). Byte-symmetric with the
+    // extension's wiring: the same provider method, the same arguments.
+    ingestionEngine.setQueueTeamMembersResolver(async (wsRoot, headTerminal) => {
+        return taskViewerProvider
+            ? taskViewerProvider.resolveTeamMembers(wsRoot, headTerminal)
+            : null;
+    });
+    // Queue escalation recorder seam (host parity with extension.ts:1135).
+    // Resolves `server` LAZILY at call time, not wiring time: this seam is
+    // wired here, but `new LocalApiServer(options)` runs further down at
+    // :2955, so `server` is declared (`let server: LocalApiServer;` at :514)
+    // but unassigned at this point. Capturing it in a local here would bind
+    // undefined and silently no-op forever — the exact Promise<void> failure
+    // mode this plan exists to close. The truthiness check inside the async
+    // body is load-bearing, not defensive noise.
+    ingestionEngine.setQueueEscalationRecorder(async (wsRoot, planId, fromSeat) => {
+        try {
+            // Resolved at CALL time, not wiring time. Capturing `server` in a
+            // local here would bind undefined and silently no-op forever.
+            if (server && typeof server.reportQueueDone === 'function') {
+                await server.reportQueueDone({ workspaceRoot: wsRoot, from: fromSeat, outcome: 'failed', planId });
+            }
+        } catch { /* best-effort — the operator notice already fired */ }
+    });
+
     // Agent-group instantiation, standalone edition. The TaskViewer arm guards on
     // `_ptyHostPort`, which only exists in the extension host (its fleet lives in a
     // child process); standalone runs with `suppressLocalApiServer = true`, so that
@@ -2678,6 +2749,20 @@ Each plan file must include:
         },
         onTurnEndNotify: (info: any) => {
             handleTurnEndNotify(info);
+        },
+        // Queue-level stall watch arming (host parity with the extension's
+        // TaskViewerProvider.setPlanIngestionEngine path, but WITHOUT the
+        // extension's watcher indirection — standalone owns the
+        // engine instance directly, so one arming route per host). The
+        // LocalApiServer's dispatch (:2231) and release (:3183) arm sites are
+        // both behind `if (this._options.armQueueWatch)`; without this field
+        // they stay inert and kanban.queueWatches is never written, so the
+        // sweep reads an empty list every tick — Layer 2 of the gap. Pointing
+        // straight at ingestionEngine.armQueueWatch is the invariant: a second
+        // arming path that can disagree with the first is the thing to avoid.
+        armQueueWatch: async (wsRoot: string, headTerminal: string | null, armOpts?: { onDispatch?: boolean }) => {
+            try { await ingestionEngine.armQueueWatch(wsRoot, headTerminal, armOpts); }
+            catch (e) { log(opts, `armQueueWatch failed: ${e instanceof Error ? e.message : String(e)}`); }
         },
         // Team-scoped reviewer routing for POST /kanban/dispatch. The helper is
         // pure over (db, liveTerminals) so the standalone host needs no

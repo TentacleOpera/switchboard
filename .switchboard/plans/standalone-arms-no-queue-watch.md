@@ -29,7 +29,7 @@ never touched.
 
 **Layer 1 — the four queue seams are wired in exactly one host.**
 
-`PlanIngestionEngine` exposes nine setters. `src/extension.ts:1089–1163` wires
+`PlanIngestionEngine` exposes nine setters. `src/extension.ts:1090–1165` wires
 seven. `src/standalone/bootstrap.ts` wires five. Only three overlap:
 
 | Seam | `extension.ts` | `bootstrap.ts` |
@@ -52,15 +52,15 @@ nobody has ever compared.
 
 Four call sites can arm a queue watch. All four are inert in standalone:
 
-- `KanbanProvider.ts:2745` (`onArmQueueWatch`) and `:8508` (`stageForQueue`)
+- `KanbanProvider.ts:2772` (`onArmQueueWatch`) and `:8542` (`stageForQueue`)
   both resolve the engine through `this._globalPlanWatcher?.getEngine?.()`.
   `bootstrap.ts` contains **zero** references to `globalPlanWatcher`. The
   optional chain yields `undefined`, the `if (engine)` guard is false, and
   nothing throws.
-- `LocalApiServer.ts:2230` (dispatch) and `:3182` (release) are both behind
+- `LocalApiServer.ts:2231` (dispatch) and `:3183` (release) are both behind
   `if (this._options.armQueueWatch)`. That option is supplied only by
   `TaskViewerProvider.ts:3781`. Standalone builds its own options object at
-  `bootstrap.ts:2603` (passed to `new LocalApiServer(options)` at `:2910`) and
+  `bootstrap.ts:2648` (passed to `new LocalApiServer(options)` at `:2955`) and
   never sets it.
 
 So even if the four resolvers were wired, `kanban.queueWatches` would stay
@@ -98,16 +98,16 @@ already in the tree, and the gate shape is decided below.
 - All four seams are one-line delegations to methods that already exist and are
   already instantiated in `bootstrap.ts` (`kanbanProvider`, `taskViewerProvider`, `server`).
 - Adding one field to the standalone `LocalApiServer` options object at
-  `bootstrap.ts:2603`.
+  `bootstrap.ts:2648`.
 
 ### Complex / Risky
 
 - **`taskViewerProvider` exists in standalone but is nullable.** It is declared
-  `TaskViewerProvider | null` at `bootstrap.ts:231` and assigned at `:989` — the
+  `TaskViewerProvider | null` at `bootstrap.ts:232` and assigned at `:1008` — the
   real class, running under the vscode shim, same as every contract test loads
   it. So `taskViewerProvider.resolveTeamMembers` *is* reachable and the wiring
   can be byte-symmetric with the extension's. It must be null-guarded, and it
-  must be wired after `:989`. (An earlier draft of this plan asserted the
+  must be wired after `:1008`. (An earlier draft of this plan asserted the
   opposite — that the method was vscode-bound with no standalone instance and
   that `resolveTeamMembersForHead` had to be called directly. That was wrong.
   `resolveTeamMembersForHead` remains the correct fallback shape if the null
@@ -117,7 +117,7 @@ already in the tree, and the gate shape is decided below.
   this, they will. That is the point of the fix, but it is a new class of
   message on a shipped host and should be expected rather than diagnosed as a
   regression. Delivery already works — `setTurnEndNotifier` is wired to
-  `handleTurnEndNotify` at `bootstrap.ts:2499`.
+  `handleTurnEndNotify` at `bootstrap.ts:2544`.
 - **The new gate must not be a hard equality check.** Two seams are legitimately
   standalone-only. A strict diff is red on day one, gets baselined to silence,
   and the guard is then worthless.
@@ -135,14 +135,14 @@ absent-head path.
 
 | Seam | Delegate | Where it lives | Standalone-safe? |
 |---|---|---|---|
-| `setQueueHeadResolver` | `kanbanProvider.resolveCodingHeadFromGroups` | `KanbanProvider.ts:5480`, public | ✅ shared provider, db-backed |
-| `setQueuePacingResolver` | `kanbanProvider.resolveTeamPacing` | `KanbanProvider.ts:5501`, public | ✅ shared provider, db-backed |
-| `setQueueTeamMembersResolver` | `taskViewerProvider.resolveTeamMembers` | `TaskViewerProvider.ts:10688` | ✅ instantiated at `bootstrap.ts:989` under the shim — nullable, guard it |
-| `setQueueEscalationRecorder` | `LocalApiServer.reportQueueDone` | `LocalApiServer.ts:2752`, public | ✅ standalone constructs one at `:2910` |
+| `setQueueHeadResolver` | `kanbanProvider.resolveCodingHeadFromGroups` | `KanbanProvider.ts:5511`, public | ✅ shared provider, db-backed |
+| `setQueuePacingResolver` | `kanbanProvider.resolveTeamPacing` | `KanbanProvider.ts:5532`, public | ✅ shared provider, db-backed |
+| `setQueueTeamMembersResolver` | `taskViewerProvider.resolveTeamMembers` | `TaskViewerProvider.ts:10715` | ✅ instantiated at `bootstrap.ts:1008` under the shim — nullable, guard it |
+| `setQueueEscalationRecorder` | `LocalApiServer.reportQueueDone` | `LocalApiServer.ts:2753`, public | ✅ standalone constructs one at `:2955` |
 
 **Ordering inside `bootstrap.ts`.** The escalation recorder closes over the
-`LocalApiServer`, which is constructed at `:2910` — *after* the other engine
-wiring at `:786–2499`. The recorder callback must resolve the server lazily at
+`LocalApiServer`, which is constructed at `:2955` — *after* the other engine
+wiring at `:786–2544`. The recorder callback must resolve the server lazily at
 call time (read a module-scoped `server` binding inside the async body), not
 capture it at wiring time, or it captures `undefined` and silently no-ops —
 reproducing the exact `Promise<void>` failure mode this plan exists to close.
@@ -151,12 +151,13 @@ reproducing the exact `Promise<void>` failure mode this plan exists to close.
 `ingestionEngine.armQueueWatch`. Do **not** replicate the extension's
 `_globalPlanWatcher` indirection: `bootstrap.ts` owns the engine instance
 directly, and adding a `_globalPlanWatcher` to the standalone `KanbanProvider`
-purely to satisfy `KanbanProvider.ts:2745`/`:8508` would add a second arming path
+purely to satisfy `KanbanProvider.ts:2772`/`:8542` would add a second arming path
 that can disagree with the first. One arming route per host.
 
 **Race conditions.** None new. `armQueueWatch` serialises on its own
 `updateConfigJson`; the sweep is serialised by `_scanInProgress`
-(`PlanIngestionEngine.ts:508`); `_runQueueDone` serialises on `_queueNextChain`.
+(`PlanIngestionEngine.ts:508`); `_runQueueDone` serialises on `_queueNextChain`
+(`LocalApiServer.ts:64`, `_runQueueDone` at `:2776`).
 
 **Interaction with `the-dead-pacer-alert-has-no-budget-of-its-own.md`.** That
 plan fixes an unguarded operator alert in the seat-pacing branch. Seat pacing is
@@ -179,19 +180,16 @@ deliberately not extended (see below).
 
 ## Adversarial Synthesis
 
-Key risks. (1) Wiring the four resolvers without the arm path produces a
+Key risks: (1) Wiring the four resolvers without the arm path produces a
 completely green, completely inert change — the seams resolve and no watch ever
 exists to use them; Layer 2 is the half most likely to be skipped because Layer 1
-is the one the bug report names. (2) Copying the extension's
-`TaskViewerProvider.resolveTeamMembers` call into `bootstrap.ts` fails at
-runtime, or worse gets "fixed" by instantiating a vscode-bound provider in the
-headless host. (3) The escalation recorder capturing `server` at wiring time
-instead of call time recreates the silent-no-op seam. (4) A hard-equality parity
-gate is red on arrival, gets baselined, and becomes decoration. Mitigations: the
-verification plan asserts an armed watch in standalone, not just the presence of
-the wiring; the resolver table names the correct `teamWiring` entry point; the
-ordering hazard has its own audit entry; the gate is specified as an
-allowlist-with-reasons rather than a diff.
+is the one the bug report names. (2) The escalation recorder capturing `server`
+at wiring time instead of call time recreates the silent-no-op seam.
+(3) A hard-equality parity gate is red on arrival, gets baselined, and becomes
+decoration. Mitigations: the verification plan asserts an armed watch in
+standalone, not just the presence of the wiring; the lazy-capture hazard has its
+own audit entry; the gate is specified as an allowlist-with-reasons rather than
+a diff.
 
 ## Proposed Changes
 
@@ -213,8 +211,8 @@ ingestionEngine.setQueuePacingResolver(async (wsRoot, headTerminal) => {
     return 'head' as const;
 });
 
-// Byte-symmetric with extension.ts:1125, plus the null guard standalone needs
-// (`taskViewerProvider` is `TaskViewerProvider | null`, assigned at :989).
+// Byte-symmetric with extension.ts:1126, plus the null guard standalone needs
+// (`taskViewerProvider` is `TaskViewerProvider | null`, assigned at :1008).
 ingestionEngine.setQueueTeamMembersResolver(async (wsRoot, headTerminal) => {
     return taskViewerProvider
         ? taskViewerProvider.resolveTeamMembers(wsRoot, headTerminal)
@@ -223,9 +221,9 @@ ingestionEngine.setQueueTeamMembersResolver(async (wsRoot, headTerminal) => {
 ```
 
 The fourth resolves the server lazily, because it is wired before
-`new LocalApiServer(options)` runs at `:2910`. `server` is declared
-`let server: LocalApiServer;` at `:513`, so the binding exists at wiring time
-but is unassigned until `:2910` — the truthiness check is load-bearing, not
+`new LocalApiServer(options)` runs at `:2955`. `server` is declared
+`let server: LocalApiServer;` at `:514`, so the binding exists at wiring time
+but is unassigned until `:2955` — the truthiness check is load-bearing, not
 defensive noise:
 
 ```ts
@@ -241,17 +239,17 @@ ingestionEngine.setQueueEscalationRecorder(async (wsRoot, planId, fromSeat) => {
 ```
 
 Match the extension's error semantics exactly: swallow-and-default, never throw
-into the sweep. Wire all four **after `bootstrap.ts:989`** so
+into the sweep. Wire all four **after `bootstrap.ts:1008`** so
 `taskViewerProvider` is assigned — next to the existing
-`setTurnEndNotifier` call at `:2499` is the natural home.
+`setTurnEndNotifier` call at `:2544` is the natural home.
 
-Note `log()` in this file is `log(opts, ...args)` (`:118`), not a bare `log()` —
+Note `log()` in this file is `log(opts, ...args)` (`:119`), not a bare `log()` —
 pass the options object through if any of these need to log.
 
-### 2. `src/standalone/bootstrap.ts:2603` — supply `armQueueWatch`
+### 2. `src/standalone/bootstrap.ts:2648` — supply `armQueueWatch`
 
-Add to the options object handed to `LocalApiServer`, so the dispatch (`:2230`)
-and release (`:3182`) arm sites become live:
+Add to the options object handed to `LocalApiServer`, so the dispatch (`:2231`)
+and release (`:3183`) arm sites become live:
 
 ```ts
 armQueueWatch: async (wsRoot: string, headTerminal: string | null, opts?: { onDispatch?: boolean }) => {
@@ -260,13 +258,13 @@ armQueueWatch: async (wsRoot: string, headTerminal: string | null, opts?: { onDi
 },
 ```
 
-Standalone is single-workspace — `db` is bound once at `bootstrap.ts:467`
+Standalone is single-workspace — `db` is bound once at `bootstrap.ts:468`
 (`KanbanDatabase.forWorkspace(workspaceRoot)`) and the options object exposes it
-as `getKanbanDatabase: async () => db` (`:2616`), ignoring its argument. The
+as `getKanbanDatabase: async () => db` (`:2661`), ignoring its argument. The
 `wsRoot` parameter on every seam above is therefore pass-through in this host.
 Do not build a per-workspace map to "match" the extension; there is one root.
 
-Leave `KanbanProvider.ts:2745`/`:8508` alone — they stay extension-only paths.
+Leave `KanbanProvider.ts:2772`/`:8542` alone — they stay extension-only paths.
 One arming route per host is the invariant; two that can disagree is the thing
 to avoid.
 
@@ -308,12 +306,26 @@ ratchet is how its scope became invisible in the first place.
 
 Extend `src/test/queue-pipeline-contract.test.js` (already CI-wired) with
 source-text assertions that `bootstrap.ts` wires all four seams and supplies
-`armQueueWatch`, plus a negative assertion that the team-members resolver does
-**not** reference `TaskViewerProvider`.
+`armQueueWatch`.
+
+> **Superseded:** "plus a negative assertion that the team-members resolver does
+> **not** reference `TaskViewerProvider`."
+> **Reason:** This was a leftover from the superseded earlier draft that asserted
+> `resolveTeamMembersForHead` had to be called directly (without a
+> `TaskViewerProvider` instance). Section 1's corrected code explicitly uses
+> `taskViewerProvider.resolveTeamMembers(wsRoot, headTerminal)` with a null
+> guard — the negative assertion would fail against the plan's own proposed
+> wiring, forcing a coder to either delete the test or revert to the superseded
+> approach.
+> **Replaced with:** A positive assertion that the team-members resolver in
+> `bootstrap.ts` references `taskViewerProvider.resolveTeamMembers` (confirming
+> the byte-symmetric wiring with `extension.ts:1126`), plus a null-guard
+> assertion that the resolver checks `taskViewerProvider` truthiness before
+> dereferencing.
 
 ## Verification Plan
 
-### Automated
+### Automated Tests
 
 1. `npm run compile-tests` — clean.
 2. `npm run host-seam-parity:check` — passes with the two-entry allowlist. Then
@@ -329,8 +341,25 @@ source-text assertions that `bootstrap.ts` wires all four seams and supplies
    nothing — Layer 2. Do not accept source-text assertions alone for this step.
 
 **Gate wiring:** `test:contract:queue-pipeline` is invoked at
-`.github/workflows/integration-tests.yml:920`. The new `host-seam-parity:check`
+`.github/workflows/integration-tests.yml:929`. The new `host-seam-parity:check`
 needs both a `package.json` script and a workflow step.
+
+### Goal Invariants
+
+- Assert `bootstrap.ts` contains calls to all four: `setQueueHeadResolver`,
+  `setQueuePacingResolver`, `setQueueTeamMembersResolver`,
+  `setQueueEscalationRecorder` on `ingestionEngine`.
+- Assert the options object in `bootstrap.ts` passed to `new LocalApiServer`
+  contains an `armQueueWatch` field whose body calls
+  `ingestionEngine.armQueueWatch`.
+- Assert `bootstrap.ts` does **not** reference `_globalPlanWatcher` (the
+  extension-only indirection path — one arming route per host invariant).
+- Assert `scripts/check-host-seam-parity.js` exists at the expected path and is
+  referenced in both `package.json` (as `host-seam-parity:check`) and
+  `.github/workflows/integration-tests.yml`.
+- Assert the escalation recorder callback in `bootstrap.ts` references `server`
+  inside the async body (lazy call-time resolution), not as a captured local at
+  wiring time.
 
 ### Manual
 
@@ -350,3 +379,53 @@ Send to Coder. The diff is modest but it spans two composition roots, a new CI
 gate, and one lazy-capture hazard whose failure mode is silence — and the most
 likely wrong outcome (seams wired, nothing armed) presents as a complete,
 fully-green change.
+
+---
+
+## Implementation Summary
+
+Wired all four queue seams in `src/standalone/bootstrap.ts` (setQueueHeadResolver, setQueuePacingResolver, setQueueTeamMembersResolver, setQueueEscalationRecorder) immediately after the existing setTurnEndNotifier call, with byte-symmetric error semantics to extension.ts. The escalation recorder resolves `server` lazily at call time (truthiness guard inside the async body) to avoid the silent-no-op capture hazard. Added `armQueueWatch` to the LocalApiServer options object — Layer 2 — pointing straight at `ingestionEngine.armQueueWatch` with no `_globalPlanWatcher` indirection (one arming route per host). Created `scripts/check-host-seam-parity.js`, an allowlist-based CI guard that extracts every public setter from PlanIngestionEngine and compares which composition root wires each, failing on any unallowlisted asymmetry or stale allowlist entry. Wired it as `host-seam-parity:check` in package.json and as a step in `.github/workflows/integration-tests.yml`. Extended `queue-pipeline-contract.test.js` with six source-text assertions pinning the four seams, armQueueWatch, the lazy-server resolution, the team-members null guard, the no-`_globalPlanWatcher` invariant, and the gate script's CI wiring. Verified the gate goes red when a seam is removed.
+
+## Review Findings
+
+Two MAJOR defects fixed. (1) `scripts/check-host-seam-parity.js` read only
+`.getEngine().setX(` in `extension.ts`, so it was blind to the two seams the
+extension wires through the `GlobalPlanWatcherService` facade
+(`extension.ts:881`/`:891` → `GlobalPlanWatcherService.ts:80-86`, a one-line
+`this._engine.setX(fn)` forward). The plan's "two genuine asymmetries" are not
+asymmetric — allowlisting them would have exempted two live seams forever. The
+guard now resolves verified facade forwards, the allowlist is empty (the honest
+state: 9/9 wired in both roots), seam declarations no longer require the
+`public` keyword, and any unrecognised wiring expression is a hard failure.
+(2) Staging armed nothing in standalone: `KanbanProvider.stageForQueue:8542`
+resolves the engine via `_globalPlanWatcher`, which standalone never sets, and
+the LocalApiServer dispatch/release arms only cover a queue that ran — leaving
+"staged and never run" unwatched, the exact case `queue-pipeline-contract`'s
+"every staging path arms the watch" pins. `bootstrap.ts:1496` now arms on the
+`stageForQueue` verb through the same `ingestionEngine.armQueueWatch` route.
+
+Files changed: `scripts/check-host-seam-parity.js` (rewritten),
+`src/standalone/bootstrap.ts` (staging arm), `src/test/queue-pipeline-contract.test.js`
+(new staging-arm contract; the `_globalPlanWatcher` assertion now strips comments
+so prose explaining the field's absence is not a violation).
+
+Validation: `compile-tests`, `host-seam-parity:check` (9/9, empty allowlist, and
+red on both negative controls — a removed seam and a broken facade forward),
+`test:contract:queue-pipeline` (24 contracts), `standalone-parity:check`,
+`parity:check`, `standalone-fork:check`, `catalog:check`, `push-routing:check`,
+`kanban-dispatch-callers:check`, `verb-returns:check` — all green. Behavioural:
+a probe against a standalone-shaped host (standalone ingestion host +
+`KanbanDatabase.forWorkspace`) confirms `armQueueWatch` writes a non-empty
+`kanban.queueWatches` and that re-arming does not duplicate the record.
+`headless-feature-management-contract.test.js` has one failure ("recompute
+resolves the feature column through CUSTOM columns") — reproduced at pristine
+HEAD, pre-existing, unrelated.
+
+Remaining risks: the full standalone boot (plan verification step 5) was not
+executed — no harness boots `startHeadlessSwitchboard`, so the verb-transport
+link (webview → `kanbanVerb` → arm) rests on the source contract while the
+engine-side write is proven behaviourally. `armQueueWatch` is an unserialised
+read-modify-write on `kanban.queueWatches`; concurrent arms could interleave,
+but that is pre-existing and identical in the extension. Standalone users will
+now receive queue stall nudges and operator notices for the first time — expected,
+not a regression.
