@@ -10,6 +10,7 @@ import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
 import { GlobalPlanWatcherService } from './services/GlobalPlanWatcherService';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './services/KanbanDatabase';
+import { TransferBundleService } from './services/TransferBundleService';
 import { resolveEffectiveWorkspaceRootFromMappings, getMappingsFromIndex } from './services/WorkspaceIdentityService';
 import { SetupPanelProvider } from './services/SetupPanelProvider';
 import { ConnectionsPanelProvider } from './services/ConnectionsPanelProvider';
@@ -1650,6 +1651,88 @@ export async function activate(context: vscode.ExtensionContext) {
         );
     });
     context.subscriptions.push(resetKanbanDbDisposable);
+
+    // Transfer bundle — export the shared board tier + portable settings to a
+    // file outside the repo (sequential handover to another machine). See
+    // `.switchboard/plans/hand-a-workspace-to-another-machine.md`. Wired in the
+    // standalone host too (bootstrap.ts) so the two roots do not diverge.
+    const exportTransferBundleDisposable = registerSwitchboardCommand('switchboard.exportTransferBundle', async (targetWorkspaceRoot?: string, outPath?: string) => {
+        const workspaceRoot = targetWorkspaceRoot || kanbanProvider!.getCurrentWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+            return;
+        }
+        let resolvedOutPath = outPath;
+        if (!resolvedOutPath) {
+            const uri = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(path.join(os.homedir(), '.switchboard', 'transfer', 'switchboard-transfer.json')),
+                filters: { 'Switchboard transfer bundle': ['json'] },
+                saveLabel: 'Export bundle',
+                title: 'Export Switchboard transfer bundle'
+            });
+            if (!uri) return;
+            resolvedOutPath = uri.fsPath;
+        }
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        const service = new TransferBundleService({
+            db,
+            getWorkspaceRoot: () => workspaceRoot,
+            log: (msg: string) => console.log(msg),
+        });
+        const result = await service.exportBundle({ outPath: resolvedOutPath });
+        if (!result.success) {
+            vscode.window.showErrorMessage(`Transfer export failed: ${result.error || 'unknown error'}`);
+            return;
+        }
+        const warn = result.untrackedPlanFiles.length > 0 || result.unpushedCommits > 0
+            ? `\n\n⚠ ${result.untrackedPlanFiles.length} untracked plan/feature file(s) and ${result.unpushedCommits} unpushed commit(s) — push first or those cards will not resolve on the destination.`
+            : '';
+        const scp = result.scpLine ? `\n\nReady-to-paste:\n${result.scpLine}` : '';
+        vscode.window.showInformationMessage(
+            `Wrote ${result.path} — ${result.cardCount} cards · ${result.settingCount} settings · 0 credentials.${warn}${scp}`
+        );
+    });
+    context.subscriptions.push(exportTransferBundleDisposable);
+
+    const importTransferBundleDisposable = registerSwitchboardCommand('switchboard.importTransferBundle', async (targetWorkspaceRoot?: string, bundlePath?: string) => {
+        const workspaceRoot = targetWorkspaceRoot || kanbanProvider!.getCurrentWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+            return;
+        }
+        let resolvedPath = bundlePath;
+        if (!resolvedPath) {
+            const uri = await vscode.window.showOpenDialog({
+                filters: { 'Switchboard transfer bundle': ['json'] },
+                openLabel: 'Import bundle',
+                title: 'Import Switchboard transfer bundle',
+                canSelectMany: false
+            });
+            if (!uri || uri.length === 0) return;
+            resolvedPath = uri[0].fsPath;
+        }
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        const service = new TransferBundleService({
+            db,
+            getWorkspaceRoot: () => workspaceRoot,
+            log: (msg: string) => console.log(msg),
+        });
+        const result = await service.importBundle(resolvedPath);
+        if (!result.success) {
+            vscode.window.showErrorMessage(`Transfer import failed: ${result.error || 'unknown error'}`);
+            return;
+        }
+        const skipped = result.cardsSkipped.length > 0
+            ? `\n\nSkipped ${result.cardsSkipped.length} card(s) (plan file not in this checkout): ${result.cardsSkipped.slice(0, 5).map(c => c.planFile).join(', ')}${result.cardsSkipped.length > 5 ? ' …' : ''}`
+            : '';
+        const excluded = result.settingsExcluded.length > 0
+            ? `\n\nExcluded ${result.settingsExcluded.length} setting(s) (machine-local).`
+            : '';
+        vscode.window.showInformationMessage(
+            `Imported: ${result.cardsUpdated} cards matched, ${result.settingsApplied.length} settings applied.${skipped}${excluded}\n\nRe-authenticate tokens on this machine (secrets do not travel in the bundle).`
+        );
+    });
+    context.subscriptions.push(importTransferBundleDisposable);
 
     const syncImportedPlansDisposable = vscode.commands.registerCommand(
         'switchboard.syncImportedPlans',

@@ -35,6 +35,13 @@ export class WorkspaceExcludeService {
         '# are credentials, and a fork that drops the glob must still never commit them.',
         '.switchboard/secrets.enc*',
         '.switchboard/.master-key*',
+        '',
+        '# Transfer bundle — personal-portable settings (theme, thresholds, prompt',
+        '# overrides) for handing a workspace to ANOTHER machine. The default export',
+        '# path is ~/.switchboard/transfer/ (outside the repo), but a bundle placed in',
+        '# the tree must stay ignored: it carries one person\'s chrome, not team-shared',
+        '# state, and committing it imposes one machine\'s settings on every clone.',
+        'switchboard-transfer*.json',
     ];
 
     constructor(private readonly workspaceRoot: string) {}

@@ -3078,6 +3078,19 @@ export class KanbanDatabase {
         );
     }
 
+    /**
+     * Update a plan's repo_scope by plan_file. Used by the transfer-bundle import
+     * to restore the shared-tier repo scope onto a matched destination row.
+     * Mirrors updateTagsByPlanFile's shape.
+     */
+    public async updateRepoScopeByPlanFile(planFile: string, workspaceId: string, repoScope: string): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
+        return this._persistedUpdate(
+            'UPDATE plans SET repo_scope = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [repoScope, new Date().toISOString(), normalized, workspaceId]
+        );
+    }
+
     /** @deprecated session_id is no longer the unique key; use updateTagsByPlanFile instead. */
     public async updateTags(sessionId: string, tags: string): Promise<boolean> {
         const plan = await this.getPlanBySessionId(sessionId);
@@ -5629,6 +5642,26 @@ export class KanbanDatabase {
             [key, value]
         );
         return this._persist();
+    }
+
+    /**
+     * Read every config row (key + value). Used by the transfer-bundle exporter
+     * to classify and filter the full settings set in one pass. Sync requires an
+     * open handle (same contract as getConfigSync); returns [] otherwise.
+     */
+    public async getAllConfig(): Promise<Array<{ key: string; value: string }>> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare('SELECT key, value FROM config', []);
+        const rows: Array<{ key: string; value: string }> = [];
+        try {
+            while (stmt.step()) {
+                const obj = stmt.getAsObject();
+                rows.push({ key: String(obj.key ?? ''), value: String(obj.value ?? '') });
+            }
+        } finally {
+            stmt.free();
+        }
+        return rows;
     }
 
     public async getConfigJson<T>(key: string, defaultValue: T): Promise<T> {
@@ -9155,6 +9188,20 @@ FROM plans
                     }
                 }
 
+                // Resolve the existing row via the SAME plan-file resolution
+                // helper the transfer-bundle import uses (getPlanByPlanFile),
+                // so the two restore paths share one resolution symbol (grep
+                // both call sites for getPlanByPlanFile). When a row already
+                // exists, preserve its machine-local fields instead of
+                // overwriting them from the backup — narrows the backup's
+                // machine-local carry (brain_source_path, mirror_path,
+                // routed_to, dispatched_agent/ide/terminal, last_liveness_at,
+                // blocked_at, worktree_id, queue_position, column_order,
+                // completed_at, priority_starred, map_fingerprint). The backup
+                // still wins for the shared tier (column, project, complexity,
+                // tags, feature link) — that is the restore's purpose.
+                const existingRow = await this.getPlanByPlanFile(planFile.replace(/\\/g, '/'), workspaceId);
+
                 const record: KanbanPlanRecord = {
                     planId: p.plan_id || p.planId || '',
                     sessionId: p.session_id || p.sessionId || '',
@@ -9171,21 +9218,30 @@ FROM plans
                     updatedAt: now,
                     lastAction: 'restored_from_backup',
                     sourceType: p.source_type || p.sourceType || 'local',
-                    brainSourcePath: p.brain_source_path || p.brainSourcePath || '',
-                    mirrorPath: p.mirror_path || p.mirrorPath || '',
-                    routedTo: p.routed_to || p.routedTo || '',
-                    dispatchedAgent: p.dispatched_agent || p.dispatchedAgent || '',
-                    dispatchedIde: p.dispatched_ide || p.dispatchedIde || '',
-                    dispatchedAt: p.dispatched_at ?? p.dispatchedAt ?? null,
+                    brainSourcePath: existingRow?.brainSourcePath ?? (p.brain_source_path || p.brainSourcePath || ''),
+                    mirrorPath: existingRow?.mirrorPath ?? (p.mirror_path || p.mirrorPath || ''),
+                    routedTo: existingRow?.routedTo ?? (p.routed_to || p.routedTo || ''),
+                    dispatchedAgent: existingRow?.dispatchedAgent ?? (p.dispatched_agent || p.dispatchedAgent || ''),
+                    dispatchedIde: existingRow?.dispatchedIde ?? (p.dispatched_ide || p.dispatchedIde || ''),
+                    dispatchedTerminal: existingRow?.dispatchedTerminal,
+                    dispatchedAt: existingRow?.dispatchedAt ?? (p.dispatched_at ?? p.dispatchedAt ?? null),
+                    lastLivenessAt: existingRow?.lastLivenessAt ?? null,
+                    blockedAt: existingRow?.blockedAt ?? null,
                     clickupTaskId: p.clickup_task_id || p.clickupTaskId || '',
                     linearIssueId: p.linear_issue_id || p.linearIssueId || '',
                     notionPageId: p.notion_page_id || p.notionPageId || '',
-                    worktreeId: p.worktree_id ?? p.worktreeId ?? undefined,
+                    worktreeId: existingRow?.worktreeId ?? (p.worktree_id ?? p.worktreeId ?? undefined),
+                    worktreeStatus: existingRow?.worktreeStatus,
                     workspaceName: p.workspace_name || p.workspaceName || '',
                     projectId: p.project_id !== null && p.project_id !== undefined ? Number(p.project_id) : (p.projectId !== null && p.projectId !== undefined ? Number(p.projectId) : null),
                     isFeature: p.is_feature !== undefined ? Number(p.is_feature) : (p.isFeature !== undefined ? Number(p.isFeature) : 0),
                     featureId: p.feature_id || p.featureId || '',
-                    columnEnteredAt: p.column_entered_at ?? p.columnEnteredAt ?? null
+                    columnEnteredAt: p.column_entered_at ?? p.columnEnteredAt ?? null,
+                    queuePosition: existingRow?.queuePosition,
+                    columnOrder: existingRow?.columnOrder,
+                    completedAt: existingRow?.completedAt ?? null,
+                    priorityStarred: existingRow?.priorityStarred,
+                    mapFingerprint: existingRow?.mapFingerprint ?? null
                 };
 
                 try {

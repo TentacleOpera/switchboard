@@ -42,6 +42,7 @@ import { listIconPalette } from './iconPalette';
 import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQueue, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
 import { composeCompletedTurnEndBody, composeCompletionEvidence, TURN_END_VERIFY_INSTRUCTION } from './PlanIngestionEngine';
 import { compareByPrecedence } from './kanbanOrdering';
+import { TransferBundleService } from './TransferBundleService';
 
 /** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
  *  'lead_coded' / 'Lead Coded' all → 'LEAD CODED'. */
@@ -6372,6 +6373,95 @@ export class LocalApiServer {
         }
     }
 
+    /**
+     * POST /kanban/transfer/export — write a transfer bundle (shared board tier
+     * + portable settings) to a file. Default location is
+     * `~/.switchboard/transfer/switchboard-transfer.json` (outside the repo).
+     * Body: { workspaceRoot?, path? }. Shared route — wired in both hosts via
+     * the shared `getKanbanDatabase` seam, so the extension and standalone do
+     * not diverge.
+     */
+    private async _handleTransferExport(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const root = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            if (!root) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            const db = await this._resolveDbForRoot(root);
+            if (!db) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Kanban database not available' }));
+                return;
+            }
+            const service = new TransferBundleService({
+                db,
+                getWorkspaceRoot: () => root,
+                log: (msg: string) => console.log(msg),
+            });
+            const result = await service.exportBundle({ outPath: body?.path });
+            const status = result.success ? 200 : (result.error && /credential/i.test(result.error) ? 422 : 500);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] transferExport error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'transferExport failed' }));
+        }
+    }
+
+    /**
+     * POST /kanban/transfer/import — read a transfer bundle and upsert its
+     * cards onto the destination by `planFile` (never creates a row), then
+     * apply the allowlisted settings. Body: { workspaceRoot?, path }.
+     */
+    private async _handleTransferImport(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const root = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            if (!root) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            const bundlePath = String(body?.path || '').trim();
+            if (!bundlePath) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: path' }));
+                return;
+            }
+            const db = await this._resolveDbForRoot(root);
+            if (!db) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Kanban database not available' }));
+                return;
+            }
+            const service = new TransferBundleService({
+                db,
+                getWorkspaceRoot: () => root,
+                log: (msg: string) => console.log(msg),
+            });
+            const result = await service.importBundle(bundlePath);
+            const status = result.success ? 200 : (result.error && /credential/i.test(result.error) ? 422 : 500);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] transferImport error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'transferImport failed' }));
+        }
+    }
+
     private async _handleClickUpApiProxy(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, false)) {
             this._sendUnauthorized(res);
@@ -7205,6 +7295,10 @@ export class LocalApiServer {
                 await this._handleMissionControlStop(req, res);
             } else if (pathname === '/kanban/plans/import' && req.method === 'POST') {
                 await this._handleImportPlans(req, res);
+            } else if (pathname === '/kanban/transfer/export' && req.method === 'POST') {
+                await this._handleTransferExport(req, res);
+            } else if (pathname === '/kanban/transfer/import' && req.method === 'POST') {
+                await this._handleTransferImport(req, res);
             } else if (pathname === '/kanban/plans/project' && req.method === 'PUT') {
                 await this._handleSetPlanProject(req, res);
             } else if (pathname === '/kanban/plans/complexity' && req.method === 'PUT') {

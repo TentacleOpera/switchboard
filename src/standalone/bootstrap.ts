@@ -63,6 +63,7 @@ import { LinearSyncService } from '../services/LinearSyncService';
 import { NotionFetchService } from '../services/NotionFetchService';
 import { NotionBrowseService } from '../services/NotionBrowseService';
 import { switchboardCommandRegistry } from '../services/commandRegistry';
+import { TransferBundleService } from '../services/TransferBundleService';
 import { DesignPanelProvider } from '../services/DesignPanelProvider';
 import { SetupPanelProvider } from '../services/SetupPanelProvider';
 import { TicketsPanelProvider } from '../services/TicketsPanelProvider';
@@ -835,6 +836,22 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         log(opts, 'node-pty is unavailable — PTY terminals and board dispatch are disabled for this session (the board, plans and panels are unaffected).');
     }
 
+    // The four Board flags added by standalone-capability-gating-honesty default
+    // false in headlessPanelHtml, so a host that omits one hides that surface.
+    // `worktrees` and `uat` were omitted here on expectation, not measurement —
+    // the triage plan that was meant to classify them never produced its list, so
+    // a gate documented as provisional became permanent and the two tabs vanished
+    // from the browser Board. Both surfaces are wired in this host: every worktree
+    // and UAT verb is in KANBAN_VERBS and falls through the `default:` arm below to
+    // `kanbanProvider.handleServiceVerb`, whose arms are DB + git + `_seams().ui`
+    // with no editor dependency. Declared true so the two hosts render the same
+    // board (CLAUDE.md: standalone and the extension must not diverge).
+    //
+    // `boardStructure` stays false for a measured reason, not an assumed one:
+    // pushFullState publishes `updateColumns` from the CONSTANT
+    // DEFAULT_KANBAN_COLUMNS (:334, :363), so a saved custom column is written to
+    // the DB and never rendered. `featureAdvanced` likewise — `suggestFeatures`
+    // and `setFeatureWorkflowMode` are not wired here. Flip each when its path is.
     const baseStandaloneCapabilities: HostCapabilities = {
         terminalDispatch: ptyReady,
         automation: false,
@@ -842,6 +859,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         terminalFleet: ptyReady,
         mcpTerminals: false,
         secretsEntry: true,
+        worktrees: true,
+        uat: true,
     };
     const computeIntegrationsConfigured = async () => {
         try {
@@ -1201,6 +1220,32 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         await taskViewerProvider.resetAutobanTimersFromKanban());
     switchboardCommandRegistry.register('switchboard.setAutobanPausedFromKanban', async (paused: boolean) =>
         await taskViewerProvider.setAutobanPausedFromKanban(!!paused));
+
+    // Transfer bundle — parity with the extension's export/import commands
+    // (extension.ts). The shared API routes in LocalApiServer cover both hosts,
+    // but the webview's executeCommand falls through to the registry, so the
+    // command IDs must be registered here too or the standalone host silently
+    // no-ops a button the extension answers. See
+    // `.switchboard/plans/hand-a-workspace-to-another-machine.md`.
+    switchboardCommandRegistry.register('switchboard.exportTransferBundle', async (_targetWorkspaceRoot?: string, outPath?: string) => {
+        const service = new TransferBundleService({
+            db,
+            getWorkspaceRoot: () => workspaceRoot,
+            log: (msg: string) => console.log(msg),
+        });
+        return await service.exportBundle({ outPath });
+    });
+    switchboardCommandRegistry.register('switchboard.importTransferBundle', async (_targetWorkspaceRoot?: string, bundlePath?: string) => {
+        if (!bundlePath) {
+            return { success: false, error: 'Missing required field: path', cardsUpdated: 0, cardsSkipped: [], settingsApplied: [], settingsExcluded: [] };
+        }
+        const service = new TransferBundleService({
+            db,
+            getWorkspaceRoot: () => workspaceRoot,
+            log: (msg: string) => console.log(msg),
+        });
+        return await service.importBundle(bundlePath);
+    });
 
     const moveSessionsToColumn = async (sessionIds: string[], targetColumn: string) => {
         for (const sid of sessionIds) {
