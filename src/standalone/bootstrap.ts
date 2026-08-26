@@ -2610,11 +2610,18 @@ Each plan file must include:
             // local here would bind undefined and silently no-op forever.
             if (server && typeof server.reportQueueDone === 'function') {
                 const result = await server.reportQueueDone({ workspaceRoot: wsRoot, from: fromSeat, outcome: 'failed', planId });
-                // Carry the boolean: `payload.cleared` is true only on a real
-                // non-NULL→NULL latch transition, false on a no-op/duplicate.
-                // A `Promise<void>` seam where "did nothing" and "worked" are
-                // the same value is the hole B2 exists to close.
-                return !!(result?.payload?.cleared);
+                // Carry the boolean: `payload.released` is the card id, set
+                // ONLY after `clearWorkingState` made a real non-NULL→NULL latch
+                // transition (`_runQueueDone`); a duplicate/no-op resolves
+                // through `dup()`, which omits it, and every failure path
+                // through `fail()`, which omits it too. NOT `payload.cleared` —
+                // that is the `clearTerminalContext` result, gated on
+                // `!isTeamMember`, so it is hardcoded false for every team seat
+                // and seat pacing is a team feature. A `Promise<void>` seam
+                // where "did nothing" and "worked" are the same value is the
+                // hole B2 exists to close; reading the wrong field re-opens it
+                // pointing the other way.
+                return !!(result?.payload?.released);
             }
         } catch { /* best-effort — the operator notice already fired */ }
         return false;

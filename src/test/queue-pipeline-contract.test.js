@@ -1071,7 +1071,18 @@ async function run() {
         const armBody = src.slice(armIdx, src.indexOf('\n    private ', armIdx + 10));
         const onDispatchIdx = armBody.indexOf('if (opts?.onDispatch)');
         assert.notStrictEqual(onDispatchIdx, -1, 'onDispatch branch must exist');
-        const onDispatchBlock = armBody.slice(onDispatchIdx, onDispatchIdx + 400);
+        // Walk brace depth to the branch's matching close. A fixed-width
+        // window is a trap: the branch opens with a four-line comment, so any
+        // constant large enough today truncates the moment a line is added.
+        const onDispatchOpen = armBody.indexOf('{', onDispatchIdx);
+        let odDepth = 0;
+        let onDispatchClose = -1;
+        for (let j = onDispatchOpen; j < armBody.length; j++) {
+            if (armBody[j] === '{') odDepth++;
+            else if (armBody[j] === '}') { odDepth--; if (odDepth === 0) { onDispatchClose = j; break; } }
+        }
+        assert.notStrictEqual(onDispatchClose, -1, 'the onDispatch branch must have a matching close brace');
+        const onDispatchBlock = armBody.slice(onDispatchIdx, onDispatchClose + 1);
         assert.ok(/delete rearmed\.escalatedAt/.test(onDispatchBlock),
             'onDispatch must delete escalatedAt');
         assert.ok(/delete rearmed\.noHeadNotifiedAt/.test(onDispatchBlock),
@@ -1108,6 +1119,16 @@ async function run() {
         const guardBlock = body.slice(guardIdx, guardClose + 1);
         assert.ok(!/\bcontinue\b/.test(guardBlock),
             'the alert guard block must not contain a continue — the continue belongs outside so every dead-pacer tick short-circuits the gates');
+        // The RECOVERY must also stay outside the guard. The one-shot budget
+        // belongs to the operator notice, not to the release attempt: a
+        // transient release failure recovers on the next tick, and muting the
+        // retry alongside the notice pins the card in its coding column with
+        // `dispatched_at` set until a human intervenes.
+        assert.ok(!/_queueEscalationRecorder/.test(guardBlock),
+            'the escalation recorder call must be OUTSIDE the alert guard — one-shotting the recovery attempt alongside the notice removes the only retry a transient release failure has');
+        const preGuard = body.slice(exitedIdx, guardIdx);
+        assert.ok(/_queueEscalationRecorder/.test(preGuard),
+            'the escalation recorder must be called before the alert guard, on every dead-pacer tick — its result is what selects the notice text');
         // After the guard closes, kept.push(watch) and continue must follow.
         const afterGuard = body.slice(guardClose + 1);
         const keptIdx = afterGuard.indexOf('kept.push(watch)');
@@ -1126,26 +1147,39 @@ async function run() {
             'the setQueueEscalationRecorder setter must accept Promise<boolean>');
     });
 
-    await check('both host wirings return payload.cleared, not discard the result (B2)', () => {
+    await check('both host wirings return payload.released, not discard the result (B2)', () => {
         const fs = require('fs');
-        // Extension wiring.
-        const ext = fs.readFileSync(path.join(process.cwd(), 'src', 'extension.ts'), 'utf8');
-        const extIdx = ext.indexOf('setQueueEscalationRecorder(');
-        assert.notStrictEqual(extIdx, -1, 'extension must wire setQueueEscalationRecorder');
-        const extBody = ext.slice(extIdx, ext.indexOf('});', extIdx) + 3);
-        assert.ok(/payload\.cleared/.test(extBody),
-            'extension wiring must return result.payload.cleared — discarding the reportQueueDone result is the Promise<void> failure mode');
-        assert.ok(/return\s+!!\(result\?\.payload\?\.cleared\)/.test(extBody),
-            'extension wiring must return a boolean (!!payload.cleared), not void');
-        // Standalone wiring.
-        const sa = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'bootstrap.ts'), 'utf8');
-        const saIdx = sa.indexOf('setQueueEscalationRecorder(');
-        assert.notStrictEqual(saIdx, -1, 'standalone must wire setQueueEscalationRecorder');
-        const saBody = sa.slice(saIdx, sa.indexOf('});', saIdx) + 3);
-        assert.ok(/payload\.cleared/.test(saBody),
-            'standalone wiring must return result.payload.cleared — byte-symmetric with extension (parity)');
-        assert.ok(/return\s+!!\(result\?\.payload\?\.cleared\)/.test(saBody),
-            'standalone wiring must return a boolean (!!payload.cleared), not void');
+        // The wiring body ends at the arrow function's matching close paren.
+        // indexOf('});') is a trap: it lands on `planId });` INSIDE the
+        // reportQueueDone call and truncates the body before the return.
+        const wiringBody = (src, label) => {
+            const i = src.indexOf('setQueueEscalationRecorder(');
+            assert.notStrictEqual(i, -1, `${label} must wire setQueueEscalationRecorder`);
+            const open = src.indexOf('(', i);
+            let depth = 0;
+            for (let j = open; j < src.length; j++) {
+                if (src[j] === '(') depth++;
+                else if (src[j] === ')') { depth--; if (depth === 0) return src.slice(i, j + 1); }
+            }
+            assert.fail(`${label} setQueueEscalationRecorder call must have a matching close paren`);
+        };
+        // `payload.released` is the released card id, set ONLY after
+        // clearWorkingState made a real non-NULL→NULL transition. NOT
+        // `payload.cleared`: that is the clearTerminalContext result, gated on
+        // `!isTeamMember` in _runQueueDone, so it is hardcoded false for every
+        // team seat — and seat pacing IS a team feature. Reading `cleared`
+        // makes the notice claim "could not be released" on every successful
+        // release, which is the same false-claim bug pointing the other way.
+        for (const [file, label] of [
+            [path.join(process.cwd(), 'src', 'extension.ts'), 'extension'],
+            [path.join(process.cwd(), 'src', 'standalone', 'bootstrap.ts'), 'standalone'],
+        ]) {
+            const body = wiringBody(fs.readFileSync(file, 'utf8'), label);
+            assert.ok(/return\s+!!\(result\?\.payload\?\.released\)/.test(body),
+                `${label} wiring must return !!(result?.payload?.released) — discarding the reportQueueDone result is the Promise<void> failure mode`);
+            assert.ok(!/payload\?\.cleared/.test(body),
+                `${label} wiring must NOT read payload.cleared — it is the clearTerminalContext result, gated on !isTeamMember, so it is always false for the seat-paced team case`);
+        }
     });
 
     await check('the dead-pacer notice text branches on the release result (B2)', () => {

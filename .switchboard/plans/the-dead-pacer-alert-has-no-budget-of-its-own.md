@@ -441,3 +441,34 @@ onDispatch branch clears `deadPacerAlertedFor` alongside the existing stamps.
 Seven new contract-test assertions pin the guard, the `nudgeCount` decoupling,
 the `continue` placement (brace-depth walker), the seam signature, both host
 wirings, and the notice branching.
+
+## Review Findings
+
+**CRITICAL (fixed).** The plan's premise that `reportQueueDone`'s `payload.cleared`
+reports the latch release was wrong: `_runQueueDone` declares a *second* `cleared`
+(`LocalApiServer.ts:2998`) fed by `clearTerminalContext` and gated on
+`!isTeamMember`, so it is hardcoded `false` for every team seat — and seat pacing
+is a team feature. The B2 notice therefore claimed "could not be released — re-stage
+it manually" on *every successful* release. Both host wirings now return
+`!!(result?.payload?.released)` (the card id, set only after a real non-NULL→NULL
+`clearWorkingState` transition), and the seam docblock records why `cleared` is the
+wrong field. **MAJOR (fixed).** The escalation recorder had moved *inside* the
+one-shot alert guard, so a transient release failure lost its only retry and pinned
+the card; it now runs on every dead-pacer tick, outside the guard, with only the
+notice one-shot. **MAJOR (fixed).** Two of the new contract assertions were red at
+HEAD (a 400-char window truncating mid-`noHeadNotifiedAt`; an `indexOf('});')`
+landing inside the `reportQueueDone` call) — both now walk brace/paren depth, and a
+new assertion pins the recorder outside the guard. Files changed:
+`src/services/PlanIngestionEngine.ts`, `src/extension.ts`,
+`src/standalone/bootstrap.ts`, `src/test/queue-pipeline-contract.test.js`.
+Validation: `compile-tests` clean, `test:contract:queue-pipeline` (12 new
+assertions) and `test:contract:mission-control-tick` pass, `host-seam-parity:check`
+passes (9/9 both hosts), eslint 0 errors; all three are invoked by
+`.github/workflows/integration-tests.yml`. Pre-existing red and untouched by this
+work (verified identical at `0af21e45~1`): one `terminal-plan-attribution` assertion
+and three `seat-safeguards` call-site counts against `taskViewerProvider.ts`.
+Remaining risks: an `escalated: 'parked'` card still reads "will be re-staged"
+(the ladder fires its own `notifyOperator` park notice, so no blindness); the plan's
+behavioural sweep tests (Verification item 3) are covered by source-text assertions
+instead, which the Complexity Audit explicitly permits, so an incorrect `payload`
+field would not have been caught by a stubbed-recorder test either.

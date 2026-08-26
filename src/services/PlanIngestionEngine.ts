@@ -419,6 +419,16 @@ export class PlanIngestionEngine {
      * seam is the bridge. Optional — absent when subtask 2 has not landed,
      * in which case the escalation still fires (operator notified) but the
      * card is not re-staged until subtask 2's branch exists.
+     *
+     * Returns TRUE only when the release actually landed — the latch made a
+     * real non-NULL→NULL transition and the ladder ran. FALSE on a no-op, a
+     * duplicate, a throw, or an absent host wiring. The boolean is the whole
+     * point: `Promise<void>` made "did nothing" and "worked" the same value,
+     * which is why a silently failing release could repeat a "will be
+     * re-staged" notice that was false by then. Hosts wire this to
+     * `LocalApiServer.reportQueueDone` and must return `payload.released`
+     * (the released card id) — NOT `payload.cleared`, which is the
+     * `clearTerminalContext` result and is hardcoded false for team seats.
      */
     private _queueEscalationRecorder?: (workspaceRoot: string, planId: string, fromSeat: string) => Promise<boolean>;
 
@@ -1541,20 +1551,33 @@ export class PlanIngestionEngine {
                     // the same dead seat and card is not. Absent reads as "not
                     // yet alerted" — the safe direction for old records.
                     const deadPacerKey = `${pacerSeat}:${heldCard.planId}`;
+                    // Step 7: feed subtask 2's ladder so the dead seat's card
+                    // is re-staged. This runs on EVERY dead-pacer tick, OUTSIDE
+                    // the alert guard: the one-shot budget belongs to the
+                    // operator NOTICE, not to the recovery attempt. A release
+                    // that fails transiently (db unavailable, a throw) recovers
+                    // on the next tick — muting the retry alongside the notice
+                    // would pin the card in its coding column with
+                    // `dispatched_at` set until a human intervened. Once the
+                    // release lands, `heldCard` no longer names this seat and
+                    // the branch is not re-entered, so the retry is bounded by
+                    // its own success.
+                    //
+                    // B2: the seam carries a boolean — true only when the
+                    // release made a real non-NULL→NULL latch transition and the
+                    // ladder ran, false on a no-op, an absent recorder, or a
+                    // throw. A `Promise<void>` seam where "did nothing" and
+                    // "worked" are the same value is the hole B2 closes.
+                    let released = false;
+                    if (this._queueEscalationRecorder) {
+                        try { released = await this._queueEscalationRecorder(folder, heldCard.planId, pacerSeat); }
+                        catch (recErr) { this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge escalation recorder failed: ${recErr}`); }
+                    }
                     if (watch.deadPacerAlertedFor !== deadPacerKey) {
-                        // B2: attempt the release FIRST — the notice text
-                        // depends on whether the card could be released. The
-                        // recorder seam carries a boolean (true = the latch
-                        // made a real non-NULL→NULL transition, false = no-op
-                        // or failure) so a silent no-op is no longer
-                        // indistinguishable from success. When the release
-                        // fails the repeated text ("will be re-staged") is
-                        // false by then — say what is true, once.
-                        let released = false;
-                        if (this._queueEscalationRecorder) {
-                            try { released = await this._queueEscalationRecorder(folder, heldCard.planId, pacerSeat); }
-                            catch (recErr) { this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge escalation recorder failed: ${recErr}`); }
-                        }
+                        // The notice text depends on whether the card was
+                        // actually released: repeating "will be re-staged"
+                        // when the release failed is the now-false claim
+                        // Layer 3 diagnosed. Say what is true, once.
                         const body = released
                             ? `[switchboard:turn-end] Queue stall (seat pacing) — seat '${pacerSeat}' holding card '${heldCard.planId}' is ${!pacerLive ? 'absent' : 'exited'}. ${queueCards.length} card(s) remain staged. The card will be re-staged to a stronger seat.`
                             : `[switchboard:turn-end] Queue stall (seat pacing) — seat '${pacerSeat}' holding card '${heldCard.planId}' is ${!pacerLive ? 'absent' : 'exited'}. ${queueCards.length} card(s) remain staged. The card could not be released (the seat may have been renamed, or the release silently failed). Re-stage it manually.`;
