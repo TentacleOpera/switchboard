@@ -31,6 +31,14 @@ Thumbs.db
 # Test output
 .vscode-test/
 
+# Editor settings are per-machine. extensions/launch/tasks/mcp stay committed —
+# they are shared project config. settings.json is where VS Code writes whatever
+# a user changes through the Settings UI, including absolute paths, and it was
+# carrying a Windows brain path on a macOS checkout. It also seeded
+# switchboard.workspace.ignoreStrategy/ignoreRules to fresh clones, which
+# git-ignore-custom-default-regression.test.js exists to forbid.
+.vscode/settings.json
+
 # Logs
 *.log
 npm-debug.log*

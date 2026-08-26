@@ -3,6 +3,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 function readSource(...segments) {
     return fs.readFileSync(path.join(process.cwd(), ...segments), 'utf8');
@@ -14,7 +15,15 @@ function run() {
     const setupSource = readSource('src', 'webview', 'setup.html');
     const providerSource = readSource('src', 'services', 'TaskViewerProvider.ts');
     const excludeServiceSource = readSource('src', 'services', 'WorkspaceExcludeService.ts');
-    const vscodeSettings = JSON.parse(readSource('.vscode', 'settings.json'));
+    // `.vscode/settings.json` is deliberately UNTRACKED and gitignored: VS Code
+    // writes it whenever a user changes a `scope: resource` setting through the
+    // Settings UI, so a committed copy carries one machine's absolute paths to
+    // every other clone (it was holding a `c:/Users/...` brain path on a macOS
+    // checkout). It may still exist locally — read it if so, skip if not.
+    const vscodeSettingsPath = path.join(process.cwd(), '.vscode', 'settings.json');
+    const vscodeSettings = fs.existsSync(vscodeSettingsPath)
+        ? JSON.parse(fs.readFileSync(vscodeSettingsPath, 'utf8'))
+        : null;
 
     assert.strictEqual(
         packageJson.contributes.configuration.properties['switchboard.workspace.ignoreStrategy'].default,
@@ -72,14 +81,26 @@ function run() {
         'Expected targeted managed gitignore rules not to re-add .switchboard/workspace-id.'
     );
 
-    assert.ok(
-        !Object.prototype.hasOwnProperty.call(vscodeSettings, 'switchboard.workspace.ignoreStrategy'),
-        'Expected .vscode/settings.json not to override the default git-ignore strategy.'
-    );
-    assert.ok(
-        !Object.prototype.hasOwnProperty.call(vscodeSettings, 'switchboard.workspace.ignoreRules'),
-        'Expected .vscode/settings.json not to seed shared ignoreRules overrides for fresh users.'
-    );
+    // The invariant that actually protects a fresh clone: the file is not TRACKED.
+    // The two assertions below used to be the whole guard, and they were red —
+    // the committed copy carried both keys. Untracking is the structural fix;
+    // asserting absence from the index is what keeps it fixed.
+    const tracked = execFileSync('git', ['ls-files', '--', '.vscode/settings.json'], {
+        cwd: process.cwd(), encoding: 'utf8',
+    }).trim();
+    assert.strictEqual(tracked, '',
+        'Expected .vscode/settings.json to be untracked — a committed copy carries one machine\'s absolute paths and seeds non-default config to every fresh clone.');
+
+    // A local copy setting these keys is a legitimate developer preference and is
+    // NOT a failure — that is the whole point of untracking the file. Warn only,
+    // so the developer knows their own workspace is not exercising the default.
+    if (vscodeSettings) {
+        for (const key of ['switchboard.workspace.ignoreStrategy', 'switchboard.workspace.ignoreRules']) {
+            if (Object.prototype.hasOwnProperty.call(vscodeSettings, key)) {
+                console.warn(`  note: your local .vscode/settings.json sets ${key} — harmless for other clones now that the file is untracked, but your workspace is not exercising the default.`);
+            }
+        }
+    }
 
     console.log('git-ignore custom default regression test passed');
 }
