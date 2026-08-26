@@ -40,3 +40,4 @@ Reviewed all four subtasks against HEAD. **Deferred findings** shipped complete 
 
 - The Acceptance Tester's scope was cut by user decision after review: it stays Optional (not core), keeps its `tester` role, gets no team seat, and no separate column-participation switch. Its prompt rewrite is kept. See `completion-testing-stage-checks-acceptance-criteria.md` → **Rejected by the user — do not reimplement**.
 - RESOLVED — the "backfilled Goal Invariants into 8 storage-programme plans" claim was misattributed, not unmet: all nine `storage-layer-overhaul` subtasks carry the section, added by separate plan sweeps. Nothing outstanding.
+- WITHDRAWN — the Review head-prompt migration deleted by `209cd7fc` is not a loss: the teams feature has never shipped to users, so no install carries an adopted team and there is nothing to convert. The migration this feature added was dead weight when written.

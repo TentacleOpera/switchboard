@@ -57,7 +57,7 @@ The flow, in order:
 - **Reviewers must not fix during the review pass.** If they can, they will, and the triage loses its input — the same reason the completion-testing stage is barred from fixing. The read-only constraint has to be structural for the review turn and lifted only for the apportioned fix turn.
 - **Fix-phase concurrency is real, unlike review-phase.** Up to six reviewers writing at once is the collision the read-only framing avoided. The findings carry `file:line`, so apportionment can be made file-disjoint — the same maximum-independent-set logic `dispatch-analysis` already applies to plans, applied to fixes. Serialising the fix phase is the fallback.
 - **Six reviewers on overlapping plans can duplicate findings.** Partitioned assignment (each plan reviewed once) avoids this by construction; it is only a problem if the design later moves to redundant multi-angle review of the same plan.
-- **The shipped Review team head prompt contradicts this at four points** — self-fix under 100 lines, delegate to a coder, re-review rounds, and commit. It shipped, so it migrates: `teamWiring.ts:1037` already carries the exact-value recogniser for `OLD_REVIEW_TEAM_HEAD_PROMPT` to copy.
+- **The existing Review team head prompt contradicts this at four points** — self-fix under 100 lines, delegate to a coder, re-review rounds, and commit. ~~It shipped, so it migrates.~~ **Correction: it did not ship.** The teams feature has never reached a published install, so the gallery text is simply replaced and no converter is needed. The `OLD_REVIEW_TEAM_HEAD_PROMPT` recogniser this line pointed at was itself written on the same false premise and has since been deleted.
 - **The team definition must be offered, never pre-seeded with members.** `SEEDED_AGENT_GROUP` is deliberately member-less and `OLD_SEEDED_AGENT_GROUP` documents why: a seed with members *"would spawn three unrequested coder agent CLIs per lead — the release gate this migration exists to close."* Six reviewer members would spawn six per lead on the identical mechanism.
 
 ## Edge-Case & Dependency Audit
@@ -103,7 +103,10 @@ The flow, in order:
 
 ### Migration
 
-Exact-value conversion of the shipped Review team head prompt, preserving every other key and leaving operator-edited groups untouched.
+**None.** An earlier revision of this section called for "exact-value conversion of the shipped Review team head prompt".
+That was wrong: the teams feature has never shipped to users, so no install carries an adopted team and there is no
+persisted head prompt to convert. Unreleased dev work takes a clean break. Do not add a converter here — a no-op
+migration reads to the next person as evidence the team gallery was released.
 
 ## Verification Plan
 
@@ -141,4 +144,4 @@ The subtask shipped, and it shipped in the right medium: this flow is prompt-lev
 
 ## Deferred Findings
 
-- MAJOR — Proposed Change 8 (exact-value migration of the shipped Review team head prompt) landed in `0417cc4e` as `PRE_TRIAGE_REVIEW_HEAD_PROMPT` / `isUntouchedPreTriageReviewTeam`, and was then **deliberately deleted** by a later, separately-planned commit (`209cd7fc`, "One release signal: remove reviewer from coding team") which removed that entire family of head-prompt converters. Installs on the delegation/self-fix Review head prompt therefore keep it. Not reversed here — that deletion is another plan's decision — but this plan's `### Migration` section no longer describes HEAD.
+- WITHDRAWN — Proposed Change 8 (exact-value migration of the shipped Review team head prompt) was built on a false premise: **the teams feature has never shipped to users.** No published install has an adopted team, so there is no persisted head prompt to convert. `PRE_TRIAGE_REVIEW_HEAD_PROMPT` and `isUntouchedPreTriageReviewTeam` were dead weight the day they were written, and `209cd7fc` was correct to delete that whole family — per CLAUDE.md, unreleased dev work takes clean breaks, no migrations, no compat shims. Nothing outstanding.
