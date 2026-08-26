@@ -373,6 +373,15 @@ jobs:
       - name: Global config sandbox contract (fail-closed guard, no real-file writes)
         run: npm run test:contract:global-config-sandbox
 
+      # `.vscode/settings.json` is untracked on purpose: VS Code writes it whenever a
+      # user changes any of the 87 contributed `scope: resource` settings, so a
+      # committed copy ships one machine's absolute paths to every clone — ours held a
+      # Windows brain path on a macOS checkout — and seeds a non-default git-ignore
+      # strategy to fresh users. This test was RED for exactly that reason and was
+      # wired into nothing, so the guard existed and never fired.
+      - name: Git-ignore defaults + .vscode/settings.json stays untracked
+        run: npm run test:contract:git-ignore-defaults
+
       # renderMarkdown feeds webview HTML, so its output is an XSS surface as much as
       # a formatting one, and block-transition bugs (list-then-table, table-then-list)
       # are the classic way a hand-rolled renderer starts emitting unbalanced tags.

@@ -36,6 +36,7 @@ Board state was never given a portable representation because it never had to le
 ### Non-goals
 
 - **Concurrent sharing.** Two machines live at once needs arbitration; that is `git-carried-shared-board-state.md` (CAS via non-fast-forward rejection) and `libsql-shared-store-turso-and-self-hosted-sqld.md`. This plan is sequential handover and must not grow a sync loop.
+- **Putting settings in the git-carried board snapshot.** `board.json` on the orphan branch is *shared* state read by teammates and by web-only agents. Personal-portable settings must never land there — a snapshot that carries one person's theme, status-bar layout and nudge thresholds imposes them on everyone who adopts it, and the snapshot is overwritten wholesale by whichever machine wrote last. If that snapshot ever grows a settings block it takes **team-shared only**, and that is a decision for `git-carried-shared-board-state.md`, not this plan. The classification here is built so that decision is a filter over an existing class rather than a re-derivation.
 - **Secrets.** The bundle must never contain a credential — see the security section. Transferring secrets is a separate, manual, documented step.
 - **Plan and feature bodies.** Already committed markdown. Only board state and settings travel.
 - **Replacing `kanban.db` on the destination.** Import is an upsert onto whatever the watcher already built from the plan files, never a file swap.
@@ -109,7 +110,54 @@ One versioned JSON file, `switchboard-transfer.json`:
 
 Cards key on **`planFile`** — relative, and the file is in git so it exists on the destination. Feature membership travels as `featureFile`, not `featureId`, for the same reason. No `plan_id`, no `session_id`, no `workspace_id` anywhere in the bundle.
 
-### 2. Config classification — allowlist, defaulting to machine-local
+### 2. Config classification — three stores, two axes, defaulting to machine-local
+
+> **Amended — there are three settings stores, not one, and "portable" is two
+> different questions.** The first draft allowlisted keys from the DB `config`
+> table only. That is one store of three, and it silently assumed a single
+> portable/local split.
+
+**Three stores.** A classifier that covers one of them leaves a user retyping
+settings the bundle claimed to carry:
+
+| Store | Location | Size here | Standalone can write it? |
+|---|---|---|---|
+| DB `config` table | `kanban.db` | 87 rows | yes |
+| **VS Code settings** | `.vscode/settings.json` / user settings | **87 contributed `switchboard.*` properties** | **no** — the shim's `update()` is a deliberate no-op |
+| **Standalone config** | `.switchboard/config.json` | small (theme keys) | yes |
+
+The VS Code store is the one most likely to be missed and the most dangerous to
+carry wholesale, because its machine-specific entries are absolute paths:
+`kanban.dbPath`, `kanban.controlPlaneRoot`, `workspaceDatabaseMappings`,
+`archive.dbPath`, `stitch.defaultOutputFolder`, `research.*FolderPath*`,
+`planner.designDocLink`, `workspaceBrainPaths`. Carrying `kanban.dbPath` in
+particular is actively destructive: it points the destination at the *source*
+machine's database location, which is the exact failure
+`a-configured-db-path-may-not-be-where-the-board-is.md` documents.
+
+That store is also already leaking uncontrolled — a committed
+`.vscode/settings.json` was shipping one machine's paths to every clone until it
+was untracked. So the bundle must not become a second, sanctioned copy of the
+same mistake.
+
+**Two axes, not one.** "Portable" answers a different question depending on the
+destination, and the two destinations want different subsets:
+
+| Class | Example keys | Transfer bundle (my other machine) | Shared board store (my teammate) |
+|---|---|---|---|
+| **Machine-local** | `kanban.dbPath`, `worktrees`, `terminals.groups`, all `switchboard.prompts.terminals.*`, `runtime.*` | never | never |
+| **Personal-portable** | `theme.name`, `statusBar.*`, `activityLight.*`, retention windows | **yes** | **no** — my chrome is not my team's |
+| **Team-shared** | `switchboard.prompts.roleConfig_*`, feature/epic workflow modes, `agents.customAgents`, `planScanner.intervalSeconds` | yes | yes |
+
+A single portable flag cannot express this. Classify each key as one of the
+three, and let each consumer take the classes it wants: the transfer bundle
+takes personal-portable **plus** team-shared; a shared store takes team-shared
+only. See the closing note on the git-carried board for why this matters there.
+
+The classifier's default arm stays **machine-local** across all three stores. A
+key added later is excluded until someone deliberately classifies it.
+
+### 2b. The old single-axis list, retained as the team-shared/personal split
 
 Portable (carry): `switchboard.prompts.roleConfig_*`, `feature_*` / `epic_*` workflow and mode flags, `kanban.dynamicComplexityRoutingEnabled`, `kanban.columnDragDropModes`, `agents.customAgents`, `agents.visibleAgents`, `planning.ingestionFolder`, `project_context_enabled`.
 
