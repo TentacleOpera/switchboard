@@ -3295,8 +3295,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="agent-description">Executes simple, repetitive code edits and heavily guided tasks at lowest cost.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="reviewer" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer" id="agents-tab-cmd-reviewer" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Evaluates completed implementations against plans, checking for regressions and scope creep.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="tester" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester" id="agents-tab-cmd-tester" placeholder="e.g. agy" style="flex:1;"></div>
-          <div class="agent-description">Judges finished changes against acceptance criteria (deferred risks resolved and intent satisfied) and writes follow-up plans.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="analyst" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst" id="agents-tab-cmd-analyst" placeholder="e.g. qwen" style="flex:1;"></div>
           <div class="agent-description">Researches general-purpose technical queries and outlines plan dependencies.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="project_manager" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Project Manager</label><input type="text" data-role="project_manager" id="agents-tab-cmd-project-manager" placeholder="e.g. claude" style="flex:1;"></div>
@@ -3304,6 +3302,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
           <!-- OPTIONAL -->
           <div class="agents-group-label">Optional</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="tester" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester" id="agents-tab-cmd-tester" placeholder="e.g. agy" style="flex:1;"></div>
+          <div class="agent-description">Judges finished changes against acceptance criteria (deferred risks resolved and intent satisfied) and writes follow-up plans. Optional by decision — enabling it is what gives the pipeline a Completion Tested stage.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="ticket_updater" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Ticket Updater</label><input type="text" data-role="ticket_updater" id="agents-tab-cmd-ticket-updater" placeholder="e.g. agy" style="flex:1;"></div>
           <div class="agent-description">Synchronizes plan state and comments back to connected project management systems (e.g. ClickUp/Linear).</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Researcher</label><input type="text" data-role="researcher" id="agents-tab-cmd-researcher" placeholder="e.g. claude" style="flex:1;"></div>
@@ -4990,30 +4990,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'concise findings to {child}. Do not write plans yourself — your reports are input the lead synthesizes into '
                     + 'the plan. When the lead dispatches a search or investigation task, do it thoroughly and report only what is '
                     + 'relevant to the task.\n'
-                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
-                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
-                    + 'commit first, then correct forward. '
-                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
-                    + 'other agents may be working the same tree.'
-            },
-            {
-                name: 'Review and Acceptance',
-                headRole: 'reviewer',
-                members: [
-                    { role: 'tester', count: 1, scope: 'per-team', relationship: 'reports-to-head' }
-                ],
-                purpose: 'Post-coding quality gates: reviewer checks implementation against the plan, and Acceptance Tester judges intent and deferred risks.',
-                headPrompt: 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
-                    + 'Never move a card to a new column yourself. '
-                    + 'You lead this review and acceptance team. Review implementations against their plans, then coordinate '
-                    + 'with your Acceptance Tester to judge intent conformance and deferred risks before completing. '
-                    + 'When the work is complete, stage the files you changed by explicit path '
-                    + '— never `git add -A` or `git add .`. Then create a single commit with a '
-                    + 'descriptive message.',
-                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
-                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
-                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
-                    + 'Judge finished changes against acceptance criteria (deferred risks resolved and intent satisfied) and write follow-up plans when criteria are not met.\n'
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
                     + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
                     + 'commit first, then correct forward. '

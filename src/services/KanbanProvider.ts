@@ -14302,19 +14302,20 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Column participation for the completion-testing stage — deliberately NOT role
-     * visibility. See the twin reader in TaskViewerProvider for why the two are
-     * split; the resolution order (globalState → DB `config` → VS Code
-     * configuration → false) MUST stay identical in both, or the board flows cards
-     * into a column whose dispatch then refuses them.
+     * The Completion Tested stage is active exactly when the Acceptance Tester role
+     * is visible. ONE switch, one meaning: the role ships Optional and unchecked, so
+     * enabling it in Setup is the deliberate act that gives the pipeline this stage.
+     *
+     * Do NOT split this into a separate "column participation" setting. That split
+     * existed briefly and only made sense alongside promoting the role to core —
+     * which was rejected: the Acceptance Tester stays optional. With the role hidden
+     * by default there is nothing to decouple, and a second switch would just be a
+     * way for the board and the dispatch path to disagree about whether the stage
+     * exists.
      */
     private async _isAcceptanceTesterActive(workspaceRoot: string): Promise<boolean> {
-        const KEY = 'switchboard.kanban.completionTestingEnabled';
-        const resolved = this._getSetting<boolean | undefined>(KEY, undefined);
-        if (resolved !== undefined) {
-            return resolved;
-        }
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('kanban.completionTestingEnabled', false);
+        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+        return visibleAgents.tester !== false;
     }
 
 

@@ -791,6 +791,46 @@ suite('agentPromptBuilder', () => {
             }
         });
 
+        test('the Acceptance Tester stays OPTIONAL — it is not a core role', () => {
+            // Decided, and reversed once already. The role ships unchecked under
+            // <!-- OPTIONAL --> and `tester: false` in both defaults sources;
+            // enabling it in Setup is what gives the pipeline this stage. Promoting
+            // it to core makes an empty Completion Tested column appear on every
+            // existing board, which is why it is not core. Do not re-promote it.
+            const fs = require('fs');
+            const path = require('path');
+            const root = path.resolve(__dirname, '..', '..', '..');
+
+            const shared = fs.readFileSync(path.join(root, 'src', 'webview', 'sharedDefaults.js'), 'utf8');
+            assert.ok(/tester:\s*false/.test(shared), 'sharedDefaults.js must default tester to false');
+
+            const global = fs.readFileSync(path.join(root, 'src', 'services', 'GlobalIntegrationConfigService.ts'), 'utf8');
+            assert.ok(/tester:\s*false/.test(global), 'GlobalIntegrationConfigService must default tester to false');
+
+            const html = fs.readFileSync(path.join(root, 'src', 'webview', 'kanban.html'), 'utf8');
+            const optionalIdx = html.indexOf('<!-- OPTIONAL -->');
+            const testerRowIdx = html.indexOf('data-role="tester"');
+            assert.ok(optionalIdx > 0 && testerRowIdx > optionalIdx,
+                'the Acceptance Tester row must sit under the Optional group, not Core');
+            const row = html.slice(html.lastIndexOf('<div class="startup-row"', testerRowIdx), testerRowIdx);
+            assert.ok(!/\bchecked\b/.test(row), 'the Acceptance Tester row must ship unchecked');
+        });
+
+        test('the Acceptance Tester is not offered as a team member', () => {
+            // Its only home is the Completion Tested column. Intent checking inside a
+            // review team is the LEAD's job (category 4 of its triage), so a
+            // reviewer+tester team has nothing for the tester to do.
+            const fs = require('fs');
+            const path = require('path');
+            const html = fs.readFileSync(
+                path.resolve(__dirname, '..', '..', '..', 'src', 'webview', 'kanban.html'), 'utf8');
+            const start = html.indexOf('const SHIPPED_TEAM_TYPES');
+            const templates = html.slice(start, html.indexOf('\n        ];', start));
+            assert.ok(start > 0 && templates.length > 0, 'SHIPPED_TEAM_TYPES must exist');
+            assert.ok(!/role:\s*'tester'/.test(templates),
+                'no team template may seat a tester — the stage is a column, not a team role');
+        });
+
         test('the stage prompt states both acceptance criteria', () => {
             const prompt = buildKanbanBatchPrompt('tester', makePlans(1), {});
             assert.ok(prompt.includes('Completion Tester'), 'Should name the completion-testing persona');

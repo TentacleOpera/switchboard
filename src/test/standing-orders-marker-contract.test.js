@@ -326,9 +326,12 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         if (value !== null) { prompts.push(value); }
     }
     assert.strictEqual(
-        prompts.length, 6,
-        `Expected 6 shipped team prompts, found ${prompts.length}. The gallery ships exactly ` +
-        'six team types (Batch planners, Coding, Review, Multi-agent planning, Planning with analyst, Review and Acceptance) and each must carry a prompt.'
+        prompts.length, 5,
+        `Expected 5 shipped team prompts, found ${prompts.length}. The gallery ships exactly ` +
+        'five team types (Batch planners, Coding, Review, Multi-agent planning, Planning with analyst) and each must carry a prompt. ' +
+        'A sixth ("Review and Acceptance", a reviewer + Acceptance Tester pair) was added and then removed by decision: ' +
+        'intent checking inside a review team is the LEAD\'s job (category 4 of its triage), so the tester had nothing to do there. ' +
+        'The Acceptance Tester\'s only home is the Completion Tested column.'
     );
     for (const p of prompts) {
         assert.ok(
@@ -360,8 +363,8 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         if (value !== null) { headPromptMatches.push(value); }
     }
     assert.strictEqual(
-        headPromptMatches.length, 5,
-        `Expected exactly 5 shipped headPrompts (Coding, Review, Multi-agent planning, Planning with analyst, Review and Acceptance), found ${headPromptMatches.length}.`
+        headPromptMatches.length, 4,
+        `Expected exactly 4 shipped headPrompts (Coding, Review, Multi-agent planning, Planning with analyst), found ${headPromptMatches.length}.`
     );
     // The Coding head prompt is selected by the completion post — the ONE call
     // that ends its turn. `POST /kanban/task/complete` appears in exactly one

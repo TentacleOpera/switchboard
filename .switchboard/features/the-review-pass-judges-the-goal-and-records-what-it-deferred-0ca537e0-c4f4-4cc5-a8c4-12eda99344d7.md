@@ -38,5 +38,5 @@ Reviewed all four subtasks against HEAD. **Deferred findings** shipped complete 
 
 ## Deferred Findings
 
-- MAJOR — `package.json` (`switchboard.kanban.completionTestingEnabled`): reachable via VS Code settings and the DB `config` table, but there is no Setup-panel toggle, so standalone users have no UI.
+- The Acceptance Tester's scope was cut by user decision after review: it stays Optional (not core), keeps its `tester` role, gets no team seat, and no separate column-participation switch. Its prompt rewrite is kept. See `completion-testing-stage-checks-acceptance-criteria.md` → **Rejected by the user — do not reimplement**.
 - MAJOR — `.switchboard/plans/goal-invariant-verification-and-review-escalation.md`: Proposed Change 6 (backfill `### Goal Invariants` into the storage-programme plans) was claimed complete and never done; the claim is corrected, the work is not.

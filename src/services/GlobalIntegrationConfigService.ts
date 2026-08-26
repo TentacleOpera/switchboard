@@ -352,7 +352,7 @@ export class GlobalIntegrationConfigService {
         coder: true,
         intern: true,
         reviewer: true,
-        tester: true,
+        tester: false,
         planner: true,
         analyst: true,
         jules: false,

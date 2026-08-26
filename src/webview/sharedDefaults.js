@@ -4,7 +4,7 @@ const DEFAULT_VISIBLE_AGENTS = {
     coder: true,
     intern: true,
     reviewer: true,
-    tester: true,
+    tester: false,
     planner: true,
     analyst: true,
     jules: false,
