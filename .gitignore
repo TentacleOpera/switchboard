@@ -58,6 +58,10 @@ list_output.txt
 # >>> Switchboard managed exclusions >>>
 # Switchboard runtime state (per-session, not shareable)
 .switchboard/*
+# .switchboard/logs/ contains terminal session logs that may include secrets
+# (agent terminals echo tokens, env vars, and file paths). It is ignored by the
+# .switchboard/* glob above and must NEVER be negated with a ! — doing so would
+# commit terminal output to the repository.
 !.switchboard/reviews/
 !.switchboard/plans/
 !.switchboard/features/

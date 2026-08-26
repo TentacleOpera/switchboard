@@ -1028,7 +1028,8 @@
     "test:contract:task-complete": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/task-complete-endpoint.test.js",
     "test:contract:dependency-gate": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dependency-gate-contract.test.js",
     "test:contract:host-auto-clear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/host-auto-clear-on-plan-change.test.js",
-    "test:contract:transfer-bundle": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/transfer-bundle-contract.test.js"
+    "test:contract:transfer-bundle": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/transfer-bundle-contract.test.js",
+    "test:contract:terminal-session-log": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-session-log-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

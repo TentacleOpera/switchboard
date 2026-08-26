@@ -111,6 +111,16 @@ export interface PromptDeliveryOptions {
     clearBeforePromptDelayMs?: number;
     clearReadinessMode?: ClearReadinessMode;
     cliFamily?: CliFamily;
+    /**
+     * Fired after the prompt text has been written to the pty (before the
+     * confirm CR). The terminal log writer registers as this callback to emit
+     * a `##` heading at each dispatch boundary, giving the log document an
+     * outline. This is the SHARED hook point — both hosts import
+     * `sendPromptToPty`, so hooking here reaches both composition roots.
+     * Hooking in `deliverPrompt` (standalone-only) would leave the extension
+     * host with no headings.
+     */
+    onPromptDelivered?: (terminalName: string, promptText: string) => void;
 }
 
 /**
@@ -187,6 +197,12 @@ export async function sendPromptToPty(
             }
         }
         handle.write('\x1b[201~');
+        // Notify the log writer (or any flush observer) that a prompt was
+        // delivered — the heading is emitted here, before the submit CR, so
+        // the heading precedes the CLI's echo of the prompt in the log.
+        if (opts?.onPromptDelivered) {
+            try { opts.onPromptDelivered(handle.name, text); } catch { /* log writer must never crash delivery */ }
+        }
         await new Promise(r => setTimeout(r, SUBMIT_SETTLE_MS));
         handle.write('\r');
         // Confirm Enter — see rule 2 above. Unconditional by design.

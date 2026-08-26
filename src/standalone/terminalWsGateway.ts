@@ -319,6 +319,14 @@ export class TerminalWsGateway {
     private drainInterval?: NodeJS.Timeout;
     private sharedFlushInterval?: NodeJS.Timeout;
 
+    /**
+     * Flush observers — invoked after each coalesced output chunk is committed
+     * to the scrollback ring. The terminal log writer subscribes here to tee
+     * output to per-session markdown files. Same pattern proposed by
+     * pty-screen-state-idle-detection-headless-vt.md.
+     */
+    private flushObservers = new Set<(terminal: string, data: string) => void>();
+
     private enqueueInput(terminalName: string, buf: Buffer): void {
         const handle = this.fleetService.get(terminalName);
         if (!handle) return;
@@ -484,6 +492,17 @@ export class TerminalWsGateway {
         this.broadcastWs = broadcastWs;
     }
 
+    /**
+     * Register a flush observer — called after each coalesced output chunk is
+     * committed to the scrollback ring and shipped to WS clients. The observer
+     * receives the terminal name and the coalesced chunk (the same `combined`
+     * string that was appended to the ring). Must not block — the caller is the
+     * shared flush interval driving every terminal.
+     */
+    public onFlush(cb: (terminal: string, data: string) => void): void {
+        this.flushObservers.add(cb);
+    }
+
     private initFleetListeners(): void {
         // Subscribe to fleet events so we capture scrollback from terminal creation time
         for (const t of this.fleetService.list()) {
@@ -600,6 +619,15 @@ export class TerminalWsGateway {
         }
 
         this.checkBackpressure(terminalName, targetClients);
+
+        // Notify flush observers (the terminal log writer tees output here).
+        // After the ring append and client fan-out so the live path is never
+        // delayed by a slow observer. The observer must not block.
+        if (this.flushObservers.size > 0) {
+            for (const observer of this.flushObservers) {
+                try { observer(terminalName, combined); } catch { /* observer must never crash the gateway */ }
+            }
+        }
 
         // More than one cap's worth arrived in a single window — keep draining
         // rather than waiting for the next pty read to re-arm the timer.

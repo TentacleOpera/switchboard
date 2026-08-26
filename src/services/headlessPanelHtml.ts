@@ -430,6 +430,7 @@ export function getTerminalsHtml(repoRoot: string, workspaceRoot: string, capabi
     const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'none';`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/\{\{TERMINALS_JS_URI\}\}/g, '/static/webview/terminals.js');
+    content = content.replace(/\{\{SHARED_UTILS_URI\}\}/g, '/static/webview/sharedUtils.js');
     content = content.replace(/\{\{XTERM_JS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.js');
     content = content.replace(/\{\{XTERM_CSS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.css');
     content = content.replace(/\{\{XTERM_ADDON_FIT_URI\}\}/g, '/static/webview/vendor/xterm/addon-fit.js');

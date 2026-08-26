@@ -6161,6 +6161,20 @@
             renderPaneGrid();
         });
 
+        // Log button — opens the terminal session log as a readable markdown
+        // document in a full-screen overlay. Re-reads the pane's current
+        // assignment (same pattern as paneClearBtn) so a reused element targets
+        // whatever terminal is in this pane NOW, not the one it was built for.
+        const paneLogBtn = document.createElement('button');
+        paneLogBtn.className = 'btn-unassign-pane btn-log-pane';
+        paneLogBtn.title = 'Open this terminal\'s session log';
+        paneLogBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const targetName = paneAssignments[index];
+            if (!targetName) { return; }
+            openLogView(targetName);
+        });
+
         const peekDismissBtn = document.createElement('button');
         peekDismissBtn.className = 'btn-unassign-pane btn-peek-dismiss';
         peekDismissBtn.textContent = 'Restore';
@@ -6189,6 +6203,7 @@
         actionsEl.appendChild(paneModelBtn);
         actionsEl.appendChild(unassignBtn);
         actionsEl.appendChild(modeBtn);
+        actionsEl.appendChild(paneLogBtn);
         headerEl.appendChild(titleEl);
         headerEl.appendChild(actionsEl);
         paneEl.appendChild(headerEl);
@@ -6473,7 +6488,7 @@
         // share a class name, so there is no selector that tells them apart, and
         // children[] is the honest read.
         // children[0] = pin, [1] = peek dismiss, [2] = pop out, [3] = clear,
-        // [4] = model, [5] = hide, [6] = mode (order set in createPaneElement).
+        // [4] = model, [5] = hide, [6] = mode, [7] = log (order set in createPaneElement).
         const pinBtn = actionsEl.children[0];
         const peekDismissBtn = actionsEl.children[1];
         const popoutBtn = actionsEl.children[2];
@@ -6481,9 +6496,11 @@
         const modelBtn = actionsEl.children[4];
         const hideBtn = actionsEl.children[5];
         const modeBtn = actionsEl.children[6];
+        const logBtn = actionsEl.children[7];
         clearBtn.textContent = 'clear';
         modelBtn.textContent = 'model';
         hideBtn.textContent = 'hide';
+        logBtn.textContent = 'log';
 
         // Restored explicitly, not left to the container's display. renderKanbanPane
         // hides these three INDIVIDUALLY, and panes are reused rather than rebuilt —
@@ -6495,6 +6512,11 @@
         modeBtn.style.display = 'none';
         peekDismissBtn.style.display = '';
         popoutBtn.style.display = '';
+        // Log button: visible only on an assigned terminal pane (same gate as
+        // the actionsEl container below). renderKanbanPane hides every child but
+        // modeBtn by LOOPING over actionsEl.children, so this restore is what
+        // brings the button back on a pane that has been in kanban mode.
+        logBtn.style.display = assignedName ? '' : 'none';
 
         // Pin toggle: text labels (not emoji) to match clear/hide treatment; state
         // carried by colour via .btn-pin-pane.is-pinned and by aria-pressed.
@@ -12409,6 +12431,164 @@
             if (e.key === 'Escape') { e.stopPropagation(); closeModal(); }
         }, true);
     })();
+
+    // ── Terminal session log viewer ──────────────────────────────────────
+    //
+    // Opens a full-screen overlay showing the terminal's session log as a
+    // readable markdown document, with a sidebar for browsing other sessions.
+    // Reuses renderMarkdown (sharedUtils.js) and the .content-row / sidebar
+    // layout pattern from tickets.html. Fetches the log tail-first via the
+    // ranged endpoint to avoid handing renderMarkdown a multi-megabyte string.
+
+    let logViewOverlay = null;
+    // Held so closeLogView can unregister it. Registered per open and torn down
+    // per close: without this, closing via the Close button leaves a document
+    // capture-phase keydown listener behind for every log view ever opened.
+    let logViewEscHandler = null;
+
+    function closeLogView() {
+        if (logViewEscHandler) {
+            document.removeEventListener('keydown', logViewEscHandler, true);
+            logViewEscHandler = null;
+        }
+        if (logViewOverlay) {
+            logViewOverlay.remove();
+            logViewOverlay = null;
+        }
+    }
+
+    async function openLogView(terminalName) {
+        if (logViewOverlay) { closeLogView(); }
+
+        const overlay = document.createElement('div');
+        overlay.className = 'log-view-overlay';
+        overlay.id = 'log-view-overlay';
+
+        // Sidebar (session list) + detail (rendered markdown), reusing the
+        // .content-row / #tree-pane pattern from tickets.html.
+        const contentRow = document.createElement('div');
+        contentRow.className = 'content-row log-view-content-row';
+
+        const sidebar = document.createElement('div');
+        sidebar.className = 'log-view-sidebar';
+        sidebar.id = 'log-view-sidebar';
+
+        const sidebarHeader = document.createElement('div');
+        sidebarHeader.className = 'log-view-sidebar-header';
+        const sidebarTitle = document.createElement('span');
+        sidebarTitle.textContent = `${terminalName} — sessions`;
+        sidebarHeader.appendChild(sidebarTitle);
+
+        const sidebarToggle = document.createElement('button');
+        sidebarToggle.className = 'log-view-close-btn';
+        sidebarToggle.textContent = 'Close';
+        sidebarToggle.title = 'Close the log view';
+        sidebarToggle.addEventListener('click', closeLogView);
+        sidebarHeader.appendChild(sidebarToggle);
+
+        const sessionList = document.createElement('div');
+        sessionList.className = 'log-view-session-list';
+
+        sidebar.appendChild(sidebarHeader);
+        sidebar.appendChild(sessionList);
+
+        const detail = document.createElement('div');
+        detail.className = 'log-view-detail';
+        const detailContent = document.createElement('div');
+        detailContent.className = 'log-view-detail-content';
+        detail.appendChild(detailContent);
+
+        contentRow.appendChild(sidebar);
+        contentRow.appendChild(detail);
+        overlay.appendChild(contentRow);
+
+        // Close on Escape or overlay backdrop click.
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) { closeLogView(); }
+        });
+        logViewEscHandler = (e) => {
+            if (e.key === 'Escape') { closeLogView(); }
+        };
+        document.addEventListener('keydown', logViewEscHandler, true);
+
+        document.body.appendChild(overlay);
+        logViewOverlay = overlay;
+
+        // Load the session list for the sidebar.
+        try {
+            const res = await fetch(`/terminals/${encodeURIComponent(terminalName)}/logs`, { credentials: 'same-origin' });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success && Array.isArray(data.sessions)) {
+                    renderLogSessionList(sessionList, data.sessions, terminalName, detailContent);
+                }
+            }
+        } catch { /* best-effort — sidebar is optional */ }
+
+        // Load the most recent session's log content.
+        await loadLogContent(terminalName, null, detailContent);
+    }
+
+    function renderLogSessionList(container, sessions, terminalName, detailEl) {
+        container.innerHTML = '';
+        if (sessions.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'log-view-session-empty';
+            empty.textContent = 'No sessions logged yet.';
+            container.appendChild(empty);
+            return;
+        }
+        for (const session of sessions) {
+            const item = document.createElement('div');
+            item.className = 'log-view-session-item';
+            const date = new Date(session.mtime);
+            const sizeKB = Math.round(session.size / 1024);
+            item.textContent = `${date.toLocaleString()} (${sizeKB} KB)`;
+            item.title = session.filename;
+            item.addEventListener('click', () => {
+                // Highlight the selected session.
+                for (const child of container.children) {
+                    child.classList.remove('selected');
+                }
+                item.classList.add('selected');
+                loadLogContent(terminalName, session.filename, detailEl);
+            });
+            container.appendChild(item);
+            // Auto-select the first (most recent) session.
+            if (container.children.length === 1) {
+                item.classList.add('selected');
+            }
+        }
+    }
+
+    async function loadLogContent(terminalName, sessionFile, detailEl) {
+        detailEl.innerHTML = '<div class="log-view-loading">Loading…</div>';
+        try {
+            const url = sessionFile
+                ? `/terminals/${encodeURIComponent(terminalName)}/log?session=${encodeURIComponent(sessionFile)}`
+                : `/terminals/${encodeURIComponent(terminalName)}/log`;
+            const res = await fetch(url, { credentials: 'same-origin' });
+            if (!res.ok) {
+                if (res.status === 404) {
+                    detailEl.innerHTML = '<div class="log-view-empty">No log found for this terminal. Logs are created when the terminal produces output.</div>';
+                } else {
+                    detailEl.innerHTML = `<div class="log-view-error">Failed to load log (HTTP ${res.status}).</div>`;
+                }
+                return;
+            }
+            const text = await res.text();
+            if (!text.trim()) {
+                detailEl.innerHTML = '<div class="log-view-empty">The log is empty — the terminal has not produced output yet.</div>';
+                return;
+            }
+            // renderMarkdown is from sharedUtils.js, loaded before terminals.js.
+            detailEl.innerHTML = (typeof renderMarkdown === 'function')
+                ? (renderMarkdown(text) || '')
+                : `<pre>${text.replace(/</g, '&lt;')}</pre>`;
+        } catch (err) {
+            detailEl.innerHTML = `<div class="log-view-error">Failed to load log: ${err instanceof Error ? err.message : String(err)}</div>`;
+        }
+    }
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);

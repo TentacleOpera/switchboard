@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-08-26T03:50:38.297Z",
+  "generatedAt": "2026-08-26T09:56:53.699Z",
   "summary": {
     "totalArms": 647,
     "totalVerbs": 558,
@@ -14,7 +14,7 @@
       "TaskViewer": 110,
       "Setup": 101
     },
-    "apiEndpointCount": 103,
+    "apiEndpointCount": 105,
     "manualReviewCount": 6
   },
   "providers": {
@@ -2788,552 +2788,552 @@
       "arms": [
         {
           "verb": "ready",
-          "line": 14355,
+          "line": 14363,
           "dynamic": false
         },
         {
           "verb": "runSetup",
-          "line": 14404,
+          "line": 14412,
           "dynamic": false
         },
         {
           "verb": "runSetupIDEs",
-          "line": 14407,
+          "line": 14415,
           "dynamic": false
         },
         {
           "verb": "dispatchProjectManager",
-          "line": 14410,
+          "line": 14418,
           "dynamic": false
         },
         {
           "verb": "openKanban",
-          "line": 14431,
+          "line": 14439,
           "dynamic": false
         },
         {
           "verb": "openPlanningPanel",
-          "line": 14434,
+          "line": 14442,
           "dynamic": false
         },
         {
           "verb": "openDesignPanel",
-          "line": 14437,
+          "line": 14445,
           "dynamic": false
         },
         {
           "verb": "openSetupPanel",
-          "line": 14440,
+          "line": 14448,
           "dynamic": false
         },
         {
           "verb": "openProjectPanel",
-          "line": 14443,
+          "line": 14451,
           "dynamic": false
         },
         {
           "verb": "openInBrowser",
-          "line": 14446,
+          "line": 14454,
           "dynamic": false
         },
         {
           "verb": "jobsList",
-          "line": 14449,
+          "line": 14457,
           "dynamic": false
         },
         {
           "verb": "jobsInboxList",
-          "line": 14483,
-          "dynamic": false
-        },
-        {
-          "verb": "jobsMovesList",
           "line": 14491,
           "dynamic": false
         },
         {
+          "verb": "jobsMovesList",
+          "line": 14499,
+          "dynamic": false
+        },
+        {
           "verb": "jobsDropInstruction",
-          "line": 14498,
+          "line": 14506,
           "dynamic": false
         },
         {
           "verb": "jobsClearStuckClaim",
-          "line": 14511,
+          "line": 14519,
           "dynamic": false
         },
         {
           "verb": "jobsRefresh",
-          "line": 14533,
+          "line": 14541,
           "dynamic": false
         },
         {
           "verb": "linearLoadProject",
-          "line": 14540,
+          "line": 14548,
           "dynamic": false
         },
         {
           "verb": "linearLoadProjects",
-          "line": 14598,
+          "line": 14606,
           "dynamic": false
         },
         {
           "verb": "linearLoadTaskDetails",
-          "line": 14640,
+          "line": 14648,
           "dynamic": false
         },
         {
           "verb": "linearImportTask",
-          "line": 14712,
+          "line": 14720,
           "dynamic": false
         },
         {
           "verb": "clickupImportTask",
-          "line": 14737,
+          "line": 14745,
           "dynamic": false
         },
         {
           "verb": "linearImportAndSendToPlanner",
-          "line": 14762,
+          "line": 14770,
           "dynamic": false
         },
         {
           "verb": "clickupLoadProject",
-          "line": 14827,
+          "line": 14835,
           "dynamic": false
         },
         {
           "verb": "clickupLoadSpaces",
-          "line": 14896,
+          "line": 14904,
           "dynamic": false
         },
         {
           "verb": "clickupLoadFolders",
-          "line": 14925,
+          "line": 14933,
           "dynamic": false
         },
         {
           "verb": "clickupLoadLists",
-          "line": 14957,
+          "line": 14965,
           "dynamic": false
         },
         {
           "verb": "clickupSaveListSelection",
-          "line": 14988,
+          "line": 14996,
           "dynamic": false
         },
         {
           "verb": "clickupSaveSpaceSelection",
-          "line": 15010,
+          "line": 15018,
           "dynamic": false
         },
         {
           "verb": "clickupSaveFolderSelection",
-          "line": 15033,
+          "line": 15041,
           "dynamic": false
         },
         {
           "verb": "linearSaveProjectSelection",
-          "line": 15055,
+          "line": 15063,
           "dynamic": false
         },
         {
           "verb": "clickupLoadTaskDetails",
-          "line": 15073,
+          "line": 15081,
           "dynamic": false
         },
         {
           "verb": "linearUpdateIssueLabels",
-          "line": 15123,
+          "line": 15131,
           "dynamic": false
         },
         {
           "verb": "clickupUpdateTaskTags",
-          "line": 15161,
+          "line": 15169,
           "dynamic": false
         },
         {
           "verb": "linearLoadAutomationCatalog",
-          "line": 15200,
+          "line": 15208,
           "dynamic": false
         },
         {
           "verb": "clickupLoadSpaceTags",
-          "line": 15223,
+          "line": 15231,
           "dynamic": false
         },
         {
           "verb": "copyTextToClipboard",
-          "line": 15248,
+          "line": 15256,
           "dynamic": false
         },
         {
           "verb": "showInfo",
-          "line": 15260,
+          "line": 15268,
           "dynamic": false
         },
         {
           "verb": "showWarning",
-          "line": 15265,
-          "dynamic": false
-        },
-        {
-          "verb": "initializeProtocols",
-          "line": 15270,
-          "dynamic": false
-        },
-        {
-          "verb": "finishOnboarding",
           "line": 15273,
           "dynamic": false
         },
         {
+          "verb": "initializeProtocols",
+          "line": 15278,
+          "dynamic": false
+        },
+        {
+          "verb": "finishOnboarding",
+          "line": 15281,
+          "dynamic": false
+        },
+        {
           "verb": "scaffoldMultiRepo",
-          "line": 15276,
+          "line": 15284,
           "dynamic": false
         },
         {
           "verb": "openExternalUrl",
-          "line": 15302,
+          "line": 15310,
           "dynamic": false
         },
         {
           "verb": "openDocs",
-          "line": 15309,
+          "line": 15317,
           "dynamic": false
         },
         {
           "verb": "toggleSilentSetup",
-          "line": 15314,
+          "line": 15322,
           "dynamic": false
         },
         {
           "verb": "setTerminalRole",
-          "line": 15320,
+          "line": 15328,
           "dynamic": false
         },
         {
           "verb": "focusTerminal",
-          "line": 15325,
+          "line": 15333,
           "dynamic": false
         },
         {
           "verb": "focus",
-          "line": 15326,
+          "line": 15334,
           "dynamic": false
         },
         {
           "verb": "closeTerminal",
-          "line": 15336,
+          "line": 15344,
           "dynamic": false
         },
         {
           "verb": "executeRemote",
-          "line": 15341,
+          "line": 15349,
           "dynamic": false
         },
         {
           "verb": "executeLocal",
-          "line": 15346,
+          "line": 15354,
           "dynamic": false
         },
         {
           "verb": "renameTerminal",
-          "line": 15351,
+          "line": 15359,
           "dynamic": false
         },
         {
           "verb": "requestContextFile",
-          "line": 15356,
-          "dynamic": false
-        },
-        {
-          "verb": "registerAllTerminals",
-          "line": 15361,
-          "dynamic": false
-        },
-        {
-          "verb": "deregisterAllTerminals",
           "line": 15364,
           "dynamic": false
         },
         {
+          "verb": "registerAllTerminals",
+          "line": 15369,
+          "dynamic": false
+        },
+        {
+          "verb": "deregisterAllTerminals",
+          "line": 15372,
+          "dynamic": false
+        },
+        {
           "verb": "createAgentGrid",
-          "line": 15367,
+          "line": 15375,
           "dynamic": false
         },
         {
           "verb": "createAgentGridEditor",
-          "line": 15376,
+          "line": 15384,
           "dynamic": false
         },
         {
           "verb": "openTerminalGrid",
-          "line": 15379,
-          "dynamic": false
-        },
-        {
-          "verb": "closeChatAgent",
-          "line": 15382,
-          "dynamic": false
-        },
-        {
-          "verb": "setChatAgentRole",
           "line": 15387,
           "dynamic": false
         },
         {
+          "verb": "closeChatAgent",
+          "line": 15390,
+          "dynamic": false
+        },
+        {
+          "verb": "setChatAgentRole",
+          "line": 15395,
+          "dynamic": false
+        },
+        {
           "verb": "triggerAgentAction",
-          "line": 15393,
+          "line": 15401,
           "dynamic": false
         },
         {
           "verb": "sendAnalystMessage",
-          "line": 15398,
+          "line": 15406,
           "dynamic": false
         },
         {
           "verb": "generateContextMap",
-          "line": 15407,
+          "line": 15415,
           "dynamic": false
         },
         {
           "verb": "reviewPlan",
-          "line": 15411,
+          "line": 15419,
           "dynamic": false
         },
         {
           "verb": "viewPlan",
-          "line": 15433,
+          "line": 15441,
           "dynamic": false
         },
         {
           "verb": "copyPlanLink",
-          "line": 15446,
+          "line": 15454,
           "dynamic": false
         },
         {
           "verb": "deletePlan",
-          "line": 15453,
-          "dynamic": false
-        },
-        {
-          "verb": "importPlans",
-          "line": 15458,
-          "dynamic": false
-        },
-        {
-          "verb": "completePlan",
           "line": 15461,
           "dynamic": false
         },
         {
-          "verb": "recoverPlanFromSidebar",
+          "verb": "importPlans",
           "line": 15466,
           "dynamic": false
         },
         {
+          "verb": "completePlan",
+          "line": 15469,
+          "dynamic": false
+        },
+        {
+          "verb": "recoverPlanFromSidebar",
+          "line": 15474,
+          "dynamic": false
+        },
+        {
           "verb": "claimPlan",
-          "line": 15471,
-          "dynamic": false
-        },
-        {
-          "verb": "createDraftPlanTicket",
-          "line": 15476,
-          "dynamic": false
-        },
-        {
-          "verb": "getRecoverablePlans",
           "line": 15479,
           "dynamic": false
         },
         {
-          "verb": "restorePlan",
+          "verb": "createDraftPlanTicket",
           "line": 15484,
           "dynamic": false
         },
         {
+          "verb": "getRecoverablePlans",
+          "line": 15487,
+          "dynamic": false
+        },
+        {
+          "verb": "restorePlan",
+          "line": 15492,
+          "dynamic": false
+        },
+        {
           "verb": "saveStartupCommands",
-          "line": 15496,
+          "line": 15504,
           "dynamic": false
         },
         {
           "verb": "fetchNotionContent",
-          "line": 15499,
+          "line": 15507,
           "dynamic": false
         },
         {
           "verb": "getNotionFetchState",
-          "line": 15534,
+          "line": 15542,
           "dynamic": false
         },
         {
           "verb": "getStartupCommands",
-          "line": 15557,
+          "line": 15565,
           "dynamic": false
         },
         {
           "verb": "getVisibleAgents",
-          "line": 15562,
+          "line": 15570,
           "dynamic": false
         },
         {
           "verb": "getAccurateCodingSetting",
-          "line": 15567,
+          "line": 15575,
           "dynamic": false
         },
         {
           "verb": "getAdvancedReviewerSetting",
-          "line": 15572,
+          "line": 15580,
           "dynamic": false
         },
         {
           "verb": "getLeadChallengeSetting",
-          "line": 15577,
+          "line": 15585,
           "dynamic": false
         },
         {
           "verb": "getJulesAutoSyncSetting",
-          "line": 15582,
+          "line": 15590,
           "dynamic": false
         },
         {
           "verb": "getDefaultPromptOverrides",
-          "line": 15587,
+          "line": 15595,
           "dynamic": false
         },
         {
           "verb": "saveDefaultPromptOverrides",
-          "line": 15592,
+          "line": 15600,
           "dynamic": false
         },
         {
           "verb": "getDefaultPromptPreviews",
-          "line": 15596,
+          "line": 15604,
           "dynamic": false
         },
         {
           "verb": "memoListWorkspaces",
-          "line": 15601,
+          "line": 15609,
           "dynamic": false
         },
         {
           "verb": "setActiveTab",
-          "line": 15611,
+          "line": 15619,
           "dynamic": false
         },
         {
           "verb": "setActiveSubTab",
-          "line": 15616,
+          "line": 15624,
           "dynamic": false
         },
         {
           "verb": "memoLoad",
-          "line": 15622,
+          "line": 15630,
           "dynamic": false
         },
         {
           "verb": "memoSave",
-          "line": 15637,
+          "line": 15645,
           "dynamic": false
         },
         {
           "verb": "memoClear",
-          "line": 15651,
+          "line": 15659,
           "dynamic": false
         },
         {
           "verb": "memoGeneratePrompt",
-          "line": 15661,
+          "line": 15669,
           "dynamic": false
         },
         {
           "verb": "getRecentActivity",
-          "line": 15748,
+          "line": 15756,
           "dynamic": false
         },
         {
           "verb": "updateAutobanState",
-          "line": 15754,
+          "line": 15762,
           "dynamic": false
         },
         {
           "verb": "pipelineStart",
-          "line": 15775,
+          "line": 15783,
           "dynamic": false
         },
         {
           "verb": "pipelineStop",
-          "line": 15782,
+          "line": 15790,
           "dynamic": false
         },
         {
           "verb": "pipelinePause",
-          "line": 15785,
+          "line": 15793,
           "dynamic": false
         },
         {
           "verb": "pipelineUnpause",
-          "line": 15788,
-          "dynamic": false
-        },
-        {
-          "verb": "pipelineSetInterval",
-          "line": 15791,
-          "dynamic": false
-        },
-        {
-          "verb": "airlock_sendToCoder",
           "line": 15796,
           "dynamic": false
         },
         {
-          "verb": "airlock_syncRepo",
-          "line": 15801,
+          "verb": "pipelineSetInterval",
+          "line": 15799,
           "dynamic": false
         },
         {
-          "verb": "kanban_workflowEvent",
+          "verb": "airlock_sendToCoder",
           "line": 15804,
           "dynamic": false
         },
         {
-          "verb": "getDbPath",
+          "verb": "airlock_syncRepo",
           "line": 15809,
           "dynamic": false
         },
         {
+          "verb": "kanban_workflowEvent",
+          "line": 15812,
+          "dynamic": false
+        },
+        {
+          "verb": "getDbPath",
+          "line": 15817,
+          "dynamic": false
+        },
+        {
           "verb": "setLocalDb",
-          "line": 15814,
+          "line": 15822,
           "dynamic": false
         },
         {
           "verb": "editDbPath",
-          "line": 15818,
+          "line": 15826,
           "dynamic": false
         },
         {
           "verb": "testDbConnection",
-          "line": 15861,
+          "line": 15869,
           "dynamic": false
         },
         {
           "verb": "setCustomDbPath",
-          "line": 15886,
-          "dynamic": false
-        },
-        {
-          "verb": "setPresetDbPath",
-          "line": 15890,
-          "dynamic": false
-        },
-        {
-          "verb": "resetDatabase",
           "line": 15894,
           "dynamic": false
         },
         {
-          "verb": "sendToTerminal",
+          "verb": "setPresetDbPath",
           "line": 15898,
+          "dynamic": false
+        },
+        {
+          "verb": "resetDatabase",
+          "line": 15902,
+          "dynamic": false
+        },
+        {
+          "verb": "sendToTerminal",
+          "line": 15906,
           "dynamic": false
         }
       ]
@@ -16450,7 +16450,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5489,
+      "line": 5497,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16462,7 +16462,7 @@
       "verb": "loading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6141,
+      "line": 6149,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16474,7 +16474,7 @@
       "verb": "loading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6150,
+      "line": 6158,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16486,7 +16486,7 @@
       "verb": "loading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6200,
+      "line": 6208,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16498,7 +16498,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6783,
+      "line": 6791,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16511,7 +16511,7 @@
       "verb": "openMemoTab",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6873,
+      "line": 6881,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16522,7 +16522,7 @@
       "verb": "openMemoTab",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6876,
+      "line": 6884,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16533,7 +16533,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 7147,
+      "line": 7155,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16546,7 +16546,7 @@
       "verb": "workspaceChanged",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8558,
+      "line": 8566,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16558,7 +16558,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8562,
+      "line": 8570,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16567,7 +16567,7 @@
       "verb": "terminalAgentNames",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8566,
+      "line": 8574,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16579,7 +16579,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8569,
+      "line": 8577,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16591,7 +16591,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8572,
+      "line": 8580,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16603,7 +16603,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8573,
+      "line": 8581,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16615,7 +16615,7 @@
       "verb": "julesAutoSyncSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8575,
+      "line": 8583,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16627,7 +16627,7 @@
       "verb": "designSystemDocSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8583,
+      "line": 8591,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16640,7 +16640,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8591,
+      "line": 8599,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16652,7 +16652,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8603,
+      "line": 8611,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16661,7 +16661,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8606,
+      "line": 8614,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16673,7 +16673,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8608,
+      "line": 8616,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16685,7 +16685,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8617,
+      "line": 8625,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16698,7 +16698,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8618,
+      "line": 8626,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16710,7 +16710,7 @@
       "verb": "julesAutoSyncSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8622,
+      "line": 8630,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16722,7 +16722,7 @@
       "verb": "accurateCodingSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8629,
+      "line": 8637,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16734,7 +16734,7 @@
       "verb": "advancedReviewerSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8633,
+      "line": 8641,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16746,7 +16746,7 @@
       "verb": "leadChallengeSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8637,
+      "line": 8645,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16758,7 +16758,7 @@
       "verb": "excludeReviewedBacklogSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8642,
+      "line": 8650,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16770,7 +16770,7 @@
       "verb": "statusShowTerminalsSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8647,
+      "line": 8655,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16782,7 +16782,7 @@
       "verb": "statusShowKanbanSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8651,
+      "line": 8659,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16794,7 +16794,7 @@
       "verb": "statusShowArtifactsSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8655,
+      "line": 8663,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16806,7 +16806,7 @@
       "verb": "statusShowDesignSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8659,
+      "line": 8667,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16818,7 +16818,7 @@
       "verb": "statusShowProjectSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8663,
+      "line": 8671,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16830,7 +16830,7 @@
       "verb": "statusShowMemoSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8667,
+      "line": 8675,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16842,7 +16842,7 @@
       "verb": "cyberAnimationDisabledSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8672,
+      "line": 8680,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16854,7 +16854,7 @@
       "verb": "boardStateExportSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8682,
+      "line": 8690,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16867,7 +16867,7 @@
       "verb": "cyberScanlinesDisabledSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8690,
+      "line": 8698,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16879,7 +16879,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8695,
+      "line": 8703,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16891,7 +16891,7 @@
       "verb": "gitIgnoreConfig",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8701,
+      "line": 8709,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16900,7 +16900,7 @@
       "verb": "controlPlaneStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8704,
+      "line": 8712,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16909,7 +16909,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8705,
+      "line": 8713,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16918,7 +16918,7 @@
       "verb": "integrationSetupStates",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8708,
+      "line": 8716,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -16927,7 +16927,7 @@
       "verb": "selectPlanFile",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 9538,
+      "line": 9546,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16939,7 +16939,7 @@
       "verb": "selectPlanFile",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 9634,
+      "line": 9642,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16951,7 +16951,7 @@
       "verb": "initialState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 9899,
+      "line": 9907,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16969,7 +16969,7 @@
       "verb": "autobanStateSync",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11546,
+      "line": 11554,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16981,7 +16981,7 @@
       "verb": "pipelineState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11576,
+      "line": 11584,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16993,7 +16993,7 @@
       "verb": "missionControlStartResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11734,
+      "line": 11742,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -17002,7 +17002,7 @@
       "verb": "missionControlStartResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11746,
+      "line": 11754,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17015,7 +17015,7 @@
       "verb": "missionControlStartResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11892,
+      "line": 11900,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17028,7 +17028,7 @@
       "verb": "missionControlStartResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11903,
+      "line": 11911,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17040,7 +17040,7 @@
       "verb": "missionControlHandoff",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12123,
+      "line": 12131,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17054,7 +17054,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 13035,
+      "line": 13043,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17066,7 +17066,7 @@
       "verb": "notionFetchState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14393,
+      "line": 14401,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17081,7 +17081,7 @@
       "verb": "linearProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14543,
+      "line": 14551,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17095,7 +17095,7 @@
       "verb": "linearProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14555,
+      "line": 14563,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17109,7 +17109,7 @@
       "verb": "linearProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14581,
+      "line": 14589,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17123,7 +17123,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14590,
+      "line": 14598,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17136,7 +17136,7 @@
       "verb": "linearProjectsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14601,
+      "line": 14609,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17150,7 +17150,7 @@
       "verb": "linearProjectsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14613,
+      "line": 14621,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17164,7 +17164,7 @@
       "verb": "linearProjectsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14624,
+      "line": 14632,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17177,7 +17177,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14632,
+      "line": 14640,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17190,7 +17190,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14644,
+      "line": 14652,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17204,7 +17204,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14672,
+      "line": 14680,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17218,7 +17218,7 @@
       "verb": "linearTaskDetailsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14692,
+      "line": 14700,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17234,7 +17234,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14703,
+      "line": 14711,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17248,7 +17248,7 @@
       "verb": "linearTaskImported",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14716,
+      "line": 14724,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17262,7 +17262,7 @@
       "verb": "linearTaskImported",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14726,
+      "line": 14734,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -17271,7 +17271,7 @@
       "verb": "clickupTaskImported",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14741,
+      "line": 14749,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17285,7 +17285,7 @@
       "verb": "clickupTaskImported",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14751,
+      "line": 14759,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -17294,7 +17294,7 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14766,
+      "line": 14774,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17306,7 +17306,7 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14776,
+      "line": 14784,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17318,7 +17318,7 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14799,
+      "line": 14807,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17330,7 +17330,7 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14808,
+      "line": 14816,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17342,7 +17342,7 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14820,
+      "line": 14828,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17354,7 +17354,7 @@
       "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14835,
+      "line": 14843,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17368,7 +17368,7 @@
       "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14848,
+      "line": 14856,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17382,7 +17382,7 @@
       "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14860,
+      "line": 14868,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17396,7 +17396,7 @@
       "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14877,
+      "line": 14885,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17411,7 +17411,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14887,
+      "line": 14895,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17425,7 +17425,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14899,
+      "line": 14907,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17438,7 +17438,7 @@
       "verb": "clickupSpacesLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14910,
+      "line": 14918,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17450,7 +17450,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14917,
+      "line": 14925,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17463,7 +17463,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14928,
+      "line": 14936,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17476,7 +17476,7 @@
       "verb": "clickupFoldersLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14940,
+      "line": 14948,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17490,7 +17490,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14949,
+      "line": 14957,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17503,7 +17503,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14960,
+      "line": 14968,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17516,7 +17516,7 @@
       "verb": "clickupListsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14971,
+      "line": 14979,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17530,7 +17530,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14980,
+      "line": 14988,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17543,7 +17543,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15076,
+      "line": 15084,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17556,7 +17556,7 @@
       "verb": "clickupTaskDetailsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15103,
+      "line": 15111,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17572,7 +17572,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15114,
+      "line": 15122,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17586,7 +17586,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15129,
+      "line": 15137,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17601,7 +17601,7 @@
       "verb": "linearLabelsUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15142,
+      "line": 15150,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17615,7 +17615,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15151,
+      "line": 15159,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17630,7 +17630,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15168,
+      "line": 15176,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17645,7 +17645,7 @@
       "verb": "clickupTagsUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15181,
+      "line": 15189,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17659,7 +17659,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15190,
+      "line": 15198,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17674,7 +17674,7 @@
       "verb": "linearAutomationCatalogLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15206,
+      "line": 15214,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17687,7 +17687,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15214,
+      "line": 15222,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17701,7 +17701,7 @@
       "verb": "clickupSpaceTagsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15230,
+      "line": 15238,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17714,7 +17714,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15238,
+      "line": 15246,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17722,18 +17722,6 @@
         "scope",
         "error",
         "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "multiRepoScaffoldResult",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 15287,
-      "receiver": "this",
-      "provider": "TaskViewer",
-      "payloadKeys": [
-        "type",
-        "result"
       ]
     },
     {
@@ -17749,10 +17737,22 @@
       ]
     },
     {
+      "verb": "multiRepoScaffoldResult",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 15303,
+      "receiver": "this",
+      "provider": "TaskViewer",
+      "payloadKeys": [
+        "type",
+        "result"
+      ]
+    },
+    {
       "verb": "createAgentGridResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15370,
+      "line": 15378,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17764,7 +17764,7 @@
       "verb": "createAgentGridResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15373,
+      "line": 15381,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17776,7 +17776,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15413,
+      "line": 15421,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17789,7 +17789,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15428,
+      "line": 15436,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17802,7 +17802,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15438,
+      "line": 15446,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17815,7 +17815,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15442,
+      "line": 15450,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17828,7 +17828,7 @@
       "verb": "recoverablePlans",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15481,
+      "line": 15489,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17840,7 +17840,7 @@
       "verb": "restorePlanResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15487,
+      "line": 15495,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17853,7 +17853,7 @@
       "verb": "recoverablePlans",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15490,
+      "line": 15498,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17865,7 +17865,7 @@
       "verb": "notionFetchState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15509,
+      "line": 15517,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17874,18 +17874,6 @@
         "pageTitle",
         "pageUrl",
         "charCount"
-      ]
-    },
-    {
-      "verb": "notionFetchState",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 15518,
-      "receiver": "this",
-      "provider": "TaskViewer",
-      "payloadKeys": [
-        "type",
-        "error"
       ]
     },
     {
@@ -17904,7 +17892,19 @@
       "verb": "notionFetchState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15548,
+      "line": 15534,
+      "receiver": "this",
+      "provider": "TaskViewer",
+      "payloadKeys": [
+        "type",
+        "error"
+      ]
+    },
+    {
+      "verb": "notionFetchState",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 15556,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -17913,7 +17913,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15559,
+      "line": 15567,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -17922,7 +17922,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15564,
+      "line": 15572,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17934,7 +17934,7 @@
       "verb": "accurateCodingSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15569,
+      "line": 15577,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17946,7 +17946,7 @@
       "verb": "advancedReviewerSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15574,
+      "line": 15582,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17958,7 +17958,7 @@
       "verb": "leadChallengeSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15579,
+      "line": 15587,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17970,7 +17970,7 @@
       "verb": "julesAutoSyncSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15584,
+      "line": 15592,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17982,7 +17982,7 @@
       "verb": "defaultPromptOverrides",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15589,
+      "line": 15597,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17994,7 +17994,7 @@
       "verb": "defaultPromptPreviews",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15598,
+      "line": 15606,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18006,7 +18006,7 @@
       "verb": "memoWorkspaceItems",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15608,
+      "line": 15616,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18019,7 +18019,7 @@
       "verb": "memoError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15625,
+      "line": 15633,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18031,7 +18031,7 @@
       "verb": "memoContent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15634,
+      "line": 15642,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18043,7 +18043,7 @@
       "verb": "memoError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15640,
+      "line": 15648,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18055,7 +18055,7 @@
       "verb": "memoError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15654,
+      "line": 15662,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18067,7 +18067,7 @@
       "verb": "memoError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15665,
+      "line": 15673,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18079,7 +18079,7 @@
       "verb": "memoPromptResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15677,
+      "line": 15685,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18092,7 +18092,7 @@
       "verb": "memoContent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15720,
+      "line": 15728,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18104,7 +18104,7 @@
       "verb": "memoPromptResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15728,
+      "line": 15736,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18119,7 +18119,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15811,
+      "line": 15819,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -18128,7 +18128,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15855,
+      "line": 15863,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18140,25 +18140,12 @@
       "verb": "dbConnectionResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15867,
+      "line": 15875,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
         "type",
         "success"
-      ]
-    },
-    {
-      "verb": "dbConnectionResult",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 15873,
-      "receiver": "this",
-      "provider": "TaskViewer",
-      "payloadKeys": [
-        "type",
-        "success",
-        "error"
       ]
     },
     {
@@ -18175,10 +18162,23 @@
       ]
     },
     {
+      "verb": "dbConnectionResult",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 15889,
+      "receiver": "this",
+      "provider": "TaskViewer",
+      "payloadKeys": [
+        "type",
+        "success",
+        "error"
+      ]
+    },
+    {
       "verb": "memoUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 16336,
+      "line": 16344,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18190,7 +18190,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17704,
+      "line": 17712,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18202,7 +18202,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19571,
+      "line": 19579,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18214,7 +18214,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19825,
+      "line": 19833,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18226,7 +18226,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19830,
+      "line": 19838,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18238,7 +18238,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20119,
+      "line": 20127,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18252,7 +18252,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20177,
+      "line": 20185,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18267,7 +18267,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 21267,
+      "line": 21275,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18282,7 +18282,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 21278,
+      "line": 21286,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18296,7 +18296,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 21333,
+      "line": 21341,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18310,7 +18310,7 @@
       "verb": "refresh",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 21436,
+      "line": 21444,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18321,7 +18321,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22278,
+      "line": 22286,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18334,7 +18334,7 @@
       "verb": "airlock_syncStart",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22290,
+      "line": 22298,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18345,7 +18345,7 @@
       "verb": "airlock_syncComplete",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22298,
+      "line": 22306,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18356,7 +18356,7 @@
       "verb": "airlock_syncError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22302,
+      "line": 22310,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18368,7 +18368,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22305,
+      "line": 22313,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18381,7 +18381,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22316,
+      "line": 22324,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18394,7 +18394,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22750,
+      "line": 22758,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18408,7 +18408,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22766,
+      "line": 22774,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18421,7 +18421,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22776,
+      "line": 22784,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18434,7 +18434,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 22798,
+      "line": 22806,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18447,7 +18447,7 @@
       "verb": "planCreated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23043,
+      "line": 23051,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18458,7 +18458,7 @@
       "verb": "insertContextFile",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23609,
+      "line": 23617,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18471,7 +18471,7 @@
       "verb": "setupStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23619,
+      "line": 23627,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18483,7 +18483,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23627,
+      "line": 23635,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18495,7 +18495,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23629,
+      "line": 23637,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18507,7 +18507,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23632,
+      "line": 23640,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18520,7 +18520,7 @@
       "verb": "setupStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23645,
+      "line": 23653,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18532,7 +18532,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23650,
+      "line": 23658,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18544,7 +18544,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23651,
+      "line": 23659,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18556,7 +18556,7 @@
       "verb": "sessionStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23690,
+      "line": 23698,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18570,7 +18570,7 @@
       "verb": "sessionStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23697,
+      "line": 23705,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18584,7 +18584,7 @@
       "verb": "julesStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 23985,
+      "line": 23993,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18597,7 +18597,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24397,
+      "line": 24405,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18610,7 +18610,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24416,
+      "line": 24424,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18623,7 +18623,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24672,
+      "line": 24680,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18637,7 +18637,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24673,
+      "line": 24681,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18651,7 +18651,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24694,
+      "line": 24702,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18666,7 +18666,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24701,
+      "line": 24709,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18681,7 +18681,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24818,
+      "line": 24826,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18693,7 +18693,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24823,
+      "line": 24831,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18705,7 +18705,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24842,
+      "line": 24850,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18717,7 +18717,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24855,
+      "line": 24863,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18729,7 +18729,7 @@
       "verb": "airlock_coderSent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24861,
+      "line": 24869,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18740,7 +18740,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24864,
+      "line": 24872,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18752,7 +18752,7 @@
       "verb": "airlock_syncComplete",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24872,
+      "line": 24880,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -18763,7 +18763,7 @@
       "verb": "airlock_syncError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 24875,
+      "line": 24883,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -19900,7 +19900,7 @@
       "verb": "popoutTerminal",
       "direction": "push",
       "file": "src/webview/terminals.js",
-      "line": 6182,
+      "line": 6196,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",
@@ -27814,6 +27814,16 @@
     {
       "path": "/terminals/verb/",
       "method": "POST",
+      "prefix": true
+    },
+    {
+      "path": "/terminals/",
+      "method": "GET",
+      "prefix": true
+    },
+    {
+      "path": "/terminals/",
+      "method": "GET",
       "prefix": true
     },
     {

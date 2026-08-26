@@ -39,6 +39,7 @@ import { MISSION_CONTROL_TERMINAL_NAME } from '../services/autobanState';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 import { TerminalWsGateway } from './terminalWsGateway';
 import { sendPromptToPty, clearPty, modelPty, writeSlashCommand } from './ptyPromptDelivery';
+import { TerminalLogWriter } from './terminalLogWriter';
 import type { ClearReadinessResult } from './clearReadiness';
 import { extractDispatchIdentity } from '../services/dispatchIdentity';
 import { resolveStandalonePtyClearDelay, resolveStandalonePtyClearPolicy } from '../services/ptyClearPolicy';
@@ -428,7 +429,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         // worked on exactly the seats where it timed out.
         let readiness: ClearReadinessResult | undefined;
         try {
-            readiness = await sendPromptToPty(handle, out, opts);
+            readiness = await sendPromptToPty(handle, out, {
+                ...opts,
+                onPromptDelivered: terminalLogWriter
+                    ? (terminalName, promptText) => terminalLogWriter.onPrompt(terminalName, promptText)
+                    : undefined,
+            });
         } catch (err: any) {
             sendErr = err;
             throw err;
@@ -2729,6 +2735,24 @@ Each plan file must include:
         ? new TerminalWsGateway(ptyFleetService, async () => resolvedToken)
         : undefined;
 
+    // Terminal log writer — tees flushed pty output to per-session markdown files
+    // under .switchboard/logs/. Subscribes to the gateway's flush observer for
+    // output chunks and to prompt-delivery notifications for dispatch headings.
+    // Both hosts wire this after gateway creation so the tee reaches both.
+    const terminalLogWriter = ptyReady
+        ? new TerminalLogWriter(path.join(switchboardDir, 'logs'))
+        : undefined;
+    if (terminalWsGateway && terminalLogWriter) {
+        terminalWsGateway.onFlush((terminal, data) => terminalLogWriter.onFlush(terminal, data));
+        ptyFleetService.onDidChange((event) => {
+            if (event.type === 'renamed') {
+                terminalLogWriter.onRename(event.oldName, event.newName);
+            } else if (event.type === 'closed') {
+                terminalLogWriter.onClose(event.name);
+            }
+        });
+    }
+
     const options: any = {
         workspaceRoot,
         port: opts.port,
@@ -2763,6 +2787,11 @@ Each plan file must include:
         onTurnEndNotify: (info: any) => {
             handleTurnEndNotify(info);
         },
+        // Roll the terminal log file when a seat's context is cleared via
+        // queue/done — a cleared terminal starting fresh work is a new session.
+        onTerminalContextCleared: terminalLogWriter
+            ? (terminalName: string) => terminalLogWriter.onSessionBoundary(terminalName)
+            : undefined,
         // Queue-level stall watch arming (host parity with the extension's
         // TaskViewerProvider.setPlanIngestionEngine path, but WITHOUT the
         // extension's watcher indirection — standalone owns the
@@ -3177,6 +3206,10 @@ Each plan file must include:
         usingDurableToken,
         stop: async () => {
             try { terminalWsGateway?.dispose(); } catch { /* ignore */ }
+            // Before the fleet goes: closes every open output block so the files
+            // left on disk are balanced markdown rather than something the read
+            // path has to repair on every later view.
+            try { terminalLogWriter?.dispose(); } catch { /* ignore */ }
             try { await ptyFleetService.disposeAll(); } catch { /* ignore */ }
             try { ingestionEngine.dispose(); } catch { /* ignore */ }
             try { (designProvider as any).dispose?.(); } catch { /* ignore */ }

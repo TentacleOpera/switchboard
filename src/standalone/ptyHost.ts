@@ -8,6 +8,7 @@ import { isPtyAvailable } from './ptyBackend';
 import { PtyFleetService } from './ptyFleetService';
 import { TerminalWsGateway } from './terminalWsGateway';
 import { clearPty, modelPty, sendPromptToPty, writeSlashCommand } from './ptyPromptDelivery';
+import { TerminalLogWriter } from './terminalLogWriter';
 
 interface PtyHostOptions {
     workspaceRoot: string;
@@ -43,6 +44,21 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
     const fleet = new PtyFleetService(workspaceRoot);
     const token = crypto.randomBytes(32).toString('hex');
     const gateway = new TerminalWsGateway(fleet, async () => token);
+
+    // Terminal log writer — tees flushed pty output to per-session markdown files.
+    // Same wiring as bootstrap.ts (standalone host) so both composition roots
+    // produce logs with dispatch headings. The gateway's flush observer and the
+    // fleet's renamed/closed events reach the writer here.
+    const switchboardDir = path.join(workspaceRoot, '.switchboard');
+    const terminalLogWriter = new TerminalLogWriter(path.join(switchboardDir, 'logs'));
+    gateway.onFlush((terminal, data) => terminalLogWriter.onFlush(terminal, data));
+    fleet.onDidChange((event) => {
+        if (event.type === 'renamed') {
+            terminalLogWriter.onRename(event.oldName, event.newName);
+        } else if (event.type === 'closed') {
+            terminalLogWriter.onClose(event.name);
+        }
+    });
 
     // Controller seat mirror — the extension host pushes the adopted
     // Mission Control seat here via the ptySetControllerSeat verb so the
@@ -279,6 +295,9 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                         clearReadinessMode: payload.clearReadinessMode === 'auto' || payload.clearReadinessMode === 'manual'
                             ? payload.clearReadinessMode
                             : undefined,
+                        // Heading-write hook for the log writer — the SHARED
+                        // path, not the extension-only deliverPrompt wrapper.
+                        onPromptDelivered: (terminalName, promptText) => terminalLogWriter.onPrompt(terminalName, promptText),
                     });
                     // Carry the readiness OUTCOME back over the wire. Without it the
                     // extension host has no way to tell a real ready signal from a
@@ -295,6 +314,17 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 // change (adopt, stop, handoff, confirm). null/undefined
                 // clears it. See the controllerSeat declaration above.
                 controllerSeat = payload?.seat || null;
+                return { success: true };
+            }
+            case 'ptyRollLogSession': {
+                // Roll the terminal log file (session boundary) — called by the
+                // extension host's onTerminalContextCleared callback when a
+                // seat's context is cleared via queue/done. The log writer lives
+                // in this child process, so the session roll must be forwarded
+                // over the verb boundary.
+                if (typeof payload.name === 'string') {
+                    terminalLogWriter.onSessionBoundary(payload.name);
+                }
                 return { success: true };
             }
             default:
@@ -396,6 +426,10 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
     const cleanupAndExit = () => {
         if (exiting) { return; }
         exiting = true;
+        // Host parity with bootstrap.ts's stop(): closes every open output block so
+        // the files left on disk are balanced markdown, not something the read path
+        // has to repair on every later view.
+        try { terminalLogWriter.dispose(); } catch { /* logging must never block the exit */ }
         // Awaited, not fire-and-forget: disposeAll owns the SIGTERM → grace → SIGKILL
         // budget, and exiting underneath it sends SIGTERM and never lives to escalate.
         // The 1s cap keeps a wedged shell from holding the host open indefinitely; the

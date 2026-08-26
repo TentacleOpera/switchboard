@@ -9,6 +9,10 @@ import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
 import { importPlanFiles } from './PlanFileImporter';
+// The fence discipline the terminal log is WRITTEN with is the same one the read
+// path has to honour, so the balance pass ships with the writer rather than
+// being re-derived (and drifting) here.
+import { normalizeLogSlice } from '../standalone/terminalLogWriter';
 import {
     STANDING_ORDERS_CONFIG_KEY,
     STANDING_ORDER_DEFINITIONS_CONFIG_KEY,
@@ -360,6 +364,14 @@ interface LocalApiServerOptions {
      * (reported `cleared: false`, pop still proceeds).
      */
     clearTerminalContext?: (workspaceRoot: string, terminalName: string) => Promise<{ cleared: boolean; error?: string }>;
+    /**
+     * Fired after a seat's terminal context is cleared via `clearTerminalContext`
+     * in `_runQueueDone`. The terminal log writer subscribes here to roll the
+     * log file (close current session, start a new one) so a cleared terminal
+     * starting fresh work reads as a new document. Optional — absent in
+     * headless/test harnesses.
+     */
+    onTerminalContextCleared?: (terminalName: string) => void;
     /**
      * Fired when a seat's working state is cleared (non-NULL→NULL transition) via
      * queue/done. Mirrors PlanIngestionEngine._onWorkingStateCleared →
@@ -2492,6 +2504,9 @@ export class LocalApiServer {
                     if (clr && clr.cleared === false && clr.error) {
                         clearError = clr.error;
                     }
+                    if (cleared && this._options.onTerminalContextCleared) {
+                        try { this._options.onTerminalContextCleared(acceptedCodingSeat); } catch { /* log writer must never crash the complete */ }
+                    }
                 } catch (clrErr) {
                     clearError = clrErr instanceof Error ? clrErr.message : String(clrErr);
                     console.warn(`[LocalApiServer] clearTerminalContext failed for accepted seat '${acceptedCodingSeat}':`, clrErr);
@@ -3002,6 +3017,12 @@ export class LocalApiServer {
                             const clr = await this._options.clearTerminalContext(workspaceRoot, from);
                             cleared = !!clr?.cleared;
                             clearError = clr?.error;
+                            // Notify the log writer to roll the session file —
+                            // a cleared terminal starting fresh work is a new
+                            // session to a reader.
+                            if (cleared && this._options.onTerminalContextCleared) {
+                                try { this._options.onTerminalContextCleared(from); } catch { /* log writer must never crash the pop */ }
+                            }
                         } catch (clrErr) {
                             clearError = clrErr instanceof Error ? clrErr.message : String(clrErr);
                             console.warn('[LocalApiServer] clearTerminalContext failed:', clrErr);
@@ -4657,6 +4678,178 @@ export class LocalApiServer {
             console.warn('[LocalApiServer] icon-palette failed:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: 'icon-palette failed' }));
+        }
+    }
+
+    /**
+     * Default tail size for log reads — 256 KB. Keeps `renderMarkdown` from
+     * choking on a multi-megabyte string (the same attach-burst mistake one
+     * layer up that the ring cap exists to route around).
+     */
+    private static readonly LOG_TAIL_DEFAULT_BYTES = 256 * 1024;
+
+    /**
+     * Hard ceiling on a single log read, however large `tail` asks for. Without
+     * it `?tail=99999999` reads the whole file into memory and hands the whole
+     * thing to `renderMarkdown` — the exact failure the default tail exists to
+     * prevent, reachable from a query string.
+     */
+    private static readonly LOG_TAIL_MAX_BYTES = 2 * 1024 * 1024;
+
+    /**
+     * GET /terminals/<name>/log — ranged tail of a terminal's session log.
+     *
+     * Returns the last N bytes (default 256 KB) of the most recent log file for
+     * the terminal, as `text/markdown` with a `Content-Range` header indicating
+     * the byte range served and a `X-Log-Total-Bytes` header with the file size.
+     * A `session` query param selects a specific session file by filename; without
+     * it the most recent session is served. A `tail` query param controls the
+     * number of bytes; an `offset` query param reads from a specific byte offset
+     * (for backward pagination from the tail) — `tail` still bounds the length,
+     * so `offset=0` reads a window, never the whole file.
+     *
+     * The served slice is fence-normalized (`normalizeLogSlice`) before it goes
+     * out: a byte range can start inside a code block and end inside the one the
+     * live session is still writing, and either unpaired fence makes
+     * `renderMarkdown` render the rest of the session as prose.
+     *
+     * Auth: uses the same `_checkAuth` that every other route uses — do NOT
+     * assume inheritance. The log files may contain secrets (agent terminals
+     * echo tokens, env and paths), so the auth gate is load-bearing.
+     *
+     * Returns 404 if no log exists for the terminal.
+     */
+    private async _handleTerminalLog(req: http.IncomingMessage, res: http.ServerResponse, terminalName: string): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        const url = new URL(req.url || '', `http://${req.headers.host}`);
+        const logsDir = path.join(this._options.workspaceRoot, '.switchboard', 'logs');
+        const sessionFile = url.searchParams.get('session');
+        const tailParam = Number(url.searchParams.get('tail'));
+        const offsetParam = Number(url.searchParams.get('offset'));
+
+        try {
+            // Every log file this terminal owns, newest first. The prefix is the
+            // writer's own sanitizeFileName mapping, and the session-id suffix is
+            // base36 of Date.now(), so a lexicographic sort is chronological.
+            const prefix = terminalName.replace(/[^a-zA-Z0-9._-]/g, '_') + '-';
+            let files: string[] = [];
+            try { files = fsSync.readdirSync(logsDir); } catch { /* dir may not exist */ }
+            const matching = files
+                .filter(f => f.startsWith(prefix) && f.endsWith('.md'))
+                .sort()
+                .reverse();
+
+            // Resolve the log file: a specific session, or the most recent.
+            let filePath: string | undefined;
+            if (sessionFile) {
+                // Scoped to THIS terminal's own sessions rather than to anything
+                // that lands inside logsDir: the caller names a session, not a
+                // path, and the listing above is the authority on what exists.
+                // That also settles traversal — no candidate is built from input.
+                const safe = sessionFile.replace(/[^a-zA-Z0-9._-]/g, '_');
+                if (matching.includes(safe)) {
+                    filePath = path.join(logsDir, safe);
+                }
+            } else if (matching.length > 0) {
+                filePath = path.join(logsDir, matching[0]);
+            }
+
+            if (!filePath) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'No log found for terminal', terminalName }));
+                return;
+            }
+
+            const stat = fsSync.statSync(filePath);
+            const totalBytes = stat.size;
+
+            // Resolve the byte range. Default: last 256 KB, hard-capped at 2 MiB.
+            // `tail` bounds the LENGTH in both directions — with `offset` it is a
+            // window, not "from here to EOF", or `offset=0` would read it all.
+            const requested = Number.isFinite(tailParam) && tailParam > 0 ? tailParam : LocalApiServer.LOG_TAIL_DEFAULT_BYTES;
+            const tailBytes = Math.min(requested, LocalApiServer.LOG_TAIL_MAX_BYTES, totalBytes);
+            const fromOffset = Number.isFinite(offsetParam) && offsetParam > 0;
+            const startBytes = fromOffset ? Math.min(offsetParam, totalBytes) : Math.max(0, totalBytes - tailBytes);
+            const endBytes = Math.min(totalBytes - 1, startBytes + tailBytes - 1);
+
+            if (startBytes > endBytes) {
+                // Range beyond file size — return empty body.
+                res.writeHead(200, {
+                    'Content-Type': 'text/markdown; charset=utf-8',
+                    'Content-Range': `bytes */${totalBytes}`,
+                    'X-Log-Total-Bytes': String(totalBytes),
+                });
+                res.end('');
+                return;
+            }
+
+            const length = endBytes - startBytes + 1;
+            const buf = Buffer.alloc(length);
+            const handle = await fs.open(filePath, 'r');
+            try {
+                await handle.read(buf, 0, length, startBytes);
+            } finally {
+                await handle.close();
+            }
+            // Content-Range describes the bytes READ from the file; the body is
+            // the fence-normalized form of them, so its length can differ by the
+            // one or two fence lines the balance pass adds.
+            const body = normalizeLogSlice(buf.toString('utf8'), startBytes > 0);
+            res.writeHead(200, {
+                'Content-Type': 'text/markdown; charset=utf-8',
+                'Content-Range': `bytes ${startBytes}-${endBytes}/${totalBytes}`,
+                'X-Log-Total-Bytes': String(totalBytes),
+            });
+            res.end(body);
+        } catch (err) {
+            console.warn('[LocalApiServer] terminal log read failed:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Failed to read terminal log' }));
+        }
+    }
+
+    /**
+     * GET /terminals/<name>/logs — list all session log files for a terminal.
+     *
+     * Returns `{ success: true, sessions: [{ filename, size, mtime }] }` sorted
+     * newest-first. Used by the log viewer's sidebar to browse other sessions.
+     * Auth-gated like every other route.
+     */
+    private async _handleTerminalLogList(req: http.IncomingMessage, res: http.ServerResponse, terminalName: string): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        const logsDir = path.join(this._options.workspaceRoot, '.switchboard', 'logs');
+        const prefix = terminalName.replace(/[^a-zA-Z0-9._-]/g, '_') + '-';
+
+        try {
+            let files: string[] = [];
+            try { files = fsSync.readdirSync(logsDir); } catch { /* dir may not exist */ }
+            const matching = files
+                .filter(f => f.startsWith(prefix) && f.endsWith('.md'))
+                .sort()
+                .reverse();
+
+            const sessions = matching.map(f => {
+                const fp = path.join(logsDir, f);
+                try {
+                    const stat = fsSync.statSync(fp);
+                    return { filename: f, size: stat.size, mtime: stat.mtimeMs };
+                } catch { return null; }
+            }).filter((s): s is { filename: string; size: number; mtime: number } => s !== null);
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, sessions }));
+        } catch (err) {
+            console.warn('[LocalApiServer] terminal log list failed:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Failed to list terminal logs' }));
         }
     }
 
@@ -7214,6 +7407,16 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/terminals/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/terminals/verb/'.length));
                 await this._handleTerminalVerb(verb, req, res);
+            } else if (pathname.startsWith('/terminals/') && pathname.endsWith('/log') && pathname.split('/').length === 4 && req.method === 'GET') {
+                // GET /terminals/<name>/log — ranged tail of a terminal's session log.
+                // Sits behind the same auth as every other route. The name is the
+                // middle segment (/terminals/<name>/log → 3 segments after split).
+                const name = decodeURIComponent(pathname.split('/')[2]);
+                await this._handleTerminalLog(req, res, name);
+            } else if (pathname.startsWith('/terminals/') && pathname.endsWith('/logs') && pathname.split('/').length === 4 && req.method === 'GET') {
+                // GET /terminals/<name>/logs — list all session log files for a terminal.
+                const name = decodeURIComponent(pathname.split('/')[2]);
+                await this._handleTerminalLogList(req, res, name);
             } else if (pathname.startsWith('/kanban/verb/') && req.method === 'POST') {
                 // A2b per-verb burn-down rail: /kanban/verb/<name> → KanbanService.
                 const verb = decodeURIComponent(pathname.slice('/kanban/verb/'.length));

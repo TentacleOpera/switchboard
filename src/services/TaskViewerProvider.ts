@@ -3754,6 +3754,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             resolveTeamMembers: async (wsRoot, headTerminal) => this.resolveTeamMembers(wsRoot, headTerminal),
             resolveTeamPacing: async (wsRoot, headTerminal) => this.resolveTeamPacing(wsRoot, headTerminal),
             clearTerminalContext: async (wsRoot, terminalName) => this.clearTerminalContext(wsRoot, terminalName),
+            // Roll the terminal log file (session boundary) when a seat's context
+            // is cleared via queue/done. The log writer lives in the pty host child
+            // process, so the roll is forwarded over the verb boundary.
+            onTerminalContextCleared: (terminalName) => {
+                if (this._ptyHostPort) {
+                    void this._ptyHostVerb('ptyRollLogSession', { name: terminalName }).catch(() => { /* best-effort — log roll is not critical */ });
+                }
+            },
             // Completion-callback parity with the file-watcher path (extension.ts
             // wires the same seams on the engine via setOnWorkingStateCleared /
             // setTurnEndNotifier). The API-based queue/done path fires these so a

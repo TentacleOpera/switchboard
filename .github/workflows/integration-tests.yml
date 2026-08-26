@@ -406,6 +406,19 @@ jobs:
       - name: Transfer bundle contract (round trip, re-keying, classifier, credential guard, host parity)
         run: npm run test:contract:transfer-bundle
 
+      # The terminal session log fails in the one way no byte-level assertion sees:
+      # an agent-printed ``` closes the log's own code block, and the rest of the
+      # session renders as prose. renderMarkdown delimits on EXACTLY three
+      # backticks and its match is not line-anchored, so "a longer fence than the
+      # payload" does not hold here. This test renders the writer's real output
+      # through the real renderer, and asserts the ranged tail is fence-balanced
+      # before it is served — a byte range can start inside one block and end
+      # inside the one the live session is still writing. Also pins the two
+      # composition roots: the heading hook is invoked only in the shared
+      # sendPromptToPty, and bootstrap.ts and ptyHost.ts each REGISTER against it.
+      - name: Terminal session log contract (fence safety, ranged tail, auth, host parity)
+        run: npm run test:contract:terminal-session-log
+
       # renderMarkdown feeds webview HTML, so its output is an XSS surface as much as
       # a formatting one, and block-transition bugs (list-then-table, table-then-list)
       # are the classic way a hand-rolled renderer starts emitting unbalanced tags.
