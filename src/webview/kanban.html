@@ -5003,7 +5003,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     { role: 'tester', count: 1, scope: 'per-team', relationship: 'reports-to-head' }
                 ],
                 purpose: 'Post-coding quality gates: reviewer checks implementation against the plan, and Acceptance Tester judges intent and deferred risks.',
-                headPrompt: 'You lead this review and acceptance team. Review implementations against their plans, then coordinate with your Acceptance Tester to judge intent conformance and deferred risks before completing.',
+                headPrompt: 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
+                    + 'Never move a card to a new column yourself. '
+                    + 'You lead this review and acceptance team. Review implementations against their plans, then coordinate '
+                    + 'with your Acceptance Tester to judge intent conformance and deferred risks before completing. '
+                    + 'When the work is complete, stage the files you changed by explicit path '
+                    + '— never `git add -A` or `git add .`. Then create a single commit with a '
+                    + 'descriptive message.',
                 prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
                     + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
                     + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
@@ -6256,7 +6262,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             { id: 'CODER CODED', label: 'Coder', role: 'coder', kind: 'coded', autobanEnabled: true },
             { id: 'INTERN CODED', label: 'Intern', role: 'intern', kind: 'coded', autobanEnabled: true },
             { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', autobanEnabled: false },
-            { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'planner', autobanEnabled: true },
+            { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'tester', autobanEnabled: true },
             { id: 'COMPLETED', label: 'Completed', kind: 'completed', autobanEnabled: false }
         ];
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };

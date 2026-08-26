@@ -5514,7 +5514,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'INTERN CODED': return 'intern';
             case 'CODED': return 'lead';
             case 'CODE REVIEWED': return 'reviewer';
-            case 'ACCEPTANCE TESTED': return 'planner';
+            case 'ACCEPTANCE TESTED': return 'tester';
             case 'RESEARCHER': return 'researcher';
             case 'TICKET UPDATER': return 'ticket_updater';
             case 'COMPLETED': return null;
@@ -5580,7 +5580,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'CODE REVIEWED':
                 return 'reviewer';
             case 'ACCEPTANCE TESTED':
-                return 'planner';
+                return 'tester';
             default:
                 return column.startsWith('custom_agent_') ? column : null;
         }
@@ -7422,14 +7422,50 @@ Each plan file must include:
         };
     }
 
+    /**
+     * Column participation for the completion-testing stage — deliberately NOT role
+     * visibility. `tester` is a core role (visible by default) so it can be started
+     * and put on a team like any other; whether the PIPELINE grows a stage is this
+     * switch, and it is off unless someone turns it on. That split is what lets the
+     * role be promoted without activating a new column on every existing install.
+     *
+     * Resolution MUST stay byte-identical to KanbanProvider's reader
+     * (`_isAcceptanceTesterActive` → `_getSetting`): globalState → the workspace DB
+     * `config` table → VS Code configuration → false. The two providers gate
+     * different halves of the same stage (this one gates dispatch eligibility and
+     * the next-column resolver; KanbanProvider gates the column skip), so a
+     * divergence shows up as the board flowing cards into a column whose dispatch
+     * then refuses them.
+     */
     private async _isAcceptanceTesterActive(workspaceRoot?: string): Promise<boolean> {
-        return this._context.globalState.get<boolean>('switchboard.kanban.completionTestingEnabled', false);
+        const KEY = 'switchboard.kanban.completionTestingEnabled';
+        const stateVal = this._context.globalState.get<boolean>(KEY);
+        if (stateVal !== undefined) {
+            return stateVal;
+        }
+        const root = this._resolveWorkspaceRoot(workspaceRoot);
+        if (root) {
+            try {
+                const db = KanbanDatabase.forWorkspace(root);
+                if (db.isOpen()) {
+                    const dbVal = db.getConfigJsonSync<boolean | undefined>(KEY, undefined);
+                    if (dbVal !== undefined) {
+                        return dbVal;
+                    }
+                }
+            } catch {}
+        }
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('kanban.completionTestingEnabled', false);
     }
 
     private async _ensureAcceptanceTesterDispatchEligible(workspaceRoot?: string): Promise<boolean> {
         const visibleAgents = await this.getVisibleAgents(workspaceRoot);
         if (visibleAgents.tester === false) {
             this._seams().ui.showErrorMessage('Acceptance Tester is currently disabled in Setup.');
+            return false;
+        }
+        if (!await this._isAcceptanceTesterActive(workspaceRoot)) {
+            this._seams().ui.showErrorMessage('Completion testing is off. Enable switchboard.kanban.completionTestingEnabled to run the Completion Tested stage.');
             return false;
         }
         return true;

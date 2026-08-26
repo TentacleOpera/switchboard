@@ -383,6 +383,37 @@ export class KanbanProvider implements vscode.Disposable {
         this._reloadSettingsFromStore();
     }
 
+    /**
+     * Open a newly created worktree's agent terminals — BEST-EFFORT, never fatal.
+     *
+     * The worktree exists on disk and its `worktrees` row is written before this
+     * runs, so a terminal failure must not invert an already-succeeded create.
+     * In the standalone host it always fails: `_createAutobanTerminal` calls
+     * `vscode.window.createTerminal` (`TaskViewerProvider.ts:11397`), which the
+     * headless shim throws on by design (`standalone/vscodeShim.ts:184`). Before
+     * this helper the rejection propagated out of the three create arms' own
+     * try/catch and was reported as `Failed to create worktree: ...` for a
+     * worktree that had in fact been created AND recorded — the board then showed
+     * it on the next refresh, contradicting the error.
+     *
+     * Swallowed here rather than inside `ensureWorktreeTerminals`: that seam
+     * returns `Promise<void>`, so silencing it there would make "never wired" and
+     * "working" the same value for every caller. `openWorktreeTerminals` exists to
+     * open terminals — a throw there is an honest failure and keeps its message.
+     */
+    private async _openWorktreeTerminalsBestEffort(workspaceRoot: string, worktreePath: string): Promise<void> {
+        if (!this._taskViewerProvider) { return; }
+        try {
+            const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+            const activeAgents = Object.entries(visibleAgents)
+                .filter(([_, enabled]) => enabled)
+                .map(([role]) => role);
+            await this._taskViewerProvider.ensureWorktreeTerminals(worktreePath, activeAgents, true, true);
+        } catch (e: any) {
+            console.warn('[KanbanProvider] worktree created; opening its terminals failed:', e?.message || e);
+        }
+    }
+
     private _planningPanelProvider?: import('./PlanningPanelProvider').PlanningPanelProvider;
 
     public setPlanningPanelProvider(provider: import('./PlanningPanelProvider').PlanningPanelProvider) {
@@ -3758,7 +3789,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'INTERN CODED': 'intern',
             'PLANNED': 'planner',
             'CODE REVIEWED': 'reviewer',
-            'ACCEPTANCE TESTED': 'planner',
+            'ACCEPTANCE TESTED': 'tester',
         };
         const role = roleFromColumn[targetColumn];
         if (!role) return; // Column not in tracking scope
@@ -6182,13 +6213,17 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 resolvedOptions.reviewCommits = reviewCommits;
             }
         } else if (role === 'tester') {
-            // The acceptance tester needs an authoritative requirements baseline. The
-            // active project's PRD (resolved above into resolvedOptions.prdReferences
-            // and injected via the shared prefix) satisfies this; the legacy global
-            // design doc remains a back-compat fallback. Throw ONLY when neither exists.
-            if (!resolvedOptions.prdReferences || resolvedOptions.prdReferences.length === 0) {
-                throw new Error('Acceptance review requires a product requirements baseline: author a PRD for the active project (Projects tab). The workspace constitution, if present, will be enforced as supplementary invariants.');
-            }
+            // Completion testing takes the PLAN'S `## Goal` as its primary intent
+            // baseline; the active project's PRD (resolved above into
+            // resolvedOptions.prdReferences) is a CONTEXTUAL extra, used when present
+            // and never required.
+            //
+            // Do NOT reinstate a "no PRD => throw" guard here. It was removed
+            // deliberately: the incident this stage exists to catch (a plan whose
+            // steps were satisfied while its goal was inverted) was an internal
+            // refactor with no PRD entry, so a PRD precondition makes the stage
+            // unreachable on exactly the class of work it is for. The plan's Goal is
+            // always present; that is the yardstick.
 
             // Resolve the workspace constitution for the tester regardless of planner.constitutionEnabled (always-included supplementary invariants when the file exists)
             const { constitutionLink, constitutionContent } = await this._resolveConstitution(workspaceRoot, true);
@@ -13733,13 +13768,7 @@ ${FOCUS_DIRECTIVE}`;
                     await db.addWorktree(branch, wtPath, featureId, msg.project, undefined, defaultBranch);
 
                     // Force-create new terminals in worktree
-                    if (this._taskViewerProvider) {
-                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                        const activeAgents = Object.entries(visibleAgents)
-                            .filter(([_, enabled]) => enabled)
-                            .map(([role]) => role);
-                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents, true, true);
-                    }
+                    await this._openWorktreeTerminalsBestEffort(workspaceRoot, wtPath);
 
                     void this._seams().ui.showInformationMessage(`Worktree created: ${branch}`);
 
@@ -13771,13 +13800,7 @@ ${FOCUS_DIRECTIVE}`;
                     await db.addWorktree(branch, wtPath, msg.featureId ? String(msg.featureId) : undefined, undefined, undefined, defaultBranch);
 
                     // Force-create terminals in worktree using shared ensureWorktreeTerminals
-                    if (this._taskViewerProvider) {
-                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                        const activeAgents = Object.entries(visibleAgents)
-                            .filter(([_, enabled]) => enabled)
-                            .map(([role]) => role);
-                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents, true, true);
-                    }
+                    await this._openWorktreeTerminalsBestEffort(workspaceRoot, wtPath);
 
                     void this._seams().ui.showInformationMessage(`Worktree created for feature: ${branch}`);
                     await this._refreshBoard(workspaceRoot);
@@ -13808,13 +13831,7 @@ ${FOCUS_DIRECTIVE}`;
                     await db.addWorktree(branch, wtPath, undefined, msg.project, undefined, defaultBranch);
 
                     // Force-create terminals in worktree using shared ensureWorktreeTerminals
-                    if (this._taskViewerProvider) {
-                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                        const activeAgents = Object.entries(visibleAgents)
-                            .filter(([_, enabled]) => enabled)
-                            .map(([role]) => role);
-                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents, true, true);
-                    }
+                    await this._openWorktreeTerminalsBestEffort(workspaceRoot, wtPath);
 
                     void this._seams().ui.showInformationMessage(`Worktree created for project: ${branch}`);
                     await this._refreshBoard(workspaceRoot);
@@ -14278,14 +14295,26 @@ ${FOCUS_DIRECTIVE}`;
             case 'INTERN CODED': return 'intern';
             case 'CODED': return 'lead';
             case 'CODE REVIEWED': return 'reviewer';
-            case 'ACCEPTANCE TESTED': return 'planner';
+            case 'ACCEPTANCE TESTED': return 'tester';
             case 'COMPLETED': return null;
             default: return column.startsWith('custom_agent_') ? column : null;
         }
     }
 
+    /**
+     * Column participation for the completion-testing stage — deliberately NOT role
+     * visibility. See the twin reader in TaskViewerProvider for why the two are
+     * split; the resolution order (globalState → DB `config` → VS Code
+     * configuration → false) MUST stay identical in both, or the board flows cards
+     * into a column whose dispatch then refuses them.
+     */
     private async _isAcceptanceTesterActive(workspaceRoot: string): Promise<boolean> {
-        return this._getSetting<boolean>('switchboard.kanban.completionTestingEnabled', false);
+        const KEY = 'switchboard.kanban.completionTestingEnabled';
+        const resolved = this._getSetting<boolean | undefined>(KEY, undefined);
+        if (resolved !== undefined) {
+            return resolved;
+        }
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('kanban.completionTestingEnabled', false);
     }
 
 

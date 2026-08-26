@@ -68,15 +68,33 @@ test('reviewerBaseInstructions contains the GOAL VERDICT clause', () => {
 });
 
 test('GOAL VERDICT clause is unconditional base text (no add-on flag)', () => {
-    // The clause is appended to reviewerBaseInstructions without any
-    // conditional — it must not be gated on an add-on or flag.
+    // The clause must live INSIDE the `const reviewerBaseInstructions = ...`
+    // initializer as a plain `+` concat operand — not appended later behind an
+    // `if`, and not selected by a ternary on an add-on flag.
+    //
+    // Do NOT re-express this as a fixed-width slice before the clause: an earlier
+    // revision took the 200 characters preceding the clause and looked for the
+    // identifier there, which went red the moment an unrelated line was added to
+    // the initializer. Anchor on the declaration and the statement terminator.
     const clauseIdx = BUILDER_SRC.indexOf('GOAL VERDICT (mandatory');
     assert.ok(clauseIdx > 0, 'GOAL VERDICT clause must exist');
-    // Check it's inside a string concatenation chain, not inside an if-block.
-    const before = BUILDER_SRC.slice(clauseIdx - 200, clauseIdx);
+
+    const declIdx = BUILDER_SRC.indexOf('const reviewerBaseInstructions =');
+    assert.ok(declIdx > 0, 'reviewerBaseInstructions must be declared');
+    assert.ok(declIdx < clauseIdx, 'GOAL VERDICT must come after the reviewerBaseInstructions declaration');
+
+    // No statement terminator between the declaration and the clause => the clause
+    // is still part of that one initializer expression.
+    const between = BUILDER_SRC.slice(declIdx, clauseIdx);
     assert.ok(
-        before.includes("reviewerBaseInstructions") || before.includes("+ `\\n\\nGOAL VERDICT"),
-        'GOAL VERDICT must be part of reviewerBaseInstructions, not a conditional block.'
+        !between.includes(';'),
+        'GOAL VERDICT must be part of the reviewerBaseInstructions initializer, not a later conditional append.'
+    );
+
+    // The operand itself is an unconditional `+ \`...\`` concat, never a ternary.
+    assert.ok(
+        /\+\s*`\\n\\nGOAL VERDICT \(mandatory/.test(BUILDER_SRC),
+        'GOAL VERDICT must be attached as an unconditional concat operand, not gated on a flag.'
     );
 });
 
@@ -155,7 +173,10 @@ test('improve-plan SKILL.md offers ### Goal Invariants as recommended', () => {
         'Expected the section to explicitly state it is never a gate.'
     );
     assert.ok(
-        IMPROVE_PLAN.includes('executable assertions that name concrete paths'),
+        // Case-insensitive: the sentence opens a bullet in SKILL.md, so it is
+        // capitalised there. Pinning the lower-case form asserted the prose style,
+        // not the requirement.
+        /executable assertions that name concrete paths/i.test(IMPROVE_PLAN),
         'Expected invariants to require concrete assertions, not prose.'
     );
     assert.ok(
@@ -220,7 +241,14 @@ test('no confirm gates introduced in agentPromptBuilder.ts', () => {
 
 test('no confirm gates introduced in CONSTITUTION.md escalation rule', () => {
     const escalationIdx = CONSTITUTION.indexOf('Reviewer escalation on destination');
-    const region = CONSTITUTION.slice(escalationIdx, escalationIdx + 800);
+    assert.ok(escalationIdx > 0, 'the escalation rule must exist in CONSTITUTION.md');
+    // Scope to the whole bullet, not a fixed byte window: the rule is longer than
+    // the 800 characters an earlier revision sliced, so the closing no-confirm
+    // sentence fell outside the region and the assertion went red against correct
+    // prose. The bullet ends at the next top-level `- **` or the section rule.
+    const rest = CONSTITUTION.slice(escalationIdx);
+    const endRel = rest.slice(1).search(/\n- \*\*|\n---/);
+    const region = endRel === -1 ? rest : rest.slice(0, endRel + 1);
     assert.ok(
         !region.includes('confirm('),
         'The constitution escalation rule must not introduce a confirm() call.'

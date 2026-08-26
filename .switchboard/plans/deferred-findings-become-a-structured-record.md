@@ -103,3 +103,11 @@ None.
 ## Review Findings
 
 Implemented the deferred-findings section as a shared `DEFERRED_FINDINGS_SECTION_INSTRUCTION` constant interpolated into both `COMPLETION_STEP_FULL` and `COMPLETION_STEP_COMPACT`, preserving the `COMPLETION REPORT:` sentinel and the POST handshake. The compact mode's ≤ 5 sentence budget is explicitly scoped to the `## Review Findings` prose only and does NOT bound the deferred-findings list. The tester's step 5 now records remaining requirement gaps in the same `## Deferred Findings` section (one concept, one vocabulary), dropping the now-moot "remaining requirement gaps" phrasing. `reconcile` (`schedulerPresets.ts`) left byte-identical — consumption is the next plan's business. Added 7 tests covering both modes, the explicit empty case, severity/file:line per item, budget scoping, sentinel survival, tester vocabulary migration, and reconcile non-edit.
+
+### Reviewer pass (independent verification)
+
+Verified against HEAD, not against the completion note above. `DEFERRED_FINDINGS_SECTION_INSTRUCTION` (`agentPromptBuilder.ts:1081`) is interpolated into both `COMPLETION_STEP_FULL` (`:1083`) and `COMPLETION_STEP_COMPACT` (`:1085`) and into the completion-testing role's step 5 (`:2071`), so the record exists under either `reviewerCompactPlanUpdateEnabled` setting and under whichever role occupies the completion-testing stage. Both completion steps still open with the literal `COMPLETION REPORT:` token, so `ensureCompletionDirective`'s sentinel guard (`:1095`) still recognises the composed text and a `replace`-mode override still gets the generic directive re-appended. The compact budget is scoped in the instruction text itself — "The ≤ 5 sentence budget applies to the `## Review Findings` prose summary ONLY and does NOT bound the deferred-findings list" — and `schedulerPresets.ts`'s `reconcile` prompt is byte-identical, confirmed by an assertion in the suite rather than by inspection. All 8 assertions in `src/services/__tests__/agentPromptBuilder.test.ts` pass, and that suite is CI-invoked as `test:contract:reviewer-prompt-behaviour` (`.github/workflows/integration-tests.yml:476`). **No CRITICAL or MAJOR findings — this subtask is the one that shipped complete and wired.**
+
+## Deferred Findings
+
+None.

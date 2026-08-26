@@ -5114,12 +5114,19 @@ export class LocalApiServer {
                 ? group.order
                 : (Array.isArray(group.members) ? group.members : []);
 
+            // A review team's members must keep their review context between the
+            // judging turn and the apportioned fix turn, so their queue-done order
+            // omits the clear-on-done fragment. Resolve it from the group's own
+            // headRole HERE — this is the only call site, and leaving the flag
+            // unpassed is indistinguishable from "no review teams exist": the
+            // variant body would be defined, tested, and never installed.
             await applyTeamQueueOrders({
                 db,
                 groupId,
                 headName,
                 roster,
                 enabled: mode === 'auto',
+                isReviewTeam: group?.headRole === 'reviewer',
             });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, mode }));

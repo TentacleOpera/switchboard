@@ -13,6 +13,7 @@ import {
     SWITCHBOARD_LIVENESS_DIRECTIVE
 } from '../agentPromptBuilder';
 import { buildReconcilePrompt } from '../schedulerPresets';
+import { DEFAULT_KANBAN_COLUMNS } from '../agentConfig';
 import { AgentSkillExporter } from '../AgentSkillExporter';
 
 suite('agentPromptBuilder', () => {
@@ -740,6 +741,96 @@ suite('agentPromptBuilder', () => {
             assert.ok(customPrompt.includes('Do NOT create git worktrees for this dispatch.'));
             assert.ok(customPrompt.includes('Work through the subtasks in a sensible order.'));
             assert.ok(!customPrompt.includes('subagent'));
+        });
+    });
+
+    suite('completion-testing stage — column, role and prompt', () => {
+        const completionColumn = () => DEFAULT_KANBAN_COLUMNS.find(c => c.id === 'ACCEPTANCE TESTED');
+
+        test('the column keeps its stored id while carrying the completion-testing label', () => {
+            const col = completionColumn();
+            assert.ok(col, 'ACCEPTANCE TESTED must remain the stored column id');
+            // The id is in ~4,000 installs' card rows. Relabel and re-role freely;
+            // renaming the id strands every card sitting in it.
+            assert.strictEqual(col!.label, 'Completion Tested');
+        });
+
+        test('the column routes to the role that owns the completion-testing prompt', () => {
+            // REGRESSION: the column was briefly re-roled to 'planner'. Every
+            // column->role map fed 'planner' into the dispatch, which builds the
+            // improve-plan PLANNER prompt — a plan rewriter, not a judge — while the
+            // completion-testing prompt sat unreachable on the tester branch.
+            // The role name is the prompt selector; it must name the branch that
+            // actually renders this stage.
+            assert.strictEqual(completionColumn()!.role, 'tester');
+            // ...and the stage's entry point (the column before it) must hand off to
+            // that same role.
+            assert.strictEqual(columnToPromptRole('CODE REVIEWED'), 'tester');
+            // Terminal by design: nothing auto-advances past completion testing.
+            assert.strictEqual(columnToPromptRole('ACCEPTANCE TESTED'), null);
+        });
+
+        test('every provider column->role map agrees the stage is the tester', () => {
+            // There are FOUR of these maps across two providers, and they are the
+            // dispatch's actual role source — the column definition alone does not
+            // settle it. A map left behind sends the stage to a different persona
+            // with a different git policy, and no gate below this one can see it.
+            const fs = require('fs');
+            const path = require('path');
+            const servicesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'services');
+            for (const file of ['KanbanProvider.ts', 'TaskViewerProvider.ts']) {
+                const src = fs.readFileSync(path.join(servicesDir, file), 'utf8');
+                const mappings = src.match(/'ACCEPTANCE TESTED':\s*(?:return\s*)?'(\w+)'|case 'ACCEPTANCE TESTED':\s*\n\s*return '(\w+)'/g) || [];
+                assert.ok(mappings.length > 0, `${file} must map ACCEPTANCE TESTED to a role`);
+                for (const m of mappings) {
+                    assert.ok(
+                        /'tester'/.test(m),
+                        `${file}: ACCEPTANCE TESTED must map to 'tester', found: ${m}`
+                    );
+                }
+            }
+        });
+
+        test('the stage prompt states both acceptance criteria', () => {
+            const prompt = buildKanbanBatchPrompt('tester', makePlans(1), {});
+            assert.ok(prompt.includes('Completion Tester'), 'Should name the completion-testing persona');
+            assert.ok(/deferred risks resolved/i.test(prompt), 'Should carry the deferred-risk criterion');
+            assert.ok(/intent satisfied/i.test(prompt), 'Should carry the intent criterion');
+        });
+
+        test("the intent baseline is the plan's Goal, with the PRD optional", () => {
+            // The incident this stage exists to catch had NO PRD entry — its intent
+            // lived only in the plan's ## Goal. A PRD-primary baseline is blind to
+            // exactly that class of failure.
+            const prompt = buildKanbanBatchPrompt('tester', makePlans(1), {});
+            assert.ok(
+                prompt.includes("Treat the plan's ## Goal as the primary intent baseline"),
+                'The plan Goal must be the primary intent baseline'
+            );
+            assert.ok(/PRD when present/i.test(prompt), 'The PRD must be optional, not required');
+        });
+
+        test('the stage distinguishes "no deferred record" from "no deferred findings"', () => {
+            const prompt = buildKanbanBatchPrompt('tester', makePlans(1), {});
+            assert.ok(prompt.includes('no deferred record'), 'Should report a missing record distinctly');
+            assert.ok(
+                /pre-existing plan written before the structured deferred-findings section existed/.test(prompt),
+                'Should explain why a historical plan has no record rather than reading as clean'
+            );
+        });
+
+        test('the stage may plan, but never edits code and never commits', () => {
+            const prompt = buildKanbanBatchPrompt('tester', makePlans(1), { gitProhibitionEnabled: false });
+            assert.ok(prompt.includes('Do NOT edit code'), 'Should withhold the code-editing remit');
+            assert.ok(
+                /follow-up plan file in \.switchboard\/plans\//.test(prompt),
+                'Should grant the plan write'
+            );
+            assert.ok(
+                /Do NOT plan net-new scope/.test(prompt),
+                'Planning must be bounded to recorded findings and named intent gaps'
+            );
+            assert.ok(!/\bgit commit\b/i.test(prompt), 'The stage must not be told to commit');
         });
     });
 

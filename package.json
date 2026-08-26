@@ -437,6 +437,12 @@
           "description": "Paths to local folders containing design system files (.md, .txt, .markdown, .rst, .adoc) and image assets (.png, .jpg, .jpeg, .gif, .svg). Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
           "scope": "application"
         },
+        "switchboard.kanban.completionTestingEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Column participation for the Completion Tested stage. When on, cards advance from Reviewed into Completion Tested and an Acceptance Tester judges the finished change against its acceptance criteria (recorded deferred findings resolved, and the plan's Goal satisfied). Off by default: promoting the Acceptance Tester to a core role makes the SEAT available, this switch is what makes the PIPELINE grow a stage.",
+          "scope": "resource"
+        },
         "switchboard.kanban.completedLimit": {
           "type": "integer",
           "default": 100,
