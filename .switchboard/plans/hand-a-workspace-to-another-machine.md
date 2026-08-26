@@ -8,7 +8,7 @@ Ship a **transfer bundle** — one versioned JSON file holding the shared board 
 
 ### Problem Analysis
 
-**What git carries, and what it does not.** `.gitignore:52` is `.switchboard/*` with un-ignores for only `plans/`, `features/`, `reviews/`, `sessions/`, `CLIENT_CONFIG.md`, `README.md`. So a clone re-imports every plan through the watcher and reconstructs nothing else — column, project, priority, complexity, feature membership, and every setting are DB-only.
+**What git carries, and what it does not.** `.gitignore:60` is `.switchboard/*` with un-ignores for only `plans/`, `features/`, `reviews/`, `sessions/`, `CLIENT_CONFIG.md`, `README.md`, `SWITCHBOARD_PROTOCOL.md`. So a clone re-imports every plan through the watcher and reconstructs nothing else — column, project, priority, complexity, feature membership, and every setting are DB-only.
 
 **The two existing exports do not close it.** `.switchboard/kanban-state-<column>.md` is export-only — nothing reads it back, `SparkContextExporter` calls it "a DB-exported mirror", and it is no longer un-ignored so it is not in git either. `BoardSnapshotPublisher`'s `board.json` is closer — its `BoardCardEntry` is the shared tier — but its payload is exactly `{schema, ordering, cards, features}`: **no settings at all**. A user who adopts it still retypes every prompt override, workflow mode and folder mapping.
 
@@ -33,6 +33,10 @@ Ship a **transfer bundle** — one versioned JSON file holding the shared board 
 
 Board state was never given a portable representation because it never had to leave the machine that produced it. Every serialiser built since — the per-column markdown, the board snapshot, `kanban-state-backup.json` — was built for a *reader* (an agent, a web session), never for a *destination that writes*. So all three are one-directional by construction, and none of them carries settings, because a reader does not need them.
 
+> **Superseded:** "all three are one-directional by construction" — this is wrong for `kanban-state-backup.json`. `KanbanDatabase.restoreFromBackup()` (`KanbanDatabase.ts:9113`) is a live two-directional restore path, wired into the extension's DB-rebuild flow (`extension.ts:1630`). It already keys on `plan_file` (not `plan_id`), validates that the plan file exists on disk before restoring, and skips missing files rather than creating them — three of the four properties this plan proposes as novel for its import path.
+> **Reason:** the claim that no existing serialiser writes back erased the one precedent that proves the approach works, and hid the fact that the new import path is reinventing an existing one. The distinction that actually matters is narrower: `restoreFromBackup` carries machine-local fields (`brain_source_path`, `mirror_path`, `routed_to`, `dispatched_agent`, `dispatched_ide` — all in its SELECT at `:9084-9088`), carries no settings, has no credential assertion, and is wired in the extension only (not standalone). It is a DB-rebuild tool, not a transfer tool.
+> **Replaced with:** `kanban-state-backup.json` is the one existing serialiser that *does* write back, and its restore path already validates the key-on-`plan_file` / skip-missing / never-create contract this plan needs. The transfer bundle is not the first two-directional board serialiser — it is the first *clean* one: a curated field set that excludes machine-local state, plus a settings block, plus a credential self-assertion, wired in both hosts. The import should reuse `restoreFromBackup`'s matching logic (or share its plan-file resolution) rather than duplicating it, and the plan should flag that the existing backup's SELECT must be narrowed if the two paths ever converge.
+
 ### Non-goals
 
 - **Concurrent sharing.** Two machines live at once needs arbitration; that is `git-carried-shared-board-state.md` (CAS via non-fast-forward rejection) and `libsql-shared-store-turso-and-self-hosted-sqld.md`. This plan is sequential handover and must not grow a sync loop.
@@ -54,7 +58,7 @@ None. The transfer/sharing split is settled by the non-goals, the machine-local 
 
 ### Routine
 
-- Serialising the shared card fields — two shipped serialisers already agree on the set (`BoardSnapshotPublisher`'s `BoardCardEntry`, `_writeKanbanStateBackup`).
+- Serialising the shared card fields — two shipped serialisers overlap on the shared tier (`BoardSnapshotPublisher`'s 7-field `BoardCardEntry`, `_writeKanbanStateBackup`'s 24-field SELECT). They do not agree on the set: the backup additionally carries machine-local fields (`brain_source_path`, `mirror_path`, `routed_to`, `dispatched_agent`, `dispatched_ide`) that the snapshot correctly excludes. The transfer bundle's field list should derive from `BoardCardEntry`'s clean set, not the backup's broader one.
 - Writing and reading one versioned JSON file.
 - Adding an export and an import entry point in both hosts.
 
@@ -86,7 +90,7 @@ This is a property to *preserve*, not merely observe. The bundle is a file users
 
 ## Adversarial Synthesis
 
-Key risks. (1) Keying the bundle on `plan_id` produces an import that matches nothing and reports success — the single most likely way to ship this broken, because it works on the machine that exported it. (2) A config allowlist that defaults to *portable* imports a dead terminal roster and pane layout onto the destination, which is worse than importing nothing. (3) Exporting settings without asserting the output is credential-free means one future config key turns the bundle into a token leak, and the bundle is an artifact people attach and commit. (4) Wiring export/import in the extension only, when standalone is the likelier destination. Mitigations: `plan_file` is named as the key with the reason; the allowlist defaults to machine-local; the exporter self-asserts rather than trusting the list; both roots are named in the changes and in the verification.
+Key risks. (1) Keying the bundle on `plan_id` produces an import that matches nothing and reports success — the single most likely way to ship this broken, because it works on the machine that exported it. (2) A config allowlist that defaults to *portable* imports a dead terminal roster and pane layout onto the destination, which is worse than importing nothing. (3) Exporting settings without asserting the output is credential-free means one future config key turns the bundle into a token leak, and the bundle is an artifact people attach and commit. (4) Wiring export/import in the extension only, when standalone is the likelier destination. (5) Duplicating `restoreFromBackup`'s plan-file matching logic instead of reusing it — two code paths that should agree will drift, and the existing path already carries machine-local fields the new one must exclude. Mitigations: `plan_file` is named as the key with the reason; the allowlist defaults to machine-local; the exporter self-asserts rather than trusting the list; both roots are named in the changes and in the verification; the import should share or reuse `restoreFromBackup`'s resolution logic, and the backup's SELECT must be narrowed if the two paths converge.
 
 ## Proposed Changes
 
@@ -123,7 +127,7 @@ settings the bundle claimed to carry:
 | Store | Location | Size here | Standalone can write it? |
 |---|---|---|---|
 | DB `config` table | `kanban.db` | 87 rows | yes |
-| **VS Code settings** | `.vscode/settings.json` / user settings | **87 contributed `switchboard.*` properties** | **no** — the shim's `update()` is a deliberate no-op |
+| **VS Code settings** | `.vscode/settings.json` / user settings | **86 contributed `switchboard.*` properties** | **no** — the shim's `update()` is a deliberate no-op |
 | **Standalone config** | `.switchboard/config.json` | small (theme keys) | yes |
 
 The VS Code store is the one most likely to be missed and the most dangerous to
@@ -175,6 +179,20 @@ A command and an API route in both hosts. Writes the bundle to a path the user c
 >
 > **Replaced with:** default **outside the repository** — alongside the other transfer artifacts in `~/.switchboard/transfer/`, which is where `secrets.enc` and `.master-key` already live and which no repo can commit. The export prints the absolute path so it is discoverable by being *told to the user*, not by sitting where git will pick it up. If the user explicitly names a path inside the repo, honour it and **warn once** that the file is committable and carries personal settings. Additionally, add `switchboard-transfer*.json` to the gitignore template the scaffolder writes, so a bundle deliberately placed in the tree is still ignored by default.
 
+**Pre-flight: the bundle references files git has to deliver.** Cards key on
+`planFile`, and the destination resolves those paths against files that arrive
+through `git clone`. Any plan file that is untracked, modified-but-uncommitted,
+or sitting in an unpushed commit will not be on the destination, so its card
+silently lands in the "skipped — plan file not in this checkout" list. The user
+reads that as data loss, and they are not wrong.
+
+The export must therefore run `git status --porcelain` and `git log @{u}..HEAD`
+over the plans and features directories first, and **refuse or warn loudly** with
+the count and the paths. This is not a corner case: at the time of writing, this
+very workspace has 1 untracked plan file and 17 unpushed commits touching
+`.switchboard/plans/`. A transfer taken right now would arrive missing all of
+them, and every gate in this plan would report success.
+
 **Self-assertion before write:** scan the serialised bundle for credential shapes — the known token prefixes (`lin_api_`, `ghp_`, `github_pat_`, `sk-`, `xox[bp]-`, `ntn_`, `AIza`, `Bearer `) and long high-entropy strings in values. On a hit, **refuse to write** and name the offending key. This is the guard that survives the allowlist being wrong.
 
 ### 4. Import
@@ -184,11 +202,52 @@ Reads the bundle, then for each card resolves `planFile` against the destination
 - **Match** → update `kanban_column`, `project_id`, `complexity`, `tags`, `repo_scope`, priority, and feature link (resolving `featureFile` to the destination's own feature `plan_id`).
 - **No match** → collect and report at the end. Never create.
 
+> **Reuse note:** `KanbanDatabase.restoreFromBackup()` (`:9113`) already implements plan-file resolution, existence validation, and skip-on-missing. The import should call into the same resolution path (or extract a shared `resolvePlanByPlanFile` helper) rather than duplicating the logic. The existing `restoreFromBackup` creates records (`status: 'active'`, `lastAction: 'restored_from_backup'`); the transfer import is update-only — never create — so the shared helper must separate resolution from the create-vs-update decision.
+
 Then applies the allowlisted settings. Reports a summary: cards updated, cards skipped with reasons, settings applied — **and settings excluded, by key**.
 
 The exclusion list is not optional output. A misclassification in the machine-local direction is silent by construction: the import reports success having quietly dropped the thing the user most wanted. This is not hypothetical — during the manual dry run of this classification, `terminals.agentGroups` was misfiled as machine-local because it shares the `terminals.` prefix with `terminals.standingOrders` and `switchboard.prompts.terminals.groups`, both of which genuinely hold live terminal names. It holds none: it is role/count/scope plus prompt templates with `{child}` and `{head}` placeholders substituted at spawn time. Dropping it silently loses every tuned team prompt while the transfer reports as clean. Printing what was excluded is what makes that visible in the one second the user is looking at the output.
 
 Machine-local fields on matched rows are left exactly as the destination has them — the import never writes `dispatched_terminal`, `last_liveness_at`, or any worktree row.
+
+### 4b. What the user actually does, end to end
+
+The shipped flow, so the seams are visible as a whole rather than per-change:
+
+```
+# old machine
+$ switchboard export
+  Wrote ~/.switchboard/transfer/switchboard-transfer.json
+    42 cards · 29 settings · 0 credentials
+  ⚠ 1 untracked plan file and 17 unpushed commits — push first or those cards
+    will not resolve on the destination.
+
+# move it across — scp, AirDrop, USB, cloud drive. Not this plan's business,
+# but the export SHOULD print a ready-to-paste scp line, because "export, then
+# somehow, then import" is where a user stalls.
+
+# new machine
+$ git clone <repo> && cd <repo>
+$ npx switchboard
+  No Switchboard database found.
+    1) Create a new board       (~/.switchboard/kanban.db — recommended)
+    2) Use an existing database (path)
+    3) Import a transfer bundle (path)
+  > 3
+  ✓ 42 cards matched   ✓ 29 settings applied
+  – 51 settings excluded (machine-local)
+  Board ready → http://127.0.0.1:7777/?token=…
+```
+
+Then two things remain manual, both deliberately:
+
+- **Re-authenticate**, or copy `secrets.enc` + `.master-key` (see change 5).
+- **Start the team once**, so seats spawn and standing orders register against
+  real terminal names. The team *definitions* travel in `terminals.agentGroups`;
+  the bindings cannot.
+
+Three commands, one path, one re-auth, one team start. That is the bar this plan
+is measured against — not the count of things the bundle carries.
 
 ### 5. Document the secrets step separately
 
@@ -206,14 +265,23 @@ Secrets are not in the bundle and never will be. The transfer instructions state
 6. New: the credential guard. Plant a token-shaped value in an allowlisted key; assert export **refuses** and names the key. Assert the refusal, not just the absence — a test that only checks the bundle is clean passes when the guard is missing.
 7. New: unmatched card. Include a `planFile` with no file on the destination; assert it is skipped and reported, and that no row is created.
 8. New: host parity — assert both `extension.ts` and `bootstrap.ts` wire export and import.
+9. New: import reuse — assert the transfer import calls the same plan-file resolution helper as `restoreFromBackup` (grep both call sites for the shared symbol), and that the import never creates a row (update-only, unlike `restoreFromBackup` which creates).
 
 **Gate wiring:** any new test file needs a `package.json` script **and** a step in `.github/workflows/integration-tests.yml`. A script defined but not invoked is the green-while-incomplete hole.
 
 ### Manual
 
-9. Real handover: export from this workspace, clone the repo fresh at a different path, import, and confirm the board matches — columns, projects, complexities, feature grouping — with no terminals, worktrees or pane layout carried over.
-10. Import into the **standalone** host and confirm parity with the extension.
-11. Inspect a bundle by eye and confirm it contains no credential.
+10. Real handover: export from this workspace, clone the repo fresh at a different path, import, and confirm the board matches — columns, projects, complexities, feature grouping — with no terminals, worktrees or pane layout carried over.
+11. Import into the **standalone** host and confirm parity with the extension.
+12. Inspect a bundle by eye and confirm it contains no credential.
+
+### Goal Invariants
+
+- Assert `switchboard-transfer.json` contains no key named `plan_id`, `session_id`, or `workspace_id` at any depth (the bundle must not carry machine identity).
+- Assert every `cards[].planFile` value in the bundle is a relative path (does not start with `/` or a drive letter).
+- Assert no `cards[]` entry in the bundle contains keys `dispatched_terminal`, `last_liveness_at`, `brain_source_path`, `mirror_path`, `routed_to`, `dispatched_agent`, or `dispatched_ide` (machine-local fields are absent from the bundle).
+- Assert the bundle contains a `settings` object with at least one allowlisted key when the source has personal-portable or team-shared settings configured.
+- Assert `restoreFromBackup` and the transfer import share the same plan-file resolution helper (single function or method), verifiable by grep for the shared symbol name in both call sites.
 
 ## Recommendation
 
