@@ -4,7 +4,7 @@
 
 `npx switchboard` on a fresh machine writes a 0-byte `kanban.db` into the repo, runs 64 schema migrations against it, and hands back a board the user may not want in a location they were never asked about. If they already have a database — a copy from another machine, a global store, a sibling repo — it is ignored, and the first thing they do is delete what the tool just spent a minute building.
 
-Give the standalone host an interactive first-run wizard: detect before creating, ask where things live, and seat the user's agents and teams from the CLIs they actually use. Standalone is increasingly the **first** contact with Switchboard — before the VS Code extension — so first run has to stand on its own rather than assume a panel will finish the job.
+Give the standalone host a first-run flow: **probe in the terminal, decide in the browser.** The terminal detects before creating and hands off a URL; the existing Setup panel — which already ships Database, Control Plane, Multi-Repo and Agents tabs, and which standalone already serves — collects the answers. Standalone is increasingly the **first** contact with Switchboard, before the VS Code extension, so first run has to stand on its own; it does not have to do so in a second UI idiom.
 
 ### Problem Analysis
 
@@ -27,12 +27,12 @@ await db.ensureReady();
 | Question | Substrate today | Gap |
 |---|---|---|
 | Where does the DB live? | `kanban.dbPath`, `controlPlaneRoot`, mappings, `db-pointer` — all exist | Presentation only |
-| Where does `.switchboard/` scaffolding live? | `switchboard.kanban.controlPlaneRoot` exists ("Explicit Control Plane folder override… leave empty to auto-detect") | Presentation only |
+| Where does `.switchboard/` scaffolding live? | `controlPlaneRoot` stores it, but nothing *probes* for it. `detectCandidateParent` answers a different question and returns nothing below two git repos. | Needs an artifact probe (`.switchboard/`, `.agents/`, `.claude/`) at repo root and external root, with "none yet" as a real answer. |
 | Which CLIs do you use? | `CLI_BRAND_ICON_KEYS` in `src/webview/terminals.js` — 19 entries (claude, antigravity, devin, jules, gemini, codex, cursor, copilot, windsurf, qwen, amp, cline, kiro, kilo, trae, opencode, zed…) | It is a **brand-icon map in a webview**, not a registry. The CLI cannot import it. |
-| …and seat roles from them | `startupCommands` is `Record<string,string>` **keyed by role**, in `GlobalIntegrationConfigService` | There is **no CLI→command mapping anywhere**. Nothing maps "claude" to a launch command. Grep for `DEFAULT_STARTUP` / `defaultStartupCommand` / `startupCommandFor` returns nothing. |
+| …and seat roles from them | `config.agents.startupCommands` — live, role-keyed, values are the CLI binary plus flags (`"lead":"claude"`, `"coder":"agy"`, `"analyst":"qwen"`). `agents.visibleAgents` is its visibility twin. | No **seed** table, but the seed is near-identity over the registry keys. Small, not a product decision. |
 | …and the three teams | `SHIPPED_TEAM_TYPES` in `src/webview/kanban.html:4854` — Batch planners / Coding / Review, with head roles and member shapes | Lives in a **self-contained webview**. The CLI cannot import it, and duplicating it guarantees drift. |
 
-So the wizard's last question — the one that delivers most of the value — is blocked on two extractions and one piece of data that has never been written down.
+So the last question is blocked on two extractions — and only because a *terminal* consumer cannot import a webview. A browser consumer already can.
 
 ### Root Cause
 
@@ -52,7 +52,22 @@ Standalone was built as a second front door onto a product whose configuration s
 
 ## User Review Required
 
-- **The CLI→startup-command table is new product data and needs a human decision, not a guess.** Nothing in the codebase records how to launch any of the 19 CLIs. The plan proposes seeding a small table for the CLIs the project can state confidently and leaving the rest to a free-text prompt, but *which* CLIs get a shipped default — and what those commands are — is the user's call. A wrong default seats a role that fails on first dispatch, which is worse than an empty field the user fills in.
+None.
+
+> **Amended — the earlier escalation was wrong, and so was the surface.** The first draft escalated "the CLI→startup-command table is new product data" to User Review and proposed a terminal wizard. Three corrections, all from evidence that was already in the tree:
+>
+> **1. The startup-command data exists and is nearly trivial.** `config.agents.startupCommands` is a live, role-keyed map, and its values are the CLI binary plus optional flags:
+> ```json
+> {"planner":"devin --permission-mode bypass","lead":"claude","coder":"agy",
+>  "intern":"agy","reviewer":"devin --permission-mode bypass","analyst":"qwen"}
+> ```
+> So a CLI→command default is mostly the identity function over the registry keys — `claude`→`claude`, `qwen`→`qwen`, `agy`→`agy`, `codex`→`codex`. The only genuinely open part is per-CLI flags (`devin --permission-mode bypass`), and the safe default there is no flags with an editable field. What the first draft called missing product data was a seed table that writes itself from the registry. `agents.visibleAgents` is the matching role-visibility map and gets seeded the same way. No escalation warranted.
+>
+> **2. Control-plane detection is the wrong probe for scaffolding.** Question 4 leaned on `controlPlaneRoot` and, by implication, `ControlPlaneMigrationService.detectCandidateParent`. That detector answers a different question: it looks for a *parent directory holding two or more git repos* and suggests consolidating there (`extension.ts:4238-4270`, gated on `discoveredRepos.filter(r => r.hasGit).length < 2`). It returns nothing for a single-repo user, and it says nothing about where scaffolding currently is. Scaffolding may not exist yet, and when it does it may sit inside the repo or outside it. Question 4 must probe for the artifacts themselves — `.switchboard/`, `.agents/`, `.claude/` — at the repo root **and** at any configured external root, and treat "none found" as a first-class answer rather than a detector returning empty.
+>
+> **3. This should be a webview, not a terminal wizard.** Four of the five questions already have panel UI: `setup.html` ships tabs for **Database**, **Control Plane**, Multi-Repo, Plan Scanner, Remote and more, and the Agents tab already edits `startupCommands` and `visibleAgents`. Standalone serves those same panels in a browser via `headlessPanelHtml.ts`. A terminal wizard would reimplement four existing surfaces in a second idiom, and every future setting would have to be added twice. The extension's own onboarding is the shape to follow — detect a condition, offer once, remember the dismissal — not a scripted interrogation.
+>
+> The revised design is therefore **probe in the terminal, decide in the browser**, specified below. The terminal owns only what must happen before a page can render; everything else is the panel that already exists.
 
 ## Complexity Audit
 
@@ -101,26 +116,40 @@ Key risks. (1) Building the wizard while `bootstrap.ts` still creates unconditio
 
 In `bootstrap.ts`, before the `writeFileSync(dbPath, Buffer.alloc(0))`, resolve candidates in the order above. One candidate → adopt and report it. Several → prompt (TTY) or list-and-exit (non-TTY). None → run the wizard (TTY) or exit with instructions (non-TTY). Creation moves *after* the answer.
 
-### 2. A prompting primitive
+### 2. A DB-less setup-mode server
 
-`src/standalone/wizard.ts` on `node:readline/promises`: yes/no, single-choice, multi-choice, free text. Every prompt takes a default and a flag name, so `--db`, `--scaffold-root`, `--clis` bypass it. `process.stdin.isTTY === false` short-circuits every prompt to its flag or its default.
+The load-bearing question for this design: today `bootstrap.ts` creates the database at `:467` and constructs `LocalApiServer` at `:2910`, so the DB precedes the server. For the browser to collect the answers, the server has to boot **without** one.
 
-### 3. The five questions, gated
+Add a setup mode: when the probe resolves no database and none is adopted, start the HTTP server with a null DB, serve only the Setup panel and the routes it needs, and print the URL. Everything DB-dependent stays unconstructed. On save, the panel's existing handlers create or adopt the database, and boot continues into the normal path — no restart.
 
-1. **Migrating from another machine?** → yes: ask for a transfer bundle, hand to the importer, then skip 3–5 (the bundle carries those settings). No: continue.
-2. **Existing database to use?** → pre-answered when the probe found candidates; the question is only asked when it found none.
-3. **Where should the board live?** → `~/.switchboard/kanban.db` (recommended — survives `git clean`, a fresh clone, and ephemeral checkouts), in the repo, or a path you name. Writes `kanban.dbPath`.
-4. **Where should `.switchboard/` scaffolding live?** → external folder (recommended) or in the repo. Writes `controlPlaneRoot`. Present whatever recommendation `control-plane-scaffold-out-of-the-repo.md` settles on.
-5. **Which CLIs do you use?** → multi-choice over the extracted registry. Seats the core roles and the three shipped teams with a startup command per selected CLI; any CLI without a shipped default gets a free-text prompt rather than a guess.
+This is the only genuinely new infrastructure in the plan, and it is what removes the need for terminal prompting entirely.
 
-### 4. The two extractions
+### 3. Terminal output, not terminal prompting
 
-- **`src/services/teamPresets.ts`** — `SHIPPED_TEAM_TYPES` moved out of `kanban.html:4854`, with the webview importing it. Retarget `team-scoped-role-routing.test.js:972` and `standing-orders-marker-contract.test.js:315` to the module in the same change.
-- **`src/services/cliRegistry.ts`** — the 19 CLI keys from `terminals.js`'s `CLI_BRAND_ICON_KEYS`, plus a separate optional `startupCommand` per entry. Brand icon and launch command stay distinct fields; `terminals.js` consumes the registry for its icon map.
+With setup mode available, the terminal's whole job is three lines:
+
+- one candidate found → adopt, say which, continue (no interaction);
+- several found → list them and print the URL, create nothing;
+- none found → print the URL, create nothing.
+
+No `readline`, no TTY gating on the happy path, no flag-equivalent matrix for five questions. `--db <path>` remains for scripted use, and a non-TTY run with no candidate exits with the URL and instructions rather than building a database nobody asked for.
+
+### 4. First-run panel state and the two probes
+
+The Setup panel gains a first-run mode — the same shape as the extension's onboarding (`extension.ts:4238-4270`): a condition, an offer, and a remembered dismissal, not an interrogation. It sequences tabs that already exist rather than adding new UI:
+
+- **Database** tab, pre-populated with the probe's candidates and a recommendation of `~/.switchboard/kanban.db` (survives `git clean`, a fresh clone, and ephemeral checkouts).
+- **Scaffolding**, driven by an **artifact probe** — look for `.switchboard/`, `.agents/`, `.claude/` at the repo root *and* at any configured external root. Report what was found and where; treat "none yet" as a first-class answer with a recommendation, not as a detector returning empty. Do **not** call `detectCandidateParent` for this: it is gated on two or more git repos and answers "should you consolidate a control plane", which is a different question with a different trigger.
+- **Agents**, with the CLI multi-select. Selecting CLIs seeds `agents.startupCommands` and `agents.visibleAgents` for the core roles and instantiates the three shipped teams.
+- **Migrating from another machine?** offered first; taking it routes to the transfer bundle importer (`hand-a-workspace-to-another-machine.md`) and skips the rest, because the bundle carries those settings.
+
+### 4b. The seed table
+
+`src/services/cliRegistry.ts` carries the 19 keys with an optional `startupCommand` defaulting to the key itself. Per-CLI flags are the only hand-authored part and default to none, with the field editable in the panel. Seeding writes through the same `GlobalIntegrationConfigService` path the panel uses — and must clear the wipe guard rather than be silently discarded by it, which looks identical to success.
 
 ### 5. `switchboard setup`
 
-A subcommand that re-runs the wizard on demand, so the flow is reachable after first run without deleting anything.
+A subcommand that reopens the first-run panel on demand, so the flow is reachable after first run without deleting anything. It is the dismissal's escape hatch.
 
 ## Verification Plan
 
@@ -128,8 +157,9 @@ A subcommand that re-runs the wizard on demand, so the flow is reachable after f
 
 1. `npm run compile-tests` — clean.
 2. New: **probe-before-create.** Given a workspace with no DB and a candidate at `~/.switchboard/kanban.db`, assert the candidate is adopted and **no file is written** at `<root>/.switchboard/kanban.db`. Assert the absence — a test that only checks the board loads passes today.
-3. New: **non-TTY start creates nothing.** With `isTTY` false, no candidate and no flag, assert a non-zero exit with instructions and no file created.
-4. New: **flag equivalence.** Every question satisfied by flags produces the same config writes as the interactive path.
+3. New: **no-candidate start creates nothing.** With no candidate and no `--db`, assert the server enters setup mode, prints a URL, and **no database file is written** anywhere.
+4. New: **setup mode boots DB-less.** Assert the server starts and serves the Setup panel with a null DB, and that no DB-dependent service is constructed until a location is chosen.
+4b. New: **scaffolding probe.** Given `.agents/` at the repo root and nothing external, assert the probe reports repo-local; given neither, assert "none yet" rather than an empty result; assert `detectCandidateParent` is **not** on this path.
 5. New: **wipe-guard interaction.** A partial CLI selection writes `startupCommands` successfully; assert the values are present afterward, not merely that the write was attempted.
 6. New: **single source for presets.** Assert `kanban.html` no longer defines `SHIPPED_TEAM_TYPES` inline and that the extracted module is the only definition; same for the CLI list in `terminals.js`.
 7. Retargeted: `test:contract:team-scoped-routing` and `test:contract:standing-orders-marker` pass against the extracted module.
@@ -139,12 +169,13 @@ A subcommand that re-runs the wizard on demand, so the flow is reachable after f
 
 ### Manual
 
-9. Fresh machine, no `~/.switchboard`: run `npx switchboard`, walk all five questions, confirm the board comes up with the chosen DB location, the chosen scaffold root, core roles seated, and the three teams present with startup commands.
+9. Fresh machine, no `~/.switchboard`: run `npx switchboard`, follow the printed URL, complete the panel, confirm the board comes up with the chosen DB location, the chosen scaffold root, core roles seated with startup commands, and the three teams present — and that boot continued without a restart.
 10. Same, answering "migrating" at question 1 with a transfer bundle: confirm 3–5 are skipped and the imported settings are in effect.
 11. With an existing `~/.switchboard/kanban.db`: confirm it is adopted, the adoption is reported, and no new file appears in the repo.
 12. Two candidates present: confirm both are listed and neither is chosen silently.
-13. `npx switchboard` piped (no TTY): confirm it exits with instructions and creates nothing.
+13. `npx switchboard` piped (no TTY): confirm it prints the URL and creates nothing.
+14. Single-repo user (the case `detectCandidateParent` returns nothing for): confirm scaffolding is still probed and answered.
 
 ## Recommendation
 
-Send to Coder, and **ship change 1 on its own first**. Probe-before-create is a contained fix to the reported symptom and needs none of the extractions; the wizard is a larger piece whose value is gated on two refactors and one product decision that is not the coder's to make.
+Send to Coder, and **ship change 1 on its own first**. Probe-before-create is a contained fix to the reported symptom and needs neither the setup-mode server nor the extractions. The rest is gated on one genuinely new piece of infrastructure — a server that boots without a database — and that is the part to design before writing any panel code.
