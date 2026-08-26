@@ -9170,6 +9170,20 @@ FROM plans
 
         const now = new Date().toISOString();
 
+        // Pre-pass: resolve every backed-up plan_file to its existing row BEFORE
+        // opening the transaction. getPlanByPlanFile is not a plain read — on a
+        // hot miss it falls through to the cold archive and calls restoreToHot(),
+        // which runs its own BEGIN and flushPersist(). Doing that inside an open
+        // BEGIN on sql.js's single shared connection throws "cannot start a
+        // transaction within a transaction" and rolls the whole restore back.
+        // Same convention upsertPlans() states: no async yields inside BEGIN/COMMIT.
+        const existingByPlanFile = new Map<string, KanbanPlanRecord | null>();
+        for (const p of plans) {
+            const pf = String(p.plan_file || p.planFile || '').replace(/\\/g, '/');
+            if (!pf || existingByPlanFile.has(pf)) continue;
+            existingByPlanFile.set(pf, await this.getPlanByPlanFile(pf, workspaceId));
+        }
+
         this._db.run('BEGIN');
         try {
             for (const p of plans) {
@@ -9188,19 +9202,26 @@ FROM plans
                     }
                 }
 
-                // Resolve the existing row via the SAME plan-file resolution
-                // helper the transfer-bundle import uses (getPlanByPlanFile),
-                // so the two restore paths share one resolution symbol (grep
-                // both call sites for getPlanByPlanFile). When a row already
-                // exists, preserve its machine-local fields instead of
-                // overwriting them from the backup — narrows the backup's
-                // machine-local carry (brain_source_path, mirror_path,
-                // routed_to, dispatched_agent/ide/terminal, last_liveness_at,
-                // blocked_at, worktree_id, queue_position, column_order,
-                // completed_at, priority_starred, map_fingerprint). The backup
-                // still wins for the shared tier (column, project, complexity,
-                // tags, feature link) — that is the restore's purpose.
-                const existingRow = await this.getPlanByPlanFile(planFile.replace(/\\/g, '/'), workspaceId);
+                // The existing row, resolved above by the SAME plan-file
+                // resolution helper the transfer-bundle import uses
+                // (getPlanByPlanFile), so the two restore paths share one
+                // resolution symbol. When a row already exists, its
+                // machine-local fields win over the backup's — the backup still
+                // wins for the shared tier (column, project, complexity, tags,
+                // feature link), which is the restore's purpose.
+                //
+                // Only the five machine-local path/name fields below are bound
+                // by UPSERT_PLAN_SQL; dispatched_terminal, last_liveness_at,
+                // blocked_at, queue_position, column_order, completed_at,
+                // priority_starred and map_fingerprint are not in its column
+                // list at all, so they are preserved by the SQL itself and need
+                // no record field here.
+                const existingRow = existingByPlanFile.get(planFile.replace(/\\/g, '/')) ?? null;
+                // `?? ` is not enough: _readRows maps a NULL column to '', so an
+                // existing row's empty machine-local field would beat a real
+                // backup value. Prefer the existing row only when it has one.
+                const preferExisting = (existingValue: string | undefined, backupValue: string): string =>
+                    (existingValue && existingValue.length > 0) ? this._ensureRelativePlanFile(existingValue) : backupValue;
 
                 const record: KanbanPlanRecord = {
                     planId: p.plan_id || p.planId || '',
@@ -9218,30 +9239,24 @@ FROM plans
                     updatedAt: now,
                     lastAction: 'restored_from_backup',
                     sourceType: p.source_type || p.sourceType || 'local',
-                    brainSourcePath: existingRow?.brainSourcePath ?? (p.brain_source_path || p.brainSourcePath || ''),
-                    mirrorPath: existingRow?.mirrorPath ?? (p.mirror_path || p.mirrorPath || ''),
-                    routedTo: existingRow?.routedTo ?? (p.routed_to || p.routedTo || ''),
-                    dispatchedAgent: existingRow?.dispatchedAgent ?? (p.dispatched_agent || p.dispatchedAgent || ''),
-                    dispatchedIde: existingRow?.dispatchedIde ?? (p.dispatched_ide || p.dispatchedIde || ''),
-                    dispatchedTerminal: existingRow?.dispatchedTerminal,
+                    // _readRows returns brain_source_path / mirror_path ABSOLUTE;
+                    // preferExisting re-relativises them so the V17→V18 relative
+                    // plan-path invariant survives a restore over existing rows.
+                    brainSourcePath: preferExisting(existingRow?.brainSourcePath, p.brain_source_path || p.brainSourcePath || ''),
+                    mirrorPath: preferExisting(existingRow?.mirrorPath, p.mirror_path || p.mirrorPath || ''),
+                    routedTo: (existingRow?.routedTo) || (p.routed_to || p.routedTo || ''),
+                    dispatchedAgent: (existingRow?.dispatchedAgent) || (p.dispatched_agent || p.dispatchedAgent || ''),
+                    dispatchedIde: (existingRow?.dispatchedIde) || (p.dispatched_ide || p.dispatchedIde || ''),
                     dispatchedAt: existingRow ? (existingRow.dispatchedAt ?? null) : (p.dispatched_at ?? p.dispatchedAt ?? null),
-                    lastLivenessAt: existingRow ? (existingRow.lastLivenessAt ?? null) : null,
-                    blockedAt: existingRow ? (existingRow.blockedAt ?? null) : null,
                     clickupTaskId: p.clickup_task_id || p.clickupTaskId || '',
                     linearIssueId: p.linear_issue_id || p.linearIssueId || '',
                     notionPageId: p.notion_page_id || p.notionPageId || '',
                     worktreeId: existingRow ? (existingRow.worktreeId ?? undefined) : (p.worktree_id ?? p.worktreeId ?? undefined),
-                    worktreeStatus: existingRow?.worktreeStatus,
                     workspaceName: p.workspace_name || p.workspaceName || '',
                     projectId: p.project_id !== null && p.project_id !== undefined ? Number(p.project_id) : (p.projectId !== null && p.projectId !== undefined ? Number(p.projectId) : null),
                     isFeature: p.is_feature !== undefined ? Number(p.is_feature) : (p.isFeature !== undefined ? Number(p.isFeature) : 0),
                     featureId: p.feature_id || p.featureId || '',
-                    columnEnteredAt: p.column_entered_at ?? p.columnEnteredAt ?? null,
-                    queuePosition: existingRow?.queuePosition,
-                    columnOrder: existingRow?.columnOrder,
-                    completedAt: existingRow?.completedAt ?? null,
-                    priorityStarred: existingRow?.priorityStarred,
-                    mapFingerprint: existingRow?.mapFingerprint ?? null
+                    columnEnteredAt: p.column_entered_at ?? p.columnEnteredAt ?? null
                 };
 
                 try {

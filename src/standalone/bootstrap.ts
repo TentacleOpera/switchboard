@@ -1237,7 +1237,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     });
     switchboardCommandRegistry.register('switchboard.importTransferBundle', async (_targetWorkspaceRoot?: string, bundlePath?: string) => {
         if (!bundlePath) {
-            return { success: false, error: 'Missing required field: path', cardsUpdated: 0, cardsSkipped: [], settingsApplied: [], settingsExcluded: [] };
+            return { success: false, error: 'Missing required field: path', cardsUpdated: 0, cardsSkipped: [], partialFailures: [], settingsApplied: [], settingsExcluded: [] };
         }
         const service = new TransferBundleService({
             db,

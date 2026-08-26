@@ -112,6 +112,14 @@
         "title": "Switchboard: Reconcile Kanban Databases"
       },
       {
+        "command": "switchboard.exportTransferBundle",
+        "title": "Switchboard: Export Transfer Bundle (hand this workspace to another machine)"
+      },
+      {
+        "command": "switchboard.importTransferBundle",
+        "title": "Switchboard: Import Transfer Bundle"
+      },
+      {
         "command": "switchboard.setClickUpToken",
         "title": "Set ClickUp API Token",
         "category": "Switchboard"
@@ -1018,7 +1026,8 @@
     "test:contract:atomic-team-lifecycle": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/atomic-team-feature-run-context-lifecycle.test.js",
     "test:contract:task-complete": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/task-complete-endpoint.test.js",
     "test:contract:dependency-gate": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dependency-gate-contract.test.js",
-    "test:contract:host-auto-clear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/host-auto-clear-on-plan-change.test.js"
+    "test:contract:host-auto-clear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/host-auto-clear-on-plan-change.test.js",
+    "test:contract:transfer-bundle": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/transfer-bundle-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

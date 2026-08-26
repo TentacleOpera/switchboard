@@ -48,6 +48,14 @@ export interface ExportResult {
     path?: string;
     cardCount: number;
     settingCount: number;
+    /**
+     * The config keys the classifier dropped, by key. NOT optional output: a
+     * misclassification in the machine-local direction is silent by construction,
+     * and the export is the only place that has the full key set to report from —
+     * the bundle carries only the portable keys, so the import can never know what
+     * was left behind. Printing this is what makes a wrong classification visible.
+     */
+    settingsExcluded: string[];
     credentialCount: number;
     untrackedPlanFiles: string[];
     unpushedCommits: number;
@@ -65,7 +73,20 @@ export interface ImportResult {
     success: boolean;
     cardsUpdated: number;
     cardsSkipped: ImportCardOutcome[];
+    /**
+     * Cards that matched but whose `featureFile` did not resolve to a feature on
+     * the destination, or whose column was rejected. A matched card with a lost
+     * feature link is a partial failure, and reporting it as a clean update is
+     * the same silent-success failure the plan's §4 warns about.
+     */
+    partialFailures: ImportCardOutcome[];
     settingsApplied: string[];
+    /**
+     * Keys present in the bundle that this destination's classifier declines to
+     * apply. Empty for a bundle written by a matching version — the export
+     * already filtered. Non-empty means a hand-edited, tampered, or
+     * newer-classifier bundle, which is exactly when it must be reported.
+     */
     settingsExcluded: string[];
     error?: string;
 }
@@ -193,6 +214,14 @@ const CREDENTIAL_PREFIXES: string[] = [
     'xoxp-',
     'ntn_',
     'AIza',
+    'AKIA',
+];
+
+/**
+ * Credential markers that contain a space, so they can never appear as a token
+ * run and have to be matched against the whole value.
+ */
+const CREDENTIAL_SUBSTRINGS: string[] = [
     'Bearer ',
 ];
 
@@ -206,11 +235,7 @@ const CREDENTIAL_KEY_PATTERNS: RegExp[] = [
     /master.?key/i,
 ];
 
-/**
- * Shannon entropy over character frequencies. Used to catch high-entropy
- * secrets that do not match a known prefix (e.g. a random PAT under a
- * misclassified key). Threshold tuned for ~40+ char random strings.
- */
+/** Shannon entropy over character frequencies, in bits per character. */
 function shannonEntropy(s: string): number {
     if (!s) return 0;
     const freq = new Map<string, number>();
@@ -224,17 +249,47 @@ function shannonEntropy(s: string): number {
     return entropy;
 }
 
-const HIGH_ENTROPY_THRESHOLD = 4.5;
-const HIGH_ENTROPY_MIN_LENGTH = 32;
+/**
+ * A "token run" — the longest stretch of characters a secret could be made of.
+ * Splitting on everything else (whitespace, quotes, braces, `.`, `,`, `:`) is
+ * what lets the scan find a token embedded in a JSON blob or a sentence.
+ */
+const TOKEN_RUN_RE = /[A-Za-z0-9+/=_-]+/g;
 
-/** A value is credential-shaped if it matches a known prefix OR is a long high-entropy string. */
+/**
+ * Entropy alone CANNOT separate a secret from a prompt override, and a threshold
+ * that tries to will kill the export on a real workspace. Measured on this
+ * repo's live `config` table: every `switchboard.prompts.roleConfig_*` value and
+ * `terminals.agentGroups` — nine of the twenty-three keys the bundle carries —
+ * run 4.55–4.77 bits/char, because English prose with mixed case and punctuation
+ * sits in exactly the band a naive "high entropy" threshold occupies. Raising the
+ * threshold above prose does not help either: a 40-char hex API key tops out at
+ * 4.0 bits/char (16 symbols), BELOW prose. So the discriminator is SHAPE first,
+ * entropy second — a secret is one unbroken run of token characters containing
+ * both digits and letters, which prose and filesystem paths are not.
+ */
+const TOKEN_MIN_LENGTH = 24;
+const TOKEN_MAX_LENGTH = 512;
+const TOKEN_ENTROPY_THRESHOLD = 3.0;
+
+/**
+ * A value is credential-shaped if it carries a known token marker or contains a
+ * token-shaped run. `startsWith` is checked per run, not per value, so a token
+ * pasted into the middle of a JSON blob is still caught.
+ */
 function valueLooksCredential(value: string): boolean {
     if (!value) return false;
-    for (const p of CREDENTIAL_PREFIXES) {
-        if (value.startsWith(p)) return true;
+    for (const marker of CREDENTIAL_SUBSTRINGS) {
+        if (value.includes(marker)) return true;
     }
-    if (value.length >= HIGH_ENTROPY_MIN_LENGTH && shannonEntropy(value) >= HIGH_ENTROPY_THRESHOLD) {
-        return true;
+    for (const run of value.match(TOKEN_RUN_RE) || []) {
+        for (const p of CREDENTIAL_PREFIXES) {
+            if (run.startsWith(p)) return true;
+        }
+        if (run.length < TOKEN_MIN_LENGTH || run.length > TOKEN_MAX_LENGTH) continue;
+        // Prose words and path segments do not mix digits into a 24+ char run.
+        if (!/[0-9]/.test(run) || !/[A-Za-z]/.test(run)) continue;
+        if (shannonEntropy(run) >= TOKEN_ENTROPY_THRESHOLD) return true;
     }
     return false;
 }
@@ -315,7 +370,7 @@ export class TransferBundleService {
         try {
             const workspaceId = await db.getWorkspaceId();
             if (!workspaceId) {
-                return { success: false, cardCount: 0, settingCount: 0, credentialCount: 0, untrackedPlanFiles: [], unpushedCommits: 0, error: 'No workspace ID resolved.' };
+                return { success: false, cardCount: 0, settingCount: 0, settingsExcluded: [], credentialCount: 0, untrackedPlanFiles: [], unpushedCommits: 0, error: 'No workspace ID resolved.' };
             }
 
             const plans = await db.getBoard(workspaceId);
@@ -323,7 +378,7 @@ export class TransferBundleService {
             // Resolve feature planId → relative featureFile for the featureFile field.
             const featureIdToPlanFile = new Map<string, string>();
             for (const p of plans) {
-                if (p.isFeature === 1 || p.isFeature === true) {
+                if (Number(p.isFeature) === 1) {
                     const rel = p.planFile ? path.relative(root, p.planFile).replace(/\\/g, '/') : p.planFile;
                     featureIdToPlanFile.set(p.planId, rel || '');
                 }
@@ -337,20 +392,24 @@ export class TransferBundleService {
                     column: p.kanbanColumn || 'CREATED',
                     project: p.project || '',
                     complexity: p.complexity || 'Unknown',
-                    isFeature: !!(p.isFeature === 1 || p.isFeature === true),
+                    isFeature: Number(p.isFeature) === 1,
                     featureFile,
                     tags: p.tags || '',
                     repoScope: p.repoScope || '',
-                    priority: !!(p.priorityStarred === 1 || p.priorityStarred === true),
+                    priority: Number(p.priorityStarred) === 1,
                 };
             });
 
-            // Settings: classify every config row, keep portable ones.
+            // Settings: classify every config row, keep portable ones. The
+            // dropped keys are collected and reported — see ExportResult.
             const allConfig = await db.getAllConfig();
             const settings: Record<string, string> = {};
+            const settingsExcluded: string[] = [];
             for (const { key, value } of allConfig) {
                 if (isPortableForTransfer(classifyConfigKey(key))) {
                     settings[key] = value;
+                } else {
+                    settingsExcluded.push(key);
                 }
             }
 
@@ -372,6 +431,7 @@ export class TransferBundleService {
                     success: false,
                     cardCount: cards.length,
                     settingCount: Object.keys(settings).length,
+                    settingsExcluded,
                     credentialCount: hits.length,
                     untrackedPlanFiles: [],
                     unpushedCommits: 0,
@@ -399,6 +459,9 @@ export class TransferBundleService {
             const scpLine = this._buildScpLine(outPath);
 
             this._log(`Wrote ${outPath} — ${cards.length} cards · ${Object.keys(settings).length} settings · 0 credentials`);
+            if (settingsExcluded.length > 0) {
+                this._log(`${settingsExcluded.length} setting(s) excluded (machine-local): ${settingsExcluded.join(', ')}`);
+            }
             if (preflight.untrackedPlanFiles.length > 0 || preflight.unpushedCommits > 0) {
                 this._log(`WARNING: ${preflight.untrackedPlanFiles.length} untracked plan/feature file(s) and ${preflight.unpushedCommits} unpushed commit(s) — push first or those cards will not resolve on the destination.`);
             }
@@ -408,6 +471,7 @@ export class TransferBundleService {
                 path: outPath,
                 cardCount: cards.length,
                 settingCount: Object.keys(settings).length,
+                settingsExcluded,
                 credentialCount: 0,
                 untrackedPlanFiles: preflight.untrackedPlanFiles,
                 unpushedCommits: preflight.unpushedCommits,
@@ -416,7 +480,7 @@ export class TransferBundleService {
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             this._log(`exportBundle error: ${msg}`);
-            return { success: false, cardCount: 0, settingCount: 0, credentialCount: 0, untrackedPlanFiles: [], unpushedCommits: 0, error: msg };
+            return { success: false, cardCount: 0, settingCount: 0, settingsExcluded: [], credentialCount: 0, untrackedPlanFiles: [], unpushedCommits: 0, error: msg };
         }
     }
 
@@ -495,7 +559,7 @@ export class TransferBundleService {
         try {
             await fs.promises.access(bundlePath);
         } catch {
-            return { success: false, cardsUpdated: 0, cardsSkipped: [], settingsApplied: [], settingsExcluded: [], error: `Bundle not found: ${bundlePath}` };
+            return { success: false, cardsUpdated: 0, cardsSkipped: [], partialFailures: [], settingsApplied: [], settingsExcluded: [], error: `Bundle not found: ${bundlePath}` };
         }
 
         let bundle: TransferBundle;
@@ -504,11 +568,11 @@ export class TransferBundleService {
             bundle = JSON.parse(raw);
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
-            return { success: false, cardsUpdated: 0, cardsSkipped: [], settingsApplied: [], settingsExcluded: [], error: `Failed to parse bundle: ${msg}` };
+            return { success: false, cardsUpdated: 0, cardsSkipped: [], partialFailures: [], settingsApplied: [], settingsExcluded: [], error: `Failed to parse bundle: ${msg}` };
         }
 
         if (!bundle || typeof bundle !== 'object' || bundle.schema !== TRANSFER_BUNDLE_SCHEMA) {
-            return { success: false, cardsUpdated: 0, cardsSkipped: [], settingsApplied: [], settingsExcluded: [], error: `Unsupported bundle schema (expected ${TRANSFER_BUNDLE_SCHEMA}).` };
+            return { success: false, cardsUpdated: 0, cardsSkipped: [], partialFailures: [], settingsApplied: [], settingsExcluded: [], error: `Unsupported bundle schema (expected ${TRANSFER_BUNDLE_SCHEMA}).` };
         }
 
         // Credential guard on import too — a hand-edited or tampered bundle
@@ -517,17 +581,18 @@ export class TransferBundleService {
         if (hits.length > 0) {
             const detail = hits.map(h => `${h.key} (${h.reason})`).join('; ');
             this._log(`Credential guard refused import: ${detail}`);
-            return { success: false, cardsUpdated: 0, cardsSkipped: [], settingsApplied: [], settingsExcluded: [], error: `Refused to import: credential-shaped value(s) detected: ${detail}` };
+            return { success: false, cardsUpdated: 0, cardsSkipped: [], partialFailures: [], settingsApplied: [], settingsExcluded: [], error: `Refused to import: credential-shaped value(s) detected: ${detail}` };
         }
 
         const workspaceId = await db.getWorkspaceId();
         if (!workspaceId) {
-            return { success: false, cardsUpdated: 0, cardsSkipped: [], settingsApplied: [], settingsExcluded: [], error: 'No workspace ID resolved.' };
+            return { success: false, cardsUpdated: 0, cardsSkipped: [], partialFailures: [], settingsApplied: [], settingsExcluded: [], error: 'No workspace ID resolved.' };
         }
 
         const cards = Array.isArray(bundle.cards) ? bundle.cards : [];
         let cardsUpdated = 0;
         const cardsSkipped: ImportCardOutcome[] = [];
+        const partialFailures: ImportCardOutcome[] = [];
 
         // First pass: features must resolve before subtasks link to them, so
         // process feature cards first (isFeature === true), then the rest.
@@ -548,9 +613,14 @@ export class TransferBundleService {
             }
 
             // Column — validate via movePlanByPlanFile (handles custom columns).
+            // It returns false on a rejected column name; that is a partial
+            // failure, not a clean update, so it has to reach the report.
             const column = String(card.column || '').trim();
             if (column && column !== existing.kanbanColumn) {
-                await db.movePlanByPlanFile(planFile, workspaceId, column);
+                const moved = await db.movePlanByPlanFile(planFile, workspaceId, column);
+                if (!moved) {
+                    partialFailures.push({ planFile, matched: true, reason: `column "${column}" was rejected — card left in "${existing.kanbanColumn}"` });
+                }
             }
 
             // Project — resolve-only (updatePlanProjectByPlanFileInvariant uses
@@ -568,7 +638,7 @@ export class TransferBundleService {
 
             // Complexity — skip for features (derived).
             const complexity = String(card.complexity || '').trim();
-            if (complexity && !(existing.isFeature === 1 || existing.isFeature === true)) {
+            if (complexity && Number(existing.isFeature) !== 1 && complexity !== (existing.complexity || '')) {
                 await db.updateComplexityByPlanFile(planFile, workspaceId, complexity);
             }
 
@@ -586,7 +656,7 @@ export class TransferBundleService {
 
             // Priority (starred) — by planId.
             const starred = !!card.priority;
-            const currentlyStarred = !!(existing.priorityStarred === 1 || existing.priorityStarred === true);
+            const currentlyStarred = Number(existing.priorityStarred) === 1;
             if (starred !== currentlyStarred) {
                 await db.setPriorityStarred(existing.planId, workspaceId, starred);
             }
@@ -596,12 +666,13 @@ export class TransferBundleService {
             if (!card.isFeature && card.featureFile) {
                 const featureFile = String(card.featureFile).trim();
                 const featureRow = await db.getPlanByPlanFile(featureFile, workspaceId);
-                if (featureRow && (featureRow.isFeature === 1 || featureRow.isFeature === true)) {
+                if (featureRow && Number(featureRow.isFeature) === 1) {
                     if (existing.featureId !== featureRow.planId) {
                         await db.updateFeatureStatus(existing.planId, 0, featureRow.planId);
                     }
                 } else {
                     this._log(`featureFile ${featureFile} not found as a feature on destination; skipping feature link for ${planFile}`);
+                    partialFailures.push({ planFile, matched: true, reason: `feature "${featureFile}" is not a feature on this destination — card left unlinked` });
                 }
             }
 
@@ -621,12 +692,18 @@ export class TransferBundleService {
             }
         }
 
-        this._log(`Imported: ${cardsUpdated} cards matched, ${cardsSkipped.length} skipped, ${settingsApplied.length} settings applied, ${settingsExcluded.length} excluded`);
+        // The import is the durability boundary the user just asked for, and
+        // _persist() only arms a trailing debounce. Flush so a host that exits
+        // right after the import does not lose the whole transfer.
+        await db.flushPersist();
+
+        this._log(`Imported: ${cardsUpdated} cards matched, ${cardsSkipped.length} skipped, ${partialFailures.length} partial, ${settingsApplied.length} settings applied, ${settingsExcluded.length} excluded`);
 
         return {
             success: true,
             cardsUpdated,
             cardsSkipped,
+            partialFailures,
             settingsApplied,
             settingsExcluded,
         };

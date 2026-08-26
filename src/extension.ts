@@ -1688,8 +1688,14 @@ export async function activate(context: vscode.ExtensionContext) {
             ? `\n\n⚠ ${result.untrackedPlanFiles.length} untracked plan/feature file(s) and ${result.unpushedCommits} unpushed commit(s) — push first or those cards will not resolve on the destination.`
             : '';
         const scp = result.scpLine ? `\n\nReady-to-paste:\n${result.scpLine}` : '';
+        // The excluded count is not optional output: a key misclassified as
+        // machine-local is dropped silently, and the export is the only place
+        // that holds the full key set to report it from.
+        const excluded = result.settingsExcluded.length > 0
+            ? `\n\n${result.settingsExcluded.length} setting(s) excluded (machine-local): ${result.settingsExcluded.join(', ')}`
+            : '';
         vscode.window.showInformationMessage(
-            `Wrote ${result.path} — ${result.cardCount} cards · ${result.settingCount} settings · 0 credentials.${warn}${scp}`
+            `Wrote ${result.path} — ${result.cardCount} cards · ${result.settingCount} settings · 0 credentials.${excluded}${warn}${scp}`
         );
     });
     context.subscriptions.push(exportTransferBundleDisposable);
@@ -1726,10 +1732,13 @@ export async function activate(context: vscode.ExtensionContext) {
             ? `\n\nSkipped ${result.cardsSkipped.length} card(s) (plan file not in this checkout): ${result.cardsSkipped.slice(0, 5).map(c => c.planFile).join(', ')}${result.cardsSkipped.length > 5 ? ' …' : ''}`
             : '';
         const excluded = result.settingsExcluded.length > 0
-            ? `\n\nExcluded ${result.settingsExcluded.length} setting(s) (machine-local).`
+            ? `\n\nExcluded ${result.settingsExcluded.length} setting(s) (machine-local): ${result.settingsExcluded.join(', ')}`
+            : '';
+        const partial = result.partialFailures.length > 0
+            ? `\n\n${result.partialFailures.length} card(s) partially applied: ${result.partialFailures.slice(0, 5).map(c => `${c.planFile} — ${c.reason}`).join('; ')}${result.partialFailures.length > 5 ? ' …' : ''}`
             : '';
         vscode.window.showInformationMessage(
-            `Imported: ${result.cardsUpdated} cards matched, ${result.settingsApplied.length} settings applied.${skipped}${excluded}\n\nRe-authenticate tokens on this machine (secrets do not travel in the bundle).`
+            `Imported: ${result.cardsUpdated} cards matched, ${result.settingsApplied.length} settings applied.${skipped}${partial}${excluded}\n\nRe-authenticate tokens on this machine (secrets do not travel in the bundle).`
         );
     });
     context.subscriptions.push(importTransferBundleDisposable);

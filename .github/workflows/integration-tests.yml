@@ -382,6 +382,15 @@ jobs:
       - name: Git-ignore defaults + .vscode/settings.json stays untracked
         run: npm run test:contract:git-ignore-defaults
 
+      # The transfer bundle's three load-bearing decisions all fail SILENTLY: a
+      # bundle keyed on plan_id matches nothing and reports success, a classifier
+      # defaulting to portable imports a dead terminal roster, and a credential
+      # guard tuned on raw entropy blocks the export on prose prompt overrides.
+      # Round-trips onto a destination at a DIFFERENT absolute path, which is what
+      # proves the bundle carries no machine identity.
+      - name: Transfer bundle contract (round trip, re-keying, classifier, credential guard, host parity)
+        run: npm run test:contract:transfer-bundle
+
       # renderMarkdown feeds webview HTML, so its output is an XSS surface as much as
       # a formatting one, and block-transition bugs (list-then-table, table-then-list)
       # are the classic way a hand-rolled renderer starts emitting unbalanced tags.
