@@ -15,10 +15,10 @@ Return the CI contract suite to green and remove the mechanism that keeps taking
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [A whole-file regex in the WS surface-scoping contract false-positives on a debug log](../plans/ws-surface-scoping-false-positive-blocks-ci-tail.md) — **PLAN REVIEWED**
-- [ ] [Two CI contracts extract a span that no longer exists — a renamed declaration and a guard clause silently emptied their assertion windows](../plans/ci-contract-span-rot-memo-binding-and-pane-fit.md) — **PLAN REVIEWED**
-- [ ] [Three CI contracts pin implementations that were deliberately replaced — the code moved on and the assertions did not](../plans/ci-contracts-pinning-superseded-designs-memo-verb-terminal-input-shell-strip.md) — **PLAN REVIEWED**
-- [ ] [55 hand-rolled source-span extractions treat a failed marker lookup as a valid span — one silently swallows the file, another silently collapses to nothing](../plans/source-span-extraction-guard-shared-helper.md) — **PLAN REVIEWED**
+- [ ] [A whole-file regex in the WS surface-scoping contract false-positives on a debug log](../plans/ws-surface-scoping-false-positive-blocks-ci-tail.md) — **PLAN REVIEWED** — ID: 25c68f2b-f66c-4a5a-bade-c015c5222d6d
+- [ ] [Two CI contracts extract a span that no longer exists — a renamed declaration and a guard clause silently emptied their assertion windows](../plans/ci-contract-span-rot-memo-binding-and-pane-fit.md) — **PLAN REVIEWED** — ID: 74738725-1e30-413f-87ac-b419796364d1
+- [ ] [Three CI contracts pin implementations that were deliberately replaced — the code moved on and the assertions did not](../plans/ci-contracts-pinning-superseded-designs-memo-verb-terminal-input-shell-strip.md) — **PLAN REVIEWED** — ID: 60288750-f436-47ca-a456-aba55b673bb0
+- [ ] [55 hand-rolled source-span extractions treat a failed marker lookup as a valid span — one silently swallows the file, another silently collapses to nothing](../plans/source-span-extraction-guard-shared-helper.md) — **PLAN REVIEWED** — ID: f944fb1d-b9a3-4b51-bd84-80462fda37d0
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

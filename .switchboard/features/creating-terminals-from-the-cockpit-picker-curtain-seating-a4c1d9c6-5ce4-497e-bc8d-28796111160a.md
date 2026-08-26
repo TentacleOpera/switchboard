@@ -13,8 +13,8 @@ Spawning terminals from the cockpit misbehaves at every step: the role picker op
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [OPEN AGENT TERMINALS — seat every terminal it creates, grow the grid to fit, and paint the first curtain](../plans/feature_plan_20260808142009_open-agent-terminals-seat-every-terminal-and-grow-the-grid.md) — **CODE REVIEWED**
-- [ ] [New-Terminal Role Picker Opens at the Top of the Terminals Sidebar Instead of Under the Workspace Header That Was Clicked](../plans/feature_plan_20260808212400_role-picker-opens-under-clicked-workspace-header.md) — **CODE REVIEWED**
+- [ ] [OPEN AGENT TERMINALS — seat every terminal it creates, grow the grid to fit, and paint the first curtain](../plans/feature_plan_20260808142009_open-agent-terminals-seat-every-terminal-and-grow-the-grid.md) — **CODE REVIEWED** — ID: d4065eb2-1617-4138-b3aa-23cd1cb8658b
+- [ ] [New-Terminal Role Picker Opens at the Top of the Terminals Sidebar Instead of Under the Workspace Header That Was Clicked](../plans/feature_plan_20260808212400_role-picker-opens-under-clicked-workspace-header.md) — **CODE REVIEWED** — ID: 18d0f914-5196-464a-9d99-983e0e50b345
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

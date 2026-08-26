@@ -13,8 +13,8 @@ Two related issues with the Prompts tab git strategy UI: (1) add-ons render as a
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix: Prompts tab layout — group ungrouped prompts first, make git subsections accordions, add option descriptions](../plans/feature_plan_20260707125810_prompts-tab-layout-accordions-grouping.md) — **CODE REVIEWED**
-- [ ] [Fix: Git strategy defaults should be "Not Specified" for all three; remove meaningless "Incremental Commits" option](../plans/feature_plan_20260707125920_git-strategy-defaults-notspecified-remove-incremental.md) — **CODE REVIEWED**
+- [ ] [Fix: Prompts tab layout — group ungrouped prompts first, make git subsections accordions, add option descriptions](../plans/feature_plan_20260707125810_prompts-tab-layout-accordions-grouping.md) — **CODE REVIEWED** — ID: 76535114-3951-4617-bc3c-d99b29fb375a
+- [ ] [Fix: Git strategy defaults should be "Not Specified" for all three; remove meaningless "Incremental Commits" option](../plans/feature_plan_20260707125920_git-strategy-defaults-notspecified-remove-incremental.md) — **CODE REVIEWED** — ID: 1f7d525d-71da-407b-b273-c80276e1876b
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

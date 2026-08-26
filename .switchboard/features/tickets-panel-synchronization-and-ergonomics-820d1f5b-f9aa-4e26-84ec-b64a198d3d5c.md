@@ -23,8 +23,8 @@ Improve the reliability, synchronization, and user experience of the Tickets pan
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Reconcile and Delete Stale Local Ticket Markdown Files on Fetch](../plans/feature_plan_20260818093001_tickets-reconcile-stale-local-files-on-fetch.md) — **PLAN REVIEWED**
-- [ ] [Relabel and Enable 'Push All Subtasks' Button from Subtask Views](../plans/feature_plan_20260818093002_tickets-push-all-subtasks-button-relabel-and-subtask-enable.md) — **PLAN REVIEWED**
-- [ ] [Proactive Ticket Comment Fetching on Selection, Refresh, and Refetch](../plans/feature_plan_20260818093005_tickets-proactive-comment-fetching-on-select-and-refresh.md) — **PLAN REVIEWED**
+- [ ] [Reconcile and Delete Stale Local Ticket Markdown Files on Fetch](../plans/feature_plan_20260818093001_tickets-reconcile-stale-local-files-on-fetch.md) — **PLAN REVIEWED** — ID: 3061590f-2341-457a-aeef-accb16676ca9
+- [ ] [Relabel and Enable 'Push All Subtasks' Button from Subtask Views](../plans/feature_plan_20260818093002_tickets-push-all-subtasks-button-relabel-and-subtask-enable.md) — **PLAN REVIEWED** — ID: 5b4eacb1-ae4c-47d9-8125-5b35984b5266
+- [ ] [Proactive Ticket Comment Fetching on Selection, Refresh, and Refetch](../plans/feature_plan_20260818093005_tickets-proactive-comment-fetching-on-select-and-refresh.md) — **PLAN REVIEWED** — ID: 8920d149-48e9-49b3-9215-9e7f616d02c2
 <!-- END SUBTASKS -->
 

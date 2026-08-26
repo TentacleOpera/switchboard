@@ -13,8 +13,8 @@ Make the Worktrees tab reflect what is actually on disk. It never consults git w
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Abandoning a Worktree Removes the Checkout and Leaves Everything That Points At It](../plans/abandon-worktree-leaves-a-branch-and-a-stale-feature-block.md) — **PLAN REVIEWED**
-- [ ] [The Worktrees Tab Never Looks at Git, So a Worktree It Did Not Create Is Unreachable Forever](../plans/worktrees-tab-never-looks-at-git.md) — **PLAN REVIEWED**
+- [ ] [Abandoning a Worktree Removes the Checkout and Leaves Everything That Points At It](../plans/abandon-worktree-leaves-a-branch-and-a-stale-feature-block.md) — **PLAN REVIEWED** — ID: 48e6b307-2d8e-4f74-8f0a-bee08020d917
+- [ ] [The Worktrees Tab Never Looks at Git, So a Worktree It Did Not Create Is Unreachable Forever](../plans/worktrees-tab-never-looks-at-git.md) — **PLAN REVIEWED** — ID: bf12d71f-ca27-48ef-b52b-b58a06d9df49
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

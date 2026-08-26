@@ -16,11 +16,11 @@ The Tickets tab in planning.html is overloaded: the top control strip horizontal
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Tickets tab: move Refetch into a "More" menu (keep Refresh primary)](../plans/tickets-merge-refresh-refetch.md) — **CODE REVIEWED**
-- [ ] [Tickets tab: remove the Refine button from ticket cards](../plans/tickets-remove-refine-button.md) — **CODE REVIEWED**
-- [ ] [Tickets tab: stop sidebar cards resizing on hover](../plans/tickets-sidebar-cards-no-hover-resize.md) — **CODE REVIEWED**
-- [ ] [Tickets tab: move the search input to the top of the sidebar](../plans/tickets-search-move-to-sidebar-top.md) — **CODE REVIEWED**
-- [ ] [Tickets tab: de-overload the ticket preview meta bar](../plans/tickets-preview-meta-bar-deoverload.md) — **CODE REVIEWED**
+- [ ] [Tickets tab: move Refetch into a "More" menu (keep Refresh primary)](../plans/tickets-merge-refresh-refetch.md) — **CODE REVIEWED** — ID: 378cee24-143e-4bf1-9581-f479eebb4cc3
+- [ ] [Tickets tab: remove the Refine button from ticket cards](../plans/tickets-remove-refine-button.md) — **CODE REVIEWED** — ID: 721c271d-8b07-4574-8cf0-afa72e0f2897
+- [ ] [Tickets tab: stop sidebar cards resizing on hover](../plans/tickets-sidebar-cards-no-hover-resize.md) — **CODE REVIEWED** — ID: 7b3760b1-4141-4ea6-883e-24bed5392c21
+- [ ] [Tickets tab: move the search input to the top of the sidebar](../plans/tickets-search-move-to-sidebar-top.md) — **CODE REVIEWED** — ID: 7698d820-4aaf-46ea-9b1a-db49c0c153c5
+- [ ] [Tickets tab: de-overload the ticket preview meta bar](../plans/tickets-preview-meta-bar-deoverload.md) — **CODE REVIEWED** — ID: 37e968a8-d2be-43e2-ad6f-94c74ff93ced
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

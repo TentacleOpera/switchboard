@@ -16,10 +16,10 @@ Fix and improve the full lifecycle of worktree-spawned terminals from creation t
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Planner Agent Row Shows IDE-Suffixed Terminal Name ("planner - planner-devin")](../plans/feature_plan_20260702105354_planner-row-shows-ide-suffixed-name.md) — **CODE REVIEWED**
-- [ ] [Agents Tab Terminal List Does Not Respect Worktree Terminals](../plans/feature_plan_20260702114209_agents-tab-worktree-terminal-preference.md) — **CODE REVIEWED**
-- [ ] [Worktree Delete/Merge/Abandon Must Close Its Spawned Terminals](../plans/feature_plan_20260702140001_worktree-delete-closes-terminals.md) — **CODE REVIEWED**
-- [ ] [Worktree "Open Terminals With Grid" Toggle — Make It Clear, Prominent, And On By Default](../plans/feature_plan_20260702140003_grid-terminals-toggle-clear-and-on-by-default.md) — **CODE REVIEWED**
-- [ ] [Worktree State Must Hydrate Automatically After A Window Reload](../plans/feature_plan_20260702140004_worktree-state-hydrate-on-reload.md) — **CODE REVIEWED**
+- [ ] [Planner Agent Row Shows IDE-Suffixed Terminal Name ("planner - planner-devin")](../plans/feature_plan_20260702105354_planner-row-shows-ide-suffixed-name.md) — **CODE REVIEWED** — ID: 50c93be4-9c84-45b7-90b4-15f3ddaaae67
+- [ ] [Agents Tab Terminal List Does Not Respect Worktree Terminals](../plans/feature_plan_20260702114209_agents-tab-worktree-terminal-preference.md) — **CODE REVIEWED** — ID: a168be0a-8486-426d-98a6-1fe4e43dfcfd
+- [ ] [Worktree Delete/Merge/Abandon Must Close Its Spawned Terminals](../plans/feature_plan_20260702140001_worktree-delete-closes-terminals.md) — **CODE REVIEWED** — ID: d5fd8eaf-8d4c-4135-b674-b774195d85e7
+- [ ] [Worktree "Open Terminals With Grid" Toggle — Make It Clear, Prominent, And On By Default](../plans/feature_plan_20260702140003_grid-terminals-toggle-clear-and-on-by-default.md) — **CODE REVIEWED** — ID: a647c9d7-f659-4d20-9882-bc83b7ac34db
+- [ ] [Worktree State Must Hydrate Automatically After A Window Reload](../plans/feature_plan_20260702140004_worktree-state-hydrate-on-reload.md) — **CODE REVIEWED** — ID: 379471f8-b2f9-46e3-93ad-2eddb782060c
 <!-- END SUBTASKS -->
 

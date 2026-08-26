@@ -26,10 +26,10 @@ The related plan standalone-secrets-bridge-global-encrypted-store.md is delibera
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone PTY Fleet Backend: node-pty TerminalBackend and Registry Integration](../plans/pty-fleet-backend-standalone-terminal-registry.md) — **CODE REVIEWED**
-- [ ] [PTY Terminal I/O over WebSocket: Attach Protocol, Scrollback Replay, and Backpressure](../plans/pty-websocket-terminal-io-channel.md) — **CODE REVIEWED**
-- [ ] [Browser Terminals Panel: xterm.js Rail Tab in the Standalone Shell](../plans/browser-terminals-panel-xterm.md) — **CODE REVIEWED**
-- [ ] [Standalone Agent Dispatch onto the PTY Fleet](../plans/standalone-dispatch-via-pty-fleet.md) — **CODE REVIEWED**
+- [ ] [Standalone PTY Fleet Backend: node-pty TerminalBackend and Registry Integration](../plans/pty-fleet-backend-standalone-terminal-registry.md) — **CODE REVIEWED** — ID: 4839686f-ca79-46af-af16-fad054de6c40
+- [ ] [PTY Terminal I/O over WebSocket: Attach Protocol, Scrollback Replay, and Backpressure](../plans/pty-websocket-terminal-io-channel.md) — **CODE REVIEWED** — ID: 9ee08717-14ed-4485-bc3a-cdaa057516ac
+- [ ] [Browser Terminals Panel: xterm.js Rail Tab in the Standalone Shell](../plans/browser-terminals-panel-xterm.md) — **CODE REVIEWED** — ID: 52075bfc-34ab-4775-a02e-495b85f4d547
+- [ ] [Standalone Agent Dispatch onto the PTY Fleet](../plans/standalone-dispatch-via-pty-fleet.md) — **CODE REVIEWED** — ID: 40e10e14-c5db-48eb-9bb1-1d7a06dcc345
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

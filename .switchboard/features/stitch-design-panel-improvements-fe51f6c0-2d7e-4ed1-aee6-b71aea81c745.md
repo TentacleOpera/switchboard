@@ -27,11 +27,11 @@ The improve-feature pass improved all five subtasks against the live code and au
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Organise the Stitch Cache into Per-Project Folders](../plans/stitch-cache-per-project-folders.md) — **CODE REVIEWED**
-- [ ] [Add a "Stitch HTML" Browser Tab to the Design Panel](../plans/stitch-html-browser-tab.md) — **CODE REVIEWED**
-- [ ] [Replace the Stitch "New Project" Native Input Box with a Real In-Webview Modal](../plans/stitch-new-project-real-modal.md) — **CODE REVIEWED**
-- [ ] [Briefs "Send to Stitch" — Auto-Name the Project and Actually Generate](../plans/briefs-send-to-stitch-actually-sends.md) — **CODE REVIEWED**
-- [ ] [Add a Per-Brief "Link" Button to the Briefs Sidebar](../plans/briefs-per-item-link-button.md) — **CODE REVIEWED**
+- [ ] [Organise the Stitch Cache into Per-Project Folders](../plans/stitch-cache-per-project-folders.md) — **CODE REVIEWED** — ID: f7d870a6-46da-4378-87f1-906321acf1f5
+- [ ] [Add a "Stitch HTML" Browser Tab to the Design Panel](../plans/stitch-html-browser-tab.md) — **CODE REVIEWED** — ID: 2826d44c-6144-480b-b3c4-1cd1afc396fb
+- [ ] [Replace the Stitch "New Project" Native Input Box with a Real In-Webview Modal](../plans/stitch-new-project-real-modal.md) — **CODE REVIEWED** — ID: 3926abbb-4f50-4fba-a614-0b6224f5c8ce
+- [ ] [Briefs "Send to Stitch" — Auto-Name the Project and Actually Generate](../plans/briefs-send-to-stitch-actually-sends.md) — **CODE REVIEWED** — ID: 9fa389ef-1c08-4099-9bc4-94677164761f
+- [ ] [Add a Per-Brief "Link" Button to the Briefs Sidebar](../plans/briefs-per-item-link-button.md) — **CODE REVIEWED** — ID: 0e3aaa6c-9250-400c-80fb-8cdd36babd03
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

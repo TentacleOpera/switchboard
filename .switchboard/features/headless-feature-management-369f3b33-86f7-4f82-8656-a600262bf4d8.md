@@ -31,9 +31,9 @@ It also removed the feature's only cross-feature file contention (see below).
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Surface Verb Failures in the Browser Transport](../plans/browser-surface-verb-failures.md) — **CODE REVIEWED**
-- [ ] [Capability-Gate Feature Management in the Browser](../plans/capability-gate-feature-management.md) — **CODE REVIEWED**
-- [ ] [Construct KanbanProvider in the Standalone Host and Wire Feature Management](../plans/wire-feature-management-standalone.md) — **CODE REVIEWED**
+- [ ] [Surface Verb Failures in the Browser Transport](../plans/browser-surface-verb-failures.md) — **CODE REVIEWED** — ID: c71b9857-51bb-4973-a214-5c10c89081dd
+- [ ] [Capability-Gate Feature Management in the Browser](../plans/capability-gate-feature-management.md) — **CODE REVIEWED** — ID: c61e2594-6565-4e10-9736-5bf51e29e28c
+- [ ] [Construct KanbanProvider in the Standalone Host and Wire Feature Management](../plans/wire-feature-management-standalone.md) — **CODE REVIEWED** — ID: caa7ba7c-85a1-46d6-8686-4181b5906578
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

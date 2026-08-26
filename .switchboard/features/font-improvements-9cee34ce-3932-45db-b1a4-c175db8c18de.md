@@ -38,8 +38,8 @@ Subtask 2 does not edit `:root` except to delete `--font-mono` in its final phas
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Correct the Font-Role Assignment: Monospace Only Where It Earns It](../plans/correct-font-role-assignment.md) — **CODE REVIEWED**
-- [ ] [Decouple Webview Fonts from the VS Code Host](../plans/decouple-webview-fonts-from-host.md) — **CODE REVIEWED**
+- [ ] [Correct the Font-Role Assignment: Monospace Only Where It Earns It](../plans/correct-font-role-assignment.md) — **CODE REVIEWED** — ID: 3f99b62e-b421-429e-ac49-3bf3afabee9d
+- [ ] [Decouple Webview Fonts from the VS Code Host](../plans/decouple-webview-fonts-from-host.md) — **CODE REVIEWED** — ID: 9d3b6733-fba7-4270-9064-ae3cb29a1577
 <!-- END SUBTASKS -->
 
 ## Review Findings

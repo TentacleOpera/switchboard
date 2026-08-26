@@ -19,10 +19,10 @@ Make the journey of creating and fleshing out an epic coherent and correct, from
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Promote-to-Epic Creates Epic File Without Subtask List in Description](../plans/feature_plan_20260628220159_promote-to-epic-missing-subtasks.md) — **CODE REVIEWED**
-- [ ] [Dynamic "Promote to Epic" Button Label Based on Selection Count](../plans/feature_plan_20260628221751_promote-to-epic-button-label-dynamic.md) — **CODE REVIEWED**
-- [ ] [Replace "Group All Plans Into Epic" Button with "Add Epic" (Blank Epic Creation)](../plans/feature_plan_20260628221752_add-epic-button-replaces-group-all.md) — **CODE REVIEWED**
-- [ ] [Refine Epic Skill & Epics-Tab Button](../plans/feature_plan_20260628222343_refine-epic-skill-and-card-button.md) — **CODE REVIEWED**
-- [ ] [Extract the Suggest-Epics Orchestration Flow into a Model-Invocable Skill](../plans/feature_plan_20260629114530_extract-suggest-epics-flow-into-skill.md) — **CODE REVIEWED**
+- [ ] [Promote-to-Epic Creates Epic File Without Subtask List in Description](../plans/feature_plan_20260628220159_promote-to-epic-missing-subtasks.md) — **CODE REVIEWED** — ID: 5c49121a-2061-48a0-ab3e-6b6f35dbf819
+- [ ] [Dynamic "Promote to Epic" Button Label Based on Selection Count](../plans/feature_plan_20260628221751_promote-to-epic-button-label-dynamic.md) — **CODE REVIEWED** — ID: 12a20566-940f-4830-8a56-d0e89b26f1a2
+- [ ] [Replace "Group All Plans Into Epic" Button with "Add Epic" (Blank Epic Creation)](../plans/feature_plan_20260628221752_add-epic-button-replaces-group-all.md) — **CODE REVIEWED** — ID: 7c2a1e47-de60-4225-89c7-1d2322be778f
+- [ ] [Refine Epic Skill & Epics-Tab Button](../plans/feature_plan_20260628222343_refine-epic-skill-and-card-button.md) — **CODE REVIEWED** — ID: 37782565-c526-43bd-8d70-f41698da7c77
+- [ ] [Extract the Suggest-Epics Orchestration Flow into a Model-Invocable Skill](../plans/feature_plan_20260629114530_extract-suggest-epics-flow-into-skill.md) — **CODE REVIEWED** — ID: 06c6c9a1-e828-4504-af8d-7596ce33face
 <!-- END SUBTASKS -->
 

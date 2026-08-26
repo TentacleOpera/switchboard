@@ -17,12 +17,12 @@ Finish the browser cockpit to editor parity and make it run in a browser concurr
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [B2 · Browser Cockpit — Serve From the Extension's LocalApiServer (Concurrent With the Editor)](../plans/b2-cockpit-serve-from-extension-server-concurrent.md) — **CODE REVIEWED**
-- [ ] [B2 · Browser Cockpit — Live Data Delivery to Panel Iframes (Empty Board Fix)](../plans/b2-cockpit-live-data-delivery-empty-board.md) — **CODE REVIEWED**
-- [ ] [B2 · Browser Cockpit — Real Nav Icons + Claudify Theming Parity](../plans/b2-cockpit-real-icons-and-claudify-theming.md) — **CODE REVIEWED**
-- [ ] [B2 · Browser Cockpit — Surface Scope (Per-Control Capability Matrix, Not Panel Mirroring)](../plans/b2-cockpit-complete-panel-set-artifacts-implementation.md) — **CODE REVIEWED**
-- [ ] [B2 · Browser Cockpit — Standalone Settings Persistence](../plans/b2-cockpit-standalone-settings-persistence.md) — **CODE REVIEWED**
-- [ ] [B2 · Browser Cockpit — Secrets Are Editor-Only (Capability Gating + Server Guard)](../plans/b2-cockpit-secrets-editor-only.md) — **CODE REVIEWED**
+- [ ] [B2 · Browser Cockpit — Serve From the Extension's LocalApiServer (Concurrent With the Editor)](../plans/b2-cockpit-serve-from-extension-server-concurrent.md) — **CODE REVIEWED** — ID: cfe7da74-9856-4136-8e89-1a5ff79e4f4f
+- [ ] [B2 · Browser Cockpit — Live Data Delivery to Panel Iframes (Empty Board Fix)](../plans/b2-cockpit-live-data-delivery-empty-board.md) — **CODE REVIEWED** — ID: 2fc42707-9f31-43dd-8d3c-486ae052534a
+- [ ] [B2 · Browser Cockpit — Real Nav Icons + Claudify Theming Parity](../plans/b2-cockpit-real-icons-and-claudify-theming.md) — **CODE REVIEWED** — ID: 587b496b-d4a9-4157-a69c-0d517258b054
+- [ ] [B2 · Browser Cockpit — Surface Scope (Per-Control Capability Matrix, Not Panel Mirroring)](../plans/b2-cockpit-complete-panel-set-artifacts-implementation.md) — **CODE REVIEWED** — ID: 43400a83-0f23-4001-a615-50f655cc3506
+- [ ] [B2 · Browser Cockpit — Standalone Settings Persistence](../plans/b2-cockpit-standalone-settings-persistence.md) — **CODE REVIEWED** — ID: 461a6fb0-2def-4573-8840-ab1c725d463e
+- [ ] [B2 · Browser Cockpit — Secrets Are Editor-Only (Capability Gating + Server Guard)](../plans/b2-cockpit-secrets-editor-only.md) — **CODE REVIEWED** — ID: 418d0768-01d4-4cb6-88b9-385e7da5d955
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

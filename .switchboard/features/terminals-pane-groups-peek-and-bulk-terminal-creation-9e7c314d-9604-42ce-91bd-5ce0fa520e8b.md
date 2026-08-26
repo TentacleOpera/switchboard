@@ -24,10 +24,10 @@ The through-line is separating what the user picked from what is currently rende
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Role Grid Fill: Create a Grid-Full of Agent Terminals in One Action](../plans/role-grid-fill-terminals.md) — **CODE REVIEWED**
-- [ ] [Terminal Peek: Temporary Full-Pane View That Restores Exactly](../plans/terminal-peek-temporary-fullscreen.md) — **CODE REVIEWED**
-- [ ] [Terminals Sidebar: Logical Groups That Lock the View](../plans/terminals-sidebar-groups-and-grids-ia.md) — **CODE REVIEWED**
-- [ ] [Planner Fan-Out: Make the Round-Robin See the Terminals-Pane Fleet](../plans/planner-fanout-pty-fleet-awareness.md) — **CODE REVIEWED**
+- [ ] [Role Grid Fill: Create a Grid-Full of Agent Terminals in One Action](../plans/role-grid-fill-terminals.md) — **CODE REVIEWED** — ID: c5de30ae-c29a-4ebc-aad9-7035947a8261
+- [ ] [Terminal Peek: Temporary Full-Pane View That Restores Exactly](../plans/terminal-peek-temporary-fullscreen.md) — **CODE REVIEWED** — ID: c1cc3b0f-a0ef-4369-ae37-9bb46fe64007
+- [ ] [Terminals Sidebar: Logical Groups That Lock the View](../plans/terminals-sidebar-groups-and-grids-ia.md) — **CODE REVIEWED** — ID: 3da1871f-0b7a-4a0c-b585-227aec7f3fb2
+- [ ] [Planner Fan-Out: Make the Round-Robin See the Terminals-Pane Fleet](../plans/planner-fanout-pty-fleet-awareness.md) — **CODE REVIEWED** — ID: 27472a4e-9639-4715-8a75-b1ed0150b102
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

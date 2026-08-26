@@ -21,8 +21,8 @@ This feature was reconciled from four subtasks to two. The set is now partitione
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [One Completion Signal Per Agent Turn — Batch-Aware "Done" and a Falsifiable Silence Verdict](../plans/feature_plan_20260813100400_done-fires-per-plan-file-not-per-agent-turn.md) — **PLAN REVIEWED**
-- [ ] [One Completion Notice, In One Window — Cut the Terminals Panel's Four DONE Surfaces to Two](../plans/feature_plan_20260813100500_one-completion-paints-four-done-surfaces.md) — **PLAN REVIEWED**
+- [ ] [One Completion Signal Per Agent Turn — Batch-Aware "Done" and a Falsifiable Silence Verdict](../plans/feature_plan_20260813100400_done-fires-per-plan-file-not-per-agent-turn.md) — **PLAN REVIEWED** — ID: 6480bd50-bd74-4f48-a864-b12cee630181
+- [ ] [One Completion Notice, In One Window — Cut the Terminals Panel's Four DONE Surfaces to Two](../plans/feature_plan_20260813100500_one-completion-paints-four-done-surfaces.md) — **PLAN REVIEWED** — ID: 431ee1ab-caa6-4fee-8f81-09a6d32d6d93
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

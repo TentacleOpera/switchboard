@@ -62,7 +62,7 @@ Yes — three decisions.
 
 ### Complex / Risky
 
-- **Spanning two stores changes read cost.** A miss in Board becomes a second lookup in Archive, and under a remote or on-demand Archive that is a network round-trip on a path agents call often. Needs a negative cache or a Board-side tombstone so a genuinely absent card does not pay the Archive lookup every time.
+- **Spanning two stores changes read cost.** A miss in Board becomes a second lookup in Archive, and under a remote or on-demand Archive that is a network round-trip on a path agents call often. Needs a negative cache or a Board-side tombstone so a genuinely absent card does not pay the Archive lookup every time. **The span is application-level, not SQL-level:** libSQL does not support `ATTACH DATABASE` in embedded replica mode, so when Board is a remote target the span is two separate connections merged in TypeScript, not a SQL join — the round-trip cost is per-connection, not per-query.
 - **Board and Archive can disagree mid-sweep.** A card being archived can appear in both or neither. Read Archive first and dedupe by id, or read under one snapshot — either way, exactly one record must come back.
 - **"Unreachable" has to propagate honestly through every layer.** A `try/catch` returning `[]` anywhere between the store and the response reintroduces the exact ambiguity this plan exists to remove. That pattern is common and easy to reintroduce, so it wants a test rather than a convention.
 - **The panel and the agents want different answers to the same question.** A human looking at the board wants dormant cards hidden; an agent asking about a specific card wants it found. So spanning is per-endpoint, not global: collection reads stay windowed, record lookups span. Getting that backwards either floods the board or hides cards from agents.
@@ -90,6 +90,7 @@ Yes — three decisions.
 - **Must land before** the `query-kanban` rewrite in `skills-declare-preconditions-and-degrade.md`, so the destination is correct when agents arrive.
 - **Must land with or after** the topology plan's window and Archive, which is what creates the spanning requirement.
 - **Coordinate with** `sql-write-guardrail-prevent-agents-from-writing-to-kanban-db.md` — same files, opposite direction.
+- **Coordinate with** `storage-topology-one-choice-three-stores.md` — both edit `query-kanban` SKILL.md (topology changes the documented DB path via consolidation; this plan removes `sqlite3`). Three plans edit the same skill file — coordinate so none reverts the others.
 - **Feeds** the app plan's mode matrix: this is what makes agent board reads identical in local/local, remote-board/local-agents and remote-board/remote-agents.
 
 ## Adversarial Synthesis
@@ -98,7 +99,7 @@ Key risks: an endpoint that returns a well-formed "not found" for an archived ca
 
 ## Proposed Changes
 
-1. **Record lookups span Board and Archive**, with each record labelled by source. Collection reads stay windowed, so the human board is unaffected.
+1. **Record lookups span Board and Archive**, with each record labelled by source. Collection reads stay windowed, so the human board is unaffected. **Research constraint (ATTACH):** libSQL does not support `ATTACH DATABASE` in embedded replica mode, so when Board is a remote target, the span cannot be a SQL-level `ATTACH` join across Board and Archive — it must be an application-level merge (separate connections, fetch by id, dedupe in TypeScript). When Board is a local file (default target), `ATTACH` may work, but the code path must not depend on it.
 2. **A distinct store-unavailable outcome**, never an empty success, propagated honestly from the store to the response.
 3. **A negative path that does not pay for Archive every time** — Board-side tombstone or negative cache.
 4. **Archive-first dedupe by id** so a card being archived returns exactly once.
@@ -121,6 +122,14 @@ Additive response fields; existing callers unaffected. Ships before the `query-k
 - **Worktree parity:** run an agent read from inside a per-feature worktree with no `.switchboard/` present. Assert it succeeds — the break that exists today.
 - **Consumer handling:** inject unavailable into the orchestrator, the standing orders' reads, and `manage-features`' fallback. Assert none proceeds as though the board were empty.
 - **Guardrail coexistence:** apply both this plan's and the write guardrail's edits. Assert neither reverts the other and no non-readonly `sqlite3` remains in any skill.
+
+### Goal Invariants
+
+- **Three distinct outcomes:** assert a record-lookup read endpoint returns three distinguishable outcomes — found (with per-record source label), no-such-record, and store-unavailable — and that store-unavailable is a distinct type no layer coerces to `200 []`.
+- **Record lookups span, collections stay windowed:** assert a record lookup for a dormant card spans Archive and returns it, while a collection read for the same board excludes that dormant card. Getting this backwards floods the board or hides cards from agents.
+- **Genuine absence does not pay for Archive every time:** assert a lookup for an id that never existed does not trigger an Archive round-trip on every subsequent call (negative cache or Board-side tombstone).
+- **Consumers branch and degrade:** assert the orchestrator, standing orders, and `manage-features` fallback branch on store-unavailable rather than treating it as empty, and degrade (retry-with-backoff or fail-fast) rather than loop on a permanently-down store.
+- **No `catch` swallows unavailable into `[]`:** assert no layer between the store and the response converts a store-unavailable error into an empty success — the pattern this plan exists to kill.
 
 ## Outstanding Questions
 

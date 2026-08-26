@@ -23,10 +23,10 @@ Land the flow-control plan first — it is the keystone and the other three are 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminal Output Flow Control: Ack-Based Backpressure and Page-Level Batching](../plans/terminal-output-flow-control.md) — **CODE REVIEWED**
-- [ ] [Terminal View Lifecycle: Dispose Views That Leave a Pane](../plans/terminal-view-lifecycle-teardown.md) — **CODE REVIEWED**
-- [ ] [Scope WS Pushes to the Panels That Asked For Them](../plans/panel-surface-scoped-ws-push.md) — **CODE REVIEWED**
-- [ ] [Terminal Input Path: Binary Frames and Paced PTY Writes](../plans/terminal-input-paste-path.md) — **CODE REVIEWED**
+- [ ] [Terminal Output Flow Control: Ack-Based Backpressure and Page-Level Batching](../plans/terminal-output-flow-control.md) — **CODE REVIEWED** — ID: cafe2e4f-2fd2-4470-a7df-ab93470b5116
+- [ ] [Terminal View Lifecycle: Dispose Views That Leave a Pane](../plans/terminal-view-lifecycle-teardown.md) — **CODE REVIEWED** — ID: c7a0209d-3b15-4588-8dbe-15b6d9646ba0
+- [ ] [Scope WS Pushes to the Panels That Asked For Them](../plans/panel-surface-scoped-ws-push.md) — **CODE REVIEWED** — ID: 480f9ea8-22bc-4da8-a91a-764e96842aee
+- [ ] [Terminal Input Path: Binary Frames and Paced PTY Writes](../plans/terminal-input-paste-path.md) — **CODE REVIEWED** — ID: 42120478-139f-4f3a-92ac-866768efd16c
 <!-- END SUBTASKS -->
 
 ## Review Findings

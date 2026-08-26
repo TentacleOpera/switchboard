@@ -19,8 +19,8 @@ Make the Switchboard management console the product's real front door — reacha
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Refactor Switchboard Entry Points to Four `switchboard-`Tagged Front Doors (Skillify Internal Workflows, No Host Drift)](../plans/refactor-switchboard-four-front-doors.md) — **CODE REVIEWED**
-- [ ] [Make the Switchboard Manage Console Speak Human and Offer the Next Step](../plans/switchboard-manage-console-voice-and-proactivity.md) — **CODE REVIEWED**
+- [ ] [Refactor Switchboard Entry Points to Four `switchboard-`Tagged Front Doors (Skillify Internal Workflows, No Host Drift)](../plans/refactor-switchboard-four-front-doors.md) — **CODE REVIEWED** — ID: 7ccb04e6-75d3-4083-875f-7bc07cc3e008
+- [ ] [Make the Switchboard Manage Console Speak Human and Offer the Next Step](../plans/switchboard-manage-console-voice-and-proactivity.md) — **CODE REVIEWED** — ID: f1aeaf50-e44c-44c5-8c16-32c9fa52867a
 <!-- END SUBTASKS -->
 
 ## Review Findings

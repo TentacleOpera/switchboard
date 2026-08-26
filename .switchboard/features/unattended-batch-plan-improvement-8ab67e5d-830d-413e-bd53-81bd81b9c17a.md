@@ -18,9 +18,9 @@ What remains genuinely missing is narrower and sharper: terminals that are live 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Hidden, Batched Terminal Creation with Mixed-Provider Allocation](../plans/hidden-terminal-create-and-provider-mix.md) — **CODE REVIEWED**
-- [ ] [Unattended Improver Contract: Outstanding Questions and Single-File Scope](../plans/improver-prompt-and-planner-lifecycle.md) — **CODE REVIEWED**
-- [ ] [Parallel Planner Lane in the Oversight Pass](../plans/plan-update-notifies-planner.md) — **CODE REVIEWED**
+- [ ] [Hidden, Batched Terminal Creation with Mixed-Provider Allocation](../plans/hidden-terminal-create-and-provider-mix.md) — **CODE REVIEWED** — ID: e93cd1cd-7c46-409e-9b98-4a44fca9b0b9
+- [ ] [Unattended Improver Contract: Outstanding Questions and Single-File Scope](../plans/improver-prompt-and-planner-lifecycle.md) — **CODE REVIEWED** — ID: c745ca77-e5d3-4eb2-adbd-f88496084518
+- [ ] [Parallel Planner Lane in the Oversight Pass](../plans/plan-update-notifies-planner.md) — **CODE REVIEWED** — ID: 47c636aa-c013-44b6-8817-fe9cb107ec38
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

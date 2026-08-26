@@ -20,9 +20,9 @@ The through-line is that every current "mode" is really one property of a single
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Orchestration Stops Being a Mode — Oversight Becomes a Flag](../plans/feature_plan_20260816150001_oversight-stops-being-a-mode.md) — **CODE REVIEWED**
-- [ ] [Internal / External: Rename the Modes and Make External Actually External](../plans/feature_plan_20260816150002_internal-external-rename-and-external-mode.md) — **CODE REVIEWED**
-- [ ] [Delete the Comms Schedule Mode and Collapse Scheduling to Two Controls](../plans/feature_plan_20260816150003_delete-comms-and-collapse-scheduler.md) — **CODE REVIEWED**
+- [ ] [Orchestration Stops Being a Mode — Oversight Becomes a Flag](../plans/feature_plan_20260816150001_oversight-stops-being-a-mode.md) — **CODE REVIEWED** — ID: e8407b5a-3730-482a-a2d1-08bbc548dab7
+- [ ] [Internal / External: Rename the Modes and Make External Actually External](../plans/feature_plan_20260816150002_internal-external-rename-and-external-mode.md) — **CODE REVIEWED** — ID: 0965d1fc-4b4d-403b-bf3d-31186f878c8d
+- [ ] [Delete the Comms Schedule Mode and Collapse Scheduling to Two Controls](../plans/feature_plan_20260816150003_delete-comms-and-collapse-scheduler.md) — **CODE REVIEWED** — ID: 54e6352e-7f6c-4b91-a2ae-57ad1109d93d
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

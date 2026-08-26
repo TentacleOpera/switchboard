@@ -19,7 +19,7 @@ Fixes bottom-row clipping in 2x3/3x3 grid layouts and adds a new 1x3 vertical-st
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add 1x3 Terminal Layout (3 Panes Stacked Vertically)](../plans/feature_plan_20260806114816_terminals-add-1x3-vertical-layout.md) — **CODE REVIEWED**
-- [ ] [Fix: Bottom Terminal Row Clipped in 2x3 and 3x3 Layouts](../plans/feature_plan_20260806114815_terminals-x3-layouts-bottom-row-clipped.md) — **CODE REVIEWED**
+- [ ] [Add 1x3 Terminal Layout (3 Panes Stacked Vertically)](../plans/feature_plan_20260806114816_terminals-add-1x3-vertical-layout.md) — **CODE REVIEWED** — ID: a7fa9a07-4466-43e3-94be-20264e0df758
+- [ ] [Fix: Bottom Terminal Row Clipped in 2x3 and 3x3 Layouts](../plans/feature_plan_20260806114815_terminals-x3-layouts-bottom-row-clipped.md) — **CODE REVIEWED** — ID: c23d8471-a984-4235-8eb5-9f18554d85c2
 <!-- END SUBTASKS -->
 

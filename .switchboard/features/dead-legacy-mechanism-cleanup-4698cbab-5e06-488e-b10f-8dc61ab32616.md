@@ -13,8 +13,8 @@ Remove two vestigial mechanisms that no longer have any consumer in the codebase
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Remove Dead Plan-Import Manifest Language from Workflows and Skills](../plans/remove-dead-plan-import-manifest-language-from-workflows-and-skills.md) — **CODE REVIEWED**
-- [ ] [Remove the dead Stage Complete label + parser field](../plans/remove-dead-stage-complete-label-and-parser.md) — **CODE REVIEWED**
+- [ ] [Remove Dead Plan-Import Manifest Language from Workflows and Skills](../plans/remove-dead-plan-import-manifest-language-from-workflows-and-skills.md) — **CODE REVIEWED** — ID: 332657fc-82b3-4b8a-8404-0164fc500c19
+- [ ] [Remove the dead Stage Complete label + parser field](../plans/remove-dead-stage-complete-label-and-parser.md) — **CODE REVIEWED** — ID: bf8580f2-7911-4cc7-8a1d-f45da9653b3c
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

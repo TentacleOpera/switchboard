@@ -14,9 +14,9 @@ Make the tickets auto-sync engine safe to leave switched on, and stop parent tic
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Replace embedded subtask content with file references in parent ticket docs](../plans/feature_plan_20260818103104_subtask-file-references-not-embedded-content.md) — **PLAN REVIEWED**
-- [ ] [Fix Parent Ticket Card Stuck on 'Checking' Sync Status in Subtasks Sidebar](../plans/feature_plan_20260818103943_fix_parent_ticket_checking_status_subtasks_sidebar.md) — **PLAN REVIEWED**
-- [ ] [Safe Auto-Sync: Suppress Delta-Pull During Edit Mode, Reliable Autopush on Save](../plans/feature_plan_20260818151304_safe-autosync-suppress-delta-pull-during-edit-mode.md) — **PLAN REVIEWED**
+- [ ] [Replace embedded subtask content with file references in parent ticket docs](../plans/feature_plan_20260818103104_subtask-file-references-not-embedded-content.md) — **PLAN REVIEWED** — ID: 9efcddb4-93e2-4ece-9643-0082a2f30670
+- [ ] [Fix Parent Ticket Card Stuck on 'Checking' Sync Status in Subtasks Sidebar](../plans/feature_plan_20260818103943_fix_parent_ticket_checking_status_subtasks_sidebar.md) — **PLAN REVIEWED** — ID: 6eb88a70-cf18-4091-b7ef-313fbd99b9eb
+- [ ] [Safe Auto-Sync: Suppress Delta-Pull During Edit Mode, Reliable Autopush on Save](../plans/feature_plan_20260818151304_safe-autosync-suppress-delta-pull-during-edit-mode.md) — **PLAN REVIEWED** — ID: 708b9038-9d03-42ed-bede-4f249cd570e8
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

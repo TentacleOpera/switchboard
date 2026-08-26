@@ -15,10 +15,10 @@ Fix a cluster of UX and visual defects in the Switchboard markdown editor — a 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Plan: Fix Markdown Editor Internal Scrollbar](../plans/feature_plan_20260716_fix_markdown_editor_internal_scrollbar.md) — **CODE REVIEWED**
-- [ ] [Plan: Fix Blue Background on Markdown Editor Panel](../plans/feature_plan_20260716_fix_blue_background_on_markdown_editor.md) — **CODE REVIEWED**
-- [ ] [Plan: Fix Image Attachments Not Showing in Edit Preview](../plans/feature_plan_20260716_fix_image_attachments_not_showing_in_edit_preview.md) — **CODE REVIEWED**
-- [ ] [Plan: Fix Table Icon Shows Calendar Emoji](../plans/feature_plan_20260716_fix_table_icon_shows_calendar.md) — **CODE REVIEWED**
+- [ ] [Plan: Fix Markdown Editor Internal Scrollbar](../plans/feature_plan_20260716_fix_markdown_editor_internal_scrollbar.md) — **CODE REVIEWED** — ID: 30b6f8fb-8296-4517-b390-6cd19a828cfb
+- [ ] [Plan: Fix Blue Background on Markdown Editor Panel](../plans/feature_plan_20260716_fix_blue_background_on_markdown_editor.md) — **CODE REVIEWED** — ID: 3a1827cb-708f-4e98-959c-b4bb76f1b4df
+- [ ] [Plan: Fix Image Attachments Not Showing in Edit Preview](../plans/feature_plan_20260716_fix_image_attachments_not_showing_in_edit_preview.md) — **CODE REVIEWED** — ID: 08e2ee9c-7fa8-43c7-bbb3-66df04bd91ba
+- [ ] [Plan: Fix Table Icon Shows Calendar Emoji](../plans/feature_plan_20260716_fix_table_icon_shows_calendar.md) — **CODE REVIEWED** — ID: fe127570-abf3-421c-92e5-cc0b300aa493
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

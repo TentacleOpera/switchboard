@@ -17,8 +17,8 @@ Fix ten UAT failures from the team-first-class-object feature. The shell strip w
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [UAT Remediation: Shell Strip & In-Place Team View](../plans/uat-shell-strip-in-place-team-view.md) — **CODE REVIEWED**
-- [ ] [UAT Remediation: Remove Pacing Toggle & Relocate Action Bar](../plans/uat-remove-pacing-toggle-relocate-action-bar.md) — **CODE REVIEWED**
+- [ ] [UAT Remediation: Shell Strip & In-Place Team View](../plans/uat-shell-strip-in-place-team-view.md) — **CODE REVIEWED** — ID: dea8ad5d-8d27-4e73-99ec-91b227310eb5
+- [ ] [UAT Remediation: Remove Pacing Toggle & Relocate Action Bar](../plans/uat-remove-pacing-toggle-relocate-action-bar.md) — **CODE REVIEWED** — ID: a0c90cae-bd4a-4a4d-acf2-5145def20820
 <!-- END SUBTASKS -->
 
 ## Completion Report

@@ -1,13 +1,17 @@
 ---
 name: switchboard-remote
-description: Remote Connections & Remote Control — drive plans via Linear, Notion, or external AI surfaces (side-by-side or away from desk)
+description: Remote Switchboard control — drive plans via Linear or Notion when the local machine is off
 ---
 
-# Connections & Remote Switchboard Session Entry Point
+# Remote Switchboard Session Entry Point
 
-You are entering a **Connections & Remote Switchboard planning session**. Drive board planning either remotely (away from desk) or side-by-side using external AI surfaces (e.g. Gemini Spark or Claude Cowork). Plans live in Linear, Notion, or external file return paths. MCP or file watchers serve as the integration layer.
+You are entering a **remote Switchboard planning session**. The local machine and
+VS Code extension are not running. Plans live in Linear or Notion — not in local
+`.md` files. MCP (or the LocalApiServer proxy) is the control surface. Git is not
+used for planning.
 
-This is the external/remote counterpart to `/sw` (switchboard-chat). Use `/sw` when you have local access; use `/sw-remote` for external surfaces or away-from-desk control.
+This is the remote counterpart to `/sw` (switchboard-chat). Use `/sw` when you have
+local access; use `/sw-remote` when you don't.
 
 ## 1. Confirm Remote Context
 
@@ -209,144 +213,3 @@ When splitting: write each as a separate plan file with its own Goal, Metadata, 
 - **Closing (when all plans are drafted):** Offer again: *"You now have [N] plans covering [topic] — want me to create a feature to group them?"*
 
 The gate depends on who initiated grouping: if the user already asked for grouping or a feature (e.g. "split these into plans and create a feature"), the original ask IS the confirmation — create the feature now without a second confirm. If you are proposing grouping the user did not request, only create the feature if the user confirms. In a remote session, feature creation follows the `/create-feature` skill (direct file write to `.switchboard/features/`) or the `create-feature.js` script if the extension is reachable.
-
-## 8b. Linear Steps (if Linear is the provider)
-
-Linear is the provider to prefer when the operator is on a **phone** — it has a first-class
-mobile app, and its structured queries are not tier-gated the way some Notion connectors are.
-These steps mirror section 8.
-
-1. **Find the board.** `list_projects` to locate the mapped Switchboard project. If several
-   Switchboard projects exist, confirm which one before writing anything.
-
-2. **Read the real status names.** `list_issue_statuses` **every session** — do not carry names
-   over from a previous one. Users rename statuses, and the mapped column names are what drive
-   local dispatch.
-
-3. **Create or find the card's issue.** Either update an existing issue (one per board card) or
-   create a new issue in the mapped project — the next poll imports a new issue as a new local
-   markdown plan automatically.
-
-4. **Write the plan into the issue DESCRIPTION.** Author it fully *before* moving the card, and
-   ground it in the synced project context per section 7. The local poll reads the description
-   and writes it to the local plan file, so the description is the source of truth the local
-   agent runs against. **Write the description completely, THEN change the status** — a
-   half-written description can be picked up if you flip too early. An empty description is
-   skipped, so always author it when you intend to revise.
-
-5. **Trigger the local agent: change the status.** Set the issue's status to the trigger state
-   for the work you want (a planning state to refine, a coding state to implement). The poll
-   mirrors the state locally and dispatches that column's agent.
-
-6. **Converse without a state change: add a comment.** A comment on the issue is routed to the
-   card's **current** column agent as input. This is the Linear equivalent of the Notion
-   Comments-DB row, and needs no relation field — the issue *is* the addressing.
-
-7. **Read results.** On a later turn, re-read the issue description and its comments. Local
-   agents post back as comments, and the description carries whatever the local plan file now
-   says.
-
-### Features (Linear)
-
-Per the Features section above: create the feature's issue, then set each subtask issue's
-**parent** to it. The local poll mirrors the parent/child relationship, so changing the
-**feature's** status cascades to all subtasks and dispatches each one's column agent.
-
-### Automation rules — label-triggered pipelines
-
-Linear has a capability Notion does not: **automation rules** keyed on a label plus a set of
-states. Configured in Switchboard's Remote tab, each rule is
-`{ name, triggerLabel, triggerStates, targetColumn, finalColumn, writeBackOnComplete }`, and a
-card matching **both** the label and one of the states is imported into `targetColumn` — with the
-result written back to the card when it completes, if `writeBackOnComplete` is set.
-
-For an agent driving the board remotely this means: **applying a label can be a dispatch action**,
-not just metadata. Before using labels that way, ask the operator which rules are configured — a
-label you add casually may fire a pipeline. Conversely, if the operator wants a repeatable
-"file a card, get work done" path, a rule is the mechanism to suggest rather than hand-moving
-statuses each time.
-
-## 9. Driving from a phone
-
-This skill *is* the phone answer for Switchboard. The board itself is a desktop surface — it has
-no responsive layout and its kanban card moves use HTML5 drag-and-drop, which does not fire on
-touch devices at all — so a phone drives the board **through the tracker**, not through the board.
-
-What that means in practice:
-
-- **Prefer Linear.** Real mobile app, no tier-gated queries, comments as the message bus.
-- **Latency is the design, not a defect.** Local results appear after the next poll (30-120s).
-  Write, put the phone away, read the answer later. Do not sit and refresh — and do not tell the
-  user something failed because it has not appeared yet.
-- **One action per turn is usually right.** Author the description fully, then change the status.
-  The half-written-body race in step 4 is more likely on a phone, where the operator is
-  interrupted mid-edit.
-- **Nothing here requires exposing the host.** The tracker is reachable from the phone; the host
-  is not, and does not need to be. Never suggest opening a port, a tunnel or a proxy to make a
-  phone work — that is a different and much larger decision, and the tracker path exists so it is
-  not needed.
-
-## 10. What the tracker cannot show you
-
-The mirror is faithful for plans, statuses, features and comments. It carries **nothing** for the
-following, so do not offer them, and say plainly that they are desk-only if asked:
-
-- **Missions.** Mission state, membership, launch/stop, and dependency gating are local-only —
-  there is no mission representation in the sync at all. A question like "why hasn't this card
-  moved" may have a mission-gating answer that is invisible from here. Say so rather than
-  guessing.
-- **Memo capture.** Local-only. There is no memo surface on the tracker.
-- **Worktree diffs and git state.** Not mirrored. "Did the agent do something sane?" cannot be
-  answered from the tracker unless an agent wrote the answer into a comment.
-- **Live terminal output.** Not mirrored, and not something to attempt — agents report by posting
-  comments, and that is the only stream available here.
-
-When the operator asks for one of these, the honest answer is that it needs the board, plus an
-offer to have an agent post the specific thing they want as a comment. Do not speculate about
-local state you cannot see — the sync's silence is not evidence that nothing is happening.
-
-## 11. Remote mode is what makes agents talk to you
-
-This is the most important operational fact in this skill, and it is a **pre-flight item**, not a
-detail.
-
-When a board is under remote control, `REMOTE_MODE_DIRECTIVE` is injected into **every** agent
-role on dispatch. Its text:
-
-> REMOTE MODE: You are running under remote control — the user is NOT at the terminal. If you need
-> to ask the user anything or report a blocker, post it as a comment on the linked issue using
-> `.agents/protocols/linear-api/SKILL.md` (or `.agents/protocols/clickup-api/SKILL.md`). Do NOT
-> wait on terminal input. Continue with any work you can do without the answer.
-
-So the question-and-answer loop already exists and is bidirectional:
-
-- **Agent → operator.** The agent posts through the host-side comment bridge. Comments are
-  stamped with a self-marker **host-side**, never by the agent, which is what stops Switchboard's
-  own comments from being re-ingested as operator input. Agents never call the tracker API
-  directly.
-- **Operator → agent.** Your comment on the issue is routed to that card's current column agent as
-  input, with the marker filtering Switchboard's own comments out.
-
-**Why this matters when you are driving remotely:**
-
-- **Confirm remote control is actually ON for the board you are working**, per the pre-flight in
-  section 6. It is gated per board. With it off, a dispatched agent that hits a question **blocks
-  on terminal input nobody is watching** — the work stalls silently and no comment ever appears.
-  If cards seem to stop mid-flight with no explanation, this is the first thing to check.
-- **A quiet card is not necessarily a stuck card.** The directive tells agents to continue with
-  whatever does not need the answer, so silence can mean "still working". Read the comments before
-  concluding anything.
-- **Answer in the thread, not by editing the description.** A reply is a comment; the description
-  is the plan body and rewriting it mid-flight fights the poll.
-- **Do not design around this loop's absence.** If asked how to get an answer back from an agent,
-  the answer is "it already comes back as a comment" — not a tunnel, not a port, not a new
-  channel.
-
-### Planned change — where a comment goes
-
-The statements above that a comment is routed to the card's **current column agent** describe
-today's behaviour and are correct as written. A planned change
-(`a-card-comment-cannot-reach-the-seat-holding-the-work.md`) routes a comment on an **in-flight**
-card to the seat actually holding it — the card's `dispatched_terminal` — and leaves column routing
-in place for every other card. Until that ships, assume column routing. After it ships, this section
-is what to update.

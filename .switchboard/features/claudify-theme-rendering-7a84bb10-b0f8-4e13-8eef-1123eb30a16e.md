@@ -14,9 +14,9 @@ Make the Claudify theme render with solid opaque panels and a dark immersive gro
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix: Theme changes do not apply to already-open webviews (split theme on Design)](../plans/feature_plan_20260707124454_theme-not-applied-to-open-webviews.md) — **CODE REVIEWED**
-- [ ] [Fix: Claudify theme — setup panel background boxes are transparent instead of black](../plans/feature_plan_20260707124454_claudify-setup-panel-transparent-background.md) — **CODE REVIEWED**
-- [ ] [Fix: Claudify theme — webview background behind the grid is too light](../plans/feature_plan_20260707124454_claudify-webview-background-too-light.md) — **CODE REVIEWED**
+- [ ] [Fix: Theme changes do not apply to already-open webviews (split theme on Design)](../plans/feature_plan_20260707124454_theme-not-applied-to-open-webviews.md) — **CODE REVIEWED** — ID: 4c8a7917-e849-427d-907d-fa3ec0573187
+- [ ] [Fix: Claudify theme — setup panel background boxes are transparent instead of black](../plans/feature_plan_20260707124454_claudify-setup-panel-transparent-background.md) — **CODE REVIEWED** — ID: 5451fda2-1ae1-4d4b-a161-dc98241120c3
+- [ ] [Fix: Claudify theme — webview background behind the grid is too light](../plans/feature_plan_20260707124454_claudify-webview-background-too-light.md) — **CODE REVIEWED** — ID: 57d82822-1ed6-48bf-92c6-cee867bea7ab
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

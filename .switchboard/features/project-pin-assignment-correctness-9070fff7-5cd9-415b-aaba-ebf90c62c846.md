@@ -23,8 +23,8 @@ Together they close both failure layers: subtask 2 makes the pin work on first i
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Let a `**Project:**` Pin Apply to an Unassigned Plan Instead of Being Frozen Forever](../plans/feature_plan_20260730130632_project-pin-unrecoverable-once-missed.md) — **CODE REVIEWED**
-- [ ] [Find and Fix Why a Valid `**Project:**` Pin Resolves to Unassigned on Every Fresh Plan Import](../plans/feature_plan_20260730130633_project-pin-resolves-to-unassigned-on-import.md) — **CODE REVIEWED**
+- [ ] [Let a `**Project:**` Pin Apply to an Unassigned Plan Instead of Being Frozen Forever](../plans/feature_plan_20260730130632_project-pin-unrecoverable-once-missed.md) — **CODE REVIEWED** — ID: faff42f7-8cd8-4cce-b937-78ca36f966f3
+- [ ] [Find and Fix Why a Valid `**Project:**` Pin Resolves to Unassigned on Every Fresh Plan Import](../plans/feature_plan_20260730130633_project-pin-resolves-to-unassigned-on-import.md) — **CODE REVIEWED** — ID: 07ee748b-b210-4e6f-ada8-7c9e27b04419
 <!-- END SUBTASKS -->
 
 ## Code Review (2026-07-30, reviewer pass)

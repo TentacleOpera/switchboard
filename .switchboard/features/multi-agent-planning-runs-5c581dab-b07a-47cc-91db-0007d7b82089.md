@@ -14,9 +14,9 @@ Add a planning mode that attacks one problem with N independent agents instead o
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Multi-Agent Planning 01 — Fan-In Dispatch: N Agents, One Problem, N Independent Plans](../plans/multi-agent-planning-01-fan-in-dispatch.md) — **PLAN REVIEWED**
-- [ ] [Multi-Agent Planning 02 — Divergence Map Before Synthesis](../plans/multi-agent-planning-02-divergence-map.md) — **PLAN REVIEWED**
-- [ ] [Multi-Agent Planning 03 — Adjudication Round: Resolving Divergence Against the Code](../plans/multi-agent-planning-03-adjudication-round.md) — **PLAN REVIEWED**
+- [ ] [Multi-Agent Planning 01 — Fan-In Dispatch: N Agents, One Problem, N Independent Plans](../plans/multi-agent-planning-01-fan-in-dispatch.md) — **PLAN REVIEWED** — ID: 4cca4ce9-f3d6-4d54-bb31-fc18024b55cd
+- [ ] [Multi-Agent Planning 02 — Divergence Map Before Synthesis](../plans/multi-agent-planning-02-divergence-map.md) — **PLAN REVIEWED** — ID: d5839664-b471-48cf-bb03-1beb8e9a6b36
+- [ ] [Multi-Agent Planning 03 — Adjudication Round: Resolving Divergence Against the Code](../plans/multi-agent-planning-03-adjudication-round.md) — **PLAN REVIEWED** — ID: c8575419-5018-49d6-9ca4-a1f7bacd01fe
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -14,9 +14,9 @@ Remove three code paths that serve nothing. A tickets ask-agent verb whose butto
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Delete the dead `.agent/` fallback paths, keep the `.agent/` migration](../plans/remove-dead-agent-singular-fallback-paths.md) — **CREATED**
-- [ ] [Remove the dead tickets ask-agent path](../plans/remove-dead-tickets-ask-agent-path.md) — **CREATED**
-- [ ] [Remove Retired-Mode UI Notices](../plans/remove-retired-mode-ui-notices.md) — **CREATED**
+- [ ] [Delete the dead `.agent/` fallback paths, keep the `.agent/` migration](../plans/remove-dead-agent-singular-fallback-paths.md) — **CREATED** — ID: a7a89fa3-a4d0-43e0-b8d6-2171e1dbfcfe
+- [ ] [Remove the dead tickets ask-agent path](../plans/remove-dead-tickets-ask-agent-path.md) — **CREATED** — ID: bb3d0ad8-7094-40ca-adc2-2ed74ac9f71e
+- [ ] [Remove Retired-Mode UI Notices](../plans/remove-retired-mode-ui-notices.md) — **CREATED** — ID: aa542002-85a7-4d5e-a2c7-df7b198663b8
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

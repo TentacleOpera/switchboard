@@ -23,8 +23,8 @@ Drag-and-drop from a Terminals-panel kanban pane onto a terminal pane is missing
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Kanban-pane drag-to-terminal never marks the plan as dispatched — no active-agent tracking](../plans/feature_plan_20260807161805_kanban-pane-drop-does-not-mark-agent-working.md) — **CODE REVIEWED**
-- [ ] [Kanban-pane rows have no multi-select — drag-to-terminal can only ever dispatch one plan](../plans/feature_plan_20260807161806_kanban-pane-multi-select-drag-to-terminal.md) — **CODE REVIEWED**
+- [ ] [Kanban-pane drag-to-terminal never marks the plan as dispatched — no active-agent tracking](../plans/feature_plan_20260807161805_kanban-pane-drop-does-not-mark-agent-working.md) — **CODE REVIEWED** — ID: ea7e6a9d-c6ca-47b2-ad86-f7653d9e38c9
+- [ ] [Kanban-pane rows have no multi-select — drag-to-terminal can only ever dispatch one plan](../plans/feature_plan_20260807161806_kanban-pane-multi-select-drag-to-terminal.md) — **CODE REVIEWED** — ID: 09942d9b-08fd-4c3a-a94b-e23f5776fad2
 <!-- END SUBTASKS -->
 
 ## Review Findings

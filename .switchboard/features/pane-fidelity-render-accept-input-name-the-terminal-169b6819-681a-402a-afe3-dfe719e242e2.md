@@ -14,9 +14,9 @@ Make a terminal pane an honest view of its pty. Three independent defects break 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [A Terminal Pane's `exited` Flag Is A One-Way Latch — A Live PTY Renders Read-Only Until The Panel Is Reloaded](../plans/feature_plan_20260813084500_terminal-pane-exited-latch-never-clears.md) — **PLAN REVIEWED**
-- [ ] [The Terminal Pane Header Shows the CLI Brand and the Handle, But No Longer Shows the Agent Role](../plans/feature_plan_20260813100100_pane-header-no-longer-shows-the-agent-role.md) — **PLAN REVIEWED**
-- [ ] [Seating a Terminal Into an Empty Grid Slot Corrupts the Glyphs in Its Neighbours](../plans/feature_plan_20260813100200_seating-a-terminal-corrupts-sibling-pane-glyphs.md) — **PLAN REVIEWED**
+- [ ] [A Terminal Pane's `exited` Flag Is A One-Way Latch — A Live PTY Renders Read-Only Until The Panel Is Reloaded](../plans/feature_plan_20260813084500_terminal-pane-exited-latch-never-clears.md) — **PLAN REVIEWED** — ID: 587776f2-44e1-4b3a-92a0-bceb14127657
+- [ ] [The Terminal Pane Header Shows the CLI Brand and the Handle, But No Longer Shows the Agent Role](../plans/feature_plan_20260813100100_pane-header-no-longer-shows-the-agent-role.md) — **PLAN REVIEWED** — ID: fbd0ea84-9e14-4b27-a5c1-0e9fdf70faaa
+- [ ] [Seating a Terminal Into an Empty Grid Slot Corrupts the Glyphs in Its Neighbours](../plans/feature_plan_20260813100200_seating-a-terminal-corrupts-sibling-pane-glyphs.md) — **PLAN REVIEWED** — ID: db17215d-d140-4c0e-8c45-6237cdcea939
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

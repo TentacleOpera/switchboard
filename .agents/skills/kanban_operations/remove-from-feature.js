@@ -15,23 +15,7 @@ const path = require('path');
 const http = require('http');
 
 const subtaskPlanId = process.argv[2];
-let resolveWorkspaceRoot;
-try {
-  ({ resolveWorkspaceRoot } = require('../_lib/workspace-root'));
-} catch {
-  resolveWorkspaceRoot = (explicit) =>
-    path.resolve(explicit && explicit !== '.' ? explicit : process.cwd());
-}
-const workspaceRoot = resolveWorkspaceRoot(process.argv[3]);
-if (!workspaceRoot) {
-  console.error(
-    `No Switchboard workspace found from ${process.cwd()} — no .switchboard/kanban.db ` +
-    `in this directory or any parent below your home directory.\n` +
-    `Pass the workspace root explicitly:\n` +
-    `  node remove-from-feature.js <subtaskPlanId> /absolute/path/to/workspace`
-  );
-  process.exit(1);
-}
+const workspaceRoot = process.argv[3] || '.';
 
 if (!subtaskPlanId) {
   console.error("Usage: node remove-from-feature.js <subtask_plan_id> [workspace_root]");

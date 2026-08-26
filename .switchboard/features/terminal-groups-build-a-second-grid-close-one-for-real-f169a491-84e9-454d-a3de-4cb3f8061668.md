@@ -13,8 +13,8 @@ Make the group machinery in the Terminals panel support the two gestures an oper
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The Group Tab's × Deletes the Group Label and Leaves Every Terminal Running](../plans/feature_plan_20260813100000_group-tab-close-leaves-every-terminal-running.md) — **PLAN REVIEWED**
-- [ ] [FILL GRID must build a second grid of a role it has already used](../plans/feature_plan_20260814100824_fill-grid-refuses-a-second-grid-of-the-same-role.md) — **PLAN REVIEWED**
+- [ ] [The Group Tab's × Deletes the Group Label and Leaves Every Terminal Running](../plans/feature_plan_20260813100000_group-tab-close-leaves-every-terminal-running.md) — **PLAN REVIEWED** — ID: cba0ac6f-48c5-4a01-b486-0b3dd0b60445
+- [ ] [FILL GRID must build a second grid of a role it has already used](../plans/feature_plan_20260814100824_fill-grid-refuses-a-second-grid-of-the-same-role.md) — **PLAN REVIEWED** — ID: 6d972b6d-40f3-41b6-8f00-67dd8da4d0c0
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -14,9 +14,9 @@ Close the residual risks the 2026-07-29 code review of Headless Feature Manageme
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Headless Feature Management — Destructive & Convergence Path Tests](../plans/headless-feature-destructive-path-tests.md) — **CODE REVIEWED**
-- [ ] [Standalone Ingestion Feature Callbacks — Delegate to the Real Provider](../plans/standalone-feature-callbacks-provider-delegation.md) — **CODE REVIEWED**
-- [ ] [Fix the Verb-Engine Kanban Seam Harness (and CI-Wire the Verb-Engine Suites)](../plans/fix-verb-engine-kanban-seam-harness.md) — **CODE REVIEWED**
+- [ ] [Headless Feature Management — Destructive & Convergence Path Tests](../plans/headless-feature-destructive-path-tests.md) — **CODE REVIEWED** — ID: 4cdeb9cd-ea6b-44d6-bdc8-d0fa72c24fc1
+- [ ] [Standalone Ingestion Feature Callbacks — Delegate to the Real Provider](../plans/standalone-feature-callbacks-provider-delegation.md) — **CODE REVIEWED** — ID: 8c70a8a6-cfcb-4135-b675-7621fc65416c
+- [ ] [Fix the Verb-Engine Kanban Seam Harness (and CI-Wire the Verb-Engine Suites)](../plans/fix-verb-engine-kanban-seam-harness.md) — **CODE REVIEWED** — ID: 7af6d9d1-83e5-4dbf-86dc-4d3a07d92f79
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

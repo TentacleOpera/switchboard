@@ -13,8 +13,8 @@ An operator watching a grid of agents can see which agent is in each pane but no
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Turn-End From PTY Output Silence: One Completion Signal That Works For Every Agent CLI](../plans/feature_plan_20260808083000_pty-turn-end-from-output-silence.md) — **CODE REVIEWED**
-- [ ] [Show the Live Plan Title in Each Terminals Pane Header](../plans/feature_plan_20260808135826_terminals-pane-header-live-plan-title.md) — **CODE REVIEWED**
+- [ ] [Turn-End From PTY Output Silence: One Completion Signal That Works For Every Agent CLI](../plans/feature_plan_20260808083000_pty-turn-end-from-output-silence.md) — **CODE REVIEWED** — ID: de678193-b92c-43e9-94b0-c6466f2ba996
+- [ ] [Show the Live Plan Title in Each Terminals Pane Header](../plans/feature_plan_20260808135826_terminals-pane-header-live-plan-title.md) — **CODE REVIEWED** — ID: af9b53a8-0c54-4e55-ac84-405f90e5a0e4
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

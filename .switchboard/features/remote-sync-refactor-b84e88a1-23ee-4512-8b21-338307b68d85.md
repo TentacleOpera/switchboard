@@ -41,10 +41,10 @@ Fix the foundation before shipping the UX. Make push a declared provider capabil
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Linear Bidirectional Description Sync](../plans/linear-bidirectional-description-sync.md) — **CODE REVIEWED**
-- [ ] [Remote Sync Refactor (1/3): Declared Provider Capabilities + Unified Push Dispatch](../plans/remote-sync-refactor-1-provider-capabilities-and-unified-push.md) — **CODE REVIEWED**
-- [ ] [Remote Sync Refactor (2/3): Notion Push Pipeline (Status + Content Write-Back)](../plans/remote-sync-refactor-2-notion-push-pipeline.md) — **CODE REVIEWED**
-- [ ] [Remote Sync Refactor (3/3): Config Consolidation + Remote-Tab Ingest/Full UX](../plans/remote-sync-refactor-3-config-consolidation-and-remote-tab-ux.md) — **CODE REVIEWED**
+- [ ] [Linear Bidirectional Description Sync](../plans/linear-bidirectional-description-sync.md) — **CODE REVIEWED** — ID: 4cf51efb-6d7d-43bc-8945-cd2cbb2faa69
+- [ ] [Remote Sync Refactor (1/3): Declared Provider Capabilities + Unified Push Dispatch](../plans/remote-sync-refactor-1-provider-capabilities-and-unified-push.md) — **CODE REVIEWED** — ID: 7de5be2e-fa59-4e9f-a88c-6f7447caedf7
+- [ ] [Remote Sync Refactor (2/3): Notion Push Pipeline (Status + Content Write-Back)](../plans/remote-sync-refactor-2-notion-push-pipeline.md) — **CODE REVIEWED** — ID: fb86d161-aaa5-46da-b85d-f5ca260b4388
+- [ ] [Remote Sync Refactor (3/3): Config Consolidation + Remote-Tab Ingest/Full UX](../plans/remote-sync-refactor-3-config-consolidation-and-remote-tab-ux.md) — **CODE REVIEWED** — ID: 1bd3f73a-6a50-46f5-82d6-39070ee74c45
 <!-- END SUBTASKS -->
 
 ## Metadata

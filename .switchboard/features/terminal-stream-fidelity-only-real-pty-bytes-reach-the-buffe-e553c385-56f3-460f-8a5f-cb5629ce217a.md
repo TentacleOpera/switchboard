@@ -13,8 +13,8 @@ A terminal screen buffer must contain exactly what the pty produced, in order, w
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Four Client Notices Are Written Into the Terminal Buffer, Corrupting Any TUI's Screen Model](../plans/feature_plan_20260807130000_terminal-chrome-writes-corrupt-tui-buffer.md) — **CODE REVIEWED**
-- [ ] [Scrollback Replay Splices Silently Over Evicted Output and Can Start Mid-Escape-Sequence](../plans/feature_plan_20260807130001_gateway-replay-gap-and-unsafe-parse-start.md) — **CODE REVIEWED**
+- [ ] [Four Client Notices Are Written Into the Terminal Buffer, Corrupting Any TUI's Screen Model](../plans/feature_plan_20260807130000_terminal-chrome-writes-corrupt-tui-buffer.md) — **CODE REVIEWED** — ID: 5da4a27b-46e5-4aec-af74-cfd6575da188
+- [ ] [Scrollback Replay Splices Silently Over Evicted Output and Can Start Mid-Escape-Sequence](../plans/feature_plan_20260807130001_gateway-replay-gap-and-unsafe-parse-start.md) — **CODE REVIEWED** — ID: 67accbdd-16fd-41fe-8f18-977eded6e1bc
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

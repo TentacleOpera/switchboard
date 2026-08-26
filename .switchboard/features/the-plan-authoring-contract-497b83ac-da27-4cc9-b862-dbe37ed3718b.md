@@ -17,12 +17,12 @@ Fix what authoring agents are required to do, and what their output must contain
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Prohibit Subagents in Memo and Chat Prompts](../plans/feature_plan_20260818093006_prohibit-subagents-in-memo-and-chat-prompts.md) — **PLAN REVIEWED**
-- [ ] [Require a verbatim ## User Instructions section in every authored plan](../plans/feature_plan_20260819140000_verbatim-user-instructions-in-plans.md) — **PLAN REVIEWED**
-- [ ] [The create-feature Skill Documents the Link Mechanism That Works Without the Extension](../plans/create-feature-skill-documents-the-frontmatter-carrier.md) — **PLAN REVIEWED**
-- [ ] [Enforce Mandatory Split Gate in improve-plan Protocol](../plans/enforce-mandatory-split-gate-in-improve-plan-protocol.md) — **PLAN REVIEWED**
-- [ ] [Split-Gate Return Routing via Standing Orders](../plans/split-gate-return-routing-for-automation.md) — **PLAN REVIEWED**
-- [ ] [Replace agent-authored project pinning with a sticky-project UI setting](../plans/replace-agent-project-pinning-with-a-sticky-ui-setting.md) — **PLAN REVIEWED**
+- [ ] [Prohibit Subagents in Memo and Chat Prompts](../plans/feature_plan_20260818093006_prohibit-subagents-in-memo-and-chat-prompts.md) — **PLAN REVIEWED** — ID: 87abd97a-b0a3-47f1-b536-a27f66f3ed97
+- [ ] [Require a verbatim ## User Instructions section in every authored plan](../plans/feature_plan_20260819140000_verbatim-user-instructions-in-plans.md) — **PLAN REVIEWED** — ID: 1f45b865-b094-40e1-8911-5915599275b2
+- [ ] [The create-feature Skill Documents the Link Mechanism That Works Without the Extension](../plans/create-feature-skill-documents-the-frontmatter-carrier.md) — **PLAN REVIEWED** — ID: f72f21ea-ed6f-41c8-ac13-3383b98e07ba
+- [ ] [Enforce Mandatory Split Gate in improve-plan Protocol](../plans/enforce-mandatory-split-gate-in-improve-plan-protocol.md) — **PLAN REVIEWED** — ID: 37738533-d288-4c80-9735-78776a4212ea
+- [ ] [Split-Gate Return Routing via Standing Orders](../plans/split-gate-return-routing-for-automation.md) — **PLAN REVIEWED** — ID: df13a9ad-3e47-46f5-971b-ae2e2e301b79
+- [ ] [Replace agent-authored project pinning with a sticky-project UI setting](../plans/replace-agent-project-pinning-with-a-sticky-ui-setting.md) — **PLAN REVIEWED** — ID: 03ed0e7a-c916-4cba-9024-0276a6987961
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

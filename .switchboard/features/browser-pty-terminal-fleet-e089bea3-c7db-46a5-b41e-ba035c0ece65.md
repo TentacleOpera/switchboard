@@ -21,8 +21,8 @@ Make the browser-mode PTY terminal fleet usable at fleet scale: stop layout swit
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Expand the Browser Terminals Grid Beyond Four Panes](../plans/feature_plan_20260731120000_browser-terminal-grid-beyond-four-panes.md) — **CODE REVIEWED**
-- [ ] [Stop Losing Browser Terminal Pane Assignments on Layout Switch and Mis-Click](../plans/feature_plan_20260731120100_stop-losing-browser-terminal-pane-assignments.md) — **CODE REVIEWED**
-- [ ] [Route Browser-Surface Dispatch to the PTY Fleet Instead of Refusing It](../plans/feature_plan_20260731120200_route-browser-surface-dispatch-to-pty-fleet.md) — **CODE REVIEWED**
+- [ ] [Expand the Browser Terminals Grid Beyond Four Panes](../plans/feature_plan_20260731120000_browser-terminal-grid-beyond-four-panes.md) — **CODE REVIEWED** — ID: a850d621-7219-495a-a618-f2a25d692584
+- [ ] [Stop Losing Browser Terminal Pane Assignments on Layout Switch and Mis-Click](../plans/feature_plan_20260731120100_stop-losing-browser-terminal-pane-assignments.md) — **CODE REVIEWED** — ID: 334e7468-2cd6-4fb0-8ca1-418847447537
+- [ ] [Route Browser-Surface Dispatch to the PTY Fleet Instead of Refusing It](../plans/feature_plan_20260731120200_route-browser-surface-dispatch-to-pty-fleet.md) — **CODE REVIEWED** — ID: acaafcfd-05bd-4b8f-a649-71fb8e9f2286
 <!-- END SUBTASKS -->
 

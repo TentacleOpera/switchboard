@@ -18,8 +18,8 @@ Part 1 must land before Part 2 — Part 2 consumes `TmuxTerminalBackend`, `isTmu
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [tmux Bridge Part 1: Transport Layer](../plans/tmux-bridge-1-transport-layer.md) — **CREATED**
-- [ ] [tmux Bridge Part 2: Standalone Dispatch Integration](../plans/tmux-bridge-2-standalone-dispatch-integration.md) — **CREATED**
-- [ ] [WSL Standalone Support for tmux Bridge on Windows](../plans/wsl-standalone-support-for-tmux-bridge-on-windows.md) — **CREATED**
+- [ ] [tmux Bridge Part 1: Transport Layer](../plans/tmux-bridge-1-transport-layer.md) — **CREATED** — ID: 8bc07323-3c00-4614-b48f-e5069c263f83
+- [ ] [tmux Bridge Part 2: Standalone Dispatch Integration](../plans/tmux-bridge-2-standalone-dispatch-integration.md) — **CREATED** — ID: f1965bc4-a221-4928-a64f-1c3165eaae2f
+- [ ] [WSL Standalone Support for tmux Bridge on Windows](../plans/wsl-standalone-support-for-tmux-bridge-on-windows.md) — **CREATED** — ID: b59e9fae-6409-480b-ba24-829db3891932
 <!-- END SUBTASKS -->
 

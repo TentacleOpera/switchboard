@@ -85,6 +85,6 @@ the pane is actually scrolled.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Restore The scrollTop ↔ ydisp Invariant So Terminal Panes Neither Stall Nor Teleport](../plans/feature_plan_20260814170000_terminals-scrolltop-ydisp-invariant.md) — **PLAN REVIEWED**
+- [ ] [Restore The scrollTop ↔ ydisp Invariant So Terminal Panes Neither Stall Nor Teleport](../plans/feature_plan_20260814170000_terminals-scrolltop-ydisp-invariant.md) — **PLAN REVIEWED** — ID: f52b8493-ac68-445b-a71e-07037635013d
 <!-- END SUBTASKS -->
 

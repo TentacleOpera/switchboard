@@ -10,11 +10,11 @@ Improvements to the Claude tab of design.html
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Claude Tab: Independent Folder Management (Not Shared with HTML Previews)](../plans/feature_plan_20260625104014_claude-tab-independent-folder-management.md) — **CODE REVIEWED**
-- [ ] [Move Claude Tab to Second Position (After Stitch)](../plans/feature_plan_20260625104015_claude-tab-move-to-second-position.md) — **CODE REVIEWED**
-- [ ] [Separate Images and HTML in Claude Tab with Subheaders](../plans/feature_plan_20260625104016_claude-tab-separate-images-html-subheaders.md) — **CODE REVIEWED**
-- [ ] [Remove Invented "Repo Folders & Files" Subheader from Claude Tab](../plans/feature_plan_20260625104017_claude-tab-remove-repo-folders-files-subheader.md) — **CODE REVIEWED**
-- [ ] [Remove Confusing "Target" and "Active Terminal" from Claude Tab Function Bar](../plans/feature_plan_20260625104018_claude-tab-remove-target-active-terminal-function-bar.md) — **CODE REVIEWED**
+- [ ] [Claude Tab: Independent Folder Management (Not Shared with HTML Previews)](../plans/feature_plan_20260625104014_claude-tab-independent-folder-management.md) — **CODE REVIEWED** — ID: c712721c-27cc-4c15-b913-039194769942
+- [ ] [Move Claude Tab to Second Position (After Stitch)](../plans/feature_plan_20260625104015_claude-tab-move-to-second-position.md) — **CODE REVIEWED** — ID: db25ecc1-8e41-4cd7-a551-431933881931
+- [ ] [Separate Images and HTML in Claude Tab with Subheaders](../plans/feature_plan_20260625104016_claude-tab-separate-images-html-subheaders.md) — **CODE REVIEWED** — ID: 4f268eab-5be9-49a9-81b9-4d3a194e4e3f
+- [ ] [Remove Invented "Repo Folders & Files" Subheader from Claude Tab](../plans/feature_plan_20260625104017_claude-tab-remove-repo-folders-files-subheader.md) — **CODE REVIEWED** — ID: 935f1b11-3923-4187-81b8-f438d0300d98
+- [ ] [Remove Confusing "Target" and "Active Terminal" from Claude Tab Function Bar](../plans/feature_plan_20260625104018_claude-tab-remove-target-active-terminal-function-bar.md) — **CODE REVIEWED** — ID: c42a7fd2-0a05-40ca-97f7-ad8cec5d3788
 <!-- END SUBTASKS -->
 
 ## Implementation Status — Implemented 2026-06-25 (Epic Orchestrator)

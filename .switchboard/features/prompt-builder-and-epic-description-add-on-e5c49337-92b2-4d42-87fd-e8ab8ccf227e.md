@@ -13,7 +13,7 @@ Strip redundant boilerplate from generated prompts and add a new planner add-on 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add "Write Epic Description If Empty" Planner Add-on + Dependencies Section to Suggest Epics Skill](../plans/feature_plan_20260702063927_write-epic-description-if-empty-addon.md) — **CODE REVIEWED**
-- [ ] [Prompt Builder Redundancy Cleanup — Lean Dispatch Prompts](../plans/feature_plan_20260702123609_prompt-builder-redundancy-cleanup.md) — **CODE REVIEWED**
+- [ ] [Add "Write Epic Description If Empty" Planner Add-on + Dependencies Section to Suggest Epics Skill](../plans/feature_plan_20260702063927_write-epic-description-if-empty-addon.md) — **CODE REVIEWED** — ID: dc858497-e213-4787-a288-911539a93145
+- [ ] [Prompt Builder Redundancy Cleanup — Lean Dispatch Prompts](../plans/feature_plan_20260702123609_prompt-builder-redundancy-cleanup.md) — **CODE REVIEWED** — ID: 6d650fb9-080e-457c-8c80-ced2a01499c7
 <!-- END SUBTASKS -->
 

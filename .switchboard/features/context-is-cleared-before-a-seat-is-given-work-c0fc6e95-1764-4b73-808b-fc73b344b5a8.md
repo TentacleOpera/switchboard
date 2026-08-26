@@ -13,8 +13,8 @@ Stop a seat starting new work carrying the last task's context. Clearing must ha
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Host-Enforced Auto-Clear on Plan Change](../plans/plan_20260820140000_host-auto-clear-on-plan-change.md) — **CODE REVIEWED**
-- [ ] [Clear All Team Terminals When a Card Moves Into a Team](../plans/clear-all-team-terminals-on-card-move.md) — **CODE REVIEWED**
+- [ ] [Host-Enforced Auto-Clear on Plan Change](../plans/plan_20260820140000_host-auto-clear-on-plan-change.md) — **CODE REVIEWED** — ID: d5d2230a-a3e5-4afb-ae1d-c20e22aa033c
+- [ ] [Clear All Team Terminals When a Card Moves Into a Team](../plans/clear-all-team-terminals-on-card-move.md) — **CODE REVIEWED** — ID: 68f91a19-bcb5-4044-8798-45bb8dd4abf0
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -24,7 +24,6 @@ The host-enforced subtask is the general mechanism and the team-wide clear is a 
 ## Completion Summary
 
 Both subtasks implemented and reviewed. Host-enforced auto-clear adds an in-memory Map (terminal name → last planId) on both extension host and standalone; when a dispatch references a different planId, the host overrides clearBeforePrompt to true so /clear fires before the prompt. Same-planId resends preserve false (context kept for fix prompts). Map maintenance covers ptyClearTerminal, ptyClearAllTerminals, ptyCloseTerminal, ptyRenameTerminal, and ptyWrite with /clear. Team-wide clear adds a fire-and-forget block in _handleTriggerAgentActionInternal that calls clearTerminalContext on all team members except the destination seat when a card lands on a team. Skill documentation inlined into KanbanProvider.ts _buildDrivePrefix (skill files were deleted); contract phrases "mandatory for correctness" and "Clear at rest, always" preserved. New test file host-auto-clear-on-plan-change.test.js has 11 source-level assertions covering both hosts.
-
 
 ## Review Findings
 

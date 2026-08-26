@@ -13,7 +13,7 @@ Streamline the implementation.html plan-select panel button layout and create-pl
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [implementation.html plan select panel layout improvements](../plans/feature_plan_20260702083641_implementation-plan-select-panel-layout-improvements.md) — **CODE REVIEWED**
-- [ ] [Create plan button should not open VS Code dialogue — open project.html Kanban tab instead](../plans/feature_plan_20260702083642_create-plan-button-no-vscode-dialogue.md) — **CODE REVIEWED**
+- [ ] [implementation.html plan select panel layout improvements](../plans/feature_plan_20260702083641_implementation-plan-select-panel-layout-improvements.md) — **CODE REVIEWED** — ID: 94b65897-2e29-4c75-9216-86fa95879ea6
+- [ ] [Create plan button should not open VS Code dialogue — open project.html Kanban tab instead](../plans/feature_plan_20260702083642_create-plan-button-no-vscode-dialogue.md) — **CODE REVIEWED** — ID: 0e938950-e153-4ac1-a69c-a6454beebe39
 <!-- END SUBTASKS -->
 

@@ -13,8 +13,8 @@ Make the configuration Switchboard pushes to agents both distributable and safe 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add MCP config distribution — push MCP server configs to all agents from terminals.html](../plans/add-mcp-config-distribution.md) — **PLAN REVIEWED**
-- [ ] [Cross-panel startup command overwrite](../plans/cross-panel-startup-command-overwrite.md) — **PLAN REVIEWED**
+- [ ] [Add MCP config distribution — push MCP server configs to all agents from terminals.html](../plans/add-mcp-config-distribution.md) — **PLAN REVIEWED** — ID: 5f01c5dd-5e55-46e1-996e-1a6a67704b97
+- [ ] [Cross-panel startup command overwrite](../plans/cross-panel-startup-command-overwrite.md) — **PLAN REVIEWED** — ID: 0c468f55-853b-48ca-a143-96e71177ea6a
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

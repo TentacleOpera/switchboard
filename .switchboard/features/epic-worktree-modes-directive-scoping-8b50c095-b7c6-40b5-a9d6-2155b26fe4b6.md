@@ -136,11 +136,11 @@ shared prompt wiring once 2 & 3 land.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Part 0 — Directive Scope Bug Fix (ultracode/goal leak)](../plans/part0-directive-scope-bugfix.md) — **CODE REVIEWED**
-- [ ] [Part 1 — Epic Worktree Mode Selector + Config Foundation](../plans/part1-epic-worktree-mode-selector.md) — **CODE REVIEWED**
-- [ ] [Part 2 — Worktree-per-subtask (Feature 1)](../plans/part2-worktree-per-subtask.md) — **CODE REVIEWED**
-- [ ] [Part 3 — High/low Complexity Split (Feature 2)](../plans/part3-high-low-complexity-split.md) — **CODE REVIEWED**
-- [ ] [Part 4 — Directive Wiring Centralization (cross-cutting)](../plans/part4-directive-wiring.md) — **CODE REVIEWED**
+- [ ] [Part 0 — Directive Scope Bug Fix (ultracode/goal leak)](../plans/part0-directive-scope-bugfix.md) — **CODE REVIEWED** — ID: 9c7bd4e0-b1ea-4edf-87f3-f0b2474203b4
+- [ ] [Part 1 — Epic Worktree Mode Selector + Config Foundation](../plans/part1-epic-worktree-mode-selector.md) — **CODE REVIEWED** — ID: db5a8926-0263-4e22-a09e-3f4480ee4260
+- [ ] [Part 2 — Worktree-per-subtask (Feature 1)](../plans/part2-worktree-per-subtask.md) — **CODE REVIEWED** — ID: 310f0f47-8ed3-41eb-be2f-42c8cbcc5b2f
+- [ ] [Part 3 — High/low Complexity Split (Feature 2)](../plans/part3-high-low-complexity-split.md) — **CODE REVIEWED** — ID: 02453653-743a-45f8-aeed-5e1d594138d0
+- [ ] [Part 4 — Directive Wiring Centralization (cross-cutting)](../plans/part4-directive-wiring.md) — **CODE REVIEWED** — ID: 36247134-5010-4694-930a-48c163f6cbc3
 <!-- END SUBTASKS -->
 
 ## Subtasks

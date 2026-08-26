@@ -20,9 +20,9 @@ Fix visual consistency issues in the Afterburner/claudify themes — CRT scanlin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Remove CRT Scanline Animation from the Design and Setup Panels](../plans/feature_plan_20260626124050_crt_animation_scope_design_setup_panels.md) — **CODE REVIEWED**
-- [ ] [Make the "Disable CRT Animation" Toggle Take Effect Live](../plans/feature_plan_20260626124051_crt_animation_disable_not_live.md) — **CODE REVIEWED**
-- [ ] [Unify Kanban Card Meta (Complexity + Timestamp) to Grey Across Themes](../plans/feature_plan_20260626124052_kanban_card_meta_teal_afterburner.md) — **CODE REVIEWED**
+- [ ] [Remove CRT Scanline Animation from the Design and Setup Panels](../plans/feature_plan_20260626124050_crt_animation_scope_design_setup_panels.md) — **CODE REVIEWED** — ID: d6a1ace3-bc68-42ec-bd64-311fdb57f3d8
+- [ ] [Make the "Disable CRT Animation" Toggle Take Effect Live](../plans/feature_plan_20260626124051_crt_animation_disable_not_live.md) — **CODE REVIEWED** — ID: f679aeae-ea3c-4e6a-85da-f6a6fcfd264c
+- [ ] [Unify Kanban Card Meta (Complexity + Timestamp) to Grey Across Themes](../plans/feature_plan_20260626124052_kanban_card_meta_teal_afterburner.md) — **CODE REVIEWED** — ID: 12f21470-318e-4085-8408-115c2d80714e
 <!-- END SUBTASKS -->
 
 ---

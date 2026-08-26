@@ -13,8 +13,8 @@ Give the operator control over how work enters a queue from the board. A toggle 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Repurpose Created Column's Blank-Feature Button as a Planner Fan-Out Toggle for Batch Move](../plans/feature_plan_20260820220404_created-column-batch-move-planner-fanout-toggle.md) — **PLAN REVIEWED**
-- [ ] [Remove STAGING column gate — allow drag-back from any column](../plans/remove-staging-column-gate-allow-all-columns.md) — **PLAN REVIEWED**
+- [ ] [Repurpose Created Column's Blank-Feature Button as a Planner Fan-Out Toggle for Batch Move](../plans/feature_plan_20260820220404_created-column-batch-move-planner-fanout-toggle.md) — **PLAN REVIEWED** — ID: 847915da-b56f-48b8-8e82-3ca3fac1911c
+- [ ] [Remove STAGING column gate — allow drag-back from any column](../plans/remove-staging-column-gate-allow-all-columns.md) — **PLAN REVIEWED** — ID: 20e09739-97bc-47ee-924f-65b89971daf1
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

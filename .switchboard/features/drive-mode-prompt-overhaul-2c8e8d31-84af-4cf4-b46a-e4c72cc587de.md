@@ -13,8 +13,8 @@ The team lead agent wastes a full turn on discovery work the extension already h
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Inject Context Into Drive-Mode Prompt, Trim Skill File](../plans/inject-context-trim-skill-drive-mode-prompt-payload.md) — **CODE REVIEWED**
-- [ ] [Drive-Mode Addon Cleanup + Auto-Arm Feature Watch](../plans/drive-mode-addon-cleanup-auto-arm-watch.md) — **CODE REVIEWED**
+- [ ] [Inject Context Into Drive-Mode Prompt, Trim Skill File](../plans/inject-context-trim-skill-drive-mode-prompt-payload.md) — **CODE REVIEWED** — ID: b97d86d8-7627-497e-8e09-856242a97cfa
+- [ ] [Drive-Mode Addon Cleanup + Auto-Arm Feature Watch](../plans/drive-mode-addon-cleanup-auto-arm-watch.md) — **CODE REVIEWED** — ID: 0a879cf3-0269-4637-9280-81805033e399
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

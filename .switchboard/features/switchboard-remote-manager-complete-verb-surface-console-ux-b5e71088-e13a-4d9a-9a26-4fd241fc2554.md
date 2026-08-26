@@ -13,8 +13,8 @@ Make /switchboard-manage a genuinely complete manager while VS Code runs minimis
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature A · A2b — Generic Verb Passthrough (VS Code running)](../plans/a2b-generic-verb-passthrough-vscode-running.md) — **CODE REVIEWED**
-- [ ] [/switchboard-manage — Skill UX Overhaul](../plans/switchboard-manage-skill-ux-overhaul.md) — **CODE REVIEWED**
+- [ ] [Feature A · A2b — Generic Verb Passthrough (VS Code running)](../plans/a2b-generic-verb-passthrough-vscode-running.md) — **CODE REVIEWED** — ID: abd578f7-4ee6-431b-b052-9670921a4f54
+- [ ] [/switchboard-manage — Skill UX Overhaul](../plans/switchboard-manage-skill-ux-overhaul.md) — **CODE REVIEWED** — ID: f985f1e4-f8d4-48d5-b7cf-f14909e4c78e
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

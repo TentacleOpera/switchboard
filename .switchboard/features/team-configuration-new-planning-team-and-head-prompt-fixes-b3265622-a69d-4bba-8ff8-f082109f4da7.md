@@ -21,9 +21,9 @@ Add a general planning team with an analyst subagent to save the lead's tokens f
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [General planning team with analyst subagent to save lead tokens](../plans/feature_plan_20260818000512_general-planning-team-with-analyst-subagent.md) — **CODE REVIEWED**
-- [ ] [Fix coding team head standing order: API errors and rotation rule](../plans/feature_plan_20260818000513_fix-coding-team-head-standing-order-api-errors-and-rotation-rule.md) — **CODE REVIEWED**
-- [ ] [A Team Lead Must Dispatch Only to Its Own Seats, Trust the Roster, and Verify Before Undoing](../plans/feature_plan_20260818063846_team-lead-must-dispatch-only-to-own-seats-trust-roster-verify-before-undoing.md) — **CODE REVIEWED**
+- [ ] [General planning team with analyst subagent to save lead tokens](../plans/feature_plan_20260818000512_general-planning-team-with-analyst-subagent.md) — **CODE REVIEWED** — ID: a1ce68fa-192f-42f6-a7a7-1807f82d8184
+- [ ] [Fix coding team head standing order: API errors and rotation rule](../plans/feature_plan_20260818000513_fix-coding-team-head-standing-order-api-errors-and-rotation-rule.md) — **CODE REVIEWED** — ID: 66d7cb2b-dbab-4783-a9e6-daffcf8e06e8
+- [ ] [A Team Lead Must Dispatch Only to Its Own Seats, Trust the Roster, and Verify Before Undoing](../plans/feature_plan_20260818063846_team-lead-must-dispatch-only-to-own-seats-trust-roster-verify-before-undoing.md) — **CODE REVIEWED** — ID: 6099c70d-7e04-403b-b723-3b35f72ccfd7
 <!-- END SUBTASKS -->
 
 ## Review Findings

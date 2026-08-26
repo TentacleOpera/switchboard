@@ -15,10 +15,10 @@ Make it structurally impossible for a review to satisfy a plan's mechanics while
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Make the reviewer assess the goal, not just the steps](../plans/goal-invariant-verification-and-review-escalation.md) — **CODE REVIEWED**
-- [ ] [A review team triages a whole feature, then fixes only what it reviewed](../plans/a-review-team-triages-then-fixes-what-it-reviewed.md) — **CODE REVIEWED**
-- [ ] [Completion testing: a planner judges the finish, and may plan the remainder](../plans/completion-testing-stage-checks-acceptance-criteria.md) — **CODE REVIEWED**
-- [ ] [Deferred review findings become a structured record](../plans/deferred-findings-become-a-structured-record.md) — **CODE REVIEWED**
+- [ ] [Make the reviewer assess the goal, not just the steps](../plans/goal-invariant-verification-and-review-escalation.md) — **CODE REVIEWED** — ID: e0bc6c25-8531-41fc-a753-b2578eeaff91
+- [ ] [A review team triages a whole feature, then fixes only what it reviewed](../plans/a-review-team-triages-then-fixes-what-it-reviewed.md) — **CODE REVIEWED** — ID: 373f50c6-dece-4b8a-8985-9ec530c1392c
+- [ ] [Completion testing: the Acceptance Tester judges the finish, and may plan the remainder](../plans/completion-testing-stage-checks-acceptance-criteria.md) — **CODE REVIEWED** — ID: aa8feaba-388b-4e18-9fd7-a7cc0b99389b
+- [ ] [Deferred review findings become a structured record](../plans/deferred-findings-become-a-structured-record.md) — **CODE REVIEWED** — ID: 7ea0d362-52be-4d00-9798-c7dbe914a02c
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -30,7 +30,6 @@ Deferred findings lands before completion testing, which consumes that record. T
 ## Implementation Summary
 
 All four subtasks implemented and committed (0417cc4e). Goal-invariant verification adds unconditional GOAL VERDICT and ESCALATION clauses to reviewerBaseInstructions, a CONSTITUTION.md escalation rule, recommended Goal Invariants in improve-plan/improve-feature, and must-not-exist assertions in the packaging contract test. Deferred findings get a structured `## Deferred Findings` section in both completion step variants with severity + file:line per item, explicit empty case, and compact budget scoped to prose only. Review team triage adds an offered review team definition, read-only review turns with context-preserving standing orders, 4-category triage with file-disjoint fix apportionment in reviewTriage.ts, and exact-value migration of the shipped head prompt. Completion testing relabels ACCEPTANCE TESTED to Completion Tested (id unchanged), gives it a purpose-built prompt reading the plan's Goal as first-class intent baseline (the column's role stays `tester` — see that plan's `### Review Deviations`), splits _isAcceptanceTesterActive into a column-participation switch, promotes the tester role to core, deletes the pair-level tester preset, and offers a Review+Acceptance team definition.
-
 
 ## Review Findings
 

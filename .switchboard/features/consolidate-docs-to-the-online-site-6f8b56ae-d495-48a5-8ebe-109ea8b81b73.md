@@ -17,8 +17,8 @@ Land together or in order: **README rewrite first**, **retire second**. The reti
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Retire the bundled user manual/guide; redirect docs affordances to the online site](../plans/retire-bundled-docs-redirect-to-online.md) — **CODE REVIEWED**
-- [ ] [Rewrite README to match the online docs](../plans/rewrite-readme-match-online-docs.md) — **CODE REVIEWED**
+- [ ] [Retire the bundled user manual/guide; redirect docs affordances to the online site](../plans/retire-bundled-docs-redirect-to-online.md) — **CODE REVIEWED** — ID: 1aff0fcc-65d7-4c10-9cbf-eda1473bdc46
+- [ ] [Rewrite README to match the online docs](../plans/rewrite-readme-match-online-docs.md) — **CODE REVIEWED** — ID: 0f03fedb-58a7-479d-9c7b-2aead3713b36
 <!-- END SUBTASKS -->
 
 ---

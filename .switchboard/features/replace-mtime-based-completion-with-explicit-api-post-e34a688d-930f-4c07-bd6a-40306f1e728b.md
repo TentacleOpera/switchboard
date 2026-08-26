@@ -8,11 +8,11 @@ Replace the unreliable mtime-based plan-file completion detection with explicit 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add queue/done instruction to team coder standing orders](../plans/add-queue-done-instruction-to-team-coder-standing-orders.md) — **CODE REVIEWED**
-- [ ] [Remove mtime-based completion detection](../plans/remove-mtime-based-completion-detection.md) — **CODE REVIEWED**
-- [ ] [Update all completion directives to reference the API POST](../plans/update-completion-directives-to-reference-api-post.md) — **CODE REVIEWED**
-- [ ] [Update and add tests for API-based completion](../plans/update-and-add-tests-for-api-completion.md) — **CODE REVIEWED**
-- [ ] [Wire completion callbacks into the _runQueueDone path](../plans/wire-completion-callbacks-into-runqueue-done.md) — **CODE REVIEWED**
+- [ ] [Add queue/done instruction to team coder standing orders](../plans/add-queue-done-instruction-to-team-coder-standing-orders.md) — **CODE REVIEWED** — ID: 14648a04-d9ae-4a6f-9832-31e9acea8992
+- [ ] [Remove mtime-based completion detection](../plans/remove-mtime-based-completion-detection.md) — **CODE REVIEWED** — ID: d9b07f12-06b3-4001-a023-3369e8e98447
+- [ ] [Update all completion directives to reference the API POST](../plans/update-completion-directives-to-reference-api-post.md) — **CODE REVIEWED** — ID: 51ed91ad-b396-4d30-aec4-7bcb794a907c
+- [ ] [Update and add tests for API-based completion](../plans/update-and-add-tests-for-api-completion.md) — **CODE REVIEWED** — ID: 35526218-8107-4490-a518-39f403d51e34
+- [ ] [Wire completion callbacks into the _runQueueDone path](../plans/wire-completion-callbacks-into-runqueue-done.md) — **CODE REVIEWED** — ID: 2f28b86b-b9d6-4c4a-ae08-8574e75f818e
 <!-- END SUBTASKS -->
 
 ## Completion Report

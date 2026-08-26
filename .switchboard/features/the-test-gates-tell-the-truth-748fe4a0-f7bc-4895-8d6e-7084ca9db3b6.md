@@ -13,8 +13,8 @@ Make CI mean something. Three control-plane tests are dark - invoked by nothing,
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Source-Regex Test Assertions Must Pin Behaviour, Not Spelling](../plans/test-assertions-pin-behaviour-not-spelling.md) — **CREATED**
-- [ ] [Three dark control-plane tests fail on a database that no longer auto-creates — fix the harness seam and wire them into CI](../plans/dark-control-plane-tests-fail-on-a-db-that-no-longer-auto-creates.md) — **CREATED**
+- [ ] [Source-Regex Test Assertions Must Pin Behaviour, Not Spelling](../plans/test-assertions-pin-behaviour-not-spelling.md) — **CREATED** — ID: 0d37839b-53e9-4959-9fac-8e9afc90bb5f
+- [ ] [Three dark control-plane tests fail on a database that no longer auto-creates — fix the harness seam and wire them into CI](../plans/dark-control-plane-tests-fail-on-a-db-that-no-longer-auto-creates.md) — **CREATED** — ID: ad2793d6-bea8-4004-9119-9e156779d350
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

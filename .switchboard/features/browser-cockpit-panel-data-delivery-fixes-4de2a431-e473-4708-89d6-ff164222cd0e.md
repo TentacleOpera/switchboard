@@ -27,10 +27,10 @@ Fix the four browser-cockpit bugs where panels render no content: Kanban UAT/Aut
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Browser Cockpit — Kanban UAT & Automation Tabs Render No Content](../plans/feature_plan_20260724103701_browser-cockpit-kanban-uat-automation-tabs-empty.md) — **CODE REVIEWED**
-- [ ] [Browser Cockpit — Planning / Artifacts Tab Loads No Docs](../plans/feature_plan_20260724103702_browser-cockpit-planning-artifacts-docs-empty.md) — **CODE REVIEWED**
-- [ ] [Browser Cockpit — Design View Renders No Content (Doc Trees, Images, Previews)](../plans/feature_plan_20260724103703_browser-cockpit-design-view-no-content.md) — **CODE REVIEWED**
-- [ ] [Browser Cockpit — Stitch Integration Shows No Projects or Screens](../plans/feature_plan_20260724103704_browser-cockpit-stitch-integration-empty.md) — **CODE REVIEWED**
+- [ ] [Browser Cockpit — Kanban UAT & Automation Tabs Render No Content](../plans/feature_plan_20260724103701_browser-cockpit-kanban-uat-automation-tabs-empty.md) — **CODE REVIEWED** — ID: 0b80968c-b5df-4fef-b399-9592bf808a57
+- [ ] [Browser Cockpit — Planning / Artifacts Tab Loads No Docs](../plans/feature_plan_20260724103702_browser-cockpit-planning-artifacts-docs-empty.md) — **CODE REVIEWED** — ID: 08d953b7-3954-4fc3-acbb-feff62ffc696
+- [ ] [Browser Cockpit — Design View Renders No Content (Doc Trees, Images, Previews)](../plans/feature_plan_20260724103703_browser-cockpit-design-view-no-content.md) — **CODE REVIEWED** — ID: b51129dd-4761-4802-9e82-391ac77df660
+- [ ] [Browser Cockpit — Stitch Integration Shows No Projects or Screens](../plans/feature_plan_20260724103704_browser-cockpit-stitch-integration-empty.md) — **CODE REVIEWED** — ID: f1beee03-6f8b-4fad-923d-3f919f3a6501
 <!-- END SUBTASKS -->
 
 COMPLETION REPORT:

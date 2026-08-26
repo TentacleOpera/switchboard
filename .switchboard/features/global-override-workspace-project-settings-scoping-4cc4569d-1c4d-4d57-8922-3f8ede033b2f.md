@@ -22,11 +22,11 @@ Add a GLOBAL OVERRIDE section to the Setup tab with two independent switches (Wo
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Global Override 01: project_config Storage Layer](../plans/global-override-01-project-config-storage-layer.md) — **CODE REVIEWED**
-- [ ] [Global Override 03: GLOBAL OVERRIDE UI Section & Toggle Handlers](../plans/global-override-03-ui-and-toggle-handlers.md) — **CODE REVIEWED**
-- [ ] [Global Override 04: Snapshot-on-Toggle Mechanism](../plans/global-override-04-snapshot-on-toggle.md) — **CODE REVIEWED**
-- [ ] [Global Override 05: Role Config Scope Awareness](../plans/global-override-05-role-config-scope-awareness.md) — **CODE REVIEWED**
-- [ ] [Global Override 02: Scope-Aware Settings Read/Write Layer](../plans/global-override-02-scope-aware-settings-layer.md) — **CODE REVIEWED**
+- [ ] [Global Override 01: project_config Storage Layer](../plans/global-override-01-project-config-storage-layer.md) — **CODE REVIEWED** — ID: 0bbfbed8-2309-4710-aeb8-9ca3a58f000d
+- [ ] [Global Override 03: GLOBAL OVERRIDE UI Section & Toggle Handlers](../plans/global-override-03-ui-and-toggle-handlers.md) — **CODE REVIEWED** — ID: e393c5dc-d55c-4707-9d3c-591f283af6c4
+- [ ] [Global Override 04: Snapshot-on-Toggle Mechanism](../plans/global-override-04-snapshot-on-toggle.md) — **CODE REVIEWED** — ID: 0c40f1b4-22d0-426d-8fee-be33dc225be7
+- [ ] [Global Override 05: Role Config Scope Awareness](../plans/global-override-05-role-config-scope-awareness.md) — **CODE REVIEWED** — ID: 074c9a0d-40a9-4261-b1e7-6b0d4f6e2090
+- [ ] [Global Override 02: Scope-Aware Settings Read/Write Layer](../plans/global-override-02-scope-aware-settings-layer.md) — **CODE REVIEWED** — ID: 7ee3fcca-301d-4e5d-a3a5-9c40f7d6aa09
 <!-- END SUBTASKS -->
 
 ## Review Findings

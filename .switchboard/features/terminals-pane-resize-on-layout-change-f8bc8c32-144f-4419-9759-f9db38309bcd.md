@@ -58,7 +58,7 @@ Both subtasks reviewed in place as one delivery unit (fit ladder first, then the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Verified Pane Fit After a Terminals-Panel Layout Change](../plans/feature_plan_20260803144948_verified-pane-fit-after-layout-change.md) — **CODE REVIEWED**
-- [ ] [Reconcile the Terminals Pane Grid In Place Instead of Rebuilding It](../plans/feature_plan_20260803144949_pane-grid-in-place-reconciliation.md) — **CODE REVIEWED**
+- [ ] [Verified Pane Fit After a Terminals-Panel Layout Change](../plans/feature_plan_20260803144948_verified-pane-fit-after-layout-change.md) — **CODE REVIEWED** — ID: 62fd075c-d4da-4d19-9f91-3e8136a91d34
+- [ ] [Reconcile the Terminals Pane Grid In Place Instead of Rebuilding It](../plans/feature_plan_20260803144949_pane-grid-in-place-reconciliation.md) — **CODE REVIEWED** — ID: 8ec90cec-cd29-4b61-b492-f0fdc3fc0eca
 <!-- END SUBTASKS -->
 

@@ -17,10 +17,10 @@ Make an already-possible workflow discoverable: point an agent at your docs, hav
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Merge the Dev Docs tab into the Docs tab](../plans/merge-dev-docs-into-docs-tab.md) — **CODE REVIEWED**
-- [ ] [Build the Create Plans tab](../plans/create-plans-tab-docs-only-agent-intake.md) — **CODE REVIEWED**
-- [ ] [Delete the project-context auto-bundle feature](../plans/delete-project-context-auto-bundle.md) — **CODE REVIEWED**
-- [ ] [Remove the NotebookLM export](../plans/remove-notebooklm-export.md) — **CODE REVIEWED**
+- [ ] [Merge the Dev Docs tab into the Docs tab](../plans/merge-dev-docs-into-docs-tab.md) — **CODE REVIEWED** — ID: 337d8017-648a-4efc-ae59-1bdbc0928d57
+- [ ] [Build the Create Plans tab](../plans/create-plans-tab-docs-only-agent-intake.md) — **CODE REVIEWED** — ID: 8ce19cee-5b03-430a-905b-be1073105951
+- [ ] [Delete the project-context auto-bundle feature](../plans/delete-project-context-auto-bundle.md) — **CODE REVIEWED** — ID: 49f1553e-eb75-4465-9fd8-b18cfe9b450d
+- [ ] [Remove the NotebookLM export](../plans/remove-notebooklm-export.md) — **CODE REVIEWED** — ID: de52a357-3113-4bbe-b22a-2e50af2681b9
 <!-- END SUBTASKS -->
 
 ## Review Findings

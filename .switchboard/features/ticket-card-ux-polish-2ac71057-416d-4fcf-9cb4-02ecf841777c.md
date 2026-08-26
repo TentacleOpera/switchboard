@@ -14,9 +14,9 @@ Clean up the visual and interaction quality of ticket cards in the sidebar — a
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Plan: Fix Status/Assignees Clickable Area on Ticket Cards](../plans/feature_plan_20260716_fix_status_assignees_clickable_area.md) — **CODE REVIEWED**
-- [ ] [Plan: Shorten Ticket Card Button Labels](../plans/feature_plan_20260716_shorten_ticket_card_button_labels.md) — **CODE REVIEWED**
-- [ ] [Plan: Justify Ticket Card Buttons Left](../plans/feature_plan_20260716_justify_ticket_card_buttons_left.md) — **CODE REVIEWED**
+- [ ] [Plan: Fix Status/Assignees Clickable Area on Ticket Cards](../plans/feature_plan_20260716_fix_status_assignees_clickable_area.md) — **CODE REVIEWED** — ID: e0e3cf46-9602-4018-9637-e793ed321d97
+- [ ] [Plan: Shorten Ticket Card Button Labels](../plans/feature_plan_20260716_shorten_ticket_card_button_labels.md) — **CODE REVIEWED** — ID: a8846238-bd8b-4df3-a111-eea648556462
+- [ ] [Plan: Justify Ticket Card Buttons Left](../plans/feature_plan_20260716_justify_ticket_card_buttons_left.md) — **CODE REVIEWED** — ID: e12dafab-20ff-42ed-b51b-f9e4c8b2b963
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

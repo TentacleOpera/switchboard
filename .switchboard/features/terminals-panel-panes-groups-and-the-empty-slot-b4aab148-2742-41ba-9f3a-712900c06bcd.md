@@ -35,9 +35,9 @@ Three of the four share one root cause worth naming up front: **the rule "a slot
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Kanban Pane's Workspace › Project Picker Is Too Narrow To Read](../plans/feature_plan_20260817141100_kanban-pane-workspace-project-picker-truncates.md) — **PLAN REVIEWED**
-- [ ] [Switching to a Terminal Group Destroys a Pane's Kanban Mode](../plans/feature_plan_20260817141400_terminal-groups-destroy-a-panes-kanban-mode.md) — **PLAN REVIEWED**
-- [ ] [The Whole Empty Pane Is a Hidden Hotspot That Fires the Agent Picker](../plans/feature_plan_20260817141500_empty-pane-is-one-giant-hidden-hotspot-for-the-agent-picker.md) — **PLAN REVIEWED**
-- [ ] [A New Agent Ignores the Empty Slot You Aimed At and Hijacks Another Group's Grid](../plans/feature_plan_20260817141600_new-agent-ignores-the-empty-slot-and-hijacks-another-group.md) — **PLAN REVIEWED**
+- [ ] [Kanban Pane's Workspace › Project Picker Is Too Narrow To Read](../plans/feature_plan_20260817141100_kanban-pane-workspace-project-picker-truncates.md) — **PLAN REVIEWED** — ID: 52059eef-905e-47f9-a57d-048ae8cf81fb
+- [ ] [Switching to a Terminal Group Destroys a Pane's Kanban Mode](../plans/feature_plan_20260817141400_terminal-groups-destroy-a-panes-kanban-mode.md) — **PLAN REVIEWED** — ID: a5d593b1-3c29-4209-9d04-40845a3c42f5
+- [ ] [The Whole Empty Pane Is a Hidden Hotspot That Fires the Agent Picker](../plans/feature_plan_20260817141500_empty-pane-is-one-giant-hidden-hotspot-for-the-agent-picker.md) — **PLAN REVIEWED** — ID: 20c89767-94aa-417b-9b73-b7392ba3d6d9
+- [ ] [A New Agent Ignores the Empty Slot You Aimed At and Hijacks Another Group's Grid](../plans/feature_plan_20260817141600_new-agent-ignores-the-empty-slot-and-hijacks-another-group.md) — **PLAN REVIEWED** — ID: b48afe52-b803-4299-a0e9-f2c64c2fb418
 <!-- END SUBTASKS -->
 

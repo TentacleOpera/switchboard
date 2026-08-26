@@ -23,8 +23,8 @@ Three defects where the Terminals panel's chrome disagrees with what it is actua
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminals Layout Picker: 2h/2v Labels Are Inverted and Mis-Ordered](../plans/feature_plan_20260805105300_terminals-2h-2v-layout-labels-inverted.md) — **CODE REVIEWED**
-- [ ] [Terminals Panel: The Layout Picker Lies — It Shows "1" While Rendering the Stored Layout](../plans/feature_plan_20260805105311_terminals-layout-picker-lies-about-stored-layout.md) — **CODE REVIEWED**
-- [ ] [Terminals Panel: Show the Agent CLI Name in the Sidebar Rows and on the Pane Header](../plans/feature_plan_20260805105313_terminals-show-agent-cli-name-in-sidebar-and-pane-header.md) — **CODE REVIEWED**
+- [ ] [Terminals Layout Picker: 2h/2v Labels Are Inverted and Mis-Ordered](../plans/feature_plan_20260805105300_terminals-2h-2v-layout-labels-inverted.md) — **CODE REVIEWED** — ID: fb673c18-aa08-41b4-890a-e775067085e8
+- [ ] [Terminals Panel: The Layout Picker Lies — It Shows "1" While Rendering the Stored Layout](../plans/feature_plan_20260805105311_terminals-layout-picker-lies-about-stored-layout.md) — **CODE REVIEWED** — ID: 427cb778-931c-4c99-9e9a-32dbe2583eb9
+- [ ] [Terminals Panel: Show the Agent CLI Name in the Sidebar Rows and on the Pane Header](../plans/feature_plan_20260805105313_terminals-show-agent-cli-name-in-sidebar-and-pane-header.md) — **CODE REVIEWED** — ID: 70d58fa5-5f90-4e3f-83a9-0a6eeb5a964b
 <!-- END SUBTASKS -->
 

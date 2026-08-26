@@ -21,10 +21,10 @@ Give Switchboard a real **browser cockpit**: `npx switchboard` opens a single ta
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Headless App-Shell — one-tab container with a left panel-switcher strip](../plans/headless-app-shell-nav-container.md) — **CODE REVIEWED**
-- [ ] [Headless Design Panel — route + host-agnostic provider](../plans/headless-design-panel-route.md) — **CODE REVIEWED**
-- [ ] [Headless Setup Panel — route + host-agnostic provider](../plans/headless-setup-panel-route.md) — **CODE REVIEWED**
-- [ ] [Headless Memo — relocate capture into the Project panel](../plans/headless-memo-relocate-to-project.md) — **CODE REVIEWED**
+- [ ] [Headless App-Shell — one-tab container with a left panel-switcher strip](../plans/headless-app-shell-nav-container.md) — **CODE REVIEWED** — ID: 62b4d1c9-33d5-4ef8-9c63-16501c82a7d7
+- [ ] [Headless Design Panel — route + host-agnostic provider](../plans/headless-design-panel-route.md) — **CODE REVIEWED** — ID: 7406be9a-52a6-44d8-be95-3e41e3e375b1
+- [ ] [Headless Setup Panel — route + host-agnostic provider](../plans/headless-setup-panel-route.md) — **CODE REVIEWED** — ID: 384264a1-7677-4859-bfdb-08cfcf0b7c03
+- [ ] [Headless Memo — relocate capture into the Project panel](../plans/headless-memo-relocate-to-project.md) — **CODE REVIEWED** — ID: 2b5d0a91-20ae-466b-b94d-f572b6498a94
 <!-- END SUBTASKS -->
 
 ---

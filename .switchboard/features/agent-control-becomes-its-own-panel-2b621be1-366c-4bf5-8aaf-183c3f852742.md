@@ -14,9 +14,9 @@ Move Agent Control out of kanban.html into a panel file of its own, give it an O
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add an Orders tab to Agent Control](../plans/add-an-orders-tab-to-agent-control.md) — **PLAN REVIEWED**
-- [ ] [Extract Agent Control into its own panel file](../plans/extract-agent-control-into-its-own-panel-file.md) — **PLAN REVIEWED**
-- [ ] [Retire the agent tabs from kanban.html](../plans/retire-the-agent-tabs-from-kanban-html.md) — **PLAN REVIEWED**
+- [ ] [Add an Orders tab to Agent Control](../plans/add-an-orders-tab-to-agent-control.md) — **PLAN REVIEWED** — ID: 6b9d97ce-60da-43d2-b1ab-6e574f27e1b7
+- [ ] [Extract Agent Control into its own panel file](../plans/extract-agent-control-into-its-own-panel-file.md) — **PLAN REVIEWED** — ID: 1e9a9b79-abd5-46ef-9b78-31beb778cd77
+- [ ] [Retire the agent tabs from kanban.html](../plans/retire-the-agent-tabs-from-kanban-html.md) — **PLAN REVIEWED** — ID: 02aa2bd1-26cc-492f-b3b4-7d826eede6f6
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

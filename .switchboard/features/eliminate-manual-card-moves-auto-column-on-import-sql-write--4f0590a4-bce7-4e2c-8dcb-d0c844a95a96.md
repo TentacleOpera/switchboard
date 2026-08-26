@@ -13,8 +13,8 @@ Eliminate the need for agents to manually move kanban cards after restructuring,
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Auto-Column Feature-Scoped Subtasks to PLAN REVIEWED on Import](../plans/auto-column-feature-subtasks-to-plan-reviewed-on-import.md) — **PLAN REVIEWED**
-- [ ] [SQL Write Guardrail — Prevent Agents from Writing to kanban.db Directly](../plans/sql-write-guardrail-prevent-agents-from-writing-to-kanban-db.md) — **PLAN REVIEWED**
+- [ ] [Auto-Column Feature-Scoped Subtasks to PLAN REVIEWED on Import](../plans/auto-column-feature-subtasks-to-plan-reviewed-on-import.md) — **PLAN REVIEWED** — ID: e78bf396-2548-454d-8a74-3cfce8d3d798
+- [ ] [SQL Write Guardrail — Prevent Agents from Writing to kanban.db Directly](../plans/sql-write-guardrail-prevent-agents-from-writing-to-kanban-db.md) — **PLAN REVIEWED** — ID: ecfb14fa-0a8b-4765-b3c0-d4f5a1483ff4
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

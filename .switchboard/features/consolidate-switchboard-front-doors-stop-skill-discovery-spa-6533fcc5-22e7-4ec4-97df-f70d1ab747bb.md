@@ -13,8 +13,8 @@ Reduce Switchboard's user-facing entry points to a coherent minimal surface and 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Stop Skill-Discovery Spam in Antigravity & Devin by Removing Source Frontmatter](../plans/fix-skill-discovery-frontmatter-spam.md) — **CODE REVIEWED**
-- [ ] [Collapse Switchboard Front Doors to a Single Adaptive `/switchboard` (Plus `/memo`)](../plans/consolidate-switchboard-front-doors.md) — **CODE REVIEWED**
+- [ ] [Stop Skill-Discovery Spam in Antigravity & Devin by Removing Source Frontmatter](../plans/fix-skill-discovery-frontmatter-spam.md) — **CODE REVIEWED** — ID: 8a8b7856-3307-472b-8525-1f119b892746
+- [ ] [Collapse Switchboard Front Doors to a Single Adaptive `/switchboard` (Plus `/memo`)](../plans/consolidate-switchboard-front-doors.md) — **CODE REVIEWED** — ID: 38a2a6ed-8406-4522-96fb-3688b8ebb8bc
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

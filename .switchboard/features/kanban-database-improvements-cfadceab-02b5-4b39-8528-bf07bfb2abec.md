@@ -19,8 +19,8 @@ Stop `kanban.db` from crashing the extension host and keep the board fast as pla
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix kanban.db sql.js WASM Memory Exhaustion ("disk I/O error" across all DBs)](../plans/fix_kanban_db_wasm_memory_exhaustion.md) — **CODE REVIEWED**
-- [ ] [Split kanban.db into Hot (operational) + Cold (archive) Stores, with a Time-Based Board Window](../plans/split_kanban_hot_cold_dbs.md) — **CODE REVIEWED**
+- [ ] [Fix kanban.db sql.js WASM Memory Exhaustion ("disk I/O error" across all DBs)](../plans/fix_kanban_db_wasm_memory_exhaustion.md) — **CODE REVIEWED** — ID: 2471867e-18d7-4c68-9554-fa7d2ee37f93
+- [ ] [Split kanban.db into Hot (operational) + Cold (archive) Stores, with a Time-Based Board Window](../plans/split_kanban_hot_cold_dbs.md) — **CODE REVIEWED** — ID: 9a7d78eb-ae25-4dd6-9f7a-1188219fedf5
 <!-- END SUBTASKS -->
 
 ---

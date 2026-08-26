@@ -13,8 +13,8 @@ Settle the two things that decide how parallel work is set up and when it is all
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Persist dependency edges and gate dispatch on asserted completion at pop time](../plans/staging-streams-parallel-dispatch-and-worktrees.md) — **CODE REVIEWED**
-- [ ] [Consolidate the worktree models: a STAGING toggle for features, the strip button for projects](../plans/worktree-models-consolidate-and-a-staging-toggle.md) — **CODE REVIEWED**
+- [ ] [Persist dependency edges and gate dispatch on asserted completion at pop time](../plans/staging-streams-parallel-dispatch-and-worktrees.md) — **CODE REVIEWED** — ID: fc3d5e9a-1687-41ce-b50a-6ccedd7e703c
+- [ ] [Consolidate the worktree models: a STAGING toggle for features, the strip button for projects](../plans/worktree-models-consolidate-and-a-staging-toggle.md) — **CODE REVIEWED** — ID: 065411bd-1a60-4af8-ac0f-d7d1e1dcd9e3
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -14,9 +14,9 @@ Make `npx switchboard` ingest plans identically to the VS Code extension — sam
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Headless Ingestion 1 — Shared Engine Extraction + VS Code Adapter](../plans/headless-plan-file-ingestion-watcher.md) — **CODE REVIEWED**
-- [ ] [Headless Ingestion 2 — Standalone Ingestion (adapter + bootstrap + verbs)](../plans/headless-standalone-ingestion.md) — **CODE REVIEWED**
-- [ ] [Headless Ingestion 3 — Headless Provider Sync](../plans/headless-provider-sync.md) — **CODE REVIEWED**
+- [ ] [Headless Ingestion 1 — Shared Engine Extraction + VS Code Adapter](../plans/headless-plan-file-ingestion-watcher.md) — **CODE REVIEWED** — ID: 92adc68d-fdc2-4632-9c9b-d5a8872d4666
+- [ ] [Headless Ingestion 2 — Standalone Ingestion (adapter + bootstrap + verbs)](../plans/headless-standalone-ingestion.md) — **CODE REVIEWED** — ID: 838f5ae6-8013-4a7b-86bf-54026a0ac167
+- [ ] [Headless Ingestion 3 — Headless Provider Sync](../plans/headless-provider-sync.md) — **CODE REVIEWED** — ID: 9ced86f7-4378-4196-82fa-de914eac88b1
 <!-- END SUBTASKS -->
 
 ## Implementation Summary

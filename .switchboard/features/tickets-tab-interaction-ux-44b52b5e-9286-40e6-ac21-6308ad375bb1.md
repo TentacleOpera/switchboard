@@ -13,8 +13,8 @@ Improve the Tickets tab interaction model so users can edit tickets more directl
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Make status & assignee labels on ticket sidebar cards open edit modals](../plans/feature_plan_20260714100700_ticket_sidebar_status_assignee_modals.md) — **CODE REVIEWED**
-- [ ] [Replace the Move-Ticket modal with the Source modal + Apply](../plans/feature_plan_20260714101818_replace-move-ticket-modal-with-source-modal.md) — **CODE REVIEWED**
+- [ ] [Make status & assignee labels on ticket sidebar cards open edit modals](../plans/feature_plan_20260714100700_ticket_sidebar_status_assignee_modals.md) — **CODE REVIEWED** — ID: 2ab8025a-8826-4387-a40d-3bf016c35ec3
+- [ ] [Replace the Move-Ticket modal with the Source modal + Apply](../plans/feature_plan_20260714101818_replace-move-ticket-modal-with-source-modal.md) — **CODE REVIEWED** — ID: 817a1716-97f8-47ff-973a-28ac167846b0
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

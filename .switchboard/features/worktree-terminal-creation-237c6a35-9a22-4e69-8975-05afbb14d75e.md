@@ -17,7 +17,7 @@ Both subtasks rewrite the same function — `ensureWorktreeTerminals` in `src/se
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix Slow Sequential Terminal Opening in Worktrees](../plans/feature_plan_20260703063949_fix-slow-worktree-terminal-opening.md) — **CODE REVIEWED**
-- [ ] [Fix: Worktree terminal cross-contamination with main repo terminals](../plans/feature_plan_20260703071500_worktree-terminal-cross-contamination.md) — **CODE REVIEWED**
+- [ ] [Fix Slow Sequential Terminal Opening in Worktrees](../plans/feature_plan_20260703063949_fix-slow-worktree-terminal-opening.md) — **CODE REVIEWED** — ID: d70ca1aa-dc75-43c6-95cb-1e4951716919
+- [ ] [Fix: Worktree terminal cross-contamination with main repo terminals](../plans/feature_plan_20260703071500_worktree-terminal-cross-contamination.md) — **CODE REVIEWED** — ID: 443c579a-8766-4ec1-b619-27a816acda70
 <!-- END SUBTASKS -->
 

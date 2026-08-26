@@ -84,11 +84,11 @@ Ordering — B-1 first; B-2 / B-4(sweep) / the UI depend on B-1; B-3 defines the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`**Stage Complete:**` marker parsing clears working state](../plans/stage-complete-marker-clears-working-state.md) — **CODE REVIEWED**
-- [ ] [Mandatory `**Stage Complete:**` directive in dispatch prompts](../plans/stage-complete-prompt-directive.md) — **CODE REVIEWED**
-- [ ] [Working-state data model + activity light ON at dispatch](../plans/working-state-model-and-dispatch-on.md) — **CODE REVIEWED**
-- [ ] [20-minute working-state timeout sweep](../plans/working-state-timeout-sweep.md) — **CODE REVIEWED**
-- [ ] [Card working-light UI](../plans/card-working-light-ui.md) — **CODE REVIEWED**
+- [ ] [`**Stage Complete:**` marker parsing clears working state](../plans/stage-complete-marker-clears-working-state.md) — **CODE REVIEWED** — ID: a66aed24-ddbf-4098-b8f6-23a5ed5a6640
+- [ ] [Mandatory `**Stage Complete:**` directive in dispatch prompts](../plans/stage-complete-prompt-directive.md) — **CODE REVIEWED** — ID: 8398a605-1587-420f-be76-a1edf1e52784
+- [ ] [Working-state data model + activity light ON at dispatch](../plans/working-state-model-and-dispatch-on.md) — **CODE REVIEWED** — ID: 05953653-6b87-452b-867e-995af7b6944c
+- [ ] [20-minute working-state timeout sweep](../plans/working-state-timeout-sweep.md) — **CODE REVIEWED** — ID: 1164d5ab-a16a-4ef5-a8df-0be28c82f919
+- [ ] [Card working-light UI](../plans/card-working-light-ui.md) — **CODE REVIEWED** — ID: 1887184e-72eb-46cb-a0eb-5deb43aa35be
 <!-- END SUBTASKS -->
 
 ## Review Findings

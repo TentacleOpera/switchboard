@@ -13,8 +13,8 @@ Close out two extractions that shipped their mechanism but not their consolidati
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Finish the `advanceCards` Extraction — Nineteen Call Sites Still Open-Code It](../plans/finish-advance-cards-extraction.md) — **PLAN REVIEWED**
-- [ ] [Dispatch-Surface Ratchet — Stop `apiOriginated` Growing Back](../plans/dispatch-surface-ratchet-guard.md) — **PLAN REVIEWED**
+- [ ] [Finish the `advanceCards` Extraction — Nineteen Call Sites Still Open-Code It](../plans/finish-advance-cards-extraction.md) — **PLAN REVIEWED** — ID: af65df25-ecff-4376-8afc-1190b9e80067
+- [ ] [Dispatch-Surface Ratchet — Stop `apiOriginated` Growing Back](../plans/dispatch-surface-ratchet-guard.md) — **PLAN REVIEWED** — ID: 54e52cc2-b558-48b3-80c9-eaf7b468624e
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

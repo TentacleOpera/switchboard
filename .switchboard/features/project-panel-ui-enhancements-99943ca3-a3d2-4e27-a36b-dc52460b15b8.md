@@ -14,8 +14,8 @@ Add and refine UI in project.html. Reposition the Edit and AutoFetch buttons and
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Architect Agent Tab in project.html](../plans/feature_plan_20260702000820_architect-agent-tab.md) — **CODE REVIEWED**
-- [ ] [project.html Kanban tab — reposition Edit button, AutoFetch modal, and fix Chat Prompt formatting](../plans/feature_plan_20260702083645_project-html-edit-autofetch-chatprompt-layout.md) — **CODE REVIEWED**
-- [ ] [Epics Tab — Add Project Filter Dropdown](../plans/feature_plan_20260702104217_epics-tab-project-filter.md) — **CODE REVIEWED**
+- [ ] [Architect Agent Tab in project.html](../plans/feature_plan_20260702000820_architect-agent-tab.md) — **CODE REVIEWED** — ID: dd8ce7e6-2365-4dfc-aa72-52e4df1d0277
+- [ ] [project.html Kanban tab — reposition Edit button, AutoFetch modal, and fix Chat Prompt formatting](../plans/feature_plan_20260702083645_project-html-edit-autofetch-chatprompt-layout.md) — **CODE REVIEWED** — ID: ce81e321-69a8-498c-9ea4-87adede8ac26
+- [ ] [Epics Tab — Add Project Filter Dropdown](../plans/feature_plan_20260702104217_epics-tab-project-filter.md) — **CODE REVIEWED** — ID: fb505f61-aeb9-4f94-ae19-4fcca52bdbb8
 <!-- END SUBTASKS -->
 

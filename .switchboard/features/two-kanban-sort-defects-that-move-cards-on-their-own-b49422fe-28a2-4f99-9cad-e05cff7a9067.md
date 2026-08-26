@@ -13,8 +13,8 @@ Fix the two reasons a card changes position without anyone moving it. The Create
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Kanban card jumps to middle on copy-prompt advance, then to top on paste](../plans/feature_plan_20260819130405_kanban-card-optimistic-move-stale-ts.md) — **PLAN REVIEWED**
-- [ ] [Fix Created Column Sort — Use createdAt, Not columnEnteredAt/lastActivity](../plans/fix-created-column-sort-by-creation-date.md) — **PLAN REVIEWED**
+- [ ] [Kanban card jumps to middle on copy-prompt advance, then to top on paste](../plans/feature_plan_20260819130405_kanban-card-optimistic-move-stale-ts.md) — **PLAN REVIEWED** — ID: b24cd25c-d885-4d39-a493-28435671d56c
+- [ ] [Fix Created Column Sort — Use createdAt, Not columnEnteredAt/lastActivity](../plans/fix-created-column-sort-by-creation-date.md) — **PLAN REVIEWED** — ID: a313de52-6c8d-4dc4-8020-3ac85506fc58
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -6,45 +6,23 @@
 // (POST /kanban/feature). The extension performs the create via KanbanProvider, so it
 // inherits the DB upsert, subtask linking, feature-file write, and board refresh.
 //
-// NOTE on sync: feature creation DOES fan out to Linear/ClickUp. createFeatureFromPlanIds
-// ends in _syncFeatureOutbound (KanbanProvider.ts), which pushes the feature as a parent
-// issue/task and links each subtask as a child. It is gated per tracker on BOTH
-// `setupComplete` and `realTimeSyncEnabled` being true — with either off, that tracker is
-// skipped silently. A subtask is only linked if its own issue/task already exists; ones
-// that don't are skipped and get linked on a later feature-sync trigger. Sync is
-// best-effort and never blocks creation. This script inherits all of that via the API.
+// NOTE on sync: feature creation does NOT fan out to Linear/ClickUp. The webview
+// createFeature flow has never synced to external trackers, and the new feature file is
+// deliberately skipped by the plan watcher. This script preserves that behavior.
 //
-// NOTE on fallback: when the extension is reachable, it is authoritative (handling
-// project inheritance, column resolution, Linear/ClickUp sync, and immediate board refresh).
-// When unreachable or on stale/alien port collision, create-feature.js falls back to
-// writing the feature markdown file directly with <!-- BEGIN SUBTASKS --> subtask links.
-// This fallback is safe because PlanIngestionEngine parses declarative subtask links and
-// synchronizes kanban.db automatically upon file ingestion.
+// NOTE on fallback: unlike move-card.js, there is no direct-DB fallback. Feature creation
+// spans project inheritance, column resolution, a YAML-safe file write, and per-subtask
+// linking — replicating that in raw DB calls risks an orphaned feature (DB record with no
+// file, or unlinked subtasks). So when the extension isn't reachable, this fails with a
+// clear instruction to start it rather than writing a half-formed feature.
 //
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const crypto = require('crypto');
 
 const featureName = process.argv[2];
 const planIdsJson = process.argv[3];
-let resolveWorkspaceRoot;
-try {
-  ({ resolveWorkspaceRoot } = require('../_lib/workspace-root'));
-} catch {
-  resolveWorkspaceRoot = (explicit) =>
-    path.resolve(explicit && explicit !== '.' ? explicit : process.cwd());
-}
-const workspaceRoot = resolveWorkspaceRoot(process.argv[4]);
-if (!workspaceRoot) {
-  console.error(
-    `No Switchboard workspace found from ${process.cwd()} — no .switchboard/kanban.db ` +
-    `in this directory or any parent below your home directory.\n` +
-    `Pass the workspace root explicitly:\n` +
-    `  node create-feature.js <name> <planIdsJson> /absolute/path/to/workspace [description]`
-  );
-  process.exit(1);
-}
+const workspaceRoot = process.argv[4] || '.';
 const description = process.argv[5] || undefined;
 
 if (!featureName || !planIdsJson) {
@@ -66,14 +44,14 @@ if (!Array.isArray(planIds) || planIds.length === 0 || !planIds.every(p => typeo
 }
 
 // ── Discover the running extension's API server: walk up for the port file. ──
-function findApiPortInfo(startDir) {
+function findApiPort(startDir) {
   let cur = path.resolve(startDir);
   while (true) {
     const portFile = path.join(cur, '.switchboard', 'api-server-port.txt');
     try {
       if (fs.existsSync(portFile)) {
         const port = fs.readFileSync(portFile, 'utf8').trim();
-        if (port) return { port, portFile };
+        if (port) return port;
       }
     } catch { /* ignore and keep walking */ }
     const next = path.dirname(cur);
@@ -112,27 +90,18 @@ function httpJson(method, port, urlPath, bodyObj, timeoutMs) {
 // ── Route through the running extension. When reachable it is authoritative: a
 // logical failure is reported as-is, NOT retried via some other path. ──
 async function tryViaExtension() {
-  const portInfo = findApiPortInfo(workspaceRoot) || findApiPortInfo(process.cwd());
-  if (!portInfo) return { reachable: false };
+  const port = findApiPort(workspaceRoot) || findApiPort(process.cwd());
+  if (!port) return { reachable: false };
 
   try {
-    const health = await httpJson('GET', portInfo.port, '/health', null, 2000);
-    if (!health || health.status !== 200) {
-      return { reachable: false };
-    }
-    let healthJson = {};
-    try { healthJson = JSON.parse(health.body); } catch { /* non-json body */ }
-    if (healthJson.status !== 'ok' || healthJson.service !== 'switchboard') {
-      // Alien process detected binding to stale port file. Evict dead port file.
-      try { if (fs.existsSync(portInfo.portFile)) fs.unlinkSync(portInfo.portFile); } catch { }
-      return { reachable: false };
-    }
+    const health = await httpJson('GET', port, '/health', null, 2000);
+    if (!health || health.status !== 200) return { reachable: false };
   } catch {
     return { reachable: false };
   }
 
   try {
-    const resp = await httpJson('POST', portInfo.port, '/kanban/feature', {
+    const resp = await httpJson('POST', port, '/kanban/feature', {
       workspaceRoot,
       name: featureName,
       planIds,
@@ -149,61 +118,6 @@ async function tryViaExtension() {
   }
 }
 
-// ── Offline fallback: direct feature file creation with subtask links ──
-async function viaDirectFile() {
-  const featurePlanId = crypto.randomUUID();
-  const slug = featureName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'feature';
-  const featuresDir = path.join(workspaceRoot, '.switchboard', 'features');
-  if (!fs.existsSync(featuresDir)) {
-    fs.mkdirSync(featuresDir, { recursive: true });
-  }
-  const featureFile = path.join(featuresDir, `${slug}-${featurePlanId}.md`);
-
-  // Query kanban.db if available to resolve plan_file paths and titles
-  let subtaskLines = [];
-  try {
-    const { KanbanDatabase } = require('../../../out/services/KanbanDatabase');
-    const db = KanbanDatabase.forWorkspace(workspaceRoot);
-    await db.ensureReady();
-    for (const pid of planIds) {
-      const plan = await db.getPlanByPlanId(pid);
-      if (plan && plan.planFile) {
-        const basename = path.basename(plan.planFile);
-        const topic = plan.topic || basename;
-        subtaskLines.push(`- [ ] [${topic}](../plans/${basename})`);
-      } else {
-        subtaskLines.push(`- [ ] [${pid}](../plans/${pid}.md)`);
-      }
-    }
-    if (typeof db.close === 'function') db.close();
-  } catch {
-    // If KanbanDatabase module unavailable, write basic plan links
-    subtaskLines = planIds.map(pid => `- [ ] [${pid}](../plans/${pid}.md)`);
-  }
-
-  const descText = description || `Implementation plan for ${featureName}.`;
-  const subtasksBlock = subtaskLines.length > 0 ? subtaskLines.join('\n') : '- [ ] (no subtasks)';
-
-  const content = `---
-description: '${featureName.replace(/'/g, "''")}'
----
-
-# ${featureName}
-
-## Goal
-
-${descText}
-
-<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
-## Subtasks
-${subtasksBlock}
-<!-- END SUBTASKS -->
-`;
-
-  fs.writeFileSync(featureFile, content, 'utf8');
-  return { ok: true, featurePlanId, featureFile };
-}
-
 (async () => {
   const viaExt = await tryViaExtension();
   if (viaExt.reachable) {
@@ -215,15 +129,12 @@ ${subtasksBlock}
     process.exit(1);
   }
 
-  // Extension not reachable — fallback to direct markdown feature file creation
-  const fallbackResult = await viaDirectFile();
+  // Extension not reachable — no safe direct-DB fallback for feature creation.
   console.log(JSON.stringify({
-    ok: true,
-    featurePlanId: fallbackResult.featurePlanId,
-    featureFile: fallbackResult.featureFile,
-    fallback: true
+    ok: false,
+    error: 'Switchboard extension not reachable. Feature creation requires the running extension (no direct-DB fallback). Open the workspace in VS Code with Switchboard active and retry.'
   }));
-  process.exit(0);
+  process.exit(1);
 })().catch(err => {
   console.log(JSON.stringify({ ok: false, error: err.message }));
   process.exit(1);

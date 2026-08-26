@@ -21,8 +21,8 @@ Close the loop between a coding team's lead and its reviewer. Today the shipped 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Coding team: give the head a standing order to advance finished subtasks to CODE REVIEWED](../plans/feature_plan_20260816164108_coding-team-head-advances-card-to-code-reviewed.md) — **CODE REVIEWED**
-- [ ] [Route a CODE REVIEWED advance to the originating team's own reviewer, not the first reviewer on the board](../plans/feature_plan_20260816164109_team-scoped-reviewer-routing-on-code-reviewed.md) — **CODE REVIEWED**
+- [ ] [Coding team: give the head a standing order to advance finished subtasks to CODE REVIEWED](../plans/feature_plan_20260816164108_coding-team-head-advances-card-to-code-reviewed.md) — **CODE REVIEWED** — ID: 47ce3cb8-af36-4976-b11e-9b2e1a6d8606
+- [ ] [Route a CODE REVIEWED advance to the originating team's own reviewer, not the first reviewer on the board](../plans/feature_plan_20260816164109_team-scoped-reviewer-routing-on-code-reviewed.md) — **CODE REVIEWED** — ID: c0771d23-93f7-4bf0-bac8-e7f99ea6e776
 <!-- END SUBTASKS -->
 
 ## Completion report — 2026-08-16

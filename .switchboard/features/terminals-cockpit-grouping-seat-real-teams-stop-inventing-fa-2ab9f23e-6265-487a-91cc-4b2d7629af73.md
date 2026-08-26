@@ -13,8 +13,8 @@ Fix the terminals grid group model at both ends - the group the operator deliber
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Stop Auto-Creating a "Planners" Group, and Scope Role Groups to One Workspace/Worktree](../plans/feature_plan_20260814144853_derived-role-groups-consent-and-location-scoping.md) — **CODE REVIEWED**
-- [ ] [Seat the whole team in the terminal grid when a team head starts](../plans/feature_plan_20260815134928_team-members-never-seated-in-terminal-grid.md) — **CODE REVIEWED**
+- [ ] [Stop Auto-Creating a "Planners" Group, and Scope Role Groups to One Workspace/Worktree](../plans/feature_plan_20260814144853_derived-role-groups-consent-and-location-scoping.md) — **CODE REVIEWED** — ID: 3eba89c5-9355-44a5-b187-50de917da542
+- [ ] [Seat the whole team in the terminal grid when a team head starts](../plans/feature_plan_20260815134928_team-members-never-seated-in-terminal-grid.md) — **CODE REVIEWED** — ID: e79c9f14-0662-4a47-abae-f1eb58ab9feb
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

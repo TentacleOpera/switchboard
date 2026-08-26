@@ -13,8 +13,8 @@ The Project panel is where you go to read a plan in full, and today it is both h
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Project panel goes out of sync with the kanban board after card moves](../plans/project-panel-kanban-sync-on-card-move.md) — **CODE REVIEWED**
-- [ ] [Add View Button to Kanban-Mode Pane Cards in Terminals](../plans/feature_plan_20260807182931_kanban-pane-view-button.md) — **CODE REVIEWED**
+- [ ] [Project panel goes out of sync with the kanban board after card moves](../plans/project-panel-kanban-sync-on-card-move.md) — **CODE REVIEWED** — ID: 56146bc5-eda7-4322-b121-c4944f619454
+- [ ] [Add View Button to Kanban-Mode Pane Cards in Terminals](../plans/feature_plan_20260807182931_kanban-pane-view-button.md) — **CODE REVIEWED** — ID: 5349bc64-6cce-41f2-b7b7-1b004210653d
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

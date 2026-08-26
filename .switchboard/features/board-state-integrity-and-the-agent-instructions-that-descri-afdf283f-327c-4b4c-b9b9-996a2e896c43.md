@@ -14,9 +14,9 @@ Make the board's own state internally consistent, and make the agent-facing inst
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature Creation Can Produce a Column-Mixed Feature — Propagate the Column to the Subtasks, Not Just the Feature Card](../plans/feature_plan_20260814110809_feature-creation-produces-column-mixed-features.md) — **PLAN REVIEWED**
-- [ ] [`improve-feature` Tells Agents Plan Deletion Hard-Deletes the Card. It Soft-Deletes, and the Card Stays.](../plans/fix-improve-feature-plan-deletion-instruction.md) — **PLAN REVIEWED**
-- [ ] [A Reconciliation Skill for When the Board and Disk Disagree](../plans/add-board-disk-reconciliation-skill.md) — **PLAN REVIEWED**
+- [ ] [Feature Creation Can Produce a Column-Mixed Feature — Propagate the Column to the Subtasks, Not Just the Feature Card](../plans/feature_plan_20260814110809_feature-creation-produces-column-mixed-features.md) — **PLAN REVIEWED** — ID: 3b1e22b2-8e09-483a-8fee-a836c380902c
+- [ ] [`improve-feature` Tells Agents Plan Deletion Hard-Deletes the Card. It Soft-Deletes, and the Card Stays.](../plans/fix-improve-feature-plan-deletion-instruction.md) — **PLAN REVIEWED** — ID: ac839ce1-730b-4b05-801b-cc465acccaa7
+- [ ] [A Reconciliation Skill for When the Board and Disk Disagree](../plans/add-board-disk-reconciliation-skill.md) — **PLAN REVIEWED** — ID: 24dd7d7c-d15e-4ed4-a33e-55f4e8ac148e
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

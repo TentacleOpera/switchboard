@@ -19,8 +19,8 @@ Both subtasks are the same principle applied twice: **what the system tells an a
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Remove the Instruction-Inbox / Standing-Jobs / Declared-Moves Subsystem Entirely](../plans/feature_plan_20260805140000_external-orchestration-governance-in-connections.md) — **PLAN REVIEWED**
-- [ ] [`DELETE /kanban/plans` Leaves the Markdown and the Feature File Behind — Bring It to Parity With the Board's Delete](../plans/feature_plan_20260812120500_delete-plan-api-parity-with-board-delete.md) — **PLAN REVIEWED**
+- [ ] [Remove the Instruction-Inbox / Standing-Jobs / Declared-Moves Subsystem Entirely](../plans/feature_plan_20260805140000_external-orchestration-governance-in-connections.md) — **PLAN REVIEWED** — ID: b7d95f03-322a-4404-8195-ea3d27eb20a5
+- [ ] [`DELETE /kanban/plans` Leaves the Markdown and the Feature File Behind — Bring It to Parity With the Board's Delete](../plans/feature_plan_20260812120500_delete-plan-api-parity-with-board-delete.md) — **PLAN REVIEWED** — ID: 8a9cf756-a9d6-498b-8061-c94b0341f43e
 <!-- END SUBTASKS -->
 
 ## Plan Review Status

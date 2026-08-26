@@ -13,8 +13,8 @@ Delete the two shipped mechanisms that guess whether work finished from board st
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Remove Silence-Based "Blocked" State from the Kanban](../plans/feature_plan_20260819160000_remove-silence-based-blocked-state-from-kanban.md) — **PLAN REVIEWED**
-- [ ] [Remove the seat order's hand-to-review clause](../plans/remove-the-seat-orders-code-reviewed-clause.md) — **PLAN REVIEWED**
+- [ ] [Remove Silence-Based "Blocked" State from the Kanban](../plans/feature_plan_20260819160000_remove-silence-based-blocked-state-from-kanban.md) — **PLAN REVIEWED** — ID: 8fda05be-64bf-4182-9b80-ec6ffcebcd9c
+- [ ] [Remove the seat order's hand-to-review clause](../plans/remove-the-seat-orders-code-reviewed-clause.md) — **PLAN REVIEWED** — ID: 2b948736-d4c9-4b89-868b-15ef168fa412
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

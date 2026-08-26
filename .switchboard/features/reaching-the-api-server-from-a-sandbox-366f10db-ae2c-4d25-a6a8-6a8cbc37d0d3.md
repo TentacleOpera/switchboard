@@ -13,8 +13,8 @@ Make the documented discovery path work from where agents actually run. The port
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The API server port file goes missing from eligible workspace roots and never comes back](../plans/api-server-port-file-missing-from-eligible-roots.md) — **PLAN REVIEWED**
-- [ ] [Add file-based IPC transport to LocalApiServer for sandboxed agents](../plans/add-file-based-ipc-transport.md) — **PLAN REVIEWED**
+- [ ] [The API server port file goes missing from eligible workspace roots and never comes back](../plans/api-server-port-file-missing-from-eligible-roots.md) — **PLAN REVIEWED** — ID: 5a526a96-1d5f-4914-8e29-aed1a222bbdf
+- [ ] [Add file-based IPC transport to LocalApiServer for sandboxed agents](../plans/add-file-based-ipc-transport.md) — **PLAN REVIEWED** — ID: 893d87be-c013-45fb-afcf-4e861a6acf18
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -25,10 +25,10 @@ These four are grouped because they are small, low-risk presentation/UX fixes to
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Create Worktree Button Has No Tooltip When Active](../plans/feature_plan_20260709124500_create-worktree-button-tooltip-when-active.md) — **CODE REVIEWED**
-- [ ] [Claudify "Colour Kanban Board Icons" Not Applied Live When Switching to Claudify](../plans/feature_plan_20260709124600_claudify-colour-kanban-icons-live-apply-on-theme-switch.md) — **CODE REVIEWED**
-- [ ] ["Colour Kanban Board Icons" Label & Description Should Use American "Color"](../plans/feature_plan_20260709124700_colour-kanban-icons-american-spelling.md) — **CODE REVIEWED**
-- [ ] [Agents List Needs "Core" / "Optional" Subheaders (Kanban Agents Tab + Onboarding)](../plans/feature_plan_20260709124800_agents-tab-core-optional-subheaders.md) — **CODE REVIEWED**
+- [ ] [Create Worktree Button Has No Tooltip When Active](../plans/feature_plan_20260709124500_create-worktree-button-tooltip-when-active.md) — **CODE REVIEWED** — ID: 098c7f8e-25b3-46ab-b509-8a86593b9815
+- [ ] [Claudify "Colour Kanban Board Icons" Not Applied Live When Switching to Claudify](../plans/feature_plan_20260709124600_claudify-colour-kanban-icons-live-apply-on-theme-switch.md) — **CODE REVIEWED** — ID: 7efdd8e3-3382-4e2a-8713-e15ca5eeb04d
+- [ ] ["Colour Kanban Board Icons" Label & Description Should Use American "Color"](../plans/feature_plan_20260709124700_colour-kanban-icons-american-spelling.md) — **CODE REVIEWED** — ID: e6cd935f-bba7-4245-8d7d-f64341489942
+- [ ] [Agents List Needs "Core" / "Optional" Subheaders (Kanban Agents Tab + Onboarding)](../plans/feature_plan_20260709124800_agents-tab-core-optional-subheaders.md) — **CODE REVIEWED** — ID: 1d281d20-f347-40cb-9338-ece4e3b66003
 <!-- END SUBTASKS -->
 
 ## Completion Report

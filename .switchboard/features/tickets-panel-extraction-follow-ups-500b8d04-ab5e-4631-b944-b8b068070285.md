@@ -28,7 +28,7 @@ Re-verified at HEAD on 2026-08-14: still undone. The two subtasks are the extrac
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Sweep the dead ticket code left in the Artifacts panel after the Tickets extraction](../plans/tickets-panel-7-sweep-dead-ticket-code-from-planning.md) — **PLAN REVIEWED**
-- [ ] [Give `tickets.root` a single source of truth: wire the host push, then drop the local mirror](../plans/tickets-panel-8-single-source-for-tickets-root.md) — **PLAN REVIEWED**
+- [ ] [Sweep the dead ticket code left in the Artifacts panel after the Tickets extraction](../plans/tickets-panel-7-sweep-dead-ticket-code-from-planning.md) — **PLAN REVIEWED** — ID: 7832f5c6-86e7-4b0d-92fa-ff75f6e54113
+- [ ] [Give `tickets.root` a single source of truth: wire the host push, then drop the local mirror](../plans/tickets-panel-8-single-source-for-tickets-root.md) — **PLAN REVIEWED** — ID: 5fc18aec-4fc7-4a57-937b-3f2e585d782d
 <!-- END SUBTASKS -->
 

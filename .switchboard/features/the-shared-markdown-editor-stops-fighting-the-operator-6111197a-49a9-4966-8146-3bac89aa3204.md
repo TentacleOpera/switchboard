@@ -13,8 +13,8 @@ Make the shared markdown editor usable on long documents in every panel that emb
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Markdown editor toolbar scrolls out of reach on long docs and tickets](../plans/feature_plan_20260817161200_markdown-toolbar-scrolls-away-on-long-docs.md) — **PLAN REVIEWED**
-- [ ] [Markdown Editor Independent Preview Scrolling and Inline Image Sizing](../plans/feature_plan_20260818093003_markdown-editor-independent-preview-scroll-and-image-sizing.md) — **PLAN REVIEWED**
+- [ ] [Markdown editor toolbar scrolls out of reach on long docs and tickets](../plans/feature_plan_20260817161200_markdown-toolbar-scrolls-away-on-long-docs.md) — **PLAN REVIEWED** — ID: bebe72dd-ccdd-4b3b-951b-49261fd1905b
+- [ ] [Markdown Editor Independent Preview Scrolling and Inline Image Sizing](../plans/feature_plan_20260818093003_markdown-editor-independent-preview-scroll-and-image-sizing.md) — **PLAN REVIEWED** — ID: cbad3802-c247-4cec-b54d-e8be4e5904a5
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

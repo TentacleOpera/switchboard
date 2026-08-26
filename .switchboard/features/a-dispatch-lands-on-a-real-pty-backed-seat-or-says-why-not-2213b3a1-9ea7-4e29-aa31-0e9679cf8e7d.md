@@ -14,9 +14,9 @@ Make seat resolution honest. Teams are PTY-only, so no team automation may fall 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Team start silently spawns bare shells for roles with no startup command](../plans/feature_plan_20260819092741_team-start-reports-commandless-seats.md) — **PLAN REVIEWED**
-- [ ] [Enforce PTY-Only for Team Automations](../plans/enforce-pty-only-for-team-automations.md) — **PLAN REVIEWED**
-- [ ] [Complexity Routing Degrades to the Live Terminal Pool](../plans/complexity-routing-degrade-to-live-pool.md) — **PLAN REVIEWED**
+- [ ] [Team start silently spawns bare shells for roles with no startup command](../plans/feature_plan_20260819092741_team-start-reports-commandless-seats.md) — **PLAN REVIEWED** — ID: 4139b10e-8f84-40a7-8ace-3569062de542
+- [ ] [Enforce PTY-Only for Team Automations](../plans/enforce-pty-only-for-team-automations.md) — **PLAN REVIEWED** — ID: 83a75c14-b93a-499f-a49f-a7170a61e1db
+- [ ] [Complexity Routing Degrades to the Live Terminal Pool](../plans/complexity-routing-degrade-to-live-pool.md) — **PLAN REVIEWED** — ID: 8fee0dcb-b3b2-4af8-baa2-5321d26e0278
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

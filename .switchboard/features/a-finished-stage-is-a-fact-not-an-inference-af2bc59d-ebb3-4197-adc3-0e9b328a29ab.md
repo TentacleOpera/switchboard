@@ -14,9 +14,9 @@ Make the end of a pipeline stage something the system can read rather than guess
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Coding Team — The Lead Sends the Whole Feature to Review, Through Board Dispatch](../plans/coding-team-sends-the-feature-to-review-not-each-subtask.md) — **CODE REVIEWED**
-- [ ] [Retire Auto-Commit — Leads and Reviewers Commit, and a Review Commit Means Done](../plans/retire-auto-commit-agents-commit-their-own-work.md) — **CODE REVIEWED**
-- [ ] [Stage Markers in Git — a Commit Says Which Stage Finished, for the Orchestrator and the Board](../plans/stage-markers-in-commit-trailers.md) — **CODE REVIEWED**
+- [ ] [Coding Team — The Lead Sends the Whole Feature to Review, Through Board Dispatch](../plans/coding-team-sends-the-feature-to-review-not-each-subtask.md) — **CODE REVIEWED** — ID: 1c574256-a535-4caf-9ac8-9be19573c304
+- [ ] [Retire Auto-Commit — Leads and Reviewers Commit, and a Review Commit Means Done](../plans/retire-auto-commit-agents-commit-their-own-work.md) — **CODE REVIEWED** — ID: a3adf9f1-7ad7-4eb9-bcea-cead13c8362d
+- [ ] [Stage Markers in Git — a Commit Says Which Stage Finished, for the Orchestrator and the Board](../plans/stage-markers-in-commit-trailers.md) — **CODE REVIEWED** — ID: 5f3e165f-d7ce-46e3-8291-f41d07380d38
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

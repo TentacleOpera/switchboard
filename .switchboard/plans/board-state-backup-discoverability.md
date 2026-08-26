@@ -65,13 +65,18 @@ None.
 
 - The portable export/import plan adds its own palette entries when it lands; this plan covers only the operations that exist today.
 - **Related, not blocking: the provider board-sync capability feature.** It makes "Notion is the only restorable remote" false. This plan can land first provided it phrases restorability against declared capabilities rather than a fixed list — see the audit item above. If it lands after, the phrasing is simply already correct.
+- **Interim surface: the Setup panel copy correction (Proposed Change #3) is interim.** The Database panel plan (same feature) retires the Setup panel's database section and moves the surviving copy to the new panel. This plan should land first; the corrected copy then moves with the section when the Database panel retires it. If the Database panel lands first, target the copy correction at the Database panel directly and skip the Setup edit.
+
+## Adversarial Synthesis
+
+Key risks: (1) the copy overstates coverage — a user who reads "Switchboard backs up your board automatically" and concludes their state survives a new laptop has been actively misled; the in-project, gitignored limitation is the single most important sentence. (2) The cron snippet at `setup.html:1302` recommends copying `kanban.db` — which carries absolute paths across five tables and does not move cleanly between machines. The snippet is fine for same-machine corruption recovery but must not be presented as a migration path; the portable export (`kanban-state-backup.json`) is the cross-machine artefact. (3) A declared provider-capabilities mechanism does not yet exist in the codebase (no `canRestore`/`boardRestoreCapability` field found), so the restorable-remote list must state the current truth (Notion only) and note it is changing, rather than reading from a mechanism that is not there. Mitigations: the plan already calls out the honesty concern as its top Complex/Risky item; the cron guidance should distinguish same-machine backup from cross-machine migration; the restorable-remote phrasing is already conditional on the capabilities feature landing.
 
 ## Proposed Changes
 
 1. **Add a README section** covering what board state is, that `kanban.db` is machine-local and gitignored, which mechanisms run automatically, and — stated plainly — which failure modes are and are not covered.
 2. **Add command palette entries** for the existing Notion backup and restore operations, titled so they cannot be confused with `switchboard.restoreIntegrationConfig`.
-3. **Correct the Setup panel copy** to say that `dbbackup/` and `kanban-state-backup.json` are in-project and gitignored, and therefore cover corruption but not machine loss.
-4. **Replace the POSIX-only cron snippet** with guidance that works on all three platforms, or state its platform explicitly and name the Windows equivalent.
+3. **Correct the Setup panel copy** (interim — the Database panel plan retires this section; see Dependencies) to say that `dbbackup/` and `kanban-state-backup.json` are in-project and gitignored, and therefore cover corruption but not machine loss. The corrected copy moves to the Database panel when it lands.
+4. **Replace the POSIX-only cron snippet** (`setup.html:1302`) with guidance that works on all three platforms, or state its platform explicitly and name the Windows equivalent (`schtasks`). The guidance must distinguish same-machine corruption backup (copying `kanban.db` is fine for this) from cross-machine migration (use the portable `kanban-state-backup.json` export, not `kanban.db`, which carries absolute paths).
 5. **State which remotes are restorable, sourced from the declared provider capabilities rather than a hardcoded list**, so a user choosing an integration for durability rather than for workflow picks one that can actually rebuild a board — and so the doc does not go stale as ClickUp and Linear restore land.
 
 ### Migration
@@ -86,6 +91,13 @@ None. Documentation and command registration only.
 3a. **The restorable-remote list is not hardcoded.** Flip a provider's declared board-restore capability and confirm the documented list or the UI that renders it follows, rather than needing a doc edit.
 4. **Windows guidance runs.** Execute the off-project copy instructions on Windows and confirm they work as written.
 5. **No new interruptions.** Confirm a fresh install shows no backup-related toast, modal, or startup message.
+
+### Goal Invariants
+
+- **assert** `README.md` contains at least one match for the string "backup" that names `dbbackup/`, `kanban-state-backup.json`, and the Notion backup.
+- **assert** `package.json` contributes.commands contains entries for Notion backup and restore whose titles do not contain "Restore Integration Config".
+- **assert** no backup-related `showInformationMessage`, `showWarningMessage`, or `showErrorMessage` call is triggered on extension startup or workspace open (the no-nag invariant).
+- **assert** the cron/copy guidance in the Setup panel (or Database panel, whichever is current) distinguishes same-machine backup from cross-machine migration and does not recommend `kanban.db` as the cross-machine artefact.
 
 ## Outstanding Questions
 

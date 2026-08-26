@@ -4,11 +4,11 @@
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Move Auto-Fetch Controls Into a Modal in project.html Kanban Plans Tab](../plans/feature_plan_20260701141143_autofetch-controls-into-modal.md) — **CODE REVIEWED**
-- [ ] [Fix: Parent Board Shows Blank After Creating New Project](../plans/feature_plan_20260702000830_fix-blank-board-after-project-creation.md) — **CODE REVIEWED**
-- [ ] [Fix: Reduce Sidebar Width for project.html Governance Tabs](../plans/feature_plan_20260702000840_reduce-governance-tab-sidebar-width.md) — **CODE REVIEWED**
-- [ ] [Fix: New Project Not Showing in project.html Dropdown Until Reopen](../plans/feature_plan_20260702000855_fix-project-dropdown-not-updating-on-creation.md) — **CODE REVIEWED**
-- [ ] [Fix: Projects Tab Missing Theme Styles and Weird File Path Display](../plans/feature_plan_20260702000850_fix-projects-tab-theme-styles-and-filepath.md) — **CODE REVIEWED**
+- [ ] [Move Auto-Fetch Controls Into a Modal in project.html Kanban Plans Tab](../plans/feature_plan_20260701141143_autofetch-controls-into-modal.md) — **CODE REVIEWED** — ID: c3884f6d-f419-4373-bbc8-94741ab104ec
+- [ ] [Fix: Parent Board Shows Blank After Creating New Project](../plans/feature_plan_20260702000830_fix-blank-board-after-project-creation.md) — **CODE REVIEWED** — ID: 7a2fe749-011b-4616-8e35-234abcfd499d
+- [ ] [Fix: Reduce Sidebar Width for project.html Governance Tabs](../plans/feature_plan_20260702000840_reduce-governance-tab-sidebar-width.md) — **CODE REVIEWED** — ID: 100adde0-fbe0-4c37-9123-005ddbe6a72c
+- [ ] [Fix: New Project Not Showing in project.html Dropdown Until Reopen](../plans/feature_plan_20260702000855_fix-project-dropdown-not-updating-on-creation.md) — **CODE REVIEWED** — ID: 6e62c79d-8c0d-4409-baa8-af507b6df79e
+- [ ] [Fix: Projects Tab Missing Theme Styles and Weird File Path Display](../plans/feature_plan_20260702000850_fix-projects-tab-theme-styles-and-filepath.md) — **CODE REVIEWED** — ID: cfb23d0e-bc3f-4612-849f-956b66dbfac3
 <!-- END SUBTASKS -->
 
 ## Dependency Sequence

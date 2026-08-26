@@ -17,7 +17,7 @@ De-clutter and visually unify the action-button row on kanban cards, where epics
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Remove the Per-Card "Pair" Button (Rely on the Pair-Mode Dropdown)](../plans/feature_plan_20260629085554_remove-per-card-pair-button.md) — **CODE REVIEWED**
-- [ ] [Orchestrate Button: Purple Outline Instead of Solid Fill](../plans/feature_plan_20260629092225_orchestrate-button-purple-outline.md) — **CODE REVIEWED**
+- [ ] [Remove the Per-Card "Pair" Button (Rely on the Pair-Mode Dropdown)](../plans/feature_plan_20260629085554_remove-per-card-pair-button.md) — **CODE REVIEWED** — ID: d614926e-329e-49b2-9c03-69c9c486cdb0
+- [ ] [Orchestrate Button: Purple Outline Instead of Solid Fill](../plans/feature_plan_20260629092225_orchestrate-button-purple-outline.md) — **CODE REVIEWED** — ID: 63062934-e01a-4653-a429-c821bad25cae
 <!-- END SUBTASKS -->
 

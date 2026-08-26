@@ -91,10 +91,10 @@ frontmatter-facts` lands with the retirement (it's where the manifest's fields g
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Delete-feature (and delete-plan) file-resurrect fix](../plans/delete-epic-file-resurrect-fix.md) — **CODE REVIEWED**
-- [ ] [Plan-authoring frontmatter facts (feature + project on import)](../plans/plan-authoring-frontmatter-facts.md) — **CODE REVIEWED**
-- [ ] [Retire the file-based git control plane; hand board visibility to the read-only snapshot](../plans/retire-file-based-git-control-plane.md) — **CODE REVIEWED**
-- [ ] [Board-state read snapshot (isolated ref, one-directional)](../plans/feature_plan_20260704_224822_board_state_read_snapshot_isolated_ref_one_directional.md) — **CODE REVIEWED**
+- [ ] [Delete-feature (and delete-plan) file-resurrect fix](../plans/delete-epic-file-resurrect-fix.md) — **CODE REVIEWED** — ID: 61481c3d-a750-47a9-980c-ac792b825c3a
+- [ ] [Plan-authoring frontmatter facts (feature + project on import)](../plans/plan-authoring-frontmatter-facts.md) — **CODE REVIEWED** — ID: 4e24d212-23b3-4b1d-bb36-682ae1d9d5de
+- [ ] [Retire the file-based git control plane; hand board visibility to the read-only snapshot](../plans/retire-file-based-git-control-plane.md) — **CODE REVIEWED** — ID: 64819afb-d45b-4621-9f61-48d6c7ae76b5
+- [ ] [Board-state read snapshot (isolated ref, one-directional)](../plans/feature_plan_20260704_224822_board_state_read_snapshot_isolated_ref_one_directional.md) — **CODE REVIEWED** — ID: .switchboard/plans/feature_plan_20260704_224822_board_state_read_snapshot_isolated_ref_one_directional.md
 <!-- END SUBTASKS -->
 
 ## Review Findings

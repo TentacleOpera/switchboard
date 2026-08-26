@@ -39,10 +39,10 @@ The split between autoban and the orchestrator is the design: **autoban owns the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Turn-End Notification — Tell the Interested Agent When a Seat Goes Quiet](../plans/feature_plan_20260814150000_agent-completion-endpoint.md) — **CODE REVIEWED**
-- [ ] [Retire Autoban's Terminal Pools — the Problem They Solved Is Now `clear` and Teams](../plans/feature_plan_20260814150200_retire-terminal-pools.md) — **CODE REVIEWED**
-- [ ] [Retire the Orchestrator's Bespoke Machinery — No Wake Cadence, No File Inbox, No Dispatch Endpoint](../plans/feature_plan_20260814150400_retire-orchestrator-machinery.md) — **CODE REVIEWED**
-- [ ] [Autoban: Delete `multi-column` and `antigravity-batch`, Scope It to PLAN REVIEWED → CODED, Drive It From Completion Reports](../plans/feature_plan_20260814150100_autoban-single-column-completion-driven.md) — **CODE REVIEWED**
+- [ ] [Turn-End Notification — Tell the Interested Agent When a Seat Goes Quiet](../plans/feature_plan_20260814150000_agent-completion-endpoint.md) — **CODE REVIEWED** — ID: 42c31413-712a-4bd1-a2d6-2013730d773e
+- [ ] [Retire Autoban's Terminal Pools — the Problem They Solved Is Now `clear` and Teams](../plans/feature_plan_20260814150200_retire-terminal-pools.md) — **CODE REVIEWED** — ID: 247903ac-6a89-49b0-ba00-90ad629b0e03
+- [ ] [Retire the Orchestrator's Bespoke Machinery — No Wake Cadence, No File Inbox, No Dispatch Endpoint](../plans/feature_plan_20260814150400_retire-orchestrator-machinery.md) — **CODE REVIEWED** — ID: f46a1480-9b12-485b-a1e4-e9ef3c3e6b75
+- [ ] [Autoban: Delete `multi-column` and `antigravity-batch`, Scope It to PLAN REVIEWED → CODED, Drive It From Completion Reports](../plans/feature_plan_20260814150100_autoban-single-column-completion-driven.md) — **CODE REVIEWED** — ID: 118ad40f-671e-4fb3-8ee4-40180ebf37c1
 <!-- END SUBTASKS -->
 
 ---

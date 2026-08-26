@@ -14,9 +14,9 @@ Fix three defects on one path - the relay that sends a reviewer's fixes back to 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Delegation fixStep suppresses seat block — coder stops receiving SKIP TESTS / dontCommit from the delivery layer](../plans/delegation-fixstep-suppresses-seat-block.md) — **PLAN REVIEWED**
-- [ ] [originLead cross-team guard — drop last-dispatch target when it's not on the reviewer's team](../plans/originlead-cross-team-guard.md) — **PLAN REVIEWED**
-- [ ] [Reviewer Prompt: Inbound Field-Existence Check & Plan-Authority Split](../plans/reviewer-prompt-inbound-field-existence-check.md) — **PLAN REVIEWED**
+- [ ] [Delegation fixStep suppresses seat block — coder stops receiving SKIP TESTS / dontCommit from the delivery layer](../plans/delegation-fixstep-suppresses-seat-block.md) — **PLAN REVIEWED** — ID: 6a1e2e24-3fd3-4c37-a137-87806c7c7667
+- [ ] [originLead cross-team guard — drop last-dispatch target when it's not on the reviewer's team](../plans/originlead-cross-team-guard.md) — **PLAN REVIEWED** — ID: 1a380d6c-6ef9-4ca9-8579-ab33785e732f
+- [ ] [Reviewer Prompt: Inbound Field-Existence Check & Plan-Authority Split](../plans/reviewer-prompt-inbound-field-existence-check.md) — **PLAN REVIEWED** — ID: a79560b9-871f-4d37-a217-60335e272718
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

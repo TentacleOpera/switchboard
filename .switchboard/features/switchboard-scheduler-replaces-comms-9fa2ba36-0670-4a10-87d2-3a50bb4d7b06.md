@@ -15,10 +15,10 @@ Generalize Switchboard's only self-owned scheduler (the Comms Monitor) into a te
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Scheduler Job Data Model & Comms Config Migration](../plans/scheduler-job-data-model.md) — **CODE REVIEWED**
-- [ ] [Generalize the Comms Monitor Loop into a Terminal-Agnostic Local Scheduler Engine](../plans/scheduler-local-execution-engine.md) — **CODE REVIEWED**
-- [ ] [Scheduler Prompt Presets & External-Target (Antigravity/Cloud) Handoff](../plans/scheduler-prompt-presets-external-targets.md) — **CODE REVIEWED**
-- [ ] [Scheduler UI in the Automation Tab; Retire the Standalone Comms Tab](../plans/scheduler-ui-replace-comms-tab.md) — **CODE REVIEWED**
+- [ ] [Scheduler Job Data Model & Comms Config Migration](../plans/scheduler-job-data-model.md) — **CODE REVIEWED** — ID: f39860c9-81dd-4069-83df-4acb54916f25
+- [ ] [Generalize the Comms Monitor Loop into a Terminal-Agnostic Local Scheduler Engine](../plans/scheduler-local-execution-engine.md) — **CODE REVIEWED** — ID: afbe8f05-ffdd-41f7-9930-b372fb806615
+- [ ] [Scheduler Prompt Presets & External-Target (Antigravity/Cloud) Handoff](../plans/scheduler-prompt-presets-external-targets.md) — **CODE REVIEWED** — ID: b25fd970-e6c7-4232-8e13-8449802567ed
+- [ ] [Scheduler UI in the Automation Tab; Retire the Standalone Comms Tab](../plans/scheduler-ui-replace-comms-tab.md) — **CODE REVIEWED** — ID: 8100d8f8-ba6c-4bad-9e57-19d310c92d5d
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

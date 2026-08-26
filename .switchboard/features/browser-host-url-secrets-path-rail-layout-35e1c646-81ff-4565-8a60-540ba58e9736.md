@@ -24,9 +24,9 @@ Cross-subtask audit found no overlap, contradiction, or supersession. Shared sur
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Browser Board URL Must Default to switchboard.localhost, Not 127.0.0.1](../plans/feature_plan_20260805105305_browser-board-url-defaults-to-switchboard-localhost.md) — **CODE REVIEWED**
-- [ ] [Browser Setup/Tickets Panels: "Set This in the Editor" Hint Ignores the Encrypted Secrets Store](../plans/feature_plan_20260805105306_browser-setup-secrets-hint-names-cli-secrets-store.md) — **CODE REVIEWED**
-- [ ] [Browser Shell: Move the Setup Icon to the Bottom of the Rail, Next to the Theme Toggle](../plans/feature_plan_20260805105312_browser-shell-setup-icon-moves-to-bottom-rail.md) — **CODE REVIEWED**
+- [ ] [Browser Board URL Must Default to switchboard.localhost, Not 127.0.0.1](../plans/feature_plan_20260805105305_browser-board-url-defaults-to-switchboard-localhost.md) — **CODE REVIEWED** — ID: 21cdac6a-06d9-4549-b895-aa39257906a5
+- [ ] [Browser Setup/Tickets Panels: "Set This in the Editor" Hint Ignores the Encrypted Secrets Store](../plans/feature_plan_20260805105306_browser-setup-secrets-hint-names-cli-secrets-store.md) — **CODE REVIEWED** — ID: df6d7834-7ba0-4a3e-889d-5bb847939784
+- [ ] [Browser Shell: Move the Setup Icon to the Bottom of the Rail, Next to the Theme Toggle](../plans/feature_plan_20260805105312_browser-shell-setup-icon-moves-to-bottom-rail.md) — **CODE REVIEWED** — ID: fc360c3b-caf2-48a0-b758-0336cf12e171
 <!-- END SUBTASKS -->
 
 ## Completion Report

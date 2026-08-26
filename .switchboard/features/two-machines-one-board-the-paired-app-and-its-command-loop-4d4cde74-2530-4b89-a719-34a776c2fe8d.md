@@ -13,8 +13,8 @@ Ship Switchboard as something you launch rather than something you open an IDE t
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The remote command vocabulary is closed at two verbs, because the third one turns a reviewed-plan pipeline into a remote shell](../plans/the-remote-command-vocabulary-is-closed.md) — **CREATED**
-- [ ] [An app that pairs two machines and lets you choose which one holds the board and which one runs the agents](../plans/switchboard-as-a-local-app-and-a-self-hosted-remote.md) — **CREATED**
+- [ ] [The remote command vocabulary is closed at two verbs, because the third one turns a reviewed-plan pipeline into a remote shell](../plans/the-remote-command-vocabulary-is-closed.md) — **CREATED** — ID: 767be11f-f733-4737-aafa-ff55ae188299
+- [ ] [An app that pairs two machines and lets you choose which one holds the board and which one runs the agents](../plans/switchboard-as-a-local-app-and-a-self-hosted-remote.md) — **CREATED** — ID: 9adefb23-5f90-4a9d-b8b7-f56ba1f78872
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

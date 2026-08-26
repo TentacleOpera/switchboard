@@ -20,9 +20,9 @@ Fix all 13 broken file watchers in the standalone/browser host. Plan 1 fixes the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix no-op vscodeShim.createFileSystemWatcher — Root Cause of All Standalone Watcher Failures](../plans/feature_plan_20260819153323_fix-vscodeShim-createFileSystemWatcher-noop.md) — **CODE REVIEWED**
-- [ ] [Arm Planning Panel Watchers in Standalone Host](../plans/feature_plan_20260819153324_arm-planning-panel-watchers-in-standalone.md) — **CODE REVIEWED**
-- [ ] [Arm Design Panel Watchers in Standalone Host](../plans/feature_plan_20260819153325_arm-design-panel-watchers-in-standalone.md) — **CODE REVIEWED**
+- [ ] [Fix no-op vscodeShim.createFileSystemWatcher — Root Cause of All Standalone Watcher Failures](../plans/feature_plan_20260819153323_fix-vscodeShim-createFileSystemWatcher-noop.md) — **CODE REVIEWED** — ID: dd93e393-045c-4399-a559-8b4795875d1b
+- [ ] [Arm Planning Panel Watchers in Standalone Host](../plans/feature_plan_20260819153324_arm-planning-panel-watchers-in-standalone.md) — **CODE REVIEWED** — ID: 8c753c05-fc9e-429a-a243-437b222cbb52
+- [ ] [Arm Design Panel Watchers in Standalone Host](../plans/feature_plan_20260819153325_arm-design-panel-watchers-in-standalone.md) — **CODE REVIEWED** — ID: 5104afac-7d9b-4177-bf29-0e5463f53daf
 <!-- END SUBTASKS -->
 
 ## Completion Summary

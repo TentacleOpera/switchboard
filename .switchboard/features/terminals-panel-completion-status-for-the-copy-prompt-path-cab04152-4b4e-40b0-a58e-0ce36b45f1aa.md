@@ -16,8 +16,8 @@ This feature closes that gap end to end: first make the Terminals-panel copy but
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Attribute Copied Dispatch Prompts to the Terminal Pane They Were Pasted Into](../plans/paste-attribution-copied-dispatch-prompts-terminal-panes.md) — **CODE REVIEWED**
-- [ ] [Terminals Panel's Kanban-Pane Copy Prompt Button Never Reaches the Clipboard in the Browser Host](../plans/terminals-kanban-pane-copy-prompt-never-reaches-clipboard.md) — **CODE REVIEWED**
+- [ ] [Attribute Copied Dispatch Prompts to the Terminal Pane They Were Pasted Into](../plans/paste-attribution-copied-dispatch-prompts-terminal-panes.md) — **CODE REVIEWED** — ID: b9a1f4e5-8bdb-4931-b6c6-a5f7254dc125
+- [ ] [Terminals Panel's Kanban-Pane Copy Prompt Button Never Reaches the Clipboard in the Browser Host](../plans/terminals-kanban-pane-copy-prompt-never-reaches-clipboard.md) — **CODE REVIEWED** — ID: 636f58b6-7cd7-4fd8-be74-61c077a3bd63
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

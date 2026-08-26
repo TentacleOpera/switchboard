@@ -15,8 +15,8 @@ Together they make every cell of the outbound and inbound sync matrices ✅ for 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Provider Sync — Outbound Parity (ClickUp / Linear / Notion)](../plans/provider-sync-outbound-parity.md) — **CODE REVIEWED**
-- [ ] [Provider Sync — Inbound Delete (ClickUp / Linear / Notion)](../plans/provider-sync-inbound-delete.md) — **CODE REVIEWED**
+- [ ] [Provider Sync — Outbound Parity (ClickUp / Linear / Notion)](../plans/provider-sync-outbound-parity.md) — **CODE REVIEWED** — ID: ebca8a8d-3fdf-4b95-99a7-1973354f8fff
+- [ ] [Provider Sync — Inbound Delete (ClickUp / Linear / Notion)](../plans/provider-sync-inbound-delete.md) — **CODE REVIEWED** — ID: 1fb6e37c-ce50-4040-b583-0e0b1c8f12e7
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

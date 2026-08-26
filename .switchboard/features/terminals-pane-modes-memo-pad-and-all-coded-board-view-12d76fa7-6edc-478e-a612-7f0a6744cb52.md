@@ -35,7 +35,7 @@ Reviewer pass 2026-08-11 over both subtasks, in-place, no worktree. One CRITICAL
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Open the Memo as a Shell Modal Instead of a Full-Screen Panel](../plans/feature_plan_20260807090100_terminals-pane-memo-mode.md) — **CODE REVIEWED**
-- [ ] [Add an "All Coded" Aggregate Option to the Terminals Kanban-Pane Column Picker](../plans/feature_plan_20260807090200_terminals-kanban-pane-all-coded-aggregate-column.md) — **CODE REVIEWED**
+- [ ] [Open the Memo as a Shell Modal Instead of a Full-Screen Panel](../plans/feature_plan_20260807090100_terminals-pane-memo-mode.md) — **CODE REVIEWED** — ID: e1ee5cea-58be-4949-9613-eaff45b77f03
+- [ ] [Add an "All Coded" Aggregate Option to the Terminals Kanban-Pane Column Picker](../plans/feature_plan_20260807090200_terminals-kanban-pane-all-coded-aggregate-column.md) — **CODE REVIEWED** — ID: 4fe876b4-1009-4355-8f4c-b71fa4410511
 <!-- END SUBTASKS -->
 

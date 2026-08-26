@@ -38,14 +38,14 @@ This feature's first draft carried factual errors of exactly the class it exists
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone Doc-Parity Audit — Harness, Claim Register and Evidence Rules](../plans/audit-standalone-against-extension-docs.md) — **CODE REVIEWED**
-- [ ] [Doc-Parity Audit — `reference` Section (6 files, 788 lines)](../plans/audit-docs-section-reference.md) — **CODE REVIEWED**
-- [ ] [Doc-Parity Audit — `board` Section (11 files, 775 lines)](../plans/audit-docs-section-board.md) — **CODE REVIEWED**
-- [ ] [Doc-Parity Audit — `getting-started` Section (9 files, 594 lines)](../plans/audit-docs-section-getting-started.md) — **CODE REVIEWED**
-- [ ] [Doc-Parity Audit — `project` Section (12 files, 480 lines)](../plans/audit-docs-section-project.md) — **CODE REVIEWED**
-- [ ] [Doc-Parity Audit — `artifacts` Section (14 files, 462 lines)](../plans/audit-docs-section-artifacts.md) — **CODE REVIEWED**
-- [ ] [Doc-Parity Audit — `pm-tools`, `integrations` and `agents` Sections (9 files, 456 lines)](../plans/audit-docs-section-pm-tools-integrations-agents.md) — **CODE REVIEWED**
-- [ ] [Doc-Parity Audit — Closeout: Convert Gaps to Plans and Rewrite the Standalone Doc](../plans/audit-docs-closeout-gaps-to-plans-and-doc-rewrite.md) — **CODE REVIEWED**
+- [ ] [Standalone Doc-Parity Audit — Harness, Claim Register and Evidence Rules](../plans/audit-standalone-against-extension-docs.md) — **CODE REVIEWED** — ID: dce236aa-ba0f-4874-8138-3e9e6f1521a0
+- [ ] [Doc-Parity Audit — `reference` Section (6 files, 788 lines)](../plans/audit-docs-section-reference.md) — **CODE REVIEWED** — ID: d7510e6a-f8d9-4d0d-b32c-28bc3c8f4986
+- [ ] [Doc-Parity Audit — `board` Section (11 files, 775 lines)](../plans/audit-docs-section-board.md) — **CODE REVIEWED** — ID: 73447b9e-d7fd-49b0-86f8-afee2ce1d41e
+- [ ] [Doc-Parity Audit — `getting-started` Section (9 files, 594 lines)](../plans/audit-docs-section-getting-started.md) — **CODE REVIEWED** — ID: 36192253-77ce-4a73-992c-2c08405391a2
+- [ ] [Doc-Parity Audit — `project` Section (12 files, 480 lines)](../plans/audit-docs-section-project.md) — **CODE REVIEWED** — ID: fc60178c-1ed5-4927-9f2b-18f99c4c89d7
+- [ ] [Doc-Parity Audit — `artifacts` Section (14 files, 462 lines)](../plans/audit-docs-section-artifacts.md) — **CODE REVIEWED** — ID: 8c4d00e9-1644-4411-a21d-5df79662bc7f
+- [ ] [Doc-Parity Audit — `pm-tools`, `integrations` and `agents` Sections (9 files, 456 lines)](../plans/audit-docs-section-pm-tools-integrations-agents.md) — **CODE REVIEWED** — ID: d63a2017-f576-4db5-9e0a-489b5e895d86
+- [ ] [Doc-Parity Audit — Closeout: Convert Gaps to Plans and Rewrite the Standalone Doc](../plans/audit-docs-closeout-gaps-to-plans-and-doc-rewrite.md) — **CODE REVIEWED** — ID: 00b62ca8-55c9-4f50-b104-695534508bc0
 <!-- END SUBTASKS -->
 
 ## How the Subtasks Achieve This

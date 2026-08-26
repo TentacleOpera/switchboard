@@ -16,11 +16,11 @@ Stop the narrow sidebar column trying to be everything. Restructure it into name
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Memo Is the One Surface That Exists Only in the Cramped Column — Give It an Editor Tab](../plans/memo-gets-an-editor-tab-panel.md) — **CREATED**
-- [ ] [The Sidebar Becomes a Launcher and a Status Board, Not a Cramped Column of Everything](../plans/sidebar-becomes-launcher-and-status-board.md) — **CREATED**
-- [ ] [A Read-Only Status Section in the Sidebar: What Is Running, Never What Should Run](../plans/sidebar-read-only-status-section.md) — **CREATED**
-- [ ] [Spike: Find Out Whether a VS Code Editor-Area Terminal Grid Is Actually Usable](../plans/vscode-editor-grid-spike.md) — **CREATED**
-- [ ] [The Cockpit Polls a Dead Host Forever Without Saying So](../plans/cockpit-must-say-when-the-host-is-gone.md) — **CREATED**
+- [ ] [Memo Is the One Surface That Exists Only in the Cramped Column — Give It an Editor Tab](../plans/memo-gets-an-editor-tab-panel.md) — **CREATED** — ID: 42981110-e662-4ef4-9386-454daf0a3f1a
+- [ ] [The Sidebar Becomes a Launcher and a Status Board, Not a Cramped Column of Everything](../plans/sidebar-becomes-launcher-and-status-board.md) — **CREATED** — ID: c335a73d-6724-48d3-9d35-cf1813640c3c
+- [ ] [A Read-Only Status Section in the Sidebar: What Is Running, Never What Should Run](../plans/sidebar-read-only-status-section.md) — **CREATED** — ID: 665c24e0-2077-4b4b-a2b9-161b66c001ed
+- [ ] [Spike: Find Out Whether a VS Code Editor-Area Terminal Grid Is Actually Usable](../plans/vscode-editor-grid-spike.md) — **CREATED** — ID: dc574a6d-a593-480d-8ba1-7bf778bb8b68
+- [ ] [The Cockpit Polls a Dead Host Forever Without Saying So](../plans/cockpit-must-say-when-the-host-is-gone.md) — **CREATED** — ID: 046e5e5c-7fa3-47c3-b364-cbb4f8b42bc0
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

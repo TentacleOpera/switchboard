@@ -21,9 +21,9 @@ Strict ordering required:
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Delete Dead Skill Files](../plans/delete-dead-skill-files.md) — **CODE REVIEWED**
-- [ ] [Move Protocols Out of Skill Discovery](../plans/move-protocols-out-of-skill-discovery.md) — **CODE REVIEWED**
-- [ ] [Add Archives Tab to Project Panel](../plans/add-archives-tab-to-project-panel.md) — **CODE REVIEWED**
+- [ ] [Delete Dead Skill Files](../plans/delete-dead-skill-files.md) — **CODE REVIEWED** — ID: 8ac2000f-3621-4dfb-aad4-c9551f0fe281
+- [ ] [Move Protocols Out of Skill Discovery](../plans/move-protocols-out-of-skill-discovery.md) — **CODE REVIEWED** — ID: f24c9593-4e62-4bba-a2ad-27908f34868a
+- [ ] [Add Archives Tab to Project Panel](../plans/add-archives-tab-to-project-panel.md) — **CODE REVIEWED** — ID: 326b5284-3926-4f4d-8eef-3ab61d1e02a5
 <!-- END SUBTASKS -->
 
 ## Completion Report

@@ -14,9 +14,9 @@ Every agent surface in Switchboard is reachable from exactly one place, and it i
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add an "Open Terminal Grid" Button Beside "Open Agent Terminals"](../plans/vscode-terminals-view-onto-pty-fleet.md) — **CODE REVIEWED**
-- [ ] [Right-Hand Agent Dock in the Browser Shell — a Persistent Agent Terminal Where IDE Users Expect Agent Chat](../plans/feature_plan_20260808220200_shell-right-agent-dock-terminal.md) — **CODE REVIEWED**
-- [ ] [Project Manager Agent Has No Entry Point Outside the VS Code Sidebar — Add a Board Button and Make the Dispatch Path Work Headlessly](../plans/feature_plan_20260808220300_project-manager-entry-point-browser-standalone.md) — **CODE REVIEWED**
+- [ ] [Add an "Open Terminal Grid" Button Beside "Open Agent Terminals"](../plans/vscode-terminals-view-onto-pty-fleet.md) — **CODE REVIEWED** — ID: d7fde118-cfe1-4279-9c9f-b21069f3d1ec
+- [ ] [Right-Hand Agent Dock in the Browser Shell — a Persistent Agent Terminal Where IDE Users Expect Agent Chat](../plans/feature_plan_20260808220200_shell-right-agent-dock-terminal.md) — **CODE REVIEWED** — ID: 433b6978-0f92-4f5a-8918-5fe28c9142c1
+- [ ] [Project Manager Agent Has No Entry Point Outside the VS Code Sidebar — Add a Board Button and Make the Dispatch Path Work Headlessly](../plans/feature_plan_20260808220300_project-manager-entry-point-browser-standalone.md) — **CODE REVIEWED** — ID: c647fe1f-1d83-4897-9ca7-565866ffdc4e
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

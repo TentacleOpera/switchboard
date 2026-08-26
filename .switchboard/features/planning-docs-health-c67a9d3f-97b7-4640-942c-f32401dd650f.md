@@ -13,8 +13,8 @@ Improve the quality of plans produced by external planning agents (Spark, Claude
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Planning Navigational Docs — Component Map, IPC Index, Search Scoping, File TOCs](../plans/feature_plan_20260818140000_planning-navigational-docs.md) — **CODE REVIEWED**
-- [ ] [Docs Health Sub-Tab in Connections — Planning Doc Guidance & Maintenance Prompt](../plans/feature_plan_20260818140001_docs-health-connections-tab.md) — **CODE REVIEWED**
+- [ ] [Planning Navigational Docs — Component Map, IPC Index, Search Scoping, File TOCs](../plans/feature_plan_20260818140000_planning-navigational-docs.md) — **CODE REVIEWED** — ID: c8418ca9-cdbb-4523-9bf4-146aa1488590
+- [ ] [Docs Health Sub-Tab in Connections — Planning Doc Guidance & Maintenance Prompt](../plans/feature_plan_20260818140001_docs-health-connections-tab.md) — **CODE REVIEWED** — ID: c5489c87-1c81-42c4-a59d-6b971a508cca
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

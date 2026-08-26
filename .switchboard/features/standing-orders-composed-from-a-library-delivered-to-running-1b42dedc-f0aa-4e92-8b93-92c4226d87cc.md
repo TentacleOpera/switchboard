@@ -15,10 +15,10 @@ Replace fixed per-team order monoliths with a library of small named fragments c
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Review-Team Head Standing Orders Must Migrate On Read](../plans/review-team-head-orders-must-migrate-on-read.md) — **PLAN REVIEWED**
-- [ ] [Review-Team Head Orders: Supersede The First-Generation Text](../plans/review-team-head-order-old-generation-supersession.md) — **PLAN REVIEWED**
-- [ ] [Compose standing orders from a library instead of installing monoliths](../plans/compose-standing-orders-from-a-library.md) — **PLAN REVIEWED**
-- [ ] [Standing Orders Library Section in the Tab](../plans/standing-orders-library-section-in-the-tab.md) — **PLAN REVIEWED**
+- [ ] [Review-Team Head Standing Orders Must Migrate On Read](../plans/review-team-head-orders-must-migrate-on-read.md) — **PLAN REVIEWED** — ID: fd36522f-85c0-45d5-8335-01724be15f2a
+- [ ] [Review-Team Head Orders: Supersede The First-Generation Text](../plans/review-team-head-order-old-generation-supersession.md) — **PLAN REVIEWED** — ID: 21695aa3-ea9d-4db8-bb03-046f72116931
+- [ ] [Compose standing orders from a library instead of installing monoliths](../plans/compose-standing-orders-from-a-library.md) — **PLAN REVIEWED** — ID: bf4bb2af-bc64-4329-9be9-1fc975c440d0
+- [ ] [Standing Orders Library Section in the Tab](../plans/standing-orders-library-section-in-the-tab.md) — **PLAN REVIEWED** — ID: cb9b253a-3348-464b-8c76-0061917c7ada
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

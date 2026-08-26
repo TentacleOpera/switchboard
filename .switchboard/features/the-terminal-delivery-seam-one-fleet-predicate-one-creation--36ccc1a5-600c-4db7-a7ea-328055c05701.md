@@ -13,8 +13,8 @@ Fix the two halves of the terminal-delivery seam that both hang off TaskViewerPr
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminal Creation Policy — Spawn in the Fleet Instead of Declining](../plans/terminal-creation-policy-spawn-in-the-fleet.md) — **PLAN REVIEWED**
-- [ ] [One Fleet Seam: Stop `_ptyHostPort` Meaning "A Fleet Exists"](../plans/feature_plan_20260812150000_fleet-seam-standalone-terminal-parity.md) — **PLAN REVIEWED**
+- [ ] [Terminal Creation Policy — Spawn in the Fleet Instead of Declining](../plans/terminal-creation-policy-spawn-in-the-fleet.md) — **PLAN REVIEWED** — ID: f880bd33-e127-4562-9959-cdca33cd318d
+- [ ] [One Fleet Seam: Stop `_ptyHostPort` Meaning "A Fleet Exists"](../plans/feature_plan_20260812150000_fleet-seam-standalone-terminal-parity.md) — **PLAN REVIEWED** — ID: fefc269b-df55-41d2-b774-b73ee6c5ebd7
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

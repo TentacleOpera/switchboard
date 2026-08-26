@@ -18,9 +18,9 @@ No hard ordering constraints; subtasks can be executed in parallel. The drag-dro
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Show Feature Subtask Count in Terminal Kanban Mode Card Rows](../plans/feature_plan_20260806143801_subtask-count-in-terminal-kanban-mode.md) — **CODE REVIEWED**
-- [ ] [Fix Terminal Kanban Drag-Drop to Use Server-Side Prompt Delivery (ptySendPrompt)](../plans/feature_plan_20260806143803_fix-kanban-drag-drop-prompt-delivery.md) — **CODE REVIEWED**
-- [ ] [Add Drag-and-Drop Hint Tooltip to Terminal Kanban Mode Header](../plans/feature_plan_20260806143804_kanban-mode-drag-drop-hint-tooltip.md) — **CODE REVIEWED**
+- [ ] [Show Feature Subtask Count in Terminal Kanban Mode Card Rows](../plans/feature_plan_20260806143801_subtask-count-in-terminal-kanban-mode.md) — **CODE REVIEWED** — ID: 83263d05-bddd-4f0f-99f8-013ab288323b
+- [ ] [Fix Terminal Kanban Drag-Drop to Use Server-Side Prompt Delivery (ptySendPrompt)](../plans/feature_plan_20260806143803_fix-kanban-drag-drop-prompt-delivery.md) — **CODE REVIEWED** — ID: 2075e6a5-59e9-4d5a-a890-6df5fa659c02
+- [ ] [Add Drag-and-Drop Hint Tooltip to Terminal Kanban Mode Header](../plans/feature_plan_20260806143804_kanban-mode-drag-drop-hint-tooltip.md) — **CODE REVIEWED** — ID: 92bf20d8-3b33-4f21-807b-88821bdb2007
 <!-- END SUBTASKS -->
 
 ## Completion Report

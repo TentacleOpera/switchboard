@@ -14,9 +14,9 @@ Create a top-level Agent Control panel that opens the Agents, Teams, and Prompts
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add the Agent Control View Mode to `kanban.html`](../plans/feature_plan_20260819_agent-control-frontend-html.md) — **CODE REVIEWED**
-- [ ] [Add the Agent Control Panel, Command, and Second-Panel Delivery](../plans/feature_plan_20260819_agent-control-provider-routing.md) — **CODE REVIEWED**
-- [ ] [Serve Agent Control in the Browser and Standalone Shell](../plans/feature_plan_20260819_agent-control-browser-shell.md) — **CODE REVIEWED**
+- [ ] [Add the Agent Control View Mode to `kanban.html`](../plans/feature_plan_20260819_agent-control-frontend-html.md) — **CODE REVIEWED** — ID: 5e36951c-7ce1-4ec4-b169-2252635aca4e
+- [ ] [Add the Agent Control Panel, Command, and Second-Panel Delivery](../plans/feature_plan_20260819_agent-control-provider-routing.md) — **CODE REVIEWED** — ID: 99b7eeb3-70fb-48e5-9c5e-b8575f3ab6d8
+- [ ] [Serve Agent Control in the Browser and Standalone Shell](../plans/feature_plan_20260819_agent-control-browser-shell.md) — **CODE REVIEWED** — ID: 45d55941-bb01-4e03-9f96-a5a7b6931e1e
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

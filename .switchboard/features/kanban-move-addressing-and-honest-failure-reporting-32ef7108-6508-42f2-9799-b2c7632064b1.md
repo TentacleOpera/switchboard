@@ -14,9 +14,9 @@ A card move can fail for four distinguishable reasons and today they all surface
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [move-card.js Sends a Caller-Relative Workspace Root Across a Process Boundary, So Its Documented Two-Argument Form Silently Targets the Wrong Database](../plans/feature_plan_20260808103000_move-card-script-sends-relative-workspace-root.md) — **CODE REVIEWED**
-- [ ] [POST /kanban/move Silently Defaults to the First Registered Root, So a Move With No workspaceRoot Fails Against the Wrong Database in Any Multi-Root Setup](../plans/feature_plan_20260808103100_kanban-move-silently-defaults-to-first-root.md) — **CODE REVIEWED**
-- [ ] ["Column update failed" Is Returned When the Card Was Never Found, Making an Addressing Miss Read as a Refused Transition](../plans/feature_plan_20260808103200_column-update-failed-masks-plan-not-found.md) — **CODE REVIEWED**
+- [ ] [move-card.js Sends a Caller-Relative Workspace Root Across a Process Boundary, So Its Documented Two-Argument Form Silently Targets the Wrong Database](../plans/feature_plan_20260808103000_move-card-script-sends-relative-workspace-root.md) — **CODE REVIEWED** — ID: 8e7d94af-dba3-4376-b332-e826b7b67518
+- [ ] [POST /kanban/move Silently Defaults to the First Registered Root, So a Move With No workspaceRoot Fails Against the Wrong Database in Any Multi-Root Setup](../plans/feature_plan_20260808103100_kanban-move-silently-defaults-to-first-root.md) — **CODE REVIEWED** — ID: 232ba645-abc1-43b0-bdab-3f0870f66ccf
+- [ ] ["Column update failed" Is Returned When the Card Was Never Found, Making an Addressing Miss Read as a Refused Transition](../plans/feature_plan_20260808103200_column-update-failed-masks-plan-not-found.md) — **CODE REVIEWED** — ID: e8891655-f3c1-4d6f-b871-79e9811c9c72
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

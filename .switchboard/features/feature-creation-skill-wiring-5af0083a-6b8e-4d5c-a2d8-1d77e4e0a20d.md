@@ -15,10 +15,10 @@ Ensure that every agent instructed to create a Switchboard feature uses the auth
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add Direct "Create Feature from Plans" Skill + Wire Into Planner & Improve-Plan](../plans/add-direct-create-feature-skill.md) — **CODE REVIEWED**
-- [ ] [Fix: kanban-board.md snapshot gets stale — refresh more reliably](../plans/feature_plan_20260707124454_suggest-features-board-snapshot-staleness.md) — **CODE REVIEWED**
-- [ ] [Fix: Suggest Features prompt — project-scope section is wildly over-worded](../plans/feature_plan_20260707124454_suggest-features-project-scope-wording.md) — **CODE REVIEWED**
-- [ ] [Fix: Feature-creation prompts must reference the create-feature skill, not "see the format"](../plans/feature_plan_20260707132952_feature-creation-must-use-skill-not-handwrite.md) — **CODE REVIEWED**
+- [ ] [Add Direct "Create Feature from Plans" Skill + Wire Into Planner & Improve-Plan](../plans/add-direct-create-feature-skill.md) — **CODE REVIEWED** — ID: a53b7fa1-406e-43a3-bc0b-d51a3f31c027
+- [ ] [Fix: kanban-board.md snapshot gets stale — refresh more reliably](../plans/feature_plan_20260707124454_suggest-features-board-snapshot-staleness.md) — **CODE REVIEWED** — ID: 284e5aee-746e-4889-983f-cab07da5cf10
+- [ ] [Fix: Suggest Features prompt — project-scope section is wildly over-worded](../plans/feature_plan_20260707124454_suggest-features-project-scope-wording.md) — **CODE REVIEWED** — ID: 47a8ffec-27a8-4e02-968f-18e104874d01
+- [ ] [Fix: Feature-creation prompts must reference the create-feature skill, not "see the format"](../plans/feature_plan_20260707132952_feature-creation-must-use-skill-not-handwrite.md) — **CODE REVIEWED** — ID: b11f4303-5b8d-4eb5-bd56-2cd87cfa0324
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

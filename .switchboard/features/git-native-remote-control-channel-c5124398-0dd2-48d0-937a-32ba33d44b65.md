@@ -21,8 +21,8 @@ Manifest import is the working git-native remote-control path today: a repo-conn
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix Manifest Silent-Failure: Bare Filenames Rejected + Rejections Invisible](../plans/fix-manifest-silent-failure.md) — **CODE REVIEWED**
-- [ ] [Board State Remote Mirror: Configurable Export Destinations + Git-Native Remote Control](../plans/board-state-remote-mirror-channels.md) — **CODE REVIEWED**
+- [ ] [Fix Manifest Silent-Failure: Bare Filenames Rejected + Rejections Invisible](../plans/fix-manifest-silent-failure.md) — **CODE REVIEWED** — ID: aa0413d7-3840-4790-b19a-4128a469f158
+- [ ] [Board State Remote Mirror: Configurable Export Destinations + Git-Native Remote Control](../plans/board-state-remote-mirror-channels.md) — **CODE REVIEWED** — ID: f89dabb4-14c9-4a85-aafe-89b6a4a71889
 <!-- END SUBTASKS -->
 
 ## Review Findings

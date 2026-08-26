@@ -51,7 +51,7 @@ Yes — three decisions remain; the fourth is settled.
 ### Complex / Risky
 
 - **Runtime as a third store is new, and it is the piece that makes the hybrid posture possible at all.** "Keep the non-thrashing operations on Turso" requires the thrashing to have somewhere else to be. Runtime holds `dispatched_*`, `last_liveness_at`, `blocked_at`, `worktrees` — never shared, never migrated, re-derived from the live fleet on start, and safe to delete. Getting its lifecycle wrong (persisting it, migrating it, backing it up) reintroduces exactly the write volume the split exists to remove.
-- **Three stores means cross-store reads.** The board view joins Board and Runtime; a history view reads Archive. Under a remote Board and an on-demand Archive those have different latencies and different failure modes, and the UI must not present a partial read as a complete one.
+- **Three stores means cross-store reads.** The board view joins Board and Runtime; a history view reads Archive. Under a remote Board and an on-demand Archive those have different latencies and different failure modes, and the UI must not present a partial read as a complete one. **Research constraint (ATTACH):** libSQL does not support `ATTACH DATABASE` in embedded replica mode, so when Board is a remote target (embedded replica), cross-store joins (Board+Runtime, Board+Archive) cannot use SQL-level `ATTACH` — they must be application-level joins in TypeScript, opening separate connections per store and merging in-process. When Board is a local file (default target), `ATTACH` may still be available, but the code path must not depend on it.
 - **Deriving placement retroactively for existing installs.** An install with a custom `kanban.dbPath` and a configured `archive.dbPath` pointing somewhere unrelated has to land somewhere sensible. Derivation cannot silently relocate a database a user deliberately placed.
 - **The escape hatch must not become the interface again.** A path override has to exist, and the moment it appears in onboarding, help text or a default, the ten mechanisms start growing back. It belongs behind an explicit "advanced" surface with a stated support posture.
 - **Card promotion out of Archive.** A dormant card touched again must come back to Board. The superseded plan's phrase "reversible on access" is the right requirement; it is also the one most likely to be skipped, and skipping it silently loses cards from the board.
@@ -60,6 +60,7 @@ Yes — three decisions remain; the fourth is settled.
 
 **Race conditions**
 - Promotion and the archive sweep racing over the same card. Serialise both behind the sidecar's single ownership.
+- **Archive sweep vs the tier split's orphan sweep (cross-subtask):** when a card is archived, this plan's archive sweep moves the shared row to Archive *and* the tier-split plan's orphan sweep must clear the local-tier row. Both act on the same card at the same moment. The sidecar's single-ownership serialisation must extend to the orphan sweep, or a local-tier row is orphanated mid-archive.
 - Two machines' Runtime stores both claiming the same card as locally dispatched. Legitimate — they are different machines — and the board must render "dispatched elsewhere" rather than resolving it.
 
 **Security**
@@ -78,6 +79,7 @@ Yes — three decisions remain; the fourth is settled.
 ## Dependencies
 
 - **Hard prerequisites:** the sidecar/real-binding plan (it is what makes one Board store viable and what expires the file split), the tier split (it defines Runtime versus Board contents), and the unscoped-tables plan.
+- **Coordinate with** `board-read-endpoints-must-survive-the-storage-topology.md` — both edit `query-kanban` SKILL.md (this plan changes the documented DB path via consolidation; that plan removes `sqlite3`). Whichever lands second must not revert the first. The write-guardrail plan edits the same files for a third reason — all three must be coordinated.
 - **Supersedes** `split_kanban_hot_cold_dbs.md`.
 - **Feeds** the Database panel (this is the topology it renders), the libSQL and git-carried store plans (these are the targets), and the retention plan (which sets the window).
 
@@ -117,6 +119,19 @@ Per install: derive the three placements, import anything found at a retired mec
 - **Custom-path preservation:** an install with a deliberate `kanban.dbPath` and an unrelated `archive.dbPath`; assert neither is silently relocated and both remain readable.
 - **DuckDB demotion:** with no `duckdb` binary present, assert every board read path works and any existing DuckDB archive was imported with its file left in place.
 - **Mechanism count:** grep-level regression asserting the retired mechanisms are gone, and that the override is the only path input in the product.
+
+### Goal Invariants
+
+- **Retired mechanisms absent from config schema:** assert `switchboard.kanban.dbPath`, `switchboard.archive.dbPath`, `switchboard.workspaceDatabaseMappings`, `switchboard.kanban.controlPlaneRoot`, `switchboard.boardStateExport` are absent from the default config schema and onboarding copy — not merely unread. An ignored-but-present setting is a tenth answer that is still typeable.
+- **Three-store definition present:** assert `src/services/storageTopology.ts` exists and exports the Runtime/Board/Archive definition with placement rules and invariants (Runtime never leaves; Board authoritative; Archive append-only, on-demand).
+- **Override is the only path input:** assert the path override is the sole path-setting surface and that it appears in no default, onboarding copy, or help text (contract test).
+- **DuckDB off every board read path:** assert no board read path imports or shells out to `duckdb`; the CLI dependency cannot break rendering.
+- **Fresh install zero-config:** assert a fresh install performs zero storage configuration and works — Runtime and Archive locations derived, not asked (positive paired with "retired mechanisms absent").
+- **Promotion lands with the sweep:** assert a dormant card touched again is promoted back to Board within one refresh — promotion is the same commit as the archive sweep, not a follow-up.
+
+## Resolved Assumptions
+
+- **libSQL embedded replica sync is whole-database — no partial/table-level replication.** Confirmed by research (Turso docs, libSQL source, sqld architecture). libSQL uses physical WAL frame replication at the 4 KB page level; there are no table filters, row predicates, or publication-subscription mechanisms. ATTACH DATABASE is also unsupported in embedded replica mode. This validates the third-store design: dormant history MUST live in a separate Archive database, because there is no way to exclude it from a replica sync within one database. The two-stores-with-a-windowed-view alternative is not viable under libSQL.
 
 ## Outstanding Questions
 

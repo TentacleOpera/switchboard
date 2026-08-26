@@ -23,8 +23,8 @@ Both subtask plans were re-verified against the working tree. The set is coheren
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Extract the kanban column-set derivation into a shared webview script](../plans/feature_plan_20260812143000_shared-kanban-column-set-derivation.md) — **PLAN REVIEWED**
-- [ ] [Fill Grid Does Not Displace Panes Held by Other Roles — New Terminals Left Unassigned](../plans/feature_plan_20260812185906_fill-grid-displaces-other-roles.md) — **PLAN REVIEWED**
+- [ ] [Extract the kanban column-set derivation into a shared webview script](../plans/feature_plan_20260812143000_shared-kanban-column-set-derivation.md) — **PLAN REVIEWED** — ID: 883a52c0-3b0b-44e8-8c7e-3cd75384b758
+- [ ] [Fill Grid Does Not Displace Panes Held by Other Roles — New Terminals Left Unassigned](../plans/feature_plan_20260812185906_fill-grid-displaces-other-roles.md) — **PLAN REVIEWED** — ID: 8e6804b2-f26b-4e17-aa70-8a1a0db9636d
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

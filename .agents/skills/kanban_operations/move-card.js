@@ -22,24 +22,7 @@ const http = require('http');
 const effectiveKey = process.argv[2];
 const targetColumn = process.argv[3];
 const optionalPlanFile = process.argv[4];
-let resolveWorkspaceRoot;
-try {
-  ({ resolveWorkspaceRoot } = require('../_lib/workspace-root'));
-} catch {
-  // Partial .agents/ sync — degrade to the old behaviour rather than crash.
-  resolveWorkspaceRoot = (explicit) =>
-    path.resolve(explicit && explicit !== '.' ? explicit : process.cwd());
-}
-const workspaceRoot = resolveWorkspaceRoot(process.argv[5]);
-if (!workspaceRoot) {
-  console.error(
-    `No Switchboard workspace found from ${process.cwd()} — no .switchboard/kanban.db ` +
-    `in this directory or any parent below your home directory.\n` +
-    `Pass the workspace root explicitly:\n` +
-    `  node move-card.js <plan> <column> "" /absolute/path/to/workspace`
-  );
-  process.exit(1);
-}
+const workspaceRoot = process.argv[5] || '.';
 
 if (!effectiveKey || !targetColumn) {
   console.error('Usage: node move-card.js <session_id|plan_id|plan_file> <target_column> [plan_file] [workspace_root]');

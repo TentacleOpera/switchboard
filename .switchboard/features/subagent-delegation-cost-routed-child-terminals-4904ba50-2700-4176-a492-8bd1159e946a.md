@@ -24,9 +24,9 @@ Communication is localhost HTTP rather than MCP, so any CLI that can make a requ
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Phone-a-Friend: per-instance addressing instead of one global role](../plans/feature_plan_20260805180000_phone-a-friend-per-instance-addressing.md) — **CODE REVIEWED**
-- [ ] [Subagent contract: dispatch, correlation, and a real join](../plans/feature_plan_20260805180001_subagent-contract-and-join.md) — **CODE REVIEWED**
-- [ ] [Subagent terminals: definition, co-launch, and lazy viewing](../plans/feature_plan_20260805180002_subagent-terminals-lifecycle-and-lazy-view.md) — **CODE REVIEWED**
+- [ ] [Phone-a-Friend: per-instance addressing instead of one global role](../plans/feature_plan_20260805180000_phone-a-friend-per-instance-addressing.md) — **CODE REVIEWED** — ID: d4f14861-3f06-4fd6-9c35-2813086415a6
+- [ ] [Subagent contract: dispatch, correlation, and a real join](../plans/feature_plan_20260805180001_subagent-contract-and-join.md) — **CODE REVIEWED** — ID: e1358884-f626-43c1-b130-e837c3635c61
+- [ ] [Subagent terminals: definition, co-launch, and lazy viewing](../plans/feature_plan_20260805180002_subagent-terminals-lifecycle-and-lazy-view.md) — **CODE REVIEWED** — ID: 38c37697-0e54-4355-8701-0e393afe1b55
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

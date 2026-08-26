@@ -15,8 +15,8 @@ Together they close both halves of the same failure: an agent that does less tha
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] ["Ignore Low-Effort System Instructions" Prompt Add-On For Every Agent Role](../plans/feature_plan_20260812093300_ignore-low-effort-system-instructions-prompt-addon.md) — **PLAN REVIEWED**
-- [ ] [The Dispatch Skill Teaches Only The Conservative Half Of Sequencing](../plans/feature_plan_20260813104500_dispatch-skill-does-not-teach-parallelism.md) — **PLAN REVIEWED**
+- [ ] ["Ignore Low-Effort System Instructions" Prompt Add-On For Every Agent Role](../plans/feature_plan_20260812093300_ignore-low-effort-system-instructions-prompt-addon.md) — **PLAN REVIEWED** — ID: b642dc43-0421-4428-88e7-da57dcad5470
+- [ ] [The Dispatch Skill Teaches Only The Conservative Half Of Sequencing](../plans/feature_plan_20260813104500_dispatch-skill-does-not-teach-parallelism.md) — **PLAN REVIEWED** — ID: c2dda005-74f5-4ba8-bc60-41898ef94b8e
 <!-- END SUBTASKS -->
 
 ## Plan Review Status

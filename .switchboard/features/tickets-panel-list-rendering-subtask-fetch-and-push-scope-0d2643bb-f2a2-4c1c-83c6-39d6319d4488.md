@@ -23,9 +23,9 @@ Three defects in the Tickets panel, sharing the local-.md-as-source-of-truth sea
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Preserve Loose-List Blank Lines in Ticket Markdown Rendering and Edit Round-Trip](../plans/feature_plan_20260812150000_ticket-markdown-loose-list-spacing.md) — **CODE REVIEWED**
-- [ ] [Download Subtasks With Their Parents on Every Fetch](../plans/feature_plan_20260812150100_ticket-subtask-local-file-fetch.md) — **CODE REVIEWED**
-- [ ] [Add a "Push + subtasks" Action and Make the Plain Push Button Say What It Actually Pushes](../plans/feature_plan_20260812150200_ticket-push-including-subtasks.md) — **CODE REVIEWED**
+- [ ] [Preserve Loose-List Blank Lines in Ticket Markdown Rendering and Edit Round-Trip](../plans/feature_plan_20260812150000_ticket-markdown-loose-list-spacing.md) — **CODE REVIEWED** — ID: 1a92e739-559c-4230-b9e6-8e79d96f2acb
+- [ ] [Download Subtasks With Their Parents on Every Fetch](../plans/feature_plan_20260812150100_ticket-subtask-local-file-fetch.md) — **CODE REVIEWED** — ID: 5d36f0f1-f0ec-4e5d-8bc9-492c679223e2
+- [ ] [Add a "Push + subtasks" Action and Make the Plain Push Button Say What It Actually Pushes](../plans/feature_plan_20260812150200_ticket-push-including-subtasks.md) — **CODE REVIEWED** — ID: 2e91652e-5c33-44b0-b51b-39e75b58c0bb
 <!-- END SUBTASKS -->
 
 ## Completion Summary

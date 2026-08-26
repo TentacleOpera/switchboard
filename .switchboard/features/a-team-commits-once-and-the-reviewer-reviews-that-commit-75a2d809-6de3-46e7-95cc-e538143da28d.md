@@ -56,11 +56,11 @@ This feature makes a team commit once, as its head: members report instead of co
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [A Coder's Commit Sweeps the Whole Shared Tree, Including Its Peers' Unfinished Work](../plans/agent-commits-sweep-the-whole-shared-tree.md) — **CODE REVIEWED**
-- [ ] [A Lead-Dispatched Coder's Commits Carry No Stage Trailers, So Coded Work Reads as Unmarked](../plans/lead-dispatched-commits-carry-no-stage-trailers.md) — **CODE REVIEWED**
-- [ ] [A Team Commits Once, As Its Head — Members Never Commit Their Own Subtasks](../plans/a-team-commits-once-as-its-head.md) — **CODE REVIEWED**
-- [ ] [The Reviewer Is Never Told What To Review — It Is Handed Plan Paths and a Dirty Tree](../plans/the-reviewer-is-never-told-what-to-review.md) — **CODE REVIEWED**
-- [ ] [A Lead-Dispatched Plan Is Never Registered, So Every Backstop Downstream Is Blind](../plans/a-lead-dispatched-plan-is-never-registered.md) — **CODE REVIEWED**
+- [ ] [A Coder's Commit Sweeps the Whole Shared Tree, Including Its Peers' Unfinished Work](../plans/agent-commits-sweep-the-whole-shared-tree.md) — **CODE REVIEWED** — ID: b93fd9a7-bd7a-4e8a-9856-1643f69604f4
+- [ ] [A Lead-Dispatched Coder's Commits Carry No Stage Trailers, So Coded Work Reads as Unmarked](../plans/lead-dispatched-commits-carry-no-stage-trailers.md) — **CODE REVIEWED** — ID: 6bef84f4-726d-437c-8ad2-dbc3f34af9d9
+- [ ] [A Team Commits Once, As Its Head — Members Never Commit Their Own Subtasks](../plans/a-team-commits-once-as-its-head.md) — **CODE REVIEWED** — ID: 2b16329d-449b-492c-b813-5cbf0ec1dc15
+- [ ] [The Reviewer Is Never Told What To Review — It Is Handed Plan Paths and a Dirty Tree](../plans/the-reviewer-is-never-told-what-to-review.md) — **CODE REVIEWED** — ID: fa698121-1cc5-4fbd-b7be-78fdf6dccfa2
+- [ ] [A Lead-Dispatched Plan Is Never Registered, So Every Backstop Downstream Is Blind](../plans/a-lead-dispatched-plan-is-never-registered.md) — **CODE REVIEWED** — ID: 3e13cb1c-0d5a-4af0-b766-572ac0dbd994
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

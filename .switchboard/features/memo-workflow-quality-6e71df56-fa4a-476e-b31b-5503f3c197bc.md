@@ -13,8 +13,8 @@ Improve the reliability and output quality of the memo→plan pipeline so it pro
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Plan: Memo Capture Should Prompt Agent to Suggest Feature Groupings When Relevant](../plans/feature_plan_20260716_memo_capture_should_prompt_feature_grouping.md) — **CODE REVIEWED**
-- [ ] [Memo Process Prompt: Add Complexity Ratings & Correct Metadata Format](../plans/feature_plan_20260716125702_memo-process-prompt-complexity-format.md) — **CODE REVIEWED**
+- [ ] [Plan: Memo Capture Should Prompt Agent to Suggest Feature Groupings When Relevant](../plans/feature_plan_20260716_memo_capture_should_prompt_feature_grouping.md) — **CODE REVIEWED** — ID: 84156d5f-f85e-4dd9-98cd-896e7b13fde1
+- [ ] [Memo Process Prompt: Add Complexity Ratings & Correct Metadata Format](../plans/feature_plan_20260716125702_memo-process-prompt-complexity-format.md) — **CODE REVIEWED** — ID: f47c0196-43cd-4c45-a03c-862249ec2273
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

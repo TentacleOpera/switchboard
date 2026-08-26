@@ -87,7 +87,7 @@ says why not.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Bridge host notifications to the browser panels so verb buttons stop looking dead](../plans/feature_plan_20260811143000_bridge-host-notifications-to-browser-toasts.md) — **PLAN REVIEWED**
-- [ ] [Finish the prompt-copy return-body retrofit so standalone copy buttons actually copy](../plans/feature_plan_20260811143001_standalone-copy-prompt-verbs-never-reach-a-clipboard.md) — **PLAN REVIEWED**
+- [ ] [Bridge host notifications to the browser panels so verb buttons stop looking dead](../plans/feature_plan_20260811143000_bridge-host-notifications-to-browser-toasts.md) — **PLAN REVIEWED** — ID: d59913ae-a8e0-4490-8b31-d35f728c0258
+- [ ] [Finish the prompt-copy return-body retrofit so standalone copy buttons actually copy](../plans/feature_plan_20260811143001_standalone-copy-prompt-verbs-never-reach-a-clipboard.md) — **PLAN REVIEWED** — ID: c2b1f777-deae-4035-82d4-87a5ce84e167
 <!-- END SUBTASKS -->
 

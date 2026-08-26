@@ -14,9 +14,9 @@ Fix all three ways the terminal grid mis-sizes itself on open. Fill Grid mirrors
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Start Grid undercounts planner agents when one already exists](../plans/feature_plan_20260820074416_start-grid-undercounts-planners-when-one-already-exists.md) — **PLAN REVIEWED**
-- [ ] [Fill Grid mode dropdown should default to 2x2 instead of mirroring current layout](../plans/feature_plan_20260820082002_fill-grid-default-2x2.md) — **PLAN REVIEWED**
-- [ ] [Team grid shows too few terminals on first click — stale fleet under-sizes the layout](../plans/feature_plan_20260820221235_team-grid-stale-fleet-under-sized-on-enter.md) — **PLAN REVIEWED**
+- [ ] [Start Grid undercounts planner agents when one already exists](../plans/feature_plan_20260820074416_start-grid-undercounts-planners-when-one-already-exists.md) — **PLAN REVIEWED** — ID: 09f54022-6f19-4137-8be3-9a701db53b8e
+- [ ] [Fill Grid mode dropdown should default to 2x2 instead of mirroring current layout](../plans/feature_plan_20260820082002_fill-grid-default-2x2.md) — **PLAN REVIEWED** — ID: 224b7f97-9e79-4961-a983-1f6aaf93db50
+- [ ] [Team grid shows too few terminals on first click — stale fleet under-sizes the layout](../plans/feature_plan_20260820221235_team-grid-stale-fleet-under-sized-on-enter.md) — **PLAN REVIEWED** — ID: 5b806a13-f6eb-45ef-8b05-e5f605c85d3d
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

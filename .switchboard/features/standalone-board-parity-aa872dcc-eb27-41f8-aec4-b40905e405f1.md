@@ -84,12 +84,12 @@ These six subtasks form a strict dependency chain rather than independent fixes:
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone Board: fall through to the KanbanProvider verb passthrough](../plans/standalone-board-verb-rail-fallthrough.md) — **CODE REVIEWED**
-- [ ] [Standalone: make workspace-root resolution work in the shared providers](../plans/standalone-workspace-root-wiring.md) — **CODE REVIEWED**
-- [ ] [Standalone: bridge `switchboard.*` command dispatch instead of swallowing it](../plans/standalone-refreshui-and-command-bridge.md) — **CODE REVIEWED**
-- [ ] [Standalone: triage the Board verbs that cannot work headlessly, and prove the rest do](../plans/standalone-editor-bound-verb-triage.md) — **CODE REVIEWED**
-- [ ] [Capability gating: stop the headless Board from showing controls that cannot work](../plans/standalone-capability-gating-honesty.md) — **CODE REVIEWED**
-- [ ] [Standalone: persist UI settings instead of holding them in a process-local Map](../plans/standalone-persist-ui-settings.md) — **CODE REVIEWED**
+- [ ] [Standalone Board: fall through to the KanbanProvider verb passthrough](../plans/standalone-board-verb-rail-fallthrough.md) — **CODE REVIEWED** — ID: 120030ef-4b1a-4b5b-bc06-e12d09576854
+- [ ] [Standalone: make workspace-root resolution work in the shared providers](../plans/standalone-workspace-root-wiring.md) — **CODE REVIEWED** — ID: 9894dfbb-c0d6-4f7f-8bfa-4ebc4a034167
+- [ ] [Standalone: bridge `switchboard.*` command dispatch instead of swallowing it](../plans/standalone-refreshui-and-command-bridge.md) — **CODE REVIEWED** — ID: 917e28b9-aa5e-4449-a394-bd87d01b13bf
+- [ ] [Standalone: triage the Board verbs that cannot work headlessly, and prove the rest do](../plans/standalone-editor-bound-verb-triage.md) — **CODE REVIEWED** — ID: 5e567bea-7a70-4ae9-8f80-9749c4b46be1
+- [ ] [Capability gating: stop the headless Board from showing controls that cannot work](../plans/standalone-capability-gating-honesty.md) — **CODE REVIEWED** — ID: 497f97de-280d-4b29-ab24-72fcc46d3578
+- [ ] [Standalone: persist UI settings instead of holding them in a process-local Map](../plans/standalone-persist-ui-settings.md) — **CODE REVIEWED** — ID: 75a56c6f-e608-42d2-ac00-656768c25221
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

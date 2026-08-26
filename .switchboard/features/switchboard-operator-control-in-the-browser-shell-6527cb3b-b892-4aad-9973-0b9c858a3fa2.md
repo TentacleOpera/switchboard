@@ -21,8 +21,8 @@ The visibility plan must land first — it creates the UFO button, the state rel
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Orchestrator Visibility and Control in the Shell Rail](../plans/orchestrator-visibility-and-control-in-shell-rail.md) — **CODE REVIEWED**
-- [ ] [Switchboard Operator Start from Shell Rail](../plans/operator-start-from-shell-rail.md) — **CODE REVIEWED**
+- [ ] [Orchestrator Visibility and Control in the Shell Rail](../plans/orchestrator-visibility-and-control-in-shell-rail.md) — **CODE REVIEWED** — ID: 0616fdee-19ef-45cc-aaa7-9125704a8508
+- [ ] [Switchboard Operator Start from Shell Rail](../plans/operator-start-from-shell-rail.md) — **CODE REVIEWED** — ID: 9aee123d-196e-44e0-b028-7b35914c6c82
 <!-- END SUBTASKS -->
 
 ## Review Findings

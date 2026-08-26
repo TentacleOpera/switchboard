@@ -20,8 +20,8 @@ Two live rendering defects in the browser Terminals pane grid: per-pane action b
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminal vertical scrollbar goes missing, especially in single/solo view mode](../plans/feature_plan_20260804092233_terminal-vertical-scrollbar-missing-single-view.md) — **CODE REVIEWED**
-- [ ] [Terminal pane buttons condensed to single letters by layout name, not by actual width](../plans/feature_plan_20260804092302_terminal-pane-buttons-condensed-by-layout-name.md) — **CODE REVIEWED**
+- [ ] [Terminal vertical scrollbar goes missing, especially in single/solo view mode](../plans/feature_plan_20260804092233_terminal-vertical-scrollbar-missing-single-view.md) — **CODE REVIEWED** — ID: 94f26d33-7e63-4152-b35d-8873dc39715d
+- [ ] [Terminal pane buttons condensed to single letters by layout name, not by actual width](../plans/feature_plan_20260804092302_terminal-pane-buttons-condensed-by-layout-name.md) — **CODE REVIEWED** — ID: 0afe0c3b-0d5d-40eb-ba1f-59d7110a1df8
 <!-- END SUBTASKS -->
 
 ## Review Findings

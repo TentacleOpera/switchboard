@@ -15,8 +15,8 @@ Both are instances of the same project contract: a control with no wiring behind
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminals kanban pane: the per-row `link` button is inert — make it copy the plan's absolute path](../plans/feature_plan_20260812084311_terminals-kanban-pane-link-button-is-inert.md) — **PLAN REVIEWED**
-- [ ] [Making an Agent Visible Also Forces a Kanban Column — Split Them With an "Add as Board Column" Checkbox](../plans/feature_plan_20260813100600_separate-board-column-from-agent-visibility.md) — **PLAN REVIEWED**
+- [ ] [Terminals kanban pane: the per-row `link` button is inert — make it copy the plan's absolute path](../plans/feature_plan_20260812084311_terminals-kanban-pane-link-button-is-inert.md) — **PLAN REVIEWED** — ID: cb0392a3-de2c-4df7-895d-df538e59c4c8
+- [ ] [Making an Agent Visible Also Forces a Kanban Column — Split Them With an "Add as Board Column" Checkbox](../plans/feature_plan_20260813100600_separate-board-column-from-agent-visibility.md) — **PLAN REVIEWED** — ID: 1f8e310a-27a5-4c55-991c-248fab0cd3c8
 <!-- END SUBTASKS -->
 
 ## Plan Review Status

@@ -18,7 +18,7 @@ Fix two reliability bugs in the Memo capture feature: memo content targets the w
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Bug: Memo Targets Wrong .switchboard Directory in Multi-Parent Workspaces](../plans/feature_plan_20260626100858_memo_wrong_switchboard_directory.md) — **CODE REVIEWED**
-- [ ] [Fix Zombie Memo Content Persisting in the Implementation Panel](../plans/feature_plan_20260626124049_memo_zombie_cache_implementation_panel.md) — **CODE REVIEWED**
+- [ ] [Bug: Memo Targets Wrong .switchboard Directory in Multi-Parent Workspaces](../plans/feature_plan_20260626100858_memo_wrong_switchboard_directory.md) — **CODE REVIEWED** — ID: 4dbb414d-bfa8-40c5-8edb-7ab9ffdfbe6b
+- [ ] [Fix Zombie Memo Content Persisting in the Implementation Panel](../plans/feature_plan_20260626124049_memo_zombie_cache_implementation_panel.md) — **CODE REVIEWED** — ID: a4fdb6ba-08ef-4503-9767-cf11bdc5f93d
 <!-- END SUBTASKS -->
 

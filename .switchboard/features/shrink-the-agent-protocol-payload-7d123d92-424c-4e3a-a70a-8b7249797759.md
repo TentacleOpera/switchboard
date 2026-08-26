@@ -13,8 +13,8 @@ Cut what every agent prompt has to carry. The injected protocol block runs to ne
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Cut the injected agent protocol block from 14,826 chars to ~740](../plans/shrink-the-injected-agent-protocol-block.md) — **CODE REVIEWED**
-- [ ] [Every skill declares its preconditions and what to do when they are unmet](../plans/skills-declare-preconditions-and-degrade.md) — **CODE REVIEWED**
+- [ ] [Cut the injected agent protocol block from 14,826 chars to ~740](../plans/shrink-the-injected-agent-protocol-block.md) — **CODE REVIEWED** — ID: 6efad706-0924-4468-af02-18338e4100a8
+- [ ] [Every skill declares its preconditions and what to do when they are unmet](../plans/skills-declare-preconditions-and-degrade.md) — **CODE REVIEWED** — ID: 4c76fb9f-b21e-4a2e-800d-80a9c2a3acbd
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

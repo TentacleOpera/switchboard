@@ -14,9 +14,9 @@ Let the operator act on a terminal from where the terminals are, instead of deto
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Chat button on terminal pane header pastes the chat prompt in place](../plans/feature_plan_20260819111109_chat-button-on-terminal-pane-header.md) — **PLAN REVIEWED**
-- [ ] [Bidirectional Link-Up — Both Terminals Get Instructions](../plans/feature_plan_20260819143000_bidirectional-link-up-both-terminals-get-instructions.md) — **PLAN REVIEWED**
-- [ ] [Terminal Notification Toggle — Per-Terminal Completion-Reminder Standing Order](../plans/feature_plan_20260820080022_terminal-notification-toggle-button.md) — **PLAN REVIEWED**
+- [ ] [Chat button on terminal pane header pastes the chat prompt in place](../plans/feature_plan_20260819111109_chat-button-on-terminal-pane-header.md) — **PLAN REVIEWED** — ID: 920a3f7b-02ee-480b-8466-2723c66646af
+- [ ] [Bidirectional Link-Up — Both Terminals Get Instructions](../plans/feature_plan_20260819143000_bidirectional-link-up-both-terminals-get-instructions.md) — **PLAN REVIEWED** — ID: 697c1180-3516-4574-a68d-78b2023d5328
+- [ ] [Terminal Notification Toggle — Per-Terminal Completion-Reminder Standing Order](../plans/feature_plan_20260820080022_terminal-notification-toggle-button.md) — **PLAN REVIEWED** — ID: 38271e23-9ad1-46a9-860b-8e5b9895b790
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

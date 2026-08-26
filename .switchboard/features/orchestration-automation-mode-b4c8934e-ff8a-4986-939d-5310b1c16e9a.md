@@ -74,12 +74,12 @@ The mode foundation lands first (everything keys off the new `automationMode`). 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add an Orchestration Automation Mode (Config, AUTOMATION-Tab UI, Worktree-Mode Coupling)](../plans/orchestration-1-automation-mode-foundation.md) — **CODE REVIEWED**
-- [ ] [Orchestration Kickoff — Auto-Group into Features (+ Miscellaneous) and Fan Out to Worktrees](../plans/orchestration-4-kickoff-group-and-fan-out.md) — **CODE REVIEWED**
-- [ ] [Author the Orchestrator Persona Workflow (`.agents/workflows/orchestrator.md`)](../plans/orchestration-2-persona-workflow.md) — **CODE REVIEWED**
-- [ ] [Orchestration Wake + Triage Loop with Feature-by-Feature Merge-Back](../plans/orchestration-5-wake-triage-and-merge-back.md) — **CODE REVIEWED**
-- [ ] [Add an Agent→Orchestrator Request Channel and Session Log](../plans/orchestration-3-agent-request-channel-and-session-log.md) — **CODE REVIEWED**
-- [ ] [External Agent HTTP Surface — Read Endpoints + Orchestration Skill](../plans/external-agent-http-surface.md) — **CODE REVIEWED**
+- [ ] [Add an Orchestration Automation Mode (Config, AUTOMATION-Tab UI, Worktree-Mode Coupling)](../plans/orchestration-1-automation-mode-foundation.md) — **CODE REVIEWED** — ID: 50d6ec89-25e6-4fff-bc55-8bb4ce3be48d
+- [ ] [Orchestration Kickoff — Auto-Group into Features (+ Miscellaneous) and Fan Out to Worktrees](../plans/orchestration-4-kickoff-group-and-fan-out.md) — **CODE REVIEWED** — ID: 8326e9c6-af70-487c-8fbf-8d2f0c2a3c70
+- [ ] [Author the Orchestrator Persona Workflow (`.agents/workflows/orchestrator.md`)](../plans/orchestration-2-persona-workflow.md) — **CODE REVIEWED** — ID: 45f53ec1-4ba1-43cd-bc9f-73bac846c480
+- [ ] [Orchestration Wake + Triage Loop with Feature-by-Feature Merge-Back](../plans/orchestration-5-wake-triage-and-merge-back.md) — **CODE REVIEWED** — ID: d310f808-fe13-45d9-8d9c-27ac13d92a12
+- [ ] [Add an Agent→Orchestrator Request Channel and Session Log](../plans/orchestration-3-agent-request-channel-and-session-log.md) — **CODE REVIEWED** — ID: af9a4cd5-d28d-4d98-9c50-ca3f7995bd76
+- [ ] [External Agent HTTP Surface — Read Endpoints + Orchestration Skill](../plans/external-agent-http-surface.md) — **CODE REVIEWED** — ID: e1d8662d-def1-4653-9cb1-12faa293242c
 <!-- END SUBTASKS -->
 
 ## Review Findings

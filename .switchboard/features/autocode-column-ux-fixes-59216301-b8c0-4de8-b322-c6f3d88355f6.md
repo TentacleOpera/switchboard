@@ -18,7 +18,7 @@ Fix two UX issues in the AUTOCODE column observed during testing: (1) cards disp
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix Autocode Column Sort Order — Missing createdAt Tiebreaker](../plans/feature_plan_20260819085447_autocode-column-sort-order-mismatch.md) — **PLAN REVIEWED**
-- [ ] [Light Up Working Status When Copy-Prompt Is Pasted to an External Interface](../plans/feature_plan_20260819085502_working-status-light-external-paste.md) — **PLAN REVIEWED**
+- [ ] [Fix Autocode Column Sort Order — Missing createdAt Tiebreaker](../plans/feature_plan_20260819085447_autocode-column-sort-order-mismatch.md) — **PLAN REVIEWED** — ID: 843dea32-0570-48f2-a4a1-34eb0d221913
+- [ ] [Light Up Working Status When Copy-Prompt Is Pasted to an External Interface](../plans/feature_plan_20260819085502_working-status-light-external-paste.md) — **PLAN REVIEWED** — ID: bd65dba1-887b-488f-a910-211a43379d03
 <!-- END SUBTASKS -->
 

@@ -15,10 +15,10 @@ Give the shared tier two concrete targets an operator can actually point at: a l
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Make the orphan-branch board snapshot bidirectional, so a team that shares a repo shares a board with no infrastructure](../plans/git-carried-shared-board-state.md) — **CREATED**
-- [ ] [A libSQL shared store, hosted on Turso or self-hosted sqld, as an opt-in authoritative target](../plans/libsql-shared-store-turso-and-self-hosted-sqld.md) — **CREATED**
-- [ ] [Remote plan authoring over the shared store — a fourth provider kind, not a new pipeline](../plans/remote-authoring-over-the-shared-store-as-a-provider-kind.md) — **CREATED**
-- [ ] [One machine owns provider sync, and every board write says who made it](../plans/sync-owner-lease-and-write-attribution.md) — **CREATED**
+- [ ] [Make the orphan-branch board snapshot bidirectional, so a team that shares a repo shares a board with no infrastructure](../plans/git-carried-shared-board-state.md) — **CREATED** — ID: 29e871f0-14ff-4349-8e8c-dc657328e30b
+- [ ] [A libSQL shared store, hosted on Turso or self-hosted sqld, as an opt-in authoritative target](../plans/libsql-shared-store-turso-and-self-hosted-sqld.md) — **CREATED** — ID: a974763c-b52f-4f09-af93-ed65d9f3c48c
+- [ ] [Remote plan authoring over the shared store — a fourth provider kind, not a new pipeline](../plans/remote-authoring-over-the-shared-store-as-a-provider-kind.md) — **CREATED** — ID: c5b2c3d3-309e-4436-8975-5b7f5d5beb88
+- [ ] [One machine owns provider sync, and every board write says who made it](../plans/sync-owner-lease-and-write-attribution.md) — **CREATED** — ID: 540be267-fd7b-4300-8de8-74dc995c34e6
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

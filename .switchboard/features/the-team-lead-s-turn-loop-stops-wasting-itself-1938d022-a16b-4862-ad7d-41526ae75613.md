@@ -16,11 +16,11 @@ Reclaim the work a team lead burns before it does anything useful. Today it re-r
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Eliminate Redundant Switchboard Connectivity Checks in Dispatched Agent Prompts](../plans/eliminate-redundant-switchboard-connectivity-checks-in-dispatched-agent-prompts.md) — **CODE REVIEWED**
-- [ ] [Make the Feature File the Lead's Single Source of Truth and Retire the Dispatch Skill](../plans/feature_plan_20260820140000_drive-mode-stop-reverification-waste.md) — **CODE REVIEWED**
-- [ ] [Fix Silent Nudge Noise to Team Lead in Team Coding Mode](../plans/fix-silent-nudge-noise-to-team-lead-in-team-coding-mode.md) — **CODE REVIEWED**
-- [ ] [Fix: Team Lead Commits Per-Subtask Instead of Once at End](../plans/fix_team_lead_commit_timing_directive.md) — **CODE REVIEWED**
-- [ ] [Team Lead Does Redundant API Port and Terminal Name Checks Despite Both Being in Its Prompt](../plans/feature_plan_20260821090653_team-lead-redundant-port-and-terminal-name-checks.md) — **CODE REVIEWED**
+- [ ] [Eliminate Redundant Switchboard Connectivity Checks in Dispatched Agent Prompts](../plans/eliminate-redundant-switchboard-connectivity-checks-in-dispatched-agent-prompts.md) — **CODE REVIEWED** — ID: fe2ae984-5892-440e-8656-664fd0ed0628
+- [ ] [Make the Feature File the Lead's Single Source of Truth and Retire the Dispatch Skill](../plans/feature_plan_20260820140000_drive-mode-stop-reverification-waste.md) — **CODE REVIEWED** — ID: f2d76f7c-c1e9-442e-85c5-d77f63a502df
+- [ ] [Fix Silent Nudge Noise to Team Lead in Team Coding Mode](../plans/fix-silent-nudge-noise-to-team-lead-in-team-coding-mode.md) — **CODE REVIEWED** — ID: 904a4361-41d0-4a9f-9baf-0c0ae3e15b87
+- [ ] [Fix: Team Lead Commits Per-Subtask Instead of Once at End](../plans/fix_team_lead_commit_timing_directive.md) — **CODE REVIEWED** — ID: 83503ad2-62fc-48d4-aea4-807fd45b04f5
+- [ ] [Team Lead Does Redundant API Port and Terminal Name Checks Despite Both Being in Its Prompt](../plans/feature_plan_20260821090653_team-lead-redundant-port-and-terminal-name-checks.md) — **CODE REVIEWED** — ID: 8f074f84-ab33-43b3-b550-8d77e0213536
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -30,7 +30,6 @@ No hard ordering constraints; all five are independent reductions and can be exe
 ## Completion Summary
 
 All five subtasks implemented and reviewed via git diff. The drive prefix now inlines 7 behavioral rules and points the lead at the feature file (with plan IDs and Team Dispatch Instructions) instead of a 689-line skill file, which is deleted. Redundant port/terminal-name checks are suppressed from the prefix. A SWITCHBOARD_LIVENESS_DIRECTIVE is folded into dispatchPrefixCore so all 7 roles skip port-discovery and health-check steps. Commit-timing disambiguation added to both the driveMode directive and head-prompt §7. Nudge noise fixed: nudgeSilenceMs (10min default) decouples nudge pacing from 90s turn-end detection, team-wide in-flight detection and team-liveness suppression stop false positives during active coding, feature nudge gets nudgeCount with gate-4a re-arm, and user escalation is stripped from both gate-8 blocks.
-
 
 ## Review Findings
 

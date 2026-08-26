@@ -37,11 +37,11 @@ The design constraint that shapes the whole feature is that **cards move on codi
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Seats Take Cards by Complexity, and Say When They Are Done](../plans/seat-routed-queue-1-seats-take-cards-and-report-done.md) — **CODE REVIEWED**
-- [ ] [Every Seat Is Told to Report Done, and a Failed Card Steps Up One Seat](../plans/seat-routed-queue-2-seat-orders-and-the-escalation-ladder.md) — **CODE REVIEWED**
-- [ ] [Choosing Seat Pacing — the Team-Level Switch, Run Queue, and the Idle Watch](../plans/seat-routed-queue-3-choosing-seat-pacing-and-the-idle-watch.md) — **CODE REVIEWED**
-- [ ] [The Orchestrator Presents the Seat-Routed Queue as a Third Option](../plans/seat-routed-queue-4-orchestrator-presents-the-seat-routed-queue.md) — **CODE REVIEWED**
-- [ ] [Split the Orchestrator Skill by Runtime Entry Point](../plans/seat-routed-queue-split-orchestrator-by-runtime.md) — **CODE REVIEWED**
+- [ ] [Seats Take Cards by Complexity, and Say When They Are Done](../plans/seat-routed-queue-1-seats-take-cards-and-report-done.md) — **CODE REVIEWED** — ID: 629a852a-6d1e-496a-98dc-bef8b8a9e372
+- [ ] [Every Seat Is Told to Report Done, and a Failed Card Steps Up One Seat](../plans/seat-routed-queue-2-seat-orders-and-the-escalation-ladder.md) — **CODE REVIEWED** — ID: fd2e3093-be74-4f42-8b7c-5d85ddae8a70
+- [ ] [Choosing Seat Pacing — the Team-Level Switch, Run Queue, and the Idle Watch](../plans/seat-routed-queue-3-choosing-seat-pacing-and-the-idle-watch.md) — **CODE REVIEWED** — ID: 2ba597d7-2836-467b-8b2e-6da5d5a0d5a2
+- [ ] [The Orchestrator Presents the Seat-Routed Queue as a Third Option](../plans/seat-routed-queue-4-orchestrator-presents-the-seat-routed-queue.md) — **CODE REVIEWED** — ID: 14ebb3f9-a01f-4dc9-af99-c9a89f7a48ad
+- [ ] [Split the Orchestrator Skill by Runtime Entry Point](../plans/seat-routed-queue-split-orchestrator-by-runtime.md) — **CODE REVIEWED** — ID: 3968bbbf-d88a-4dbd-af0b-445c5c1a692e
 <!-- END SUBTASKS -->
 
 ## Review Findings

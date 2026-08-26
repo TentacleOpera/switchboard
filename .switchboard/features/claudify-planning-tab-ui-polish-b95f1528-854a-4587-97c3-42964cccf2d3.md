@@ -19,8 +19,8 @@ Two Claudify/planning-tab UI fixes surfaced during testing: (1) remove the pixel
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Remove the Pixel-Font Option From the Claudify Theme](../plans/feature_plan_20260716151401_remove-claudify-pixel-font-option.md) — **CODE REVIEWED**
-- [ ] [Give the Dev Docs Tab Proper Sidebar Cards Like the Other Tabs](../plans/feature_plan_20260716151402_devdocs-tab-sidebar-cards.md) — **CODE REVIEWED**
+- [ ] [Remove the Pixel-Font Option From the Claudify Theme](../plans/feature_plan_20260716151401_remove-claudify-pixel-font-option.md) — **CODE REVIEWED** — ID: 8536e57a-79ff-484b-bebb-8908ed4bcf72
+- [ ] [Give the Dev Docs Tab Proper Sidebar Cards Like the Other Tabs](../plans/feature_plan_20260716151402_devdocs-tab-sidebar-cards.md) — **CODE REVIEWED** — ID: 32ebf276-839a-4c4d-add0-73aa7098bf1e
 <!-- END SUBTASKS -->
 
 ## Review Findings

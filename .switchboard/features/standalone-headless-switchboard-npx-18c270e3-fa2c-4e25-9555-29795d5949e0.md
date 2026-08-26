@@ -37,9 +37,9 @@ Cross-feature: the *Board Anywhere · Browser Board* subtask is the first place 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature B · B4 — `npx` Distribution + Launcher](../plans/extract-standalone-npx-04-npx-distribution.md) — **CODE REVIEWED**
-- [ ] [Feature B · B1 — Host-Agnostic Core Service / Standalone Bootstrap](../plans/standalone-headless-core-service-bootstrap.md) — **CODE REVIEWED**
-- [ ] [Feature B · B2 — Transport Shim (run the real webview UI in a browser)](../plans/standalone-headless-transport-shim.md) — **CODE REVIEWED**
+- [ ] [Feature B · B4 — `npx` Distribution + Launcher](../plans/extract-standalone-npx-04-npx-distribution.md) — **CODE REVIEWED** — ID: 5674b039-5c6b-4787-b061-390d3a790093
+- [ ] [Feature B · B1 — Host-Agnostic Core Service / Standalone Bootstrap](../plans/standalone-headless-core-service-bootstrap.md) — **CODE REVIEWED** — ID: cffd3a43-964b-4e7f-b530-469f8c3f0a76
+- [ ] [Feature B · B2 — Transport Shim (run the real webview UI in a browser)](../plans/standalone-headless-transport-shim.md) — **CODE REVIEWED** — ID: a5de2ce9-286d-4da0-ac43-149318c64a86
 <!-- END SUBTASKS -->
 
 ## Completion Summary

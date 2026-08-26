@@ -102,8 +102,8 @@ owner, and the ordering constraint recorded here.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Audit the openExternal channel — standalone returns `true` and opens nothing](../plans/feature_plan_20260811160000_audit-openexternal-channel-reports-success-opens-nothing.md) — **PLAN REVIEWED**
-- [ ] [Audit the command seam — unbridged commands are dead and their failures are swallowed](../plans/feature_plan_20260811160001_audit-command-seam-62-unbridged-commands-swallowed.md) — **PLAN REVIEWED**
+- [ ] [Audit the openExternal channel — standalone returns `true` and opens nothing](../plans/feature_plan_20260811160000_audit-openexternal-channel-reports-success-opens-nothing.md) — **PLAN REVIEWED** — ID: 0e351db7-c00f-4e66-a4c2-9873f5bf8062
+- [ ] [Audit the command seam — unbridged commands are dead and their failures are swallowed](../plans/feature_plan_20260811160001_audit-command-seam-62-unbridged-commands-swallowed.md) — **PLAN REVIEWED** — ID: 26839f25-39c2-47dc-b86b-6e90399419e8
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

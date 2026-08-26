@@ -20,23 +20,7 @@ const featurePlanId = process.argv[2];
 const keptPlanIdsJson = process.argv[3];
 const firstFeatureName = process.argv[4];
 const secondFeatureName = process.argv[5];
-let resolveWorkspaceRoot;
-try {
-  ({ resolveWorkspaceRoot } = require('../_lib/workspace-root'));
-} catch {
-  resolveWorkspaceRoot = (explicit) =>
-    path.resolve(explicit && explicit !== '.' ? explicit : process.cwd());
-}
-const workspaceRoot = resolveWorkspaceRoot(process.argv[6]);
-if (!workspaceRoot) {
-  console.error(
-    `No Switchboard workspace found from ${process.cwd()} — no .switchboard/kanban.db ` +
-    `in this directory or any parent below your home directory.\n` +
-    `Pass the workspace root explicitly:\n` +
-    `  node split-feature.js <featurePlanId> <keptPlanIds> <firstFeatureName> <secondFeatureName> /absolute/path/to/workspace`
-  );
-  process.exit(1);
-}
+const workspaceRoot = process.argv[6] || '.';
 
 if (!featurePlanId || !keptPlanIdsJson || !firstFeatureName || !secondFeatureName) {
   console.error("Usage: node split-feature.js <feature_plan_id> <kept_plan_ids_json> <first_feature_name> <second_feature_name> [workspace_root]");

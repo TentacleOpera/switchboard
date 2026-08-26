@@ -19,10 +19,10 @@ Extract the TICKETS tab out of the Artifacts panel into a dedicated Tickets pane
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Lift the helpers Tickets shares with DOCS/HTML out of planning.js into sharedUtils.js](../plans/tickets-panel-1-lift-shared-webview-helpers-into-sharedutils.md) — **CODE REVIEWED**
-- [ ] [Extract the TICKETS tab into its own panel, registered in both the VS Code and standalone hosts](../plans/tickets-panel-2-extract-tickets-tab-into-standalone-panel.md) — **CODE REVIEWED**
-- [ ] [De-collide the three tickets-folder verbs that Planning and Setup both define with different meanings](../plans/tickets-panel-3-decollide-duplicate-tickets-folder-verbs.md) — **CODE REVIEWED**
-- [ ] [Move the ClickUp and Linear config tabs out of Setup and into the Tickets panel](../plans/tickets-panel-4-move-clickup-and-linear-config-out-of-setup.md) — **CODE REVIEWED**
+- [ ] [Lift the helpers Tickets shares with DOCS/HTML out of planning.js into sharedUtils.js](../plans/tickets-panel-1-lift-shared-webview-helpers-into-sharedutils.md) — **CODE REVIEWED** — ID: a59dcb02-bb2b-4446-9d09-91f1637bf3cf
+- [ ] [Extract the TICKETS tab into its own panel, registered in both the VS Code and standalone hosts](../plans/tickets-panel-2-extract-tickets-tab-into-standalone-panel.md) — **CODE REVIEWED** — ID: 0e27f6e2-a966-4fc0-bacf-db0819e94917
+- [ ] [De-collide the three tickets-folder verbs that Planning and Setup both define with different meanings](../plans/tickets-panel-3-decollide-duplicate-tickets-folder-verbs.md) — **CODE REVIEWED** — ID: b23b988c-cc4b-4ee8-957a-94effab06488
+- [ ] [Move the ClickUp and Linear config tabs out of Setup and into the Tickets panel](../plans/tickets-panel-4-move-clickup-and-linear-config-out-of-setup.md) — **CODE REVIEWED** — ID: 1a1643bc-e906-4644-bec0-53ee5470bb26
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

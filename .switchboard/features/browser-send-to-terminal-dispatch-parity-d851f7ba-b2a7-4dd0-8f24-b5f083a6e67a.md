@@ -38,10 +38,10 @@ Every browser-originated prompt dispatch reaches the terminal the calling surfac
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Browser "Send to Planner" Fails Because the Dispatch Path Drops the Surface Flag](../plans/feature_plan_20260805210001_browser-send-to-planner-drops-surface-flag.md) — **CODE REVIEWED**
-- [ ] [Four Dispatch Sites Hardcode the VS Code Fleet, So Orchestrator / Pair-Program / Airlock Sends Die in the Browser](../plans/feature_plan_20260806090000_browser-stray-dispatch-sites-hardcode-vscode-fleet.md) — **CODE REVIEWED**
-- [ ] [Four Direct-to-`vscode.Terminal` Helpers Bypass the Dispatcher, So Browser Sends Land in Invisible Terminals and Still Report Success](../plans/feature_plan_20260806090001_browser-direct-terminal-helpers-not-fleet-aware.md) — **CODE REVIEWED**
-- [ ] [Project Panel Posts Two Verbs the Planning Allowlist Rejects, So the Browser Shows an Error Banner on Every Open](../plans/feature_plan_20260806090002_browser-project-panel-verbs-rejected-by-planning-allowlist.md) — **CODE REVIEWED**
+- [ ] [Browser "Send to Planner" Fails Because the Dispatch Path Drops the Surface Flag](../plans/feature_plan_20260805210001_browser-send-to-planner-drops-surface-flag.md) — **CODE REVIEWED** — ID: bfd354d5-a620-4588-811e-39c017c0b677
+- [ ] [Four Dispatch Sites Hardcode the VS Code Fleet, So Orchestrator / Pair-Program / Airlock Sends Die in the Browser](../plans/feature_plan_20260806090000_browser-stray-dispatch-sites-hardcode-vscode-fleet.md) — **CODE REVIEWED** — ID: cdc982dd-f2bd-4f90-be0a-7c4e9cc48e79
+- [ ] [Four Direct-to-`vscode.Terminal` Helpers Bypass the Dispatcher, So Browser Sends Land in Invisible Terminals and Still Report Success](../plans/feature_plan_20260806090001_browser-direct-terminal-helpers-not-fleet-aware.md) — **CODE REVIEWED** — ID: 6a469a1c-c9be-40a8-bc3c-e7044c5899e3
+- [ ] [Project Panel Posts Two Verbs the Planning Allowlist Rejects, So the Browser Shows an Error Banner on Every Open](../plans/feature_plan_20260806090002_browser-project-panel-verbs-rejected-by-planning-allowlist.md) — **CODE REVIEWED** — ID: 8c20d118-04c9-43c7-aa90-37c9aaf45661
 <!-- END SUBTASKS -->
 
 ## Completion Report

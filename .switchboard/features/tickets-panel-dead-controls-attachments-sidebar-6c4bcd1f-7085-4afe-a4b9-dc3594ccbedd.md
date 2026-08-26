@@ -24,8 +24,8 @@ All three are the same class of defect and the reason they are grouped: a contro
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Delete the attachments-modal "Reveal" button and replace it with "Copy path"](../plans/feature_plan_20260811143000_attachments_modal_reveal_button_is_a_silent_noop.md) — **PLAN REVIEWED**
-- [ ] [Clicking an attachment tag on a ticket must open the attachment viewer, not silently re-download the file](../plans/feature_plan_20260811143100_attachment_tag_click_opens_viewer_instead_of_downloading.md) — **PLAN REVIEWED**
-- [ ] [Wire the Tickets sidebar collapse toggle — the « button has markup and CSS but no click listener](../plans/feature_plan_20260811143200_tickets_sidebar_collapse_toggle_has_no_click_listener.md) — **PLAN REVIEWED**
+- [ ] [Delete the attachments-modal "Reveal" button and replace it with "Copy path"](../plans/feature_plan_20260811143000_attachments_modal_reveal_button_is_a_silent_noop.md) — **PLAN REVIEWED** — ID: 577744ca-3af0-4c5e-a2b0-4b0f177cf059
+- [ ] [Clicking an attachment tag on a ticket must open the attachment viewer, not silently re-download the file](../plans/feature_plan_20260811143100_attachment_tag_click_opens_viewer_instead_of_downloading.md) — **PLAN REVIEWED** — ID: 548d7420-854d-41fd-b58b-c9dc0ea42544
+- [ ] [Wire the Tickets sidebar collapse toggle — the « button has markup and CSS but no click listener](../plans/feature_plan_20260811143200_tickets_sidebar_collapse_toggle_has_no_click_listener.md) — **PLAN REVIEWED** — ID: ff18076c-c912-4416-a67a-c29095972b50
 <!-- END SUBTASKS -->
 

@@ -15,10 +15,10 @@ Make a team something the operator can find, understand, launch and rely on. Rig
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Team Picker Shows a Phantom Member-less "Lead team" — the Two Team Verbs Resolve One Root and Seed Into It](../plans/feature_plan_20260816212416_team-verbs-read-the-wrong-workspace-db.md) — **CODE REVIEWED**
-- [ ] [Promote START TEAM Out of the Tiny `+` Picker Into the Terminals Sidebar Ops Block](../plans/feature_plan_20260816212500_start-team-is-a-first-class-sidebar-control.md) — **CODE REVIEWED**
-- [ ] [Teams Start Themselves on Load](../plans/teams-start-themselves-on-load.md) — **CODE REVIEWED**
-- [ ] [TEAMS Tab — Pick a Team From Three Cards and See It Drawn](../plans/teams-tab-pick-a-team-from-three-cards.md) — **CODE REVIEWED**
+- [ ] [Team Picker Shows a Phantom Member-less "Lead team" — the Two Team Verbs Resolve One Root and Seed Into It](../plans/feature_plan_20260816212416_team-verbs-read-the-wrong-workspace-db.md) — **CODE REVIEWED** — ID: 127a2231-9375-4eac-8d21-a7cb46815830
+- [ ] [Promote START TEAM Out of the Tiny `+` Picker Into the Terminals Sidebar Ops Block](../plans/feature_plan_20260816212500_start-team-is-a-first-class-sidebar-control.md) — **CODE REVIEWED** — ID: 0603bfe9-b175-4c97-b919-db0b4f84d978
+- [ ] [Teams Start Themselves on Load](../plans/teams-start-themselves-on-load.md) — **CODE REVIEWED** — ID: 622eb5de-caeb-45e1-bb8d-1e142f4435dd
+- [ ] [TEAMS Tab — Pick a Team From Three Cards and See It Drawn](../plans/teams-tab-pick-a-team-from-three-cards.md) — **CODE REVIEWED** — ID: 758c6e2c-806e-4846-bb96-ed613ac72cde
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

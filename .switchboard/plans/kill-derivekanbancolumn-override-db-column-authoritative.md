@@ -368,3 +368,7 @@ These changes are visible in `git diff src/services/KanbanProvider.ts`. The diff
 ### `src/services/TaskViewerProvider.ts` — NO CHANGES YET
 
 No pre-existing edits. All changes in this file (deleting `_getEffectiveKanbanColumnForSession`, adding `kanbanColumn` to preserved fields in `_buildKanbanRecordFromSheet`) are new work from this plan.
+
+## Implementation Summary
+
+Implemented all changes to establish `plans.kanban_column` as the single authoritative source of truth. Added `await this.flushPersist()` to `updateColumnByPlanFileWithReason` in `KanbanDatabase.ts` to prevent debounce races on standalone plan moves. Replaced `deriveKanbanColumn` current-column checks with direct DB lookups in `KanbanProvider.ts` (`_getEligibleSessionIds`, `_advanceSessionsInColumn`), and removed dead code `_sheetToCard`. Deleted unused `_getEffectiveKanbanColumnForSession` and preserved `kanbanColumn` across existing record merges in `TaskViewerProvider.ts`, updating regression test assertions accordingly.

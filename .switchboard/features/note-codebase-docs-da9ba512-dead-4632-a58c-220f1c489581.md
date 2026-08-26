@@ -42,9 +42,9 @@ The context pipeline: **NotebookLM (get code into an analysis system) → author
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Linear Remote Tab: Dynamic Agent Skill Copy Button](../plans/linear-remote-agent-skill-copy-button.md) — **CODE REVIEWED**
-- [ ] [Remote Agent Orientation — Plan From Project-Context Docs (No Repo)](../plans/phase2-remote-plan-from-notion-docs.md) — **CODE REVIEWED**
-- [ ] [Project Context Hub — Dev Docs Tab + project.html Information Architecture](../plans/project-html-dev-docs-tab-and-ia.md) — **CODE REVIEWED**
-- [ ] [Project-Context Sync — project.html Content → Notion + Linear](../plans/project-context-sync-to-notion-and-linear.md) — **CODE REVIEWED**
+- [ ] [Linear Remote Tab: Dynamic Agent Skill Copy Button](../plans/linear-remote-agent-skill-copy-button.md) — **CODE REVIEWED** — ID: 6fe656a9-838b-4a99-81e6-9db715f7d306
+- [ ] [Remote Agent Orientation — Plan From Project-Context Docs (No Repo)](../plans/phase2-remote-plan-from-notion-docs.md) — **CODE REVIEWED** — ID: 0f7e723e-9327-4073-a18a-0fde08c3e99f
+- [ ] [Project Context Hub — Dev Docs Tab + project.html Information Architecture](../plans/project-html-dev-docs-tab-and-ia.md) — **CODE REVIEWED** — ID: 4318c53b-9134-42fd-a0c1-d3389d1c9dd4
+- [ ] [Project-Context Sync — project.html Content → Notion + Linear](../plans/project-context-sync-to-notion-and-linear.md) — **CODE REVIEWED** — ID: de725715-414f-42f1-9e9a-ff0512ac1b0b
 <!-- END SUBTASKS -->
 

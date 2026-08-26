@@ -13,7 +13,7 @@ Add animated visual feedback to all setup.html buttons with spinners and press a
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Claudify Pixel-Font Toggle & Afterburner Ultracode-Animation Toggle](../plans/feature_plan_20260630_claudify-pixel-font-and-afterburner-ultracode-toggles.md) — **CODE REVIEWED**
-- [ ] [Add Animated Visual Feedback to All setup.html Buttons](../plans/feature_plan_20260701141141_setup-animated-button-feedback.md) — **CODE REVIEWED**
+- [ ] [Claudify Pixel-Font Toggle & Afterburner Ultracode-Animation Toggle](../plans/feature_plan_20260630_claudify-pixel-font-and-afterburner-ultracode-toggles.md) — **CODE REVIEWED** — ID: 23e8734c-3271-46ea-82f5-f4e96f2dd14e
+- [ ] [Add Animated Visual Feedback to All setup.html Buttons](../plans/feature_plan_20260701141141_setup-animated-button-feedback.md) — **CODE REVIEWED** — ID: 7eca1a68-d437-422a-b767-ec2bb9624231
 <!-- END SUBTASKS -->
 

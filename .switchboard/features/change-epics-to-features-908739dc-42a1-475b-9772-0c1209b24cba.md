@@ -47,8 +47,8 @@ Phase 1 (user-facing + routes + script filenames)
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Plan: Rename "Epics" → "Features" (User-Facing Surfaces Only)](../plans/rename-epics-to-features-user-facing.md) — **CODE REVIEWED**
-- [ ] [Feature Operations Agent Clarity — Verb Scripts, API Endpoints & Intent→Action Cheatsheet](../plans/feature_plan_20260704232500_epic-operations-agent-clarity.md) — **CODE REVIEWED**
-- [ ] [Plan: Rename "Epics" → "Features" (Internal Identifiers + Persisted State — Phase 2)](../plans/rename-epics-to-features-internal-phase2.md) — **CODE REVIEWED**
+- [ ] [Plan: Rename "Epics" → "Features" (User-Facing Surfaces Only)](../plans/rename-epics-to-features-user-facing.md) — **CODE REVIEWED** — ID: 8e168df0-515b-4874-b1c9-c6fd17ca0fa3
+- [ ] [Feature Operations Agent Clarity — Verb Scripts, API Endpoints & Intent→Action Cheatsheet](../plans/feature_plan_20260704232500_epic-operations-agent-clarity.md) — **CODE REVIEWED** — ID: a84b7ca0-558d-48c2-b2a4-e1059bf4603c
+- [ ] [Plan: Rename "Epics" → "Features" (Internal Identifiers + Persisted State — Phase 2)](../plans/rename-epics-to-features-internal-phase2.md) — **CODE REVIEWED** — ID: ee503abd-a3d9-4c8c-90ba-ba1da6b28781
 <!-- END SUBTASKS -->
 

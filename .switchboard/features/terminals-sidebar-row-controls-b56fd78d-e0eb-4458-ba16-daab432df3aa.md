@@ -26,7 +26,7 @@ The three defects share one root cause and one owner: `renderTerminalRow` (`src/
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Rework the Terminals Sidebar Row Controls: Inline ×, Edit Pencil, and a Real Clear Button](../plans/feature_plan_20260807093000_terminals-sidebar-row-controls-rework.md) — **CODE REVIEWED**
+- [ ] [Rework the Terminals Sidebar Row Controls: Inline ×, Edit Pencil, and a Real Clear Button](../plans/feature_plan_20260807093000_terminals-sidebar-row-controls-rework.md) — **CODE REVIEWED** — ID: 0548eb14-81ba-4d18-bcaf-f1cde9d53185
 <!-- END SUBTASKS -->
 
 ## Review Findings

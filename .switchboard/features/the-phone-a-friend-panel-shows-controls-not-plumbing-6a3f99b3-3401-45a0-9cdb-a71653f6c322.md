@@ -16,6 +16,6 @@ Single subtask — no internal ordering.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Strip the Phone-a-Friend Panel to Controls, Not Plumbing](../plans/feature_plan_20260818120000_phone-a-friend-panel-strip-to-controls.md) — **PLAN REVIEWED**
+- [ ] [Strip the Phone-a-Friend Panel to Controls, Not Plumbing](../plans/feature_plan_20260818120000_phone-a-friend-panel-strip-to-controls.md) — **PLAN REVIEWED** — ID: c0f3c369-04ce-445a-8eb4-1ff9bb13d523
 <!-- END SUBTASKS -->
 

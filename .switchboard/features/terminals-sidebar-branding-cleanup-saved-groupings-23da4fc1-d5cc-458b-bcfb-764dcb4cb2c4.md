@@ -25,10 +25,10 @@ Rework the browser Terminals sidebar list: brand each row with the real CLI icon
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminals role picker: read the real visible-agents store in both hosts](../plans/standalone-role-picker-visible-agents.md) — **CODE REVIEWED**
-- [ ] [Terminal Sidebar Groupings — Saved Pane-Assignment Sets, One-Click Switch](../plans/feature_plan_20260804083403_terminal-sidebar-groupings.md) — **CODE REVIEWED**
-- [ ] [Remove redundant "locate" button from browser terminals.html sidebar](../plans/feature_plan_20260804115941_remove-redundant-locate-button-browser-terminals-sidebar.md) — **CODE REVIEWED**
-- [ ] [Brand the terminals.html sidebar list with real CLI brand icons and names](../plans/feature_plan_20260804120328_brand-cli-sidebar-list-with-icons.md) — **CODE REVIEWED**
+- [ ] [Terminals role picker: read the real visible-agents store in both hosts](../plans/standalone-role-picker-visible-agents.md) — **CODE REVIEWED** — ID: 867aaf31-5987-4c3f-8ceb-f2abe075ade6
+- [ ] [Terminal Sidebar Groupings — Saved Pane-Assignment Sets, One-Click Switch](../plans/feature_plan_20260804083403_terminal-sidebar-groupings.md) — **CODE REVIEWED** — ID: ed50b45e-ac5d-4cdd-8cf0-f05c7fac26f7
+- [ ] [Remove redundant "locate" button from browser terminals.html sidebar](../plans/feature_plan_20260804115941_remove-redundant-locate-button-browser-terminals-sidebar.md) — **CODE REVIEWED** — ID: aaac2eef-e6d3-4532-976a-2d015558c2fd
+- [ ] [Brand the terminals.html sidebar list with real CLI brand icons and names](../plans/feature_plan_20260804120328_brand-cli-sidebar-list-with-icons.md) — **CODE REVIEWED** — ID: 5dbb8ad6-3ab4-444e-97c5-fd617116a8e1
 <!-- END SUBTASKS -->
 
 ## Completion Summary

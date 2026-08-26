@@ -21,10 +21,10 @@ Add a comprehensive multi-page documentation section to the Switchboard marketin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Switchboard Docs — Astro Migration & Landing Page Port](../plans/switchboard-docs-1-astro-migration.md) — **CODE REVIEWED**
-- [ ] [Switchboard Docs — Layout, Sidebar & Components](../plans/switchboard-docs-2-layout-components.md) — **CODE REVIEWED**
-- [ ] [Switchboard Docs — Content: Getting Started & Guides](../plans/switchboard-docs-3-content-getting-started-guides.md) — **CODE REVIEWED**
-- [ ] [Switchboard Docs — Content: Reference (Full User Manual)](../plans/switchboard-docs-4-content-reference.md) — **CODE REVIEWED**
+- [ ] [Switchboard Docs — Astro Migration & Landing Page Port](../plans/switchboard-docs-1-astro-migration.md) — **CODE REVIEWED** — ID: aa3bbf44-81c1-47da-9d16-455c39b4287c
+- [ ] [Switchboard Docs — Layout, Sidebar & Components](../plans/switchboard-docs-2-layout-components.md) — **CODE REVIEWED** — ID: 1e8fdd7d-7c69-4314-9b1e-112d242f6021
+- [ ] [Switchboard Docs — Content: Getting Started & Guides](../plans/switchboard-docs-3-content-getting-started-guides.md) — **CODE REVIEWED** — ID: e2d0a13d-f730-4e03-8c8e-fe25a536ffa1
+- [ ] [Switchboard Docs — Content: Reference (Full User Manual)](../plans/switchboard-docs-4-content-reference.md) — **CODE REVIEWED** — ID: 2dbe65a3-3f0f-440f-9ed7-67423c2bb17c
 <!-- END SUBTASKS -->
 
 ### Completion Summary

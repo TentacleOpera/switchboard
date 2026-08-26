@@ -14,9 +14,9 @@ Windows is a deliberately supported platform — 21 win32 branches across 8 non-
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Three skills instruct agents to use POSIX-only tooling — point them at the existing Node equivalents](../plans/skills-posix-only-tooling.md) — **PLAN REVIEWED**
-- [ ] [Windows `switchboard stop` is a hard kill — replace signal-based shutdown with an authenticated HTTP verb](../plans/windows-graceful-stop-http-verb.md) — **PLAN REVIEWED**
-- [ ] [Windows terminals get an unusable environment — the wrong shell from Git Bash, no PATH from Task Scheduler](../plans/windows-terminal-environment.md) — **PLAN REVIEWED**
+- [ ] [Three skills instruct agents to use POSIX-only tooling — point them at the existing Node equivalents](../plans/skills-posix-only-tooling.md) — **PLAN REVIEWED** — ID: 35fead7a-2119-4c4c-9067-60a4ce6554cc
+- [ ] [Windows `switchboard stop` is a hard kill — replace signal-based shutdown with an authenticated HTTP verb](../plans/windows-graceful-stop-http-verb.md) — **PLAN REVIEWED** — ID: 8eba302d-5203-41fd-b1aa-56a8a5e8689a
+- [ ] [Windows terminals get an unusable environment — the wrong shell from Git Bash, no PATH from Task Scheduler](../plans/windows-terminal-environment.md) — **PLAN REVIEWED** — ID: a6ed1ade-d43f-48ec-b874-99a205390dbd
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

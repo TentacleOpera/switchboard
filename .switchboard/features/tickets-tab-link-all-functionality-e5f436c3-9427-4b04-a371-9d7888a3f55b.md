@@ -20,8 +20,8 @@ Make the "Link All" copy-paths feature reliable and move filter controls to thei
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature: Link All Button + Complexity Filter in Project Panel Kanban Plans Tab](../plans/feature_plan_20260626100854_link_all_complexity_filter_kanban_plans.md) — **CODE REVIEWED**
-- [ ] [Move Status/State Filter Out of the Tickets Source Modal](../plans/feature_plan_20260626152607_move-status-filter-out-of-source-modal.md) — **CODE REVIEWED**
-- [ ] [Fix "Link All" on Tickets Tab Not Fetching All Sidebar Tickets](../plans/feature_plan_20260626152608_fix-link-all-not-fetching-all-tickets.md) — **CODE REVIEWED**
+- [ ] [Feature: Link All Button + Complexity Filter in Project Panel Kanban Plans Tab](../plans/feature_plan_20260626100854_link_all_complexity_filter_kanban_plans.md) — **CODE REVIEWED** — ID: ef43c8bb-153c-4016-bb82-fb545c5d266e
+- [ ] [Move Status/State Filter Out of the Tickets Source Modal](../plans/feature_plan_20260626152607_move-status-filter-out-of-source-modal.md) — **CODE REVIEWED** — ID: 87f9c17d-6753-44d4-8c24-e4232b2456cc
+- [ ] [Fix "Link All" on Tickets Tab Not Fetching All Sidebar Tickets](../plans/feature_plan_20260626152608_fix-link-all-not-fetching-all-tickets.md) — **CODE REVIEWED** — ID: 777aa62c-f350-4249-b77f-da1b36271c05
 <!-- END SUBTASKS -->
 

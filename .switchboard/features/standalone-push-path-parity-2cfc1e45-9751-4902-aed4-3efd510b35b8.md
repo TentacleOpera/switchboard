@@ -22,9 +22,9 @@ This feature installs a CI guard that turns the gap into a ratcheted number, rep
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Restore the Backlog View to the Standalone (Browser) Host](../plans/restore-backlog-view-to-standalone-host.md) — **CODE REVIEWED**
-- [ ] [Standalone Push-Parity Guard — Make "Is the Browser Host at Parity?" a CI Number](../plans/standalone-push-parity-guard.md) — **CODE REVIEWED**
-- [ ] [Standalone State Builders Fabricate the Board Payload — Delegate to `getFullStateMessages`](../plans/standalone-state-builders-delegate-to-getfullstatemessages.md) — **CODE REVIEWED**
+- [ ] [Restore the Backlog View to the Standalone (Browser) Host](../plans/restore-backlog-view-to-standalone-host.md) — **CODE REVIEWED** — ID: 683200c5-3ea8-415d-9e4d-fddcf9d60570
+- [ ] [Standalone Push-Parity Guard — Make "Is the Browser Host at Parity?" a CI Number](../plans/standalone-push-parity-guard.md) — **CODE REVIEWED** — ID: e33835f4-925c-48c4-8bdd-0af51d28c4cc
+- [ ] [Standalone State Builders Fabricate the Board Payload — Delegate to `getFullStateMessages`](../plans/standalone-state-builders-delegate-to-getfullstatemessages.md) — **CODE REVIEWED** — ID: 487a05d9-399b-4133-a57c-eda02dc24a31
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

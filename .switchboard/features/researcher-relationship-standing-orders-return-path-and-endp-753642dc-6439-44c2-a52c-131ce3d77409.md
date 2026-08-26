@@ -14,9 +14,9 @@ Make the researcher relationship work as a durable standing order with a closed 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Retire /research/dispatch And The Researcher Hand-Off Prompt Directive](../plans/feature_plan_20260812170000_research-dispatch-blind-to-pty-fleet.md) — **PLAN REVIEWED**
-- [ ] [Link-Up Role Presets Fire Through The Relay Path, Inverting Who The Instruction Is Addressed To](../plans/feature_plan_20260812171500_link-up-presets-fire-through-relay-not-standing-orders.md) — **PLAN REVIEWED**
-- [ ] [The Researcher Relationship Has No Return Path](../plans/feature_plan_20260813060000_researcher-relationship-has-no-return-path.md) — **PLAN REVIEWED**
+- [ ] [Retire /research/dispatch And The Researcher Hand-Off Prompt Directive](../plans/feature_plan_20260812170000_research-dispatch-blind-to-pty-fleet.md) — **PLAN REVIEWED** — ID: b8a23c2e-3d44-4aec-a003-51aa17ef61f7
+- [ ] [Link-Up Role Presets Fire Through The Relay Path, Inverting Who The Instruction Is Addressed To](../plans/feature_plan_20260812171500_link-up-presets-fire-through-relay-not-standing-orders.md) — **PLAN REVIEWED** — ID: 7898eb69-9643-4217-a190-db3da672a6c7
+- [ ] [The Researcher Relationship Has No Return Path](../plans/feature_plan_20260813060000_researcher-relationship-has-no-return-path.md) — **PLAN REVIEWED** — ID: 25aff7ca-5b2a-49ce-b2b3-f2fc048021b8
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

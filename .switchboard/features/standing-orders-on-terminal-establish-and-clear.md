@@ -23,9 +23,9 @@ Rough order: role scope → (establish delivery ‖ clear delivery).
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standing Orders: Add a `role` Scope](../plans/standing-orders-role-scope.md) — **CODE REVIEWED**
-- [ ] [Deliver Standing Orders on Terminal Establish](../plans/standing-orders-deliver-on-establish.md) — **CODE REVIEWED**
-- [ ] [Deliver Standing Orders After Terminal Clear](../plans/standing-orders-deliver-after-clear.md) — **CODE REVIEWED**
+- [ ] [Standing Orders: Add a `role` Scope](../plans/standing-orders-role-scope.md) — **CODE REVIEWED** — ID: d31aab82-5a6a-4ea2-880b-25fd55aceaee
+- [ ] [Deliver Standing Orders on Terminal Establish](../plans/standing-orders-deliver-on-establish.md) — **CODE REVIEWED** — ID: 84fea818-4e44-442b-9c4a-631ff4cf0a1d
+- [ ] [Deliver Standing Orders After Terminal Clear](../plans/standing-orders-deliver-after-clear.md) — **CODE REVIEWED** — ID: b8ffd075-79fe-4b96-818a-a74c0857a7e9
 <!-- END SUBTASKS -->
 
 ## Completion Summary

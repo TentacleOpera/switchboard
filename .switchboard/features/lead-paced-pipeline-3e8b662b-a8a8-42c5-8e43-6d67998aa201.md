@@ -59,13 +59,13 @@ Two further outcomes:
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The Coding Lead Paces Its Own Pipeline — `POST /kanban/queue/next`](../plans/lead-paced-pipeline-1-queue-next-endpoint.md) — **CODE REVIEWED**
-- [ ] [The Dispatch Column Becomes the Session Queue — Select Plans, Press Run, Walk Away](../plans/lead-paced-pipeline-2-dispatch-as-session-queue.md) — **CODE REVIEWED**
-- [ ] [A Dead Pacer Must Surface, Not End the Night Silently — Queue Watch on the Idle Sweep](../plans/lead-paced-pipeline-3-queue-idle-watch.md) — **CODE REVIEWED**
-- [ ] [Delete the Mode Axis and the Completion Hybrid — Keep a Plain Scheduler](../plans/lead-paced-pipeline-4-delete-the-mode-axis-and-hybrid.md) — **CODE REVIEWED**
-- [ ] [The Orchestrator Becomes an Advisor — Silent Ready Checks, Bounded Answers, Advice on Request](../plans/lead-paced-pipeline-5-orchestrator-as-advisor.md) — **CODE REVIEWED**
-- [ ] [The Orchestrator Hands Off and Exits — One Team Means No Resident Manager](../plans/lead-paced-pipeline-6-orchestrator-hands-off-and-exits.md) — **CODE REVIEWED**
-- [ ] [Remote Plans Enter the Queue, Not the Agents — Batch Intake With the Orchestrator as Sequencer](../plans/lead-paced-pipeline-7-remote-plans-enter-the-queue.md) — **CODE REVIEWED**
+- [ ] [The Coding Lead Paces Its Own Pipeline — `POST /kanban/queue/next`](../plans/lead-paced-pipeline-1-queue-next-endpoint.md) — **CODE REVIEWED** — ID: e060b8c4-27bd-48ac-a5d1-c72f557ea27a
+- [ ] [The Dispatch Column Becomes the Session Queue — Select Plans, Press Run, Walk Away](../plans/lead-paced-pipeline-2-dispatch-as-session-queue.md) — **CODE REVIEWED** — ID: 7e0983cc-c3a6-44d4-be7f-5b03917153d6
+- [ ] [A Dead Pacer Must Surface, Not End the Night Silently — Queue Watch on the Idle Sweep](../plans/lead-paced-pipeline-3-queue-idle-watch.md) — **CODE REVIEWED** — ID: 85481036-a94d-46b0-9c46-afa0e06da994
+- [ ] [Delete the Mode Axis and the Completion Hybrid — Keep a Plain Scheduler](../plans/lead-paced-pipeline-4-delete-the-mode-axis-and-hybrid.md) — **CODE REVIEWED** — ID: 8919baf1-c7c2-4aa6-a54f-79f11b42187c
+- [ ] [The Orchestrator Becomes an Advisor — Silent Ready Checks, Bounded Answers, Advice on Request](../plans/lead-paced-pipeline-5-orchestrator-as-advisor.md) — **CODE REVIEWED** — ID: 3d112587-1374-4d7d-bd48-2601a7de885a
+- [ ] [The Orchestrator Hands Off and Exits — One Team Means No Resident Manager](../plans/lead-paced-pipeline-6-orchestrator-hands-off-and-exits.md) — **CODE REVIEWED** — ID: c4b903af-effd-4f30-b81d-9edc2b8bc3ab
+- [ ] [Remote Plans Enter the Queue, Not the Agents — Batch Intake With the Orchestrator as Sequencer](../plans/lead-paced-pipeline-7-remote-plans-enter-the-queue.md) — **CODE REVIEWED** — ID: 90d2c18e-9100-4054-a92d-11993524a249
 <!-- END SUBTASKS -->
 
 ---

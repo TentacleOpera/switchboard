@@ -30,11 +30,11 @@ The Switchboard Remote-Control API turns the VS Code extension into a host-agnos
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature A · A1 — Protocol Catalog + Discovery Endpoint](../plans/extract-standalone-npx-01-protocol-core.md) — **CODE REVIEWED**
-- [ ] [Feature A · A2a — Transport Infrastructure: wsHub, Auth, Seams](../plans/extract-standalone-npx-03-transport-migration.md) — **CODE REVIEWED**
-- [ ] [Switchboard Manage — Host-Agnostic Management Console Skill](../plans/switchboard-manage-console-skill.md) — **CODE REVIEWED**
-- [ ] [Feature A · A3 — Declarative, Path-Addressed Feature Management](../plans/feature-management-declarative-path-addressed.md) — **CODE REVIEWED**
-- [ ] [Feature A · A2b — Per-Verb Handler Burn-Down (All Panels)](../plans/transport-migration-per-verb-burndown.md) — **CODE REVIEWED**
+- [ ] [Feature A · A1 — Protocol Catalog + Discovery Endpoint](../plans/extract-standalone-npx-01-protocol-core.md) — **CODE REVIEWED** — ID: eb75281d-d8f3-4e50-b396-f7626abed020
+- [ ] [Feature A · A2a — Transport Infrastructure: wsHub, Auth, Seams](../plans/extract-standalone-npx-03-transport-migration.md) — **CODE REVIEWED** — ID: aaeafbeb-f4f0-40b4-a335-53e69febc8f7
+- [ ] [Switchboard Manage — Host-Agnostic Management Console Skill](../plans/switchboard-manage-console-skill.md) — **CODE REVIEWED** — ID: 8345c4a6-dff0-47d8-b296-38a3b0493037
+- [ ] [Feature A · A3 — Declarative, Path-Addressed Feature Management](../plans/feature-management-declarative-path-addressed.md) — **CODE REVIEWED** — ID: fa2f155e-9dc3-47b5-8f3f-1d6d2903c592
+- [ ] [Feature A · A2b — Per-Verb Handler Burn-Down (All Panels)](../plans/transport-migration-per-verb-burndown.md) — **CODE REVIEWED** — ID: c05762a3-8aef-4502-9b91-f72c2a2b2b81
 <!-- END SUBTASKS -->
 
 ## Implementation Progress (session 2026-07-08)

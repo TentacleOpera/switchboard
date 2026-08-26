@@ -28,13 +28,13 @@ Short version: Gemini Spark rejects `http://` and its fetch originates in Google
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Connections Panel — Rename Remote Control and Give It a Rail Entry](../plans/feature_plan_20260805120000_connections-panel-rename-and-rail-entry.md) — **CODE REVIEWED**
-- [ ] [External-Agent Skill Launchers in the Connections Panel](../plans/feature_plan_20260805120001_external-agent-skill-launchers.md) — **CODE REVIEWED**
-- [ ] [Memo Write-Back Watcher — Reflect External Edits to `memo.md`](../plans/feature_plan_20260805120002_memo-external-write-back-watcher.md) — **CODE REVIEWED**
-- [ ] [`switchboard-spark` — A Generated, Uploadable Context Skill for External AI Surfaces](../plans/feature_plan_20260805130000_switchboard-spark-uploadable-context-skill.md) — **CODE REVIEWED**
-- [ ] [Scheduled External-Agent Jobs — Instruction Inbox and Standing Jobs](../plans/feature_plan_20260805130001_scheduled-external-agent-jobs-instruction-inbox.md) — **CODE REVIEWED**
-- [ ] [Move the WEB AGENTS Tab out of Artifacts and into Connections](../plans/feature_plan_20260805130002_move-web-agents-into-connections.md) — **CODE REVIEWED**
-- [ ] [Connections Jobs Tab — Standing Jobs, Inbox Lifecycle and Run-Log View](../plans/feature_plan_20260805153000_connections-jobs-tab-activity-view.md) — **CODER CODED**
+- [ ] [Connections Panel — Rename Remote Control and Give It a Rail Entry](../plans/feature_plan_20260805120000_connections-panel-rename-and-rail-entry.md) — **CODE REVIEWED** — ID: d000634e-a287-4441-ad3b-e54400a8f7c1
+- [ ] [External-Agent Skill Launchers in the Connections Panel](../plans/feature_plan_20260805120001_external-agent-skill-launchers.md) — **CODE REVIEWED** — ID: bb5e22ec-d1b0-4090-a700-ee434e8da249
+- [ ] [Memo Write-Back Watcher — Reflect External Edits to `memo.md`](../plans/feature_plan_20260805120002_memo-external-write-back-watcher.md) — **CODE REVIEWED** — ID: 10a3dd38-50fb-45aa-9094-fdcce9c9873f
+- [ ] [`switchboard-spark` — A Generated, Uploadable Context Skill for External AI Surfaces](../plans/feature_plan_20260805130000_switchboard-spark-uploadable-context-skill.md) — **CODE REVIEWED** — ID: 631cc4cb-54bb-483b-9bf0-23db5f4ea682
+- [ ] [Scheduled External-Agent Jobs — Instruction Inbox and Standing Jobs](../plans/feature_plan_20260805130001_scheduled-external-agent-jobs-instruction-inbox.md) — **CODE REVIEWED** — ID: 11034208-d73a-4652-bed2-b5c00500491c
+- [ ] [Move the WEB AGENTS Tab out of Artifacts and into Connections](../plans/feature_plan_20260805130002_move-web-agents-into-connections.md) — **CODE REVIEWED** — ID: 6d42449c-21bd-4649-9e50-8de29eadc26a
+- [ ] [Connections Jobs Tab — Standing Jobs, Inbox Lifecycle and Run-Log View](../plans/feature_plan_20260805153000_connections-jobs-tab-activity-view.md) — **CODER CODED** — ID: 836dde1f-2b5a-403e-bed6-13852cb455fd
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -13,8 +13,8 @@ Split standing orders into a reusable definitions library with a live link (edit
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standing Orders Tab in the Agent Control Panel](../plans/standing-orders-tab-in-agent-control.md) — **CODE REVIEWED**
-- [ ] [Standing Orders Library: Definitions and Sync](../plans/standing-orders-library-definitions-and-sync.md) — **CODE REVIEWED**
+- [ ] [Standing Orders Tab in the Agent Control Panel](../plans/standing-orders-tab-in-agent-control.md) — **CODE REVIEWED** — ID: 1446d899-5abf-401b-9a8a-1a89aca4325a
+- [ ] [Standing Orders Library: Definitions and Sync](../plans/standing-orders-library-definitions-and-sync.md) — **CODE REVIEWED** — ID: 9d9159bd-b550-4923-b5be-4edfac058fa5
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

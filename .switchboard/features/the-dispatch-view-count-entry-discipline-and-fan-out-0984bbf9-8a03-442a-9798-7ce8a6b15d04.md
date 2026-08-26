@@ -14,9 +14,9 @@ DISPATCH is a display mode of the Planned column that is supposed to mean these 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Send the Dispatch Set to Coders, with Terminal Provisioning](../plans/dispatcher-auto-send-to-coder-terminals.md) — **CODE REVIEWED**
-- [ ] [The DISPATCH toggle on the Planned column shows how many plans are staged](../plans/feature_plan_20260808120100_dispatch-toggle-staged-count-badge.md) — **CODE REVIEWED**
-- [ ] [Remove the Manual "Move to Dispatch" Button from Planned Column Cards](../plans/feature_plan_20260808120000_remove-manual-send-to-dispatch-button-from-planned-cards.md) — **CODE REVIEWED**
+- [ ] [Send the Dispatch Set to Coders, with Terminal Provisioning](../plans/dispatcher-auto-send-to-coder-terminals.md) — **CODE REVIEWED** — ID: 7c3c59d0-8aa5-49e3-914f-301f1fbba131
+- [ ] [The DISPATCH toggle on the Planned column shows how many plans are staged](../plans/feature_plan_20260808120100_dispatch-toggle-staged-count-badge.md) — **CODE REVIEWED** — ID: d973f063-de28-4045-b85d-711a6e9342ef
+- [ ] [Remove the Manual "Move to Dispatch" Button from Planned Column Cards](../plans/feature_plan_20260808120000_remove-manual-send-to-dispatch-button-from-planned-cards.md) — **CODE REVIEWED** — ID: a3b2c810-b61c-4ab0-a219-b5a2a7ad2269
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

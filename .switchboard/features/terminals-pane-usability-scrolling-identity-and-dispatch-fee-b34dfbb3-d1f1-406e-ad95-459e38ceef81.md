@@ -34,10 +34,10 @@ Guards and constraints that must be in place:
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Snappier PTY Prompt Delivery With A Dispatch Progress Chip In The Pane Header](../plans/feature_plan_20260812093000_snappier-terminal-prompt-delivery-with-dispatch-progress-chip.md) — **CODE REVIEWED**
-- [ ] [Show The CLI Brand Icon In Each Terminal Pane Header](../plans/feature_plan_20260812093200_cli-brand-icon-in-terminal-pane-header.md) — **CODE REVIEWED**
-- [ ] [Kanban-Mode Pane In terminals.html Cannot Scroll Its Card List](../plans/feature_plan_20260812093500_terminals-kanban-pane-card-list-cannot-scroll.md) — **CODE REVIEWED**
-- [ ] [Claude CLI Seats Have No Scrollbar And No Jump-To-Latest: It Enters The Alternate Screen And Grabs The Mouse](../plans/feature_plan_20260812093600_claude-cli-alt-screen-kills-pane-scrollback-and-jump-to-latest.md) — **CODE REVIEWED**
+- [ ] [Snappier PTY Prompt Delivery With A Dispatch Progress Chip In The Pane Header](../plans/feature_plan_20260812093000_snappier-terminal-prompt-delivery-with-dispatch-progress-chip.md) — **CODE REVIEWED** — ID: 1b81f0f9-1239-41df-b468-e7ec2c8d6926
+- [ ] [Show The CLI Brand Icon In Each Terminal Pane Header](../plans/feature_plan_20260812093200_cli-brand-icon-in-terminal-pane-header.md) — **CODE REVIEWED** — ID: d9290de1-add4-4f44-9e42-c45b5433bdb7
+- [ ] [Kanban-Mode Pane In terminals.html Cannot Scroll Its Card List](../plans/feature_plan_20260812093500_terminals-kanban-pane-card-list-cannot-scroll.md) — **CODE REVIEWED** — ID: dea15848-6f1b-4020-b50c-f3c98c9625b8
+- [ ] [Claude CLI Seats Have No Scrollbar And No Jump-To-Latest: It Enters The Alternate Screen And Grabs The Mouse](../plans/feature_plan_20260812093600_claude-cli-alt-screen-kills-pane-scrollback-and-jump-to-latest.md) — **CODE REVIEWED** — ID: c8c0ac16-9c69-46aa-a03a-b31b01d9c46c
 <!-- END SUBTASKS -->
 
 ## Review Findings (2026-08-14)

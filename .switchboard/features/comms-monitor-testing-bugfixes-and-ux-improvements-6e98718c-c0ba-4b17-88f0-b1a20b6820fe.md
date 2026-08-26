@@ -41,11 +41,11 @@ Web research was run and findings integrated into the plans. Of the 4 original u
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Comms Monitor: Start Polling Button Should Immediately Poll, Not Wait 30s](../plans/feature_plan_20260706092056_comms-monitor-start-polling-immediate-first-tick.md) — **CODE REVIEWED**
-- [ ] [Comms Monitor: Stop Polling Button Stuck — UI Never Updates After Stop](../plans/feature_plan_20260706092058_comms-monitor-stop-polling-button-stuck.md) — **CODE REVIEWED**
-- [ ] [Comms Monitor: Capture Agent Output and Display in COMMS Tab UI](../plans/feature_plan_20260706092100_comms-monitor-capture-output-to-ui.md) — **CODE REVIEWED**
-- [ ] [Comms Monitor: Stop Polling Kills the Terminal Instead of Just Stopping Polling](../plans/feature_plan_20260706092059_comms-monitor-stop-polling-sends-clear.md) — **CODE REVIEWED**
-- [ ] [Comms Monitor: Reduce Delay Between Prompt Paste and Enter Submission](../plans/feature_plan_20260706092101_comms-monitor-reduce-paste-to-enter-delay.md) — **CODE REVIEWED**
+- [ ] [Comms Monitor: Start Polling Button Should Immediately Poll, Not Wait 30s](../plans/feature_plan_20260706092056_comms-monitor-start-polling-immediate-first-tick.md) — **CODE REVIEWED** — ID: 93008d8c-141a-4593-8251-d96c35191077
+- [ ] [Comms Monitor: Stop Polling Button Stuck — UI Never Updates After Stop](../plans/feature_plan_20260706092058_comms-monitor-stop-polling-button-stuck.md) — **CODE REVIEWED** — ID: b3f32b7c-1825-4262-bdde-e236bf292577
+- [ ] [Comms Monitor: Capture Agent Output and Display in COMMS Tab UI](../plans/feature_plan_20260706092100_comms-monitor-capture-output-to-ui.md) — **CODE REVIEWED** — ID: 217d7bf6-488e-4617-979c-00986e0e89b6
+- [ ] [Comms Monitor: Stop Polling Kills the Terminal Instead of Just Stopping Polling](../plans/feature_plan_20260706092059_comms-monitor-stop-polling-sends-clear.md) — **CODE REVIEWED** — ID: 2b75a114-8094-4de4-8fd8-455c67c91bef
+- [ ] [Comms Monitor: Reduce Delay Between Prompt Paste and Enter Submission](../plans/feature_plan_20260706092101_comms-monitor-reduce-paste-to-enter-delay.md) — **CODE REVIEWED** — ID: c8cd6197-be34-4d5b-8308-a46b685a04e3
 <!-- END SUBTASKS -->
 
 ## Review Findings

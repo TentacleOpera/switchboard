@@ -58,10 +58,6 @@ list_output.txt
 # >>> Switchboard managed exclusions >>>
 # Switchboard runtime state (per-session, not shareable)
 .switchboard/*
-# .switchboard/logs/ contains terminal session logs that may include secrets
-# (agent terminals echo tokens, env vars, and file paths). It is ignored by the
-# .switchboard/* glob above and must NEVER be negated with a ! — doing so would
-# commit terminal output to the repository.
 !.switchboard/reviews/
 !.switchboard/plans/
 !.switchboard/features/
@@ -88,6 +84,13 @@ list_output.txt
 # are credentials, and a fork that drops the glob must still never commit them.
 .switchboard/secrets.enc*
 .switchboard/.master-key*
+
+# Transfer bundle — personal-portable settings (theme, thresholds, prompt
+# overrides) for handing a workspace to ANOTHER machine. The default export
+# path is ~/.switchboard/transfer/ (outside the repo), but a bundle placed in
+# the tree must stay ignored: it carries one person's chrome, not team-shared
+# state, and committing it imposes one machine's settings on every clone.
+switchboard-transfer*.json
 # <<< Switchboard managed exclusions <<<
 
 # Generated vendor assets for browser panels (xterm.js et al).

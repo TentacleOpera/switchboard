@@ -113,6 +113,14 @@ Additive. Nothing removed, nothing unlinked, nothing fabricated. A link that can
 - **Backfill honesty:** an existing install with populated `linear_issue_id` values and no file cache. Assert rows are created with ids and nulls, and that no field was invented.
 - **Size:** measure `plan_tickets` bytes per ticket with and without bodies, and report replica sync cost against the shared-store budget.
 
+### Goal Invariants
+
+- **`plan_tickets` exists and is shared tier:** assert the `plan_tickets` table exists in the schema and is named as shared tier in `src/services/storageTiers.ts` (owned by the tier-split plan; this plan consumes that registration).
+- **Metadata resolvable without files:** assert an imported ticket's assignee, state, and labels are resolvable from the Board store alone, with `.switchboard/tickets/` files absent — clone survival (positive paired with "files are not the source of truth for imported tickets").
+- **Legacy id columns preserved:** assert `plans.linear_issue_id` and `plans.clickup_task_id` remain present and populated — the keep-as-is requirement, not removed.
+- **Badge reads the board record:** assert ticket badge/drilldown logic for imported tickets reads through the board-record accessor, not the file cache — the documented cross-read bugs' structural fix.
+- **No fabricated metadata:** assert a backfilled link that cannot be resolved yields a row with the id and nulls, never an invented field.
+
 ## Outstanding Questions
 
 - Should ticket metadata be refetched on a schedule, or strictly on demand? A schedule keeps cards fresh and adds provider API traffic per machine — which the sync-owner lease would then need to govern.

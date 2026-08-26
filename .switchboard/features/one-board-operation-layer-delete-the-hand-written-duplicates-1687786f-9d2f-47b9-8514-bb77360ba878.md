@@ -14,9 +14,9 @@ Three separate places in this codebase implement the same board operations by ha
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone Kanban Column-Parity Audit](../plans/standalone-kanban-column-parity-audit.md) — **CODE REVIEWED**
-- [ ] [Delete `allowPtyFleet` — Resolve Terminals by Name, Not by Caller Surface](../plans/delete-allowptyfleet-resolve-terminals-by-name.md) — **CODE REVIEWED**
-- [ ] [Extract One `advanceCards` Operation — Eighteen Copies of the Same Routine](../plans/extract-advance-cards-operation.md) — **CODE REVIEWED**
+- [ ] [Standalone Kanban Column-Parity Audit](../plans/standalone-kanban-column-parity-audit.md) — **CODE REVIEWED** — ID: 9110f26b-dfdb-4be2-a028-8f5290f2bb91
+- [ ] [Delete `allowPtyFleet` — Resolve Terminals by Name, Not by Caller Surface](../plans/delete-allowptyfleet-resolve-terminals-by-name.md) — **CODE REVIEWED** — ID: 7ebe51eb-36d0-45d4-8020-17116c9d9851
+- [ ] [Extract One `advanceCards` Operation — Eighteen Copies of the Same Routine](../plans/extract-advance-cards-operation.md) — **CODE REVIEWED** — ID: b4e836f4-cd18-44a9-bf6a-621adc4b930e
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -18,8 +18,8 @@ Retire the dedicated epic-orchestration lane — the orchestrator role, its term
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Unify Epic Subtask Bundling Across Both Plan Resolvers](../plans/feature_plan_20260629113945_unify-epic-subtask-bundling-across-resolvers.md) — **CODE REVIEWED**
-- [ ] [Sticky Epic Workflow Toggle Buttons (Ultracode / Goal) with Prompt Prepend](../plans/feature_plan_20260629113946_sticky-epic-workflow-toggle-buttons.md) — **CODE REVIEWED**
-- [ ] [Remove the Epic Orchestrator Role, ORCHESTRATING Column, and Orchestrate Buttons](../plans/feature_plan_20260629113947_remove-epic-orchestrator-role-and-column.md) — **CODE REVIEWED**
+- [ ] [Unify Epic Subtask Bundling Across Both Plan Resolvers](../plans/feature_plan_20260629113945_unify-epic-subtask-bundling-across-resolvers.md) — **CODE REVIEWED** — ID: 6ff50041-4851-45e1-92a1-8328bcc16810
+- [ ] [Sticky Epic Workflow Toggle Buttons (Ultracode / Goal) with Prompt Prepend](../plans/feature_plan_20260629113946_sticky-epic-workflow-toggle-buttons.md) — **CODE REVIEWED** — ID: 1970665e-b1e2-45cd-ad85-2ac871d36b5a
+- [ ] [Remove the Epic Orchestrator Role, ORCHESTRATING Column, and Orchestrate Buttons](../plans/feature_plan_20260629113947_remove-epic-orchestrator-role-and-column.md) — **CODE REVIEWED** — ID: dbdefaf6-8a40-4814-9778-1019678944e9
 <!-- END SUBTASKS -->
 

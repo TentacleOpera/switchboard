@@ -44,10 +44,10 @@ Net order: **skill → (delivery fix ∥ Agent Groups) → toggle.** Delivery an
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Teach The Head Agent To Drive A Coder Terminal: Dispatch, Callback, Review, Resend](../plans/feature_plan_20260812120000_head-agent-terminal-dispatch-pattern.md) — **CODE REVIEWED**
-- [ ] [`sendToTerminal` Delivers Multi-Line Prompts Line By Line And The Receiving Agent Runs Fragments](../plans/feature_plan_20260812120100_sendtoterminal-pty-path-corrupts-long-prompts.md) — **CODE REVIEWED**
-- [ ] [Add a Third Feature-Workflow Toggle: Drive Subtasks Through a Coder Terminal](../plans/feature_plan_20260812120200_feature-workflow-toggle-drive-subtasks-through-coder.md) — **CODE REVIEWED**
-- [ ] [Agent Groups: Define a Team of Agents Once, Instantiate It Wired](../plans/feature_plan_20260812120400_agent-groups-in-agents-tab.md) — **CODE REVIEWED**
+- [ ] [Teach The Head Agent To Drive A Coder Terminal: Dispatch, Callback, Review, Resend](../plans/feature_plan_20260812120000_head-agent-terminal-dispatch-pattern.md) — **CODE REVIEWED** — ID: 5ceaf2db-c6db-48e0-9c81-7fb988744046
+- [ ] [`sendToTerminal` Delivers Multi-Line Prompts Line By Line And The Receiving Agent Runs Fragments](../plans/feature_plan_20260812120100_sendtoterminal-pty-path-corrupts-long-prompts.md) — **CODE REVIEWED** — ID: 440629cb-6d5d-4ed8-a64a-2cffdeb17a73
+- [ ] [Add a Third Feature-Workflow Toggle: Drive Subtasks Through a Coder Terminal](../plans/feature_plan_20260812120200_feature-workflow-toggle-drive-subtasks-through-coder.md) — **CODE REVIEWED** — ID: 89422a33-527f-4b4e-8563-b17cbf9406e7
+- [ ] [Agent Groups: Define a Team of Agents Once, Instantiate It Wired](../plans/feature_plan_20260812120400_agent-groups-in-agents-tab.md) — **CODE REVIEWED** — ID: 9e0b228e-8b3f-4757-9123-61edcce8acf9
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

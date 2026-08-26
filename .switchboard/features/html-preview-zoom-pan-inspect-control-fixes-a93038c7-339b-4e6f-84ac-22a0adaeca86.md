@@ -27,11 +27,11 @@ Fixes for the HTML preview zoom/pan/inspect controls in the Design and Planning 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Preserve HTML preview zoom/pan across file auto-refresh](../plans/feature_plan_20260720095401_preserve-html-preview-zoom-on-refresh.md) — **CODE REVIEWED**
-- [ ] [Open HTML previews fit-to-width, not fully zoomed out](../plans/feature_plan_20260720095402_html-preview-initial-fit-to-width.md) — **CODE REVIEWED**
-- [ ] [Fix the "Reset zoom" (⟲) toolbar button so it recenters predictably](../plans/feature_plan_20260720095403_reset-zoom-button-recenter-and-clarify.md) — **CODE REVIEWED**
-- [ ] [Let HTML previews scroll/navigate without turning on Pan mode](../plans/feature_plan_20260720095404_html-preview-scroll-navigation-without-pan-mode.md) — **CODE REVIEWED**
-- [ ] [Make Inspect Mode and Pan work together in HTML previews](../plans/feature_plan_20260720095405_inspect-and-pan-coexist-html-preview.md) — **CODE REVIEWED**
+- [ ] [Preserve HTML preview zoom/pan across file auto-refresh](../plans/feature_plan_20260720095401_preserve-html-preview-zoom-on-refresh.md) — **CODE REVIEWED** — ID: 2890a2ee-de17-4482-b40b-3bc9ac8a9407
+- [ ] [Open HTML previews fit-to-width, not fully zoomed out](../plans/feature_plan_20260720095402_html-preview-initial-fit-to-width.md) — **CODE REVIEWED** — ID: 6ccecb77-0d0a-4e83-9533-d6b1dca6da4e
+- [ ] [Fix the "Reset zoom" (⟲) toolbar button so it recenters predictably](../plans/feature_plan_20260720095403_reset-zoom-button-recenter-and-clarify.md) — **CODE REVIEWED** — ID: 75a7e362-ec59-4aa0-acaf-2218940ed2df
+- [ ] [Let HTML previews scroll/navigate without turning on Pan mode](../plans/feature_plan_20260720095404_html-preview-scroll-navigation-without-pan-mode.md) — **CODE REVIEWED** — ID: 99dcac43-0438-421c-8bb5-0b8f6118b0ff
+- [ ] [Make Inspect Mode and Pan work together in HTML previews](../plans/feature_plan_20260720095405_inspect-and-pan-coexist-html-preview.md) — **CODE REVIEWED** — ID: b9db3d0a-d953-4e0d-94cd-d4e120890d42
 <!-- END SUBTASKS -->
 
 ## Completion Summary

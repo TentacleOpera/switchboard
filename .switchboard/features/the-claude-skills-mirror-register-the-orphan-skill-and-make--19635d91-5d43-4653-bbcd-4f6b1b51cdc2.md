@@ -13,8 +13,8 @@ Close a live path in which an extension activation deletes a working skill with 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`mirror:check` is red because the `delegates` skill was never added to MIRROR_MANIFEST — and the fix the error message recommends deletes the skill](../plans/mirror-check-red-delegates-skill-missing-manifest-entry.md) — **PLAN REVIEWED**
-- [ ] [The mirror generator deletes shipped skill files silently, and its drift check prints the one remedy that causes the deletion](../plans/mirror-divergence-must-be-loud-and-non-destructive.md) — **PLAN REVIEWED**
+- [ ] [`mirror:check` is red because the `delegates` skill was never added to MIRROR_MANIFEST — and the fix the error message recommends deletes the skill](../plans/mirror-check-red-delegates-skill-missing-manifest-entry.md) — **PLAN REVIEWED** — ID: 2ede9f9c-18f5-453c-874c-ec114d6f5a5e
+- [ ] [The mirror generator deletes shipped skill files silently, and its drift check prints the one remedy that causes the deletion](../plans/mirror-divergence-must-be-loud-and-non-destructive.md) — **PLAN REVIEWED** — ID: a8a28c33-32d6-42b8-af17-049029d4b2a8
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

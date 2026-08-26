@@ -13,8 +13,8 @@ The shell left rail renders one button per fleet terminal, and both halves of th
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Restore Disappeared Terminals List in Shell.html Sidebar](../plans/feature_plan_20260806143802_terminal-list-disappeared-from-shell-sidebar.md) — **CODE REVIEWED**
-- [ ] [Completion Ring on Shell Rail Terminal Icons Burns Forever — the DONE Light Is a Sticky Flag With No Expiry and No Animation](../plans/feature_plan_20260808212500_completion-ring-pulses-once-then-fades.md) — **CODE REVIEWED**
+- [ ] [Restore Disappeared Terminals List in Shell.html Sidebar](../plans/feature_plan_20260806143802_terminal-list-disappeared-from-shell-sidebar.md) — **CODE REVIEWED** — ID: 4abe4a87-422d-444f-8425-b374bb92911d
+- [ ] [Completion Ring on Shell Rail Terminal Icons Burns Forever — the DONE Light Is a Sticky Flag With No Expiry and No Animation](../plans/feature_plan_20260808212500_completion-ring-pulses-once-then-fades.md) — **CODE REVIEWED** — ID: 02778084-4d89-4862-ac65-10c1728ee60d
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -13,8 +13,8 @@ Make the Tickets tab show what is actually true. Two independent divergences bet
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Tickets Panel: Inline Images Are Blank On First View And Only Appear After Clicking Around](../plans/feature_plan_20260814144406_tickets-panel-inline-images-blank-on-first-fetch.md) — **PLAN REVIEWED**
-- [ ] [Prune Deleted Subtasks From A Ticket's Embedded `## Subtasks` Checklist](../plans/feature_plan_20260814161000_tickets-parent-subtask-checklist-never-pruned.md) — **PLAN REVIEWED**
+- [ ] [Tickets Panel: Inline Images Are Blank On First View And Only Appear After Clicking Around](../plans/feature_plan_20260814144406_tickets-panel-inline-images-blank-on-first-fetch.md) — **PLAN REVIEWED** — ID: 163e1a63-d264-4b89-b0f1-9b8058bcd59e
+- [ ] [Prune Deleted Subtasks From A Ticket's Embedded `## Subtasks` Checklist](../plans/feature_plan_20260814161000_tickets-parent-subtask-checklist-never-pruned.md) — **PLAN REVIEWED** — ID: e6a0b248-53e2-45d7-8e30-d27d685bc37c
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

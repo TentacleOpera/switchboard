@@ -27,10 +27,10 @@ The unifying failure is the same class of mistake in four places: the panel *inf
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Tickets panel still presents remote attachments as local files](../plans/feature_plan_20260807161808_tickets-remote-attachments-presented-as-local-files.md) — **CODE REVIEWED**
-- [ ] [Subtask cards in the Tickets sidebar always read "local" — their sync status is never fetched](../plans/feature_plan_20260807161809_tickets-subtask-drilldown-sync-badge-always-local.md) — **CODE REVIEWED**
-- [ ] [Ticket push silently drops everything below a `## Subtasks` heading, even the ticket's own](../plans/feature_plan_20260807161810_ticket-push-truncates-at-any-subtasks-heading.md) — **CODE REVIEWED**
-- [ ] [Refetching a ticket replaces its local inline image paths with remote URLs that don't render](../plans/feature_plan_20260808143000_ticket-refetch-replaces-local-inline-images-with-remote-urls.md) — **CODE REVIEWED**
+- [ ] [Tickets panel still presents remote attachments as local files](../plans/feature_plan_20260807161808_tickets-remote-attachments-presented-as-local-files.md) — **CODE REVIEWED** — ID: 5ba4ec96-9d39-42cb-9da2-aaef382ecc00
+- [ ] [Subtask cards in the Tickets sidebar always read "local" — their sync status is never fetched](../plans/feature_plan_20260807161809_tickets-subtask-drilldown-sync-badge-always-local.md) — **CODE REVIEWED** — ID: 04aaa0ba-3dcb-45bb-8d0f-c804202ac089
+- [ ] [Ticket push silently drops everything below a `## Subtasks` heading, even the ticket's own](../plans/feature_plan_20260807161810_ticket-push-truncates-at-any-subtasks-heading.md) — **CODE REVIEWED** — ID: 1917aa6f-5b05-49bd-8f4d-68a13425312a
+- [ ] [Refetching a ticket replaces its local inline image paths with remote URLs that don't render](../plans/feature_plan_20260808143000_ticket-refetch-replaces-local-inline-images-with-remote-urls.md) — **CODE REVIEWED** — ID: 07fe719e-713e-42e0-ba8a-be104b4e2d65
 <!-- END SUBTASKS -->
 
 ## Completion Report

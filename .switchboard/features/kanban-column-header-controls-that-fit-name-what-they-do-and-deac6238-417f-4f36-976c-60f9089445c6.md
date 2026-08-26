@@ -14,9 +14,9 @@ Repair the board's column header action row on three axes at once. The Planned c
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Copy Dispatch Prompt must not flash "Copied!" on every card's coder-prompt button](../plans/feature_plan_20260810172334_copy-dispatch-prompt-must-not-flash-copied-on-every-card-coder-prompt-button.md) — **PLAN REVIEWED**
-- [ ] [The Kanban Column Floor Is Narrower Than Its Own Icon Row](../plans/feature_plan_20260812190008_kanban-column-floor-fits-the-six-icon-header-row.md) — **PLAN REVIEWED**
-- [ ] [Replace the Created Column's Blank-Feature Button with an Explicit "Send N plans to planner team"](../plans/feature_plan_20260812150700_kanban-created-send-plans-to-planner-team.md) — **PLAN REVIEWED**
+- [ ] [Copy Dispatch Prompt must not flash "Copied!" on every card's coder-prompt button](../plans/feature_plan_20260810172334_copy-dispatch-prompt-must-not-flash-copied-on-every-card-coder-prompt-button.md) — **PLAN REVIEWED** — ID: c7c44210-fc5f-4d5a-ac55-c5ac7951645f
+- [ ] [The Kanban Column Floor Is Narrower Than Its Own Icon Row](../plans/feature_plan_20260812190008_kanban-column-floor-fits-the-six-icon-header-row.md) — **PLAN REVIEWED** — ID: 9cce22bd-79a2-448f-b89b-5d6e6154f53a
+- [ ] [Replace the Created Column's Blank-Feature Button with an Explicit "Send N plans to planner team"](../plans/feature_plan_20260812150700_kanban-created-send-plans-to-planner-team.md) — **PLAN REVIEWED** — ID: 46eafd1c-34f0-40e0-866d-01f1f7aef715
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

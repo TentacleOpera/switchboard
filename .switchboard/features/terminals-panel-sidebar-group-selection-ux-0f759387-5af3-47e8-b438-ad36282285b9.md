@@ -35,10 +35,10 @@ Repairs the Terminals panel sidebar and its top-bar group selector so the two su
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminals sidebar ignores the active group tab — filter the agent tree to the locked group](../plans/feature_plan_20260812212100_terminals-sidebar-filters-to-active-group.md) — **PLAN REVIEWED**
-- [ ] [Group paging controls are a red full-width banner that shoves the grid down — move them into the layout toolbar](../plans/feature_plan_20260812212101_group-shortfall-pager-moves-into-layout-toolbar.md) — **PLAN REVIEWED**
-- [ ] [Clicking an ungrouped terminal silently conscripts it into the locked group — give ungrouped terminals their own grid](../plans/feature_plan_20260812212102_ungrouped-terminals-get-their-own-grid.md) — **PLAN REVIEWED**
-- [ ] [Remove the cryptic `N (Xa/Yx)` count badge from the Terminals sidebar headers](../plans/feature_plan_20260812212103_remove-cryptic-count-badge-from-sidebar-headers.md) — **PLAN REVIEWED**
-- [ ] [Terminals sidebar stacks every workspace as a header tier — replace it with the workspace dropdown every other panel uses](../plans/feature_plan_20260812212104_terminals-sidebar-workspace-dropdown.md) — **PLAN REVIEWED**
+- [ ] [Terminals sidebar ignores the active group tab — filter the agent tree to the locked group](../plans/feature_plan_20260812212100_terminals-sidebar-filters-to-active-group.md) — **PLAN REVIEWED** — ID: 2fd51d82-8a8d-4a16-bf16-766f8aa94297
+- [ ] [Group paging controls are a red full-width banner that shoves the grid down — move them into the layout toolbar](../plans/feature_plan_20260812212101_group-shortfall-pager-moves-into-layout-toolbar.md) — **PLAN REVIEWED** — ID: 3b51c5f5-c395-43d0-afee-8e4c44b75785
+- [ ] [Clicking an ungrouped terminal silently conscripts it into the locked group — give ungrouped terminals their own grid](../plans/feature_plan_20260812212102_ungrouped-terminals-get-their-own-grid.md) — **PLAN REVIEWED** — ID: 9d453d11-a954-4896-b392-552a1d39def5
+- [ ] [Remove the cryptic `N (Xa/Yx)` count badge from the Terminals sidebar headers](../plans/feature_plan_20260812212103_remove-cryptic-count-badge-from-sidebar-headers.md) — **PLAN REVIEWED** — ID: a307de6a-d4ff-40a3-aa61-e429d45a6e4e
+- [ ] [Terminals sidebar stacks every workspace as a header tier — replace it with the workspace dropdown every other panel uses](../plans/feature_plan_20260812212104_terminals-sidebar-workspace-dropdown.md) — **PLAN REVIEWED** — ID: af4c4533-822d-4dcd-9c06-48ec01f2340e
 <!-- END SUBTASKS -->
 

@@ -30,9 +30,9 @@ The cross-subtask audit found no overlap, contradiction or supersession — the 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Split a Board Selection of Features into Worktrees in One Action](../plans/bulk-create-feature-worktrees-from-board-selection.md) — **PLAN REVIEWED**
-- [ ] [Merge a Batch of Reviewed Feature Worktrees Back in One Pass](../plans/bulk-merge-back-reviewed-feature-worktrees.md) — **PLAN REVIEWED**
-- [ ] [Agent Terminals Must Open on the Surface the Operator Is Actually Using](../plans/route-agent-terminals-to-the-active-surface.md) — **PLAN REVIEWED**
+- [ ] [Split a Board Selection of Features into Worktrees in One Action](../plans/bulk-create-feature-worktrees-from-board-selection.md) — **PLAN REVIEWED** — ID: e6111769-7039-449f-85e1-1521053db495
+- [ ] [Merge a Batch of Reviewed Feature Worktrees Back in One Pass](../plans/bulk-merge-back-reviewed-feature-worktrees.md) — **PLAN REVIEWED** — ID: 985591b6-25a5-4765-a61e-a82256d6e573
+- [ ] [Agent Terminals Must Open on the Surface the Operator Is Actually Using](../plans/route-agent-terminals-to-the-active-surface.md) — **PLAN REVIEWED** — ID: 3fadf6c9-d458-4258-a4d3-d53515faebaf
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

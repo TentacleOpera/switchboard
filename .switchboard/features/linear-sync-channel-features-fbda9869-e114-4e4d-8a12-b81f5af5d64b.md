@@ -36,10 +36,10 @@ Ship the operational safeguards that make remote control safe to run on the prim
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Switchboard Auto-Archive Rule (Time-in-Column → Completed + Archive)](../plans/linear-free-tier-auto-archive-on-completion.md) — **CODE REVIEWED**
-- [ ] [Notion Overwrite Data-Loss Guard (Code-Level)](../plans/notion-overwrite-guard.md) — **CODE REVIEWED**
-- [ ] [Remote-Sync Health & Error Surfacing](../plans/remote-sync-health-surfacing.md) — **CODE REVIEWED**
-- [ ] [Hide Triage Pipeline + Kanban Mapping/Automation Setup Sections (Pre-Release UI Gate)](../plans/hide-triage-and-automation-setup-sections.md) — **CODE REVIEWED**
+- [ ] [Switchboard Auto-Archive Rule (Time-in-Column → Completed + Archive)](../plans/linear-free-tier-auto-archive-on-completion.md) — **CODE REVIEWED** — ID: e38b7126-9fca-410a-a0d1-5a43e76f711e
+- [ ] [Notion Overwrite Data-Loss Guard (Code-Level)](../plans/notion-overwrite-guard.md) — **CODE REVIEWED** — ID: 9b6b14f6-2e09-4f1e-9ee1-eb023aa6a057
+- [ ] [Remote-Sync Health & Error Surfacing](../plans/remote-sync-health-surfacing.md) — **CODE REVIEWED** — ID: 5657301a-c60e-415d-ac4b-edaea04f0137
+- [ ] [Hide Triage Pipeline + Kanban Mapping/Automation Setup Sections (Pre-Release UI Gate)](../plans/hide-triage-and-automation-setup-sections.md) — **CODE REVIEWED** — ID: c65b8918-30aa-4920-a979-3e4a8b905c8d
 <!-- END SUBTASKS -->
 
 ## Review Findings

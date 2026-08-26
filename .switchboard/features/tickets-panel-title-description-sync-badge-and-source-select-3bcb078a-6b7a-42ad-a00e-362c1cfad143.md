@@ -15,10 +15,10 @@ Fix four independent defects that all make the Tickets panel show something othe
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Tickets Tab Source Selection Not Sticky Across Restarts in Browser/Standalone](../plans/feature_plan_20260810144131_tickets-source-not-sticky-across-restarts.md) — **PLAN REVIEWED**
-- [ ] [Tickets sync badge reads a different workspace's DB row than the refetch stamps](../plans/feature_plan_20260810144300_tickets-sync-badge-reads-a-different-workspace-db-row-than-the-refetch-stamps.md) — **PLAN REVIEWED**
-- [ ] [Deleted ticket description bounces back after Save in tickets.html](../plans/feature_plan_20260811144522_tickets-empty-delete-save-bounce.md) — **PLAN REVIEWED**
-- [ ] [Ticket detail H1: source the title from the sidebar row, not the detail cache](../plans/feature_plan_20260811161841_ticket-detail-h1-from-sidebar-row-not-detail-cache.md) — **PLAN REVIEWED**
+- [ ] [Tickets Tab Source Selection Not Sticky Across Restarts in Browser/Standalone](../plans/feature_plan_20260810144131_tickets-source-not-sticky-across-restarts.md) — **PLAN REVIEWED** — ID: 22d6f136-10d1-4234-a523-9d9de9b3db27
+- [ ] [Tickets sync badge reads a different workspace's DB row than the refetch stamps](../plans/feature_plan_20260810144300_tickets-sync-badge-reads-a-different-workspace-db-row-than-the-refetch-stamps.md) — **PLAN REVIEWED** — ID: a8355fbe-3003-4803-aa31-bf0d5e8d8b06
+- [ ] [Deleted ticket description bounces back after Save in tickets.html](../plans/feature_plan_20260811144522_tickets-empty-delete-save-bounce.md) — **PLAN REVIEWED** — ID: 99caa9d7-5eab-44e9-b1fd-cb485af5aa3f
+- [ ] [Ticket detail H1: source the title from the sidebar row, not the detail cache](../plans/feature_plan_20260811161841_ticket-detail-h1-from-sidebar-row-not-detail-cache.md) — **PLAN REVIEWED** — ID: ea3cd1e5-c075-46fc-b984-488a1b319d71
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

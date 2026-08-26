@@ -13,8 +13,8 @@ Two features moved to new surfaces and left broken residue behind in the old pan
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Tickets Auto-Sync Lost in the Panel Extraction — Migration Regression](../plans/feature_plan_20260807103000_tickets-autosync-migration-regression.md) — **CODE REVIEWED**
-- [ ] [Delete the Vestigial Default Prompt Overrides UI Left Behind in the Setup Panel](../plans/feature_plan_20260807150000_setup-panel-orphaned-element-ids-crash.md) — **CODE REVIEWED**
+- [ ] [Tickets Auto-Sync Lost in the Panel Extraction — Migration Regression](../plans/feature_plan_20260807103000_tickets-autosync-migration-regression.md) — **CODE REVIEWED** — ID: d5bf487a-3578-4846-b17f-5e4e8834b9c4
+- [ ] [Delete the Vestigial Default Prompt Overrides UI Left Behind in the Setup Panel](../plans/feature_plan_20260807150000_setup-panel-orphaned-element-ids-crash.md) — **CODE REVIEWED** — ID: 2071a79c-cf26-4702-929d-2c1471aedfef
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

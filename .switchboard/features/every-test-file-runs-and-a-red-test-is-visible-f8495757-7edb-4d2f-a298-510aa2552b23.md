@@ -14,9 +14,9 @@
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Test Reachability Ratchet, and Wire the Dark Tests That Already Pass](../plans/test-reachability-ratchet-and-wire-green-tests.md) — **CREATED**
-- [ ] [Triage the 45 Dark Test Files That Fail When Actually Run](../plans/triage-the-failing-dark-tests.md) — **CREATED**
-- [ ] [Give the 12 BDD-Style Dark Test Files a Runner](../plans/give-the-bdd-style-dark-tests-a-runner.md) — **CREATED**
+- [ ] [Test Reachability Ratchet, and Wire the Dark Tests That Already Pass](../plans/test-reachability-ratchet-and-wire-green-tests.md) — **CREATED** — ID: aefc01bb-4df5-4d95-ad4f-387888be7dd8
+- [ ] [Triage the 45 Dark Test Files That Fail When Actually Run](../plans/triage-the-failing-dark-tests.md) — **CREATED** — ID: 38f01993-6e18-40d6-86fe-0a145f33cdc9
+- [ ] [Give the 12 BDD-Style Dark Test Files a Runner](../plans/give-the-bdd-style-dark-tests-a-runner.md) — **CREATED** — ID: c1ceb6aa-dc09-4b15-a87b-c79acfc3a93b
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -19,7 +19,7 @@ The Phone-a-Friend role is broken at both ends. Its batch-end signal never reach
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Phone-a-Friend Never Reaches a PTY Fleet Seat — Three Breaks in One Signal Path](../plans/feature_plan_20260817180100_phone-a-friend-never-reaches-a-pty-fleet-seat.md) — **PLAN REVIEWED**
-- [ ] [A Phone-a-Friend Terminal Has No Brand Identity — Generic Curtain, Generic Icon, No CLI Name](../plans/feature_plan_20260817180200_phone-a-friend-seat-has-no-brand-identity.md) — **PLAN REVIEWED**
+- [ ] [Phone-a-Friend Never Reaches a PTY Fleet Seat — Three Breaks in One Signal Path](../plans/feature_plan_20260817180100_phone-a-friend-never-reaches-a-pty-fleet-seat.md) — **PLAN REVIEWED** — ID: c9a0a582-8bd6-43b3-9f7b-90d4e052c207
+- [ ] [A Phone-a-Friend Terminal Has No Brand Identity — Generic Curtain, Generic Icon, No CLI Name](../plans/feature_plan_20260817180200_phone-a-friend-seat-has-no-brand-identity.md) — **PLAN REVIEWED** — ID: 5eac4e60-ec49-4d15-9309-5636936f1f12
 <!-- END SUBTASKS -->
 

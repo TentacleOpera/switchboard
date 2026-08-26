@@ -33,14 +33,14 @@ Cross-plan contracts every coder implements to — the single end-state for each
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Plan: Design System #1 — Make the Design System Tab See and Render HTML](../plans/design-system-1-render-html-in-design-tab.md) — **CODE REVIEWED**
-- [ ] [Plan: Design System #2 — Give the Design System Its Own Injection Identity (Distinct from the PRD)](../plans/design-system-2-distinct-injection-identity.md) — **CODE REVIEWED**
-- [ ] [Plan: Design System #3 — Extract Real Token Values from an HTML Design System](../plans/design-system-3-extract-tokens-from-html.md) — **CODE REVIEWED**
-- [ ] [Plan: Design System #4 — Per-Project Design System Binding, Defaulting to None](../plans/design-system-4-per-project-binding.md) — **CODE REVIEWED**
-- [ ] [Plan: Design System #5 — Inject the Design System into Every Prompt in a Design Project](../plans/design-system-5-inject-into-every-prompt.md) — **CODE REVIEWED**
-- [ ] [Plan: Design System #6 — "Copy Design System Prompt" Button for the Iterative Design Loop](../plans/design-system-6-copy-design-system-prompt.md) — **CODE REVIEWED**
-- [ ] [Plan: Design System #7 — Create a Design System from Zero (Starter Template + Agent Interview)](../plans/design-system-7-create-from-zero.md) — **CODE REVIEWED**
-- [ ] [Plan: Design System #8 — Derive a Design System from an Existing App](../plans/design-system-8-derive-from-existing-app.md) — **CODE REVIEWED**
+- [ ] [Plan: Design System #1 — Make the Design System Tab See and Render HTML](../plans/design-system-1-render-html-in-design-tab.md) — **CODE REVIEWED** — ID: b193c90f-11f0-4430-b3fb-4f6beb4248d0
+- [ ] [Plan: Design System #2 — Give the Design System Its Own Injection Identity (Distinct from the PRD)](../plans/design-system-2-distinct-injection-identity.md) — **CODE REVIEWED** — ID: 9832bb47-35b2-4edb-a051-535f87309d63
+- [ ] [Plan: Design System #3 — Extract Real Token Values from an HTML Design System](../plans/design-system-3-extract-tokens-from-html.md) — **CODE REVIEWED** — ID: 553ebb9f-35cb-498e-a149-746d23c3df9c
+- [ ] [Plan: Design System #4 — Per-Project Design System Binding, Defaulting to None](../plans/design-system-4-per-project-binding.md) — **CODE REVIEWED** — ID: a1c8aec0-ccd3-47d5-90d6-3ac18c2a36bb
+- [ ] [Plan: Design System #5 — Inject the Design System into Every Prompt in a Design Project](../plans/design-system-5-inject-into-every-prompt.md) — **CODE REVIEWED** — ID: 1ceb4bed-d60c-461c-af97-055dbae21f50
+- [ ] [Plan: Design System #6 — "Copy Design System Prompt" Button for the Iterative Design Loop](../plans/design-system-6-copy-design-system-prompt.md) — **CODE REVIEWED** — ID: 94abc9d1-14cb-4a41-8f8f-0a4d55221d38
+- [ ] [Plan: Design System #7 — Create a Design System from Zero (Starter Template + Agent Interview)](../plans/design-system-7-create-from-zero.md) — **CODE REVIEWED** — ID: 39b4dc7f-e293-4f53-b236-4c3549fc64ca
+- [ ] [Plan: Design System #8 — Derive a Design System from an Existing App](../plans/design-system-8-derive-from-existing-app.md) — **CODE REVIEWED** — ID: 4eccb325-ad94-4609-9094-1488131926c1
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

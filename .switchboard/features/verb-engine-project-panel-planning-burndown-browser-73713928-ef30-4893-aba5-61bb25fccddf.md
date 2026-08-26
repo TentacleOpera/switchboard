@@ -20,8 +20,8 @@ Make the Project panel (PlanningPanelProvider / project.html) host-agnostic (·6
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Verb Engine · 6 — PlanningPanelProvider Burndown (172 arms)](../plans/a2b-verb-engine-06-planning-panel.md) — **CODE REVIEWED**
-- [ ] [Headless Project Panel (Browser)](../plans/headless-project-panel-browser.md) — **CODE REVIEWED**
+- [ ] [Verb Engine · 6 — PlanningPanelProvider Burndown (172 arms)](../plans/a2b-verb-engine-06-planning-panel.md) — **CODE REVIEWED** — ID: 21c5ade0-1853-4662-aec3-782deaca34db
+- [ ] [Headless Project Panel (Browser)](../plans/headless-project-panel-browser.md) — **CODE REVIEWED** — ID: 8c5f0c82-5a51-4f4e-82f4-129f689530fa
 <!-- END SUBTASKS -->
 
 ## Review Findings (feature)

@@ -39,8 +39,8 @@ There is **no contradiction left** after reconciliation: the only true overlap w
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix: Project panel duplicate on window restore (serializer ghost)](../plans/fix_project-panel-restore-serializer-ghost-duplicate.md) — **CODE REVIEWED**
-- [ ] [Review Plan opens a duplicate Project panel instead of targeting the one moved to a new window](../plans/feature_plan_20260709092124_review-plan-steals-project-panel-from-new-window.md) — **CODE REVIEWED**
+- [ ] [Fix: Project panel duplicate on window restore (serializer ghost)](../plans/fix_project-panel-restore-serializer-ghost-duplicate.md) — **CODE REVIEWED** — ID: 64c09a34-dfa8-4fd8-80a5-0f4dd57fd553
+- [ ] [Review Plan opens a duplicate Project panel instead of targeting the one moved to a new window](../plans/feature_plan_20260709092124_review-plan-steals-project-panel-from-new-window.md) — **CODE REVIEWED** — ID: 51dc0554-a9eb-43a4-a983-012baa201050
 <!-- END SUBTASKS -->
 
 ## Completion Summary

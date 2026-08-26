@@ -60,7 +60,11 @@ None.
 - **Plans in the file with no local markdown.** The plan was deleted since the export. Restore the row or skip it, but decide explicitly and report the count — do not fail the whole import.
 - **Local plans absent from the file.** Leave untouched. See the pruning risk above.
 - **Mismatched `workspaceId`.** The file records the workspace it came from. Importing into a different workspace is the actual migration case and must be allowed, but the id mismatch should be surfaced rather than silently rewritten.
-- **Feature relations.** `feature_id` and `is_feature` must be applied so features and subtasks reconnect, following the ordering `restoreFromNotion` already uses — plans first, then a second pass for feature structure, keyed on `planId` and never on `sessionId`.
+- **Feature relations.** `feature_id` and `is_feature` must be applied so features and subtasks reconnect. The existing `restoreFromBackup` (KanbanDatabase.ts:9146) already writes both fields directly in its UPSERT SQL — no second pass is needed.
+
+  > **Superseded:** "following the ordering `restoreFromNotion` already uses — plans first, then a second pass for feature structure, keyed on `planId` and never on `sessionId`."
+  > **Reason:** The Notion restore's two-pass pattern exists because it must resolve Notion *page IDs* to local `planId` values. The file backup stores `feature_id` as a local `plan_id` string already — there is no indirection to resolve. `restoreFromBackup` writes `is_feature` and `feature_id` directly in `UPSERT_PLAN_SQL` (line 9271). A second pass would be dead code imitating a pattern from a different restore path whose rationale does not apply here.
+  > **Replaced with:** Write `is_feature` and `feature_id` directly in the UPSERT, as `restoreFromBackup` already does. No second pass.
 - **Scope honesty.** The file's top level is `workspaceId`, `exportedAt`, `version`, `plans` — so it covers plans and their board state, and **not** `plan_events`, `worktrees`, `imported_docs`, `config`, or `activity_log`. The audit trail and ticket registry are not carried. Say so in the UI rather than implying a full backup.
 - **`.switchboard/kanban.db` must never be the recommended migration artefact.** It carries absolute paths across five tables and does not move cleanly between platforms.
 
@@ -68,14 +72,23 @@ None.
 
 - Independent of the discoverability plan, though they are complementary: that one documents what exists, this one adds the missing capability. This plan owns the command palette entries for its own two operations.
 - **Independent of the provider board-sync capability feature**, and not superseded by it. That feature makes all three trackers restorable; this one covers the user with no tracker configured. Do not fold this into it, and do not cut it on the grounds that "Notion/ClickUp/Linear can restore now" — the two serve disjoint populations.
+- **Ordering dependency on the Database panel plan** (same feature). The export/import *logic* and *command palette entries* are independent and can land first. The *UI surface* for export/import belongs in the Database panel's "This machine" section, not the Setup panel — see the Superseded callout on Proposed Change #5. If the Database panel has not landed yet, the command palette entries are the user-facing path; the panel section is wired when the panel arrives.
+
+## Adversarial Synthesis
+
+Key risks: (1) the import path could silently prune local plans absent from the imported file — the existing `restoreFromBackup` is additive by design (it iterates the file's plans and UPSERTs, never deletes), but the plan must assert this invariant; (2) the existing method conflates "skipped because plan_file not found on disk" with "skipped because of UPSERT error" into one `skipped` counter — the user cannot tell whether 50 skipped means 50 deleted-since-export or 50 corrupted rows; (3) workspace-id mismatch is silently swallowed — `restoreFromBackup` uses the local `workspaceId` without comparing it to the file's `workspaceId` field, so a cross-workspace import succeeds but the user is never told it happened. Mitigations: extend `restoreFromBackup`'s return type to `{ restored, skipped, notFoundLocally }` and surface the workspace-id mismatch in the result; the additive-only invariant is already enforced by the method's structure (no DELETE statement in the restore path).
 
 ## Proposed Changes
 
-1. **Add an explicit Export** that writes the existing v1 state file to a user-chosen location outside the project, via a save dialog.
-2. **Add an explicit Import** that reads such a file and applies plan board state keyed on `planId` — additive only, resolve-only for project names, with feature structure applied in a second pass.
-3. **Report the outcome honestly**: counts for restored, skipped, and not-found-locally, plus a plain statement of what the format does not carry.
-4. **Register both as command palette entries**, titled so they are distinct from the integration-config restore and from the Notion operations.
-5. **Surface both in the Setup panel** beside the existing Notion buttons, so the account-free path sits next to the account-based one.
+1. **Add an explicit Export** that writes the existing v1 state file to a user-chosen location outside the project, via a save dialog. The writer is the existing `_writeKanbanStateBackup` serialiser (KanbanDatabase.ts:9104) — call it with a user-chosen path instead of the fixed `.switchboard/kanban-state-backup.json` path.
+2. **Add an explicit Import** by extending the existing `restoreFromBackup` method (KanbanDatabase.ts:9146), which already reads the v1 file, is additive (no DELETE in the restore path), preserves machine-local fields, and writes `is_feature`/`feature_id` directly in the UPSERT. The extensions are: (a) enrich the return type from `{ restored, skipped }` to `{ restored, skipped, notFoundLocally, workspaceMismatch?: string }` — separating plans skipped because their `plan_file` doesn't exist on disk (line 9200) from plans skipped due to UPSERT errors (line 9278); (b) compare the file's top-level `workspaceId` to the local workspace's id and include it in the result rather than silently using the local one; (c) keep project-name resolution-only (an unknown project leaves the plan unassigned — the existing UPSERT already handles this via the `project` column, not a `projects` row lookup).
+3. **Report the outcome honestly**: counts for restored, skipped (UPSERT error), not-found-locally (plan_file absent), and a workspace-mismatch notice if applicable, plus a plain statement of what the format does not carry.
+4. **Register both as command palette entries**, titled so they are distinct from the integration-config restore (`switchboard.restoreIntegrationConfig`) and from the Notion operations. Suggested titles: "Switchboard: Export Board State" and "Switchboard: Import Board State".
+5. **Surface both in the Database panel's "This machine" section** (see the Database panel plan), so the account-free path sits next to the account-based projections. The command palette entries are the user-facing path until the Database panel lands.
+
+   > **Superseded:** "Surface both in the Setup panel beside the existing Notion buttons, so the account-free path sits next to the account-based one."
+   > **Reason:** The Database panel plan (same feature) retires the Setup panel's database section and moves all storage operations to a new panel. Placing export/import in the Setup panel recreates the half-ownership this feature exists to fix — two surfaces owning storage.
+   > **Replaced with:** Surface export/import in the Database panel's "This machine" section. The command palette entries are independent and can land before the panel exists.
 
 ### Migration
 
@@ -90,6 +103,15 @@ No schema or format change. `version: 1` stays the format, and the automatic wri
 5. **v1 compatibility is permanent.** Import a v1 file produced by the current automatic writer, unmodified, and confirm it is accepted.
 6. **Workspace-id mismatch is surfaced.** Import a file exported from a different workspace; confirm the migration succeeds and the mismatch is reported.
 7. **Scope is stated.** Confirm the UI tells the user the export does not carry the audit trail, worktrees, ticket registry, or config.
+
+### Goal Invariants
+
+- **assert** a command palette entry containing "Export Board State" exists in `package.json` contributes.commands.
+- **assert** a command palette entry containing "Import Board State" exists in `package.json` contributes.commands.
+- **assert** neither new command palette entry title contains "Restore Integration Config" (collision with `switchboard.restoreIntegrationConfig`).
+- **assert** `restoreFromBackup` in `KanbanDatabase.ts` returns a result object with `notFoundLocally` as a numeric field (separated from `skipped`).
+- **assert** no `DELETE` SQL statement exists in the `restoreFromBackup` method body (additive-only invariant).
+- **assert** the export path writes to a user-chosen location outside `.switchboard/` (the automatic writer's path is unchanged).
 
 ## Outstanding Questions
 

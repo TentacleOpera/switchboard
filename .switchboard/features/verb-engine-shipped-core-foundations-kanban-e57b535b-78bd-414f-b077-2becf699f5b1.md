@@ -22,8 +22,8 @@ This feature carries no new work — it isolates the *built* part of the Host-Ag
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Verb Engine · 1 — Foundations: Command Services, Return Contract, Generic Dispatch](../plans/a2b-verb-engine-01-foundations.md) — **CODE REVIEWED**
-- [ ] [Verb Engine · 4 — KanbanProvider Burndown (144 arms)](../plans/a2b-verb-engine-04-kanban-provider.md) — **CODE REVIEWED**
+- [ ] [Verb Engine · 1 — Foundations: Command Services, Return Contract, Generic Dispatch](../plans/a2b-verb-engine-01-foundations.md) — **CODE REVIEWED** — ID: 4768874d-6f9c-4202-b35c-f63a15d943d2
+- [ ] [Verb Engine · 4 — KanbanProvider Burndown (144 arms)](../plans/a2b-verb-engine-04-kanban-provider.md) — **CODE REVIEWED** — ID: bb0c142e-5ece-48d8-adf2-6ba08579dc5e
 <!-- END SUBTASKS -->
 
 ## Review Findings (feature-level, 2026-07-17)

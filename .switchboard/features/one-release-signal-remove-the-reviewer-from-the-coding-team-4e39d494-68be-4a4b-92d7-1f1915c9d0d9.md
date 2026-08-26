@@ -26,9 +26,9 @@ A coding team holds exactly one card, and exactly one fact releases it: the lead
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [A queued card has no holder; only completed_at releases a team](../plans/one-release-signal-remove-the-reviewer-from-the-coding-team.md) — **CODE REVIEWED**
-- [ ] [The coding team has no reviewer seat](../plans/the-coding-team-has-no-reviewer-seat.md) — **CODE REVIEWED**
-- [ ] [Delete the head-prompt compat machinery for an unreleased surface](../plans/delete-head-prompt-compat-machinery.md) — **CODE REVIEWED**
+- [ ] [A queued card has no holder; only completed_at releases a team](../plans/one-release-signal-remove-the-reviewer-from-the-coding-team.md) — **CODE REVIEWED** — ID: 667a87a3-9a22-48e9-b375-50537b05ed1b
+- [ ] [The coding team has no reviewer seat](../plans/the-coding-team-has-no-reviewer-seat.md) — **CODE REVIEWED** — ID: 706018f7-202d-4de1-afa9-e1211471080b
+- [ ] [Delete the head-prompt compat machinery for an unreleased surface](../plans/delete-head-prompt-compat-machinery.md) — **CODE REVIEWED** — ID: 53102b97-a619-4004-842a-b1be6aa59c2d
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

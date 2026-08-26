@@ -13,8 +13,8 @@ Improve the experience of working with a selected plan in the project.html Kanba
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix: Review Plan navigation does not scroll sidebar to the actual card position](../plans/feature_plan_20260703064910_review_plan_sidebar_scroll_to_card.md) — **CODE REVIEWED**
-- [ ] [Add Copy Link & Copy Prompt buttons to the Kanban document top bar](../plans/feature_plan_20260703064911_kanban_topbar_copy_link_copy_prompt.md) — **CODE REVIEWED**
+- [ ] [Fix: Review Plan navigation does not scroll sidebar to the actual card position](../plans/feature_plan_20260703064910_review_plan_sidebar_scroll_to_card.md) — **CODE REVIEWED** — ID: ff0987e7-45a2-4aca-b45f-3a77ae1c2c75
+- [ ] [Add Copy Link & Copy Prompt buttons to the Kanban document top bar](../plans/feature_plan_20260703064911_kanban_topbar_copy_link_copy_prompt.md) — **CODE REVIEWED** — ID: a1cb17bc-4f2a-4605-b0df-88f75ec482c3
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

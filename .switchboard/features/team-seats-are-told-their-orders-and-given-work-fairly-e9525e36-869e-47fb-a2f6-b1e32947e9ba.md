@@ -19,7 +19,7 @@ Two defects in how a team treats its seats, both reached through teamWiring.ts a
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Relay Standing Orders to a Seat the Moment It Starts, Not Only When Someone Dispatches to It](../plans/feature_plan_20260817101500_relay-standing-orders-on-terminal-startup.md) — **PLAN REVIEWED**
-- [ ] [A Team Lead Must Spread Subtasks Across Idle Seats, Not Burn One Coder to Its Context Limit](../plans/feature_plan_20260817101700_lead-spreads-subtasks-across-idle-seats.md) — **PLAN REVIEWED**
+- [ ] [Relay Standing Orders to a Seat the Moment It Starts, Not Only When Someone Dispatches to It](../plans/feature_plan_20260817101500_relay-standing-orders-on-terminal-startup.md) — **PLAN REVIEWED** — ID: 3a53a219-24d0-4a44-b789-5c2730e470ac
+- [ ] [A Team Lead Must Spread Subtasks Across Idle Seats, Not Burn One Coder to Its Context Limit](../plans/feature_plan_20260817101700_lead-spreads-subtasks-across-idle-seats.md) — **PLAN REVIEWED** — ID: b684296c-0a14-4271-aace-3dfc872c06ee
 <!-- END SUBTASKS -->
 

@@ -23,14 +23,14 @@ This feature keeps one concept. A team is a named head role plus members, each w
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Clear The Coder Between Subtasks, And Call The Block What It Is](../plans/feature_plan_20260812190000_clear-between-subtasks-and-standing-orders-title.md) — **CODE REVIEWED**
-- [ ] [A Terminal Shows The Wrong Agent CLI Until The Panel Is Reloaded](../plans/feature_plan_20260812190001_stale-agent-cli-label-cache.md) — **CODE REVIEWED**
-- [ ] [Retire The Delegate Join Contract](../plans/feature_plan_20260812190002_retire-the-delegate-join-contract.md) — **CODE REVIEWED**
-- [ ] [The Spawn Primitive Must Wire The Team, Not The Wrapper](../plans/feature_plan_20260812190003_spawn-primitive-wires-the-team.md) — **CODE REVIEWED**
-- [ ] [A Team Starts With Its Head Role — Delete The Instantiate Button](../plans/feature_plan_20260812190004_teams-auto-start-with-their-head-role.md) — **CODE REVIEWED**
-- [ ] [Team Members Gain A Scope And A Relationship](../plans/feature_plan_20260812190005_team-member-scope-and-relationship.md) — **CODE REVIEWED**
-- [ ] [The Teams Tab And Four Shipped Team Types](../plans/feature_plan_20260812190006_teams-tab-and-shipped-team-types.md) — **CODE REVIEWED**
-- [ ] [Seed A Starter Team, And Migrate The Groups People Already Have](../plans/feature_plan_20260812190007_seed-a-starter-team-and-migrate-agent-groups.md) — **CODE REVIEWED**
+- [ ] [Clear The Coder Between Subtasks, And Call The Block What It Is](../plans/feature_plan_20260812190000_clear-between-subtasks-and-standing-orders-title.md) — **CODE REVIEWED** — ID: 87754301-26ac-4d39-9f48-e142cafc9941
+- [ ] [A Terminal Shows The Wrong Agent CLI Until The Panel Is Reloaded](../plans/feature_plan_20260812190001_stale-agent-cli-label-cache.md) — **CODE REVIEWED** — ID: 85546a0b-2ced-4d80-937b-e4f2267a2c70
+- [ ] [Retire The Delegate Join Contract](../plans/feature_plan_20260812190002_retire-the-delegate-join-contract.md) — **CODE REVIEWED** — ID: 03c6ab0c-ac38-453c-a639-cbd3fe8041a3
+- [ ] [The Spawn Primitive Must Wire The Team, Not The Wrapper](../plans/feature_plan_20260812190003_spawn-primitive-wires-the-team.md) — **CODE REVIEWED** — ID: af4630d8-cb0f-4512-aa27-917d36d890e4
+- [ ] [A Team Starts With Its Head Role — Delete The Instantiate Button](../plans/feature_plan_20260812190004_teams-auto-start-with-their-head-role.md) — **CODE REVIEWED** — ID: 81f5ff9d-b7a4-4e85-9263-eda63730bd56
+- [ ] [Team Members Gain A Scope And A Relationship](../plans/feature_plan_20260812190005_team-member-scope-and-relationship.md) — **CODE REVIEWED** — ID: 6098a7cf-8b9d-4188-85cc-b1cc4db4b211
+- [ ] [The Teams Tab And Four Shipped Team Types](../plans/feature_plan_20260812190006_teams-tab-and-shipped-team-types.md) — **CODE REVIEWED** — ID: eb6e7eaa-69f4-4314-9012-7197b6813237
+- [ ] [Seed A Starter Team, And Migrate The Groups People Already Have](../plans/feature_plan_20260812190007_seed-a-starter-team-and-migrate-agent-groups.md) — **CODE REVIEWED** — ID: 94f3065b-c29f-4148-a7fe-0971b479f526
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

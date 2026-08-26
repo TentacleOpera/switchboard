@@ -19,14 +19,14 @@ Repair the terminals grouping feature, which failed UAT on ten separate counts. 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Groups Become A Tab Strip Above The Grid, Not A Slab In The Sidebar](../plans/feature_plan_20260811170000_terminals-sidebar-workspace-group-terminal-hierarchy.md) — **CODE REVIEWED**
-- [ ] [Group Switching Inherits The Previous Group's Grid — Give Every Group Its Own Layout](../plans/feature_plan_20260811170001_terminal-group-layout-persistence-and-switching.md) — **CODE REVIEWED**
-- [ ] [You Can Never Delete A Group — Give Every Group Source A Working Delete](../plans/feature_plan_20260811170002_terminal-group-deletion-every-source.md) — **CODE REVIEWED**
-- [ ] [Peek Mode Traps The Grid — Selecting Another Terminal Must Cancel The Peek](../plans/feature_plan_20260811170003_peek-mode-traps-the-grid.md) — **CODE REVIEWED**
-- [ ] [Link-Up Wipes The Recipient's Context And Reads Like An API Tutorial](../plans/feature_plan_20260811170004_link-up-relay-endpoint-and-safe-clear-default.md) — **CODE REVIEWED**
-- [ ] [Remove The `delegates` Button — A Permanently Disabled Control In Every Pane Header](../plans/feature_plan_20260811170005_remove-dead-terminal-controls-detach-and-delegates.md) — **CODE REVIEWED**
-- [ ] [Unrelated Repos Appear As Workspaces In The Terminals Sidebar](../plans/feature_plan_20260811170006_terminals-sidebar-foreign-workspace-rows.md) — **CODE REVIEWED**
-- [ ] [A Locked Group's Empty Panes Cannot Be Filled — Every Sidebar Click Is Captured](../plans/feature_plan_20260811170007_locked-group-empty-panes-cannot-be-filled.md) — **CODE REVIEWED**
+- [ ] [Groups Become A Tab Strip Above The Grid, Not A Slab In The Sidebar](../plans/feature_plan_20260811170000_terminals-sidebar-workspace-group-terminal-hierarchy.md) — **CODE REVIEWED** — ID: 973e9940-7c58-40e6-962d-c28ee3d88a05
+- [ ] [Group Switching Inherits The Previous Group's Grid — Give Every Group Its Own Layout](../plans/feature_plan_20260811170001_terminal-group-layout-persistence-and-switching.md) — **CODE REVIEWED** — ID: f0a5f75f-80d2-4bfa-9d49-ec2ac6db95c1
+- [ ] [You Can Never Delete A Group — Give Every Group Source A Working Delete](../plans/feature_plan_20260811170002_terminal-group-deletion-every-source.md) — **CODE REVIEWED** — ID: d617c622-d9cb-43ba-a367-1c1b1efa79e3
+- [ ] [Peek Mode Traps The Grid — Selecting Another Terminal Must Cancel The Peek](../plans/feature_plan_20260811170003_peek-mode-traps-the-grid.md) — **CODE REVIEWED** — ID: e250db3d-c9a8-455a-b48e-2f333f59bc95
+- [ ] [Link-Up Wipes The Recipient's Context And Reads Like An API Tutorial](../plans/feature_plan_20260811170004_link-up-relay-endpoint-and-safe-clear-default.md) — **CODE REVIEWED** — ID: 464ba537-27d1-4af7-a81b-4ce6e92455cd
+- [ ] [Remove The `delegates` Button — A Permanently Disabled Control In Every Pane Header](../plans/feature_plan_20260811170005_remove-dead-terminal-controls-detach-and-delegates.md) — **CODE REVIEWED** — ID: 1737f5e9-347c-4b92-8411-2a73d200632c
+- [ ] [Unrelated Repos Appear As Workspaces In The Terminals Sidebar](../plans/feature_plan_20260811170006_terminals-sidebar-foreign-workspace-rows.md) — **CODE REVIEWED** — ID: 6acbf8fc-0a59-431b-9bae-34c078a97892
+- [ ] [A Locked Group's Empty Panes Cannot Be Filled — Every Sidebar Click Is Captured](../plans/feature_plan_20260811170007_locked-group-empty-panes-cannot-be-filled.md) — **CODE REVIEWED** — ID: 49e0c2f5-e51b-4867-ad75-42c965f38b90
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -22,9 +22,9 @@ Why all three, stated plainly: layers 1 and 2 are predicates, and predicates onl
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Make `~/.switchboard` Unreachable From a Test Process (state-home seam + fail-closed guard)](../plans/sandbox-switchboard-state-home-in-tests.md) — **CODE REVIEWED**
-- [ ] [Make a Bad Integration-Config Write Non-Destructive and a Stale ClickUp Workspace ID Self-Healing](../plans/integration-config-write-guards-and-stale-id-heal.md) — **CODE REVIEWED**
-- [ ] [Back Up `integration-config.json` on Every Significant Write, and Make Restoring It a Ten-Second Operation](../plans/integration-config-backup-on-write-and-restore.md) — **CODE REVIEWED**
+- [ ] [Make `~/.switchboard` Unreachable From a Test Process (state-home seam + fail-closed guard)](../plans/sandbox-switchboard-state-home-in-tests.md) — **CODE REVIEWED** — ID: 279b5d7c-1dcb-40e8-abb3-28cfd52c53c7
+- [ ] [Make a Bad Integration-Config Write Non-Destructive and a Stale ClickUp Workspace ID Self-Healing](../plans/integration-config-write-guards-and-stale-id-heal.md) — **CODE REVIEWED** — ID: 22c157aa-421a-4249-998a-088217fd3a3f
+- [ ] [Back Up `integration-config.json` on Every Significant Write, and Make Restoring It a Ten-Second Operation](../plans/integration-config-backup-on-write-and-restore.md) — **CODE REVIEWED** — ID: b0048610-34f8-41f0-a26c-1727d9387e47
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

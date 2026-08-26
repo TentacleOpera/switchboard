@@ -20,9 +20,9 @@ Group of 3 worktree-tab fixes: abandon button lag (optimistic UI + N+1 query opt
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature Plan: Fix Abandon Worktree Button Lag with Optimistic UI](../plans/feature_plan_20260708120903_abandon-worktree-optimistic-ui.md) — **CODE REVIEWED**
-- [ ] [Feature Plan: Remove Autoban 5-Terminal Cap from Manual Worktree Creation](../plans/feature_plan_20260708120904_worktree-terminal-limit-manual-vs-autoban.md) — **CODE REVIEWED**
-- [ ] [Feature Plan: Add Column Subheaders to Worktree Creation Dropdown](../plans/feature_plan_20260708120907_worktree-creation-dropdown-column-subheaders.md) — **CODE REVIEWED**
+- [ ] [Feature Plan: Fix Abandon Worktree Button Lag with Optimistic UI](../plans/feature_plan_20260708120903_abandon-worktree-optimistic-ui.md) — **CODE REVIEWED** — ID: ffe13b0c-1d5a-4430-b63f-9f778f52d9bb
+- [ ] [Feature Plan: Remove Autoban 5-Terminal Cap from Manual Worktree Creation](../plans/feature_plan_20260708120904_worktree-terminal-limit-manual-vs-autoban.md) — **CODE REVIEWED** — ID: 356b03b9-860e-41c3-83fc-3feeef6a3067
+- [ ] [Feature Plan: Add Column Subheaders to Worktree Creation Dropdown](../plans/feature_plan_20260708120907_worktree-creation-dropdown-column-subheaders.md) — **CODE REVIEWED** — ID: 00eb202d-85ea-4c05-914c-b93905b53dca
 <!-- END SUBTASKS -->
 
 ## Feature Code Review (Direct Reviewer Pass — 2026-07-09)

@@ -15,10 +15,10 @@ Turn the orchestrator from a one-shot batch manager into an agent that wakes on 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Orchestration Starts as a Conversation, Not a Button Press](../plans/orchestration-starts-as-a-conversation.md) — **CODE REVIEWED**
-- [ ] [Orchestrator Persona — One Tick, One Action, No Miscellaneous](../plans/orchestrator-persona-becomes-a-tick.md) — **CODE REVIEWED**
-- [ ] [`/switchboard` Becomes a Launcher — Two Steps, Not a Console](../plans/switchboard-skill-becomes-a-launcher.md) — **CODE REVIEWED**
-- [ ] [Agents Post Updates to a File Inbox the Orchestrator Reads](../plans/agent-reports-go-to-a-file-inbox.md) — **CODE REVIEWED**
+- [ ] [Orchestration Starts as a Conversation, Not a Button Press](../plans/orchestration-starts-as-a-conversation.md) — **CODE REVIEWED** — ID: 65cfd0a0-8877-447a-bcda-ae23d5f3b8e2
+- [ ] [Orchestrator Persona — One Tick, One Action, No Miscellaneous](../plans/orchestrator-persona-becomes-a-tick.md) — **CODE REVIEWED** — ID: 91d5ed5f-7481-4510-ba2c-25689b55445a
+- [ ] [`/switchboard` Becomes a Launcher — Two Steps, Not a Console](../plans/switchboard-skill-becomes-a-launcher.md) — **CODE REVIEWED** — ID: d31a5140-d77b-43c2-8976-30c0f0bcfb38
+- [ ] [Agents Post Updates to a File Inbox the Orchestrator Reads](../plans/agent-reports-go-to-a-file-inbox.md) — **CODE REVIEWED** — ID: 2495bd75-8535-42ff-a424-dc24ee3cdfca
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -13,8 +13,8 @@ Consolidate custom-agent add-on configuration in the Prompts tab and fix the rol
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix Role Selector Dropdown Visibility in Prompts Tab](../plans/feature_plan_20260706085729_fix-role-selector-dropdown-visibility-prompts-tab.md) — **CODE REVIEWED**
-- [ ] [Remove "Apply Feature Ultracode/Goal Directives" Checkbox from Custom Agent Form](../plans/feature_plan_20260706085728_move-feature-directives-to-prompts-tab.md) — **CODE REVIEWED**
+- [ ] [Fix Role Selector Dropdown Visibility in Prompts Tab](../plans/feature_plan_20260706085729_fix-role-selector-dropdown-visibility-prompts-tab.md) — **CODE REVIEWED** — ID: 5a69bb0c-2b00-4e09-8191-06b201d94867
+- [ ] [Remove "Apply Feature Ultracode/Goal Directives" Checkbox from Custom Agent Form](../plans/feature_plan_20260706085728_move-feature-directives-to-prompts-tab.md) — **CODE REVIEWED** — ID: 1df7bc42-c745-4270-a2ad-c0ca111ed6e4
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

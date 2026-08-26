@@ -74,10 +74,10 @@ so without the bump the changes propagate to no one.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Audit and Restructure Agent Skills to Prevent Discovery Failures](../plans/audit-agent-skills-structure.md) — **CODE REVIEWED**
-- [ ] [Fix `switchboard-manage` Entry: Local-Markdown-First, Workspace-Scoped, Low-Noise Console](../plans/switchboard-manage-entry-local-md-and-workspace-scoping.md) — **CODE REVIEWED**
-- [ ] [Release: Bump Extension Version to 1.7.6 to Propagate the Skill Changes](../plans/release-version-bump-1.7.6-propagate-skill-changes.md) — **CODE REVIEWED**
-- [ ] [Make Board/Feature Ops Ergonomic for Agents: Declarative-First, No UUID Choreography](../plans/agent-board-op-ergonomics-declarative-first.md) — **CODE REVIEWED**
+- [ ] [Audit and Restructure Agent Skills to Prevent Discovery Failures](../plans/audit-agent-skills-structure.md) — **CODE REVIEWED** — ID: 2ba95e8c-7753-42b9-9e8d-dd2a1bc26d0a
+- [ ] [Fix `switchboard-manage` Entry: Local-Markdown-First, Workspace-Scoped, Low-Noise Console](../plans/switchboard-manage-entry-local-md-and-workspace-scoping.md) — **CODE REVIEWED** — ID: e76969fc-0723-4bb3-9adf-a50f0a1835af
+- [ ] [Release: Bump Extension Version to 1.7.6 to Propagate the Skill Changes](../plans/release-version-bump-1.7.6-propagate-skill-changes.md) — **CODE REVIEWED** — ID: 88afa890-3fc7-4c11-b26b-380df2b22eef
+- [ ] [Make Board/Feature Ops Ergonomic for Agents: Declarative-First, No UUID Choreography](../plans/agent-board-op-ergonomics-declarative-first.md) — **CODE REVIEWED** — ID: cb42297a-844f-41af-b10c-8bd5386035dd
 <!-- END SUBTASKS -->
 
 ## Completion Report

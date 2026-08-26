@@ -13,8 +13,8 @@ Make every write path resolve a workspace root the same way the read paths alrea
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`POST /kanban/plans/import` Duplicates the Entire Board From One Mis-Cased Root, and Reports That Nothing Happened](../plans/feature_plan_20260814153000_import-endpoint-root-guard-and-honest-count.md) — **PLAN REVIEWED**
-- [ ] [Fix Plan-Card Save Rejecting Every Plan That Lives Under A Mapped Parent Root](../plans/feature_plan_20260814161300_plan-card-save-rejects-mapped-parent-root.md) — **PLAN REVIEWED**
+- [ ] [`POST /kanban/plans/import` Duplicates the Entire Board From One Mis-Cased Root, and Reports That Nothing Happened](../plans/feature_plan_20260814153000_import-endpoint-root-guard-and-honest-count.md) — **PLAN REVIEWED** — ID: 4acb5f84-e4e0-41dc-9235-6c025fe5ba81
+- [ ] [Fix Plan-Card Save Rejecting Every Plan That Lives Under A Mapped Parent Root](../plans/feature_plan_20260814161300_plan-card-save-rejects-mapped-parent-root.md) — **PLAN REVIEWED** — ID: 5abfd8f4-3148-4ece-8616-5eafd10ccf19
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -22,9 +22,9 @@ Makes parent/child relationships visible and controllable from the Tickets sideb
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Convert-to-subtask must stamp `parentId` into the local ticket file and refresh the sidebar](../plans/feature_plan_20260811100143_convert_to_subtask_stamps_parentid_and_refreshes_sidebar.md) — **CODE REVIEWED**
-- [ ] [Replace the sidebar ticket card's overflow menu with a direct Move button](../plans/feature_plan_20260811100143_replace_sidebar_card_overflow_menu_with_direct_move_button.md) — **CODE REVIEWED**
-- [ ] [Subtask-count chip on Tickets sidebar cards, and make it the only drill-down affordance](../plans/feature_plan_20260811100143_subtask_count_chip_is_the_explicit_drilldown_affordance.md) — **CODE REVIEWED**
+- [ ] [Convert-to-subtask must stamp `parentId` into the local ticket file and refresh the sidebar](../plans/feature_plan_20260811100143_convert_to_subtask_stamps_parentid_and_refreshes_sidebar.md) — **CODE REVIEWED** — ID: 0023cd2f-abba-4e29-9898-43411749c4da
+- [ ] [Replace the sidebar ticket card's overflow menu with a direct Move button](../plans/feature_plan_20260811100143_replace_sidebar_card_overflow_menu_with_direct_move_button.md) — **CODE REVIEWED** — ID: 1161ed65-cd4c-4cfd-8bae-d595eddd3fd0
+- [ ] [Subtask-count chip on Tickets sidebar cards, and make it the only drill-down affordance](../plans/feature_plan_20260811100143_subtask_count_chip_is_the_explicit_drilldown_affordance.md) — **CODE REVIEWED** — ID: 4d3c8dc1-eca8-409f-b8d8-1acb68c29424
 <!-- END SUBTASKS -->
 
 ## Review Findings

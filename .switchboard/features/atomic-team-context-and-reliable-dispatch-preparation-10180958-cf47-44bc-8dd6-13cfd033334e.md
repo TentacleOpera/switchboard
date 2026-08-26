@@ -15,10 +15,10 @@ Prepare atomic teams and standalone seats with fresh context without racing prom
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Detect PTY clear readiness before prompt delivery](../plans/bracketed-paste-submit-cr-not-firing-on-devin-3000-5-20-under-load.md) — **CODE REVIEWED**
-- [ ] [Expose VS Code clear delay and PTY readiness mode in Kanban Setup](../plans/expose-pty-clear-delay-in-kanban-setup-ui.md) — **CODE REVIEWED**
-- [ ] [Atomic team context lifecycle per feature run](../plans/atomic-team-feature-run-context-lifecycle.md) — **CODE REVIEWED**
-- [ ] [Dispatch preparation curtain with themed UFO feedback](../plans/dispatch-preparation-curtain-and-themed-ufo.md) — **CODE REVIEWED**
+- [ ] [Detect PTY clear readiness before prompt delivery](../plans/bracketed-paste-submit-cr-not-firing-on-devin-3000-5-20-under-load.md) — **CODE REVIEWED** — ID: ca011dd4-52e7-49f7-9f0a-e7ab00410846
+- [ ] [Expose VS Code clear delay and PTY readiness mode in Kanban Setup](../plans/expose-pty-clear-delay-in-kanban-setup-ui.md) — **CODE REVIEWED** — ID: 925e2291-b642-4244-865e-a186c44c10e1
+- [ ] [Atomic team context lifecycle per feature run](../plans/atomic-team-feature-run-context-lifecycle.md) — **CODE REVIEWED** — ID: dab620eb-f123-41e3-bfc3-464160138a6e
+- [ ] [Dispatch preparation curtain with themed UFO feedback](../plans/dispatch-preparation-curtain-and-themed-ufo.md) — **CODE REVIEWED** — ID: 9745eabb-ca10-4b2d-9cb8-b138fa23dcc8
 <!-- END SUBTASKS -->
 
 ## Cross-Column Review Note

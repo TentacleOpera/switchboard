@@ -28,9 +28,9 @@ That is why there is no `--parents` boot argument, no `ptySetParents` verb, no `
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [PTY Fleet: Report Each Terminal's Parent Workspace](../plans/pty-fleet-parent-workspace-attribution.md) — **CODE REVIEWED**
-- [ ] [PTY Fleet: Spawn Into the Active Parent Workspace](../plans/pty-fleet-multi-parent-spawn.md) — **CODE REVIEWED**
-- [ ] [Terminals Sidebar: Parent → Worktree Two-Level Hierarchy](../plans/terminals-sidebar-parent-worktree-hierarchy.md) — **CODE REVIEWED**
+- [ ] [PTY Fleet: Report Each Terminal's Parent Workspace](../plans/pty-fleet-parent-workspace-attribution.md) — **CODE REVIEWED** — ID: 7f347ba6-adf5-480a-b612-4a269db420cf
+- [ ] [PTY Fleet: Spawn Into the Active Parent Workspace](../plans/pty-fleet-multi-parent-spawn.md) — **CODE REVIEWED** — ID: 326b289c-1e80-43e1-9931-d035bebe553c
+- [ ] [Terminals Sidebar: Parent → Worktree Two-Level Hierarchy](../plans/terminals-sidebar-parent-worktree-hierarchy.md) — **CODE REVIEWED** — ID: b8195cb9-1b41-4f53-95db-8cb9d865b492
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

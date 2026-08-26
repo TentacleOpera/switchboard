@@ -22,10 +22,10 @@ Deliberately excluded: no `--bind` flag, no public exposure, no accounts, no hos
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`npx switchboard` has no lifecycle — add detached start/stop/status/logs and per-OS autostart](../plans/standalone-daemon-lifecycle.md) — **CODE REVIEWED**
-- [ ] [Standalone auth is destroyed on every restart — adopt the already-shipped `switchboard.apiToken` as a durable session token](../plans/standalone-durable-session-token.md) — **CODE REVIEWED**
-- [ ] [The loopback lockdown is undocumented, and the asset route bakes the server port into absolute URLs](../plans/standalone-remote-access-story.md) — **CODE REVIEWED**
-- [ ] [Remote external-team-lead verification over HTTP — close the file-inbox gap](../plans/remote-team-lead-verification-over-http.md) — **CODE REVIEWED**
+- [ ] [`npx switchboard` has no lifecycle — add detached start/stop/status/logs and per-OS autostart](../plans/standalone-daemon-lifecycle.md) — **CODE REVIEWED** — ID: a189596a-9a19-44e5-a9d5-c0026b73c816
+- [ ] [Standalone auth is destroyed on every restart — adopt the already-shipped `switchboard.apiToken` as a durable session token](../plans/standalone-durable-session-token.md) — **CODE REVIEWED** — ID: 6f42af40-52f5-4679-9bce-ab1d74856101
+- [ ] [The loopback lockdown is undocumented, and the asset route bakes the server port into absolute URLs](../plans/standalone-remote-access-story.md) — **CODE REVIEWED** — ID: 6a2d0268-a4c4-4f92-9928-1f44133d06ed
+- [ ] [Remote external-team-lead verification over HTTP — close the file-inbox gap](../plans/remote-team-lead-verification-over-http.md) — **CODE REVIEWED** — ID: 53948639-3fda-4ce5-9ab1-1c99c537d496
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -19,10 +19,10 @@ The plan/feature distinction is a value no other agentic project-management tool
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature Config — Foundation: First-Class "Features" Subsection Per Role + Relocate Agent-Managed Worktrees](../plans/feature-config-foundation-features-subsection.md) — **CODE REVIEWED**
-- [ ] [Feature Config — Workflow Lever: Per-Role Feature Workflow Override](../plans/feature-config-workflow-override-per-role.md) — **CODE REVIEWED**
-- [ ] [Feature Config — Worktree + Subagent Levers: Decouple Feature Orchestration Into Two Independent Controls](../plans/feature-config-worktree-subagent-levers.md) — **CODE REVIEWED**
-- [ ] [Feature Config — Planner Features UI: Wire the Feature Levers Into the Planner's Hardcoded Config Block](../plans/feature-config-planner-features-ui.md) — **CODE REVIEWED**
+- [ ] [Feature Config — Foundation: First-Class "Features" Subsection Per Role + Relocate Agent-Managed Worktrees](../plans/feature-config-foundation-features-subsection.md) — **CODE REVIEWED** — ID: d78af13e-3c52-4ac2-8fb2-97018b88ddb0
+- [ ] [Feature Config — Workflow Lever: Per-Role Feature Workflow Override](../plans/feature-config-workflow-override-per-role.md) — **CODE REVIEWED** — ID: d93150b7-1c55-455a-8c42-06640a998382
+- [ ] [Feature Config — Worktree + Subagent Levers: Decouple Feature Orchestration Into Two Independent Controls](../plans/feature-config-worktree-subagent-levers.md) — **CODE REVIEWED** — ID: 36680618-4d72-49c8-a8e7-6b711801abb6
+- [ ] [Feature Config — Planner Features UI: Wire the Feature Levers Into the Planner's Hardcoded Config Block](../plans/feature-config-planner-features-ui.md) — **CODE REVIEWED** — ID: 5c7f189c-e3dd-4fcf-8844-51951bb6b9e2
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

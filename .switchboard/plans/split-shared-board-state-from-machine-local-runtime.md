@@ -88,10 +88,10 @@ Key risks: `plans` is one wide table holding both tiers, so the split turns the 
 ## Proposed Changes
 
 1. **`src/services/storageTiers.ts` (new)** — one exported constant naming every table and column's tier, and the projection helpers. The single source the board view, the snapshot publisher, the state backup and the export format all derive from.
-2. **Local-tier tables** keyed by `plan_id` + `device_id`, holding the `dispatched_*` family, `last_liveness_at`, `blocked_at`, and `worktrees`. Never remote, never migrated, re-derivable from the live fleet.
+2. **Local-tier tables** keyed by `plan_id` + `device_id`, holding the `dispatched_*` family, `last_liveness_at`, `blocked_at`, and `worktrees`. Never remote, never migrated, re-derivable from the live fleet. **Must live in a separate database file (the Runtime store defined by `storage-topology-one-choice-three-stores.md`), not in the Board database** — libSQL embedded replica sync is whole-database (confirmed by research), so local-tier tables inside the Board DB would be replicated to every teammate, which is exactly the failure mode this plan exists to prevent.
 3. **Rebuild `plans`** without the local columns, in the same pass as the workspace-scoping rebuild. Drop `plan_events.vector_clock`; add `user_id` beside `device_id`.
 3b. **Register imported ticket metadata as shared tier.** `plan_tickets` (`ticket-metadata-as-first-class-board-state.md`) is shared board state and travels with the Board store — a plan imported from Linear must carry its ticket context to every machine and teammate. Today the board holds only `plans.linear_issue_id` / `clickup_task_id` as bare strings while the metadata sits in gitignored files under `.switchboard/tickets/`, so it is neither shared nor durable. The tier constant must name it, or the shared store carries plans whose ticket context is blank for everyone but the importer.
-4. **Convert the cross-tier reads to joins**, after the N+1 batching audit, starting with `getBoardFilteredByProject` and the board projection.
+4. **Convert the cross-tier reads to joins**, after the N+1 batching audit, starting with `getBoardFilteredByProject` and the board projection. **Research constraint (ATTACH):** because the local tier lives in a separate database (Runtime store) and libSQL does not support `ATTACH DATABASE` in embedded replica mode, cross-tier joins cannot use SQL-level `ATTACH` when Board is a remote target. The join must be an application-level merge in TypeScript — open separate connections to Board and Runtime, fetch by `plan_id`, and merge in-process. When Board is a local file (default target), `ATTACH` may work, but the code path must not depend on it.
 5. **Make the shared-tier projection explicit** in `BoardSnapshotPublisher` and the state-backup writer by deriving both from `storageTiers.ts`.
 6. **Orphan sweep** for local-tier rows whose shared row is gone.
 
@@ -109,8 +109,18 @@ One transaction per install: create local tables, copy the local columns out of 
 - **Orphans:** delete a shared row with a live local row; assert the sweep clears it and nothing throws.
 - **No revival:** grep-level regression asserting `vector_clock` is gone.
 
+### Goal Invariants
+
+- **Local columns absent from `plans`:** assert `dispatched_terminal`, `dispatched_at`, `last_liveness_at`, `blocked_at` are absent from the `plans` DDL in `src/services/KanbanDatabase.ts` after migration.
+- **Local columns resolvable in local tier:** assert a local-tier table keyed by `plan_id` + `device_id` exists and holds those four columns (paired positive — absent *here*, present *there*).
+- **`vector_clock` gone:** assert `plan_events.vector_clock` is absent from the schema and from every INSERT site.
+- **Single tier source:** assert `BoardSnapshotPublisher.BoardCardEntry` and `_writeKanbanStateBackup` contain no hardcoded shared-field list — both derive from the exported tier constant in `src/services/storageTiers.ts`.
+- **No shared-store write touches a local column:** assert no write path that targets the shared tier inserts or updates a local-tier column (the failure mode this plan exists to prevent — a read-volume measurement does not catch a stray local-column write).
+- **`device_id` stability:** assert `device_id` is a stable machine identifier across reboots (not `os.hostname()` if hostname can drift), or that the local-tier key uses a persisted stable id — the orphan sweep and "re-derived from the live fleet" claim both depend on this.
+- **Solo-install byte-identical board:** assert a single-machine install's rendered board is identical before and after migration, including activity lights.
+
 ## Outstanding Questions
 
 - **Resolved: the scanner is change-gated, so it is not a meaningful shared-tier write source.** `_rescanAntigravityPlanSourcesImpl` skips before writing when a candidate is already known and unmodified: `if ((existingEntry || hasDbRow) && !isRecent) { continue; }`, with `isRecent` computed from `birthtimeMs`/`mtimeMs` against a cutoff of the previous rescan. Steady state with no file changes produces zero row writes from the sweep. It does perform a `db.hasPlan()` **read** per candidate per 10s tick, which is free locally or against an embedded replica and a per-candidate round trip against a remote-only connection — recorded in the libSQL plan as a further argument for replica-only.
-- Should the local tier be a separate database file rather than separate tables, so a corrupt local tier can be discarded without touching shared state?
+- **Resolved: the local tier must be a separate database file, not separate tables in the Board DB.** Research confirmed libSQL embedded replica sync is whole-database with no partial replication. Local-tier tables inside the Board database would be replicated to every teammate — the exact failure mode this plan exists to prevent. The separate file is the Runtime store defined by the topology plan. This also means cross-tier joins are cross-database and must be application-level when Board is an embedded replica (ATTACH DATABASE is unsupported in replica mode).
 - `projects` is shared, but project *filters* are per-operator UI state. Are they local-tier, or not board state at all?

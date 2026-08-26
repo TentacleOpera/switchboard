@@ -21,10 +21,10 @@ Four first-boot and probe failures found against a booted standalone server: the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone verb rail: two verbs that are not verbs](../plans/standalone-verb-robustness-hardening.md) — **CODE REVIEWED**
-- [ ] [KanbanDatabase: V20 migration fails on every fresh DB and dumps two stack traces](../plans/kanban-db-v20-migration-fresh-db-failure.md) — **CODE REVIEWED**
-- [ ] [Standalone: `GET /catalog` 404s for every workspace except the switchboard repo](../plans/standalone-catalog-endpoint.md) — **CODE REVIEWED**
-- [ ] [Standalone PTY: the darwin spawn-helper chmod never runs under the bundler](../plans/standalone-pty-spawn-helper-chmod.md) — **CODE REVIEWED**
+- [ ] [Standalone verb rail: two verbs that are not verbs](../plans/standalone-verb-robustness-hardening.md) — **CODE REVIEWED** — ID: 56e524e2-d391-4bce-ac3d-67a65bbb15c0
+- [ ] [KanbanDatabase: V20 migration fails on every fresh DB and dumps two stack traces](../plans/kanban-db-v20-migration-fresh-db-failure.md) — **CODE REVIEWED** — ID: a83f60a2-b039-4490-91f4-59502fc674f0
+- [ ] [Standalone: `GET /catalog` 404s for every workspace except the switchboard repo](../plans/standalone-catalog-endpoint.md) — **CODE REVIEWED** — ID: f6582f38-94be-4969-a25a-e89545f1ef3b
+- [ ] [Standalone PTY: the darwin spawn-helper chmod never runs under the bundler](../plans/standalone-pty-spawn-helper-chmod.md) — **CODE REVIEWED** — ID: 1fe507d4-ee12-49e8-934b-41e2dd0f7cdb
 <!-- END SUBTASKS -->
 
 ## Review Findings

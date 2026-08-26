@@ -14,9 +14,9 @@ Bring Switchboard's two main webview surfaces (the Kanban board and the Project 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Reorganize Edit and Delete Layouts in Project Webview](../plans/layout_fixes_project_webview.md) — **CODE REVIEWED**
-- [ ] [Shrink "→ Backlog" Card Button to a Down-Arrow Icon](../plans/shrink-backlog-button-to-icon.md) — **CODE REVIEWED**
-- [ ] [Fix: Subtask Edit Button Hidden When Subtask Opened via In-Preview Link Click](../plans/feature_plan_20260707131749_fix-subtask-edit-button-hidden-on-link-click.md) — **CODE REVIEWED**
+- [ ] [Reorganize Edit and Delete Layouts in Project Webview](../plans/layout_fixes_project_webview.md) — **CODE REVIEWED** — ID: 3eed0876-3d75-4505-a940-a6e23d51c741
+- [ ] [Shrink "→ Backlog" Card Button to a Down-Arrow Icon](../plans/shrink-backlog-button-to-icon.md) — **CODE REVIEWED** — ID: 6a54280b-e3ba-4c53-a3b0-ceabe0c08549
+- [ ] [Fix: Subtask Edit Button Hidden When Subtask Opened via In-Preview Link Click](../plans/feature_plan_20260707131749_fix-subtask-edit-button-hidden-on-link-click.md) — **CODE REVIEWED** — ID: e15ddc20-1405-478b-99a0-02713a02df6d
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

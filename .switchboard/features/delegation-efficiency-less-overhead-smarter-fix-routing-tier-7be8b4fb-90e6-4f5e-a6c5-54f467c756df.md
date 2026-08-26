@@ -19,8 +19,8 @@ They compose conceptually: the reviewer sees pre-checked work (tiered review), t
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Reviewer Fix Delegation: Self-Fix Threshold + Diagnosis-Only for Judgment Calls](../plans/self-fix-threshold-for-surgical-sets.md) — **CODE REVIEWED**
-- [ ] [Tiered Review: Mechanical Gate + Phone-a-Friend Pre-Review Before Expensive Reviewer](../plans/tiered-review-mechanical-gate-and-phone-a-friend-pre-review.md) — **CODE REVIEWED**
+- [ ] [Reviewer Fix Delegation: Self-Fix Threshold + Diagnosis-Only for Judgment Calls](../plans/self-fix-threshold-for-surgical-sets.md) — **CODE REVIEWED** — ID: e5ff5d65-be48-4891-aaec-e9df41d5c2f7
+- [ ] [Tiered Review: Mechanical Gate + Phone-a-Friend Pre-Review Before Expensive Reviewer](../plans/tiered-review-mechanical-gate-and-phone-a-friend-pre-review.md) — **CODE REVIEWED** — ID: 2cd20aeb-8eb6-4863-8da1-beedc4584bbb
 <!-- END SUBTASKS -->
 
 ## Review Findings

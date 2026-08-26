@@ -12,9 +12,9 @@ The work is split into three sequential subtasks. **Subtask 1** (backend + colum
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [STAGING column — backend, column definition, and partial frontend (Session 1 COMPLETE)](../plans/staging-column-replaces-dispatch-view.md) — **CODE REVIEWED**
-- [ ] [STAGING column — frontend DISPATCH cleanup and drag-into-STAGING routing](../plans/staging-column-2-frontend-dispatch-cleanup.md) — **CODE REVIEWED**
-- [ ] [STAGING column — skills, docs, and tests](../plans/staging-column-3-skills-docs-tests.md) — **CODE REVIEWED**
+- [ ] [STAGING column — backend, column definition, and partial frontend (Session 1 COMPLETE)](../plans/staging-column-replaces-dispatch-view.md) — **CODE REVIEWED** — ID: a3734753-98d5-43a4-9817-01b2e1c5a0be
+- [ ] [STAGING column — frontend DISPATCH cleanup and drag-into-STAGING routing](../plans/staging-column-2-frontend-dispatch-cleanup.md) — **CODE REVIEWED** — ID: 3702adf1-95a9-453d-9ee8-74e690cdafae
+- [ ] [STAGING column — skills, docs, and tests](../plans/staging-column-3-skills-docs-tests.md) — **CODE REVIEWED** — ID: bc573130-2bc9-4c2f-a0e1-134b342ef5a5
 <!-- END SUBTASKS -->
 
 ## Completion Report

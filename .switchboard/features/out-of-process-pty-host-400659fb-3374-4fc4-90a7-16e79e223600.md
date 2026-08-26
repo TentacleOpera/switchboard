@@ -20,9 +20,9 @@ The extension becomes control plane only: it spawns and supervises the pty host,
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Extract the PTY Host Into Its Own Process (1/3)](../plans/feature_plan_20260801203937_pty-host-out-of-process.md) — **CODE REVIEWED**
-- [ ] [Make the Extension a Control Plane for the PTY Host (2/3)](../plans/feature_plan_20260801203938_extension-pty-control-plane.md) — **CODE REVIEWED**
-- [ ] [Point the Terminals Panel Directly at the PTY Host (3/3)](../plans/feature_plan_20260801203939_terminals-panel-direct-connect.md) — **CODE REVIEWED**
+- [ ] [Extract the PTY Host Into Its Own Process (1/3)](../plans/feature_plan_20260801203937_pty-host-out-of-process.md) — **CODE REVIEWED** — ID: 3bd22a8c-b3a9-4aa9-8e32-cb1d734a7589
+- [ ] [Make the Extension a Control Plane for the PTY Host (2/3)](../plans/feature_plan_20260801203938_extension-pty-control-plane.md) — **CODE REVIEWED** — ID: 499a6d56-3a73-4891-88f8-5d1e3ebc66f5
+- [ ] [Point the Terminals Panel Directly at the PTY Host (3/3)](../plans/feature_plan_20260801203939_terminals-panel-direct-connect.md) — **CODE REVIEWED** — ID: 59183a80-ee75-40d0-ad59-56d5995dec97
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

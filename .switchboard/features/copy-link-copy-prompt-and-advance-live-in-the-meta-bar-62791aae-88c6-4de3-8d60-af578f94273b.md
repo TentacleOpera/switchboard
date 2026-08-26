@@ -14,9 +14,9 @@ Put document actions where users look for them - the meta-bar above the preview,
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Copy-prompt button "copied" feedback fires late and flashes green instead of a subtle press](../plans/feature_plan_20260820074420_copy-prompt-button-feedback-fires-late-and-flashes-green.md) — **PLAN REVIEWED**
-- [ ] [Relocate Copy Link to Preview Meta-Bars Across All Panels](../plans/relocate-copy-link-to-preview-meta-bars.md) — **PLAN REVIEWED**
-- [ ] [Add Copy Prompt and Advance Buttons to Project.html Kanban Plans Meta-Bar](../plans/add-copy-prompt-and-advance-to-kanban-meta-bar.md) — **PLAN REVIEWED**
+- [ ] [Copy-prompt button "copied" feedback fires late and flashes green instead of a subtle press](../plans/feature_plan_20260820074420_copy-prompt-button-feedback-fires-late-and-flashes-green.md) — **PLAN REVIEWED** — ID: 4fd378b5-3934-49b7-9e3a-6c26995132bb
+- [ ] [Relocate Copy Link to Preview Meta-Bars Across All Panels](../plans/relocate-copy-link-to-preview-meta-bars.md) — **PLAN REVIEWED** — ID: d9c7ad2c-f845-4729-baf6-e50179f64ed1
+- [ ] [Add Copy Prompt and Advance Buttons to Project.html Kanban Plans Meta-Bar](../plans/add-copy-prompt-and-advance-to-kanban-meta-bar.md) — **PLAN REVIEWED** — ID: eed94867-f544-4923-97c3-d03b33207cad
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

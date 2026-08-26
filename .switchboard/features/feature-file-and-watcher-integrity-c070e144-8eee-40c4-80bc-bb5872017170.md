@@ -13,8 +13,8 @@ Make Switchboard feature .md files and kanban DB rows robust against the two way
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix `_regenerateFeatureFile` splice so it collapses to exactly one `## Subtasks` block](../plans/fix-feature-md-subtask-block-accretion.md) — **CODE REVIEWED**
-- [ ] [Guard the plan-watcher against git-churn board clobber](../plans/guard-watcher-against-git-churn-board-clobber.md) — **CODE REVIEWED**
+- [ ] [Fix `_regenerateFeatureFile` splice so it collapses to exactly one `## Subtasks` block](../plans/fix-feature-md-subtask-block-accretion.md) — **CODE REVIEWED** — ID: da7322f8-1f66-4261-b160-78bcf507abdb
+- [ ] [Guard the plan-watcher against git-churn board clobber](../plans/guard-watcher-against-git-churn-board-clobber.md) — **CODE REVIEWED** — ID: e6e0b774-d0dc-4fce-b2b4-efa6fde88b59
 <!-- END SUBTASKS -->
 
 ## Subtasks` block**: Replaces the broken independent-`indexOf` splice with strip-all-then-insert-one (healing orphan/duplicate blocks in one pass), and applies the same fix to the WORKTREES block. This stops feature `.md` files from growing without bound on every regeneration.

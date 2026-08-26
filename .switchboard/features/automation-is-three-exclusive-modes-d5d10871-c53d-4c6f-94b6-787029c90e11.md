@@ -15,10 +15,10 @@ The AUTOMATION tab becomes a three-way choice — agent-managed, scheduled, exte
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [AUTOMATION Tab — Three Exclusive Modes, and Almost No Other Controls](../plans/automation-tab-three-exclusive-modes.md) — **CODE REVIEWED**
-- [ ] [Delete the Attended Oversight Pass](../plans/delete-the-attended-oversight-pass.md) — **CODE REVIEWED**
-- [ ] [Worktree Strategy Is the User's Choice, and the Agent Obeys It](../plans/worktree-strategy-is-the-users-choice.md) — **CODE REVIEWED**
-- [ ] [Retire the Scheduler Surface, Keep Its Two Jobs](../plans/retire-the-scheduler-surface.md) — **CODE REVIEWED**
+- [ ] [AUTOMATION Tab — Three Exclusive Modes, and Almost No Other Controls](../plans/automation-tab-three-exclusive-modes.md) — **CODE REVIEWED** — ID: e26457e6-0564-47ba-abe1-16f6323642fe
+- [ ] [Delete the Attended Oversight Pass](../plans/delete-the-attended-oversight-pass.md) — **CODE REVIEWED** — ID: fcddc4d2-7df5-49df-8c8f-ec8b0df502fa
+- [ ] [Worktree Strategy Is the User's Choice, and the Agent Obeys It](../plans/worktree-strategy-is-the-users-choice.md) — **CODE REVIEWED** — ID: 228473b5-3ba6-4cf0-a3d5-d5b55e7bb696
+- [ ] [Retire the Scheduler Surface, Keep Its Two Jobs](../plans/retire-the-scheduler-surface.md) — **CODE REVIEWED** — ID: 23c92a76-2237-427a-9d1f-d2733d9312d6
 <!-- END SUBTASKS -->
 
 ## Reconciliation record — 2026-08-17

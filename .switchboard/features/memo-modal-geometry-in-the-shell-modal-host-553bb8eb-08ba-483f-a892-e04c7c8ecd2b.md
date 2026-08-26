@@ -26,8 +26,8 @@ The shell's modal host sizes, positions and dismisses #modal-dialog without refe
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Memo Modal Close Button Overlaps The Workspace Dropdown](../plans/feature_plan_20260812093100_memo-modal-close-button-overlaps-workspace-dropdown.md) — **PLAN REVIEWED**
-- [ ] [Memo Modal Is Oversized: Dead Space Below The Memo Swallows Backdrop-Dismiss Clicks](../plans/feature_plan_20260812093400_memo-modal-content-sized-dialog-dead-space.md) — **PLAN REVIEWED**
-- [ ] [Dismiss the browser cockpit Memo modal after Copy Prompt / Send to Planner](../plans/feature_plan_20260812185740_memo-modal-dismiss-on-copy-or-send.md) — **PLAN REVIEWED**
+- [ ] [Memo Modal Close Button Overlaps The Workspace Dropdown](../plans/feature_plan_20260812093100_memo-modal-close-button-overlaps-workspace-dropdown.md) — **PLAN REVIEWED** — ID: 7d85de9e-0f94-4210-85dd-103d3ad3432d
+- [ ] [Memo Modal Is Oversized: Dead Space Below The Memo Swallows Backdrop-Dismiss Clicks](../plans/feature_plan_20260812093400_memo-modal-content-sized-dialog-dead-space.md) — **PLAN REVIEWED** — ID: aea94c35-f0e8-4c6c-8fc9-11607c226933
+- [ ] [Dismiss the browser cockpit Memo modal after Copy Prompt / Send to Planner](../plans/feature_plan_20260812185740_memo-modal-dismiss-on-copy-or-send.md) — **PLAN REVIEWED** — ID: a49b747d-8580-469b-ae62-b36e2e2a7f72
 <!-- END SUBTASKS -->
 

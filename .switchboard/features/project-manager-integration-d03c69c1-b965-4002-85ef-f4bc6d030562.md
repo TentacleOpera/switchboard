@@ -20,8 +20,8 @@ Make the Project Manager a first-class citizen of the board: promote the PM from
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Board → Manager: "Run Selected Plans" Targeted Pass Button](../plans/board-selected-plans-to-manager-targeted-pass.md) — **CODE REVIEWED**
-- [ ] [Promote Project Manager to a Core Role (Agents Tab)](../plans/promote-project-manager-to-core-role.md) — **CODE REVIEWED**
+- [ ] [Board → Manager: "Run Selected Plans" Targeted Pass Button](../plans/board-selected-plans-to-manager-targeted-pass.md) — **CODE REVIEWED** — ID: 8adeb3f8-810a-417d-b16e-181b32c009f4
+- [ ] [Promote Project Manager to a Core Role (Agents Tab)](../plans/promote-project-manager-to-core-role.md) — **CODE REVIEWED** — ID: 0832120f-77dd-49e3-9edc-fccc488e6fba
 <!-- END SUBTASKS -->
 
 ## Completion Summary

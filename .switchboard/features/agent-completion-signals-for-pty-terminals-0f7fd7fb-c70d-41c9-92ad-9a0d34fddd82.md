@@ -47,9 +47,9 @@ Gating only the sweep spares the DB row while the card still renders dark at min
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [PTY Output Liveness Must Gate the Activity-Light Timeout Sweep](../plans/feature_plan_20260807103000_pty-liveness-heartbeat-gates-activity-light-sweep.md) — **CODE REVIEWED**
-- [ ] [Agent-Emitted Completion via CLI Hooks — BUILT, THEN REMOVED (superseded by output-silence detection)](../plans/feature_plan_20260807103100_agent-emitted-completion-via-cli-hooks.md) — **CODE REVIEWED**
-- [ ] [Screen-State Idle Detection: Render the PTY Stream Server-Side So Output Can Signal Turn-End for Agents With No Hook Mechanism](../plans/feature_plan_20260807103200_pty-screen-state-idle-detection-headless-vt.md) — **CODE REVIEWED**
+- [ ] [PTY Output Liveness Must Gate the Activity-Light Timeout Sweep](../plans/feature_plan_20260807103000_pty-liveness-heartbeat-gates-activity-light-sweep.md) — **CODE REVIEWED** — ID: 50638768-d7e6-4b88-968b-215a1ecaf00d
+- [ ] [Agent-Emitted Completion via CLI Hooks — BUILT, THEN REMOVED (superseded by output-silence detection)](../plans/feature_plan_20260807103100_agent-emitted-completion-via-cli-hooks.md) — **CODE REVIEWED** — ID: 65ef46d3-c16a-4db1-ac69-ad9c384b735c
+- [ ] [Screen-State Idle Detection: Render the PTY Stream Server-Side So Output Can Signal Turn-End for Agents With No Hook Mechanism](../plans/feature_plan_20260807103200_pty-screen-state-idle-detection-headless-vt.md) — **CODE REVIEWED** — ID: 75b6017a-01a0-47d5-b839-52e228e109a9
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

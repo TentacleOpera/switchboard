@@ -14,9 +14,9 @@ Establish one access contract - agents reach state through the LocalApiServer's 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Teams reach state through endpoints, never through host files](../plans/teams-reach-state-through-endpoints-not-host-files.md) — **CREATED**
-- [ ] [Generate channel-declaration text in the Connections tab for the user to paste into a cloud agent](../plans/user-declared-state-channels-as-a-skill.md) — **CREATED**
-- [ ] [Register an Agent Running in Any Local Terminal, by Letting It Pull Instead of Being Pushed](../plans/register-an-agent-in-any-local-terminal.md) — **CREATED**
+- [ ] [Teams reach state through endpoints, never through host files](../plans/teams-reach-state-through-endpoints-not-host-files.md) — **CREATED** — ID: 71f78982-cf02-46cf-9308-d8926addd993
+- [ ] [Generate channel-declaration text in the Connections tab for the user to paste into a cloud agent](../plans/user-declared-state-channels-as-a-skill.md) — **CREATED** — ID: b62b2e5d-45ed-4290-a6c8-1f13681d5e6d
+- [ ] [Register an Agent Running in Any Local Terminal, by Letting It Pull Instead of Being Pushed](../plans/register-an-agent-in-any-local-terminal.md) — **CREATED** — ID: 6df5200a-3e42-46b3-b64b-17c770c47670
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

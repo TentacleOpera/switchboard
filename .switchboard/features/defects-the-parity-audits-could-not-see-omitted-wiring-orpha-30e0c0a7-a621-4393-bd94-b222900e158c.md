@@ -81,12 +81,12 @@ parity gaps.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`POST /kanban/move` Is Dead in Standalone — and 13 More `LocalApiServer` Options the Bootstrap Never Passes](../plans/standalone-kanban-move-endpoint-not-wired.md) — **PLAN REVIEWED**
-- [ ] [Hiding a Custom Kanban Column Does Nothing — Three Readers Ignore the Key, and the Write Leaks Into the Machine-Global Role Picker](../plans/custom-column-visibility-toggle-writes-state-no-reader-consults.md) — **PLAN REVIEWED**
-- [ ] [Read Verbs Return a Bare Ack and Ship Their Value Only on the Webview Push — the Opposite of the Documented Contract](../plans/read-verbs-return-bare-ack-violating-documented-http-contract.md) — **PLAN REVIEWED**
-- [ ] [Four Published Doc Pages Still Document Plan Auto-Fetch, Retired and Replaced by the `fetch-plans` Scheduler Source](../plans/docs-still-document-retired-plan-autofetch.md) — **PLAN REVIEWED**
-- [ ] [Standalone Parity by Code Verification — Sweep for Stubs, Omitted Wiring, Discarded Values and Gates That Pass Vacuously](../plans/standalone-code-verification-sweep-stubs-and-omissions.md) — **PLAN REVIEWED**
-- [ ] [Five Shipped `planAutoFetch` Settings Were Removed Outright, Leaving ~4,000 Installs With "Unknown Configuration Setting" Warnings and No Migration Path](../plans/planautofetch-settings-removed-without-deprecation-orphan-warnings.md) — **PLAN REVIEWED**
+- [ ] [`POST /kanban/move` Is Dead in Standalone — and 13 More `LocalApiServer` Options the Bootstrap Never Passes](../plans/standalone-kanban-move-endpoint-not-wired.md) — **PLAN REVIEWED** — ID: 5e8e3600-c011-49a0-aba9-1ad1bf030228
+- [ ] [Hiding a Custom Kanban Column Does Nothing — Three Readers Ignore the Key, and the Write Leaks Into the Machine-Global Role Picker](../plans/custom-column-visibility-toggle-writes-state-no-reader-consults.md) — **PLAN REVIEWED** — ID: 585cfe79-d77a-43a3-a037-fdc3022fce08
+- [ ] [Read Verbs Return a Bare Ack and Ship Their Value Only on the Webview Push — the Opposite of the Documented Contract](../plans/read-verbs-return-bare-ack-violating-documented-http-contract.md) — **PLAN REVIEWED** — ID: 27f87493-2cf8-4fae-992c-d1d521b4a776
+- [ ] [Four Published Doc Pages Still Document Plan Auto-Fetch, Retired and Replaced by the `fetch-plans` Scheduler Source](../plans/docs-still-document-retired-plan-autofetch.md) — **PLAN REVIEWED** — ID: 375edd49-fcf9-40d4-a869-74b0696abc69
+- [ ] [Standalone Parity by Code Verification — Sweep for Stubs, Omitted Wiring, Discarded Values and Gates That Pass Vacuously](../plans/standalone-code-verification-sweep-stubs-and-omissions.md) — **PLAN REVIEWED** — ID: fd9e39e7-366d-433a-9ea9-3365d569a4b4
+- [ ] [Five Shipped `planAutoFetch` Settings Were Removed Outright, Leaving ~4,000 Installs With "Unknown Configuration Setting" Warnings and No Migration Path](../plans/planautofetch-settings-removed-without-deprecation-orphan-warnings.md) — **PLAN REVIEWED** — ID: 34c7a73f-d616-48e5-af0a-8ce944b4c098
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -13,8 +13,8 @@ Two corrections to the endpoint surface agents use to observe and register. An e
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminal Buffer Snapshot API — `GET /terminals/:name/buffer`](../plans/feature_plan_20260818180000_terminal-buffer-snapshot-api.md) — **PLAN REVIEWED**
-- [ ] [Orchestrator adopt call drops workspaceRoot — orchestrator scopes to the wrong workspace](../plans/fix-orchestrator-adopt-workspace-root.md) — **PLAN REVIEWED**
+- [ ] [Terminal Buffer Snapshot API — `GET /terminals/:name/buffer`](../plans/feature_plan_20260818180000_terminal-buffer-snapshot-api.md) — **PLAN REVIEWED** — ID: a2eb60fa-72d8-4643-85e6-1ab24e98b676
+- [ ] [Orchestrator adopt call drops workspaceRoot — orchestrator scopes to the wrong workspace](../plans/fix-orchestrator-adopt-workspace-root.md) — **PLAN REVIEWED** — ID: 072c5d07-c040-4a7b-9dd9-3f1e74e822b5
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

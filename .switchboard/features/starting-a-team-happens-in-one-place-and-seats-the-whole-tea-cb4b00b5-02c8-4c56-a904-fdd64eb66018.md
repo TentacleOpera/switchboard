@@ -19,7 +19,7 @@ Starting a team has two entry points and neither shows the result. The terminals
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [START TEAM Seats One Head Into Whatever Grid Is Open Instead of Opening the Team's Own Grid](../plans/feature_plan_20260817174451_start-team-seats-one-head-into-the-open-grid-instead-of-its-own.md) — **CODE REVIEWED**
-- [ ] [The TEAMS Tab Adopts Teams; It Does Not Start Them](../plans/feature_plan_20260817174452_teams-tab-adopts-teams-it-does-not-start-them.md) — **CODE REVIEWED**
+- [ ] [START TEAM Seats One Head Into Whatever Grid Is Open Instead of Opening the Team's Own Grid](../plans/feature_plan_20260817174451_start-team-seats-one-head-into-the-open-grid-instead-of-its-own.md) — **CODE REVIEWED** — ID: 2cb5cf9f-193f-4603-b4ce-9d8e6b88a5f4
+- [ ] [The TEAMS Tab Adopts Teams; It Does Not Start Them](../plans/feature_plan_20260817174452_teams-tab-adopts-teams-it-does-not-start-them.md) — **CODE REVIEWED** — ID: dd048d30-3124-4d4e-a654-f78bab4aa4a5
 <!-- END SUBTASKS -->
 

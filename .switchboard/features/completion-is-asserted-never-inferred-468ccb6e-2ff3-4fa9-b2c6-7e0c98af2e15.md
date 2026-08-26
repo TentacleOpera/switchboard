@@ -14,9 +14,9 @@ Make an explicit completion post the only way the system learns that work finish
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add a task-complete endpoint the lead posts to](../plans/add-a-task-complete-endpoint-for-the-lead.md) — **CODE REVIEWED**
-- [ ] [Completion is asserted, never inferred — and silence halts](../plans/completion-is-asserted-never-inferred.md) — **CODE REVIEWED**
-- [ ] [Revise the in-flight plans for asserted completion](../plans/revise-the-in-flight-plans-for-asserted-completion.md) — **CODE REVIEWED**
+- [ ] [Add a task-complete endpoint the lead posts to](../plans/add-a-task-complete-endpoint-for-the-lead.md) — **CODE REVIEWED** — ID: 4e00f321-0987-43a9-a8b7-38a4e1125b24
+- [ ] [Completion is asserted, never inferred — and silence halts](../plans/completion-is-asserted-never-inferred.md) — **CODE REVIEWED** — ID: aa1f49da-ae96-4db1-b0f1-f6829078fd27
+- [ ] [Revise the in-flight plans for asserted completion](../plans/revise-the-in-flight-plans-for-asserted-completion.md) — **CODE REVIEWED** — ID: df870968-3e92-4e60-8053-038b0528c562
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -65,7 +65,6 @@ Hard chain: the endpoint lands first, then the anchor.
   - No plan already in implementation is rewritten under its coder (board-state check before editing; append where work has started).
   - Each amendment states why the premise changed, not merely what changed.
 - **Scope constraints:** Deliverable is edited plan files, not code. Does NOT amend `add-a-task-complete-endpoint-for-the-lead.md` (precondition relationship already recorded in the anchor's Dependencies). Does NOT perform the streams plan split (records it as a recommendation only).
-
 
 ## Review Findings
 

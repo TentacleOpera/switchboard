@@ -43,11 +43,11 @@ No plans were merged, split or deleted — the five subtasks divide cleanly by m
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standing Orders — Add Scope (Global / Team / Pair), Drop the Caps](../plans/standing-orders-scopes-and-decap.md) — **CODE REVIEWED**
-- [ ] [Teams Own Their Prompt — Stop Generating Pair Records Per Member](../plans/team-prompt-replaces-pair-records.md) — **CODE REVIEWED**
-- [ ] [Start a Team Explicitly — Wire the Button That Already Exists](../plans/explicit-team-start-in-terminals-panel.md) — **CODE REVIEWED**
-- [ ] [Tell the Lead Its Coders Exist — Fix the DELEGATE PARENT Gate](../plans/delegate-parent-notice-gate-fix.md) — **CODE REVIEWED**
-- [ ] [TEAMS Tab — Three Team Types, One Phone-a-Friend Control, No Dead Spawner](../plans/teams-tab-three-presets-and-phone-a-friend.md) — **CODE REVIEWED**
+- [ ] [Standing Orders — Add Scope (Global / Team / Pair), Drop the Caps](../plans/standing-orders-scopes-and-decap.md) — **CODE REVIEWED** — ID: 33b8a626-059d-463f-826e-f268210b6908
+- [ ] [Teams Own Their Prompt — Stop Generating Pair Records Per Member](../plans/team-prompt-replaces-pair-records.md) — **CODE REVIEWED** — ID: 81a3f4fd-87b5-4c2d-93ea-c13f308b7ea2
+- [ ] [Start a Team Explicitly — Wire the Button That Already Exists](../plans/explicit-team-start-in-terminals-panel.md) — **CODE REVIEWED** — ID: 3759d930-e143-4501-a044-29a3dc422386
+- [ ] [Tell the Lead Its Coders Exist — Fix the DELEGATE PARENT Gate](../plans/delegate-parent-notice-gate-fix.md) — **CODE REVIEWED** — ID: c1d1f92a-31b4-4f93-9359-b38669b1c6b3
+- [ ] [TEAMS Tab — Three Team Types, One Phone-a-Friend Control, No Dead Spawner](../plans/teams-tab-three-presets-and-phone-a-friend.md) — **CODE REVIEWED** — ID: 426fefd4-ed7a-4f82-9a22-5b65d441f5ed
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

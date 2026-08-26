@@ -18,23 +18,7 @@ const http = require('http');
 
 const featureRef = process.argv[2];
 const planRefOrJson = process.argv[3];
-let resolveWorkspaceRoot;
-try {
-  ({ resolveWorkspaceRoot } = require('../_lib/workspace-root'));
-} catch {
-  resolveWorkspaceRoot = (explicit) =>
-    path.resolve(explicit && explicit !== '.' ? explicit : process.cwd());
-}
-const workspaceRoot = resolveWorkspaceRoot(process.argv[4]);
-if (!workspaceRoot) {
-  console.error(
-    `No Switchboard workspace found from ${process.cwd()} — no .switchboard/kanban.db ` +
-    `in this directory or any parent below your home directory.\n` +
-    `Pass the workspace root explicitly:\n` +
-    `  node assign-to-feature.js <feature> <plan_or_plan_ids_json> /absolute/path/to/workspace`
-  );
-  process.exit(1);
-}
+const workspaceRoot = process.argv[4] || '.';
 
 if (!featureRef || !planRefOrJson) {
   console.error("Usage: node assign-to-feature.js <feature> <plan_or_plan_ids_json> [workspace_root]");

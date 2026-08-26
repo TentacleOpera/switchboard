@@ -13,8 +13,8 @@ Align agent protocol instructions, prompt directives, and workflows to improve p
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature Plan: Clarify "Pin to Project" Mechanism in Workflow & Protocol Docs](../plans/feature_plan_20260708120902_pin-to-project-docs-clarity.md) — **CODE REVIEWED**
-- [ ] [Feature Plan: Add Plan-File Update Directive to All Coding Roles](../plans/feature_plan_20260708120905_coder-prompt-plan-file-update-directive.md) — **CODE REVIEWED**
+- [ ] [Feature Plan: Clarify "Pin to Project" Mechanism in Workflow & Protocol Docs](../plans/feature_plan_20260708120902_pin-to-project-docs-clarity.md) — **CODE REVIEWED** — ID: 8b2cc1e9-57f0-41f0-8766-dbc5f9bae352
+- [ ] [Feature Plan: Add Plan-File Update Directive to All Coding Roles](../plans/feature_plan_20260708120905_coder-prompt-plan-file-update-directive.md) — **CODE REVIEWED** — ID: c8d893b9-44b6-46be-80c4-80d90f8ce1a5
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -12,7 +12,7 @@ Make the Docs tab online-document workflow match the Tickets tab proven model: n
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Converge Docs Tab to Tickets Tab Import/Edit/Sync Model](../plans/feature_plan_20260706120000_docs-tab-converge-to-tickets-model.md) — **CODE REVIEWED**
+- [ ] [Converge Docs Tab to Tickets Tab Import/Edit/Sync Model](../plans/feature_plan_20260706120000_docs-tab-converge-to-tickets-model.md) — **CODE REVIEWED** — ID: 1e76bc3e-dadd-45df-a100-09280b220745
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

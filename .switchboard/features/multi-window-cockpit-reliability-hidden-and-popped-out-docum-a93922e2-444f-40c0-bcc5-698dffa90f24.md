@@ -15,10 +15,10 @@ The browser cockpit was built for one visible document and breaks in four distin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix Terminal Renderer Desync on Window Minimize/Restore](../plans/feature_plan_20260807120001_fix-terminal-renderer-desync-on-window-restore.md) — **CODE REVIEWED**
-- [ ] [Diagnose and fix the New Window WebSocket freeze root cause](../plans/feature_plan_20260807140000_diagnose-new-window-ws-freeze-root-cause.md) — **CODE REVIEWED**
-- [ ] [A Never-Opened Terminals Panel Holds a WebGL Context Per Terminal, Starving Every Other Window](../plans/feature_plan_20260807140000_defer-webgl-context-until-pane-has-a-box.md) — **CODE REVIEWED**
-- [ ] [Solo Terminal Pop-Out Renders at the Cockpit Grid Cell's Size Because the Shared PTY Takes the Minimum of Every Attached Viewport](../plans/feature_plan_20260808212300_solo-popout-pty-clamped-to-cockpit-grid-cell.md) — **CODE REVIEWED**
+- [ ] [Fix Terminal Renderer Desync on Window Minimize/Restore](../plans/feature_plan_20260807120001_fix-terminal-renderer-desync-on-window-restore.md) — **CODE REVIEWED** — ID: 4874ade2-9099-4e65-ab88-8b0da59d19b3
+- [ ] [Diagnose and fix the New Window WebSocket freeze root cause](../plans/feature_plan_20260807140000_diagnose-new-window-ws-freeze-root-cause.md) — **CODE REVIEWED** — ID: aa8a397a-83b4-43bb-94dd-c0080aadecd8
+- [ ] [A Never-Opened Terminals Panel Holds a WebGL Context Per Terminal, Starving Every Other Window](../plans/feature_plan_20260807140000_defer-webgl-context-until-pane-has-a-box.md) — **CODE REVIEWED** — ID: 12c8fe9a-cbdf-4a96-9992-a920d999646e
+- [ ] [Solo Terminal Pop-Out Renders at the Cockpit Grid Cell's Size Because the Shared PTY Takes the Minimum of Every Attached Viewport](../plans/feature_plan_20260808212300_solo-popout-pty-clamped-to-cockpit-grid-cell.md) — **CODE REVIEWED** — ID: d55b4565-16d4-4af1-852d-5d7da300ecf7
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -16,10 +16,9 @@ Restructuring is expected — but bounded:
 - **Git is the undo.** Commit before any destructive op (delete/merge) so it is trivially reversible. Deletion of a plan file on a branch is cheap — it is a working document, not shipped user data. Do not treat it with production-data caution.
 - **Never hand-edit the auto-generated subtasks block** (`<!-- BEGIN/END SUBTASKS -->`) — Switchboard regenerates it from the DB.
 - **Route set changes through the real mechanisms**, not the block:
-  - **If SWITCHBOARD STATUS: Live is present in your prompt, you are local — use the injected port for kanban_operations calls; skip the .switchboard/api-server-port.txt file-existence detection.**
   - *Remote (no extension):* `git rm` the removed subtask `.md` files (the plan watcher hard-deletes their rows on the next local pull), create any new consolidated plan file (do NOT write a `**Plan ID:**` line — it is never read; the importer assigns the ID and keys by file path), and add a `**Feature:** <feature-plan-id>` line to the new plan file's frontmatter (the feature's UUID, taken from its `feature-<uuid>.md` filename; applied on import with apply-if-empty semantics). For column moves, you MUST move newly created cards to `PLAN REVIEWED` using the session-appropriate mechanism:
-    - **Local (extension running — `.switchboard/api-server-port.txt` present or `SWITCHBOARD STATUS: Live` in prompt):** Use the `kanban_operations` skill (move-card.js) to move the card to `PLAN REVIEWED`. (If `SWITCHBOARD STATUS: Live` is present, you are local — use the injected port directly for `kanban_operations` calls and skip `.switchboard/api-server-port.txt` file-existence detection.)
-    - **Remote (no extension — `.switchboard/api-server-port.txt` absent and no `SWITCHBOARD STATUS: Live` line):** Use the Notion/Linear provider or MCP to move the card to `PLAN REVIEWED`.
+    - **Local (extension running — `.switchboard/api-server-port.txt` present):** Use the `kanban_operations` skill (move-card.js) to move the card to `PLAN REVIEWED`.
+    - **Remote (no extension — `.switchboard/api-server-port.txt` absent):** Use the Notion/Linear provider or MCP to move the card to `PLAN REVIEWED`.
     In-place rewrites keep their existing column. Detect remote by the absence of `.switchboard/api-server-port.txt`.
   - *Local (extension running):* use `assign-to-feature.js` / the feature's create path for card-set changes.
 - **Report the restructure** — what merged into what, what was deleted, what survived — so the diff is legible. End with the reconciled subtask list.
@@ -47,13 +46,13 @@ Restructuring is expected — but bounded:
    - **Rewrite** a subtask to remove a contradiction or to defer to the merged owner of a shared symbol.
    - **Split** a subtask that is really two units of work.
    - **Reorder** — record the execution sequence.
-   Apply session-scope directives here (e.g. "unreleased → clean break, no migration shims"; "single-repo") — **apply them, never transcribe them.** A directive binds this run, not the reader. Written into a subtask file it inverts: the coder who picks that file up reads a constraint on *you* as an instruction to *itself*, and follows the document over the live dispatch that contradicts it.
+   Apply session-scope directives here (e.g. "unreleased → clean break, no migration shims"; "single-repo").
    
    After restructuring, you MUST move each **newly created** plan file (merges, splits) to `PLAN REVIEWED` using the session-appropriate mechanism (e.g., `kanban_operations` skill / move-card.js locally, Notion/Linear provider/MCP remotely). In-place rewrites keep their existing columns. Do not move deleted plans.
 
-5. **Backfill the feature file's own description.** Ensure the feature has `## Goal`, `## How the Subtasks Achieve This`, `## Dependencies & sequencing`, and `## Team Dispatch Instructions` (backfill from the subtasks if missing; don't overwrite existing content; never touch the auto-block). The Team Dispatch Instructions section contains per-subtask dispatch and review details (seat, acceptance criteria, scope constraints) so a drive-mode team lead can dispatch and review from the feature file alone without reading each plan file. Optionally record the reconciled merge map / end-state here so a coder implements to one design.
+5. **Backfill the feature file's own description.** Ensure the feature has `## Goal`, `## How the Subtasks Achieve This`, and `## Dependencies & sequencing` (backfill from the subtasks if missing; don't overwrite existing content; never touch the auto-block). Optionally record the reconciled merge map / end-state here so a coder implements to one design.
 
-6. **Report.** No commit, no push. Report the before/after subtask set and the reconciliation outcome, listing the files you created, rewrote, and deleted so the diff is legible.
+6. **Commit, push, and report.** Commit the improvements and the restructure (already committed before destructive ops per the guardrail). Report the before/after subtask set and the reconciliation outcome.
 
 ## High/Low mode (complexity-tier consolidation)
 

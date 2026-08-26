@@ -13,8 +13,8 @@ Make the board respond truthfully and immediately to a click. Today a card advan
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Restore The Optimistic Card Move On Planned-Column Copy-Prompt Buttons](../plans/feature_plan_20260815115538_planned-column-copy-prompt-optimistic-move.md) — **PLAN REVIEWED**
-- [ ] [Kanban status bar: turn raw "disk I/O error" into an actionable recovery instruction](../plans/feature_plan_20260816164107_kanban-status-bar-db-error-remediation-advice.md) — **PLAN REVIEWED**
+- [ ] [Restore The Optimistic Card Move On Planned-Column Copy-Prompt Buttons](../plans/feature_plan_20260815115538_planned-column-copy-prompt-optimistic-move.md) — **PLAN REVIEWED** — ID: 80d4184e-8239-4ff4-8a57-ac538994f663
+- [ ] [Kanban status bar: turn raw "disk I/O error" into an actionable recovery instruction](../plans/feature_plan_20260816164107_kanban-status-bar-db-error-remediation-advice.md) — **PLAN REVIEWED** — ID: 24b9401d-7cad-4fe6-bcc5-1f85e39c38eb
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -22,9 +22,9 @@ Fix the Project panel's tab state synchronization, filter navigation, and visual
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Bug: Copy Prompt on Plan Does Not Update DB Column or Kanban Position](../plans/feature_plan_20260626100855_copy_prompt_no_db_column_update.md) — **CODE REVIEWED**
-- [ ] [Bug: Project Panel Sometimes Shows No Projects](../plans/feature_plan_20260626100857_project_panel_sometimes_no_projects.md) — **CODE REVIEWED**
-- [ ] [Bug: Project Panel Projects Tab Missing Styling and Uses Wrong UX Pattern](../plans/feature_plan_20260626100860_projects_tab_styling_ux_inconsistency.md) — **CODE REVIEWED**
-- [ ] [Bug: Review Plan Button Opens Widest Filter Instead of Narrowest](../plans/feature_plan_20260626100856_review_plan_widest_filter.md) — **CODE REVIEWED**
+- [ ] [Bug: Copy Prompt on Plan Does Not Update DB Column or Kanban Position](../plans/feature_plan_20260626100855_copy_prompt_no_db_column_update.md) — **CODE REVIEWED** — ID: d398f966-a95d-4050-ba50-f5c769a97a98
+- [ ] [Bug: Project Panel Sometimes Shows No Projects](../plans/feature_plan_20260626100857_project_panel_sometimes_no_projects.md) — **CODE REVIEWED** — ID: 7cf2380c-8ecc-4615-bcfd-3b97b0101ce2
+- [ ] [Bug: Project Panel Projects Tab Missing Styling and Uses Wrong UX Pattern](../plans/feature_plan_20260626100860_projects_tab_styling_ux_inconsistency.md) — **CODE REVIEWED** — ID: 33e74a03-7f7c-4cb7-af9c-010985d55362
+- [ ] [Bug: Review Plan Button Opens Widest Filter Instead of Narrowest](../plans/feature_plan_20260626100856_review_plan_widest_filter.md) — **CODE REVIEWED** — ID: 0e0c9bd1-b9bc-4188-b75a-9dadfe05fd2d
 <!-- END SUBTASKS -->
 
