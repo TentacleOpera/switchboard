@@ -6,8 +6,8 @@ Rebuild the shell rail as three declared groups instead of one long manifest run
 an appended process list. Primary group (top): Kanban, Mission Control, Agent Control,
 Terminals, Linear. Team slots below it. Cold group at the foot: Project, Artifacts,
 Tickets, Design. Setup, Memo, Connections and the Agent Dock toggle leave the rail
-entirely for the top-right cluster (companion plan). The theme toggle and the
-per-terminal buttons are deleted.
+entirely for the top-right cluster (companion plan). The theme toggle, the UFO Mission
+Control button and the per-terminal buttons are deleted.
 
 ### The problem, and the root cause
 
@@ -84,7 +84,34 @@ silently vanishes in one host. Diff the two calls by hand; no gate catches this.
    explicit decision in `shell-strip-team-icons-instead-of-per-terminal-cli-icons.md`
    ("Terminals belonging to no team keep an individual button"); that line in that plan
    is now superseded.
-7. **Simplify `applyBottomAnchor`.** With a declared cold group, the anchor is one rule:
+7. **Delete the UFO Mission Control button.** Remove `createMissionControlIcon`
+   (`shell.js:339`), `ensureMissionControlIcon` and its three idempotent call sites
+   (`renderManifest`, and both branches of `renderTerminalSection`), the
+   `missionControlActive` / `missionControlSeat` / `missionControlStartInFlight` state,
+   the `missionControlState` postMessage handler, and the `#strip-mission-control` CSS
+   (`shell.html:245-280`). The `mission-control` **panel** icon in the primary group is
+   unaffected — that is the surviving Mission Control entry point.
+   - Delete the `missionControlState` relay at its source too
+     (`terminals.js:1764`), or the panel keeps computing and posting state nothing reads.
+   - `showStripToast` (`shell.js:318`) exists only for this button's start feedback.
+     Keep it if the team slots' start-failure path uses it (they do, in the team-slots
+     plan); otherwise delete it with the button.
+
+8. **The Mission Control panel must gain a start control — this is a hard prerequisite,
+   not a nicety.** `POST /mission-control/start` has exactly one UI caller in the
+   codebase: the dimmed UFO at `shell.js:440`. `kanban.html:11362` records that its own
+   handler was deliberately removed and points at the rail as the replacement: *"Start
+   feedback now comes from the shell rail, which reads the /mission-control/start
+   response directly."* `mission-control.html` has `mc-start-schedule` (starts a
+   *schedule*) and `btn-controller-restart`, neither of which starts a session. Deleting
+   the UFO without adding a session-start control to the Mission Control panel makes
+   Mission Control unstartable from the UI. The panel's start control must handle both
+   response modes the endpoint returns — `mode: 'terminal'` (a pty was created and the
+   persona prompt delivered) and `mode: 'clipboard'` (copy the `/switchboard` launcher
+   text) — since the rail was the only consumer of that branch. **No confirmation
+   dialog** (CLAUDE.md).
+
+9. **Simplify `applyBottomAnchor`.** With a declared cold group, the anchor is one rule:
    `margin-top: auto` on the first cold-group icon, nothing else. Delete the runtime
    reconciliation over a variable member list.
 
@@ -103,6 +130,14 @@ silently vanishes in one host. Diff the two calls by hand; no gate catches this.
   map, or `selectPanel` will try to paint `.is-active` on a button that does not exist.
 - **Deep links.** `/#setup`, `/#project`, `/#design` must still select their panel with
   no rail icon present. Test each explicitly.
+- **The UFO's dimmed CSS is reused before it is deleted.** `#strip-mission-control.mission-control-dimmed`
+  (`shell.html:267`) is the shell's only "inactive, click to start" treatment, and the
+  team-slots plan adopts it for dormant slots. Promote it to a panel-agnostic class
+  (e.g. `.strip-icon.is-dormant`) **before** deleting the UFO rules, or the team slots
+  lose their dim state along with it.
+- **`CRITICAL 1` regression guards become obsolete.** Three comments
+  (`shell.js:1080`, `:1246`, `renderManifest`) exist solely to keep the UFO alive across
+  rebuilds. Delete them with the button rather than leaving guards pointing at nothing.
 
 ## Verification plan
 
@@ -119,3 +154,8 @@ silently vanishes in one host. Diff the two calls by hand; no gate catches this.
 5. Spawn three ungrouped terminals; confirm zero new rail buttons and that all three are
    present and usable in the Terminals panel.
 6. Deep-link each of `/#setup`, `/#memo`, `/#connections` and confirm the panel opens.
+7. **Start a Mission Control session from the Mission Control panel**, in both response
+   modes. This is the acceptance test for the UFO deletion — if it cannot be started from
+   the UI, the deletion is not shippable.
+8. Grep for `missionControlState`, `ensureMissionControlIcon` and `strip-mission-control`
+   and confirm zero live references remain in either host.

@@ -1,80 +1,92 @@
-# The Agent Dock Grows Tabs, And The Kanban Pane Moves Into It
+# The Agent Dock Grows Tabs, And The Terminals Kanban Pane Becomes One Of Them
 
 ## Goal
 
-Turn the right-hand dock from a single-iframe host into a tabbed one, with two tabs: the
-agent terminal it hosts today, and a kanban view. The Terminals panel's KANBAN toolbar
-button — which repurposes a terminal pane into a board viewer — is retired in favour of
-it, giving the board a permanent home beside whatever panel is active.
+Turn the right-hand dock from a single-iframe host into a tabbed one: the agent terminal it
+hosts today, plus the Terminals panel's existing kanban pane. The kanban pane keeps working
+exactly where it already works — this adds a second place to put it, so a card list can sit
+beside any panel without spending a terminal slot.
 
 ### The problem, and the root cause
 
-The dock is hardcoded to exactly one occupant. `#agent-dock` (`shell.html:604`) contains
-one `#dock-frame` whose `src` is always `/terminals?solo=&dock=1`, one `#dock-title`, one
-`#dock-role-btn` role picker, and one `#dock-empty` start state. Every dock function
-assumes that occupant: `syncDockSeat` (`shell.js:~800`) resolves a pty seat,
-`mountDockFrame` points the single frame at it, `showDockEmptyState` offers to start an
-agent. There is no notion of *what* is docked, only of *which seat*.
+The dock is hardcoded to exactly one occupant. `#agent-dock` (`shell.html:604`) holds one
+`#dock-frame` whose `src` is always `/terminals?solo=&dock=1`, one `#dock-title`, one
+`#dock-role-btn` role picker and one `#dock-empty` start state. Every dock function assumes
+that occupant: `syncDockSeat` resolves a pty seat, `mountDockFrame` points the single frame
+at it, `showDockEmptyState` offers to start an agent. There is no notion of *what* is
+docked, only of *which seat*.
 
-Wanting a board beside the current panel therefore has no good answer today, so the
-Terminals panel invented one: `btn-kanban-toolbar` (`terminals.html:2471`) flips the
-focused terminal pane into a kanban list (`.kanban-pane-*`, `terminals.html:1566` onward).
-That works, but it costs a terminal pane to see the board, it only exists while the
-Terminals panel is the active panel, and the board view is implemented inside the
-terminals document — which is why its scroll containers needed a specific bug fix
-(`terminals.html:1411-1417`).
+So the kanban pane — which is a good thing, and staying — can only appear inside the
+Terminals panel's grid, by taking over a pane (`btn-kanban-toolbar`,
+`terminals.html:2471`). Two consequences. Seeing the card list costs a terminal slot. And
+it is only available while Terminals is the active panel, which is exactly when you least
+need a card list, and never available while you are looking at anything else.
 
 **Design decision: tabs in one dock, not a second dock region.** A second dock means a
 second splitter, a second min-width floor, a second viability gate against
-`DOCK_VIABLE_MIN` (`shell.js:56`), and a three-way width negotiation with `#content`.
-Tabs reuse all of that machinery unchanged and cost one header row.
+`DOCK_VIABLE_MIN` (`shell.js:56`), and a three-way width negotiation with `#content`. Tabs
+reuse all of that unchanged and cost one header row.
+
+**Design decision: reuse the kanban pane renderer, not the board document.** The dock's
+kanban tab renders the same `.kanban-pane-*` list the Terminals panel already renders
+(`terminals.html:1566` onward, `terminals.js:7010-7180`). It is a compact, board-aware card
+list built for a narrow column — which is what a 648px dock is. The full board document
+(`/board`) is built for a wide multi-column surface and does not belong in a dock.
 
 ## Metadata
-- **Complexity:** 7
-- **Tags:** frontend, ui, ux, refactor, feature
+- **Complexity:** 6
+- **Tags:** frontend, ui, ux, feature
+
+## Explicitly out of scope
+
+- **`btn-kanban-toolbar` stays.** The in-grid kanban pane is not retired, deprecated, or
+  gated behind the dock. `.kanban-pane-*` styles, `fetchBoardCardsForPane`,
+  `kanbanFetchInFlight` (`terminals.js:94`) and card-to-pane drag-and-drop
+  (`terminals.html:1434`) all stay and keep working.
+- **The Kanban panel is untouched.** The board keeps its own rail icon and its own panel.
 
 ## No migration
 
-Clean break. `sb.agentDock` localStorage (`shell.js:DOCK_STATE_KEY`) gains an `activeTab`
-key; a stored value without it reads as the agent tab, which is a default-value read and
-not a migration. Do not write a migration path or preserve the retired KANBAN toolbar
-button behind a setting. CLAUDE.md's migration rule is waived for this release.
+Clean break. `sb.agentDock` (`shell.js:DOCK_STATE_KEY`) gains an `activeTab` key; a stored
+value without it reads as the agent tab, which is a default-value read, not a migration. Do
+not add compat shims. CLAUDE.md's migration rule is waived for this release.
 
 ## Implementation
 
-1. **Generalise the dock to occupants.** Declare an occupant table:
-   `{ id: 'agent', title, mount() }` and `{ id: 'kanban', title, mount() }`. Each owns its
-   own iframe, both mounted up-front and toggled by class — the same
-   `display`-toggle-not-`[hidden]` idiom the shell uses everywhere, for the documented
+1. **A kanban-only mode for the terminals document.** The dock's kanban tab is
+   `/terminals?kanban=1&dock=1` — the same document, in a mode that renders one
+   full-height kanban pane and hides the grid, sidebar and toolbar. This follows the mode
+   convention the document already has: `?solo=`, `?team=`, `?dock=1`, parsed together at
+   `terminals.js:202-210`, with `is-solo` as the precedent for a body-class-driven mode
+   (`terminals.js:776`). No renderer is ported, no markup is duplicated, and the pane's
+   scroll-container fix (`terminals.html:1411-1417`) is inherited rather than re-derived.
+   - Precedence: `solo` wins over `team` today (narrower scope wins). Put `kanban` at the
+     same level and document its precedence explicitly rather than leaving it to
+     evaluation order.
+2. **Generalise the dock to occupants.** An occupant table — `{ id: 'agent', title,
+   src }`, `{ id: 'kanban', title, src }` — with one iframe each, both mounted up-front and
+   toggled by class. Use the `display`-toggle-not-`[hidden]` idiom for the documented
    cascade reason: `[hidden]{display:none}` is a user-agent rule and loses to any author
-   `display` declaration (`shell.html:432`, `:515`). Two iframes means switching tabs does
-   not reload either one, matching how panel frames already behave.
-2. **Tab strip in `#dock-header`.** The header currently holds `#dock-role-btn`,
-   `#dock-title` and `#dock-close`. Add a two-button tab group at its head. The role picker
-   is **agent-tab-specific** and must hide on the kanban tab — it is meaningless there, and
-   leaving it visible makes the header lie.
-3. **Kanban occupant source.** Point it at the existing board route (`/board`) rather than
-   porting the `.kanban-pane-*` renderer out of `terminals.html`. The board document is
-   already a complete, tested board; the pane renderer is a compact reimplementation that
-   exists only because a terminal pane is not a browser frame. Reusing `/board` deletes
-   code instead of moving it.
-   - Verify `/board` is usable at the dock's 648px floor (`DOCK_MIN`, `shell.js:50`). If it
-     is not, that is a board responsive fix, and it should be scoped as such rather than
-     answered by keeping a second board implementation alive.
-4. **Retire `btn-kanban-toolbar`.** Remove the button (`terminals.html:2471`), its handler,
-   and the `.kanban-pane-*` styles and renderer in `terminals.js` — including
-   `fetchBoardCardsForPane` and `kanbanFetchInFlight` (`terminals.js:94`) if nothing else
-   consumes them. Check first: drag-and-drop of kanban cards onto terminal panes
-   (`terminals.html:1434`) may share this data path, and that feature is staying.
-5. **Persist the active tab** in `sb.agentDock` beside `open`, `width` and `seat`, through
-   the existing `readDockState`/`writeDockState` pair (`shell.js:64-79`).
-6. **`#dock-title` becomes per-occupant.** Agent tab: the seat's friendly name, treated as
-   an opaque server-returned string (`shell.js:~85`, edge case 4). Kanban tab: the board's
-   name or active project.
-7. **Theme fan-out.** `applyThemeToAll` (`shell.js:692`) explicitly fans out to the dock
-   frame because it is not in the `frames` map (edge case 10). With two dock frames, **both**
-   need the message — this is precisely the kind of "one seam wired, the other silently
-   not" bug that leaves the second tab in the old palette until reload.
+   `display` declaration (`shell.html:432`, `:515`). Two iframes means switching tabs
+   reloads neither — the terminal keeps its scrollback and live WebSocket, the card list
+   keeps its scroll position.
+3. **Tab strip in `#dock-header`,** ahead of the existing `#dock-role-btn`, `#dock-title`
+   and `#dock-close`. The role picker is **agent-tab-specific** and must hide on the kanban
+   tab; leaving it visible makes the header lie about what it configures.
+4. **`#dock-title` per occupant.** Agent tab: the seat's friendly name, treated as an opaque
+   server-returned string (edge case 4). Kanban tab: the column or active project the pane
+   is showing.
+5. **Persist `activeTab`** in `sb.agentDock` through the existing
+   `readDockState`/`writeDockState` pair (`shell.js:64-79`).
+6. **Theme fan-out to both frames.** `applyThemeToAll` (`shell.js:692`) fans out to the
+   dock frame explicitly because it is not in the `frames` map (edge case 10). With two
+   dock frames, **both** need the message. This is precisely the one-seam-wired-the-other-
+   silently-not failure class CLAUDE.md describes: the visible tab looks right and the
+   other is stuck in the old palette until reload.
+7. **Empty state stays agent-only.** `#dock-empty` (`shell.html:611`) offers to start an
+   agent. The kanban tab has no empty state — it always has a board to read, even if the
+   column is empty, in which case the pane's own empty rendering applies. Do not route the
+   kanban tab through `showDockEmptyState`.
 
 ## Edge cases
 
@@ -82,37 +94,42 @@ button behind a setting. CLAUDE.md's migration rule is waived for this release.
   `.panel-frame` and `#dock-frame` (`shell.html:557`) because iframes swallow mousemove.
   The selector must cover both dock frames or the drag dies on entering the new one.
 - **Width floor.** `DOCK_MIN` is 648px, derived as 80 columns × 7.80px + chrome, and
-  `shell.html:437` says explicitly *"Do not lower."* That is a terminal constraint. The
-  kanban tab does not need 648px but must not be allowed to lower the shared floor.
+  `shell.html:437` says *"Do not lower."* That is a terminal constraint. The kanban pane is
+  comfortable far narrower but must not be allowed to lower the shared floor.
 - **Viability gate.** `updateDockViableGating` (`shell.js:939`) disables the dock below
-  980px. Applies to the whole dock, both tabs — do not special-case the kanban tab into a
-  narrower allowance, or the terminal tab becomes unusable when the user switches back.
-- **Two boards at once.** The Kanban panel and the kanban dock tab can both be open. Both
-  read live state over the WS rail and both must stay converged; the resync-on-connect
-  path (`getFullState`) already handles multiple clients, so verify rather than special-case.
-- **Dock empty state is agent-specific.** `#dock-empty` offers to start an agent
-  (`shell.html:611`). The kanban tab has no empty state — it always has a board. Do not
-  route the kanban tab through `showDockEmptyState`.
-- **Pop-out.** The dock has no pop-out today. Do not add one in this plan.
+  980px. It applies to the whole dock. Do not special-case the kanban tab into a narrower
+  allowance — the terminal tab becomes unusable the moment the user switches back.
+- **Two kanban panes at once.** The dock tab and an in-grid pane can both be open, both
+  reading live state over the WS rail. `getFullState` resync-on-connect already handles
+  multiple clients; verify convergence rather than special-casing it.
+- **Drag-and-drop across documents.** Card-to-pane drag works inside the terminals document
+  (`terminals.html:1434`). Dragging from the dock's kanban tab into a terminal pane in the
+  *panel* crosses an iframe boundary and will not work. Do not advertise it; if a card drag
+  starts in the dock, it must fail visibly rather than appear to do nothing.
+- **Kanban-mode body class collisions.** `is-solo` already hides the sidebar and suppresses
+  `saveSetting` (`terminals.js:1862-1867`). A new kanban mode must not inherit
+  solo-specific suppressions by accident, nor re-enable settings writes from a dock frame.
 - **No confirmation dialogs anywhere in the dock header** (CLAUDE.md). `window.confirm` is
   a silent no-op in VS Code webviews.
 
 ## Verification plan
 
 1. `npm run compile` clean.
-2. Open the dock; both tabs present, agent tab active by default on a fresh profile.
-3. Switch tabs repeatedly; confirm neither iframe reloads (the terminal keeps its
-   scrollback and its live WebSocket; the board keeps scroll position).
-4. Confirm the role picker is present on the agent tab and absent on the kanban tab.
-5. Reload with the kanban tab active; confirm it is restored, and that a `sb.agentDock`
-   value written before this change still opens cleanly on the agent tab.
-6. Drag the splitter across its full range while each tab is active; confirm the drag never
-   dies crossing a frame, and that 648px is still the floor.
-7. Toggle the theme with each tab active, then switch tabs; confirm **both** frames
-   repainted — do not accept "the visible one looks right".
-8. Resize below 980px; confirm the whole dock gates off.
-9. Terminals panel: KANBAN button gone, no dead handler, no console errors, and
-   **card-to-pane drag-and-drop still works**.
-10. Board open in the Kanban panel and the dock tab simultaneously; move a card in one and
-    confirm the other converges.
-11. Both hosts.
+2. `/terminals?kanban=1&dock=1` renders a single full-height card list with no grid, no
+   sidebar and no toolbar, and no console errors.
+3. Open the dock: both tabs present, agent tab active on a fresh profile.
+4. Switch tabs repeatedly: confirm neither iframe reloads — terminal scrollback and live
+   WebSocket survive, card-list scroll position survives.
+5. Role picker present on the agent tab, absent on the kanban tab.
+6. Reload with the kanban tab active: confirm restore, and confirm a `sb.agentDock` value
+   written before this change opens cleanly on the agent tab.
+7. Drag the splitter across its full range with each tab active: the drag never dies
+   crossing a frame, and 648px is still the floor.
+8. Toggle the theme with each tab active, then switch tabs: confirm **both** frames
+   repainted. Do not accept "the visible one looks right".
+9. Resize below 980px: the whole dock gates off.
+10. **The in-grid kanban pane still works**: `btn-kanban-toolbar` flips a pane, the card
+    list renders and scrolls, and card-to-pane drag-and-drop still works.
+11. A dock kanban tab and an in-grid pane open together: move a card in one, confirm the
+    other converges.
+12. Both hosts.

@@ -71,18 +71,23 @@ config read.
    do not appear in the rail; they live in the Agent Control and Terminals panels. State
    this in the code comment — otherwise the next change re-grows the rail.
 5. **Slot rendering in `renderTerminalSection`.** Running slots render as today (accent
-   glyph per the colour plan). Absent slots render dim — reuse the Mission Control dimmed
-   treatment (`shell.html:267`: `opacity .35` + grayscale), which is the shell's existing
-   vocabulary for "inactive, click to start".
+   glyph per the colour plan). Dormant slots render dim, using the
+   `.strip-icon.is-dormant` class promoted out of the UFO's
+   `#strip-mission-control.mission-control-dimmed` rules (`shell.html:267`: `opacity .35`
+   + grayscale). **Ordering dependency:** the rail restructure plan deletes the UFO and
+   its CSS. The promotion has to happen before or in that deletion, or these slots have no
+   dim state. Do not re-add a bespoke dim treatment here — one class, two former users.
 6. **Click behaviour, two arms.**
    - **Running** → unchanged: `selectPanel('terminals')` then post `switchToTeam` with
      the live `groupId` (`shell.js:1224`).
    - **Absent** → start that team. Reuse the start path the Agent Control panel's team
      start already uses (`btn-start-team`, `terminals.html:2401`) rather than minting a
-     second start route. Mirror the dimmed-UFO idiom (`shell.js:315`): disable the button
-     while the start request is in flight so a double-click cannot fire two starts, and
-     let the service-level singleton guard be the actual protection — a client flag is
-     not a correctness gate (`shell.js:302`). **No confirmation dialog** (CLAUDE.md).
+     second start route. Carry over the in-flight discipline the UFO's start used
+     (`shell.js:302-315`): disable the button while the start request is pending so a
+     double-click cannot fire two starts, while the actual protection stays the
+     service-level guard in `ptyFleetService.create()` — a client flag was never
+     sufficient there (two shell tabs, a reload mid-flight) and is not sufficient here.
+     **No confirmation dialog** (CLAUDE.md).
 7. **Rail height is now constant** at 5 primary + 3 slots + 4 cold = 12 buttons,
    independent of fleet size. That is the point of the plan; assert it in a test.
 
@@ -94,8 +99,10 @@ config read.
 - **Two live groups claiming one definition id.** Possible if a group is duplicated.
   Bind to the first by stable order and comment why; do not render two slots.
 - **Start fails** (no head role configured, node-pty absent). Surface it through
-  `showStripToast` (`shell.js:318`) — the existing transient-message helper — and leave
-  the slot dim. Never leave the button disabled after a failed start.
+  `showStripToast` (`shell.js:318`) and leave the slot dim. Never leave the button
+  disabled after a failed start. Note that helper was written for the UFO's start
+  feedback: the rail restructure plan deletes the UFO, so this plan is what keeps
+  `showStripToast` alive. Whichever lands second must not delete it.
 - **Terminals panel absent.** `frames.has('terminals')` gates the whole fleet section
   (`shell.js:1067`). With no Terminals panel there is no team scope to switch to, so the
   slots must not render at all — same fail-closed test the section already makes.

@@ -22,7 +22,8 @@ looked at them together:
 | Mission Control active | animated `#00e5ff` lights | `shell.js:376` |
 | Mission Control inactive | `opacity .35` + `grayscale(.8)` | `shell.html:267` |
 
-Six treatments, five hues, in a 48px column. The root cause is that `--accent` was
+Six treatments, five hues, in a 48px column. The UFO's cyan leaves with the button
+itself (rail restructure plan), so this plan is left with four to remove. The root cause is that `--accent` was
 claimed early as the *panel-selection* colour — `shell.html:348` states it outright and
 uses it to justify hardcoding the completion ring green — which left every subsequent
 state signal to invent its own hue rather than reuse the theme. The rail now advertises
@@ -69,9 +70,27 @@ it. If they land together, the interceptor plan's `fill="currentColor"` +
    arithmetic in the team loop (`shell.js:1153-1163`). The durable completion record is
    unaffected: the Terminals panel keeps its sidebar DONE chip and pane badge, which
    `shell.html:359` already names as the record of truth.
-   - **Keep the `clearTeamBadges` relay** (`shell.js:1211`). It is the acknowledgement
-     that clears member badges panel-side; without it the panel's own DONE state burns
-     forever. The *ring* is being deleted, not the acknowledgement.
+   - **Delete the `clearTeamBadges` relay too** (`shell.js:1211` and its receiver at
+     `terminals.js:1173`). The relay exists only because the rail rendered a completion
+     state that had to be acknowledgeable *from the rail* — the comment at
+     `terminals.js:1176` says so: *"the team button's click IS the acknowledgement for the
+     whole team ... without this the aggregate 'done' light burns forever."* With no
+     aggregate done light there is nothing to burn, so the shell has no business
+     acknowledging on the panel's behalf.
+     - The badge itself stays and stays useful. `terminalBadges`
+       (`terminals.js:~222`) is an *unread* marker, set on `agentCompleted`
+       (`terminals.js:10407`) and cleared when the operator actually looks: `focusTerminal`,
+       `clearTerminalBadge`, `btn-team-ack` (`terminals.js:11971`), terminal exit, close
+       and rename — seven delete sites, all panel-side, all unaffected. It cannot clear
+       "when completion is listed", because being listed as complete is precisely what
+       sets it; a badge that cleared on the same event would never be visible.
+   - **Stop relaying `light` and `doneStamp` altogether.** Once the ring, the exited
+     grayscale and the queue badge are gone, the rail consumes none of
+     `postFleetStateToShell`'s completion state — the team-slots plan renders from
+     `running`, and the dispatched-state plan renders from `dispatched`. Drop `light` and
+     `doneStamp` from the relayed `teams` payload and delete the aggregate light
+     computation (`terminals.js:1707-1730`) rather than leaving a computed field with no
+     consumer. The panel's own sidebar and pane rendering do not go through this payload.
 4. **Delete the queue-depth badge.** Remove `.strip-team-queue-depth` (`shell.html:415`)
    and its construction (`shell.js:1198`). `refreshTeamQueueDepths`
    (`terminals.js:1642`) and the `queueDepth` field stay — the dispatched-state plan
@@ -80,11 +99,13 @@ it. If they land together, the interceptor plan's `fill="currentColor"` +
    `.strip-team-btn.strip-term-exited` (`shell.html:341`, `:401`). With fixed team slots
    (companion plan) an absent team is rendered by the dim-empty slot treatment, which is
    one mechanism instead of two.
-6. **Mission Control keeps its lights.** The UFO is a bespoke inline SVG with animated
-   cyan lights and it is the one icon whose colour is *identity* rather than status —
-   it is the same art on the marketing surface. Out of scope; do not repaint it. Its
-   dimmed treatment (`shell.html:267`) also stays, because dimmed-means-inactive-and-
-   clickable-to-start is the same idiom the team slots adopt.
+6. **The UFO is deleted, not repainted** — by the rail restructure plan, which owns that
+   change. Two consequences here. The rail's animated cyan disappears without this plan
+   touching it, leaving the accent and the monochrome ramp as the only colours in the
+   rail. And the UFO's *dimmed* treatment (`shell.html:267`) must be promoted to a
+   panel-agnostic `.strip-icon.is-dormant` **before** the UFO's rules are deleted,
+   because the team slots adopt it for dormant slots — dimmed-means-inactive-and-
+   clickable-to-start is the shell's existing vocabulary and is worth keeping.
 
 ## Edge cases
 
@@ -115,9 +136,15 @@ it. If they land together, the interceptor plan's `fill="currentColor"` +
    accent appears on any nav icon.
 4. Complete an agent's work; confirm no ring plays on the rail, and confirm the Terminals
    panel sidebar DONE chip and pane badge still appear.
-5. Click a team with an unacknowledged completion; confirm `clearTeamBadges` still
-   reaches the panel and clears member badges.
-6. Simulate a replay gap; confirm the rail shows no completion state
-   (`terminal-replay-gap-contract.test.js` intent).
-7. Greyscale the screenshot and confirm selection and team-ness are both still readable.
-8. Both hosts.
+5. Complete work in a team member, then click that team slot: confirm the rail shows
+   nothing, and confirm the member's DONE badge is still present in the Terminals panel
+   until the operator opens that terminal or hits the team ack — i.e. the unread marker
+   survives the relay's deletion.
+6. Grep for `clearTeamBadges`, `doneStamp` and `DONE_PULSE_MS`; confirm zero live
+   references in either host.
+7. Simulate a replay gap; confirm the rail shows no completion state and that the gap
+   also never marks a team dispatched — the invariant at
+   `terminal-replay-gap-contract.test.js:244` must be re-pointed at the new state channel,
+   not deleted with the ring it was written about.
+8. Greyscale the screenshot and confirm selection and team-ness are both still readable.
+9. Both hosts.
