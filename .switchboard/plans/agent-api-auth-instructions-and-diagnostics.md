@@ -33,6 +33,7 @@ The prompt text encodes the *extension* host's contract as if it were the system
 
 - **Publishing or consuming the credential.** Covered by the publication and client plans; this plan changes instructions and diagnostics only.
 - **Changing any endpoint, payload or verb.** Text only, plus the two error-string sites.
+- **The 401 response *text* and the inline-401 de-duplication.** Already owned by `fix-401-auth-error-text.md`, which counted 34 inline `writeHead(401)` blocks across three different bodies and identified the same phantom `Switchboard: Api Token setting` independently. That plan centralizes them into one helper; this plan must not race it. Step 6 below is reduced to a dependency note accordingly.
 - **Rewriting the presets that already send the header correctly.** `linkPresets.ts` and the `terminals.js` relay recipe are already right; leave them, and use them as the reference wording.
 
 ## Metadata
@@ -52,7 +53,7 @@ The prompt text encodes the *extension* host's contract as if it were the system
 
 5. **Add the canonical clause to the docs that describe HTTP calls** — `.agents/skills/kanban_operations/SKILL.md`, `.agents/protocols/switchboard-mission-control-http/SKILL.md`, `.agents/protocols/external-team-lead/SKILL.md` (whose line 30 has the same phantom-token wording), `.agents/workflows/switchboard.md`, and the `create-feature*` skill docs. One clause, cross-referencing the orchestration skill rather than restating it.
 
-6. **Rewrite `_sendUnauthorized`** (`src/services/LocalApiServer.ts:922-928`) to serve both audiences. Keep the browser remedy, add the agent one: send `Authorization: Bearer` with the value of `$SWITCHBOARD_API_TOKEN` or `.switchboard/api-server-token.txt`. Machine-readable enough for an agent to act on without prose parsing — a stable `code` field alongside the human `detail`.
+6. **Do not touch the 401 body here — supply its agent-facing wording to `fix-401-auth-error-text.md` instead.** That plan owns centralizing the 34 inline 401 blocks into one helper, and two plans editing the same bodies would conflict. What this plan contributes is the *content* that helper should carry once the agent token exists: the remedy for a headless caller is to send `Authorization: Bearer` with `$SWITCHBOARD_API_TOKEN` or the value in `.switchboard/api-server-token.txt`, plus a stable `code` field so an agent need not parse prose. Note also that `fix-401-auth-error-text.md` cites `LocalApiServer.ts:352-377` and `TaskViewerProvider.ts:1232`, whereas at HEAD the gate is `:881-912` and the secret read is `:3721-3724` — **re-verify its site inventory against HEAD before implementing it**, since the file has moved underneath it.
 
 7. **Correct the stale comment at `src/services/LocalApiServer.ts:915-921`.** It says the extension "has no API-token setter UI, so `getAuthToken()` is empty there and auth is localhost-trust" — true, but it presents that as incidental when it is the load-bearing reason the two hosts diverge. State it as the contract, and cross-reference the CSRF guard as the compensating control.
 
@@ -71,6 +72,7 @@ The prompt text encodes the *extension* host's contract as if it were the system
 
 ## Dependencies
 
+- **`fix-401-auth-error-text.md`** — coordinate, do not duplicate. It owns the 401 bodies; this plan owns the generated prompts and skill docs. If it lands first, this plan supplies the agent-facing remedy text for its helper; if this one lands first, leave the 401 bodies untouched.
 - **`publish-agent-api-token-for-out-of-process-agents.md`** — soft. The instructions name a file that plan creates. The clause's fallback branch keeps it correct beforehand, so this plan may ship first; if it does, verification step 4 is deferred until the token file exists.
 
 ## Verification Plan
@@ -80,7 +82,7 @@ The prompt text encodes the *extension* host's contract as if it were the system
 3. `grep -rn "api-server-port.txt" --include=*.ts src/services/ | grep -v __tests__` — every remaining hit either interpolates the shared constant or is one of the two documented exceptions. Confirm the count dropped from 39 accordingly.
 4. **End-to-end under standalone, the case that is broken today.** Run `npx switchboard`, dispatch a card to a fleet terminal, and confirm the coding agent's `queue/done` POST — following only the generated prompt text — actually succeeds. Repeat for a reviewer's `COMPLETION_STEP_COMPACT` report.
 5. Same dispatch under the extension host: agents must still succeed, sending no header.
-6. Trigger a 401 from a terminal and confirm the body names the env var and the token file, carries a stable `code`, and reads sensibly to both a human and an agent.
+6. Trigger a 401 from a terminal and confirm the agent can act on what it gets. If `fix-401-auth-error-text.md` has landed, the body names the env var and the token file and carries a stable `code`; if it has not, confirm only that this plan changed no 401 body.
 7. `node --test src/services/__tests__/agentPromptBuilder.test.ts` plus the headless and parity contract suites — green, with any changed assertions reviewed as intentional.
 8. Read the rendered `switchboard-orchestration/SKILL.md` auth section end to end and confirm no reference to `Switchboard: Api Token` survives anywhere in the tree: `grep -rn "Switchboard: Api Token" .` returns nothing outside `.switchboard/plans/`.
 9. Grep every generated prompt for a literal token value to confirm none interpolates a secret: dispatch under standalone and inspect the delivered prompt text.
