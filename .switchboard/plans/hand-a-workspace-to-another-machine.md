@@ -169,6 +169,12 @@ The classifier's default arm is **machine-local**. A key added later is excluded
 
 A command and an API route in both hosts. Writes the bundle to a path the user chooses; defaults next to the workspace, not inside `.switchboard/` (which is gitignored, and putting it there makes it invisible to the person meant to carry it).
 
+> **Superseded:** "defaults next to the workspace, not inside `.switchboard/` (which is gitignored, and putting it there makes it invisible to the person meant to carry it)."
+>
+> **Reason:** that solves discoverability by making the bundle **committable**. A file at the repo root is not covered by any `.gitignore` rule, so the default location invites exactly the failure this plan made a non-goal one section earlier — personal-portable settings reaching shared git. It is the same mistake as the committed `.vscode/settings.json` that shipped one machine's absolute paths to every clone, in a new file and blessed by this plan. The credential self-assertion does not catch it, because the bundle is legitimately credential-free; the problem is one person's theme and thresholds landing in a repo their teammates clone.
+>
+> **Replaced with:** default **outside the repository** — alongside the other transfer artifacts in `~/.switchboard/transfer/`, which is where `secrets.enc` and `.master-key` already live and which no repo can commit. The export prints the absolute path so it is discoverable by being *told to the user*, not by sitting where git will pick it up. If the user explicitly names a path inside the repo, honour it and **warn once** that the file is committable and carries personal settings. Additionally, add `switchboard-transfer*.json` to the gitignore template the scaffolder writes, so a bundle deliberately placed in the tree is still ignored by default.
+
 **Self-assertion before write:** scan the serialised bundle for credential shapes — the known token prefixes (`lin_api_`, `ghp_`, `github_pat_`, `sk-`, `xox[bp]-`, `ntn_`, `AIza`, `Bearer `) and long high-entropy strings in values. On a hit, **refuse to write** and name the offending key. This is the guard that survives the allowlist being wrong.
 
 ### 4. Import
@@ -178,7 +184,9 @@ Reads the bundle, then for each card resolves `planFile` against the destination
 - **Match** → update `kanban_column`, `project_id`, `complexity`, `tags`, `repo_scope`, priority, and feature link (resolving `featureFile` to the destination's own feature `plan_id`).
 - **No match** → collect and report at the end. Never create.
 
-Then applies the allowlisted settings. Reports a summary: cards updated, cards skipped with reasons, settings applied.
+Then applies the allowlisted settings. Reports a summary: cards updated, cards skipped with reasons, settings applied — **and settings excluded, by key**.
+
+The exclusion list is not optional output. A misclassification in the machine-local direction is silent by construction: the import reports success having quietly dropped the thing the user most wanted. This is not hypothetical — during the manual dry run of this classification, `terminals.agentGroups` was misfiled as machine-local because it shares the `terminals.` prefix with `terminals.standingOrders` and `switchboard.prompts.terminals.groups`, both of which genuinely hold live terminal names. It holds none: it is role/count/scope plus prompt templates with `{child}` and `{head}` placeholders substituted at spawn time. Dropping it silently loses every tuned team prompt while the transfer reports as clean. Printing what was excluded is what makes that visible in the one second the user is looking at the output.
 
 Machine-local fields on matched rows are left exactly as the destination has them — the import never writes `dispatched_terminal`, `last_liveness_at`, or any worktree row.
 
