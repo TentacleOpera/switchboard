@@ -1,0 +1,164 @@
+# Hand a Workspace to Another Machine
+
+## Goal
+
+Clone the repo on a second machine today and you get plan files and nothing else: every card lands in the default column with no project, no priority, no feature grouping, and none of your settings. The board state is in `kanban.db`, `kanban.db` is gitignored, and nothing else carries it.
+
+Ship a **transfer bundle** — one versioned JSON file holding the shared board tier plus the portable settings — with an import that re-keys onto the destination machine and refuses to carry machine-local state. This is the *sequential handover* case (a machine retiring, a laptop being replaced, a remote box being set up), deliberately not the concurrent-sharing case that the shared-store plans own.
+
+### Problem Analysis
+
+**What git carries, and what it does not.** `.gitignore:52` is `.switchboard/*` with un-ignores for only `plans/`, `features/`, `reviews/`, `sessions/`, `CLIENT_CONFIG.md`, `README.md`. So a clone re-imports every plan through the watcher and reconstructs nothing else — column, project, priority, complexity, feature membership, and every setting are DB-only.
+
+**The two existing exports do not close it.** `.switchboard/kanban-state-<column>.md` is export-only — nothing reads it back, `SparkContextExporter` calls it "a DB-exported mirror", and it is no longer un-ignored so it is not in git either. `BoardSnapshotPublisher`'s `board.json` is closer — its `BoardCardEntry` is the shared tier — but its payload is exactly `{schema, ordering, cards, features}`: **no settings at all**. A user who adopts it still retypes every prompt override, workflow mode and folder mapping.
+
+**Copying `kanban.db` wholesale mostly works, and then poisons the destination.** Two portability landmines are already closed: `plan_file` is relative (the V17→V18 migration pair converted absolute→relative for exactly this), and `workspace_id` travels in the DB's own `config` table with V3's `UPDATE plans SET workspace_id = ?` unifying plans under it — so identity survives a different checkout path. What does *not* survive is everything that describes one machine:
+
+| Carrier | Why it is wrong on the destination |
+|---|---|
+| `plans.dispatched_terminal` | names a terminal that exists only on the source machine |
+| `plans.last_liveness_at` | asserts a process on the source machine is alive |
+| `worktrees` rows | absolute paths on the source filesystem |
+| `imported_docs` | stores absolute paths |
+| `config.workspace_mappings`, `kanban.dbPath` | absolute paths |
+| `config.terminals.groups`, `terminals.standingOrders` | seats and standing orders for terminals that do not exist here |
+| ~30 `config.switchboard.prompts.terminals.*` keys | pane layouts, pinned panes, collapsed groups — per-machine UI state |
+| `config.runtime.*` | live session, task and team state |
+
+`split-shared-board-state-from-machine-local-runtime.md` states the consequence precisely: "machine A's board claims a card is dispatched to a terminal that exists only on machine B."
+
+**And the volume is wrong.** The live database is 7.3 MB. Roughly 40% of it is `plan_events` (8,565 rows) which `the-plan-log-renders-start-stop-to-nobody.md` shows renders as `action=start` / `action=stop` and is unreachable outside one webview overlay. The shared tier a transfer actually needs is on the order of a couple of hundred kilobytes.
+
+### Root Cause
+
+Board state was never given a portable representation because it never had to leave the machine that produced it. Every serialiser built since — the per-column markdown, the board snapshot, `kanban-state-backup.json` — was built for a *reader* (an agent, a web session), never for a *destination that writes*. So all three are one-directional by construction, and none of them carries settings, because a reader does not need them.
+
+### Non-goals
+
+- **Concurrent sharing.** Two machines live at once needs arbitration; that is `git-carried-shared-board-state.md` (CAS via non-fast-forward rejection) and `libsql-shared-store-turso-and-self-hosted-sqld.md`. This plan is sequential handover and must not grow a sync loop.
+- **Secrets.** The bundle must never contain a credential — see the security section. Transferring secrets is a separate, manual, documented step.
+- **Plan and feature bodies.** Already committed markdown. Only board state and settings travel.
+- **Replacing `kanban.db` on the destination.** Import is an upsert onto whatever the watcher already built from the plan files, never a file swap.
+
+## Metadata
+
+**Complexity:** 6
+**Tags:** feature, backend, database, reliability
+
+## User Review Required
+
+None. The transfer/sharing split is settled by the non-goals, the machine-local carrier list is enumerated from the schema, and the secrets posture (never in the bundle) is not a trade-off.
+
+## Complexity Audit
+
+### Routine
+
+- Serialising the shared card fields — two shipped serialisers already agree on the set (`BoardSnapshotPublisher`'s `BoardCardEntry`, `_writeKanbanStateBackup`).
+- Writing and reading one versioned JSON file.
+- Adding an export and an import entry point in both hosts.
+
+### Complex / Risky
+
+- **Classifying every `config` key as portable or machine-local.** There are 87 rows in the live DB and the split is not derivable from the key name alone: `switchboard.prompts.roleConfig_coder` is portable, `switchboard.prompts.terminals.paneAssignments` is not, and both start with `switchboard.prompts.`. Getting this wrong in the portable direction imports a dead terminal roster; getting it wrong in the local direction silently drops a user's prompt customisation. The classification must be an explicit allowlist with a default of *machine-local*, so an unrecognised key is never carried.
+- **Re-keying on import.** The bundle must key cards by `plan_file` (relative, and the file itself is in git so it exists on the destination), never by `plan_id` — plan IDs are DB-assigned by the importer, so the destination has already minted its own for the same file. Matching on `plan_id` silently matches nothing and the import reports success having done nothing.
+- **Import ordering against the watcher.** The plan watcher imports `.md` files on its own schedule. An import that runs before the watcher has ingested the files finds no rows to update. The import must either run after an explicit rescan or upsert-and-wait.
+
+## Edge-Case & Dependency Audit
+
+**Security — the bundle must never carry a credential.** Verified where secrets actually live: `EncryptedSecretsStore(stateFile('secrets.enc'), stateFile('.master-key'))` (`extension.ts:687`), i.e. `~/.switchboard/secrets.enc` + `~/.switchboard/.master-key`, both mode `0600`, outside any repository. The extension mirrors `vscode.SecretStorage` into that store so standalone can read tokens typed in the editor. `kanban.db` holds none: all 87 `config` rows were scanned for credential-shaped values and token prefixes with no hits, no `setConfig`/`setConfigJson` call site writes a token-named key, and `clickup.config` / `linear.config` are 59-byte `_migrated` husks left behind when credentials moved to the home store. `integration-config.json` is plaintext but holds only IDs, names and flags.
+
+This is a property to *preserve*, not merely observe. The bundle is a file users will attach to messages and commit to repositories. The exporter must therefore assert its own output: fail the export if the serialised bundle matches a credential shape, rather than trusting the key allowlist to have been maintained. A bundle that is safe by construction beats one that is safe by review.
+
+**Migration.** None. The bundle is a new artifact; no existing schema or config key changes shape. Import is additive.
+
+**Idempotency.** Importing the same bundle twice must be a no-op. Keying on `plan_file` gives this for free; the settings apply is last-write-wins onto the same values.
+
+**Partial match.** A card in the bundle whose `plan_file` does not exist on the destination (the plan was never committed, or lives on a branch not checked out) is reported and skipped, never created — creating it would fabricate a card with no file behind it, which is the ghost-feature failure `_regenerateFeatureFile` already refuses in its bodyless-husk guard.
+
+**Host parity.** Export and import must be wired in **both** `src/extension.ts` and `src/standalone/bootstrap.ts`, per the standing rule in `CLAUDE.md` / `AGENTS.md`. Standalone is the likelier *destination* — a fresh remote box is exactly the case this plan serves — so a bundle it cannot import defeats the purpose. Two live instances of this divergence are already recorded: `standalone-arms-no-queue-watch.md`, and the telemetry-retention gap in `the-plan-log-renders-start-stop-to-nobody.md`.
+
+**Relationship to `board-backup-and-per-project-export.md` (PLAN REVIEWED).** That plan owns per-project export/import *after* the global-store consolidation, with backup integrity and retention as its subject. This plan is narrower and lands earlier: one workspace, machine to machine, no consolidation prerequisite. If the two converge later, this bundle format should become that plan's per-project payload rather than a second format. Flag rather than merge — that plan is gated on work that has not started.
+
+## Dependencies
+
+- None blocking. `split-shared-board-state-from-machine-local-runtime.md` (New) enumerates the same shared/local boundary from the storage side; this plan needs the classification but not that plan's schema work, and the two should agree on the boundary. If that plan lands first, adopt its table classification verbatim rather than maintaining a second list.
+
+## Adversarial Synthesis
+
+Key risks. (1) Keying the bundle on `plan_id` produces an import that matches nothing and reports success — the single most likely way to ship this broken, because it works on the machine that exported it. (2) A config allowlist that defaults to *portable* imports a dead terminal roster and pane layout onto the destination, which is worse than importing nothing. (3) Exporting settings without asserting the output is credential-free means one future config key turns the bundle into a token leak, and the bundle is an artifact people attach and commit. (4) Wiring export/import in the extension only, when standalone is the likelier destination. Mitigations: `plan_file` is named as the key with the reason; the allowlist defaults to machine-local; the exporter self-asserts rather than trusting the list; both roots are named in the changes and in the verification.
+
+## Proposed Changes
+
+### 1. The bundle format
+
+One versioned JSON file, `switchboard-transfer.json`:
+
+```jsonc
+{
+  "schema": 1,
+  "exportedAt": "<ISO>",
+  "sourceWorkspaceName": "<human label, informational only>",
+  "cards": [
+    { "planFile": "plans/foo.md", "column": "PLAN REVIEWED", "project": "Browser Switchboard",
+      "complexity": "5", "isFeature": false, "featureFile": "features/bar.md", "tags": "…",
+      "repoScope": "…", "priority": "…" }
+  ],
+  "settings": { "<allowlisted key>": "<value>" }
+}
+```
+
+Cards key on **`planFile`** — relative, and the file is in git so it exists on the destination. Feature membership travels as `featureFile`, not `featureId`, for the same reason. No `plan_id`, no `session_id`, no `workspace_id` anywhere in the bundle.
+
+### 2. Config classification — allowlist, defaulting to machine-local
+
+Portable (carry): `switchboard.prompts.roleConfig_*`, `feature_*` / `epic_*` workflow and mode flags, `kanban.dynamicComplexityRoutingEnabled`, `kanban.columnDragDropModes`, `agents.customAgents`, `agents.visibleAgents`, `planning.ingestionFolder`, `project_context_enabled`.
+
+Machine-local (never carry): everything else, explicitly including `terminals.groups`, `terminals.standingOrders`, `terminals.agentGroups`, every `switchboard.prompts.terminals.*`, every `runtime.*`, `workspace_mappings`, `workspace_id`, `kanban.dbPath`, `kanban.featureWatches`, `folders.paths`, and the `_migrated` husks.
+
+The classifier's default arm is **machine-local**. A key added later is excluded until someone deliberately adds it — the safe direction, since the failure mode of over-exclusion is "retype one setting" and the failure mode of over-inclusion is a poisoned destination.
+
+### 3. Export
+
+A command and an API route in both hosts. Writes the bundle to a path the user chooses; defaults next to the workspace, not inside `.switchboard/` (which is gitignored, and putting it there makes it invisible to the person meant to carry it).
+
+**Self-assertion before write:** scan the serialised bundle for credential shapes — the known token prefixes (`lin_api_`, `ghp_`, `github_pat_`, `sk-`, `xox[bp]-`, `ntn_`, `AIza`, `Bearer `) and long high-entropy strings in values. On a hit, **refuse to write** and name the offending key. This is the guard that survives the allowlist being wrong.
+
+### 4. Import
+
+Reads the bundle, then for each card resolves `planFile` against the destination's `plans` table:
+
+- **Match** → update `kanban_column`, `project_id`, `complexity`, `tags`, `repo_scope`, priority, and feature link (resolving `featureFile` to the destination's own feature `plan_id`).
+- **No match** → collect and report at the end. Never create.
+
+Then applies the allowlisted settings. Reports a summary: cards updated, cards skipped with reasons, settings applied.
+
+Machine-local fields on matched rows are left exactly as the destination has them — the import never writes `dispatched_terminal`, `last_liveness_at`, or any worktree row.
+
+### 5. Document the secrets step separately
+
+Secrets are not in the bundle and never will be. The transfer instructions state the manual step: copy `~/.switchboard/secrets.enc` and `~/.switchboard/.master-key` over a secure channel (both `0600`), or re-enter tokens on the destination via the Setup panel or `npx switchboard secrets set`. Two files, or five minutes of retyping — and for a team handover, retyping is the correct answer, since a shared credential is a worse outcome than a re-authentication.
+
+## Verification Plan
+
+### Automated
+
+1. `npm run compile-tests` — clean.
+2. New: round-trip. Build a source DB with cards in non-default columns, projects, complexity and feature links; export; build a *fresh* destination from the same plan files at a **different absolute path**; import; assert every card's column, project, complexity and feature link matches the source. The different path is the point — it is what proves the bundle is not carrying machine identity.
+3. New: idempotency. Import the same bundle twice; assert the second import changes nothing.
+4. New: machine-local exclusion. Give the source a populated `terminals.groups`, `switchboard.prompts.terminals.paneAssignments`, `workspace_mappings` and a `worktrees` row; assert none appear in the bundle and none are written on import.
+5. New: unknown-key default. Add a config key the classifier has never seen; assert it is **not** exported.
+6. New: the credential guard. Plant a token-shaped value in an allowlisted key; assert export **refuses** and names the key. Assert the refusal, not just the absence — a test that only checks the bundle is clean passes when the guard is missing.
+7. New: unmatched card. Include a `planFile` with no file on the destination; assert it is skipped and reported, and that no row is created.
+8. New: host parity — assert both `extension.ts` and `bootstrap.ts` wire export and import.
+
+**Gate wiring:** any new test file needs a `package.json` script **and** a step in `.github/workflows/integration-tests.yml`. A script defined but not invoked is the green-while-incomplete hole.
+
+### Manual
+
+9. Real handover: export from this workspace, clone the repo fresh at a different path, import, and confirm the board matches — columns, projects, complexities, feature grouping — with no terminals, worktrees or pane layout carried over.
+10. Import into the **standalone** host and confirm parity with the extension.
+11. Inspect a bundle by eye and confirm it contains no credential.
+
+## Recommendation
+
+Send to Coder. The format is simple and the export is mechanical, but three decisions carry the whole thing and each fails silently if got wrong: key on `planFile` not `plan_id`, default the classifier to machine-local, and make the exporter assert its own output rather than trusting the allowlist.
