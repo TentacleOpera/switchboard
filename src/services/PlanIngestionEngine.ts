@@ -1469,11 +1469,12 @@ export class PlanIngestionEngine {
             if (pacing === 'seat') {
                 // ── Seat pacing: resolve the pacer from board state ──────
                 // The pacer is whichever seat currently holds a card — a card
-                // with `dispatched_at` set. Cards resting in coding columns
-                // with `dispatched_at` cleared are NOT evidence of work in
-                // progress (they are coded cards that belong there per
-                // switchboard-contracts #1) and must not suppress the
-                // escalation branch. One condition: `dispatched_at` set.
+                // with `dispatched_at` set and `completed_at` NULL. Cards resting
+                // in coding columns with `dispatched_at` cleared or `completed_at`
+                // set are NOT evidence of work in progress (they are coded cards
+                // that belong there per switchboard-contracts #1) and must not
+                // suppress the escalation branch. Two conditions: `dispatched_at`
+                // set and `completed_at` NULL.
                 let teamMembers: Set<string> | null = null;
                 if (this._queueTeamMembersResolver && watch.headTerminal) {
                     try {
@@ -1486,6 +1487,7 @@ export class PlanIngestionEngine {
                 }
                 const heldCard = board.find(p =>
                     p && p.dispatchedAt
+                    && !p.completedAt
                     && typeof p.dispatchedTerminal === 'string'
                     && p.dispatchedTerminal.length > 0
                     && (!teamMembers || teamMembers.has(p.dispatchedTerminal))
@@ -1805,7 +1807,8 @@ export class PlanIngestionEngine {
             }
             const headTeamSet = headTeamMembers ?? new Set([watch.headTerminal]);
             const inFlight = board.some(p =>
-                p && !p.completedAt
+                p && !!p.dispatchedAt
+                && !p.completedAt
                 && typeof p.dispatchedTerminal === 'string'
                 && p.dispatchedTerminal.length > 0
                 && headTeamSet.has(p.dispatchedTerminal)

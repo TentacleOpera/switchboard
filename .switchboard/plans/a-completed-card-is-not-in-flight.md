@@ -280,3 +280,8 @@ leaves the watch mute so the ladder is never reached. The full set {2, 3, 4} clo
 loop — any two without the third leave a reachable re-dispatch or a silent watch. Build
 the sweep harness first — without it none of the three is verifiable, and the absence of
 that harness is why the defect shipped.
+
+## Implementation Summary
+
+Updated `PlanIngestionEngine.ts` queue stall sweep `inFlight` predicate to require `!!p.dispatchedAt && !p.completedAt` and seat-pacing `heldCard` predicate to require `!p.completedAt`, ensuring completed cards are not treated as active in-flight work and do not resolve as pacers. Updated `LocalApiServer.ts` failed-outcome restaging logic to check `!currentCompletedAt`, preventing completed cards from being restaged to `STAGING`. Added comprehensive contract test suite in `src/test/queue-stall-watch-contract.test.js` covering head pacing, seat pacing, ladder restaging, and source pins, and wired it to `package.json` and `.github/workflows/integration-tests.yml`.
+

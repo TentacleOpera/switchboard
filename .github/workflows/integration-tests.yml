@@ -1192,6 +1192,11 @@ jobs:
       - name: Dispatch preparation curtain + UFO asset contract
         run: npm run test:contract:dispatch-curtain
 
+      # The queue stall watch and escalation ladder must read the completion fact
+      # (completed_at), not infer progress from columns or dispatched_at alone.
+      - name: Queue stall watch contract (completed card not in flight, dead pacer, ladder backstop)
+        run: npm run test:contract:queue-stall-watch
+
       - name: Run integration suite
         run: npm run test:integration:all
 

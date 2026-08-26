@@ -3056,13 +3056,15 @@ export class LocalApiServer {
                         // closes the read-modify-write gap on routedTo
                         // (re-staging does not update routedTo; dispatch does).
                         let currentDispatchedTerminal = typeof held.dispatchedTerminal === 'string' ? held.dispatchedTerminal : '';
+                        let currentCompletedAt = held.completedAt ?? null;
                         try {
                             const fresh: any = await db.getPlanByPlanId?.(held.planId);
                             if (fresh) {
                                 currentDispatchedTerminal = typeof fresh.dispatchedTerminal === 'string' ? fresh.dispatchedTerminal : '';
+                                currentCompletedAt = fresh.completedAt ?? null;
                             }
                         } catch { /* fall back to held */ }
-                        const stillCoding = currentDispatchedTerminal.length > 0;
+                        const stillCoding = currentDispatchedTerminal.length > 0 && !currentCompletedAt;
                         if (!stillCoding) {
                             // Card already released/re-staged (watch re-staged it,
                             // or an operator dragged it). No re-stage, no park —
