@@ -39,4 +39,4 @@ Reviewed all four subtasks against HEAD. **Deferred findings** shipped complete 
 ## Deferred Findings
 
 - The Acceptance Tester's scope was cut by user decision after review: it stays Optional (not core), keeps its `tester` role, gets no team seat, and no separate column-participation switch. Its prompt rewrite is kept. See `completion-testing-stage-checks-acceptance-criteria.md` → **Rejected by the user — do not reimplement**.
-- MAJOR — `.switchboard/plans/goal-invariant-verification-and-review-escalation.md`: Proposed Change 6 (backfill `### Goal Invariants` into the storage-programme plans) was claimed complete and never done; the claim is corrected, the work is not.
+- RESOLVED — the "backfilled Goal Invariants into 8 storage-programme plans" claim was misattributed, not unmet: all nine `storage-layer-overhaul` subtasks carry the section, added by separate plan sweeps. Nothing outstanding.
