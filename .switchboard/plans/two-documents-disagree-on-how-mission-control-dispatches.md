@@ -1,4 +1,4 @@
-# Two documents disagree on how Mission Control dispatches, so it refuses the endpoint and picks seats by complexity
+# Nothing states what POST /kanban/dispatch is for, so dispatch reads as forbidden and features get routed by complexity
 
 ## Goal
 
@@ -23,10 +23,33 @@ Meanwhile `.claude/skills/switchboard/SKILL.md:230-236` (the console persona now
 
 > **Dispatch a plan to be coded — ONE call:** `POST /kanban/dispatch` …
 
-So an agent holding both documents has a prohibition marked *unconditional* on one side and a
-"ONE call" instruction on the other. "Unconditional" wins — as it should, given the wording — and
-the agent reports the endpoint as forbidden. It is being obedient to the stronger of two
-instructions it should never have received together.
+A prohibition marked *unconditional* on one side, a "ONE call" instruction on the other.
+
+**But these two documents should not normally share a context**, so Hard Rule 6 alone does not
+explain a refusal inside `/switchboard`. `ClaudeCodeMirrorService.ts:46` records that
+"switchboard-mission-control is NOT in the manifest — the engine launches it by path", so the
+protocol reaches an agent only through the panel/`POST /mission-control/start` door. A refusal
+observed in the console needs a cause the console actually loads.
+
+**It has one, and it is the strongest instruction in the repo.** `CLAUDE.md:128` — project
+instructions, always loaded, explicitly overriding default behaviour:
+
+> Kanban column transitions are handled automatically by the system/host. Execution agents must
+> **NEVER** attempt to update kanban columns directly via SQL **or any other method** during normal
+> workflow execution. … To manually move a card when explicitly requested by the user, use the
+> `kanban_operations` skill. The **orchestrator persona** is the sanctioned exception — it moves
+> cards via `move-card.js`/`POST /kanban/move` …
+
+`POST /kanban/dispatch` "persists the move first" before firing the role prompt
+(`.claude/skills/switchboard/SKILL.md:238-240`) — so calling it *is* updating a kanban column by
+"any other method". The rule then names exactly one exception: **"the orchestrator persona."** That
+persona was renamed to Mission Control — `migrateLegacyOrchestratorDir` exists for the directory
+half of that rename, and the manifest calls it `switchboard-mission-control`. **So the exception now
+matches no persona by name, and the console is not it under any reading.** An agent applying
+`CLAUDE.md:128` faithfully concludes that dispatch is not its call to make, and says so.
+
+Two independent sources produce the same refusal: `CLAUDE.md:128` for the console door, Hard Rule 6
+for the Mission Control door. Fixing one leaves the other.
 
 **Symptom B — "it dispatches features into team members based on feature complexity instead of the
 team lead."** The console persona teaches complexity-band routing as *the* assignment rule
@@ -60,13 +83,22 @@ a category error, and nothing in either document says so in as many words.
 
 ### Root Cause
 
-Two personas were written against two different execution models — the console against
-`/kanban/dispatch` + complexity bands, Mission Control against the staged queue + team pacing — and
-nothing reconciles them or marks one obsolete. Worse, the prohibition in Hard Rule 6 is stated as a
-bare "never" with no explanation of *why* or of what `/kanban/dispatch` legitimately remains for.
-An unexplained absolute cannot be applied with judgement: the agent cannot tell "never, because the
-queue owns pacing and a direct dispatch bypasses it" from "never, this endpoint is off-limits", so
-it reports the latter to the user. A rule with no rationale degrades into a refusal.
+**No document states what `POST /kanban/dispatch` is for.** Three state what it is *not* for —
+`CLAUDE.md:128` (agents never move columns, one named exception), Hard Rule 6 (never, unconditional),
+and the console's own Hard Rule 1 ("you are the manager, never the coder") — and one states, without
+scope, that it is "ONE call". A capability described only by its prohibitions has no positive
+definition an agent can reason from, so it defaults to refusal, which is the safe reading.
+
+Two aggravating factors. First, `CLAUDE.md:128`'s sole exception names "the orchestrator persona",
+a name the rename retired, so the carve-out matches nothing today. Second, Hard Rule 6 gives a bare
+"never" with no rationale: an agent cannot distinguish "never, because the queue owns pacing and a
+direct dispatch bypasses it" from "never, this endpoint is off-limits", so it reports the latter.
+A rule with no rationale degrades into a refusal.
+
+The complexity-band symptom is the mirror image. The bands are the one *positively* stated routing
+rule an agent is given, so they get applied — including to features, where they are a category
+error — while the actual mechanism (`queue/next` returns the destination; pacing defaults to head)
+is documented as a thing to read back rather than as the rule.
 
 ### Non-goals
 
@@ -188,8 +220,12 @@ board in both pacing modes, asserting the reported destination equals the respon
    the standing invitation to predict a destination.
 5. **State the read-back rule once, strongly:** the destination in every report comes from the call's
    response. Never from a band, a title, or a plan's complexity.
-6. **Mirror every edit** into `.agents/workflows/switchboard.md` in the same commit.
-7. **Sweep for other copies of the bands** across `.agents/`, `docs/`, and `.claude/skills/`, and
+6. **Fix `CLAUDE.md:128`'s stale exception** — it names "the orchestrator persona", which the rename
+   retired, so no current persona matches it. Name Mission Control, and state whether a
+   dispatch-that-moves-a-column is inside or outside the prohibition. This is the rule the console
+   door actually reads.
+7. **Mirror every edit** into `.agents/workflows/switchboard.md` in the same commit.
+8. **Sweep for other copies of the bands** across `.agents/`, `docs/`, and `.claude/skills/`, and
    scope or annotate each.
 
 ### Migration
@@ -203,6 +239,9 @@ remains the default for absent `pacing` fields, so no install changes behaviour.
    occurrence is consistent with the agreed scope, and none instructs Mission Control to call it.
 2. **The prohibition carries a reason and an alternative.** Hard Rule 6 names why and names
    `queue/next`; a reader cannot arrive at "forbidden endpoint" from it.
+2b. **The console door does not refuse either.** With only the console persona loaded (no protocol),
+   assert a user-named single dispatch is performed rather than declined on `CLAUDE.md:128` grounds,
+   and that `CLAUDE.md`'s exception names a persona that exists.
 3. **Head pacing sends a feature to the lead.** On a board with a team whose `pacing` is absent,
    dispatch a feature in `PLAN REVIEWED` via Mission Control; assert `queue/next`'s response names
    the **lead** terminal and the agent's report quotes that name.
