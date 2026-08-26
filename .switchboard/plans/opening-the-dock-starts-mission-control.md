@@ -46,6 +46,7 @@ controller was slotted into it as a role rather than as the thing the surface is
 ## Metadata
 - **Complexity:** 6
 - **Tags:** frontend, backend, api, ux, bugfix, feature
+- **Feature:** 4c1323fb-a025-467f-b289-88f50b1f8347
 
 ## Supersedes and completes an existing plan
 
@@ -113,36 +114,42 @@ host. Diff the two roots by hand.
    double-click cannot fire two starts, while the real protection stays the singleton guard
    in `ptyFleetService.create()`. A client flag was never sufficient there — two shell
    tabs, or a reload mid-flight, defeat it. **No confirmation dialog** (CLAUDE.md).
-4. **Stop excluding `mission-control` from the dock.** `DOCK_SYSTEM_ROLES` excludes it on
-   the grounds that it operates via skills rather than as a dockable agent CLI. That is no
-   longer true if the dock is where it runs. Remove the exclusion for `mission-control`;
-   keep it for `mcp_monitor`.
+4. **The dock hosts the controller and nothing else — retire role selection entirely.**
+   Delete `#dock-role-btn`, `#dock-role-menu`, `buildDockRoleMenu`, `fetchDockRoles`,
+   `dockRolesCache`, `labelForRole`, `DOCK_SYSTEM_ROLES` and the `.dock-role-item` /
+   `#dock-role-menu` CSS (`shell.html:539-556`). `dockRole` stops being mutable state and
+   becomes the controller role constant; `dockSeatName()` loses its parameter.
+   - The workspace-level persisted dock role setting (`loadDockRole`, and the setting it
+     reads) goes with it. There is no role to persist.
+   - `ptyVisibleRoles` was fetched only to label the picker and the empty-state hint. The
+     empty state's hint text is now about Mission Control specifically, so the fetch is
+     deleted too — one less request on first open.
+   - Keep `mcp_monitor` excluded wherever else it is excluded; that exclusion is about the
+     spawn pickers in `terminals.js` (`:951`, `:8068`) and is not this plan's business.
 5. **The dock's title reflects the session, not just the seat.** `#dock-title` shows the
    opaque `friendlyName` today. For the controller occupant, show that the session is
    seated and awaiting confirmation versus armed — the state the `missionControlState`
    relay used to carry to the rail. If the rail's relay is deleted (colour plan), this is
    where that information should land instead of being lost.
 
-## Decision needed: the role picker
+## The dock is the controller's terminal. There is no choice to make.
 
-The dock's `#dock-role-btn` lists every visible agent role, which
-`fix-agent-dock-mission-controller-terminal.md` item 3 calls out as creating *"the
-impression the dock is a general 'start any agent' launcher"*, and proposes replacing with
-a CLI-command text input.
+This is settled, not offered: the dock shows the controller agent and nothing else.
+`fix-agent-dock-mission-controller-terminal.md` item 3 named the problem — the picker
+creates *"the impression the dock is a general 'start any agent' launcher"* — and this is
+the resolution. A picker that can point the dock at a reviewer is a different feature
+wearing the same chrome, and it is the reason the start path was ambiguous: with a picker,
+"open the dock" would mean the session path for one role and the bare-spawn path for every
+other, which is the split this plan exists to close.
 
-That decision is not settled here, and it interacts with the dock-tabs plan (which
-currently keeps the picker on the agent tab and hides it on the kanban tab):
-
-- **(a) Retire the picker; the dock is the controller's terminal.** Simplest, matches the
-  original plan's intent, and makes the start semantics unambiguous. The dock-tabs plan's
-  hide-on-kanban-tab item then becomes moot.
-- **(b) Keep the picker, with the controller as one role among many.** Then start semantics
-  become role-dependent: picking the controller routes through `/mission-control/start`,
-  picking anything else routes through `ptyCreateTerminal`. Two behaviours behind one
-  control, which is how this split arose in the first place.
-
-Recommendation: **(a)**. If the dock is where Mission Control lives, a picker that can
-point it at a reviewer is a different feature wearing the same chrome.
+Consequences elsewhere:
+- **Dock-tabs plan.** Its "hide the role picker on the kanban tab" item is moot — there is
+  no picker. Whichever plan lands second must not re-add it.
+- **Starting other agents is unaffected.** The Terminals panel's new-terminal and fill-grid
+  pickers (`terminals.js:951`, `:8068`) are untouched. Nothing loses the ability to start a
+  reviewer; it just does not happen in the dock.
+- **The `dock-<role>` seat naming convention collapses** to a single controller seat name.
+  The name is still whatever the server returns and still opaque (see No migration).
 
 ## Edge cases
 
@@ -164,6 +171,11 @@ point it at a reviewer is a different feature wearing the same chrome.
   the terminal on mount, or the interview is wiped before it is read.
 - **`clearBeforePrompt` / prompt delivery is not this plan's business.** Do not add a
   second delivery path; the server owns it.
+- **A persisted seat from a picker-era profile.** `sb.agentDock.seat` may name a reviewer
+  or planner terminal chosen before the picker was retired. The adopt check must confirm the
+  persisted seat is the controller identity, not merely that it is live — otherwise the dock
+  adopts an unrelated agent's terminal and reports it as Mission Control. A non-controller
+  persisted seat is discarded and the empty state shown.
 - **Arming state is not derived client-side.** Whether the session is armed is
   `autobanState.enabled` server-side. Read it; never infer it from the fact that a seat
   exists.
@@ -185,6 +197,9 @@ point it at a reviewer is a different feature wearing the same chrome.
 7. Open the dock in two shell tabs: one seat, both mounted, no second start.
 8. Stop the controller from the Terminals panel (`btn-controller-stop`), then reopen the
    dock: confirm it offers to start again rather than mounting a dead frame.
-9. Confirm `mission-control` is selectable in the dock (if the picker survives the decision
-   above) and that `mcp_monitor` is still excluded.
-10. Both hosts.
+9. Confirm the dock header has no role picker, and that the Terminals panel's
+   new-terminal and fill-grid pickers still start every other role normally.
+10. Seed `sb.agentDock.seat` with a live non-controller terminal name, then open the dock:
+    confirm it is discarded and the empty state appears, rather than a reviewer's terminal
+    being presented as Mission Control.
+11. Both hosts.

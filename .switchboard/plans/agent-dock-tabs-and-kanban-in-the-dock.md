@@ -36,6 +36,7 @@ list built for a narrow column — which is what a 648px dock is. The full board
 ## Metadata
 - **Complexity:** 6
 - **Tags:** frontend, ui, ux, feature
+- **Feature:** 4c1323fb-a025-467f-b289-88f50b1f8347
 
 ## Explicitly out of scope
 
@@ -70,14 +71,10 @@ not add compat shims. CLAUDE.md's migration rule is waived for this release.
    `display` declaration (`shell.html:432`, `:515`). Two iframes means switching tabs
    reloads neither — the terminal keeps its scrollback and live WebSocket, the card list
    keeps its scroll position.
-3. **Tab strip in `#dock-header`,** ahead of the existing `#dock-role-btn`, `#dock-title`
-   and `#dock-close`. The role picker is **agent-tab-specific** and must hide on the kanban
-   tab; leaving it visible makes the header lie about what it configures.
-   - **Conditional on a decision in `opening-the-dock-starts-mission-control.md`:** that
-     plan proposes retiring the role picker entirely, on the grounds that the dock is the
-     controller's terminal rather than a general agent launcher. If it is retired, this
-     item is moot — there is nothing to hide. Whichever plan lands second should check
-     before implementing this.
+3. **Tab strip in `#dock-header`,** ahead of `#dock-title` and `#dock-close`. There is no
+   role picker to accommodate: `opening-the-dock-starts-mission-control.md` retires it —
+   the dock shows the controller agent, with no choice of role. Do not re-add a picker,
+   and do not carry `#dock-role-btn` / `#dock-role-menu` forward into the tabbed header.
 4. **`#dock-title` per occupant.** Agent tab: the seat's friendly name, treated as an opaque
    server-returned string (edge case 4). Kanban tab: the column or active project the pane
    is showing.
@@ -125,7 +122,7 @@ not add compat shims. CLAUDE.md's migration rule is waived for this release.
 3. Open the dock: both tabs present, agent tab active on a fresh profile.
 4. Switch tabs repeatedly: confirm neither iframe reloads — terminal scrollback and live
    WebSocket survive, card-list scroll position survives.
-5. Role picker present on the agent tab, absent on the kanban tab.
+5. No role picker in the dock header on either tab.
 6. Reload with the kanban tab active: confirm restore, and confirm a `sb.agentDock` value
    written before this change opens cleanly on the agent tab.
 7. Drag the splitter across its full range with each tab active: the drag never dies

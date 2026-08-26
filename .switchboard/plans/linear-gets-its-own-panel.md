@@ -34,6 +34,7 @@ another tab inside a panel about something else.
 ## Metadata
 - **Complexity:** 6
 - **Tags:** frontend, backend, api, ui, ux, feature
+- **Feature:** 4c1323fb-a025-467f-b289-88f50b1f8347
 
 ## Explicitly out of scope
 
