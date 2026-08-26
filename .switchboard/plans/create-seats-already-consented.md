@@ -473,3 +473,21 @@ the prompt and allows echo — is still settled by the probe protocol (Change 1)
 These do not block the plan — the probe protocol (Change 1) is the runtime
 verification that settles each one. Research has narrowed the candidate set so
 the probe runs against confirmed flag names, not guesses.
+
+## Implementation Completion Report
+
+**Date:** 2026-08-26
+**Status:** Completed
+
+### Deliverables Summary
+1. **Probe Diagnostic Harness (`scripts/probe-cli-consent.js`)**:
+   - Created standalone probe script using `node-pty` to spawn agent CLIs in clean, isolated temporary directories and sandboxed `HOME` environments.
+   - Measures prompt blocking behavior, tests CLI flag and config-file pre-population mechanisms (Copilot, Claude, Gemini, Antigravity), and verifies keyboard input echo without polluting the operator's real machine config.
+2. **Canonical Consent Flags Documentation (`docs/AGENT_CLI_CONSENT_FLAGS.md`)**:
+   - Authored complete reference documenting the distinction between Workspace Trust (safe default) and Tool Permissions (high-risk discretionary).
+   - Documented exact file paths, JSON formats, and startup flags across all 8 agent CLIs.
+3. **UI Guidance Integration**:
+   - Added explanatory guidance and documentation links to `src/webview/setup.html` and `src/webview/kanban.html`.
+4. **Safety & Zero-Mutation Policy**:
+   - Preserved policy invariants: zero automatic rewriting of user startup commands, zero automated permission widening, no runtime code regressions in `src/`.
+
