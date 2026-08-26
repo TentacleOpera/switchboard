@@ -1,27 +1,37 @@
 /**
- * Test suite for Review Team Triage and Apportionment
- * Verifies the 9 goal invariants and behaviors defined in
- * .switchboard/plans/a-review-team-triages-then-fixes-what-it-reviewed.md
+ * Contract: the Review team's shape and its standing orders.
+ * (a-review-team-triages-then-fixes-what-it-reviewed.md)
+ *
+ * This flow is PROMPT-LEVEL orchestration, and that is deliberate. The lead
+ * reads its head prompt, assigns plans to its reviewer seats over ptySendPrompt,
+ * reads the reports back, triages them, and writes one artifact — all in
+ * conversation. Team seats never receive a board-composed prompt (LocalApiServer
+ * relays lead-authored text and never calls generateUnifiedPrompt), so there is
+ * no seam where a deterministic assignment/triage/apportionment service could be
+ * called.
+ *
+ * An earlier revision of this suite exercised exactly such a service
+ * (src/services/reviewTriage.ts) by importing it directly. Every assertion
+ * passed and nothing in either host imported the module — which made a green
+ * gate report "triage implemented" when what was implemented was a paragraph.
+ * The module and those assertions are deleted. Do NOT reintroduce them: if this
+ * behaviour needs pinning, pin the PROMPT TEXT the lead actually reads, as the
+ * head-prompt test below does.
  */
 
 const assert = require('assert');
-const {
-    assignPlansToReviewers,
-    triageReviewReports,
-    apportionFixes,
-    generateReviewLeadArtifact,
-    ReviewTriageCategory,
-} = require('../../out/services/reviewTriage');
+const fs = require('fs');
+const path = require('path');
 const {
     SEEDED_AGENT_GROUP,
-    OFFERED_REVIEW_TEAM_GROUP,
-    OFFERED_TEAM_DEFINITIONS,
     TEAM_QUEUE_DONE_ORDER_BODY,
     REVIEW_TEAM_QUEUE_DONE_ORDER_BODY,
     NEW_REVIEW_TEAM_HEAD_PROMPT,
     migrateAgentGroups,
 } = require('../../out/services/teamWiring');
 const { buildKanbanBatchPrompt } = require('../../out/services/agentPromptBuilder');
+
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
 let passed = 0;
 let failed = 0;
@@ -39,183 +49,72 @@ function test(name, fn) {
 }
 
 async function runTests() {
-    console.log('\n--- Running Review Team Triage Invariant Tests ---');
+    console.log('\n--- Running Review Team contract tests ---');
 
-    // 1. The review turn cannot write
-    test('Invariant 1: The review turn cannot write and git policy prohibits code commits', () => {
-        const prompt = buildKanbanBatchPrompt(
-            'reviewer',
-            [{ planId: 'subtask-1', title: 'Task 1', filePath: '.switchboard/plans/p1.md', absolutePath: '/path/to/p1.md' }],
-            {
-                readOnlyReview: true,
-                gitCommitStrategy: 'whenDone'
-            }
-        );
-        assert.ok(prompt.includes('READ-ONLY REVIEW TURN'), 'Prompt must indicate read-only review turn');
-        assert.ok(prompt.includes('Do NOT fix code during the review turn'), 'Prompt must instruct not to fix code');
-        // The shipped `dontCommit` clause, verbatim (agentPromptBuilder GIT_COMMIT_CLAUSES).
-        // A read-only review turn forces commit: 'dontCommit' regardless of the
-        // caller's gitCommitStrategy, which is what this asserts.
-        assert.ok(prompt.includes('Do NOT commit.'), 'Git policy must prohibit code commits during read-only review turn');
+    // 1. The head prompt IS the implementation, so it is what gets pinned.
+    test('the Review team head prompt carries the whole flow', () => {
+        const p = NEW_REVIEW_TEAM_HEAD_PROMPT;
+        assert.ok(/batches of up to two per reviewer/.test(p), 'assigns in batches of two');
+        assert.ok(/review turn is read-only/.test(p), 'the review turn is read-only');
+        assert.ok(/append\s+their findings to the plan files and report back/.test(p),
+            'reviewers append findings and report to the lead');
+        assert.ok(/\(1\) needs no fixing/.test(p) && /\(2\) fixes needed/.test(p)
+            && /\(3\) follow-ups needed/.test(p) && /\(4\) did not meet intent/.test(p),
+            'all four triage categories are named');
+        assert.ok(/Apportion categories 2 and 3 back to the reviewer that reviewed them/.test(p),
+            'fixes go back to the reviewer that formed the opinion');
+        assert.ok(/Do not fix categories 1 or 4/.test(p), 'categories 1 and 4 are never fixed');
+        assert.ok(/Write one markdown artifact to the plans folder/.test(p), 'one artifact, in the plans folder');
+        assert.ok(/Never move a card backwards/.test(p), 'the card-movement rule is present');
     });
 
-    // 2. Context survives the report (context preserved for review until lead acceptance)
-    test('Invariant 2: Team standing orders preserve context across review until lead acceptance', () => {
+    // 2. The review-team order body exists AND is installed. A variant body that
+    //    no call site selects is indistinguishable from no variant at all.
+    test('the review-team queue-done order body exists and its call site selects it', () => {
         const standardOrder = TEAM_QUEUE_DONE_ORDER_BODY('team-coding');
-        assert.ok(standardOrder.includes('context is preserved for review'), 'Standard team queue done order preserves context for review');
-        assert.ok(standardOrder.includes('POST /kanban/task/complete'), 'Standard team queue done order mentions task complete acceptance');
+        assert.ok(standardOrder.includes('context is preserved for review'),
+            'the standard body preserves context for review');
+        assert.ok(standardOrder.includes('POST /kanban/task/complete'),
+            'the standard body names the acceptance POST');
 
-        const reviewTeamOrder = REVIEW_TEAM_QUEUE_DONE_ORDER_BODY('team-review');
-        assert.ok(reviewTeamOrder.includes('relay your completion report to your team lead and dispatch'), 'Review team order preserves context relay');
+        const reviewOrder = REVIEW_TEAM_QUEUE_DONE_ORDER_BODY('team-review');
+        assert.ok(reviewOrder.includes('relay your completion report to your team lead and dispatch'),
+            'the review-team body relays without the clear fragment');
+        assert.notStrictEqual(reviewOrder, standardOrder, 'the two bodies must differ');
+
+        // The wiring half. applyTeamQueueOrders has exactly one caller; if it
+        // stops passing isReviewTeam, the variant is defined, tested and never
+        // installed — which is how it shipped the first time.
+        const server = fs.readFileSync(
+            path.join(REPO_ROOT, 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        assert.ok(/applyTeamQueueOrders\(\{[\s\S]{0,400}?isReviewTeam:/.test(server),
+            'the applyTeamQueueOrders call site must pass isReviewTeam, or the review body is never installed');
     });
 
-    // 3. Coverage without duplication (8 plans across 6 seats)
-    test('Invariant 3: Coverage without duplication across seats', () => {
-        const planIds = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8'];
-        const seats = ['rev-1', 'rev-2', 'rev-3', 'rev-4', 'rev-5', 'rev-6'];
-
-        const assignments = assignPlansToReviewers(planIds, seats, 2);
-        assert.ok(assignments.length > 0, 'Assignments generated');
-
-        const assignedPlans = [];
-        for (const a of assignments) {
-            assert.ok(a.planIds.length <= 2, `Reviewer ${a.reviewer} received more than 2 plans: ${a.planIds.length}`);
-            assignedPlans.push(...a.planIds);
-        }
-
-        assert.strictEqual(assignedPlans.length, 8, 'All 8 plans assigned');
-        assert.strictEqual(new Set(assignedPlans).size, 8, 'Every plan assigned exactly once (no duplicates)');
+    // 3. A two-plan assignment is one batched dispatch, not two.
+    test('a batch of two renders the multi-plan reviewer prompt', () => {
+        const prompt = buildKanbanBatchPrompt('reviewer', [
+            { planId: 'p1', title: 'Task 1', filePath: '.switchboard/plans/p1.md', absolutePath: '/path/to/p1.md' },
+            { planId: 'p2', title: 'Task 2', filePath: '.switchboard/plans/p2.md', absolutePath: '/path/to/p2.md' }
+        ], {});
+        assert.ok(prompt.includes('each listed plan') || prompt.includes('For each plan'),
+            'renders batch multi-plan phrasing');
+        assert.ok(prompt.includes('p1') && prompt.includes('p2'), 'both plans present in the batch');
     });
 
-    // 4. Batch of two, not two dispatches
-    test('Invariant 4: Batch of two renders multi-plan reviewer prompt', () => {
-        const prompt = buildKanbanBatchPrompt(
-            'reviewer',
-            [
-                { planId: 'p1', title: 'Task 1', filePath: '.switchboard/plans/p1.md', absolutePath: '/path/to/p1.md' },
-                { planId: 'p2', title: 'Task 2', filePath: '.switchboard/plans/p2.md', absolutePath: '/path/to/p2.md' }
-            ],
-            {
-                readOnlyReview: true
-            }
-        );
-        assert.ok(prompt.includes('each listed plan') || prompt.includes('For each plan'), 'Renders batch multi-plan phrasing');
-        assert.ok(prompt.includes('p1') && prompt.includes('p2'), 'Both plans present in batch');
-    });
-
-    // 5. Fixes land with original reviewer
-    test('Invariant 5: Category 2 fixes land with originating reviewer', () => {
-        const reports = [
-            { planId: 'p1', reviewer: 'rev-1', category: ReviewTriageCategory.NEEDS_NO_FIXING },
-            { planId: 'p2', reviewer: 'rev-2', category: ReviewTriageCategory.FIXES_NEEDED, files: ['src/a.ts'] },
-            { planId: 'p3', reviewer: 'rev-3', category: ReviewTriageCategory.FOLLOW_UPS_NEEDED, files: ['src/b.ts'] },
-            { planId: 'p4', reviewer: 'rev-4', category: ReviewTriageCategory.DID_NOT_MEET_INTENT },
-        ];
-
-        const waves = apportionFixes(reports);
-        assert.ok(waves.length > 0, 'Fix waves generated');
-
-        const allTasks = waves.flat();
-        const p2Task = allTasks.find(t => t.planId === 'p2');
-        assert.ok(p2Task, 'p2 task present in fixes');
-        assert.strictEqual(p2Task.reviewer, 'rev-2', 'p2 fix must be assigned to rev-2');
-
-        const p3Task = allTasks.find(t => t.planId === 'p3');
-        assert.ok(p3Task, 'p3 task present in fixes');
-        assert.strictEqual(p3Task.reviewer, 'rev-3', 'p3 fix must be assigned to rev-3');
-    });
-
-    // 6. Concurrent fixes are file-disjoint
-    test('Invariant 6: Concurrent fixes touching same file are split into separate waves', () => {
-        const reports = [
-            { planId: 'p1', reviewer: 'rev-1', category: ReviewTriageCategory.FIXES_NEEDED, files: ['src/shared.ts', 'src/a.ts'] },
-            { planId: 'p2', reviewer: 'rev-2', category: ReviewTriageCategory.FIXES_NEEDED, files: ['src/shared.ts', 'src/b.ts'] },
-            { planId: 'p3', reviewer: 'rev-3', category: ReviewTriageCategory.FIXES_NEEDED, files: ['src/c.ts'] },
-        ];
-
-        const waves = apportionFixes(reports);
-        assert.strictEqual(waves.length, 2, 'Must split into 2 waves because p1 and p2 touch src/shared.ts');
-
-        // Wave 1 contains p1 and p3 (disjoint)
-        const wave1PlanIds = waves[0].map(t => t.planId);
-        const wave2PlanIds = waves[1].map(t => t.planId);
-        assert.ok(wave1PlanIds.includes('p1') || wave1PlanIds.includes('p2'), 'One of conflicting tasks in wave 1');
-        assert.ok(wave2PlanIds.includes('p1') || wave2PlanIds.includes('p2'), 'Other conflicting task in wave 2');
-    });
-
-    // 7. Intent failures are not fixed and not reopened
-    test('Invariant 7: Intent failures (Category 4) and Category 1 are never fixed', () => {
-        const reports = [
-            { planId: 'p1', reviewer: 'rev-1', category: ReviewTriageCategory.NEEDS_NO_FIXING },
-            { planId: 'p4', reviewer: 'rev-4', category: ReviewTriageCategory.DID_NOT_MEET_INTENT, intentNotes: 'Goal violated' },
-        ];
-
-        const waves = apportionFixes(reports);
-        assert.strictEqual(waves.length, 0, 'No fix tasks generated for categories 1 and 4');
-    });
-
-    // 8. One artifact with correct contents
-    test('Invariant 8: Single lead artifact carries deferred items, remaining risks, and intent failures', () => {
-        const reports = [
-            {
-                planId: 'p1',
-                reviewer: 'rev-1',
-                category: ReviewTriageCategory.NEEDS_NO_FIXING
-            },
-            {
-                planId: 'p2',
-                reviewer: 'rev-2',
-                category: ReviewTriageCategory.FIXES_NEEDED,
-                files: ['src/p2.ts']
-            },
-            {
-                planId: 'p3',
-                reviewer: 'rev-3',
-                category: ReviewTriageCategory.FOLLOW_UPS_NEEDED,
-                deferredItems: ['Add benchmark test for large payloads'],
-                remainingRisks: ['Lock contention under high load']
-            },
-            {
-                planId: 'p4',
-                reviewer: 'rev-4',
-                category: ReviewTriageCategory.DID_NOT_MEET_INTENT,
-                intentNotes: 'Implementation changed destination without author consent'
-            }
-        ];
-
-        const artifact = generateReviewLeadArtifact({
-            featureId: 'feat-123',
-            featureTitle: 'Example Feature',
-            reports
-        });
-
-        assert.ok(artifact.includes('# Review Findings & Deferred Risks: Example Feature'), 'Artifact has title');
-        assert.ok(artifact.includes('## Deferred Items & Follow-ups'), 'Artifact has deferred items section');
-        assert.ok(artifact.includes('Add benchmark test for large payloads'), 'Deferred item included');
-        assert.ok(artifact.includes('## Remaining Risks'), 'Artifact has remaining risks section');
-        assert.ok(artifact.includes('Lock contention under high load'), 'Remaining risk included');
-        assert.ok(artifact.includes('## Intent Failures (Remediation Requires New Plan)'), 'Artifact has intent failures section');
-        assert.ok(artifact.includes('Implementation changed destination without author consent'), 'Intent notes included');
-    });
-
-    // 9. No team seed spawns a CLI & Review team is offered
-    test('Invariant 9: SEEDED_AGENT_GROUP has no members and OFFERED_REVIEW_TEAM_GROUP is offered with no members', () => {
+    // 4. The release gate the old Coding-team migration exists to hold.
+    test('SEEDED_AGENT_GROUP has no members, so no unrequested CLI spawns', () => {
         assert.strictEqual(SEEDED_AGENT_GROUP.headRole, 'lead');
         assert.ok(Array.isArray(SEEDED_AGENT_GROUP.members));
-        assert.strictEqual(SEEDED_AGENT_GROUP.members.length, 0, 'Seed must have 0 members so no unrequested CLIs spawn');
-
-        assert.strictEqual(OFFERED_REVIEW_TEAM_GROUP.headRole, 'reviewer');
-        assert.ok(Array.isArray(OFFERED_REVIEW_TEAM_GROUP.members));
-        assert.strictEqual(OFFERED_REVIEW_TEAM_GROUP.members.length, 0, 'Offered review team must have 0 members');
-        assert.strictEqual(OFFERED_REVIEW_TEAM_GROUP.headPrompt, NEW_REVIEW_TEAM_HEAD_PROMPT);
-        assert.ok(OFFERED_TEAM_DEFINITIONS.includes(OFFERED_REVIEW_TEAM_GROUP), 'OFFERED_REVIEW_TEAM_GROUP must be in OFFERED_TEAM_DEFINITIONS');
+        assert.strictEqual(SEEDED_AGENT_GROUP.members.length, 0,
+            'the seed must have 0 members so no unrequested CLIs spawn');
     });
 
-    // 10. Structural repair survives; prompt-text migration is gone.
+    // 5. Structural repair survives; prompt-text migration is gone.
     // The frozen snapshots and their recognisers were deleted — spawned teams
     // have never shipped, so a persisted stale prompt is a clean break, not a
     // migration target. The member-shape repair must still fire.
-    test('Invariant 10: migrateAgentGroups repairs structure but never rewrites a persisted head prompt', () => {
+    test('migrateAgentGroups repairs structure but never rewrites a persisted head prompt', () => {
         const persisted = {
             id: 'g-review',
             name: 'Review',
@@ -225,17 +124,15 @@ async function runTests() {
         };
 
         const migrated = migrateAgentGroups([persisted]);
-        assert.ok(migrated, 'Structural member-shape repair must still fire');
+        assert.ok(migrated, 'the structural member-shape repair must still fire');
         assert.strictEqual(migrated[0].headPrompt, persisted.headPrompt,
-            'Prompt text is never rewritten — the snapshots were deleted deliberately');
+            'prompt text is never rewritten — the snapshots were deleted deliberately');
         assert.strictEqual(migrated[0].members[0].scope, 'per-team');
         assert.strictEqual(migrated[0].members[0].relationship, 'reports-to-head');
-        assert.strictEqual(migrateAgentGroups(migrated), null, 'Idempotent: second pass returns null');
-        assert.ok(OFFERED_REVIEW_TEAM_GROUP.headPrompt === NEW_REVIEW_TEAM_HEAD_PROMPT,
-            'A recreated Review team gets the live prompt — the clean-break replacement path');
+        assert.strictEqual(migrateAgentGroups(migrated), null, 'idempotent: a second pass returns null');
     });
 
-    console.log(`\nReview Team Triage Tests: ${passed} passed, ${failed} failed.\n`);
+    console.log(`\nReview team contract: ${passed} passed, ${failed} failed.\n`);
     if (failed > 0) {
         process.exit(1);
     }

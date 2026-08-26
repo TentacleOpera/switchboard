@@ -704,27 +704,13 @@ export const SEEDED_AGENT_GROUP: any = {
     members: [],
 };
 
-/**
- * The offered Review team definition: a member-less team headed on `reviewer`.
- *
- * Offered in the team definitions list / gallery rather than seeded into the
- * database by default — it appears as a startable team in the agents tab
- * without auto-spawning unrequested seats.
- */
-export const OFFERED_REVIEW_TEAM_GROUP: any = {
-    id: 'review-team',
-    name: 'Review team',
-    headRole: 'reviewer',
-    get headPrompt() { return NEW_REVIEW_TEAM_HEAD_PROMPT; },
-    members: [],
-};
-
-/**
- * Team definitions offered to the operator as startable templates (not auto-seeded).
- */
-export const OFFERED_TEAM_DEFINITIONS: any[] = [
-    OFFERED_REVIEW_TEAM_GROUP,
-];
+// NOTE: there is deliberately no `OFFERED_REVIEW_TEAM_GROUP` / `OFFERED_TEAM_DEFINITIONS`
+// export here. A pair of such constants existed briefly and nothing consumed them:
+// the startable team gallery is `AGENT_GROUP_TEMPLATES` in `kanban.html`, which is
+// what an operator actually sees and starts. Two declarations of one team is the
+// drift shape this file already carries scars from — they had gone out of sync on
+// member count within a single commit. If a definition needs to live in TypeScript,
+// move the gallery to read it; do not add a second copy alongside it.
 
 /**
  * The OLD seed value, preserved verbatim for the migration comparison.
