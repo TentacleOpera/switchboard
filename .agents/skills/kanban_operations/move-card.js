@@ -54,16 +54,21 @@ function findApiPort(startDir) {
 function httpJson(method, port, urlPath, bodyObj, timeoutMs) {
   return new Promise((resolve, reject) => {
     const payload = bodyObj ? JSON.stringify(bodyObj) : '';
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload)
+    };
+    const token = process.env.SWITCHBOARD_API_TOKEN || process.env.SB_API_TOKEN;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     const req = http.request(
       {
         host: '127.0.0.1',
         port: Number(port),
         path: urlPath,
         method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload)
-        }
+        headers
       },
       (res) => {
         let data = '';
@@ -105,7 +110,8 @@ async function tryViaExtension() {
     if (move.status >= 200 && move.status < 300 && parsed.success) {
       return { reachable: true, success: true };
     }
-    return { reachable: true, success: false, error: parsed.error || `HTTP ${move.status}` };
+    const isAuthError = move.status === 401 || (parsed.error && parsed.error.includes('Unauthorized'));
+    return { reachable: !isAuthError, success: false, error: parsed.error || `HTTP ${move.status}` };
   } catch (err) {
     return { reachable: true, success: false, error: err.message };
   }
