@@ -72,6 +72,15 @@ absence is invisible until then.
   history; never the only copy of current.
 - **Off-machine or encrypted backup.** The sibling may be a git repo with a remote
   if the user wants that; nothing here uploads anywhere or manages keys.
+- **Backing up the secrets store.** A set must never contain `secrets.enc` or
+  `.master-key`. The key sits beside the ciphertext it decrypts, so sweeping both
+  into a store that may be a git repo hands over the credentials rather than
+  protecting them — and the extension's own tokens live in the OS keychain, which a
+  file backup cannot reach anyway. See
+  `state-home-derives-from-an-explicit-control-plane.md`; a set is portable because
+  it holds no credentials, and the consequence — a restored board has no
+  integrations connected until they are re-entered — belongs in the restore UI, or
+  it reads as a failed restore.
 - **Replacing `writeDbBackup`'s throttle, dedupe or pruning.** They work; they get
   extended, not rewritten.
 - **Backing up the control plane.** Its definitions are regenerable from an
@@ -235,6 +244,9 @@ is trusted.
     valid, and restores. On today's layout this fails by construction.
 11. **Legacy restore** — an install with only `dbbackup/` loose files lists them and
     restores one.
+11a. **No credentials in a set** — assert no set contains `secrets.enc`,
+     `.master-key`, or `integration-config.json`, including when the state home has
+     been relocated under a control plane.
 12. **Both hosts** — back up, inspect and restore under the extension host and the
     standalone host, and assert the standalone host is not restore-only-in-theory.
     This is the divergence that exists today.
