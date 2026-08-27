@@ -56,7 +56,11 @@ Ordering inputs were added where each was needed — `queue_position` for the st
 
 Yes — three decisions.
 
-1. **Where does the field live?** Recommendation: a nullable `priority INTEGER` on `plans`, shared tier (`split-shared-board-state-from-machine-local-runtime.md`) so it travels with the board. **Null and 0 are different:** null means never triaged anywhere, 0 means a tracker recorded "No Priority". Collapsing them makes the badge meaningless on local cards. Note: Linear uses 0 for "No Priority" and ClickUp uses blank/null, so the import mapping must translate ClickUp's null to 0 (tracker-says-none) and leave a local card's field as null (never-triaged).
+1. **Where does the field live?** **DECIDED (2026-08-27, user):** a nullable `priority INTEGER` on `plans`, shared tier (`split-shared-board-state-from-machine-local-runtime.md`) so it travels with the board. **There is exactly one "no priority" state, and it is NULL.** No priority is no priority regardless of source: a tracker is not a special origin for it. Linear's 0 and ClickUp's blank both import as NULL, and a local card that nobody has triaged is NULL too. `plans.priority` therefore holds **1–4 or NULL**, and 0 is never stored.
+
+> **Superseded:** **Null and 0 are different:** null means never triaged anywhere, 0 means a tracker recorded "No Priority". Collapsing them makes the badge meaningless on local cards. Note: Linear uses 0 for "No Priority" and ClickUp uses blank/null, so the import mapping must translate ClickUp's null to 0 (tracker-says-none) and leave a local card's field as null (never-triaged).
+> **Reason:** User decision. The distinction encodes provenance, not state — "a tracker said none" and "nobody has said anything" are the same fact about the card, which is that it has no priority. The badge argument does not survive either: both states render no badge, so there was nothing to make meaningless. Carrying the pair cost a five-way sort tier, an asymmetric two-tracker import mapping, and a value an agent could not name unambiguously.
+> **Replaced with:** One NULL state. `plans.priority` is 1–4 or NULL. Linear 0 → NULL, ClickUp blank/absent → NULL, untriaged local card → NULL. Round-trip to Linear stays stable (NULL → 0 on write-back, 0 → NULL on read), so no tracker data is lost by collapsing.
 2. **Is complexity a first-class sort mode?** Recommendation: yes, with the label reflecting that it is agent-estimated — it is a rough grouping for "clear the small ones", not a ranking. Cheap to add once the control exists. **Caveat:** `KanbanPlanRecord.complexity` is a string (`'Unknown'` or `'1'`–`'10'`), not a number. The sort must `parseInt` and handle `'Unknown'` — recommendation: `'Unknown'` sorts last (after 10), so un-estimated cards don't jump to the top. This makes the mode most useful on boards where complexity has been populated, and inert (everything sorts last, stable) on boards where it hasn't — which is the honest state.
 3. **Is the control global or per-column?** Recommendation: **global**, since it answers "how is this board ordered". Manual order remains per-column, so selecting *manual* means each column uses its own arrangement.
 
@@ -118,7 +122,7 @@ Key risks: the `Order by` mode must be read from one config key by all three con
 - Add `priority INTEGER DEFAULT NULL` to `SCHEMA_TABLES_SQL` (after `map_fingerprint` at `:266`).
 - Add `MIGRATION_V65_SQL` with `ALTER TABLE plans ADD COLUMN priority INTEGER DEFAULT NULL`, following the V64 comment format. Register in the migration runner after the V64 block (`:8746`).
 - Add `priority` to `PLAN_COLUMNS` (`:1020-1026`).
-- Add `priority?: number | null` to `KanbanPlanRecord` (after `mapFingerprint` at `:172`), with a doc comment: "V65: tracker-mapped priority 1–4 (1=urgent, 4=low). NULL = never triaged (local card, no tracker link). 0 = tracker explicitly recorded 'No Priority'. Distinct from `priority_starred` (binary override) — this field describes, the star directs."
+- Add `priority?: number | null` to `KanbanPlanRecord` (after `mapFingerprint` at `:172`), with a doc comment: "V65: priority 1–4 (1=urgent, 4=low), or NULL for no priority. NULL is the ONLY no-priority state — Linear's 0 and ClickUp's blank both import as NULL; 0 is never stored. Distinct from `priority_starred` (binary override) — this field describes, the star directs."
 - Add `setCardPriority(planId, workspaceId, priority: number | null)` — sets `priority` on a card. Analogous to `setPriorityStarred` (which the star plan added).
 - Add `getOrderByMode(workspaceId): Promise<SortMode>` and `setOrderByMode(workspaceId, mode: SortMode)` — reads/writes `kanban.orderBy` from the `config` table using the existing `getConfigSync`/`setConfig` pattern (`:5616`, `:5628`). Default: `'manual'`.
 
@@ -138,14 +142,14 @@ Key risks: the `Order by` mode must be read from one config key by all three con
 - The star step (step 1 in the current comparator) runs first in ALL modes — starred always overrides.
 - After the star, the mode selects the secondary sort key:
   - `'manual'` (default): current logic — `queue_position`/`column_order` → `column_entered_at` DESC → `createdAt` DESC.
-  - `'priority'`: `priority` ASC (1=urgent first), with NULL sorting last (never-triaged after everything). Cards at the same priority fall through to the manual-order fallback, then `column_entered_at` DESC, then `createdAt` DESC. A card with priority 0 (tracker "No Priority") sorts after 1–4 but before NULL.
+  - `'priority'`: `priority` ASC (1=urgent first), with NULL sorting last (no priority after everything). Cards at the same priority fall through to the manual-order fallback, then `column_entered_at` DESC, then `createdAt` DESC. There is no 0 tier — the full order is 1 > 2 > 3 > 4 > NULL.
   - `'date'`: `column_entered_at` DESC → `createdAt` DESC. Skips the manual-order step entirely — this is "when did it last change columns."
   - `'complexity'`: `parseInt(complexity)` ASC (1 first = easiest first, the "clear the small ones" use case), with `'Unknown'` sorting last. Cards at the same complexity fall through to `column_entered_at` DESC, then `createdAt` DESC.
 - The STAGING dependency yield-or-refuse rule is applied by the CALLER (the queue pop at `LocalApiServer.ts:2067-2087`), not by the comparator. The comparator produces the order; the caller filters by dependency gates. This is unchanged — the mode only affects the sort, not the gate.
 
 **Edge Cases:**
 - In STAGING, the star step is skipped (mission queue, not board — `kanbanOrdering.ts:77`). The mode still applies to the secondary sort within STAGING: `'priority'` mode sorts STAGING by card priority, `'manual'` uses `queue_position`, etc. This is consistent — the mode is global, and STAGING's `queue_position` is its manual order.
-- NULL vs 0 distinction in `'priority'` mode: NULL (never triaged) sorts after 0 (tracker says none). This preserves the distinction the plan's User Review item 1 establishes.
+- NULL in `'priority'` mode sorts last, after 4 (Low). One no-priority tier, per User Review item 1 — a comparator that also handled 0 would be dead code, since 0 is never stored.
 
 ### 3. `src/services/KanbanProvider.ts` — consumer wiring
 
@@ -185,9 +189,9 @@ Key risks: the `Order by` mode must be read from one config key by all three con
 **Logic:**
 - Add an `Order by` control at the top of the board — a dropdown or segmented control with four options: Manual (default), Priority, Date, Complexity. On change, posts a `setOrderByMode` message. Styled to read as consequential (not a view toggle) — e.g., a labelled dropdown, not an icon.
 - The display sort at `:9030` must read the mode from the board state (sent with the board refresh) and pass it to `compareByPrecedence`. If the webview has its own copy of the comparator logic (it does — `:9030-9054` inlines the logic rather than importing `kanbanOrdering.ts`), it must be updated to apply the mode the same way the backend does. **Critical:** the webview and backend must apply the same mode logic or the screen and the system disagree.
-- Add a priority badge to `createCardHtml` — renders nothing when `priority` is null (never triaged). When 0, renders a "No Priority" indicator (distinct from blank — the tracker explicitly said none). When 1–4, renders a colored dot or label matching the tracker palette (urgent=red, high=yellow/orange, normal=blue, low=grey). Clicking the badge opens a priority picker (1–4 + clear), posting a `setCardPriority` message. No confirm gate (project rule).
+- Add a priority badge to `createCardHtml` — renders nothing when `priority` is null (no priority — the only unset state). When 1–4, renders a colored dot or label matching the tracker palette (urgent=red, high=yellow/orange, normal=blue, low=grey). Clicking the badge opens a priority picker (1–4 + clear), posting a `setCardPriority` message. No confirm gate (project rule).
 - **Reuse the tickets-panel priority infrastructure.** The Tickets sidebar already has a full priority popover + optimistic update + write-back flow, shipped via `replace-ticket-card-status-dot-with-changeable-priority-dot.md`. The kanban badge should follow the same pattern:
-  - `openPriorityPopover` (`tickets.js:3243`) — popover with provider-specific options (Linear: 0–4 hardcoded; ClickUp: `_availableClickUpPriorities()`). The kanban version uses the same 0–4 scale but writes to `plans.priority` via `setCardPriority`, not to the tracker.
+  - `openPriorityPopover` (`tickets.js:3243`) — popover with provider-specific options (Linear: 0–4 hardcoded; ClickUp: `_availableClickUpPriorities()`). The kanban version offers **1–4 plus Clear** (Clear writes NULL) and writes to `plans.priority` via `setCardPriority`, not to the tracker. It does NOT reuse the tickets popover's 0–4 list: 0 is a Linear wire value, not a board state.
   - `selectPriority` (`tickets.js:1831`) — optimistic update + message post + `_pendingPriorityChange` in-flight guard. The kanban version posts `setCardPriority` instead of `linearUpdateIssuePriority`/`clickupUpdateTaskPriority`, and if the card has a tracker link, ALSO triggers the tracker write-back (so the board and the tracker agree).
   - CSS classes (`.ticket-priority-dot`, `.ticket-priority-option`, `.priority-option-swatch`) in `tickets.html:2996-3049` — reuse or share these styles for the kanban badge.
   - The color palette is already defined: Linear at `_linearPriorityColor` (`tickets.js:497`) and `_linearPriorityName` (`:502`); ClickUp at `_clickUpPriorityColor` (`:507`) and `_clickUpPriorityName` (`:521`). The kanban badge should use the same colors so a card's priority dot looks the same whether viewed in the tickets panel or on the board.
@@ -203,22 +207,22 @@ Key risks: the `Order by` mode must be read from one config key by all three con
 **Context:** Linear priority is read at `:389` (`priority: raw?.priority === undefined || raw?.priority === null ? null : Number(raw.priority)`). Write-back is at `:1217-1240` (`updateIssuePriority`). Labels at `:2753`: `['', 'urgent', 'high', 'normal', 'low']`.
 
 **Logic:**
-- On import: Linear's `priority` (0–4, where 0 = No Priority) maps directly to the `plans.priority` column. 0 stays 0 (tracker says none), 1–4 map 1:1. Null (Linear returns null when priority is unset) maps to null (never triaged). This is already the correct mapping — the import code at `:389` produces `null` for unset and `0`–`4` for set, which matches the `plans.priority` semantics exactly.
-- On write-back: when a card's `priority` changes on the board and the card has a `linearIssueId`, call `updateIssuePriority(issueId, priority)` at `:1217`. If `priority` is null (never triaged), write 0 to Linear (Linear has no "null" priority — 0 is the closest). This is a lossy conversion (null → 0) but it is the only option Linear's API offers, and it is documented.
-- The continuous sync (`ContinuousSyncService`) must map Linear priority changes back to `plans.priority` on poll, using the same 0–4 → 0–4 / null → null mapping.
+- On import: Linear's `priority` 1–4 maps 1:1. **Linear 0 ("No Priority") maps to NULL**, as does Linear's null. The import code at `:389` already produces `null` for unset and `0`–`4` for set, so it needs one added step: collapse a `0` to `null` before it reaches `plans.priority`. Without that step 0 lands in the column and every consumer gains a tier the decision removed.
+- On write-back: when a card's `priority` changes on the board and the card has a `linearIssueId`, call `updateIssuePriority(issueId, priority)` at `:1217`. If `priority` is NULL, write 0 to Linear (`updateIssuePriority` validates 0–4 and passes 0 through cleanly). Under the resolved User Review item 1 this is **not** lossy: 0 is precisely what Linear means by no priority, and the read path collapses 0 back to NULL, so the round-trip NULL → 0 → NULL is stable and a card does not oscillate across sync polls.
+- The continuous sync (`ContinuousSyncService`) must map Linear priority changes back to `plans.priority` on poll, using the same mapping: 1–4 → 1–4, and both 0 and null → NULL. This is the second place the 0-collapse must happen; a mapping applied only on first import is undone by the next poll.
 
 ### 8. `src/services/ClickUpSyncService.ts` — ClickUp priority mapping
 
 **Context:** ClickUp priority is read as an object at `:779-784`: `{ id, priority, color, orderindex }`. Write path accepts an integer at `:1457`: `if (priority) body.priority = priority`.
 
 **Logic:**
-- On import: extract the integer from the ClickUp priority object. `parseInt(orderindex)` gives 1–4 (1=urgent, 2=high, 3=normal, 4=low). If the priority object is null (ClickApp disabled or no priority set), map to null (never triaged) — NOT 0, because ClickUp's "no priority" is absent, not an explicit "none" like Linear's 0. This is the key asymmetry: Linear 0 → `plans.priority` 0, ClickUp null → `plans.priority` null.
-- On write-back: when a card's `priority` changes on the board and the card has a `clickupTaskId`, call `updateTask(taskId, { priority })` at `:1433-1457`. If `priority` is null, omit the `priority` field (ClickUp has no "clear priority" API — or if it does, see Uncertain Assumptions). If `priority` is 0, this is a Linear-ism that doesn't map to ClickUp; write-back should omit the field (ClickUp has no "No Priority" level — it has "no priority set").
+- On import: extract the integer from the ClickUp priority object. `parseInt(orderindex)` gives 1–4 (1=urgent, 2=high, 3=normal, 4=low). If the priority object is null (ClickApp disabled or no priority set), map to NULL. No asymmetry with Linear remains: both trackers' no-priority representations collapse to the same NULL, which is what makes the mapping free in both directions.
+- On write-back: when a card's `priority` changes on the board and the card has a `clickupTaskId`, call `updateTask(taskId, { priority })` at `:1525`. If `priority` is NULL, omit the `priority` field (ClickUp has no "clear priority" API — or if it does, see Uncertain Assumptions). The 0 case is gone: 0 is never stored, so no write-back has to decide what it means to ClickUp.
 - The continuous sync must map ClickUp priority changes back to `plans.priority` on poll, using the `orderindex` extraction.
 
 **Edge Cases:**
 - ClickUp's `orderindex` is a string (`:89`: `orderindex: string`). `parseInt` must handle this.
-- A ClickUp Space with priorities disabled (ClickApp off) returns `priority: null` on the task object. Import maps this to `plans.priority = null` (never triaged), which is correct — the tracker has no priority concept for that Space.
+- A ClickUp Space with priorities disabled (ClickApp off) returns `priority: null` on the task object. Import maps this to `plans.priority = null` (no priority), which is correct — the tracker has no priority concept for that Space.
 
 ### 9. Agent instruction (advisory)
 
@@ -240,8 +244,8 @@ Additive and inert: default mode is manual, unset priority renders nothing, and 
 ## Verification Plan
 
 - **Native, not import-only:** set priority on a locally authored plan with no tracker link. Assert it persists, renders and sorts.
-- **Both trackers:** import from Linear and ClickUp; assert all four levels plus unset map correctly, and that a ClickUp Space with priorities disabled yields unset (null) rather than an error or 0.
-- **Null ≠ 0:** assert a never-triaged local card renders no badge while a tracker card at No Priority renders its own state, and that the two sort distinguishably (null after 0 in priority mode).
+- **Both trackers:** import from Linear and ClickUp; assert all four levels plus unset map correctly, that **Linear 0 imports as NULL**, and that a ClickUp Space with priorities disabled yields NULL rather than an error or 0.
+- **One no-priority state:** assert `plans.priority` never holds 0 after an import from either tracker, that a Linear card at No Priority and an untriaged local card are indistinguishable on the board and in every sort, and that a Linear round-trip (0 → NULL → 0) loses nothing.
 - **Write-back:** change priority on the board; assert the linked issue updates with no guard, and that the tickets panel and the board agree afterwards.
 - **The control is execution order, not a view:** select "priority", then assert the next card *dispatched* is the one the board shows first — the test that this is not the discrepancy the star plan exists to fix.
 - **One resolver:** assert every consumer picks the same next card under each mode; specifically assert no consumer has its own ordering. Verify by reading `kanan.orderBy` from `config` in all three call sites (`KanbanProvider.ts:7017`, `LocalApiServer.ts:2065`, `kanban.html:9030`).
@@ -273,10 +277,10 @@ The following are external API behaviors that cannot be confirmed from the codeb
 
 1. **ClickUp ClickApps priority toggle per Space:** The plan assumes a ClickUp Space with the priority ClickApp disabled returns `priority: null` on task objects (not an error, not a zero-priority object). This is external API behavior — the codebase has no test or handling for this case.
 2. **ClickUp "clear priority" API:** The plan assumes that omitting the `priority` field on `updateTask` leaves the existing priority unchanged (no clear). If ClickUp offers a "clear priority" API (e.g., setting priority to 0 or null), write-back from a null `plans.priority` should use it. Unknown from the code.
-3. **Linear priority 0 sorting semantics:** Linear's API treats priority 0 as "No Priority" / untriaged. The plan's Outstanding Questions section asks whether unset (null) should sort last or adjacent to Low in priority mode. Linear's own UI behavior for 0 vs unset may inform this decision but is external.
+3. ~~**Linear priority 0 sorting semantics.**~~ **No longer uncertain, and no longer external.** User Review item 1 collapses Linear's 0 and its null into one NULL state on import, so how Linear's own UI ranks 0 against unset cannot affect this board's sort: both arrive as NULL and sort last. Nothing needs confirming.
 
 ## Outstanding Questions
 
 - Should the mode be per-project rather than global, given a project filter already exists?
-- Does unset (null) sort last in every mode, or adjacent to Low (priority 4)? Linear treats 0 as untriaged rather than lowest, and the two readings differ for the majority of cards. The plan's recommendation: null sorts after 0, and 0 sorts after 1–4, so the full order is 1 > 2 > 3 > 4 > 0 > null. This makes "No Priority" (0) a real state that sorts below Low but above never-triaged.
+- ~~Does unset (null) sort last in every mode, or adjacent to Low (priority 4)?~~ **ANSWERED by User Review item 1:** there is one no-priority state and it sorts last. The full order is 1 > 2 > 3 > 4 > NULL. Untriaged cards sink rather than floating, so switching to priority mode does not lift a pile of un-looked-at cards to the top.
 - Is a priority sort even wanted in STAGING, where streams already sequence work, or should the control be inert there? The plan's recommendation: the mode applies everywhere (it is global), but STAGING's dependency gate (yield-or-refuse) still governs — a priority-floated card that jumps ahead of an incomplete predecessor is refused, same as a starred card.

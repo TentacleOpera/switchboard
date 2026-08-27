@@ -15,8 +15,8 @@ and an agent should not have to know they are two columns.
 
 **The field is planned but has no agent-facing write.**
 `priority-as-a-native-field-and-a-board-wide-order-by.md` adds a nullable
-`plans.priority` (1 Urgent · 2 High · 3 Normal · 4 Low · 0 tracker-says-none ·
-null never-triaged), extends `compareByPrecedence` with an order-by mode, and
+`plans.priority` (1 Urgent · 2 High · 3 Normal · 4 Low · NULL no priority),
+extends `compareByPrecedence` with an order-by mode, and
 maps both trackers. Its Proposed Changes §4 touches `LocalApiServer` only for the
 queue pop and the team queue. So when it ships, an agent will be able to **read**
 a card's priority and **star** a card, and will have no way to set the level —
@@ -50,12 +50,14 @@ stopped syncing — the `PlanIngestionEngine` queue-seam precedent verbatim. So
 the seam must be **wired in both roots and observable in the response**, not
 trusted.
 
-**And there is a second silent trap already in the tracker code.**
+**One tracker-code hazard is worth naming even though the decision defuses it.**
 `ClickUpSyncService.createTask` guards with `if (priority) body.priority = priority`
-(`:1457`) — falsy for `0`. Priority `0` ("No Priority", the parent plan's
-deliberate distinction from null) would be dropped without error. `updateTask`
-(`:1525`) takes `priority?: number` and must be checked for the same guard before
-being relied on to write `0`.
+(`:1457`) — falsy for `0`, so a `0` would be dropped without error. Since 0 is
+never stored in `plans.priority`, no write-back from this endpoint can hit that
+guard today. It is recorded because the guard is wrong in general and because the
+Linear side proves the pattern is avoidable: `updateIssuePriority` (`:1217`)
+validates `0 <= priority <= 4` and passes `0` through cleanly, which is what makes
+the NULL → Linear-0 write-back safe.
 
 ### Root Cause
 
@@ -88,8 +90,10 @@ the first caller that has to reconcile them.
 
 Blocked on `priority-as-a-native-field-and-a-board-wide-order-by.md` §1 — the
 `plans.priority` column, its migration, `PLAN_COLUMNS`, and the record mapper.
-Also needs that plan's **decision 1** resolved (null ≠ 0), because this
-endpoint's validation ladder encodes it.
+That plan's **decision 1 is resolved** (2026-08-27): there is exactly one
+no-priority state and it is NULL — a tracker is not a special source of "no
+priority", so Linear's 0 and ClickUp's blank both import as NULL and 0 is never
+stored. This endpoint's validation ladder encodes that ruling.
 
 Independent of `agents-arrange-cards-into-a-roadmap.md`; they touch different
 fields and can ship in either order.
@@ -116,20 +120,21 @@ reason — a permissive coercion here writes the wrong urgency and reports succe
 |---|---|
 | `1`–`4`, or `"1"`–`"4"` | that level |
 | `"urgent"`, `"high"`, `"normal"`, `"low"` (case/space-insensitive) | 1–4 |
-| `0` or `"0"` | 0 — *tracker recorded No Priority* |
-| `null` | null — *never triaged* |
-| `"none"`, `""`, `"unset"` | **400, rejected as ambiguous** |
-| `true`/`false`, `5`, `-1`, `3.5`, anything else | 400 |
+| `null`, `"none"`, `"clear"` | NULL — *no priority* |
+| `0` or `"0"` | NULL — Linear's wire value for no priority, accepted and collapsed |
+| `true`/`false`, `5`, `-1`, `3.5`, `""`, anything else | 400 |
 
-`"none"` is refused deliberately. It reads as either `0` or `null`, the parent
-plan spent a decision keeping those distinct, and an endpoint that guesses
-destroys the distinction on every call. The error message must say which two
-values the caller meant to choose between.
+There is one no-priority state, so `"none"` is unambiguous and accepted — as is a
+bare `0`, which is what a caller reading Linear's API would naturally send. Both
+collapse to NULL rather than being rejected: refusing a value with exactly one
+possible meaning is friction, not safety. `""` stays a 400, because an empty
+string is far more often a missing variable than an intent to clear.
 
 Label strings are accepted because agents write labels, and the mapping is not
 invented here: it is Linear's own, at `LinearSyncService.ts:2753`
 (`['', 'urgent', 'high', 'normal', 'low']`). Import that array rather than
-retyping it.
+retyping it — but note index 0 is `''` there, so the label lookup must treat
+NULL separately rather than reading slot 0.
 
 Reuse unchanged from the star arm: `planId` / `sessionId` resolution (`:6538`),
 and keying the write to `record.workspaceId` rather than the server's
@@ -187,21 +192,23 @@ Wire it in **both** composition roots, next to where each already wires
 Diff the two roots by hand. The seams each host *wires* are the audit, not the
 verbs each host answers.
 
-**Null on write-back.** Linear has no null — write `0` (parent plan §7, a
-documented lossy conversion). ClickUp has no "clear" — omit the field. Both are
-the parent plan's decisions, restated here because this endpoint is the caller
-that triggers them.
+**NULL on write-back.** Linear has no null — write `0`, which
+`updateIssuePriority` accepts (`:1217` validates 0–4). This is not lossy under the
+resolved decision: 0 is exactly what Linear means by no priority, and the return
+trip collapses it back to NULL, so the round-trip is stable. ClickUp has no
+"clear" — omit the field.
 
-**Check the falsy-zero guard before relying on `updateTask` for `0`.** If it
-guards with `if (priority)` like `createTask` does (`:1457`), fix that guard to
-`if (priority !== undefined)` as part of this change — otherwise `trackerSync`
-reports `"clickup"` for a write that never left.
+**Check `updateTask`'s guard anyway.** Levels 1–4 are truthy so nothing breaks
+today, but if it guards with `if (priority)` like `createTask` does (`:1457`),
+tighten it to `if (priority !== undefined)` while here — the next caller with a
+falsy-but-meaningful value should not have to rediscover this.
 
 ### 3. `.agents/skills/switchboard-orchestration/SKILL.md` — document the level
 
 Extend the star's row at `:104` and its `curl` example at `:119`. State plainly:
 
-- the four labels, plus `0` vs `null` and why `"none"` is refused;
+- the four labels, and that `null` / `"none"` / `"clear"` / `0` all mean the
+  one no-priority state;
 - the star and the level are different things — the star directs, the level
   describes; starring is not "priority 1";
 - **check `orderBy`** before telling a user the board has been re-prioritised;
@@ -225,9 +232,9 @@ callers reading `success` / `starred`.
 1. **Extend `src/test/plan-priority-endpoint.test.js`** — it already builds a
    fake DB reproducing the unscoped-lookup and true-on-zero-rows properties.
    Add:
-   - every accepted input from the ladder writes the expected integer, `0`, or
-     null;
-   - `"none"`, `""`, `true`, `5`, `-1`, `3.5` → 400, **zero writes**;
+   - every accepted input from the ladder writes the expected integer or NULL —
+     including `0`, `"0"`, `"none"`, and `"clear"` all landing as NULL;
+   - `""`, `true`, `false`, `5`, `-1`, `3.5` → 400, **zero writes**;
    - neither field present → 400;
    - both fields present → both columns written in one request;
    - `starred`-only requests behave **exactly** as before, byte-for-byte on the
@@ -237,8 +244,9 @@ callers reading `success` / `starred`.
      the callback throws or returns `'failed'`, and the DB write still stands;
    - `orderBy` reflects the `config` value, including its default when unset.
 2. **Tracker write-back unit test** — a fake sync service asserting Urgent → `1`
-   for Linear and for ClickUp, null → `0` for Linear and omitted for ClickUp, and
-   `0` actually reaching ClickUp's request body (the falsy-guard regression).
+   for Linear and for ClickUp, and NULL → `0` for Linear / field omitted for
+   ClickUp. Add the Linear round-trip: NULL → write 0 → read 0 → NULL, asserting
+   the card does not oscillate between states across a sync poll.
 3. **Both hosts, by hand** — set a level under the extension host and under the
    standalone host, and assert `trackerSync` is not `"unavailable"` in either.
    `npm run standalone-parity:check` is scoped to the browser read-back path and
@@ -252,8 +260,8 @@ callers reading `success` / `starred`.
   would use.
 - No input is silently coerced: every value either means one thing or is
   rejected.
-- `0` and null remain distinguishable end to end — request, DB, response,
-  tracker.
+- There is one no-priority state end to end: an inbound `0`, `"none"`, or
+  `null` all land as NULL, and no path writes 0 into `plans.priority`.
 - A response never claims a tracker write that did not happen, and never hides
   that this host cannot make one.
 - A response never implies work was re-sequenced when the board's sort mode
