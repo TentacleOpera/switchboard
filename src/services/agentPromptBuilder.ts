@@ -48,6 +48,10 @@ export interface BatchPromptPlan {
     hasOwnWorktree?: boolean;
     /** The plan's assigned project name (from KanbanCard.project / KanbanPlanRecord.project). Drives per-plan PRD resolution. */
     project?: string;
+    // Board-ordering inputs, carried so a dispatch set can be ordered by the SAME
+    // shared comparator the board and the planner fan-out use (kanbanOrdering
+    // .compareByPrecedence). Populated by KanbanProvider.buildDispatchPlans; a plan
+    // array built any other way simply sorts by its fallbacks.
     column?: string;
     priorityStarred?: number | null;
     queuePosition?: number | null;
@@ -56,6 +60,23 @@ export interface BatchPromptPlan {
     createdAt?: string;
     lastActivity?: string;
 }
+
+/**
+ * How many loose plans one team head is handed by a single batch move.
+ *
+ * Load-bearing twice over, and both failures are silent. It bounds the conflict
+ * pass the lead performs unaided (a batch carries no feature file and no declared
+ * dependency map, so the lead must derive file overlap from the plans themselves),
+ * and it bounds the lead's context, which holds every plan file, that analysis, and
+ * its own dispatch bookkeeping at once. A missed overlap looks like ordinary work
+ * until two seats fight over a file; a saturated lead misroutes without reporting
+ * that it was overloaded.
+ *
+ * This is a property of a MANUAL batch move — the number of plans one lead is handed
+ * by a human click. It is deliberately NOT schedule configuration: the automation
+ * model's rule schema admits no batch-size field, and a schema test guards that.
+ */
+export const TEAM_BATCH_PLAN_CAP = 5;
 
 /**
  * Resolve a safe working directory from a repoScope value.
@@ -322,8 +343,18 @@ export interface PromptBuilderOptions {
      *  is also true. The enriched drive prefix (built by KanbanProvider's
      *  _buildDrivePrefix) is prepended; this flag reframes the prompt body to match. */
     driveMode?: boolean;
-    /** When true, a batch of loose plans is dispatched to a team lead with driveMode. */
+    /** When true, a batch of loose plans is dispatched to a team lead with driveMode.
+     *  Pairs with featureMode + driveMode: featureMode owns the suppressions
+     *  (BATCH_EXECUTION_RULES, subagent block), driveMode owns the dispatch-to-seats
+     *  framing, and this flag swaps the feature-specific wording — the feature-file
+     *  read instruction and the single-delivery-unit clause — for batch wording, since
+     *  a batch has no feature file and its plans may be entirely unrelated. */
     batchMode?: boolean;
+    /** Caller-resolved override for "the dispatch target heads a coding team".
+     *  generateUnifiedPrompt resolves this itself when absent; the override exists so a
+     *  caller that already resolved the roster (and capped its own plan set on it) does
+     *  not resolve it twice and cannot disagree with the prompt it gets back. */
+    isTeamHead?: boolean;
     /** The feature's topic/title for directive injection. With several features batched, the first one — `featureTopics` carries the full set. */
     featureTopic?: string;
     /**
@@ -2174,7 +2205,12 @@ For each plan:
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock: effectiveSkipBlock, subagentBlock: effectiveSubagentBlock
         });
 
-        const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
+        // Excluded under batchMode: the directive tells the agent to append notes to
+        // "the feature overview file … tagged [FEATURE: ...] in PLANS TO PROCESS", and
+        // a batch has neither. Its own "if the feature file is not present, skip" escape
+        // makes the block inert rather than harmful, but it is still one more sentence
+        // asserting a feature file the batch prompt is required not to reference.
+        const staggeredImplementationBlock = (options?.featureMode && !options?.batchMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
         const suppressWalkthroughBlock = isDriveMode ? '' : (suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '');
         const promptParts = [
             buildExecutionIntro('execute', plans, options?.featureMode, options?.driveMode, options?.batchMode),
@@ -2199,7 +2235,15 @@ For each plan:
         // already lists every subtask plan link, and its WORKTREES block lists the
         // feature's worktree assignments — enumerating subtasks in the prompt is pure
         // duplication.
-        if (options?.featureMode) {
+        // batchMode is excluded: this branch replaces the plan list with a single
+        // FEATURE FILE reference resolved as `plans.find(p => !p.isSubtask)`. Every
+        // plan in a batch satisfies that predicate, so a batch would name plan #1 as
+        // the feature file (it has no Subtasks section to read), assert "All subtasks
+        // are one delivery unit" about plans that may be unrelated, and drop plans
+        // #2..N from the prompt entirely. A batch falls through to the per-plan
+        // enumeration path below, which keeps PLANS TO PROCESS and still carries the
+        // drive intro, the dispatch-to-seats authorization and the batch directive.
+        if (options?.featureMode && !options?.batchMode) {
             // Drive-mode feature coders dispatch subtasks to seats and review
             // diffs rather than implementing themselves (featureSubagentBlock
             // below reframes the role accordingly). The implementation addons
@@ -2257,7 +2301,7 @@ For each plan:
                     useWorktreesPerPlanEnabled
                 ).trim();
 
-            const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
+            const staggeredImplementationBlock = (options?.featureMode && !options?.batchMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
             const suppressWalkthroughBlock = isDriveMode ? '' : (suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '');
             const promptParts = [
                 buildExecutionIntro('execute', plans, options?.featureMode, options?.driveMode, options?.batchMode),
@@ -2345,7 +2389,7 @@ For each plan:
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
 
-        const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
+        const staggeredImplementationBlock = (options?.featureMode && !options?.batchMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
             buildExecutionIntro('process', plans, options?.featureMode, options?.driveMode, options?.batchMode),

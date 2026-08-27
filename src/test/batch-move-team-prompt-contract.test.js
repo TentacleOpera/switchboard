@@ -14,7 +14,22 @@
  */
 
 const assert = require('assert');
-const { buildKanbanBatchPrompt } = require('../../out/services/agentPromptBuilder');
+const path = require('path');
+const Module = require('module');
+
+// KanbanProvider imports `vscode`; the standalone shim stands in for it so the
+// provider's own gate + cap can be exercised headlessly (same pattern as
+// drive-mode-prompt-overhaul-contract.test.js).
+const shimPath = path.join(__dirname, '..', '..', 'out', 'standalone', 'vscodeShim.js');
+const originalLoad = Module._load;
+Module._load = function (request) {
+    if (request === 'vscode') return require(shimPath);
+    return originalLoad.apply(this, arguments);
+};
+
+const { buildKanbanBatchPrompt, TEAM_BATCH_PLAN_CAP } = require('../../out/services/agentPromptBuilder');
+const { KanbanProvider } = require('../../out/services/KanbanProvider');
+const { TERMINALS_GROUPS_KEY } = require('../../out/services/teamWiring');
 
 const makeLoosePlans = (count) => {
     const plans = [];
@@ -128,11 +143,154 @@ function testRealFeatureDispatchKeepsUnitClause() {
     console.log('  PASS: real feature dispatch keeps unit clause');
 }
 
+function testCoderBatchKeepsPlanList() {
+    console.log('Testing coder batch keeps the plan list...');
+    const plans = makeLoosePlans(5);
+    const options = { featureMode: true, driveMode: true, batchMode: true, featureTopic: 'Batch send', subtaskCount: 5 };
+
+    const prompt = buildKanbanBatchPrompt('coder', plans, options);
+
+    // The coder's featureMode branch replaces PLANS TO PROCESS with a single
+    // FEATURE FILE reference resolved as `plans.find(p => !p.isSubtask)`. Every loose
+    // plan matches that, so a batch would name plan #1 as the feature file and drop
+    // plans #2..N entirely. batchMode must fall through to per-plan enumeration.
+    assert.ok(prompt.includes('PLANS TO PROCESS:'), 'Coder batch MUST enumerate the plans');
+    for (let i = 1; i <= 5; i++) {
+        assert.ok(prompt.includes(`/path/to/loose_plan_${i}.md`), `Coder batch must name plan ${i}`);
+    }
+    assert.ok(!prompt.includes('FEATURE FILE:'), 'Coder batch must NOT claim a feature file');
+    assert.ok(!prompt.includes('All subtasks are one delivery unit'), 'Coder batch must NOT assert a delivery unit');
+
+    console.log('  PASS: coder batch keeps the plan list');
+}
+
+function testStaggeredDirectiveSuppressedInBatch() {
+    console.log('Testing staggered-implementation directive is suppressed in batch mode...');
+    const plans = makeLoosePlans(5);
+    const base = { featureMode: true, driveMode: true, featureTopic: 'Batch send', subtaskCount: 5, staggeredImplementationEnabled: true };
+
+    const batchPrompt = buildKanbanBatchPrompt('lead', plans, { ...base, batchMode: true });
+    const featurePrompt = buildKanbanBatchPrompt('lead', makeFeaturePlans(), { ...base, batchMode: false, featureTopic: 'Test Feature', subtaskCount: 2 });
+
+    assert.ok(!batchPrompt.includes('STAGGERED IMPLEMENTATION:'), 'Batch prompt must NOT reference the feature overview file');
+    assert.ok(featurePrompt.includes('STAGGERED IMPLEMENTATION:'), 'Real feature dispatch MUST keep the staggered directive');
+
+    console.log('  PASS: staggered directive suppressed in batch mode');
+}
+
+// ── Provider gate + cap ───────────────────────────────────────────────────────
+
+function makeProvider({ groups = [], agentNames = {} } = {}) {
+    const store = { [TERMINALS_GROUPS_KEY]: groups, 'terminals.groups': [] };
+    const db = {
+        ensureReady: async () => true,
+        getConfig: async key => store[key] ?? null,
+        getConfigJson: async (key, fallback) => (key in store ? structuredClone(store[key]) : fallback),
+    };
+    const provider = Object.create(KanbanProvider.prototype);
+    provider._getKanbanDb = () => db;
+    provider._getAgentNames = async () => agentNames;
+    return provider;
+}
+
+const TEAM_GROUPS = [{ id: 'team_Coding_lead', head: 'Coding-lead', members: ['Coding-lead', 'Coder-1', 'Coder-2'], order: ['Coding-lead', 'Coder-1', 'Coder-2'] }];
+
+async function testTeamHeadGateResolvesOffTheTerminalName() {
+    console.log('Testing team-head gate resolves off the target terminal name...');
+    const provider = makeProvider({ groups: TEAM_GROUPS, agentNames: { lead: 'Coding-lead' } });
+
+    // Team groups are keyed by the HEAD TERMINAL's name (`team_<headName>`). Resolving
+    // team-ness from the role STRING matches no group, so every lead reads as team-less
+    // and the whole allocate path is unreachable — the exact regression this pins.
+    assert.strictEqual(await provider.isCodingTeamHead('/ws', 'lead', 'Coding-lead'), true, 'A lead heading a team must gate true');
+    assert.strictEqual(await provider.isCodingTeamHead('/ws', 'lead', 'Solo-lead'), false, 'A lead heading no team must gate false');
+
+    // No target terminal (the prompt previews): fall back to the role's agent name.
+    assert.strictEqual(await provider.isCodingTeamHead('/ws', 'lead'), true, 'Preview path must fall back to the configured agent name');
+    const unassigned = makeProvider({ groups: TEAM_GROUPS, agentNames: { lead: 'No agent assigned' } });
+    assert.strictEqual(await unassigned.isCodingTeamHead('/ws', 'lead'), false, '"No agent assigned" is not a team head');
+
+    // The flag must not reach a plain seat or the planner: featureMode redirects the
+    // planner's workflow file, and driveMode tells a coder to dispatch to seats it has none of.
+    for (const role of ['coder', 'intern', 'planner', 'reviewer']) {
+        assert.strictEqual(await provider.isCodingTeamHead('/ws', role, 'Coding-lead'), false, `${role} must never gate as a team head`);
+    }
+
+    console.log('  PASS: team-head gate resolves off the target terminal name');
+}
+
+function makeOrderablePlans(count, extra = () => ({})) {
+    const plans = [];
+    for (let i = 1; i <= count; i++) {
+        plans.push({
+            planId: `plan${i}`,
+            topic: `Plan ${i}`,
+            column: 'CREATED',
+            createdAt: new Date(2026, 0, i).toISOString(),
+            columnEnteredAt: new Date(2026, 0, i).toISOString(),
+            ...extra(i)
+        });
+    }
+    return plans;
+}
+
+function testCapAndRemainder() {
+    console.log('Testing cap, remainder and determinism...');
+    const provider = makeProvider();
+    const twelve = makeOrderablePlans(12);
+
+    const first = provider.selectTeamBatchPlans(twelve);
+    assert.strictEqual(TEAM_BATCH_PLAN_CAP, 5, 'The cap is five');
+    assert.strictEqual(first.sent.length, 5, 'Five plans are sent');
+    assert.strictEqual(first.skipped.length, 7, 'Seven plans stay put');
+    assert.strictEqual(new Set([...first.sent, ...first.skipped]).size, 12, 'No plan is dropped or duplicated');
+
+    // The same selection sends the same five, in the same order.
+    const second = provider.selectTeamBatchPlans(twelve);
+    assert.deepStrictEqual(second.sent.map(p => p.planId), first.sent.map(p => p.planId), 'The selection is deterministic');
+
+    // A non-STAGING hand-arrangement (V63 column_order — reorderColumn rewrites the
+    // whole column's positions) is respected. Here the arrangement is oldest-first,
+    // the exact opposite of the column_entered_at DESC fallback, so a comparator that
+    // ignored column_order would send the five the user deprioritised.
+    const arranged = makeOrderablePlans(12, i => ({ columnOrder: i }));
+    const arrangedPick = provider.selectTeamBatchPlans(arranged);
+    assert.deepStrictEqual(
+        arrangedPick.sent.map(p => p.planId),
+        ['plan1', 'plan2', 'plan3', 'plan4', 'plan5'],
+        'A hand-arranged non-STAGING column must be sent in its arranged order'
+    );
+
+    // A starred card outranks the arrangement outside STAGING.
+    const starred = makeOrderablePlans(12, i => ({ columnOrder: i, priorityStarred: i === 12 ? 1 : 0 }));
+    assert.strictEqual(provider.selectTeamBatchPlans(starred).sent[0].planId, 'plan12', 'A starred card leads the sent set');
+
+    // STAGING reads queue_position instead, and column_order is ignored there.
+    const staged = makeOrderablePlans(12, i => ({ column: 'STAGING', queuePosition: 13 - i, columnOrder: i }));
+    const stagedPick = provider.selectTeamBatchPlans(staged);
+    assert.deepStrictEqual(
+        stagedPick.sent.map(p => p.planId),
+        ['plan12', 'plan11', 'plan10', 'plan9', 'plan8'],
+        'STAGING must send the head of the staged queue'
+    );
+
+    // A set at or under the cap is sent whole.
+    const three = provider.selectTeamBatchPlans(makeOrderablePlans(3));
+    assert.strictEqual(three.sent.length, 3, 'A set under the cap is sent whole');
+    assert.strictEqual(three.skipped.length, 0, 'A set under the cap skips nothing');
+
+    console.log('  PASS: cap, remainder and determinism');
+}
+
 async function runAll() {
     testTeamHeadBatchPrompt();
     testNonTeamBatchPrompt();
     testPlannerBatchPromptDoesNotLeakWorkflow();
     testRealFeatureDispatchKeepsUnitClause();
+    testCoderBatchKeepsPlanList();
+    testStaggeredDirectiveSuppressedInBatch();
+    await testTeamHeadGateResolvesOffTheTerminalName();
+    testCapAndRemainder();
     console.log('\nAll batch move team prompt contract tests PASSED!');
 }
 

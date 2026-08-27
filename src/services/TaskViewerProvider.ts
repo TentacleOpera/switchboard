@@ -85,7 +85,8 @@ import {
     buildSeatDirectiveBlock,
     ensureDispatchProtocolDirectives,
     validateDispatchPayload,
-    PHONE_A_FRIEND_DONE_DIRECTIVE
+    PHONE_A_FRIEND_DONE_DIRECTIVE,
+    TEAM_BATCH_PLAN_CAP
 } from './agentPromptBuilder';
 import { extractDispatchIdentity } from './dispatchIdentity';
 import type { NotionFetchService } from './NotionFetchService';
@@ -7560,7 +7561,29 @@ Each plan file must include:
 
         const allSameTarget = groups.every(g => g.targetAgent === groups[0].targetAgent);
 
-        const dispatchToGroup = async (group: typeof groups[0], unsentLabels?: string[]): Promise<boolean> => {
+        const dispatchToGroup = async (rawGroup: typeof groups[0], unsentLabels?: string[]): Promise<boolean> => {
+            // BATCH TO A TEAM HEAD — cap the set HERE, before anything is persisted.
+            // The cap has to bound what MOVES, not just what the prompt names: the
+            // per-plan loop below advances every card in the group and stamps its
+            // dispatch identity, so capping only the prompt would advance the whole
+            // selection while telling the lead about a handful of it — the remainder
+            // would sit in the coding column, marked in-flight, with no agent ever
+            // told to work them. The plans past the cap are left exactly where they
+            // are and named in the post-dispatch report.
+            //
+            // Loose plans only: a group carrying a feature takes the feature branch in
+            // generateUnifiedPrompt, which is not batch mode and is not capped.
+            let group = rawGroup;
+            let cappedOut: BatchPromptPlan[] = [];
+            if (role === 'lead'
+                && rawGroup.plans.length > TEAM_BATCH_PLAN_CAP
+                && partitionPlansByFeature(rawGroup.plans).featureGroups.length === 0
+                && this._kanbanProvider
+                && await this._kanbanProvider.isCodingTeamHead(resolvedWorkspaceRoot, role, rawGroup.targetAgent)) {
+                const { sent, skipped } = this._kanbanProvider.selectTeamBatchPlans(rawGroup.plans);
+                group = { ...rawGroup, plans: sent };
+                cappedOut = skipped;
+            }
             const delegateOptions = await this._resolveDelegateIdentityForTarget(group.targetAgent, role) ?? {};
             let reviewerDelegationOpts = {};
             if (role === 'reviewer' && group.targetAgent) {
@@ -7682,8 +7705,35 @@ Each plan file must include:
                     role,
                     sessionIds: group.plans.map(p => p.sessionId || p.planId || '').filter(Boolean),
                     targetAgent: group.targetAgent,
-                    planCount: group.plans.length
+                    planCount: group.plans.length,
+                    ...(cappedOut.length > 0 ? { skippedPlanCount: cappedOut.length } : {})
                 }, undefined, resolvedWorkspaceRoot);
+                if (cappedOut.length > 0) {
+                    // The webview optimistically moved EVERY selected card on the click.
+                    // A card the cap leaves behind is never named in the persist loop, so
+                    // without this its optimistic move is never reverted and its guard
+                    // ledger entry never resolves — the card sits in the wrong column
+                    // until an unrelated push repaints the board. Same channel the
+                    // in-flight skip uses, which reverts the move and states why.
+                    this._kanbanProvider?.postMessage({
+                        type: 'moveCardsFailed',
+                        failures: cappedOut
+                            .map(p => ({
+                                id: p.planId || p.sessionId || '',
+                                sourceColumn: p.column || '',
+                                reason: `over the ${TEAM_BATCH_PLAN_CAP}-plan limit for one team head — not sent`
+                            }))
+                            .filter(f => f.id && f.sourceColumn)
+                    });
+                    // Second line of defence, not the first — a cap the user only
+                    // learns about afterwards is an explanation for something already
+                    // done. Naming the plans that stayed is still required so the set
+                    // left behind is never silent.
+                    const stayed = cappedOut.map(p => p.topic || p.planId || p.sessionId || 'Untitled').join(', ');
+                    this._seams().ui.showInformationMessage(
+                        `Sent ${group.plans.length} of ${rawGroup.plans.length} plans to '${group.targetAgent}' (one team head takes ${TEAM_BATCH_PLAN_CAP} at a time). Left in place: ${stayed}.`
+                    );
+                }
             } catch (e) {
                 await this._logEvent('dispatch', {
                     event: 'batch_dispatch_failed',

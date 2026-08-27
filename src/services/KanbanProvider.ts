@@ -22,7 +22,7 @@ import {
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveAgentDisplayName } from './cliIdentity';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE, TEAM_BATCH_PLAN_CAP } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
 import { compareByPrecedence } from './kanbanOrdering';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
@@ -5950,6 +5950,46 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return [...shas];
     }
 
+    /**
+     * Does `role`'s dispatch target head a registered team? The gate for the
+     * batch-to-a-team-head allocate prompt.
+     *
+     * Team-ness resolves off the TARGET TERMINAL's name, because that is the key a
+     * team group is stored under (`team_<headName>` — see teamWiring
+     * .resolveTeamMembersForHead). The role string is not a terminal name and matches
+     * no group, so passing it resolves every lead as team-less. The caller supplies
+     * the target it is actually dispatching to (`originTerminal`); the role's
+     * configured/live agent name is the fallback for callers that dispatch nothing —
+     * the prompt previews, which must show what a real dispatch would send.
+     */
+    public async isCodingTeamHead(workspaceRoot: string, role: string, targetTerminal?: string): Promise<boolean> {
+        if (role !== 'lead') { return false; }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db) { return false; }
+        let originName = String(targetTerminal || '').trim();
+        if (!originName) {
+            const agentNames = await this._getAgentNames(workspaceRoot);
+            originName = String(agentNames[role] || '').trim();
+        }
+        if (!originName || originName === 'No agent assigned') { return false; }
+        const roster = await resolveTeamMembersForHead({ db, originName });
+        return !!(roster && roster.length > 0);
+    }
+
+    /**
+     * Split a batch bound for a team head into the plans that go and the plans that
+     * stay, ordered by the shared V63 precedence comparator — `queue_position` in
+     * STAGING, `column_order` everywhere else, starred-first, then column_entered_at /
+     * createdAt DESC. Same comparator `_distributePlannerDispatch` uses, so the batch
+     * cap and the planner fan-out pick the same plans out of the same column, and a
+     * hand-arranged column is respected rather than overridden by age.
+     */
+    public selectTeamBatchPlans<T extends BatchPromptPlan>(plans: T[]): { sent: T[]; skipped: T[] } {
+        const sortColumn = plans[0]?.column || '';
+        const ordered = [...plans].sort((a, b) => compareByPrecedence(a, b, sortColumn));
+        return { sent: ordered.slice(0, TEAM_BATCH_PLAN_CAP), skipped: ordered.slice(TEAM_BATCH_PLAN_CAP) };
+    }
+
     public async generateUnifiedPrompt(
         role: string,
         // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
@@ -6299,22 +6339,31 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (['lead', 'coder', 'intern'].includes(role) && await resolveDrive()) {
                 batchOptions.driveMode = true;
             }
-        } else if (plans.length > 1 && ['lead', 'coder', 'intern'].includes(role)) {
-            const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-            const vis = visibleAgents[role];
-            const originName = typeof vis === 'string' && vis ? vis : role;
-            const teamRoster = await resolveTeamMembersForHead({ db, originName });
-            const isTeamHead = (overrides as any)?.isTeamHead ?? (role === 'lead' && !!(teamRoster && teamRoster.length > 0));
-            if (isTeamHead || overrides?.driveMode) {
-                const sortColumn = partition.loosePlans[0]?.column || '';
-                const sortedLoose = [...partition.loosePlans].sort((a, b) => compareByPrecedence(a, b, sortColumn));
-                const cappedLoose = sortedLoose.slice(0, 5);
-                orderedPlans = cappedLoose;
+        } else if (plans.length > 1 && role === 'lead') {
+            // BATCH TO A TEAM HEAD — the lead ALLOCATES rather than executes.
+            //
+            // The gate is the whole safety property here, and it is narrow on purpose:
+            // `role === 'lead'` AND that lead heads a registered team. Not "the target
+            // belongs to a team", and never a bare driveMode override — buildKanban
+            // BatchPrompt's own comment records why (an unpaired flag "would tell a
+            // plain single-plan coder to dispatch subtasks to seats it has none of"),
+            // and featureMode additionally redirects the planner's workflow file via
+            // isFeatureTarget.
+            const isTeamHead = overrides?.isTeamHead ?? await this.isCodingTeamHead(workspaceRoot, role, overrides?.originTerminal);
+            if (isTeamHead) {
+                // Defence in depth. The dispatch caller caps its own set BEFORE moving
+                // any card (so the remainder stays where it is); this second cap only
+                // covers callers that build a prompt without moving cards — the prompt
+                // previews — and is a no-op on an already-capped set.
+                const { sent } = this.selectTeamBatchPlans(partition.loosePlans);
+                orderedPlans = sent;
                 batchOptions.featureMode = true;
                 batchOptions.driveMode = true;
                 batchOptions.batchMode = true;
                 batchOptions.featureTopic = 'Batch send';
-                batchOptions.subtaskCount = cappedLoose.length;
+                // The number actually SENT, never the number selected — the directive
+                // quotes this count, and a lead told to expect twelve receives five.
+                batchOptions.subtaskCount = sent.length;
             } else {
                 batchOptions.featureMode = false;
             }

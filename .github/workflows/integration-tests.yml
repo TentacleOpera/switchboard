@@ -169,6 +169,19 @@ jobs:
       - name: PTY dispatch focus contract (no spurious VS Code toast on a PTY dispatch)
         run: npm run test:contract:pty-dispatch-focus
 
+      # A batch move onto a team head must tell the lead to ALLOCATE, not to work the
+      # plans itself. Every failure mode here is a prompt that still builds and still
+      # sends. The gate resolves team-ness off the TARGET TERMINAL's name, because team
+      # groups are keyed `team_<headName>` — resolving it off the role string matches no
+      # group, so every lead reads as team-less and the whole path is silently dead. The
+      # flag pair must not reach a plain coder (it would tell it to dispatch to seats it
+      # has none of), the planner (featureMode redirects its workflow file), or the
+      # coder's feature-file branch (which names plan #1 as the feature file and drops
+      # the rest). And the cap must select by the shared V63 comparator, or a
+      # hand-arranged column sends the five the user deprioritised.
+      - name: Batch-to-a-team-head prompt contract (allocate framing, gate, cap ordering)
+        run: npm run test:contract:batch-move-team-prompt
+
       # Browser send-to-terminal dispatch parity: every browser-originated prompt
       # dispatch must thread the apiOriginated surface flag end-to-end so a browser
       # PTY terminal is reachable, the four stray _dispatchExecuteMessage sites
