@@ -133,6 +133,11 @@ must never be the only copy of current. Building that revision store is a separa
 optional plan — not folded in here, because it has its own schema, its own growth
 profile, and its own recovery story.
 
+What *does* go in the sibling, and what it takes to make it worth keeping, is
+`backups-that-can-actually-be-restored.md`. Short version of its finding: nothing
+in the codebase reads `dbbackup/` today, so relocating the backups is necessary and
+not sufficient.
+
 **Logs do not need to be a repo, and that is a feature.** A plain folder has no
 history, so retention is deleting files and long retention costs nothing but disk.
 A git repo is the opt-in for the case where logs should be *shared*, and it brings
@@ -176,8 +181,9 @@ does my data live"); this plan supplies the answer for the git-carried side.
   path gain a derived remote) and `board-state-remote-mirror-channels.md` (whose
   `GitStateProvider` reads a sibling instead of the control plane).
 - **Required by** `board-control-instruction-format-and-executor.md` for a
-  private channel, and by
-  `terminal-logs-live-in-the-logs-sibling.md` for the logs location.
+  private channel, `terminal-logs-live-in-the-logs-sibling.md` for the logs
+  location, and `backups-that-can-actually-be-restored.md` for the backups
+  location.
 
 ## Proposed Changes
 
