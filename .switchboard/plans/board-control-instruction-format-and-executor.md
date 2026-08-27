@@ -131,6 +131,7 @@ single DB or service call it makes:
 | `addToMilestone` | `milestoneId` | Gated on the milestones plan |
 | `stageForQueue` | — | Stage into STAGING at the next queue position |
 | `completePlan` | — | The board's own complete path |
+| `dispatch` | `role` (optional) | Send the card to a seat via the remote dispatch seam — the channel's primary action |
 
 Rules that make it a boundary rather than a list:
 
@@ -139,13 +140,17 @@ Rules that make it a boundary rather than a list:
 - **Every action routes through the same code path a human's click takes.** Board
   moves in particular go through the sanctioned move path, never raw SQL: per
   project rules, SQL moves strand cards and skip the move side-effects.
-- **Dispatch is deliberately absent from v1.** Everything above is reversible
-  from the board in one action. Dispatch spends tokens and starts an agent, and
-  replay protection is new code that has not yet been proven in the field. When it
-  is added, it routes through
-  `remote-dispatch-is-a-narrower-path-than-local-dispatch.md` — a team lead, no
-  role, no terminal, no instruction, with provenance attached — and never through
-  the local dispatch command. That plan is what makes adding it reasonable.
+- **`dispatch` is in v1, and is the point.** The workflow this channel exists for
+  is *author plans in a cloud session, run `improve-plan` in the cloud, dispatch
+  remotely to the local coder* — so a channel without dispatch does not serve its
+  primary use case. It takes an optional `role` param (default: the column's mapped
+  role) and routes through `remote-dispatch-is-its-own-audited-seam.md`, never
+  through the local dispatch command, so it is attributable and logged.
+
+  Replay matters more for this action than for any other: a re-fired move is
+  cosmetic, a re-fired dispatch spends tokens and starts a second agent. The
+  idempotency in §5 is therefore load-bearing rather than tidy, and its tests are
+  the ones to trust before enabling the channel.
 
 ### 3. Execution order, and partial failure
 
