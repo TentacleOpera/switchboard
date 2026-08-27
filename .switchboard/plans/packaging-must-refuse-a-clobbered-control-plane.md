@@ -121,6 +121,13 @@ is exactly what nobody read for the four weeks this was happening.
 
 ## Dependencies
 
+- **The two runtime ledgers must be untracked first, or the guard is unusable.**
+  `.agents/.switchboard-bundled.json` and `.claude/.switchboard-generated.json` are written on every
+  activation with a fresh `generatedAt: new Date().toISOString()` (`ControlPlaneMigrationService.ts:1281`)
+  and are currently committed. A guard asserting `git status --porcelain -- .agents .claude` is empty
+  would therefore fail after every single activation, and be disabled within a day. Gitignore both —
+  the blocklist comment already calls the ledger "generated at runtime into each workspace's
+  `.agents/`, never bundled", so tracking it was always a category error.
 - **The one-time repair must land first.** The tree currently carries the 69-file skills directory.
   Restore it (`git rm -rq .agents .claude && git checkout abd36593^ -- .agents .claude`, landing on
   17 skills / 32 protocols / 4 workflows) **before** packaging, or the first thing this guard does is
