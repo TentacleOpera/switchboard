@@ -1032,7 +1032,8 @@
     "test:contract:transfer-bundle": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/transfer-bundle-contract.test.js",
     "test:contract:terminal-session-log": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-session-log-contract.test.js",
     "test:contract:queue-stall-watch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/queue-stall-watch-contract.test.js",
-  "test:contract:agents-seed-deletion-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/agents-seed-deletion-guard-contract.test.js"
+  "test:contract:agents-seed-deletion-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/agents-seed-deletion-guard-contract.test.js",
+  "test:contract:review-column-persistence": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/review-column-persistence-regression.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

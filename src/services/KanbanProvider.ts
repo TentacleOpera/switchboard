@@ -7441,7 +7441,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 continue;
             }
             const plan = await db.getPlanBySessionId(sessionId);
-            const currentColumn = plan?.kanbanColumn || 'CREATED';
+            const currentColumn = this._normalizeLegacyKanbanColumn(plan?.kanbanColumn) || 'CREATED';
             if (currentColumn === expectedColumn) {
                 eligible.push(sessionId);
             }
@@ -7468,7 +7468,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 continue;
             }
             const plan = await db.getPlanBySessionId(sessionId);
-            const currentColumn = plan?.kanbanColumn || 'CREATED';
+            const currentColumn = this._normalizeLegacyKanbanColumn(plan?.kanbanColumn) || 'CREATED';
             if (currentColumn !== expectedColumn) {
                 continue;
             }
@@ -7492,31 +7492,42 @@ This step is what moves the plan forward in the Switchboard pipeline.
             });
 
             if (didAdvance) {
-                // updateRunSheet reads fresh from disk, so the local `events` array is stale.
-                // Re-read the updated sheet to get the authoritative post-advance events.
+                // updateRunSheet reads fresh from disk, so re-read for the planFile fallback.
                 const updatedSheet = await log.getRunSheet(sessionId);
-                const updatedEvents: any[] = Array.isArray(updatedSheet?.events) ? updatedSheet.events : [];
-                const newColumn = deriveKanbanColumn(updatedEvents, customAgents);
-                const normalizedColumn = this._normalizeLegacyKanbanColumn(newColumn);
+                // Derive the TARGET column from the workflow we just pushed and NOTHING else.
+                // deriveKanbanColumn scans the whole log backwards, so feeding it the full
+                // event array re-opens the stale-event override the current-column checks
+                // above just closed: when `workflow` is undefined (the batch low-complexity
+                // button passes none) or names a workflow the mapper skips, the scan falls
+                // through to OLDER events and writes their column back to the DB — moving a
+                // card BACKWARDS off an event log the DB has long since diverged from.
+                const workflowName = typeof workflow === 'string' ? workflow.trim() : '';
+                const derivedTarget = workflowName ? deriveKanbanColumn([{ workflow: workflowName }], customAgents) : '';
+                // 'CREATED' doubles as the mapper's no-match fallback, so only honour it when
+                // the workflow genuinely names CREATED.
+                const workflowNamesCreated = /^(?:initiate-plan|(?:move|reset)-to-created)$/.test(workflowName.toLowerCase());
+                const targetColumn = derivedTarget && (derivedTarget !== 'CREATED' || workflowNamesCreated) ? derivedTarget : '';
+                const normalizedColumn = this._normalizeLegacyKanbanColumn(targetColumn);
                 if (normalizedColumn) {
                     await this.moveCardToColumn(resolvedWorkspaceRoot, sessionId, normalizedColumn);
+                }
 
-                    // Sync complexity from plan file to DB so the kanban label updates immediately
-                    try {
-                        const planFile = sheet.planFile || updatedSheet?.planFile;
-                        if (planFile) {
-                            const complexity = await this.getComplexityFromPlan(resolvedWorkspaceRoot, planFile);
-                            if (complexity && complexity !== 'Unknown') {
-                                const db = this._getKanbanDb(resolvedWorkspaceRoot);
-                                const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-                                if (workspaceId) {
-                                    await db.updateComplexityByPlanFile(planFile, workspaceId, complexity);
-                                }
+                // Sync complexity from plan file to DB so the kanban label updates immediately.
+                // Runs on every advance, including the ones that name no target column — the
+                // runsheet moved forward either way.
+                try {
+                    const planFile = sheet.planFile || updatedSheet?.planFile;
+                    if (planFile) {
+                        const complexity = await this.getComplexityFromPlan(resolvedWorkspaceRoot, planFile);
+                        if (complexity && complexity !== 'Unknown') {
+                            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                            if (workspaceId) {
+                                await db.updateComplexityByPlanFile(planFile, workspaceId, complexity);
                             }
                         }
-                    } catch (err) {
-                        console.error('[KanbanProvider] Failed to sync complexity during column advance:', err);
                     }
+                } catch (err) {
+                    console.error('[KanbanProvider] Failed to sync complexity during column advance:', err);
                 }
                 advanced.push({ sessionId, targetColumn: normalizedColumn });
             }

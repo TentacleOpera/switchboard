@@ -81,6 +81,15 @@ jobs:
       - name: .agents seed deletion guard (ledger discriminates deleted from new)
         run: npm run test:contract:agents-seed-deletion-guard
 
+      # plans.kanban_column is the single source of truth for card position. The
+      # events-derived deriveKanbanColumn() override is a redundant second copy of
+      # the same fact that diverges whenever the event log is not perfectly
+      # maintained — a subtask cascade never fans events out — and writing it back
+      # bounces cards to a stale column. Nothing else can see that: compile, lint
+      # and the parity audits are all green while the override is live.
+      - name: Kanban column authority (DB column, never the event log)
+        run: npm run test:contract:review-column-persistence
+
       # Masked-SVG icons have two representations (icons/icon-*.svg and the base64
       # data: URI inlined into each panel's CSS). Both drift modes are silent on
       # screen — a corrupt payload renders nothing, a missing .sb-icon-<name> rule
