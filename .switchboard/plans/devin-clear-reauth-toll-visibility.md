@@ -30,7 +30,10 @@ misconfigured MCP server. It is an unpriced, invisible cost of correct behaviour
    "Devin is resetting context."
 
 3. **A new session re-initialises MCP servers**, so every OAuth-backed MCP re-runs
-   its auth flow and opens a browser.
+   its auth flow and opens a browser. In practice the cost concentrates in
+   *remote* MCP servers launched through `mcp-remote`, which performs a browser
+   OAuth flow per session rather than holding a long-lived local credential. A
+   single such server in an agent's MCP config is enough to produce the symptom.
 
 4. **The toll is linear in useful work** — roughly (context switches) × (seats).
    Devin's own one-auth-per-set guard collapses only prompts that *collide in
@@ -102,6 +105,16 @@ Content requirements — keep it to roughly two sentences:
 - State plainly that this is expected and recurs per work-context switch — this is
   the sentence that ends the "my token must be broken" misdiagnosis, and it is the
   most load-bearing line in the change.
+- Point the reader at their agent's own MCP config as the place to remove
+  OAuth-backed servers they do not need. Without this the note diagnoses without
+  offering a remedy, and the remedy is a one-line config edit.
+
+**Switchboard does not manage agent MCP configuration, and the note must not
+imply otherwise.** The only code touching any MCP config is `src/extension.ts:965-997`,
+which exclusively *deletes* a key named `switchboard` from a fixed path list that
+does not include every agent's config location. It never adds, enables, or
+re-enables an entry. Word the remedy as "in your agent's MCP config", and add no
+control for it in the panel.
 
 Style: match the existing informational-note styling already used in the tab. Do
 not introduce a new visual treatment, an icon, or a warning colour — this is
