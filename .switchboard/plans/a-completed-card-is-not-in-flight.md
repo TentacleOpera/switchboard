@@ -285,3 +285,33 @@ that harness is why the defect shipped.
 
 Updated `PlanIngestionEngine.ts` queue stall sweep `inFlight` predicate to require `!!p.dispatchedAt && !p.completedAt` and seat-pacing `heldCard` predicate to require `!p.completedAt`, ensuring completed cards are not treated as active in-flight work and do not resolve as pacers. Updated `LocalApiServer.ts` failed-outcome restaging logic to check `!currentCompletedAt`, preventing completed cards from being restaged to `STAGING`. Added comprehensive contract test suite in `src/test/queue-stall-watch-contract.test.js` covering head pacing, seat pacing, ladder restaging, and source pins, and wired it to `package.json` and `.github/workflows/integration-tests.yml`.
 
+## Review Findings
+
+Reviewer changed test files only — `src/test/queue-stall-watch-contract.test.js` and
+`src/test/completion-asserted-never-inferred.test.js`; the three production predicates
+were verified correct and left untouched. Two CI-wired gates were red at HEAD because of
+this work: the new suite's tick-2 case asserted a second nudge that shipped gate (8)
+("one nudge, then stop") deliberately suppresses, and the pre-existing
+`completion-asserted-never-inferred` source pin was anchored to the first clause of the
+`inFlight` predicate so the correct `!!p.dispatchedAt` tightening broke its regex — both
+are now fixed and green, the latter re-pinned as a category (reads `completed_at`, never
+reads `kanbanColumn`) rather than a literal spelling. A third gap was closed: the only
+genuinely new behaviour in Change 2 was pinned by nothing, so a `2b` case now asserts that
+a holder with `dispatched_at` cleared is NOT in flight — each of Changes 2, 3 and 4 was
+then individually confirmed to turn its test red when reverted in the compiled output.
+Validation: `tsc -p tsconfig.test.json` clean; `queue-stall-watch`,
+`completion-asserted-never-inferred`, `queue-pipeline`, `queue-done-relay`,
+`task-complete` and `atomic-team-lifecycle` all pass; a full sweep of all 137 contract
+suites gives 120 pass / 17 fail, and all 17 were confirmed pre-existing (zero references
+to `inFlight`/`heldCard`/`stillCoding`/`currentCompletedAt`, and the one that pins this
+same file — `terminal-plan-attribution`'s feature-nudge pacing needle — was verified
+absent at the parent commit too). Remaining risk is documentation drift only: the plan's
+Changes 1 and 2 were written against a stale snapshot, since commit `901abd26` had already
+deleted `CODING_COLUMNS` and already made `inFlight` read `!p.completedAt`.
+
+## Deferred Findings
+
+- NIT `src/services/PlanIngestionEngine.ts:1184` — the feature sweep's `remaining` filter reads `s.kanbanColumn !== 'COMPLETED'`, a done-inference column read that Goal Invariant 2 says should not exist. Left as-is deliberately: `src/test/completion-asserted-never-inferred.test.js:319` explicitly pins that exact read as required, and `getSubtasksByFeatureId` already filters `status = 'active'` so the clause is redundant rather than harmful. Changing it is a separate decision that must move the pin with it.
+- NIT `.switchboard/plans/a-completed-card-is-not-in-flight.md:1` — Change 1 ("delete `CODING_COLUMNS`") was already satisfied by commit `901abd26` before implementation began, and Change 2's stated before-state (a `CODING_COLUMNS` column read) no longer matched the file. Change 2 therefore landed as a tightening, not the described column→fact swap. Plan-text drift only; no code action.
+- MAJOR (out of scope) — 17 contract suites are red at HEAD independently of this work: `browser-panel-verb-routing`, `browser-stray-dispatch-surface`, `claude-protocol-block`, `feature-file-subtask-link`, `memo-browser-clear`, `memo-workspace-binding`, `multi-parent-terminals`, `seat-safeguards`, `skill-preconditions`, `stage-marker-commit`, `staging-column`, `terminal-focus-affordance`, `terminal-operations-no-periodic-reopen`, `terminal-plan-attribution`, `terminal-replay-gap`, `tickets-subtasks`, `verb-engine`. Each is wired into `.github/workflows/integration-tests.yml`, so `integration-tests` cannot pass on any PR until they are triaged. Existing triage plans already cover part of this set.
+

@@ -5,9 +5,12 @@
  *
  * Covers:
  * 1. Head pacing: a team whose only held card carries completed_at is NOT in
- *    flight — the sweep nudges rather than falling silent across multiple ticks.
+ *    flight — the sweep nudges, and a second tick does not reset its nudge
+ *    state (the in-flight branch's reset is the defect's signature).
  * 2. Head pacing: a team with an outstanding dispatch (dispatched_at set,
  *    completed_at NULL) IS in flight and the sweep stays silent.
+ * 2b. Head pacing: a holder with dispatched_at cleared is NOT in flight — a
+ *    released latch is not an outstanding dispatch.
  * 3. Seat pacing: a completed card with a dead holder does NOT resolve as the
  *    pacer, and the escalation recorder is not called.
  * 4. Escalation ladder: reportQueueDone(outcome:'failed') against a card carrying
@@ -178,8 +181,18 @@ async function run() {
             notifiedSeatsThisTick: new Set(),
         });
 
-        assert.strictEqual(notifications.length, 2, 'tick 2 must nudge again — watch must not fall silent on completed card');
-        assert.strictEqual(watch.nudgeCount, 2, 'watch nudgeCount must be 2 after second tick');
+        // Gate (8) — "one nudge, then stop" — legitimately suppresses a SECOND
+        // nudge; repeating every window is the noise the sweep exists to avoid.
+        // So a second NOTIFICATION is the wrong thing to assert. The defect's
+        // signature is different and is what this pins: the in-flight branch
+        // RESETS nudgeCount / lastNudgedAt / escalatedAt on every tick, so a
+        // sweep that reads the completed card as in flight arrives back at
+        // nudgeCount 0 forever and can never reach the nudge at all. Surviving
+        // nudge state across a second tick IS the proof the branch was not
+        // taken — which one tick alone cannot show.
+        assert.strictEqual(notifications.length, 1, 'tick 2 must not re-nudge — the one-nudge budget (gate 8) holds');
+        assert.strictEqual(watch.nudgeCount, 1, 'tick 2 must NOT reset nudgeCount — a completed card is not in flight');
+        assert.strictEqual(watch.lastNudgedAt, 200000, 'tick 2 must NOT reset lastNudgedAt — a completed card is not in flight');
     });
 
     // ── 2. Head pacing: outstanding dispatch IS in flight ──────────────────
@@ -228,6 +241,65 @@ async function run() {
         assert.strictEqual(notifications.length, 0, 'outstanding dispatch must suppress nudge');
         assert.strictEqual(watch.nudgeCount, 0, 'in-flight dispatch must reset nudgeCount');
         assert.strictEqual(watch.lastNudgedAt, 0, 'in-flight dispatch must reset lastNudgedAt');
+    });
+
+    // ── 2b. Head pacing: a released latch is not an outstanding dispatch ────
+    //
+    // The `dispatched_at` half of the predicate, pinned on its own. A holder
+    // alone is NOT a dispatch: `clearWorkingState` nulls `dispatched_at` at
+    // turn end but deliberately leaves `dispatched_terminal` set, so a card
+    // whose coder finished a turn without a completion post keeps its holder
+    // forever. Keying in-flight on the holder alone reads that card as live
+    // work and muzzles the watch — the same silence as the column read, under
+    // a different clause. Suppression here is the team-liveness gate's job
+    // (a coder still producing output), not the in-flight gate's.
+
+    await check('head pacing: holder set with dispatched_at cleared is NOT in flight', async () => {
+        const board = [
+            card('staged-1', 'STAGING', { queuePosition: 1 }),
+            card('sub-1', 'CODER CODED', {
+                dispatchedTerminal: 'Coder-1',
+                dispatchedAt: null,
+                completedAt: null,
+            }),
+        ];
+        const watch = {
+            workspaceRoot: WS,
+            headTerminal: 'Coding',
+            armedAt: 1000,
+            nudgeCount: 0,
+            lastNudgedAt: 0,
+        };
+        const configs = {
+            'kanban.queueWatches': [watch],
+        };
+        const { engine, db, notifications } = makeEngineHarness({
+            board,
+            configs,
+            pacing: 'head',
+            teamMembers: ['Coding', 'Coder-1'],
+        });
+
+        // Both seats quiet well beyond nudgeSilenceMs, so the team-liveness
+        // gate does not stand in for the in-flight gate and mask the result.
+        const liveness = [
+            { friendlyName: 'Coding', lastDataAt: 1000, status: 'running' },
+            { friendlyName: 'Coder-1', lastDataAt: 1000, status: 'running' },
+        ];
+
+        await engine._runQueueNudgeSweep({
+            db,
+            folder: WS,
+            liveness,
+            nowMs: 200000,
+            turnEndSilenceMs: 90000,
+            nudgeSilenceMs: 90000,
+            notifiedSeatsThisTick: new Set(),
+        });
+
+        assert.strictEqual(notifications.length, 1, 'a released latch must not suppress the nudge');
+        assert.strictEqual(notifications[0].seatName, 'Coding');
+        assert.strictEqual(watch.nudgeCount, 1, 'the sweep must reach the nudge, not the in-flight reset');
     });
 
     // ── 3. Seat pacing: completed card with dead holder does NOT resolve as pacer ──

@@ -313,8 +313,20 @@ async function run() {
             'PlanIngestionEngine must not carry a CODING_COLUMNS in-flight predicate — '
             + 'key on `completed_at` (the asserted fact) and the dispatch holder, never on board position');
         // The queue-watch sweep's in-flight predicate must read the fact.
-        assert.ok(/const inFlight = board\.some\(p =>\s*\n\s*p && !p\.completedAt/.test(planEngineSrc),
+        // Pinned as a CATEGORY over the whole predicate body, not as one
+        // literal clause order: the predicate legitimately carries further
+        // conditions (an outstanding `dispatched_at`), and a regex anchored to
+        // the FIRST clause goes red on a correct tightening while staying green
+        // on a column read moved one line down — it pins spelling, not the
+        // rule. What must hold is that `completed_at` IS read and that board
+        // position is NOT an input.
+        const inFlightTail = planEngineSrc.split('const inFlight = board.some(p =>')[1];
+        assert.ok(inFlightTail, 'the queue-watch in-flight predicate must exist in PlanIngestionEngine.ts');
+        const inFlightPredicate = inFlightTail.split('if (inFlight)')[0];
+        assert.ok(/!p\.completedAt/.test(inFlightPredicate),
             'the queue-watch in-flight predicate must read `!p.completedAt`');
+        assert.ok(!/kanbanColumn/.test(inFlightPredicate),
+            'the queue-watch in-flight predicate must not read board position');
         // The feature sweep's remaining-subtask filter must read it too.
         assert.ok(/kanbanColumn !== 'COMPLETED' && !s\.completedAt/.test(planEngineSrc),
             'the feature sweep must treat a subtask as remaining only until its completion post');
