@@ -96,9 +96,8 @@ the note where that decision is made, not in a general help section.
 
 Content requirements — keep it to roughly two sentences:
 
-- Clearing a seat restarts its CLI session for agents that reset context by
-  restarting (Devin behaves this way).
-- A restarted session re-initialises MCP servers, so OAuth-backed MCP servers
+- Clearing a seat restarts that seat's CLI session.
+- A restarted session re-initialises its MCP servers, so OAuth-backed MCP servers
   prompt for authorisation again.
 - State plainly that this is expected and recurs per work-context switch — this is
   the sentence that ends the "my token must be broken" misdiagnosis, and it is the
@@ -108,9 +107,13 @@ Style: match the existing informational-note styling already used in the tab. Do
 not introduce a new visual treatment, an icon, or a warning colour — this is
 neutral information, not a problem.
 
-**Naming Devin specifically is deliberate.** Generic phrasing ("some agents may…")
-is what made this invisible in the first place. Do not soften it. If a future CLI
-is confirmed to behave the same way, add it to the same sentence.
+**Do not name specific CLIs.** The note describes seat behaviour, so it stays
+correct as agents are added or change, and needs no maintenance.
+
+**State it flatly — do not hedge.** Write "clearing a seat restarts its CLI
+session", not "some agents may restart". Vague phrasing is what made this
+invisible in the first place, and a reader cannot act on a maybe. Describing the
+behaviour in the general case is not the same as softening it.
 
 ### 2. Documentation
 
