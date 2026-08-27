@@ -21,7 +21,7 @@ maps both trackers. Its Proposed Changes §4 touches `LocalApiServer` only for t
 queue pop and the team queue. So when it ships, an agent will be able to **read**
 a card's priority and **star** a card, and will have no way to set the level —
 the same gap `PUT /kanban/plans/priority` was created to close for the star, and
-`agents-arrange-cards-into-a-roadmap.md` closes for order.
+`agents-set-a-columns-card-order.md` closes for order.
 
 **Setting the level is not the same kind of write as starring, in one way that
 matters: it has to leave the machine.** The star is local board state. Priority
@@ -95,7 +95,7 @@ no-priority state and it is NULL — a tracker is not a special source of "no
 priority", so Linear's 0 and ClickUp's blank both import as NULL and 0 is never
 stored. This endpoint's validation ladder encodes that ruling.
 
-Independent of `agents-arrange-cards-into-a-roadmap.md`; they touch different
+Independent of `agents-set-a-columns-card-order.md`; they touch different
 fields and can ship in either order.
 
 ## Proposed Changes

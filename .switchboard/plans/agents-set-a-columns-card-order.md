@@ -1,10 +1,21 @@
-# Agents can arrange cards into a roadmap over HTTP, not just star them
+# Agents can set a column's card order over HTTP, not just star cards
 
 ## Goal
 
 Give an agent one write path that says *"this column runs in this order"* — so an
-agent asked to lay out a roadmap can read the board, decide the sequence, and
-persist it, the same way a human expresses the same intent by dragging cards.
+agent can read the board, decide the sequence, and persist it, the same way a
+human expresses the same intent by dragging cards.
+
+> **Scope correction (2026-08-27).** This plan was first written as *"agents
+> arrange cards into a roadmap"*. That title overclaimed. A roadmap is not a sort
+> order — it is a set of long-term targets that work is arranged to meet, the way
+> Linear does project milestones. Cross-column, dated, and spanning months. That
+> feature is `milestones-long-term-targets-on-the-board.md`, and it needs its own
+> state; no ordering of a column produces it.
+>
+> What is left here is still worth building on its own merit: an agent can only
+> express order by dragging today, and cannot drag. This is a **within-column
+> ordering endpoint**, nothing more, and the two plans are independent.
 
 The star (`PUT /kanban/plans/priority`) already lets an agent say *"this one
 first"*. It cannot express a sequence. This plan adds the sequence.
@@ -66,12 +77,13 @@ preconditions requires moving them from *assumed* to *enforced*.
 
 ### Non-goals
 
-- **A cross-column roadmap.** `column_order` is per-column and is deliberately
-  cleared when a card changes column (`clearColumnOrder`,
+- **Anything cross-column, including a roadmap.** `column_order` is per-column
+  and is deliberately cleared when a card changes column (`clearColumnOrder`,
   `KanbanDatabase.ts:10412` — "the number is per-column, so it must not
   travel"). A board-wide sequence has nowhere to live and would need its own
-  state. Sequencing work *across* stages is what features and
-  `/kanban/dependencies` already express.
+  state, which is exactly what
+  `milestones-long-term-targets-on-the-board.md` adds. Sequencing work *across*
+  stages is what features, `/kanban/dependencies`, and milestones express.
 - **A numeric priority level (Urgent/High/Normal/Low).** That field, its
   migration, and its Linear/ClickUp mapping are already planned in
   `priority-as-a-native-field-and-a-board-wide-order-by.md`. Ordering is a
@@ -99,7 +111,7 @@ by `_handleSetPlanOrder`. It joins the **DB-direct** family
 `_resolveDbForRoot(body.workspaceRoot)`, no provider dependency — so it works
 headlessly and identically under both hosts.
 
-**Shape A — the roadmap (authoritative).**
+**Shape A — the whole column (authoritative).**
 
 ```
 PUT /kanban/plans/order
@@ -110,7 +122,7 @@ PUT /kanban/plans/order
 `getPlanBySessionId` as an alias, matching `:6538`) and must currently sit in
 `column`. The supplied **set** must equal the column's current set — if a card
 arrived or left since the agent read the board, answer **409** with the current
-order rather than half-applying a stale roadmap. This is the concurrency guard,
+order rather than half-applying a stale ordering. This is the concurrency guard,
 and it needs no new state: the set comparison *is* the version check.
 
 `allowPartial: true` opts out of the set check for a deliberate subset rewrite,
@@ -143,7 +155,7 @@ write. The agent never names the field.
 ```
 
 `starredPlanIds` is not decoration. A starred card in the column sorts ahead of
-position 1 regardless of the roadmap (`kanbanOrdering.ts:78-84`), so an agent
+position 1 regardless of the manual order (`kanbanOrdering.ts:78-84`), so an agent
 that reports "1, 2, 3" without it is describing an order the board will not
 show. Callers should surface it: *"ordered 1–5; C runs first because it's
 starred."*
