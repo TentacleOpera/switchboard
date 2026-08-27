@@ -60,9 +60,12 @@ must therefore live in the **instruction**, not the commit.
   mirror-channels §3's. This plan adds a directory to read and a result to
   publish.
 - **A new repo, ref, or destination.** Instructions live wherever
-  `boardStateExport` points — the control-plane repo, the wiki, or the orphan ref.
-  Adding a placement is what `storage-topology-one-choice-three-stores.md` exists
-  to prevent.
+  `boardStateExport` points. Two constraints on that, both settled elsewhere:
+  a **dedicated board repo** (`board-state-and-instructions-get-a-dedicated-repo.md`)
+  is the destination when the channel must be private, and the **control plane is
+  never a destination** — it holds the personas, workflows and skills agents
+  execute, so a command channel there could rewrite the prompt the agent runs on,
+  which no action allowlist can contain.
 - **A general RPC channel.** Fixed allowlist; see below.
 - **Replacing the state or comment signals.** They keep working unchanged; this is
   a third channel for things they cannot express.
@@ -79,6 +82,10 @@ must therefore live in the **instruction**, not the commit.
 
 - **Hard prerequisite:** `board-state-remote-mirror-channels.md` §3
   (`GitStateProvider`, the cursor, the poll loop, the inbound trust guard).
+- **Required for a private channel:**
+  `board-state-and-instructions-get-a-dedicated-repo.md`. Without it the only built
+  destination is the code repo's own orphan ref, where `contents: write` — held by
+  every collaborator and every CI token — becomes the ability to file instructions.
 - `remote-dispatch-is-its-own-audited-seam.md` for the `dispatch` action — it must
   not route through the local dispatch command.
 - The `addToMilestone` / `setMilestoneComplete` actions are gated on

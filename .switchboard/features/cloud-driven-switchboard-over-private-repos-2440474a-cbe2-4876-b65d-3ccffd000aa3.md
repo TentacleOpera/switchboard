@@ -15,12 +15,14 @@ The workflow this exists for: author plans in a cloud session, run `improve-plan
 **This feature was rescoped on 2026-08-27 after an audit against five live plans it had been duplicating.** The transport, the destination and the storage topology were all already decided, and two of the original subtasks contradicted those decisions rather than extending them. Both are now superseded stubs recording why, and the surviving work is layered on the existing designs:
 
 - **Transport** is `board-state-remote-mirror-channels.md` §3's `GitStateProvider` — the poll loop, the commit-SHA cursor, the fetch-and-reconcile push, and the inbound trust guard. No second poller is built.
-- **Destination** is whatever `boardStateExport` resolves to. `board-state-remote-mirror-channels.md` already rejected a per-project private companion repo in favour of the control plane, and `storage-topology-one-choice-three-stores.md` exists specifically to stop new storage placements being invented.
+- **Destination** is whatever `boardStateExport` resolves to — and the setting gains one value rather than the feature gaining a mechanism. Only `none` and `read-only-snapshot` ship today, and `read-only-snapshot` means the code repo, where every collaborator and every CI token with `contents: write` could file an instruction. A **dedicated board repo** is added for the private case. The **control plane is never a destination**: it holds the personas, workflows and skills agents execute, so a command channel there could rewrite the prompt the agent runs on — which no action allowlist can contain.
 - **Storage** for the log record is the topology plan's **Archive** store, placement derived from the one operator choice.
 
 What the git channel could not do, and this feature adds: carry **commands** rather than only signals (a column value and a comment cannot express "star this" or "dispatch this"), give remote-originated dispatch an **identity** so it is attributable, and make terminal work **findable**.
 
 ## How the Subtasks Achieve This
+
+- **Board state and instructions get a dedicated repo**: adds `board-repo` to the shipped `boardStateExport` enum and activates the `remoteUrl` setting that ships marked "Reserved… currently unused", so board data and the command channel can live in a repo that holds nothing else. Mechanically it supplies a remote to `git-carried-shared-board-state.md`'s existing publisher and ingest path rather than inventing a protocol — the arbitration, the intent log and the ref hygiene stay that plan's. One layout at the repo root, so no reader branches on destination, and no silent fallback to `origin` when the URL is missing.
 
 - **Board control instructions — a structured command payload on the channel that already exists**: the JSON schema, a closed action allowlist that is the security boundary (the schema has no field for an endpoint, verb, SQL or shell string), execution order fixed by the allowlist rather than by JSON key order, and receipts. Its idempotency is keyed to an instruction id rather than a commit SHA, which matters because the transport's cursor cannot survive a force-push or the ref-squashing that `git-carried-shared-board-state.md` plans — and a replayed move is cosmetic where a replayed dispatch starts a second agent. Answers that plan's open question about whether a remote agent may write the ref directly: yes, through a validated schema, not by hand-editing board state.
 
@@ -45,8 +47,8 @@ What the git channel could not do, and this feature adds: carry **commands** rat
 
 External prerequisite for three subtasks: `board-state-remote-mirror-channels.md` §3 must exist, since the instruction payload and the status publishing both ride its provider and its outbound cycle.
 
-1. **Remote dispatch seam** and **log naming** are independent of everything and can start immediately.
-2. **Instruction format and executor** needs mirror-channels §3 for transport, and the dispatch seam before its `dispatch` action is enabled.
+1. **Remote dispatch seam**, **log naming** and the **dedicated board repo** are independent of everything and can start immediately. The board repo is the one that unblocks a *private* command channel, so it leads if that matters.
+2. **Instruction format and executor** needs mirror-channels §3 for transport, the dedicated board repo if the channel is to be private, and the dispatch seam before its `dispatch` action is enabled.
 3. **Cloud agent skill** ships in the same release as the executor — a skill describing a channel that is not live would have agents filing instructions nothing reads.
 4. **Logs to Archive and status** needs log naming, the Archive store from the topology plan, and the DuckDB decision above.
 

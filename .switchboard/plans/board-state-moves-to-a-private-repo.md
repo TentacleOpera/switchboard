@@ -1,4 +1,4 @@
-# SUPERSEDED — board state placement is already decided elsewhere
+# SUPERSEDED — replaced by a narrower plan, after one of its ideas was revived
 
 > **Superseded (2026-08-27) by `board-state-remote-mirror-channels.md` and
 > `storage-topology-one-choice-three-stores.md`.**
@@ -27,8 +27,23 @@
 >   "one writer per repo" invariant and its "stop force-pushing, retry once"
 >   handling contradict that design directly.
 >
-> **Replaced with:** nothing new. Board state placement follows the storage
-> topology's single target; the private-repo case is served by `control-plane`.
+> **Replaced with:** `board-state-and-instructions-get-a-dedicated-repo.md`.
+>
+> **Revived (2026-08-27, later the same day).** The user ruled that board state and
+> instructions must **never** live in the control plane. That removes the ground
+> mirror-channels rejected the dedicated-repo option on — and the reason is one
+> that rejection did not consider: the control plane holds the `personas`,
+> `workflows` and `skills` agents execute (`ControlPlaneMigrationService.ts:873`),
+> so a command channel there lets anyone who can file an instruction rewrite the
+> prompt the agent runs on. A closed action allowlist is worthless beside an open
+> door.
+>
+> So a dedicated board repo comes back — but as a **destination value on the
+> shipped `boardStateExport` setting**, activating the `remoteUrl` placeholder that
+> already exists, not as a new mechanism. The parts of this plan that were wrong
+> stay dead: the one-writer-per-repo invariant and the force-push removal both
+> contradicted `git-carried-shared-board-state.md`, which owns the arbitration
+> protocol.
 >
 > ---
 >

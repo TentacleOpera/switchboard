@@ -31,11 +31,12 @@ which is what it needs to fill `target.planId` correctly instead of guessing a
 name.
 
 **One destination, not two.** Instructions, mirror content, receipts and status all
-live at whatever `boardStateExport` resolves to — the control-plane repo, the wiki,
-or the `switchboard/board` orphan ref. The skill must not invent a second location:
-`storage-topology-one-choice-three-stores.md` exists to stop the proliferation of
-placements, and `board-state-remote-mirror-channels.md` already rejected a
-per-project companion repo in favour of the control plane.
+live at whatever `boardStateExport` resolves to — a **dedicated board repo**
+(`board-state-and-instructions-get-a-dedicated-repo.md`) where the channel must be
+private, or the `switchboard/board` orphan ref on the code repo where it need not
+be. Everything sits at the repo root in both cases, so the skill needs no
+per-destination branching. It must not invent a location, and it must never target
+a control plane: that holds the personas, workflows and skills agents execute.
 
 **The agent's only write is filing an instruction.** Everything else at that
 destination is written by the machine. An agent that assumes it may write mirror
