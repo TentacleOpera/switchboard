@@ -121,16 +121,15 @@ is exactly what nobody read for the four weeks this was happening.
 
 ## Dependencies
 
-- **The ledgers' `generatedAt` stamp must go first, or the guard is unusable — and it is a user-facing
-  bug in its own right.** `.agents/.switchboard-bundled.json` and `.claude/.switchboard-generated.json`
-  are rewritten on every activation with a fresh `generatedAt: new Date().toISOString()`
-  (`ControlPlaneMigrationService.ts:1281`, `ClaudeCodeMirrorService.ts:410`). Nothing reads that field —
-  the only value consumed from the bundle ledger is `parsed.files` (`:1184-1185`). A guard asserting
-  `git status --porcelain -- .agents .claude` is empty would therefore fail after every activation and
-  be disabled within a day. Worse, every user gets a permanently-modified file inside their own
-  repository that they did not create. Removing the field makes each ledger a pure function of the
-  bundle's file list — byte-stable across activations — which fixes the guard and the user-visible
-  churn in the same two lines. Gitignoring them locally fixes neither for anyone else.
+- **The ledgers must stop living in the tree, or the guard is unusable.**
+  `.agents/.switchboard-bundled.json` and `.claude/.switchboard-generated.json` are rewritten on every
+  activation with a fresh `generatedAt` (`ControlPlaneMigrationService.ts:1281`,
+  `ClaudeCodeMirrorService.ts:410`), so a guard asserting `git status --porcelain -- .agents .claude`
+  is empty would fail after every activation and be disabled within a day.
+  `the-bundle-ledger-belongs-in-the-database-not-the-users-repo.md` removes them from the tree
+  entirely and is the proper fix. If that is deferred, the two-line removal of the unread
+  `generatedAt` field is enough to unblock this guard — nothing reads it; the only value consumed is
+  `parsed.files` (`:1184-1185`).
 - **The one-time repair must land first.** The tree currently carries the 69-file skills directory.
   Restore it (`git rm -rq .agents .claude && git checkout abd36593^ -- .agents .claude`, landing on
   17 skills / 32 protocols / 4 workflows) **before** packaging, or the first thing this guard does is
