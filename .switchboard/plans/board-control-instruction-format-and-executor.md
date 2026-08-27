@@ -59,10 +59,10 @@ must therefore live in the **instruction**, not the commit.
 - **The transport.** Polling, fetching, cursors, and reconciliation are
   mirror-channels §3's. This plan adds a directory to read and a result to
   publish.
-- **Choosing a destination.** Instructions live in the **`-cloud` sibling** of the
+- **Choosing a destination.** Instructions live in the **`-remote` sibling** of the
   canonical layout (`canonical-control-plane-layout-with-sibling-repos.md`), whose
-  whole purpose is this channel — so a cloud session gets write there and nothing
-  elsewhere. Without the layout, the only built destination is the code repo's
+  whole purpose is this channel — so a remote author gets write there and nothing
+  elsewhere. There is one instructions channel, not one per kind of author. Without the layout, the only built destination is the code repo's
   orphan ref, where every collaborator and CI token with `contents: write` could
   file an instruction. The **control plane is never a destination**: it holds the
   personas, workflows and skills agents execute, so a command channel there could
@@ -85,7 +85,7 @@ must therefore live in the **instruction**, not the commit.
   (`GitStateProvider`, the cursor, the poll loop, the inbound trust guard).
 - **Required for a private channel:**
   `canonical-control-plane-layout-with-sibling-repos.md`, which supplies the
-  `-cloud` sibling and its derived path.
+  `-remote` sibling and its derived path.
 - `remote-dispatch-is-its-own-audited-seam.md` for the `dispatch` action — it must
   not route through the local dispatch command.
 - The `addToMilestone` / `setMilestoneComplete` actions are gated on

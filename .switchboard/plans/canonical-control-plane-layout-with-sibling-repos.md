@@ -17,23 +17,34 @@ have something else.
 Switchboard-Agents/          ← control plane. Agents start here.
 │                              Holds personas, workflows, skills, rules.
 │                              Holds NO board data.
-├── Switchboard/             ← code repo            (own git)
-├── Switchboard-plans/       ← plans + board state  (own git)
-├── Switchboard-remote/      ← remote control       (own git)
-├── Switchboard-cloud/       ← cloud instructions   (own git)
-└── Switchboard-logs/        ← terminal logs        (plain folder, or a repo)
+├── Switchboard/             ← code repo                 (own git)
+├── Switchboard-plans/       ← plans + board state       (own git)
+├── Switchboard-remote/      ← instructions + receipts   (own git)
+└── Switchboard-logs/        ← terminal logs             (plain folder, or a repo)
 ```
 
 Naming convention: `<code-repo-name>-<purpose>`, so setup can propose names and a
 human reading a directory listing can tell what everything is.
 
-> **Assumption to correct if wrong.** `-remote` carries the remote-control
-> channel (the board mirror the Linear/Notion-adjacent path reads and signals
-> through); `-cloud` carries the cloud instruction channel (`instructions/`,
-> `receipts/`). Two channels rather than one because they have different
-> audiences, and one grant per audience is the point of the layout. If they are
-> meant to divide differently, the access matrix below changes and nothing else
-> does.
+**Three data siblings, not four.** `-remote` is the instructions channel — the
+name is the user's, and there is one such channel, not a separate `-cloud`. A
+cloud session and any other remote author file into the same place; who may do so
+is a question about that repo's collaborators, not about having a repo each.
+
+**Linear and Notion are not siblings, and this is the part that could easily have
+been got wrong.** That path is not a git channel at all: `RemoteControlService`
+is constructed in-process (`KanbanProvider.ts:2730`) and polls the provider's API
+on a timer. It needs no repo, no folder and no clone — so it appears nowhere in
+this layout, and the layout must not grow a folder for it. Two remote-control
+paths exist and they are separated by *mechanism*: git-carried instructions get a
+sibling; tracker sync gets a service.
+
+One consequence worth checking during implementation rather than assuming:
+`_getRemoteControl` is keyed per **workspace root** (`:2726`). Under this layout,
+"Linear interfaces with the control plane" implies one sync rooted at the control
+plane across sibling projects rather than one per project. That is a small change
+in where the service is keyed, and it is a behaviour change for anyone running
+several mapped workspaces today.
 
 ### Problem Analysis
 
@@ -60,16 +71,20 @@ The rest of that plan stands: `GitStateProvider`, the cursor, the trust guard, t
 **One purpose per sibling means one grant per purpose.** That is the property
 worth the extra folders:
 
-| Party | code | plans | remote | cloud | logs |
-|---|---|---|---|---|---|
-| the user's machine | write | write | write | **read** | write |
-| a cloud session | — | read | — | **write** | — |
-| a teammate reviewing code | write | — | — | — | — |
-| CI on the code repo | write | — | — | — | — |
+| Party | code | plans | remote | logs |
+|---|---|---|---|---|
+| the user's machine | write | write | **read** | write |
+| a cloud / remote author | — | read | **write** | — |
+| a teammate reviewing code | write | — | — | — |
+| CI on the code repo | write | — | — | — |
 
 No row is "everything", which is what a branch or a shared repo forces. A
-compromised cloud credential can file instructions and cannot read the code, edit
-plans, or forge a receipt.
+compromised remote credential can file instructions and cannot read the code, edit
+plans, or forge a receipt — because receipts are written by the machine into
+`-plans`, which the remote author only reads.
+
+Linear/Notion sync holds no row: it reaches the board through the in-process
+service, not through any of these.
 
 **Most of the machinery already exists.** This is a layout and a setup flow, not
 new plumbing:
@@ -140,8 +155,7 @@ path*", and "*derive Archive placement from the target*"), applied here.
 
 ```
 controlPlaneRoot/<codeRepoName>-plans      → plans + board state
-controlPlaneRoot/<codeRepoName>-remote     → remote control channel
-controlPlaneRoot/<codeRepoName>-cloud      → cloud instruction channel
+controlPlaneRoot/<codeRepoName>-remote     → instructions + receipts
 controlPlaneRoot/<codeRepoName>-logs       → logs
 ```
 
@@ -195,8 +209,8 @@ one-line reason where the user would look for it — never a broken state and ne
 a silent one:
 
 - no `-plans` → plans and board state stay where they are;
-- no `-cloud` → the instruction channel is unavailable;
-- no `-remote` → remote control uses its existing destinations;
+- no `-remote` → the instruction channel is unavailable; Linear/Notion sync is
+  unaffected, since it never used a sibling;
 - no `-logs` → logs stay in `.switchboard/logs/`, as today;
 - no control plane at all → everything behaves exactly as it does now.
 
@@ -220,6 +234,9 @@ install that ignores this panel is unaffected.
    log file exists anywhere under the control plane root **outside** the siblings.
    This is the invariant the whole layout exists for, and the one a later
    convenience will erode.
+4a. **Tracker sync needs no sibling** — with `-remote` absent entirely, assert
+    Linear/Notion remote control still starts, polls and applies deltas. The two
+    remote paths must not have been accidentally coupled through the layout.
 5. **The `.gitignore` guard** — `git add .` in the control plane stages no nested
    repo's content and no gitlink.
 6. **Plans from a sibling** — plans in `-plans` are watched, imported, and

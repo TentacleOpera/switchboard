@@ -32,9 +32,9 @@ name.
 
 **Two repos, and your access to each differs.** Under the canonical layout
 (`canonical-control-plane-layout-with-sibling-repos.md`) you have **write on the
-`-cloud` sibling** — where you file instructions — and **read on `-plans`**, which
+`-remote` sibling** — where you file instructions — and **read on `-plans`**, which
 carries `board.json`, plan files, receipts and `status.json`. You have nothing on
-the code repo and nothing on `-remote`.
+the code repo.
 
 That split is deliberate: filing work and reading its outcome are different
 grants. Never try to write to `-plans`; a receipt you wrote would be worthless
@@ -89,7 +89,7 @@ the fallback for having no machine access.
 
 ```bash
 git clone --depth 1 <plansRepoUrl>  /tmp/plans    # read-only for you
-git clone --depth 1 <cloudRepoUrl>  /tmp/cloud    # you write here
+git clone --depth 1 <remoteRepoUrl> /tmp/remote   # you write here
 jq '.cards[] | {plan_id, topic, column}' /tmp/plans/board.json
 jq '.cards[] | {planId, state, idleSeconds}' /tmp/plans/status.json
 ```
@@ -117,10 +117,10 @@ an intermittent one.
 repo:
 
 ```bash
-cp instruction.json /tmp/cloud/instructions/<id>.json
-git -C /tmp/cloud add instructions/<id>.json
-git -C /tmp/cloud commit -m "board control: <id>"
-git -C /tmp/cloud push origin HEAD:main
+cp instruction.json /tmp/remote/instructions/<id>.json
+git -C /tmp/remote add instructions/<id>.json
+git -C /tmp/remote commit -m "board control: <id>"
+git -C /tmp/remote push origin HEAD:main
 ```
 
 A separate clone is the whole recipe — no worktrees in your own repo, no
