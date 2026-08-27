@@ -28,9 +28,13 @@ that they did not ask for, and that they cannot stop without writing their own i
 that it is "generated at runtime into each workspace's `.agents/`, never bundled." It is already
 understood as runtime state; it is simply stored as workspace content.
 
-**A database is already present by the time seeding runs.** The activation loop iterates refresh
-targets gated on `isSwitchboardManagedFolder(root)` (`extension.ts:850`), a predicate that requires
-`kanban.db`, a `db-pointer`, or a `workspace-id` — a deliberate setup. `refreshWorkspaceControlPlane(root, context)`
+**A database is resolvable by the time seeding runs — which is not the same as one sitting in the workspace.** The activation loop iterates refresh
+targets gated on `isSwitchboardManagedFolder(root)` (`extension.ts:850`), a predicate satisfied by
+`kanban.db`, a `db-pointer`, **or** a `workspace-id`. The `db-pointer` case is the important one: the
+database may already live outside the workspace, with only a pointer inside it. That is the direction
+of travel — `kanban.db` in the repo is the thing current storage work is removing — and it makes this
+plan *more* correct, not less: the bookkeeping leaves the user's tree entirely rather than moving from
+one in-repo file to another. `refreshWorkspaceControlPlane(root, context)`
 (`:329`) then runs with only `root` and `context` in hand, so the database exists but is not threaded
 in. Config rows are the established home for exactly this kind of per-workspace state:
 `TERMINALS_GROUPS_KEY` is read through `getConfigJson` the same way.
@@ -68,7 +72,7 @@ has a store for the second kind; the ledger predates the decision to use it.
 
 Yes — one decision.
 
-**What happens to a workspace whose database is absent or unreadable?** Recommendation: **treat it as
+**What happens to a workspace whose database is absent, unreadable, or resolving to the wrong one?** Recommendation: **treat it as
 "no prior knowledge" and prune nothing**, matching the existing first-run fail-safe ("First-run (no
 ledger) → deletes nothing, seeds the ledger for next time"). Seeding still proceeds; only retirement
 pauses until a ledger exists.
@@ -139,6 +143,14 @@ incomplete knowledge — is the failure mode this plan also exists to close.
   this plan is deferred, ship the two-line `generatedAt` removal in the meantime; it is the
   user-visible half.
 - **Must land with** the empty-bundle prune guard described above.
+- **Sequenced after DB resolution is trustworthy.**
+  `a-configured-db-path-may-not-be-where-the-board-is.md` establishes that relocation "has been failing
+  silently for an unknown number of installs", leaving a workspace resolving to a database that is not
+  the one holding its plans. Coupling control-plane retirement to DB resolution before that is settled
+  means retirement breaks wherever resolution is broken. The fail-safe bounds the damage — an
+  unresolvable database reads as "no ledger", which prunes nothing rather than deleting wrongly — so the
+  failure mode is stalled retirement, not data loss. Ship the two-line `generatedAt` removal in the
+  meantime; it fixes the user-visible churn without taking the coupling.
 - **Related:** `the-seed-loop-resurrects-files-the-workspace-deleted.md`, which adds a ledger lookup
   on the creation path — it should read through whatever accessor this plan introduces, so the two
   are best sequenced together.
