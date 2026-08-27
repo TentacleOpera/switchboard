@@ -1,241 +1,150 @@
-# Surface the seat-clear session-restart toll that silently re-triggers MCP OAuth
+# Explain the seat-clear session-restart toll where seat CLIs are configured
 
 ## Goal
 
-Make Switchboard tell the operator, at the moment it happens, that clearing a seat
-restarts that seat's CLI session — and that a restarted session re-initialises its
-MCP servers, which makes any OAuth-backed MCP prompt for authorisation again.
+Add a short, permanent explanatory note in the AGENTS tab — where an operator
+configures which CLI a seat runs — stating that clearing a seat restarts that
+seat's CLI session, that a restarted session re-initialises its MCP servers, and
+that OAuth-backed MCP servers therefore prompt for authorisation again.
 
-Today Switchboard performs this action silently. The operator sees browser windows
-opening for OAuth and has no way to connect them to Switchboard's dispatch
-behaviour. This plan adds no gate, changes no clear decision, and suppresses
-nothing. It makes an existing, correct, structural cost **legible**.
+This is **static informational copy**. It adds no runtime detection, no event
+surface, and no interruption of any kind.
 
 ### Root cause analysis
 
 The browser-spam symptom is **not** a bug in the clear logic, a broken token, or a
-misconfigured MCP. It is an unpriced, invisible cost of correct behaviour:
+misconfigured MCP server. It is an unpriced, invisible cost of correct behaviour:
 
 1. **Switchboard clears a seat when its work context changes.**
    `src/services/TaskViewerProvider.ts:816-826` gates the clear on
    `lastWorkKey !== workContextKey` (`featureId ?? planId`). The comment at :819 is
    explicit that two subtasks of one feature are one work context and deliberately
    do *not* clear between them. **This gating is already correct and already
-   minimal — it is not the defect and must not be changed by this plan.**
+   minimal — it is not the defect and must not be touched by this plan.**
 
 2. **For Devin, a clear is a full session restart, not a buffer wipe.**
    `src/standalone/clearReadiness.ts:146-180` documents the observed state machine:
    old-session bracketed-paste teardown (`\x1b[?2004l`), then re-enable
-   (`\x1b[?2004h`), then cursor/sync re-establishment. That is a session
-   transition, not a screen clear. `src/standalone/ptyHost.ts:182` corroborates —
-   it reads "Devin is resetting context." from the CLI.
+   (`\x1b[?2004h`), then cursor/sync re-establishment — a session transition, not a
+   screen clear. `src/standalone/ptyHost.ts:182` corroborates: the CLI emits
+   "Devin is resetting context."
 
 3. **A new session re-initialises MCP servers**, so every OAuth-backed MCP re-runs
    its auth flow and opens a browser.
 
-4. **The toll is therefore linear in useful work**: roughly (context switches) ×
-   (seats), i.e. N features × M seats over a batch. Devin's own one-auth-per-set
-   guard collapses only the prompts that *collide in time*; it does nothing about
-   prompts spread across a batch. This is why re-authenticating never "sticks" —
-   the operator is not repairing a broken credential, they are paying a toll per
-   context switch.
+4. **The toll is linear in useful work** — roughly (context switches) × (seats).
+   Devin's own one-auth-per-set guard collapses only prompts that *collide in
+   time*; it does nothing about prompts spread across a batch. This is why
+   re-authenticating never "sticks": the operator is not repairing a broken
+   credential, they are paying a toll per context switch.
 
-5. **Nothing in Switchboard says any of this.** No log line, no UI, no docs. The
-   reported cost of that silence was several weeks of unattributed confusion.
+5. **Nothing in Switchboard says any of this.** No note, no docs. The reported cost
+   of that silence was several weeks of unattributed confusion.
 
-The defect being fixed is **(5)**. Points 1-4 are working as designed.
+The defect being fixed is **(5)**, and only (5). Points 1-4 work as designed.
 
-### Non-goals (explicitly out of scope — do not implement these)
+### Why static copy rather than a runtime notice
 
-- **Do not suppress, defer, batch, or gate the clear.** The clear is semantically
-  load-bearing: a seat moving from feature A to feature B must not carry A's
-  context. Any change to the `:816-826` decision is out of scope.
-- **Do not add a confirmation dialog.** See the repo-wide prohibition in
-  `CLAUDE.md`. This notice is informational only. It must never block, delay, or
-  offer to cancel a clear. `window.confirm()` is additionally a silent no-op in
-  VS Code webviews.
-- **Do not suppress the browser** (e.g. `BROWSER=/bin/true`). That trades visible
-  noise for silently unauthenticated agents — strictly worse.
-- **Do not strip MCP servers from seat profiles.** Considered and rejected by the
-  operator; MCP access in seats is required.
-- **Do not read or parse Devin's MCP configuration or token store.** Not needed:
-  the notice is driven entirely by Switchboard's own knowledge of what it is about
-  to do.
+An earlier draft of this plan proposed detecting each cost-bearing clear and
+surfacing it — a webview banner, a first-run explainer, a session-log line. That
+was rejected, correctly:
 
-### Design constraints discovered during analysis (each one rules out an approach)
+- The event is **constant and expected**. A notice on every occurrence — even
+  rate-limited — is spam in a new medium, and trains the operator to ignore the
+  surface that was supposed to inform them.
+- The operator does not need a per-event record. They need to **know the rule
+  once**. After that, no individual clear needs attributing.
 
-These are recorded because each is a trap that a plausible implementation falls
-into, and two of them are invisible to the existing parity gates.
+Discarding runtime detection also removes this change's entire risk surface. Two
+composition-root divergence traps were found during analysis, and **both become
+moot** once nothing is wired at runtime. They are recorded here so a future
+implementer does not rediscover them the hard way:
 
-- **Terminal output cannot be read on the extension host.**
-  `src/services/hostSeams.ts:299` — `onData: () => ({ dispose: () => {} })`. VS
-  Code's terminal API exposes no output stream; only standalone's PTY has one.
-  **Therefore: detecting an OAuth prompt by scraping terminal output is
-  standalone-only and is forbidden as the mechanism.** The notice must be derived
-  from Switchboard's own clear decision, which is host-agnostic.
+- `src/services/hostSeams.ts:299` — `onData: () => ({ dispose: () => {} })`. VS
+  Code's terminal API exposes no output stream, so detecting an OAuth prompt by
+  scraping terminal output is standalone-only and can never reach parity.
+- `src/standalone/vscodeShim.ts:189` — `showInformationMessage` returns
+  `undefined` and displays nothing on standalone, while `hostSeams.ts:369` is real
+  on the extension host. Any notification-based surface ships to one host and
+  silently vanishes on the other.
 
-- **`HostUI.showInformationMessage` is a no-op on standalone.**
-  `src/standalone/vscodeShim.ts:189` returns `undefined` without displaying
-  anything, while `hostSeams.ts:369` is real on the extension host. **Therefore: a
-  notification-only surface would ship to one host and silently vanish on the
-  other** — precisely the composition-root divergence class described in
-  `CLAUDE.md`. The primary surfaces must be the session log and the webview
-  broadcast, both of which are genuinely shared.
+**Neither applies to this plan.** The webview is rendered by both hosts from the
+same source (`src/services/headlessPanelHtml.ts`), so static copy reaches both
+roots with no seam, no wiring, and no parity audit required.
 
-- **The webview *is* shared.** Both hosts render the same panels
-  (`src/services/headlessPanelHtml.ts`) and both drive the same broadcast path —
-  `this.postMessage(msg, SURFACES.terminals)` plus `this._broadcaster?.push(msg,
-  SURFACES.terminals)` (pattern in use at `TaskViewerProvider.ts:~790`). This is
-  the parity-safe way to show the operator something.
+### Non-goals (do not implement any of these)
 
-- **`SessionActionLog` is shared and already HTTP-exposed.** Constructed in both
-  `TaskViewerProvider.ts:9912-9917` and `KanbanProvider.ts:2603-2608`, written to
-  `.switchboard/orchestrator/session-log.md`, and served at
-  `GET /mission-control/session-log` (`LocalApiServer.ts:7561`). It is the correct
-  durable backbone: greppable after the fact, and readable by fleet agents.
-
-- **`ptyClearPolicy.ts` is the precedent to copy.** It resolves clear *timing* for
-  both hosts as a shared core (`resolvePtyClearPolicyFromExplicit`) with two thin
-  host adapters, and its header comment records that an earlier revision carried
-  the ladder twice and drifted. The new cost model must follow that exact shape.
+- **No banner, toast, notification, modal, or first-run explainer.** Explicitly
+  rejected. The whole point of this revision is that the surface is passive.
+- **No session-log line and no runtime detection.** No new code at the clear
+  decision point. No `deriveCliFamily` call, no cost model, no new module.
+- **No change to clear behaviour.** Do not suppress, defer, batch, or gate the
+  clear. The `:816-826` decision is out of scope entirely.
+- **No confirmation dialog.** See the repo-wide prohibition in `CLAUDE.md`.
+- **No browser suppression** (e.g. `BROWSER=/bin/true`) and **no stripping of MCP
+  servers from seat profiles** — both considered and rejected by the operator.
 
 ## Implementation
 
-### 1. New shared module: `src/services/clearCostModel.ts`
+### 1. The note in the AGENTS tab
 
-Pure, dependency-free, no host imports — so both roots consume one copy.
+Add a short static note to the AGENTS tab in `src/webview/kanban.html`, placed
+next to the startup-command configuration — the custom-agent command field
+(`agents-tab-custom-agent-command`, ~:4493-4520) is the control that determines
+which CLI a seat runs, and therefore whether the operator pays this toll. Place
+the note where that decision is made, not in a general help section.
 
-```ts
-export type ClearCost = 'session-restart' | 'buffer-only' | 'unknown';
+Content requirements — keep it to roughly two sentences:
 
-export interface ClearCostNotice {
-    cost: ClearCost;
-    /** Operator-facing, plain English. No jargon, no remediation nagging. */
-    message: string;
-}
+- Clearing a seat restarts its CLI session for agents that reset context by
+  restarting (Devin behaves this way).
+- A restarted session re-initialises MCP servers, so OAuth-backed MCP servers
+  prompt for authorisation again.
+- State plainly that this is expected and recurs per work-context switch — this is
+  the sentence that ends the "my token must be broken" misdiagnosis, and it is the
+  most load-bearing line in the change.
 
-export function describeClearCost(family: CliFamily): ClearCost;
-export function buildClearCostNotice(
-    family: CliFamily,
-    seatName: string,
-    fromWorkKey: string | undefined,
-    toWorkKey: string
-): ClearCostNotice | null;   // null when there is nothing worth saying
-```
+Style: match the existing informational-note styling already used in the tab. Do
+not introduce a new visual treatment, an icon, or a warning colour — this is
+neutral information, not a problem.
 
-Family mapping table — **the implementer must confirm each entry against the
-running CLI before shipping, and record the evidence in the module's header
-comment.** Do not ship an asserted value that was not observed:
+**Naming Devin specifically is deliberate.** Generic phrasing ("some agents may…")
+is what made this invisible in the first place. Do not soften it. If a future CLI
+is confirmed to behave the same way, add it to the same sentence.
 
-| Family | Expected cost | Basis to confirm |
-| :-- | :-- | :-- |
-| `devin` | `session-restart` | Operator-observed re-auth after clear; `clearReadiness.ts:146-180`; `ptyHost.ts:182` |
-| `claude` | `buffer-only` | `/clear` resets conversation within one process; MCP servers are process-scoped. **Verify — do not assume.** |
-| `antigravity` | `unknown` | Not investigated |
-| `unknown` | `unknown` | By definition |
+### 2. Documentation
 
-Emit a notice for `session-restart` only. `unknown` stays silent: a false alarm on
-every clear would be worse than the current silence and would train the operator to
-ignore the surface.
-
-### 2. Wire at the clear decision point — BOTH roots
-
-The decision already exists at `TaskViewerProvider.ts:816-826`. Where
-`clearBeforePrompt: true` is set, resolve the seat's family via
-`deriveCliFamily` (`src/services/cliIdentity.ts:59`) from the seat's startup
-command, call `buildClearCostNotice`, and if non-null emit it (§3).
-
-There are **two** places that set `clearBeforePrompt: true` in this block — the
-team-preparation arm (~:804) and the non-team arm (~:824). Cover both.
-
-**Composition-root audit is mandatory and is the real work of this task.** Per
-`CLAUDE.md`, verb-reachability is not evidence of parity — `bootstrap.ts`'s
-`default:` arm delegates unmatched verbs to the provider, so a verb audit comes
-back green regardless. Required:
-
-- `src/extension.ts` — confirm the notice emitter is wired into the provider it
-  constructs.
-- `src/standalone/bootstrap.ts` — confirm the same, by reading the composition
-  root directly and diffing the seams each root wires by hand.
-- If the emitter is introduced as a settable seam (`engine.setX(...)` style), it
-  **must** be wired in both roots in this same diff. An unwired
-  `Promise<void>` callback is indistinguishable from a working one at runtime —
-  this is the exact failure mode of the four `PlanIngestionEngine` queue seams
-  recorded in `CLAUDE.md`.
-
-### 3. Surfaces
-
-**3a. Session log (primary, both hosts, always on).** One line per cost-bearing
-clear via `SessionActionLog`: seat name, CLI family, and the work-context
-transition. This is the durable record that ends the attribution problem, and it
-is reachable by fleet agents over `GET /mission-control/session-log`.
-
-**3b. Webview notice (both hosts).** Broadcast to `SURFACES.terminals` using the
-existing `postMessage` + `_broadcaster.push` pair so the standalone webview gets it
-too. Render as a passive, auto-dismissing inline banner in the terminals panel.
-
-Rate-limit: **at most one banner per seat per batch.** A banner per clear
-reproduces the original spam in a new medium. Log lines (3a) are not rate-limited.
-
-**3c. First-run explainer (both hosts).** The first time a `session-restart` clear
-occurs, show a fuller one-time explanation: what just happened, why it is expected,
-and that it recurs per context switch. Persist a "seen" flag so it never repeats.
-
-The flag is **new state that has never shipped**, so per `CLAUDE.md` it takes a
-clean break — no migration, no compat shim. Do not add one.
-
-Implement 3c through the same webview broadcast as 3b, **not** through
-`HostUI.showInformationMessage` — that is the standalone no-op documented above.
-The extension host may *additionally* raise a native notification, but only as an
-enhancement layered on top of a surface that already works in both hosts.
-
-### 4. Documentation
-
-Add a short section to the docs explaining the toll: why re-authentication recurs,
-that it is proportional to context switches rather than a broken credential, and
-that reducing feature-switching per seat reduces it. Keep it factual — this plan
-does not promise a reduction, only visibility.
+Add a short paragraph to the docs covering the same explanation, so it is findable
+by search as well as in the panel. Keep it factual: this change delivers
+visibility, not a reduction in prompts.
 
 ## Verification Plan
 
-**Both hosts, every check.** A result from one host is not evidence for the other.
+This is a copy-only change, so verification is correspondingly small — but the
+both-hosts check still applies, because "the webview is shared" is an assumption
+worth confirming once rather than trusting.
 
-1. **Unit — cost model.** `describeClearCost` returns `session-restart` for
-   `devin`; `buildClearCostNotice` returns `null` for `unknown` and for
-   `buffer-only`. Table-driven over every `CliFamily` member so a newly added
-   family fails the test rather than silently defaulting to a notice.
+1. **Extension host.** Open the AGENTS tab. The note renders, is legible in both
+   light and dark themes, and does not disrupt the tab's existing layout.
 
-2. **Unit — no behaviour change to clearing.** Assert that the `:816-826` decision
-   produces identical `clearBeforePrompt` values with the notice path enabled and
-   disabled. The notice must be provably side-effect-free on dispatch.
+2. **Standalone host.** Open the same tab under the standalone/npx host and
+   confirm the identical note renders. This confirms the shared-webview assumption
+   that lets this plan skip a composition-root audit.
 
-3. **Composition-root diff (manual, mandatory).** Read `src/extension.ts` and
-   `src/standalone/bootstrap.ts` side by side and confirm every seam this change
-   introduces is wired in both. Record the seam names checked in the PR
-   description. Do **not** substitute `npm run standalone-parity:check` — per
-   `CLAUDE.md` it is scoped to the browser read-back path, not composition roots,
-   and will pass regardless.
+3. **Copy accuracy.** A reader who has never seen this problem can answer, from
+   the note alone: *why does my agent keep asking me to log in?* If they cannot,
+   the copy has failed its only job — rewrite it.
 
-4. **Extension host, live.** Dispatch two cards from different features to one
-   Devin seat. Confirm: the clear still happens; a session-log line is written; one
-   banner appears; the first-run explainer appears exactly once and never again.
+4. **No runtime code added.** `git diff` touches only `src/webview/kanban.html`
+   and the docs file. Any change to `TaskViewerProvider.ts`, `hostSeams.ts`,
+   `cliIdentity.ts`, or either composition root means the implementation drifted
+   back toward the rejected runtime design and must be reverted.
 
-5. **Standalone host, live.** Repeat step 4 under the standalone/npx host. The
-   session log and the banner must both appear. **This step is the one that
-   catches the `vscodeShim.ts:189` no-op** — if the banner is missing here, the
-   implementation went through `HostUI` and must be reworked.
-
-6. **Rate limit.** Dispatch five cards across five features to one seat. Confirm
-   five log lines and at most one banner.
-
-7. **Anti-regression — no confirm gate.** Grep the diff for `confirm(`,
+5. **Anti-regression — no confirm gate.** Grep the diff for `confirm(`,
    `window.confirm`, and modal `showWarningMessage`. Any hit is a defect per
-   `CLAUDE.md`. Manually confirm the clear proceeds without any operator input.
-
-8. **Silence for unknown families.** A seat with a non-Devin, non-Claude startup
-   command produces no banner and no explainer.
+   `CLAUDE.md`.
 
 ## Metadata
 
-**Complexity:** 5
-**Tags:** reliability, ux, authentication, cli
+**Complexity:** 2
+**Tags:** ux, docs, authentication, cli
