@@ -6,15 +6,15 @@ Make the `/switchboard` launcher prove that the board answering on the port belo
 
 ### Problem Analysis
 
-The launcher skill (`.claude/skills/switchboard/SKILL.md`) states the hazard correctly in its own preamble at lines 22-24:
+The launcher skill (`.claude/skills/switchboard/SKILL.md`) states the hazard correctly in its own preamble at lines 21-24:
 
 > *A port file is not liveness. `.switchboard/api-server-port.txt` survives a crashed extension, and **every workspace's port file holds the same port**, so its presence proves nothing about this workspace.*
 
 That is accurate — the standalone CLI pins the default port to 7777 (`src/standalone/cli.ts:1358-1362`, falling back to ephemeral only when 7777 is already bound), so port files across unrelated workspaces routinely carry the same number. Having named the problem, the skill then does not solve it. Three defects follow, all from the same cause.
 
-**1. A 200 from any board is accepted as this workspace's board.** Line 33 issues `curl -o /dev/null -w "%{http_code}"` and branches on the status code alone. `GET /health` already returns `roots` (`src/services/LocalApiServer.ts`, `roots: this._allRoots`), which is exactly the fact needed, and the response body is discarded to `/dev/null`. The *previous* version of this control-plane document performed the check — *"Cross-check that `ROOT` appears in `health.roots`; if not, warn the user they are outside a registered Switchboard workspace and stop"* — so this is a guard that regressed, not one that was never conceived.
+**1. A 200 from any board is accepted as this workspace's board.** Line 31 issues `curl -o /dev/null -w "%{http_code}"` and branches on the status code alone. `GET /health` already returns `roots` (`src/services/LocalApiServer.ts`, `roots: this._allRoots`), which is exactly the fact needed, and the response body is discarded to `/dev/null`. The *previous* version of this control-plane document performed the check — *"Cross-check that `ROOT` appears in `health.roots`; if not, warn the user they are outside a registered Switchboard workspace and stop"* — so this is a guard that regressed, not one that was never conceived.
 
-**2. The adopt call omits `workspaceRoot`, and the server fills in its own.** Line 95 posts only `terminalName`:
+**2. The adopt call omits `workspaceRoot`, and the server fills in its own.** Line 93 posts only `terminalName`:
 
 ```bash
 curl -s -X POST "$BASE/mission-control/adopt" -H "Content-Type: application/json" \
@@ -31,9 +31,9 @@ so an absent field falls back to **the server's own root** and is forwarded to `
 
 Together these produce the failure: run `/switchboard` in workspace **B** while workspace **A**'s board is live on 7777. Health returns 200, the skill prints *"Switchboard is already running. Using the existing board"*, and the adopt seats the orchestrator on **A**. Every subsequent call in that session drives A while the user believes they are in B. There is no error, and the session log lands in A's `.switchboard/orchestrator/`.
 
-This is strictly worse than the failure the skill's fail-safe branch (lines 40-57) is carefully written to avoid. That branch reasons that *"the cost of spawning when the board is alive is destructive (session hijack)"* and refuses to launch a second server — correctly. But the same hijack arrives through the front door whenever the live board belongs to someone else.
+This is strictly worse than the failure the skill's fail-safe branch (lines 38-55) is carefully written to avoid. That branch reasons that *"the cost of spawning when the board is alive is destructive (session hijack)"* and refuses to launch a second server — correctly. But the same hijack arrives through the front door whenever the live board belongs to someone else.
 
-**3. `ROOT="$PWD"` with no upward walk** (line 28). Run `/switchboard` from any subdirectory of a Switchboard workspace and `$PWD/.switchboard/api-server-port.txt` does not exist, so the skill takes the `else` branch at line 58 and runs `npx switchboard &` — starting a **second board rooted at the subdirectory**, which is the two-server condition the fail-safe branch exists to prevent, reached by a path it does not cover. The stale `.agents/workflows/switchboard.md` had the walk; the current skill does not.
+**3. `ROOT="$PWD"` with no upward walk** (line 26). Run `/switchboard` from any subdirectory of a Switchboard workspace and `$PWD/.switchboard/api-server-port.txt` does not exist, so the skill takes the `else` branch at line 56 and runs `npx switchboard &` — starting a **second board rooted at the subdirectory**, which is the two-server condition the fail-safe branch exists to prevent, reached by a path it does not cover. The stale `.agents/workflows/switchboard.md` had the walk; the current skill does not.
 
 ### Root Cause
 
@@ -55,19 +55,25 @@ The server compounds it by treating an omitted `workspaceRoot` as consent to sub
 
 ## Proposed Changes
 
-1. **Resolve `ROOT` by walking up for the marker** rather than assuming `$PWD` (skill line 28). Walk until `.switchboard/` is found, stop at `/`, and if none is found treat it as "not a Switchboard workspace" — a distinct outcome from "no board running", and one that must **not** launch a server. This closes defect 3 and prevents a board being created in a subdirectory.
+1. **Resolve `ROOT` by walking up for the marker** rather than assuming `$PWD` (skill line 26). Walk until `.switchboard/` is found, stop at `/`, and if none is found treat it as "not a Switchboard workspace" — a distinct outcome from "no board running", and one that must **not** launch a server. This closes defect 3 and prevents a board being created in a subdirectory.
 
-2. **Capture the health body and require `$ROOT` in `roots`** (skill lines 33 and 64). Stop discarding the response to `/dev/null`; read status and body together. A 200 whose `roots` does not contain `$ROOT` is **not this workspace's board** — report which workspace the board is actually serving and stop, rather than adopting. Handle a `/health` response with no `roots` field (older build) as *unknown*, not as *pass* — warn and stop, matching the fail-safe posture the skill already takes elsewhere.
+2. **Capture the health body and require `$ROOT` in `roots`** (skill lines 31 and 62). Stop discarding the response to `/dev/null`; read status and body together. A 200 whose `roots` does not contain `$ROOT` is **not this workspace's board** — report which workspace the board is actually serving and stop, rather than adopting. Handle a `/health` response with no `roots` field (older build) as *unknown*, not as *pass* — warn and stop, matching the fail-safe posture the skill already takes elsewhere.
 
-3. **Send `workspaceRoot` explicitly in the adopt call** (skill line 95), alongside the existing `terminalName`. This makes the caller's intent explicit rather than inferred from server state.
+3. **Send `workspaceRoot` explicitly in the adopt call** (skill line 93), alongside the existing `terminalName`. This makes the caller's intent explicit rather than inferred from server state.
 
 4. **Validate `workspaceRoot` server-side against `_allRoots`** in `_handleMissionControlAdopt` (`src/services/LocalApiServer.ts:5720-5750`). Reject an unserved root with a 400 naming the roots this board does serve. **This is the durable half of the fix** — change 3 alone is a client-side convention, and the next caller that forgets it lands on the wrong board exactly as today. Keep the `this._options.workspaceRoot` fallback for an omitted field (it preserves existing callers), but validate whatever is resolved.
 
 5. **Apply the same validation to the sibling mission-control endpoints** that take a `workspaceRoot` — `/mission-control/start`, `/mission-control/confirm`, `/mission-control/handoff`. They share the resolution pattern and therefore share the bug; fixing only `adopt` leaves the wrong-workspace write reachable one endpoint over. Audit each and record the list in the completion report.
 
-6. **Reconcile the two control-plane trees.** On `origin/main` at `5cd7935`, `.claude/skills/switchboard/SKILL.md` holds the launcher and `.agents/skills/switchboard/SKILL.md` is empty. Confirm which tree is authoritative and which is a generated mirror before editing, and fix the authoritative one — a fix landing in the unread copy is the failure mode this whole class of bug keeps producing.
+6. **Edit the source, not the mirror — resolved, not an open question.** `.agents/workflows/switchboard.md` (121 lines, 5088 bytes at `5cd7935`) is authoritative: `src/services/ClaudeCodeMirrorService.ts:52` declares `source: 'workflows/switchboard.md', name: 'switchboard', invocation: 'default'`. `.claude/skills/switchboard/SKILL.md` (5151 bytes — the 63-byte delta is rewritten frontmatter) is **generated** and tracked in `.claude/.switchboard-generated.json`; anything written there is overwritten on the next mirror run. All line numbers in this plan refer to the source file. (`.agents/skills/switchboard/SKILL.md` has never existed in any commit — an earlier draft of this plan claimed it was present-but-empty, which was a bad check, not a fact.) After editing, run the mirror and confirm the `.claude/` copy regenerates to match.
 
-7. **Update the preamble to describe what the code now does.** Lines 22-24 correctly state that the port file proves nothing; extend that to say what does prove it (`$ROOT` in `health.roots`), so the reasoning and the implementation stop disagreeing.
+7. **Fix the two nonexistent endpoints the launcher names — higher severity than the identity bug.** Source line 103 instructs the agent to call `POST /orchestration/confirm` as *"the only call that arms"*, and line 109 warns against `POST /orchestration/start`. **Neither route exists.** No `/orchestration/*` match anywhere in `src/`, no such prefix route in `LocalApiServer.ts`, and the generated `protocol-catalog.json` lists only `/mission-control/*`. The real names are `POST /mission-control/confirm` (`LocalApiServer.ts:7495`) and `POST /mission-control/start` (`:7493`). An agent following the skill verbatim therefore completes adopt and pre-flight, then 404s on the arming call — **arming silently never happens**, which breaks the primary path rather than a multi-workspace edge case. Fix both names and add them to the endpoint-name audit in change 5.
+
+8. **Reconcile the extension's dispatch prompt with the restored skill.** `src/services/TaskViewerProvider.ts:28408` builds a prompt telling the agent to read `.agents/workflows/switchboard.md` and *"follow its entry protocol exactly: concise one-line board snapshot, then present the skill's two-tier entry menu (Plan / Code / Board / Automate, plus a one-line More: design & artifacts, external PM, setup & tour)"*. That describes the **previous** 605-line console document, not the restored 121-line launcher, which has no board snapshot and no menu. The prompt and the file it points at now contradict each other.
+
+   Note what that prompt gets *right*, because it is the fix this plan proposes, already implemented on one path: it passes `${workspaceRoot}` and instructs *"use it as $ROOT directly (this is the board's selected workspace; do not derive the root from your terminal's working directory)"*. So the **dispatched** path is already immune to the wrong-workspace bug. The defect bites only on **direct user invocation** of `/switchboard`, where no prompt supplies a root and `ROOT="$PWD"` applies. Scope the severity accordingly, and reuse this prompt's wording as the model for the skill's own root resolution.
+
+9. **Update the preamble to describe what the code now does.** Lines 21-24 correctly state that the port file proves nothing; extend that to say what does prove it (`$ROOT` in `health.roots`), so the reasoning and the implementation stop disagreeing.
 
 ## Edge-Case & Dependency Audit
 
@@ -95,7 +101,9 @@ None. Independent of the four API-auth plans and of the storage-layer feature.
 8. **Path-normalisation matrix:** symlinked root, trailing slash, differing case on a case-insensitive filesystem, and a mapped child workspace — each must be accepted, not rejected. This is the false-negative guard and the most important test in the list.
 9. **Older-build health response** with no `roots` field: warns and stops, never silently passes.
 10. Repeat 1-3 against the standalone host as well as the extension host, since both serve `/health` and both answer `adopt`.
-11. Confirm the fix landed in the authoritative control-plane tree (change 6) and that the mirror, if generated, regenerates to match.
+11. Confirm the fix landed in `.agents/workflows/switchboard.md`, then run the mirror and confirm `.claude/skills/switchboard/SKILL.md` regenerates to match (change 6). A fix present only in the mirror is not a fix.
+12. **Arming works end to end** (change 7): adopt, run the pre-flight, confirm, and verify `POST /mission-control/confirm` returns success and the engine is actually armed — not merely that the skill text changed. Grep the whole control plane for `/orchestration/` and confirm no reference survives.
+13. **Dispatch path unchanged** (change 8): launch `/switchboard` from the board's own dispatch and confirm it still works, now against a skill whose text matches the prompt. Confirm the dispatched path still passes `workspaceRoot` and never derives the root from the terminal's cwd.
 
 ## Outstanding Questions
 
