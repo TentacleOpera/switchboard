@@ -10,7 +10,6 @@ The first selects the wrong workflow. Feature-subtask expansion is gated on the 
 
 The second strips the seat safeguards. The promptComposed argument means the payload already came out of the prompt builder, so do not append the seat directive block. Two reviewer-to-coder relays pass it for a payload that is hand-built prose, and because they push directly to the terminal they bypass the HTTP-boundary strip, so the marker survives and the whole seat block is skipped - git policy, skip directives, subagent policy and output shaping all silently absent from a fix-these-findings instruction. The audit gate meant to catch exactly this must then be re-pinned to the true site inventory.
 
-
 ## How the Subtasks Achieve This
 
 - **Fix Subtask Prompt Dispatch Loses Feature Context**: fixes the feature-expansion gate, which keys on the selected record having `isFeature` true while a subtask record carries `isFeature: 0` and a `featureId`. So no siblings are appended, the feature group never forms, and the builder selects `improve-plan` where `improve-feature` was intended. Also corrects the run-sheet instruction so the recorded workflow matches the prompt actually delivered.

@@ -12,7 +12,6 @@ The server bind is hardcoded to loopback with no option threaded in, so a phone 
 
 Together these make one capability: Switchboard reachable and operable from a device that is not the host.
 
-
 ## How the Subtasks Achieve This
 
 - **A Phone-Shaped Command Route**: serves a narrow tap-only surface with the five away-from-desk functions, borrowing the sidebar idiom that already solved the layout. The board is unusable on a phone not because of styling but because there is not one width breakpoint in any panel file.

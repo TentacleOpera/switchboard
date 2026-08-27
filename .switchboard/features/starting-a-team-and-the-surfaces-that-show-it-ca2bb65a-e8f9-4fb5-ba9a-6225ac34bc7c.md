@@ -10,7 +10,6 @@ Four defects compound. The start-team workspace selector is the only one in Swit
 
 Two surfaces also carry weight they have not earned: a hidden-terminal mechanism with zero callers on every path that would use it, splitting the terminal list into two projections; and a WORKTREES tab that wraps one list in five sections, three of which differ only by a filter, plus 140 words explaining what the rows already show.
 
-
 ## How the Subtasks Achieve This
 
 - **Terminals Sidebar: Team-Start UX Overhaul**: makes the start-team form default to the kanban workspace like every other selector in Switchboard, adds one-click start-all-teams, and retires `OPEN AGENT TERMINALS` — which spawns a disconnected fleet bypassing team wiring, standing orders and group seating.

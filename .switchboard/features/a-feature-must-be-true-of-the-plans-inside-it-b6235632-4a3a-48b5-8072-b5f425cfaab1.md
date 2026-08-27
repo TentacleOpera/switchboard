@@ -10,7 +10,6 @@ The skill already knows titles are not enough, but only for clustering - step 2 
 
 The same pass treats a declared dependency as a clustering hint rather than a rule about placement, so features ship holding half a capability while the other half sits in a different feature. A plan and the plans it declares it requires must land together, unless that would push the feature past ten subtasks - in which case the split is deliberate and the cross-feature dependency is stated.
 
-
 ## How the Subtasks Achieve This
 
 - **A Feature Title And Prose Must Be True Of The Plans Inside It**: carries the read-the-bodies instruction into what actually gets written. Step 2 of the Group flow says to read the full plan file and use that, not just titles, to determine groupings — but step 3 and the backfill prompt are both keyed on the plan name, so an agent reads bodies to decide placement and then writes the description from titles. Also forbids asserting that material moved somewhere without checking it arrived.

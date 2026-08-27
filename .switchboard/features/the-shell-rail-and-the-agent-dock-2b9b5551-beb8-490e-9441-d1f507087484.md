@@ -10,7 +10,6 @@ The dock is meant to be the mission controller persistent terminal, and fails at
 
 The rail art is also placeholder. The Mission Control icon is a saucer with a tractor beam and blinking lights where a pixel jet was asked for, and the Teams surface carries five head-and-torso portraits its own source comment labels as placeholder, plus a bare-letter team fallback. One flat interceptor silhouette painted in the theme accent replaces all of it. Separately the Agents icon renders below Terminals in a data-driven manifest and should be above it.
 
-
 ## How the Subtasks Achieve This
 
 - **Fix Agent Dock: Mission Controller Terminal Overhaul**: moves the dock toggle to the Mission Control icon, styles the solo terminal, replaces the all-roles picker with an editable CLI command input, adds a restart path out of the exited-process dead end, and keeps the dock terminal from appearing in the Terminals panel and rail fleet.

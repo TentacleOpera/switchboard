@@ -16,7 +16,7 @@ Make three user journeys that are silently dead in the browser cockpit either wo
 ## Subtasks
 - [ ] [Create Plans: disclose the docs-zip path instead of relying on a reveal that can silently fail](../plans/feature_plan_20260811150000_create_plans_zip_never_discloses_its_path.md) — **PLAN REVIEWED** — ID: bfaa4087-9535-40a1-ac59-6278ca5aded0
 - [ ] [Create Plans is unreachable on the standalone host — the folder picker is a stubbed native dialog](../plans/feature_plan_20260811150100_create_plans_folder_picker_dead_on_standalone_host.md) — **PLAN REVIEWED** — ID: 102d7d6f-72ec-4b57-aea8-19859ca08eea
-- [ ] [Cloud database presets silently abort on the standalone host — the whole flow hangs off stubbed dialogs](../plans/feature_plan_20260811150200_cloud_db_preset_silently_aborts_on_standalone_host.md) — **PLAN REVIEWED** — ID: c7e4667f-ce50-439b-9be3-0ab773223f7c
+- [ ] [A database path change reports success on the standalone host when the config write is a no-op, and three dialog branches are dead](../plans/feature_plan_20260811150200_cloud_db_preset_silently_aborts_on_standalone_host.md) — **PLAN REVIEWED** — ID: c7e4667f-ce50-439b-9be3-0ab773223f7c
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

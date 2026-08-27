@@ -12,7 +12,6 @@ Two intervention paths are also missing. An inbound comment is routed to the car
 
 All three run on the same comment bridge - postManagedComment, the comment route, and the per-board remote-control gate.
 
-
 ## How the Subtasks Achieve This
 
 - **The Queue Is Invisible Unless An Agent Remembers To Narrate It**: has Switchboard itself post dispatch and completion comments mentioning the operator, so progress does not depend on an agent choosing to report and a suspicious silence is visible as a silence rather than as an absence of information.

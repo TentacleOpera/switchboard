@@ -10,7 +10,6 @@ Scheduling arrived four separate times and nothing ever consolidated it. Four in
 
 Scheduling must also become safe to leave running overnight. Today a checkbox grants a scheduled agent board authority by appending prose telling it to use move-card.js - which grants nothing, restricts nothing, bypasses every dispatch guard, and leaves a card advanced with no holder. Board actions become host-executed; agent actions carry no board authority. Work then advances at the pace agents actually finish rather than on a clock.
 
-
 ## How the Subtasks Achieve This
 
 - **Retire Autoban And Batch Size**: extracts Mission Control and pair-programming out of the shared `AutobanConfigState` blob, then deletes the queue-schedule clock, `batchSize`, complexity filtering, column rules and pause/resume. This is the deletion the other subtasks assert has happened.

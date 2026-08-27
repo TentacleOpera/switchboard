@@ -10,7 +10,6 @@ The launcher skill states the hazard correctly in its own preamble - a port file
 
 The liveness half has the mirrored problem. Inside an agent sandbox, loopback curl returns 000 even when the board is up, so a shipped fix made the launcher fail safe: with a port file present and liveness unconfirmed, do not spawn. That traded a destructive failure for a recoverable one, and left a false positive - after a genuine crash the port file survives and the launcher now refuses to start a board forever, with undiscoverable manual recovery. What is needed is a filesystem object backed by a kernel object that dies with the process.
 
-
 ## How the Subtasks Achieve This
 
 - **/switchboard Accepts Any Board On The Shared Port**: cross-checks the workspace root against `health.roots` — a guard that previously existed and regressed — and makes the adopt call send its workspace root and the server reject one it does not serve, instead of silently substituting its own. Adopting the orchestrator seat for the wrong workspace becomes impossible rather than unlikely.

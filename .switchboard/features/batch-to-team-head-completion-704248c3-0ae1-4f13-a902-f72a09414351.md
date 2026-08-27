@@ -69,3 +69,4 @@ Complete the batch-to-team-head dispatch path: add dispatch means to the allocat
 - [ ] [Batch allocate prompt exists only in VS Code extension host — npx/standalone host diverges](../plans/feature_plan_20260827144008_batch-allocate-prompt-extension-only-npx-divergence.md) — **PLAN REVIEWED** — ID: 8fa93e14-cb6b-4c4a-b556-91a3c2fe3a55
 - [ ] [Eight of fifteen batch-to-team-head automated tests still absent](../plans/feature_plan_20260827144009_missing-batch-to-team-head-automated-tests.md) — **PLAN REVIEWED** — ID: 2aed6757-6cd4-4f37-abe2-9582d3dafa19
 <!-- END SUBTASKS -->
+

@@ -12,7 +12,6 @@ Beyond one mkdir, the server-start path scaffolds nothing, so a standalone-only 
 
 Underneath all of it, a configured database path may not be where the board actually is. Relocation to a target outside the source workspace is refused while the callers repoint anyway, so an unknown number of installs have a configured path aimed at an empty file while the real board sits in the old location. Any migration that assumes the configured path is authoritative will act on the wrong database.
 
-
 ## How the Subtasks Achieve This
 
 - **A First-Run Setup Wizard For The Standalone Host**: splits first run at the natural seam — the database question in the terminal, scaffolding and CLIs and roles and teams in the browser panel — and moves creation **after** the answer, so the migration chain no longer runs on a file the user is about to delete.

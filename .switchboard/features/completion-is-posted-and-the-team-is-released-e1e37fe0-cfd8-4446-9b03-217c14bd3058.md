@@ -12,7 +12,6 @@ From the other end, the standing order fires a completion report at the head unc
 
 Both write the same fact - completed_at - which is the single thing that releases a team. Nothing else does; board position is not part of the predicate.
 
-
 ## How the Subtasks Achieve This
 
 - **The Team Panel Releases What The Lead Did Not Post**: replaces `ACKNOWLEDGE COMPLETIONS` — whose entire body deletes in-memory badge entries and toasts, writing nothing — with a real release control that POSTs `task/complete` for every card the scoped team holds with no completion, and which is absent when there is nothing to release.

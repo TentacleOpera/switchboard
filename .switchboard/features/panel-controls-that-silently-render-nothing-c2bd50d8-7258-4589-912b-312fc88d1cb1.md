@@ -12,7 +12,6 @@ Switching the Previews source dropdown in the design panel to HTML Previews give
 
 Neither is a missing feature. Both are shipped capabilities that stopped rendering, and in both cases the failure is silent, which is why they read as removed rather than broken.
 
-
 ## How the Subtasks Achieve This
 
 - **Markdown Editor Missing From The Tickets Panel**: recovers the rich editor shell — toolbar, split live preview, view-mode toggle — instead of falling silently through the `window.SwitchboardMarkdownEditor` guard to a bare textarea. All the wiring is present in source in both hosts; the failure is that the guard's else-branch degrades without reporting anything.

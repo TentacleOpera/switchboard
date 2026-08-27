@@ -10,7 +10,6 @@ The plans table has no priority column. TeamQueueService sorts a priority read f
 
 The star has the same shape of gap. It ships on the board webview, where clicking it toggles priorityStarred and starred cards sort first, but the sidebar project panel renders plan and feature cards with no star UI at all - separate rendering functions in a separate webview context. So plans managed from the sidebar cannot be starred, and starred plans show no indication there.
 
-
 ## How the Subtasks Achieve This
 
 - **Priority Is A Native Card Field And A Board-Wide Order By**: adds a native 1-4 priority with null for unset on every card, and one order-by control (manual, priority, date, complexity, star always first) that decides execution order rather than only the view. Both trackers use four levels plus unset with 1 most urgent, so the field maps to each with no scale conversion and no inversion to get wrong.

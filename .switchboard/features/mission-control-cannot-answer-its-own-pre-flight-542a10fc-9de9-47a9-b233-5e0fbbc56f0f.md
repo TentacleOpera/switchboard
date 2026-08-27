@@ -10,7 +10,6 @@ The pre-flight asks whether a coding team is seated rather than a lone agent, an
 
 The persona is also told to check the terminal with no mechanism given, so it reconstructs terminal state by running commands while a markdown transcript of that terminal sits unread on disk with two endpoints no agent document mentions. And its report ends with a ready-card summary whose template is space-aligned columns that markdown collapses into one line, addressing cards by raw plan id with no token the operator can reply with.
 
-
 ## How the Subtasks Achieve This
 
 - **Mission Control Cannot See Teams Over HTTP**: exposes the configured roster — groups, roles, head and `pacing` — over the local API. Today `GET /health` returns a flat array of terminal names and the only roster reader is private with no route, so pre-flight checks 1 and 2 cannot be instrumented and dispatch routing cannot be explained.
