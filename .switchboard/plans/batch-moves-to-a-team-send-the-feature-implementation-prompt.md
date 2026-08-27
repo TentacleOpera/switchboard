@@ -176,17 +176,3 @@ None.
 ## Recommendation
 
 Complexity 5 (Mixed) — **Send to Coder**.
-
-## Implementation Summary
-
-- Added `batchMode?: boolean` to `PromptBuilderOptions` interface in `agentPromptBuilder.ts`.
-- Added a `batchMode` branch to `resolveFeatureOrchestrationDirective` and updated `buildExecutionIntro` to emit batch drive framing ("Please drive the batch of N plans below through your team seats.").
-- Suppressed `BATCH_EXECUTION_RULES`, subagent blocks, "Team Dispatch Instructions", and unit clauses ("single delivery unit") when `batchMode` is active. Replaced with conflict pass instructions for independent plans.
-- Prevented `batchMode` from redirecting the planner workflow selection (`isFeatureTarget` check updated to exclude `batchMode`).
-- In `KanbanProvider.ts`'s `generateUnifiedPrompt`, detected when loose plan batches target a team head and enabled `featureMode`, `driveMode`, and `batchMode` with `subtaskCount` capped at 5 plans sorted via `compareByPrecedence`.
-- Added `column`, `priorityStarred`, `queuePosition`, `columnOrder`, `columnEnteredAt`, `createdAt`, `lastActivity` to `BatchPromptPlan` interface and `buildDispatchPlans` so `compareByPrecedence` sorts loose plans by precedence.
-- Created contract test `src/test/batch-move-team-prompt-contract.test.js` verifying team head batch prompt, non-team batch prompt, planner workflow non-leak, and real feature unit clause retention.
-
-## Review Findings
-
-- All unit tests and contract tests pass cleanly. `npm run compile-tests` passed with 0 errors.
