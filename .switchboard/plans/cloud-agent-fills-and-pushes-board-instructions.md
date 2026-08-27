@@ -30,13 +30,17 @@ cloud agent clones it and knows the whole board without the extension running �
 which is what it needs to fill `target.planId` correctly instead of guessing a
 name.
 
-**One destination, not two.** Instructions, mirror content, receipts and status all
-live at whatever `boardStateExport` resolves to — a **dedicated board repo**
-(`board-state-and-instructions-get-a-dedicated-repo.md`) where the channel must be
-private, or the `switchboard/board` orphan ref on the code repo where it need not
-be. Everything sits at the repo root in both cases, so the skill needs no
-per-destination branching. It must not invent a location, and it must never target
-a control plane: that holds the personas, workflows and skills agents execute.
+**Two repos, and your access to each differs.** Under the canonical layout
+(`canonical-control-plane-layout-with-sibling-repos.md`) you have **write on the
+`-cloud` sibling** — where you file instructions — and **read on `-plans`**, which
+carries `board.json`, plan files, receipts and `status.json`. You have nothing on
+the code repo and nothing on `-remote`.
+
+That split is deliberate: filing work and reading its outcome are different
+grants. Never try to write to `-plans`; a receipt you wrote would be worthless
+anyway, because the receipt is the machine's word about what happened. And never
+target the control plane itself — it holds the personas, workflows and skills
+agents execute.
 
 **The agent's only write is filing an instruction.** Everything else at that
 destination is written by the machine. An agent that assumes it may write mirror
@@ -84,12 +88,13 @@ the fallback for having no machine access.
 **Read the board first.**
 
 ```bash
-git clone --depth 1 <boardDestinationUrl> /tmp/board   # or fetch the orphan ref
-jq '.cards[] | {plan_id, topic, column}' /tmp/board/board.json
-jq '.cards[] | {planId, state, idleSeconds}' /tmp/board/status.json   # if present
+git clone --depth 1 <plansRepoUrl>  /tmp/plans    # read-only for you
+git clone --depth 1 <cloudRepoUrl>  /tmp/cloud    # you write here
+jq '.cards[] | {plan_id, topic, column}' /tmp/plans/board.json
+jq '.cards[] | {planId, state, idleSeconds}' /tmp/plans/status.json
 ```
 
-`status.json` (from `terminal-logs-are-archived-and-status-is-published.md`) is how
+`status.json` (from `terminal-logs-live-in-the-logs-sibling.md`) is how
 you tell whether a card is being worked on right now — `board.json` reports the
 column, which only changes at the end of a stage.
 
@@ -112,10 +117,10 @@ an intermittent one.
 repo:
 
 ```bash
-cp instruction.json /tmp/board/instructions/<id>.json
-git -C /tmp/board add instructions/<id>.json
-git -C /tmp/board commit -m "board control: <id>"
-git -C /tmp/board push origin HEAD:<branch>      # the orphan ref, where that is the destination
+cp instruction.json /tmp/cloud/instructions/<id>.json
+git -C /tmp/cloud add instructions/<id>.json
+git -C /tmp/cloud commit -m "board control: <id>"
+git -C /tmp/cloud push origin HEAD:main
 ```
 
 A separate clone is the whole recipe — no worktrees in your own repo, no
@@ -131,8 +136,8 @@ non-fast-forward rejection is a lost-write detector the board itself relies on.
 **Then read the receipt — do not assume.**
 
 ```bash
-git -C /tmp/board fetch --depth 1 origin && git -C /tmp/board reset --hard FETCH_HEAD
-cat /tmp/board/receipts/<id>.json
+git -C /tmp/plans fetch --depth 1 origin && git -C /tmp/plans reset --hard FETCH_HEAD
+cat /tmp/plans/receipts/<id>.json
 ```
 
 The receipt is the machine's word about what happened, not yours. Never write one

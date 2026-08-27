@@ -15,14 +15,14 @@ The workflow this exists for: author plans in a cloud session, run `improve-plan
 **This feature was rescoped on 2026-08-27 after an audit against five live plans it had been duplicating.** The transport, the destination and the storage topology were all already decided, and two of the original subtasks contradicted those decisions rather than extending them. Both are now superseded stubs recording why, and the surviving work is layered on the existing designs:
 
 - **Transport** is `board-state-remote-mirror-channels.md` §3's `GitStateProvider` — the poll loop, the commit-SHA cursor, the fetch-and-reconcile push, and the inbound trust guard. No second poller is built.
-- **Destination** is whatever `boardStateExport` resolves to — and the setting gains one value rather than the feature gaining a mechanism. Only `none` and `read-only-snapshot` ship today, and `read-only-snapshot` means the code repo, where every collaborator and every CI token with `contents: write` could file an instruction. A **dedicated board repo** is added for the private case. The **control plane is never a destination**: it holds the personas, workflows and skills agents execute, so a command channel there could rewrite the prompt the agent runs on — which no action allowlist can contain.
+- **Destination** is a sibling of the control plane, one per purpose, under the canonical layout: `-plans` for plans and board state, `-cloud` for instructions, `-logs` for logs. The control plane is the **container** that agents start in, and holds no board data — it carries the personas, workflows and skills agents execute, so a command channel there could rewrite the prompt the agent runs on, which no action allowlist can contain. One purpose per sibling means one access grant per purpose: a cloud session gets write on `-cloud` and read on `-plans`, and nothing else.
 - **Storage** for the log record is the topology plan's **Archive** store, placement derived from the one operator choice.
 
 What the git channel could not do, and this feature adds: carry **commands** rather than only signals (a column value and a comment cannot express "star this" or "dispatch this"), give remote-originated dispatch an **identity** so it is attributable, and make terminal work **findable**.
 
 ## How the Subtasks Achieve This
 
-- **Board state and instructions get a dedicated repo**: adds `board-repo` to the shipped `boardStateExport` enum and activates the `remoteUrl` setting that ships marked "Reserved… currently unused", so board data and the command channel can live in a repo that holds nothing else. Mechanically it supplies a remote to `git-carried-shared-board-state.md`'s existing publisher and ingest path rather than inventing a protocol — the arbitration, the intent log and the ref hygiene stay that plan's. One layout at the repo root, so no reader branches on destination, and no silent fallback to `origin` when the URL is missing.
+- **The canonical layout: a control plane containing one sibling per purpose**: defines the shape (`Switchboard-Agents/` holding `Switchboard/`, `-plans`, `-remote`, `-cloud`, `-logs`), derives every path from the one control-plane root the operator sets, and adds the guided Setup panel that detects, proposes and — only when asked — creates and links them. Supersedes mirror-channels' `control-plane` destination, which pushed mirror content *into* the control plane; the rest of that plan stands. Degrades to today's behaviour for every sibling that is absent, and moves no file without an explicit action.
 
 - **Board control instructions — a structured command payload on the channel that already exists**: the JSON schema, a closed action allowlist that is the security boundary (the schema has no field for an endpoint, verb, SQL or shell string), execution order fixed by the allowlist rather than by JSON key order, and receipts. Its idempotency is keyed to an instruction id rather than a commit SHA, which matters because the transport's cursor cannot survive a force-push or the ref-squashing that `git-carried-shared-board-state.md` plans — and a replayed move is cosmetic where a replayed dispatch starts a second agent. Answers that plan's open question about whether a remote agent may write the ref directly: yes, through a validated schema, not by hand-editing board state.
 
@@ -32,24 +32,26 @@ What the git channel could not do, and this feature adds: carry **commands** rat
 
 - **Terminal logs are named for what they record**: adds CLI, plan slug and short plan id to the filename, keeps the terminal name first because the listing endpoint's prefix filter depends on it, and makes a plan change roll the file so a name claiming a plan cannot be a lie.
 
-- **Terminal logs go to the Archive store; a Runtime-safe status goes to the board destination**: the record becomes queryable by plan, CLI, terminal, time and content — which a directory of files cannot be. The status payload was redesigned during the audit: terminal names and log tails are Runtime tier, which the topology plan says never leaves the machine and `git-carried-shared-board-state.md` enforces with a contract test, so the default payload carries plan id, state and idle seconds and nothing else. Output tails are a separate opt-in that names itself as an exception.
+- **Terminal logs live in the logs sibling, with an index**: logs are files in `-logs`, addressable by the naming subtask and indexed for lookup without a scan. Retention is deleting files, and the default — a plain non-git folder — discloses nothing because it has nowhere to disclose to; making `-logs` a repo *is* the opt-in for sharing them. A tier-safe status (plan id, state, idle seconds — no terminal name, no path, no output) publishes with board state so a remote reader can tell moving from wedged, without breaking the invariant that Runtime data never leaves the machine.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] (no subtasks)
 <!-- END SUBTASKS -->
 
-## ⚠ Blocked items
+## Open decision carried, not resolved here
 
-**The log Archive subtask is blocked on an open decision in another plan.** `storage-topology-one-choice-three-stores.md`'s User Review item 2 — whether DuckDB is demoted to a never-load-bearing analytics export — is unresolved, and `retention-and-archive-for-unbounded-growth.md` assumes the opposite answer (*"Changing what the archive is (DuckDB stays)"*). A searchable log archive is load-bearing by definition, so the two answers give incompatible destinations. That subtask supplies the evidence and should not be coded until the decision lands.
+The `boardStateExport` setting has four proposed value sets across four plans and one shipped pair (`none | read-only-snapshot`); mirror-channels drops a shipped value and git-carried adds a bidirectional mode. The layout subtask needs one value meaning "use the canonical siblings", and reconciling the enum belongs to `storage-topology-one-choice-three-stores.md`, which already owns retiring the ten placement mechanisms. Flagged there rather than picked here — it is a migration hazard on a setting real installs hold.
+
+**No longer blocked:** the logs subtask was blocked on the topology plan's DuckDB decision while logs were headed for the Archive store. As files in a sibling folder they need no store, so that dependency is gone.
 
 ## Dependencies & sequencing
 
 External prerequisite for three subtasks: `board-state-remote-mirror-channels.md` §3 must exist, since the instruction payload and the status publishing both ride its provider and its outbound cycle.
 
-1. **Remote dispatch seam**, **log naming** and the **dedicated board repo** are independent of everything and can start immediately. The board repo is the one that unblocks a *private* command channel, so it leads if that matters.
-2. **Instruction format and executor** needs mirror-channels §3 for transport, the dedicated board repo if the channel is to be private, and the dispatch seam before its `dispatch` action is enabled.
+1. **The canonical layout**, the **remote dispatch seam** and **log naming** are independent of everything and can start immediately. The layout leads: it supplies the destination every other subtask resolves against.
+2. **Instruction format and executor** needs mirror-channels §3 for transport, the layout for a private `-cloud` destination, and the dispatch seam before its `dispatch` action is enabled.
 3. **Cloud agent skill** ships in the same release as the executor — a skill describing a channel that is not live would have agents filing instructions nothing reads.
-4. **Logs to Archive and status** needs log naming, the Archive store from the topology plan, and the DuckDB decision above.
+4. **Logs in the sibling, plus status** needs log naming and the layout's derived path. Nothing else.
 
 Nothing here depends on the milestone feature or the priority/ordering plans.

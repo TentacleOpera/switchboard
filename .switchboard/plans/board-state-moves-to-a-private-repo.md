@@ -27,7 +27,7 @@
 >   "one writer per repo" invariant and its "stop force-pushing, retry once"
 >   handling contradict that design directly.
 >
-> **Replaced with:** `board-state-and-instructions-get-a-dedicated-repo.md`.
+> **Replaced with:** `canonical-control-plane-layout-with-sibling-repos.md`.
 >
 > **Revived (2026-08-27, later the same day).** The user ruled that board state and
 > instructions must **never** live in the control plane. That removes the ground
