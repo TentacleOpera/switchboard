@@ -20,7 +20,7 @@ private static readonly DROPPED_SOURCES = new Set(['comms', 'board-batch', 'cust
 
 **2. The drop is destructive on the next write.** `_filterDroppedSources` runs on read, and the comment at `:492` states the consequence: dropped jobs *"stay inert in the file until the next legitimate `setSchedulerConfig` write, which reads through this filter and persists the list without them."* So a user's custom jobs survive right up until they change any scheduler setting, and are then written away permanently with no notice at write time. This is a shipped feature with records in `integration-config.json` on the whole install base — per the project's migration rule this is exactly the case that must import rather than drop.
 
-**3. The run-sheet dispatch tick can fire into a working team.** The only concurrency rule the dispatch path needs is per-team, not global. `_scheduleQueuePop` (`src/services/TaskViewerProvider.ts:13016`) loops `batchSize` times per tick and relies on `dispatchNextFromQueue`'s `409` to stop it — arbitration standing in for a precondition. That framing is what made the schedule look like a competing pacer; it is not one. The tick should fire once and treat a 409 (team busy) as a silent skip, not an error.
+**3. ~~The run-sheet dispatch tick can fire into a working team.~~ RETIRED — out of scope.** This defect lived in `_scheduleQueuePop`, which `retire-autoban-and-batch-size.md` deletes outright. The busy-target guarantee is already atomic and lives in `dispatchNextFromQueue` (`LocalApiServer.ts:1576-1590`), not in the caller, so it survives the deletion untouched and protects every remaining dispatcher. Nothing in this plan addresses the tick. Defects 1 and 2 (the `custom` source filtered out on read, and existing jobs silently destroyed) are this plan's whole scope.
 
 > **Superseded:** "A dispatching job can fire into a working target. … A job that would dispatch checks whether its target is busy and skips the tick if so."
 > **Reason:** The original framing conflated two separate mechanisms. There is no `ScheduledJob` that dispatches cards — the `ScheduledJob` sources (`reconcile`, `custom`, `fetch-plans`) all run **prompts in terminals** (non-dispatching). The card-advancing dispatch is the **run-sheet autoban tick** (`_scheduleQueuePop`), a separate mechanism driven by the autoban interval/cron timer, not by the scheduler jobs list. The busy-target precondition applies to the run-sheet tick, not to a `ScheduledJob`. Restored custom jobs run prompts (like fetch-plans/reconcile) and are NOT dispatching — they are unaffected by the busy-target rule.
@@ -48,7 +48,6 @@ There is no mode axis here and nothing to make exclusive. Two jobs on different 
 - Remove `'custom'` from `DROPPED_SOURCES` — one-line set edit (`GlobalIntegrationConfigService.ts:481`).
 - Clear the one-time notice flags (`customJobs.dropped` workspaceState, `droppedCustomJobsNotice` autobanState field) — reset to false/empty so a user who saw the retire notice is not left believing their jobs are gone.
 - Add `'custom'` to the `survivorSources` allowlist in `_tickSurvivorSchedulerJobs` (`TaskViewerProvider.ts:27205`) so restored custom jobs actually execute.
-- Remove the `batchSize` loop from `_scheduleQueuePop` — replace the `for` loop with a single `dispatchNextFromQueue` call. The loop is already effectively single-dispatch: the 409 on the second iteration caps it at one card per tick (one team, one in-flight card). Removing it is cleanup, not a throughput change.
 
 ### Complex / Risky
 - **Round-trip preservation in `setSchedulerConfig`.** The fix must preserve `comms`/`board-batch` (and any future unknown-source) jobs in storage while filtering them from execution. This is the data-loss gate for the install base — a regression here silently destroys user records on the next scheduler setting change. Must merge incoming jobs with raw persisted dropped-source jobs rather than overwriting with the filtered list.
@@ -69,7 +68,6 @@ There is no mode axis here and nothing to make exclusive. Two jobs on different 
 
 **Dependencies & Conflicts**
 - `CODING_COLUMNS` (`LocalApiServer.ts:57`) = `{'LEAD CODED', 'CODER CODED', 'INTERN CODED'}` — the in-flight predicate. The busy-target 409 checks whether any card in these columns has a `dispatchedTerminal` in the team's roster (`:1576-1590`). No change needed here.
-- `normalizeAutobanBatchSize` default is 1 (`autobanState.ts:17`), but users can set 2-5. With the loop removed, the `batchSize` field becomes vestigial for the dispatch path. Do NOT remove the field from `AutobanConfigState` (install-base migration) — just stop looping on it in `_scheduleQueuePop`.
 
 ## Dependencies
 
@@ -119,7 +117,7 @@ Key risks: (1) the round-trip merge in `setSchedulerConfig` is the data-loss gat
 
 ### `src/services/TaskViewerProvider.ts`
 
-**Context:** The run-sheet dispatch tick (`_scheduleQueuePop`, `:13016-13068`) and the survivor job runner (`_tickSurvivorSchedulerJobs`, `:27199-27229`) are the two execution paths. The dispatch tick loops `batchSize` times; the survivor runner only allows `fetch-plans` and `reconcile`.
+**Context:** The survivor job runner (`_tickSurvivorSchedulerJobs`, `:27199-27229`) is the execution path this plan touches — it currently allows only `fetch-plans` and `reconcile`. The run-sheet dispatch tick (`_scheduleQueuePop`) is **not in scope**; `retire-autoban-and-batch-size.md` deletes it.
 
 **Logic:**
 
@@ -143,52 +141,23 @@ Key risks: (1) the round-trip merge in `setSchedulerConfig` is the data-loss gat
 
    > **Clarification (not a new requirement):** Custom jobs ride the **shared survivor timer** (`_startSurvivorJobsTimer`, `:27172`), the same timer fetch-plans/reconcile use. The `intervalMinutes` field is vestigial (`:11722` webview comment confirms `intervalMinutes: 0` for survivor jobs). There is no per-job timer mechanism in the current architecture. If per-job intervals are required, that is separate new scope — see **Outstanding Questions**.
 
-5. **Add the busy-target precondition to the run-sheet tick** (`_scheduleQueuePop`, `:13016-13068`). Replace the `batchSize` loop with a single dispatch call. The 409 from `dispatchNextFromQueue` is the atomic busy-target check — treat it as a silent skip:
+5. **RETIRED — do not implement.** This step rewrote `_scheduleQueuePop`
+   (`:13016-13068`) to fire once per tick and treat a 409 as a silent skip.
+   `retire-autoban-and-batch-size.md` **deletes `_scheduleQueuePop` entirely**,
+   along with the run-sheet clock, `batchSize`, and `AUTOBAN_RUN_SHEET_TICK_KEY`.
+   Rewriting a function that is being removed is dead work, and the two plans
+   contradicted each other on the same lines.
 
-   > **Superseded:** "Before a job that dispatches fires, resolve its target and skip the tick if that target is already working. … Drop the `batchSize` loop from `_scheduleQueuePop`. One fire, one card."
-   > **Reason:** The 409 from `dispatchNextFromQueue` (`LocalApiServer.ts:1576-1590`) already IS the busy-target precondition — it checks whether any card in a coding column (`LEAD CODED`/`CODER CODED`/`INTERN CODED`) has a `dispatchedTerminal` in the team's roster, atomically inside the serialized critical section. A separate pre-check before the attempt would duplicate the board read + team resolution and open a TOCTOU window. The `batchSize` loop is already effectively single-dispatch: the second iteration always 409s (one team, one in-flight card) and breaks. Removing it is cleanup, not a throughput change — `DEFAULT_AUTOBAN_BATCH_SIZE` is 1 (`autobanState.ts:17`), and even at batchSize=5 only one card dispatches per tick.
-   > **Replaced with:** Call `dispatchNextFromQueue` **once** per tick. A 409 = team busy → silent skip (not an error, does not disable the schedule). A 200 with `dispatched === null` = queue empty → done. A 200 with a dispatched card = fired. No loop, no pre-check — the 409 is the precondition.
+   The busy-target guarantee is **not lost**: the 409 from
+   `dispatchNextFromQueue` (`LocalApiServer.ts:1576-1590`) is the atomic
+   precondition and lives in the dispatch path, not in the caller. It continues
+   to protect every remaining dispatcher — the survivor runner and mission
+   launch — with no change here.
 
-   ```ts
-   private async _scheduleQueuePop(): Promise<void> {
-       if (!this._autobanState.enabled || this._autobanState.paused) { return; }
-       const workspaceRoot = this._resolveWorkspaceRoot();
-       if (!workspaceRoot) { return; }
-       const apiServer = this._localApiServer;
-       if (!apiServer || typeof apiServer.dispatchNextFromQueue !== 'function') { return; }
-
-       // Resolve the live coding head — lead first, then coder (same resolver
-       // runQueue/stageForQueue use). See existing comment at :13023-13035.
-       let headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(workspaceRoot)) || '';
-       if (!headTerminal) {
-           const leads = await this.getAliveRoleTerminalNames('lead', workspaceRoot);
-           if (leads.length > 0) {
-               headTerminal = leads[0];
-           } else {
-               const coders = await this.getAliveRoleTerminalNames('coder', workspaceRoot);
-               if (coders.length > 0) { headTerminal = coders[0]; }
-           }
-       }
-       if (!headTerminal) { return; } // no team seated — try again next tick
-
-       // One fire, one card. The 409 from dispatchNextFromQueue IS the
-       // busy-target precondition (checked atomically inside its critical
-       // section). A 409 = team busy → silent skip, not an error.
-       try {
-           const outcome = await apiServer.dispatchNextFromQueue({ workspaceRoot, from: headTerminal });
-           const status = outcome?.status ?? 500;
-           if (status === 409) { /* team in flight — skip silently */ }
-           else if (status >= 200 && status < 300 && outcome?.payload?.dispatched === null) { /* queue empty */ }
-           else if (status < 200 || status >= 300) {
-               console.warn(`[Autoban] Schedule queue pop returned ${status}: ${outcome?.payload?.error ?? 'unknown'}`);
-           }
-       } catch (e) {
-           console.error('[Autoban] Schedule queue pop failed:', e);
-       }
-       this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-       this._postAutobanState();
-   }
-   ```
+   Nothing in this plan's surviving scope touches the run-sheet tick. Steps 1-4
+   (the `custom` source restore, round-trip preservation for existing jobs on
+   ~4,000 installs, and the survivor-runner filter widening) and steps 6-8 are
+   independent of it and remain in scope.
 
 6. **Do not add pacing-mode awareness anywhere in the scheduler.** The precondition is "is this team busy", which is true or false regardless of what is pacing the team. A special case per pacing mode would reintroduce the coupling this plan deletes.
 
@@ -224,12 +193,11 @@ Key risks: (1) the round-trip merge in `setSchedulerConfig` is the data-loss gat
 2. **`setSchedulerConfig` preserves unknown-source jobs.** Write an unrelated scheduler setting and assert the `comms`/`board-batch` records are still in the file afterward. This is the data-loss gate.
 3. **Round-trip a custom job** through create → save → reload → edit → save, asserting nothing is lost and unknown fields survive.
 4. **The one-time notice does not reappear**, and a workspace that already latched `customJobs.dropped` is reset.
-5. **Busy target skips.** A run-sheet tick whose team is mid-run (a card in `LEAD CODED`/`CODER CODED`/`INTERN CODED` with a `dispatchedTerminal`) does not dispatch, does not error, is not disabled, and fires normally on the next tick once the team is free.
-6. **Free target fires.**
-7. **Concurrent jobs on different clocks both fire in the same tick window** — e.g. a survivor job (fetch-plans, on the survivor timer) and a run-sheet dispatch tick (on the autoban timer) against a free team. This is the test asserting there is no global exclusivity between the two timer mechanisms.
-8. **A non-dispatching survivor job is never blocked by a busy team.** The busy-target check is only in `_scheduleQueuePop`, not in `_tickSurvivorSchedulerJobs`.
-9. **One card per fire.** Assert a single dispatch per tick with the `batchSize` loop gone, and that the interval and cron still schedule as before.
-10. **No confirmation dialogs** anywhere in the custom-job UI.
+5. **A restored custom job runs on the survivor timer.** Assert a `custom` job with a `promptOverride` is executed by `_tickSurvivorSchedulerJobs`, and that one with an empty `promptOverride` is a silent skip, not an error.
+6. **A non-dispatching survivor job is never blocked by a busy team.** Custom, `fetch-plans` and `reconcile` all run prompts in terminals; none goes through `dispatchNextFromQueue`, so a team mid-run does not gate them.
+7. **No confirmation dialogs** anywhere in the custom-job UI.
+
+> **Removed with step 5:** the former tests 5-7 and 9 (busy-target skip, free-target fire, two-clock concurrency, one-card-per-fire) all asserted `_scheduleQueuePop` behaviour. That function is deleted by `retire-autoban-and-batch-size.md`, so those assertions would be red gates against absent code. The busy-target property they covered is owned and tested by `dispatchNextFromQueue`'s critical section, not by this plan.
 
 > **Note:** Per session directives, `npm run compile` and automated tests are NOT executed during this planning run. The checks above remain written down for the implementer to run.
 

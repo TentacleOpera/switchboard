@@ -97,9 +97,13 @@ for the connections panel (`browser-panel-verb-routing.test.js:165`) omits
 `TASKVIEWER_VERBS`, so it flags the verb as unreachable when the runtime
 dispatches it correctly. `staging-column` fails because commit `684643c3` removed
 the **entire `runSheet` block** from `kanban.html` — the declaration, the
-`sourceColumn: 'STAGING'` entry, and the `forEach` rendering loop — not just the
-one field. Both are in CI, and a plan that finishes missions while two gates are
-red cannot demonstrate it finished anything.
+`sourceColumn: 'STAGING'` entry, and the `forEach` rendering loop. That block
+rendered the autoban schedule's steps, and `retire-autoban-and-batch-size.md`
+deletes that schedule, so the removal was the retirement landing early rather
+than a regression. The gate is cleared by **deleting the stale assertion**
+(`staging-column-contract.test.js:222-232`), not by restoring schedule chrome.
+Both are in CI, and a plan that finishes missions while two gates are red cannot
+demonstrate it finished anything.
 
 ### Root Cause
 
@@ -263,7 +267,7 @@ multi-stream launch; (4) retiring `feature_worktree_mode` deletes
 (5) **the `copyTextToClipboard` red gate is a test-reachable-set omission, not a
 routing defect** — fixing the route is a no-op; the test at
 `browser-panel-verb-routing.test.js:165` needs `...TASKVIEWER_VERBS` added;
-(6) **the `runSheet` red gate requires restoring a ~15-line block, not one line**
+(6) **the `runSheet` red gate is cleared by deleting the assertion, not by restoring the block**
 — commit `684643c3` deleted the entire rendering loop. Mitigations: fix
 `_refreshBoardImpl` first (item 1), assert interception order (item 2), assert
 one derivation and no stored state (items 3 and 7), preserve all surviving
@@ -496,22 +500,25 @@ holding a stashed prior value still get it restored, because the drain survives.
 > **Reason:** `copyTextToClipboard` IS reachable on `/connections/verb`. The connections route at `LocalApiServer.ts:7153` checks three allowlists in order: `SETUP_VERBS`, `PLANNING_VERBS`, `TASKVIEWER_VERBS`. `copyTextToClipboard` is in `TASKVIEWER_VERBS` (line 7174 dispatches to `_handleTaskViewerVerb`, which has `case 'copyTextToClipboard'` at line 15215). The verb works at runtime. The TEST is wrong: `browser-panel-verb-routing.test.js:165` defines the connections panel's reachable set as `new Set([...SETUP_VERBS, ...PLANNING_VERBS])`, omitting `...TASKVIEWER_VERBS`. The test flags `copyTextToClipboard` as an offender because it is not in the test's reachable set, not because it is unreachable on the route. "Route it" solves a problem that does not exist.
 > **Replaced with:** Add `...TASKVIEWER_VERBS` to the connections panel's reachable set in the test.
 
-> **Superseded:** "restore `sourceColumn: 'STAGING'` in the autoban schedule run sheet, removed by `684643c3`."
-> **Reason:** Commit `684643c3` removed the entire `runSheet` block — the `const runSheet = [{ sourceColumn: 'STAGING', headRole: 'coding' }]` declaration, the `forEach` rendering loop that drew the schedule steps in the panel, and all associated DOM construction. "Restore one line" leaves the test still failing at the `runSheet` body extraction (`staging-column-contract.test.js:227`), because `const runSheet = [` does not exist either. The fix restores a ~15-line rendering block, not a single field.
-> **Replaced with:** Restore the entire `runSheet` block (declaration + `forEach` rendering loop) that commit `684643c3` deleted from `kanban.html`. The test at `staging-column-contract.test.js:222-232` asserts both `sourceColumn: 'STAGING'` exists AND that no `sourceColumn: 'CREATED'` or `sourceColumn: 'PLAN REVIEWED'` entries appear in the `runSheet` body — both must pass.
+> **Superseded (twice):** first "restore `sourceColumn: 'STAGING'` in the autoban schedule run sheet, removed by `684643c3`", then "restore the entire `runSheet` block (declaration + `forEach` rendering loop)".
+> **Reason:** Both versions restore a renderer for a feature being deleted. The `runSheet` block drew *the steps the autoban schedule walks*, and `retire-autoban-and-batch-size.md` deletes the queue schedule in full — the clock, `batchSize`, `complexityFilter`, `routingMode`, `rules`, and its `kanban.html` surfaces (that plan records the panel which fed `setAutomationMode` as "already deleted (kanban.html:12278)"). Commit `684643c3` removing the block was the retirement arriving early, not a regression. Restoring ~15 lines of schedule chrome so a contract test goes green, while another plan deletes the schedule, is dead work — and it puts a deleted surface back into the file that `retire-the-agent-tabs-from-kanban-html.md` is also thinning.
+> **Replaced with:** **Retire the assertion, not the code.** Delete the `runSheet` assertions at `staging-column-contract.test.js:222-232`. They pin the shape of a schedule renderer that is being removed; keeping them forces the restoration of code no other plan wants. Every other assertion in that contract file stays.
 
 **Logic:** Fix the `browser-panel-verb-routing` test by adding
 `...TASKVIEWER_VERBS` to the connections panel's reachable set at line 165:
 `new Set([...SETUP_VERBS, ...PLANNING_VERBS, ...TASKVIEWER_VERBS])`. This matches
-the server's actual routing (which already checks all three). Separately,
-restore the entire `runSheet` block (the `const runSheet = […]` declaration and
-its `forEach` rendering loop) that commit `684643c3` removed from `kanban.html`.
-The block is the autoban schedule's visual run sheet — it renders the steps the
-schedule walks, and the `staging-column` contract test asserts its shape.
+the server's actual routing (which already checks all three). Separately, delete
+the `runSheet` assertions at `staging-column-contract.test.js:222-232` — do **not**
+restore the `runSheet` block in `kanban.html`. Those assertions pin the shape of
+the autoban schedule's visual run sheet, and `retire-autoban-and-batch-size.md`
+deletes that schedule; the block's removal in `684643c3` was the retirement
+landing early.
 
-**Edge Cases:** None. The first is a test correction (the runtime is already
-correct). The second is a block restoration (the run sheet is display-only; no
-behaviour depends on it beyond the test's structural assertion).
+**Edge Cases:** Both are test corrections; neither changes runtime behaviour. The
+run sheet was display-only, so nothing depends on it beyond the assertion being
+removed. If `retire-autoban-and-batch-size.md` lands first it will have deleted
+these assertions already — check before editing, and treat an absent assertion as
+done, not as a miss.
 
 ### Migration
 
@@ -610,9 +617,9 @@ the DB, unread.
   posts them.
 - **CI is green:** `browser-panel-verb-routing` passes after adding
   `...TASKVIEWER_VERBS` to the connections panel's reachable set (test fix, not
-  a routing change). `staging-column` passes after restoring the entire
-  `runSheet` block (declaration + `forEach` rendering loop), not just the
-  `sourceColumn: 'STAGING'` field.
+  a routing change). `staging-column` passes after **deleting** the `runSheet`
+  assertions at `:222-232` — not by restoring the block, which belongs to the
+  schedule that `retire-autoban-and-batch-size.md` removes.
 
 ### Manual Verification
 

@@ -64,7 +64,7 @@ None.
 ## Dependencies
 
 - Independent of the other subtasks in this feature, though it should land first: the instructions-column plan establishes the *correct* orchestrator trigger, and removing the incorrect automatic one first keeps the two from being confused.
-- **Related, not blocking: `staging-column-replaces-dispatch-view.md`.** It removes the DISPATCH column this path stages into and proposes removing the `stageForQueue` verb. That verb has a live non-UI caller — `onStageForQueue` at `KanbanProvider:2593`, the remote staging dep — so it must be retargeted rather than removed. Whichever lands second must not strand the other.
+- **Resolved, not blocking.** The DISPATCH-to-STAGING change this clause was waiting on **has landed** (commit `52404992`: a real `STAGING` column replaced the `DISPATCH` display mode), and its stale successor `feature_plan_20260811103000_staging-flag-replaces-dispatch-column.md` has been retired and deleted. `stageForQueue` was **not** removed: it survives and now stages to `STAGING`, and its live non-UI caller `onStageForQueue` (`KanbanProvider:2593`, the remote staging dep) is intact. So there is no sequencing to negotiate and no verb to retarget — stage to `STAGING` and treat the verb as stable.
 
 ## Adversarial Synthesis
 
@@ -87,7 +87,7 @@ Field removal from a shipped config blob. Read-and-ignore rather than reject, an
 
 ## Verification Plan
 
-1. **Staging wakes nobody.** Stage several cards via the remote path and confirm no Orchestrator terminal is created. Note that `staging-column-replaces-dispatch-view.md` replaces the DISPATCH display mode with a real STAGING column and makes `mode: 'queue'` unnecessary — if that plan has landed, stage by mapping a provider list to STAGING rather than by flipping a mode. The assertion is unchanged either way: staging is mechanical and must wake no agent.
+1. **Staging wakes nobody.** Stage several cards via the remote path and confirm no Orchestrator terminal is created. `STAGING` is a real column at HEAD, which makes `mode: 'queue'` unnecessary — so stage by mapping a provider list to `STAGING` rather than by flipping a mode. (This was previously conditional on another plan landing; it has, so the conditional is removed.) The assertion is unchanged: staging is mechanical and must wake no agent.
 2. **The queue still drains.** Confirm the head pulls staged cards via `queue/next` in `queue_position` order, unchanged.
 3. **Both orchestrator entry points still work.** The AUTOMATION tab button, and `POST /kanban/orchestration/start`.
 4. **Legacy config is tolerated.** Load a stored blob containing `queueSequencing: true` plus an unrecognised sibling key; confirm no crash, the field is ignored, and the sibling survives a subsequent write.

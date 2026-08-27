@@ -2,6 +2,13 @@
 
 ## Goal
 
+> **DISPATCH is retired — no migration, no compat arm.** The `DISPATCH` display mode was
+> replaced by a real `STAGING` column in commit `52404992`. At HEAD there are **zero**
+> `'DISPATCH'` references in `src/` (`kanban.html` included), `DISPATCH` is not in
+> `VALID_KANBAN_COLUMNS`, and no card is in it. The feature never shipped to users, so
+> there is nothing to migrate and no legacy arm to carry: write `STAGING` only, and do
+> not add a `|| 'DISPATCH'` fallback, an alias normaliser, or a read-time coercion.
+
 Make a card advanced from the **Planned** column (or the Dispatch view of it) via a copy-prompt button jump to its new column *on click*, the way every other column's copy-prompt button still does — instead of sitting still until the backend's DB write comes back.
 
 > **Line-citation sweep:** every `file:line` in this plan was re-verified against `d9d0a9d3` during the improve pass. The pre-improve draft's `kanban.html` citations were ~70 lines low and its `KanbanProvider.ts` citations ~100–650 lines low (the code was unchanged — only the offsets had drifted). All citations below are current.
@@ -118,7 +125,7 @@ None.
 | **Custom user column inserted directly after Planned — `moveSelected` / `moveAll`** | Backend still complexity-routes (`:9655`, `:9799`). Predict the routed coder lane, **not** `nextCol`. |
 | **Custom user column inserted directly after Planned — `promptSelected` / `promptAll`** | Backend moves the whole batch to `nextCol` (`:10007`, `:10116`). Predict `nextCol` — the plain non-routed path, which is now *correct* rather than suppressed. |
 | Custom column after Planned that resolves **no** dispatch spec (role-less, `dragDropMode: 'cli'`) | `_resolveKanbanDispatchSpec` returns `null` (`:6475-6477`), so `promptSelected` falls into the complexity branch (`!dispatchSpec`) while the webview predicts `nextCol`. Residual one-time misprediction; the `moveCards` delta corrects it and the guard absorbs the render. Accepted — the alternative (suppressing all custom-column advances) costs the common case to protect a configuration with no role. |
-| Dispatch view, per-card copy prompt on a `DISPATCH` card | Same treatment as Planned (`column === 'DISPATCH'` is already normalized to `PLAN REVIEWED` for the walk at `kanban.html:7503-7506`). Source-column count decrement still bills the Planned container via `resolveDisplayColumn('DISPATCH')` (`:5954-5956`). |
+| Staging column, per-card copy prompt on a `STAGING` card | Same treatment as Planned. `STAGING` is a real column at HEAD (`agentConfig.ts:154`, `kind: 'staging'`), not a display mode of Planned, so it has its own container and its own count — the old `resolveDisplayColumn('DISPATCH')` billing of the Planned container no longer applies. Verify the source-column decrement against the STAGING container. |
 | Backend confirms a **different** lane than predicted | `case 'moveCards'` (`:8521`) computes an entry only when `card.column !== targetCol` (`:8535`), then `moveCardElements` relocates within the same DOM container — a ts-ordered re-insert, no cross-column motion. `resolveOptimisticGuard` (`:8558`) clears the ledger. |
 | Backend refuses the move | `moveCardsFailed` (`:8579`) reverts per-card to its own `sourceColumn`. **Requires Proposed Change 5** — the prompt arms do not emit this delta today. |
 | `dynamicComplexityRoutingEnabled === false` | Backend returns `'lead'` for everything (`KanbanProvider.ts:7409-7411`). `getNextColumn('PLAN REVIEWED')` walks to the first *listed* coded column, which is **not** necessarily `LEAD CODED`. Predict `LEAD CODED` explicitly (degraded to the nearest visible lane) in this branch — the predictor owns it, so the call site must **not** gate on the flag. |
@@ -210,7 +217,7 @@ function roleForComplexityScore(score) {
 }
 
 /**
- * Predict the coder column a PLAN REVIEWED / DISPATCH advance lands in.
+ * Predict the coder column a PLAN REVIEWED / STAGING advance lands in.
  * Mirrors resolveRoutedRole (including the pair-programming intern→coder bypass)
  * and _validateOrDegradeCodingColumn.
  *
@@ -237,7 +244,7 @@ function predictComplexityRoutedColumn(card) {
 }
 
 /**
- * Per-card optimistic entries for a forward advance. PLAN REVIEWED / DISPATCH
+ * Per-card optimistic entries for a forward advance. PLAN REVIEWED / STAGING
  * cards are complexity-routed per card by the backend, which used to mean NO
  * optimistic move at all. Each card now gets its own predicted target, and
  * uncertain routes move only when every coder lane shares one container.
@@ -251,7 +258,7 @@ function predictComplexityRoutedColumn(card) {
 function optimisticEntriesForAdvance(ids, column, nextCol, { copiesPrompt = false } = {}) {
     const plainEntries = () => (nextCol ? ids.map(id => ({ id, targetColumn: nextCol })) : []);
 
-    const routedSource = (column === 'PLAN REVIEWED' || column === 'DISPATCH');
+    const routedSource = (column === 'PLAN REVIEWED' || column === 'STAGING');
     if (!routedSource) return plainEntries();
 
     // Prompt arms defer to a custom next column; move arms never do.
@@ -278,7 +285,7 @@ function optimisticEntriesForAdvance(ids, column, nextCol, { copiesPrompt = fals
 > **Reason:** `routingMapConfig` is a *display* default when no custom map is persisted, and it disagrees with the backend's real fallback (`scoreToRoutingRole`) at score 4 — coder in the webview, intern in the backend. The predictor would report `certain: true` on a wrong lane for every score-4 card on a stock install.
 > **Replaced with:** `roleForComplexityScore(score)`, which uses the persisted map only when one has actually arrived (`routingMapIsCustom`) and otherwise mirrors `complexityScale.scoreToRoutingRole` verbatim.
 
-> **Superseded:** the pre-improve `optimisticEntriesForAdvance(ids, column, nextCol)` treated every `PLAN REVIEWED` / `DISPATCH` advance as complexity-routed, ignoring `nextCol` entirely.
+> **Superseded:** the pre-improve `optimisticEntriesForAdvance(ids, column, nextCol)` treated every `PLAN REVIEWED` / `STAGING` (then `DISPATCH`) advance as complexity-routed, ignoring `nextCol` entirely.
 > **Reason:** `promptSelected` (`:10007`) and `promptAll` (`:10116`) check `dispatchSpec?.source === 'custom-user'` **before** the complexity branch, so with a custom user column inserted after Planned they move the whole batch to `nextCol`. The prediction would send the card to a coder lane instead — a cross-container bounce, the one failure display-equivalence cannot hide.
 > **Replaced with:** a `copiesPrompt` option that falls back to the plain per-card `nextCol` entries when the caller copies a prompt and `nextCol` is not a built-in coded lane. This also makes the custom-column advance move optimistically (correctly) instead of being suppressed.
 
@@ -390,7 +397,7 @@ Replace the whole suppression block with the shared predictor:
 // is exact OR every visible coder lane renders into one container, in which case
 // a wrong lane cannot be seen. Only a genuinely ambiguous route (expanded coder
 // lanes + unusable score) declines the move.
-if (column === 'PLAN REVIEWED' || column === 'DISPATCH') {
+if (column === 'PLAN REVIEWED' || column === 'STAGING') {
     const entries = optimisticEntriesForAdvance([sessionId], column, nextCol, { copiesPrompt: true });
     nextCol = entries.length ? entries[0].targetColumn : null;
 }
@@ -471,10 +478,13 @@ assert.strictEqual(/dynamicComplexityRoutingEnabled/.test(predictBody), true,
 
 // 2b. The routing-disabled case must NOT be re-gated at the call site.
 assert.strictEqual(
-    /column === 'DISPATCH'\)\s*&&\s*dynamicComplexityRoutingEnabled/.test(kanbanHtml),
+    /column === 'STAGING'\)\s*&&\s*dynamicComplexityRoutingEnabled/.test(kanbanHtml),
     false,
     'runCopyPrompt must not gate the predictor on dynamicComplexityRoutingEnabled — the predictor handles it'
 );
+// NOTE: this regex MUST name STAGING, not the retired DISPATCH. `kanban.html` has zero
+// 'DISPATCH' occurrences at HEAD, so a DISPATCH-spelled negative assertion passes
+// vacuously — green whether or not the defect it guards against is present.
 
 // 3. Lane visibility comes from lastVisibleAgents, not `columns`
 //    (_filterDynamicColumns keeps a hidden column while it holds cards).

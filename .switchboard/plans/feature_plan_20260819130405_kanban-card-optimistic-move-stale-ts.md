@@ -60,7 +60,7 @@ The "sometimes" aspect: if the card's old `ts` happens to be the highest in the 
 
 - **Feature cascade moves:** `cascadeFeatureByPlanId` (line 6577) also sets `updated_at = now` (line 6588, UPDATE at 6597-6600), so the same timestamp-bump principle applies if the cascade triggers an optimistic move through `moveCardsOptimistically`.
 
-- **DISPATCH queue inserts:** `moveCardElements` already has a special `queueInsert` path for DISPATCH that inserts by `queue_position` instead of `ts` (lines 6743-6767). The fix must NOT alter this path — only the `ts`-descending insert path (lines 6768-6773) is affected. Bumping `dataset.ts` is harmless for queue-ordered targets because the `queueInsert` branch ignores `dataset.ts` entirely.
+- **STAGING queue inserts:** `moveCardElements` already has a special `queueInsert` path that inserts by `queue_position` instead of `ts`. At HEAD it keys on `STAGING`, not the retired `DISPATCH`: `const queueInsert = (domTargetColumn === 'STAGING')` (`kanban.html:7668`) — the plan's original line numbers (6743-6767) have drifted. The fix must NOT alter this path; only the `ts`-descending insert path is affected. Bumping `dataset.ts` is harmless for queue-ordered targets because the `queueInsert` branch ignores `dataset.ts` entirely.
 
 - **Board signature stability:** `buildBoardSignature` includes `lastActivity` (line 7024). Updating `dataset.ts` and the `currentCards` model's `lastActivity` in the optimistic path will change the signature.
 
@@ -135,7 +135,7 @@ function moveCardsOptimistically(sessionIds, sourceColumn, targetColumn) {
     // column advance always sets updated_at = NOW (updateColumnByPlanFileWithReason,
     // cascadeFeatureByPlanId), so the optimistic move must mirror that — otherwise
     // moveCardElements inserts by the stale dataset.ts and the card lands in the
-    // middle of the target column instead of the top. The DISPATCH queue insert
+    // middle of the target column instead of the top. The STAGING queue insert
     // path in moveCardElements ignores ts (it sorts by queue_position), so this
     // bump is harmless for queue-ordered targets.
     //
@@ -188,7 +188,7 @@ function moveCardsOptimistically(sessionIds, sourceColumn, targetColumn) {
 
 3. **Regression — column-header advance:** Click the advance arrow on a column header to move selected cards forward. Cards should appear at the top of the target column immediately (same `moveCardsOptimistically` path).
 
-4. **Regression — DISPATCH queue ordering:** Stage cards into the DISPATCH queue in a specific order. The queue should still render by `queue_position` ascending, NOT by timestamp. The `dataset.ts` bump must not affect queue-ordered inserts (the `queueInsert` branch at line 6743 ignores `dataset.ts`).
+4. **Regression — STAGING queue ordering:** Stage cards into the STAGING queue in a specific order. The queue should still render by `queue_position` ascending, NOT by timestamp. The `dataset.ts` bump must not affect queue-ordered inserts (the `queueInsert` branch at `kanban.html:7668` ignores `dataset.ts`).
 
 5. **Regression — source column count:** After an optimistic move, verify the source column's card count badge decremented correctly (not the target column's). This confirms the `cardData.column` update remains after `moveCardElements`.
 

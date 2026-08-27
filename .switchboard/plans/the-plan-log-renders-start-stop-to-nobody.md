@@ -6,7 +6,11 @@
 
 Retire the log overlay, narrow the event vocabulary to the one question the table has ever actually answered — *why did this card move?* — and retune retention to match. The table stays; the panel and the noise go.
 
-> **Flagged for user decision (architecture review):** The Goal says "narrow the event vocabulary." `PipelineOrchestrator.getNextStage()` (`src/services/PipelineOrchestrator.ts:25`) reads `action: 'start'` events to determine the last workflow and route the next pipeline stage. Stopping `start`/`stop` writes would break pipeline orchestration — every plan would route to Planner. The improve-pass proposes Alternative C below (keep the vocabulary, add forensic columns) as a way to achieve the Goal's intent without breaking the pipeline. The user should decide whether to accept Alternative C or insist on the original vocabulary narrowing (which requires a separate plan to migrate `PipelineOrchestrator` first).
+> **Decided: Alternative C.** Keep the `start`/`stop` vocabulary; add `from_column`/`to_column`/`actor`/`reason` as real columns. Retire the overlay and retune retention as written.
+>
+> The original objection cited `PipelineOrchestrator.getNextStage()` (`PipelineOrchestrator.ts:25`) as the reader that vocabulary narrowing would break. **That class is being deleted** by `scheduling-lives-in-two-places-only.md` — no webview posts any of its five verbs, its run-sheet callback is never wired, and its state broadcast has no consumer. So that half of the objection expires and no "migrate PipelineOrchestrator first" plan is needed.
+>
+> **But a second reader survives, and it decides this.** `KanbanProvider.ts:7482`, inside `_advanceSessionsInColumn`, reads the last run-sheet event and returns early when it is `{ workflow, action: 'start' }` — the guard that stops a duplicate advance. Run sheets are hydrated from `plan_events` (`SessionActionLog.ts:443`: "merges plan_events + plans table metadata"), so this is a genuine `plan_events` reader on a live board-advance path, and nothing retires it. Stopping `start` writes would silently re-enable duplicate advances. Alternative C is therefore the approach, on the strength of that one reader alone.
 
 ### Root Cause Analysis
 
@@ -59,11 +63,9 @@ The table has paid for itself exactly once, and not through the UI. `kill-derive
 
 ## User Review Required
 
-**Yes — one decision.** Deleting the overlay is settled — it has one entry point, renders two distinct strings across 8,565 rows, and no second consumer exists. But the vocabulary narrowing (§3) conflicts with `PipelineOrchestrator`'s dependency on `action: 'start'` events. The user must choose between:
-- **Alternative C (recommended):** Keep the existing `start`/`stop` vocabulary, add `from_column`/`to_column`/`actor`/`reason` as real columns on existing events. The forensic query gets its columns; the pipeline keeps its data. No vocabulary migration needed.
-- **Original approach:** Stop writing `start`/`stop`, write `card_move` only. Requires a separate plan to migrate `PipelineOrchestrator.getNextStage()` to read from a different source first.
+**None.** Deleting the overlay is settled — one entry point, two distinct strings across 8,565 rows, no second consumer. The vocabulary question is settled too: **Alternative C**, decided above. Keep `start`/`stop`, add `from_column`/`to_column`/`actor`/`reason` as real columns.
 
-Proceeding on the assumption that **Alternative C** is accepted (keep vocabulary, add columns), because it achieves the forensic goal without breaking a live pipeline reader.
+The deciding fact is `KanbanProvider.ts:7482`'s duplicate-advance guard, which reads `action: 'start'` from a `plan_events`-hydrated run sheet on a live board-advance path and is not retired by anything. `PipelineOrchestrator` — the reader the original objection named — is deleted by `scheduling-lives-in-two-places-only.md`, so it is not a factor and needs no migration plan.
 
 ## Complexity Audit
 
@@ -77,7 +79,7 @@ Proceeding on the assumption that **Alternative C** is accepted (keep vocabulary
 ### Complex / Risky
 
 - **The vocabulary change is gated on `kill-derivekanbancolumn…` landing first.** `deriveKanbanColumn` reads the `move-to-*` / `reset-to-*` slugs out of `workflow` at five production call sites (not six — `KanbanProvider.ts:8336` is a comment, not a call): `TaskViewerProvider.ts:5788`, `KanbanProvider.ts:7370`, `:7396`, `:7424`, `:7780`. Narrowing or re-shaping events while those readers are live changes board column resolution. That plan's §4 removes them; this plan must not start until it has.
-- **`PipelineOrchestrator` reads `action: 'start'` events.** `PipelineOrchestrator.ts:25` filters events by `action === 'start'` to determine `lastWorkflow`, which routes the next pipeline stage (no starts → Planner, `Improved plan` → Lead Coder, `reviewer-pass` → Acceptance Tester). Stopping `start`/`stop` writes breaks this. Alternative C (keep vocabulary, add columns) avoids this risk entirely.
+- **One surviving reader of `action: 'start'`.** `KanbanProvider.ts:7482` (`_advanceSessionsInColumn`) returns early when the last run-sheet event is `{ workflow, action: 'start' }`, preventing a duplicate advance; run sheets hydrate from `plan_events` (`SessionActionLog.ts:443`). Stopping `start` writes re-enables duplicate advances silently. Alternative C avoids it. (`PipelineOrchestrator.ts:25` was the other reader and is deleted by `scheduling-lives-in-two-places-only.md` — not a factor.)
 - **`getRunSheet` has ~17 call sites and only some of them are the overlay.** Five callers use the sheet purely for `planFile` / `completed` (both exist on `plans`): `TaskViewerProvider.ts:5594`, `:17719`, `:19269`, `:20586`, and `KanbanProvider.ts:8751`. Those must be repointed at the `plans` row, not deleted, or unrelated paths lose a fallback. See §2 for the full enumeration.
 - **`plan_events` write sites feed the plan-file `events[]` mirror as well as the DB.** `SessionActionLog` migrates events from session files into `plan_events` (`KanbanDatabase.ts:9875`, `migrateSessionEvents`). Changing what is written affects both surfaces; the mirror is not in scope here and must keep working.
 - **CSS class reuse in `project.html`.** `.kanban-log-overlay`, `.kanban-log-modal`, and `.kanban-log-close` are reused by `#new-feature-modal` (line 1546) and `#feature-add-subtask-overlay` (line 1569). Removing these CSS classes from `project.html` would break both modals. They must NOT be removed from `project.html`. They CAN be removed from `planning.html` (only used by the dynamic overlay). Dead copies also exist in `tickets.html` and `design.html` — harmless but should be cleaned up.
@@ -174,7 +176,7 @@ Keep `payload` for anything unstructured. The `event_type` column stays as-is (`
 
 Old rows are left alone: they carry NULL `from_column`/`to_column`/`actor`/`reason` and read as "pre-forensic-columns". Retention ages them out.
 
-**If the user insists on the original vocabulary narrowing:** `PipelineOrchestrator.getNextStage()` must be migrated to read `lastWorkflow` from a different source (e.g., `plans.routed_to` or a new `last_workflow` column on `plans`) before `start`/`stop` writes stop. That is a separate plan.
+**If the vocabulary narrowing is ever revisited:** the only reader to migrate is `KanbanProvider.ts:7482`'s duplicate-advance guard — it needs a different dedupe basis (e.g. a `last_workflow` column on `plans`) before `start` writes stop. `PipelineOrchestrator` is not part of that work; it is deleted by `scheduling-lives-in-two-places-only.md`. That migration is a separate plan and is not required for Alternative C.
 
 ### 4. Make retention actually reclaim, and wire it in both hosts
 

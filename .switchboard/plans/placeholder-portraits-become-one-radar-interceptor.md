@@ -182,6 +182,26 @@ a CSS rule on `.teams-flow-node` (see Proposed Changes).
   copy. The deviation is intentional.
 
 ### `src/webview/kanban.html` — the placeholder `<defs>` block (3354–3417)
+
+> **Sequencing — two plans move this block; neither has landed.** `kanban.html` is
+> the only home for these symbols today (`agent-control.html` does not exist yet),
+> so this edit is correct as written and should be made here. But
+> `extract-agent-control-into-its-own-panel-file.md` (PLAN REVIEWED) copies the
+> Agents/Teams/Prompts tabs into a new `agent-control.html`, and
+> `retire-the-agent-tabs-from-kanban-html.md` (PLAN REVIEWED) then deletes them
+> from `kanban.html` along with the `data-view="agent-control"` projection.
+>
+> **If this plan lands first** (the expected order — it is a self-contained art
+> swap), the extraction carries the single `portrait-agent` jet symbol forward and
+> there are no five portraits left to duplicate. Say so in the extraction's diff
+> review rather than assuming it.
+>
+> **If the extraction lands first**, this block exists in two files and the art
+> swap must be applied to both, or the new panel ships the retired portraits and
+> the retirement plan then deletes the corrected copy. Check for
+> `src/webview/agent-control.html` before starting; if it exists, treat it as a
+> second target of this same section, not as a replacement for it.
+
 - **Context:** Five near-identical symbols, hardcoded cyan, one per role.
 - **Logic:** Delete `portrait-planner`, `portrait-lead`, `portrait-coder` and
   `portrait-reviewer`. Rewrite `portrait-agent` as the same flat jet geometry with

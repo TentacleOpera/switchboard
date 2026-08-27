@@ -1,10 +1,23 @@
-# Cloud database presets silently abort on the standalone host — the whole flow hangs off stubbed dialogs
+# A database path change reports success on the standalone host when the config write is a no-op, and three dialog branches are dead
 
 ## Goal
 
-Make choosing a Google Drive / Dropbox / iCloud database location either work or fail **loudly and actionably** on the standalone host, instead of returning silently and leaving the user with a Setup control that appears to do nothing.
+Stop `handleSetPresetDbPath` reporting `{success:true}` for a database relocation that did not happen, and give its three non-interactive dialog branches a real failure path on the standalone host. The defect is that a host-seam stub returns `undefined` and the method reads that as consent, so a switch that never occurred is reported as done — a confident lie, on a control that moves where the board lives.
 
-"Work" here has a stricter meaning than the original draft assumed: on the standalone host the success path's config write is itself a no-op, so this plan must also stop the method reporting success for a switch that never happened. See *The third defect* below.
+> **Scope changed — the cloud presets are being retired, the defect underneath is not.**
+>
+> **Was:** "Make choosing a Google Drive / Dropbox / iCloud database location either work or fail loudly and actionably on the standalone host."
+>
+> **Why:** `retire-cloud-file-sync-db-path-presets.md` (PLAN REVIEWED) deletes the Google Drive, Dropbox and iCloud presets outright, calling the mechanism "a corruption generator" — every write rewrites the whole database file, and a sync client racing that rename is precisely the "stale image restored from a `.tmp`/backup" state the schema layer carries a permanent shim for. Making a retired preset fail politely is dead work. Neither plan flagged the other; this block is that reconciliation.
+>
+> **Now:** the same three defects, scoped to **any** database path change rather than the cloud branch. All of it survives the retirement, because none of it is preset-specific:
+> 1. **The confident lie.** The success path's config write is a shim no-op on the standalone host, and the method returns success anyway. This is the load-bearing defect and it applies to Edit Path and Use Local DB exactly as it did to the presets.
+> 2. **Three dead dialog branches**, not one — the cloud branch, the non-cloud "Create it?" prompt, and the migration-conflict prompt. The last is the worst: it silently switches the DB anyway.
+> 3. **The capability-flag declaration** must land on the seam that is actually wired. `createHeadlessHostSeams` is **not** wired (its own docstring says so); `bootstrap.ts:659` injects `createVscodeHostSeams`. A flag declared in the unwired bundle compiles, tests green, and leaves the live standalone host unfixed.
+>
+> **Drop from scope:** the Google Drive `~/Library/CloudStorage` account scan and `<entry>/My Drive/Switchboard/kanban.db` resolution, the Dropbox and iCloud path resolution, and any verification step that selects a cloud preset. Read the sections below with the cloud preset as the *worked example* of the defect, not as the thing being fixed. Where a step is preset-only, it goes; where it is about the dialog seam or the success report, it stays.
+>
+> **Sequencing:** if `retire-cloud-file-sync-db-path-presets.md` lands first, `handleSetPresetDbPath` may be gone entirely — in that case the remaining work is the same guard on whatever survives as the path-change entry point (`editDbPath` at `TaskViewerProvider.ts:15818`, `setLocalDb` at `:15814`). Check which entry points exist before starting.
 
 ## Goal — problem analysis and root cause
 
