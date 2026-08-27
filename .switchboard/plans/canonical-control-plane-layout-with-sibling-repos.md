@@ -20,6 +20,7 @@ Switchboard-Agents/          ← control plane. Agents start here.
 ├── Switchboard/             ← code repo                 (own git)
 ├── Switchboard-plans/       ← plans + board state       (own git)
 ├── Switchboard-remote/      ← instructions + receipts   (own git)
+├── Switchboard-backups/     ← plan + DB backups         (plain folder, or a repo)
 └── Switchboard-logs/        ← terminal logs             (plain folder, or a repo)
 ```
 
@@ -71,12 +72,12 @@ The rest of that plan stands: `GitStateProvider`, the cursor, the trust guard, t
 **One purpose per sibling means one grant per purpose.** That is the property
 worth the extra folders:
 
-| Party | code | plans | remote | logs |
-|---|---|---|---|---|
-| the user's machine | write | write | **read** | write |
-| a cloud / remote author | — | read | **write** | — |
-| a teammate reviewing code | write | — | — | — |
-| CI on the code repo | write | — | — | — |
+| Party | code | plans | remote | backups | logs |
+|---|---|---|---|---|---|
+| the user's machine | write | write | **read** | write | write |
+| a cloud / remote author | — | read | **write** | — | — |
+| a teammate reviewing code | write | — | — | — | — |
+| CI on the code repo | write | — | — | — | — |
 
 No row is "everything", which is what a branch or a shared repo forces. A
 compromised remote credential can file instructions and cannot read the code, edit
@@ -98,6 +99,39 @@ new plumbing:
   reasons about nested repos; mirror-channels §2 already specified excluding
   managed project subdirectories by name.
 - `BoardSnapshotPublisher` already produces `board.json` / `.md` / `.html`.
+
+**Backups currently live inside the thing they back up.** `dbbackup/` writes to
+`<workspaceRoot>/.switchboard/dbbackup` (`KanbanDatabase.ts:7340`) and the state
+snapshot to `<workspaceRoot>/.switchboard/kanban-state-backup.json` (`:9102`).
+Both are inside the code repo's checkout, so deleting or losing that clone takes
+the backups with it — which is the one scenario a backup exists for. A sibling
+fixes a real weakness rather than tidying a path, and it is also where the storage
+topology plan's *"backups are local always, plus the target when it can hold
+them"* lands: derived from the target, not resolved independently.
+
+**On storing plans as database entries.** Worth doing for *history*, not as the
+medium for *current*. The line, and the reason:
+
+- **A backup's job is to be recoverable without the tool that wrote it.** A plan
+  `.md` is recoverable with `cp` and readable by a human in ten years. A row is
+  recoverable only by code that still understands the schema, which is exactly the
+  code you may be recovering *from*.
+- **Plan identity keys on the file path today.** The importer assigns the id and
+  keys identity by path — plan bodies carry no id line, and one written there is
+  never parsed. So a plan that exists only as a row has no identity under the
+  current model; making rows primary is a change to the identity model, not a
+  storage choice.
+- **Where rows genuinely win is revision history.** One row per revision with a
+  version and a content hash gives "what did this plan say last Tuesday" cheaply,
+  which files cannot without a file per revision. There is precedent in the
+  direction already: the scaffold work moves control-plane definitions into the
+  store as bodies with a version and content hash per row.
+
+So the rule: **the backups store keeps plan files as files, and a revision
+database beside them is additive.** A database may be the only copy of history; it
+must never be the only copy of current. Building that revision store is a separate,
+optional plan — not folded in here, because it has its own schema, its own growth
+profile, and its own recovery story.
 
 **Logs do not need to be a repo, and that is a feature.** A plain folder has no
 history, so retention is deleting files and long retention costs nothing but disk.
@@ -156,6 +190,7 @@ path*", and "*derive Archive placement from the target*"), applied here.
 ```
 controlPlaneRoot/<codeRepoName>-plans      → plans + board state
 controlPlaneRoot/<codeRepoName>-remote     → instructions + receipts
+controlPlaneRoot/<codeRepoName>-backups    → plan + DB backups
 controlPlaneRoot/<codeRepoName>-logs       → logs
 ```
 
@@ -211,6 +246,8 @@ a silent one:
 - no `-plans` → plans and board state stay where they are;
 - no `-remote` → the instruction channel is unavailable; Linear/Notion sync is
   unaffected, since it never used a sibling;
+- no `-backups` → backups stay in `.switchboard/dbbackup/` and
+  `.switchboard/kanban-state-backup.json`, as today;
 - no `-logs` → logs stay in `.switchboard/logs/`, as today;
 - no control plane at all → everything behaves exactly as it does now.
 
@@ -248,6 +285,16 @@ install that ignores this panel is unaffected.
    the control plane.
 9. **Logs as a folder** — logs work with `-logs` as a plain non-git folder; assert
    no git command is run against it. Then as a repo, and assert it is opt-in.
+9a. **Backups survive losing the code checkout** — with `-backups` configured, take
+    a DB backup and a state snapshot, then delete the code repo's `.switchboard/`
+    directory entirely. Assert both backups are still present and still restore. On
+    the current layout that test fails by construction, which is the point of the
+    sibling.
+9b. **Backup throttling and dedupe survive relocation** — `writeDbBackup`'s
+    per-reason throttle and its newest-for-reason dedupe both scan the backup
+    directory (`:7345`). Assert they behave identically against the sibling,
+    including the future-stamped-file case that must read as "no recent snapshot"
+    rather than blocking writes.
 10. **Degradation** — remove each sibling in turn; assert the matching capability
     reports unavailable with a reason, and that the board keeps working.
 11. **Both hosts** — detection, derivation and publishing under the extension host
@@ -256,6 +303,8 @@ install that ignores this panel is unaffected.
 ### Goal Invariants
 
 - The operator sets one path; the rest are derived.
+- Backups outlive the loss of the repository they back up.
+- No plan exists only as a database row.
 - No board data, instruction, receipt or log ever lands under the control plane
   root outside a sibling.
 - Every capability degrades to off with a reason, never to broken.
