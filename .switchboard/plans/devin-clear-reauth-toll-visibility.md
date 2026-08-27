@@ -109,6 +109,12 @@ Content requirements — keep it to roughly two sentences:
   OAuth-backed servers they do not need. Without this the note diagnoses without
   offering a remedy, and the remedy is a one-line config edit.
 
+Say **remove**, never "disable". A `disabled` flag is not universally honoured
+across agents and transports — field evidence has a server marked `disabled: true`
+loading and prompting for OAuth anyway. Deleting the entry is correct regardless
+of whether the flag is supported; advising "disable it" may silently not work and
+sends the reader back into the same confusion this note exists to end.
+
 **Switchboard does not manage agent MCP configuration, and the note must not
 imply otherwise.** The only code touching any MCP config is `src/extension.ts:965-997`,
 which exclusively *deletes* a key named `switchboard` from a fixed path list that
