@@ -23,17 +23,26 @@ treats a successful `git push` as a successful board change will report work it 
 not do. The skill's central instruction is therefore about **not** claiming
 success: a push means the instruction was filed, nothing more.
 
-**And the agent already has the read side.** `switchboard/board` carries
+**And the agent already has the read side.** The private **state repo** carries
 `board.json` with every card's id, topic, column, feature, project, and complexity
-(`BoardSnapshotPublisher.ts`, `BoardCardEntry`). A cloud agent can fetch that ref
-and know the whole board without the extension running — which is exactly what it
-needs to fill `target.planId` correctly instead of guessing a name.
+(`BoardSnapshotPublisher.ts`, `BoardCardEntry`), and the receipts. A cloud agent
+clones it read-only and knows the whole board without the extension running —
+which is exactly what it needs to fill `target.planId` correctly instead of
+guessing a name.
+
+**Two repos, and the agent's access to each is different.** It has **write** on
+the control repo and **read-only** on the state repo. The skill must say so
+plainly, because an agent that assumes write on state will try to push a receipt
+or a board edit, fail, and report the failure as though the instruction failed. It
+did not: filing is the agent's only write, and reading is how it learns the
+outcome.
 
 ### Non-goals
 
 - **The file format and the allowlist** — `board-control-instruction-format-and-executor.md`.
-- **Detection, polling, receipts, and pushing from the user's machine** —
-  `board-control-branch-poller.md`.
+- **Detection, polling, and receipt publishing from the user's machine** —
+  `board-control-repo-poller.md`.
+- **Where board state is published** — `board-state-moves-to-a-private-repo.md`.
 - **A new tool, MCP server, or endpoint.** The agent has git; that is the channel.
 - **Writing plans.** Plan files already flow over git on their own path. This is
   for actions on cards that exist.
@@ -65,8 +74,8 @@ the fallback for having no machine access.
 **Read the board first.**
 
 ```bash
-git fetch origin switchboard/board
-git show origin/switchboard/board:board.json | jq '.cards[] | {plan_id, topic, column}'
+git clone --depth 1 <stateRepoUrl> /tmp/board-state   # read-only for you
+jq '.cards[] | {plan_id, topic, column}' /tmp/board-state/board.json
 ```
 
 Resolve the card to a `plan_id` from this file. **Prefer `planId` over
@@ -84,24 +93,33 @@ an intermittent one.
   unsure whether your last push landed, **reuse the same id** — duplicate
   suppression is what makes that safe, and a new id is what makes it dangerous.
 
-**Push to the control branch**, without touching the working tree:
+**Push to the control repo**, in its own clone, never in your working repo:
 
 ```bash
-git fetch origin switchboard/board-control || true
-# ... write instructions/<id>.json into a temp worktree of the control ref ...
-git push origin HEAD:refs/heads/switchboard/board-control
+git clone --depth 1 <controlRepoUrl> /tmp/board-control
+cp instruction.json /tmp/board-control/instructions/<id>.json
+git -C /tmp/board-control add instructions/<id>.json
+git -C /tmp/board-control commit -m "board control: <id>"
+git -C /tmp/board-control push origin HEAD:main
 ```
 
-The skill spells out the temp-worktree recipe, including the orphan-branch first-
-push case (the ref may not exist yet) and the rule that the agent must never
-`checkout`, `switch`, or commit onto the branch it was working on.
+A separate clone is the whole recipe — no worktrees, no orphan refs, no
+force-push, and no risk to the repo you were working in. The skill states the rule
+directly: never `checkout`, `switch`, `commit`, or push in the repo you are
+working on, and never add a remote to it. The control repo has one writer, so the
+push always fast-forwards; a rejection means someone else is writing to it, which
+is worth reporting rather than retrying past.
 
 **Then read the receipt — do not assume.**
 
 ```bash
-git fetch origin switchboard/board-control
-git show origin/switchboard/board-control:receipts/<id>.json
+git -C /tmp/board-state fetch --depth 1 origin main && git -C /tmp/board-state reset --hard origin/main
+cat /tmp/board-state/receipts/<id>.json
 ```
+
+Receipts live in the **state** repo, which you have read-only. You cannot write
+one, which is the point: the receipt is the machine's word about what happened,
+not yours.
 
 `status` is `applied`, `partial`, `refused`, or `duplicate`. Only `applied` means
 every action you asked for happened. Report `partial` and `refused` to the user
@@ -144,21 +162,27 @@ Documentation and one template file. No code, no state.
 
 ## Verification Plan
 
-1. **End to end, as the agent would** — from a clone with no extension: read
-   `board.json`, write an instruction, push, then run the user-side poller and
-   assert the card moved and the receipt is readable from the branch.
-2. **The template is valid** — feed the shipped `template.json` to the executor's
+1. **End to end, as the agent would** — with no extension and two private repos:
+   read `board.json` from the state clone, file an instruction to the control repo,
+   then run the user-side poller and assert the card moved and the receipt is
+   readable from the state repo.
+2. **Read-only is respected** — assert the documented commands never attempt a
+   write to the state repo, and that a simulated write rejection there is reported
+   as "cannot happen, check your setup" rather than as instruction failure.
+3. **The template is valid** — feed the shipped `template.json` to the executor's
    validator unmodified; assert it parses and requests nothing (every action
    `false`). A shipped template that fails validation is the worst possible first
    experience.
-3. **Every documented command runs** — execute each snippet in the skill against a
-   scratch repo, including the first-push case where the control ref does not yet
-   exist. Snippets that were never run are how a fallback path rots.
-4. **Working tree safety** — follow the skill's recipe on a dirty feature branch;
-   assert the agent's branch, index, and files are untouched.
-5. **Duplicate advice is correct** — follow the "reuse the id if unsure" path:
+4. **Every documented command runs** — execute each snippet against scratch
+   repos, including the first-push case where `instructions/` does not yet exist in
+   a freshly created empty repo. Snippets that were never run are how a fallback
+   path rots.
+5. **Working tree safety** — follow the skill's recipe with the agent's own repo
+   dirty on a feature branch; assert its branch, index, files, and remote list are
+   untouched.
+6. **Duplicate advice is correct** — follow the "reuse the id if unsure" path:
    push the same id twice, assert one application and a `duplicate` status.
-6. **Refusal is legible** — push an instruction with an ambiguous `planName` and
+7. **Refusal is legible** — push an instruction with an ambiguous `planName` and
    assert the receipt names both candidate cards, so the documented "report it
    verbatim" instruction is actually actionable.
 

@@ -6,7 +6,7 @@ Define a single JSON instruction file that names a card and the board actions to
 apply to it, and build the executor that validates one and fires the named
 actions against the board. No git in this plan: the executor takes a parsed
 object and returns a per-action result, so it is fully testable by handing it a
-file. `board-control-branch-poller.md` is what delivers files to it.
+file. `board-control-repo-poller.md` is what delivers files to it.
 
 ### Problem Analysis
 
@@ -19,11 +19,13 @@ unreachable from a cloud VM.
 
 **So the only inbound channel is a file in git, and one already half-exists.**
 `BoardSnapshotPublisher` (`BoardSnapshotPublisher.ts`) publishes `board.json`,
-`board.md`, and `board.html` to the orphan branch `switchboard/board`. Its header
-is explicit that this is *"One-directional, read-only… Sole writer is the
-extension; always overwrite; no diff-ingest, no control"*. This plan and its
-siblings add the missing direction — deliberately, and **not on that branch**
-(see the branch decision in the poller plan).
+`board.md`, and `board.html` for remote reading. Its header is explicit that this
+is *"One-directional, read-only… Sole writer is the extension; always overwrite;
+no diff-ingest, no control"*. This plan and its siblings add the missing
+direction, in a **separate private repository** of its own — see
+`board-control-repo-poller.md` for why access, not history, is what has to be
+isolated, and `board-state-moves-to-a-private-repo.md` for the same move applied
+to the outbound half.
 
 **Bare booleans cannot express the actions worth firing.** A flat
 `{"move": true, "star": true}` map carries no arguments, so the most useful
@@ -35,7 +37,7 @@ template therefore keeps booleans (they are the right shape for *whether* to do
 something) and puts arguments in a sibling block, with execution order fixed by
 the schema rather than by the file.
 
-**Replay is the failure mode that matters.** A control file lives in a branch's
+**Replay is the failure mode that matters.** A control file lives in a repo's
 history. Anything that re-presents it — a force-push, a re-clone, a cursor reset,
 a rebuild of the poller's state — re-fires every action in it unless identity is
 carried by the *instruction*, not by the commit. "Move to CODED" replayed is
@@ -73,7 +75,7 @@ and add them when that lands — the allowlist is a table, so it extends cleanly
 
 ### 1. The instruction file — `src/services/boardControlSchema.ts`
 
-One file per instruction, named `instructions/<id>.json` on the control branch:
+One file per instruction, named `instructions/<id>.json` in the control repo:
 
 ```json
 {
@@ -154,6 +156,12 @@ failure would leave an instruction half-applied with no record of which half —
 worse than applying what could be applied and saying so precisely.
 
 ### 4. The receipt
+
+Receipts are published to the **state** repo, not the control repo, so each repo
+keeps exactly one writer — the machine writes state, the agent writes control. The
+executor returns the receipt object; the poller publishes it. That split also means
+a compromised agent credential can file instructions and cannot fabricate a
+receipt claiming one was applied.
 
 ```json
 { "schema": 1, "id": "…", "receivedAt": "…", "resolvedPlanId": "abc-123",
