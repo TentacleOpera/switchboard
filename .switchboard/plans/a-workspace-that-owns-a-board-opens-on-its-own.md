@@ -36,6 +36,7 @@ The host already exposes exactly the signal needed. `getWorkspaceRoots()` is a d
 
 **Tags:** backend, bugfix, reliability
 **Complexity:** 5
+**Feature:** 6f6a7cad-ef44-49a9-b70a-5921a55c4256
 
 ## User Review Required
 
