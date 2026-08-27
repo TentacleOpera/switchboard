@@ -141,8 +141,11 @@ Rules that make it a boundary rather than a list:
   project rules, SQL moves strand cards and skip the move side-effects.
 - **Dispatch is deliberately absent from v1.** Everything above is reversible
   from the board in one action. Dispatch spends tokens and starts an agent, and
-  replay protection is new code that has not yet been proven in the field. Add it
-  in a later plan once the channel has demonstrably not double-fired.
+  replay protection is new code that has not yet been proven in the field. When it
+  is added, it routes through
+  `remote-dispatch-is-a-narrower-path-than-local-dispatch.md` — a team lead, no
+  role, no terminal, no instruction, with provenance attached — and never through
+  the local dispatch command. That plan is what makes adding it reasonable.
 
 ### 3. Execution order, and partial failure
 
