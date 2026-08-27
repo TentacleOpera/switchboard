@@ -1144,6 +1144,147 @@ export class ControlPlaneMigrationService {
     }
 
     /**
+     * Read and validate the bundle-membership ledger. Returns the list of
+     * previously-shipped relative paths (posix-style, surface-prefixed:
+     * `skills/<rel>` / `workflows/<rel>`), or null when the ledger is
+     * missing, malformed, or unreadable — mirroring the prune's "no prior
+     * knowledge" fail-safe. Shared by the seed guard (creation path) and the
+     * prune (deletion path) so the two never drift in their parse/validation.
+     *
+     * The seed guard calls this once per activation and builds a Set<string>
+     * snapshot; the prune keeps its own independent call (it validates and
+     * fail-safes separately). The seed's snapshot is NOT threaded into the prune.
+     */
+    public static readBundleLedger(workspaceRoot: string): string[] | null {
+        const agentsDir = path.resolve(workspaceRoot, '.agents');
+        const ledgerPath = path.join(agentsDir, this.BUNDLE_LEDGER_FILE);
+        try {
+            if (fs.existsSync(ledgerPath)) {
+                const parsed = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+                if (parsed && Array.isArray(parsed.files) && parsed.files.every((f: unknown) => typeof f === 'string')) {
+                    return parsed.files as string[];
+                }
+                console.warn('[ControlPlaneMigrationService] Bundle ledger malformed (files[] missing or not all strings); treating as no prior knowledge.');
+            }
+        } catch (e) {
+            console.warn('[ControlPlaneMigrationService] Bundle ledger read failed; treating as no prior knowledge:', e);
+        }
+        return null;
+    }
+
+    /**
+     * Crawl a directory and return relative paths (path.sep-joined) for every
+     * file under it, matching the output format of extension.ts's `crawlDirectory`.
+     * Used by `seedBundleSurface` so the shared seed function does not depend on
+     * `vscode.workspace.fs` (which the standalone host's shim does not provide).
+     */
+    private static async _crawlRelative(rootDir: string, depth: number = 0): Promise<string[]> {
+        if (depth > MAX_AGENT_SCAN_DEPTH || !fs.existsSync(rootDir)) {
+            return [];
+        }
+        let entries: fs.Dirent[];
+        try {
+            entries = await fs.promises.readdir(rootDir, { withFileTypes: true });
+        } catch {
+            return [];
+        }
+        const results: string[] = [];
+        for (const entry of entries) {
+            if (entry.isDirectory()) {
+                const childRels = await this._crawlRelative(path.join(rootDir, entry.name), depth + 1);
+                for (const rel of childRels) {
+                    results.push(entry.name + path.sep + rel);
+                }
+            } else if (entry.isFile()) {
+                results.push(entry.name);
+            }
+        }
+        return results;
+    }
+
+    /**
+     * Content-hash seed one bundle surface (skills or workflows) into the
+     * workspace's `.agents/<surface>/` directory. Shared between the extension
+     * host and the standalone host so the deletion guard cannot diverge.
+     *
+     * Creation-path guard: when a bundled file is absent from the workspace,
+     * consult the ledger snapshot BEFORE copying. In-ledger AND absent means the
+     * workspace deliberately deleted it — skip (do NOT set `changed`). Not-in-ledger
+     * AND absent means genuinely new — copy. This is the mirror image of the prune's
+     * deletion path: the prune retires files the BUNDLE removed; the guard respects
+     * files the WORKSPACE removed.
+     *
+     * The ledger lookup key is built identically to the prune's writer:
+     * `<surface>/<posix-rel>`. `_crawlRelative` returns `path.sep`-joined paths,
+     * so on Windows a naive `surface + '/' + relativePath` would miss every entry
+     * and the guard silently no-ops — the exact resurrection this guard exists to
+     * stop. The key MUST be `<surface> + '/' + relativePath.split(path.sep).join('/')`.
+     *
+     * Fail-safe: null/empty ledger snapshot → everything is "not in ledger" → all
+     * absent files copied (fresh workspace is not starved). This mirrors the prune's
+     * "first run deletes nothing".
+     *
+     * Ledger entries are used ONLY for string-membership testing on the creation
+     * path — they are never resolved to filesystem paths here (unlike the prune,
+     * which resolves them and carries a path-traversal guard). The actual file
+     * operations use paths derived from the trusted bundle crawl, so there is no
+     * traversal surface for a malformed ledger to exploit.
+     *
+     * Returns `{ changed, files }` where `files` are the crawled relative paths
+     * (path.sep-joined), reused by the caller for the bundle-reconcile step.
+     */
+    public static async seedBundleSurface(
+        surface: 'skills' | 'workflows',
+        bundleDir: string,
+        workspaceRoot: string,
+        ledgerSnapshot: Set<string>,
+    ): Promise<{ changed: boolean; files: string[] }> {
+        let changed = false;
+        let files: string[] = [];
+        try {
+            files = await this._crawlRelative(bundleDir);
+            for (const relativePath of files) {
+                const srcPath = path.join(bundleDir, relativePath);
+                const destPath = path.join(workspaceRoot, '.agents', surface, relativePath);
+                if (fs.existsSync(destPath)) {
+                    // dest exists → overwrite iff bundle content differs (content-hash refresh)
+                    try {
+                        const [srcHash, destHash] = await Promise.all([
+                            this.hashFile(srcPath),
+                            this.hashFile(destPath),
+                        ]);
+                        if (srcHash !== destHash) {
+                            await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
+                            await fs.promises.copyFile(srcPath, destPath);
+                            changed = true;
+                        }
+                    } catch (hashErr) {
+                        console.warn(`[Switchboard] ${surface} content-hash refresh failed for ${relativePath}, skipping:`, hashErr);
+                    }
+                } else {
+                    // dest absent → check ledger before copying.
+                    // In-ledger AND absent = workspace deleted it → skip.
+                    // Not-in-ledger AND absent = genuinely new → copy.
+                    const ledgerKey = surface + '/' + relativePath.split(path.sep).join('/');
+                    if (ledgerSnapshot.has(ledgerKey)) {
+                        continue;
+                    }
+                    try {
+                        await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
+                        await fs.promises.copyFile(srcPath, destPath);
+                        changed = true;
+                    } catch (copyErr) {
+                        console.warn(`[Switchboard] ${surface} seed copy failed for ${relativePath}, skipping:`, copyErr);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error(`[Switchboard] ${surface}-file seed failed for ${workspaceRoot}, continuing:`, err);
+        }
+        return { changed, files };
+    }
+
+    /**
      * Prune bundle-tracked files that have been retired from the bundle, then
      * (re)write the bundle-membership ledger atomically. Mirrors the .claude
      * retirement ledger (ClaudeCodeMirrorService:486-508) but applied to .agents/,
@@ -1176,20 +1317,8 @@ export class ControlPlaneMigrationService {
         let missing = 0;
         let extra = 0;
 
-        // 1. Read prior ledger. Missing/malformed → previousFiles stays null → no deletes.
-        let previousFiles: string[] | null = null;
-        try {
-            if (fs.existsSync(ledgerPath)) {
-                const parsed = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
-                if (parsed && Array.isArray(parsed.files) && parsed.files.every((f: unknown) => typeof f === 'string')) {
-                    previousFiles = parsed.files as string[];
-                } else {
-                    console.warn('[ControlPlaneMigrationService] Bundle ledger malformed (files[] missing or not all strings); skipping prune, rewriting ledger.');
-                }
-            }
-        } catch (e) {
-            console.warn('[ControlPlaneMigrationService] Bundle ledger read failed; skipping prune, rewriting ledger:', e);
-        }
+        // 1. Read prior ledger via the shared helper. Missing/malformed → null → no deletes.
+        const previousFiles = this.readBundleLedger(workspaceRoot);
 
         // 2. Prune: delete ledger-tracked files no longer in the current bundle.
         if (previousFiles) {

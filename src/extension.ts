@@ -333,94 +333,29 @@ async function refreshWorkspaceControlPlane(
     // 1. Capture refresh decision BEFORE seeding stamps the version.
     const needsAgentRefresh = shouldRefreshAgentWorkspaceFiles(context.extensionUri.fsPath, root);
 
-    // 2. Content-hash skill seed loop (per-file fault tolerance).
-    let agentsChanged = false;
+    // 2. Content-hash skill + workflow seed loops (shared, per-file fault tolerance).
     // Hoisted so the bundle-reconcile step (4) can reuse the crawl results
     // without a second walk — the plan's "no extra I/O" requirement.
-    let skillFiles: string[] = [];
-    let workflowFiles: string[] = [];
-    try {
-        const bundledSkillsUri = vscode.Uri.joinPath(context.extensionUri, '.agents', 'skills');
-        skillFiles = await crawlDirectory(bundledSkillsUri);
-        for (const relativePath of skillFiles) {
-            const srcUri = vscode.Uri.joinPath(bundledSkillsUri, relativePath);
-            const destUri = vscode.Uri.joinPath(vscode.Uri.file(root), '.agents', 'skills', relativePath);
-            try {
-                await vscode.workspace.fs.stat(destUri);
-                // dest exists → overwrite iff bundle content differs (content-hash refresh)
-                try {
-                    const [srcHash, destHash] = await Promise.all([
-                        ControlPlaneMigrationService.hashFile(srcUri.fsPath),
-                        ControlPlaneMigrationService.hashFile(destUri.fsPath),
-                    ]);
-                    if (srcHash !== destHash) {
-                        await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
-                        await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
-                        agentsChanged = true;
-                    }
-                } catch (hashErr) {
-                    console.warn(`[Switchboard] Skill content-hash refresh failed for ${relativePath}, skipping:`, hashErr);
-                }
-            } catch {
-                // dest absent → copy new file.
-                try {
-                    await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
-                    await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
-                    agentsChanged = true;
-                } catch (copyErr) {
-                    console.warn(`[Switchboard] Skill seed copy failed for ${relativePath}, skipping:`, copyErr);
-                }
-            }
-        }
-    } catch (err) {
-        console.error(`[Switchboard] Skill-file seed failed for ${root}, continuing:`, err);
-    }
+    //
+    // Deletion guard: read the bundle ledger ONCE before the seed loops and build
+    // a Set<string> snapshot. The shared seedBundleSurface function consults it on
+    // the creation path (dest absent): in-ledger AND absent means the workspace
+    // deliberately deleted the file → skip. Not-in-ledger AND absent means genuinely
+    // new → copy. null/malformed ledger → empty set → all absent files copied (fresh
+    // workspace is not starved). This mirrors the prune's "first run deletes nothing"
+    // fail-safe. The prune keeps its own independent ledger read; this snapshot is
+    // NOT threaded into it.
+    const ledgerRaw = ControlPlaneMigrationService.readBundleLedger(root);
+    const ledgerSnapshot = new Set<string>(ledgerRaw ?? []);
 
-    // 2b. Content-hash workflow seed loop (same per-file semantics as skills).
-    // Workflow files are Switchboard-managed canonical definitions — user edits
-    // are not preserved across activations when the bundle differs (same contract
-    // as cleanupLegacyAgentFiles). Hash-seeding (not a version gate) ensures a
-    // door rename or new door lands on same-version installs; without this the
-    // unconditional cleanupLegacyAgentFiles delete becomes delete-without-replace.
-    // Must set agentsChanged so the same-pass scaffold regenerates the .claude
-    // mirror against freshly delivered door sources.
-    try {
-        const bundledWorkflowsUri = vscode.Uri.joinPath(context.extensionUri, '.agents', 'workflows');
-        workflowFiles = await crawlDirectory(bundledWorkflowsUri);
-        for (const relativePath of workflowFiles) {
-            const srcUri = vscode.Uri.joinPath(bundledWorkflowsUri, relativePath);
-            const destUri = vscode.Uri.joinPath(vscode.Uri.file(root), '.agents', 'workflows', relativePath);
-            try {
-                await vscode.workspace.fs.stat(destUri);
-                // dest exists → overwrite iff bundle content differs (content-hash refresh)
-                try {
-                    const [srcHash, destHash] = await Promise.all([
-                        ControlPlaneMigrationService.hashFile(srcUri.fsPath),
-                        ControlPlaneMigrationService.hashFile(destUri.fsPath),
-                    ]);
-                    if (srcHash !== destHash) {
-                        await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
-                        await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
-                        agentsChanged = true;
-                    }
-                } catch (hashErr) {
-                    console.warn(`[Switchboard] Workflow content-hash refresh failed for ${relativePath}, skipping:`, hashErr);
-                }
-            } catch {
-                // dest absent → copy new file.
-                try {
-                    await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
-                    await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
-                    agentsChanged = true;
-                } catch (copyErr) {
-                    console.warn(`[Switchboard] Workflow seed copy failed for ${relativePath}, skipping:`, copyErr);
-                }
-            }
-        }
-    } catch (err) {
-        // Missing bundle workflows dir (or unreadable) → no-op; never fail activation.
-        console.error(`[Switchboard] Workflow-file seed failed for ${root}, continuing:`, err);
-    }
+    const bundledAgentsPath = path.join(context.extensionUri.fsPath, '.agents');
+    const skillResult = await ControlPlaneMigrationService.seedBundleSurface(
+        'skills', path.join(bundledAgentsPath, 'skills'), root, ledgerSnapshot);
+    const workflowResult = await ControlPlaneMigrationService.seedBundleSurface(
+        'workflows', path.join(bundledAgentsPath, 'workflows'), root, ledgerSnapshot);
+    const agentsChanged = skillResult.changed || workflowResult.changed;
+    const skillFiles = skillResult.files;
+    const workflowFiles = workflowResult.files;
 
     // 3. Scaffold protocol layers + stamp version iff refresh needed.
     if (needsAgentRefresh || agentsChanged) {

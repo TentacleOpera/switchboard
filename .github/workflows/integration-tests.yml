@@ -67,6 +67,20 @@ jobs:
       - name: Claude mirror drift check
         run: npm run mirror:check
 
+      # The `.agents/` seed loop's creation path treats "destination absent" as
+      # "never seeded" unless the bundle ledger says otherwise. Every way that
+      # guard can break is silent: inverting the condition freezes the control
+      # plane (new bundle files never arrive), treating a missing ledger as
+      # "everything was deleted" starves a fresh workspace to an empty .agents/,
+      # and building the lookup key with native separators misses every ledger
+      # entry on Windows so the guard no-ops and deleted skills resurrect on the
+      # next restart — platform-conditional, and invisible to a Linux runner.
+      # Compile, lint, parity and the verb audits are all structurally blind
+      # here; this is the only gate on that path. Runs against out/, so it must
+      # stay AFTER "Compile test outputs".
+      - name: .agents seed deletion guard (ledger discriminates deleted from new)
+        run: npm run test:contract:agents-seed-deletion-guard
+
       # Masked-SVG icons have two representations (icons/icon-*.svg and the base64
       # data: URI inlined into each panel's CSS). Both drift modes are silent on
       # screen — a corrupt payload renders nothing, a missing .sb-icon-<name> rule
