@@ -30,6 +30,52 @@ three default teams" is not a thing the code can currently enumerate.
 - **Tags:** frontend, backend, ui, ux, feature
 - **Feature:** 4c1323fb-a025-467f-b289-88f50b1f8347
 
+## User Review Required
+
+No user review required — plan is in PLAN REVIEWED status and ready for dispatch.
+
+## Complexity Audit
+
+### Routine
+- Declaring three `DEFAULT_TEAM_DEFINITIONS` in `teamWiring.ts` with stable ids and head roles.
+- Iterating `DEFAULT_TEAM_DEFINITIONS` in `buildTeamsForShell` instead of `isSpawnedTeamGroup`-filtered groups.
+- Rendering running slots with accent glyph (same as today).
+- Persisting `activeTab` in `sb.agentDock` (shared with dock-tabs plan).
+
+### Complex / Risky
+- Binding slots to definition ids rather than spawned groups — `buildTeamsForShell` must look up a live group by definition id, which requires a new lookup path. The current code iterates spawned groups; the new code iterates definitions and reverse-looks-up groups.
+- Dormant slot rendering using `.strip-icon.is-dormant` — ordering dependency: the rail restructure plan must promote the UFO's dimmed CSS before deleting it, or these slots have no dim state.
+- Click behaviour for absent slots — reusing the Agent Control panel's team start path (`btn-start-team`, `terminals.html:2401`) rather than minting a second start route. The in-flight discipline (disable button during start request) must be carried over.
+- Re-seed on demand when a default team definition is deleted by the operator — the slot must still render (dim) and starting it must re-seed the definition.
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions:**
+- Double-click on a dim slot fires two start requests. The client-side disable is a UX nicety; the real protection is the service-level guard in `ptyFleetService.create()`. Two shell tabs or a reload mid-flight defeat the client flag — same constraint the UFO's start had.
+
+**Security:**
+- No new attack surface. Team start reuses an existing endpoint.
+
+**Side Effects:**
+- `showStripToast` (`shell.js:321`) was written for the UFO's start feedback. The rail restructure plan deletes the UFO; this plan's start-failure path is what keeps `showStripToast` alive. Whichever plan lands second must not delete it.
+- `OFFERED_REVIEW_TEAM_GROUP` / `OFFERED_TEAM_DEFINITIONS` — these constants were already removed from `teamWiring.ts:707` (the file explicitly states "there is deliberately no `OFFERED_REVIEW_TEAM_GROUP` / `OFFERED_TEAM_DEFINITIONS` export here"). `DEFAULT_TEAM_DEFINITIONS` fills the gap they left; there is nothing to retire.
+
+**Dependencies & Conflicts:**
+- **Rail restructure** — must have declared the group key and deleted the UFO. Team slots sit between primary and cold groups.
+- **`.strip-icon.is-dormant` promotion** — shared with the rail restructure and colour plans. Must happen before the UFO's CSS is deleted.
+- **`showStripToast` survival** — shared with the rail restructure plan.
+- **Dispatched-state plan** — slots render from `running`; the dispatched state needs a server-side helper. Slots can ship first wearing no work-state indicator.
+
+## Dependencies
+
+- **Rail restructure** — must land first (declares groups, deletes UFO, promotes `.strip-icon.is-dormant`).
+- **Colour plan** — provides the accent fill for team icons. Slots can land before the colour plan (they render with whatever the current team-icon treatment is).
+- **Dispatched-state plan** — depends on team slots existing (the dispatched indicator renders on a slot). Slots can ship first without the indicator.
+
+## Adversarial Synthesis
+
+Key risks: (1) stale reference to `OFFERED_REVIEW_TEAM_GROUP` / `OFFERED_TEAM_DEFINITIONS` — these constants are already deleted from the codebase; `DEFAULT_TEAM_DEFINITIONS` fills the gap, there is nothing to retire. (2) Re-seed on demand when a definition is deleted — the slot must still render and starting it must re-seed, or the rail acquires a permanent dead button. (3) `showStripToast` survival depends on landing order with the rail restructure. Mitigations: (1) corrected in the plan, (2) addressed in edge cases, (3) named in both plans and the feature dependencies.
+
 ## No migration
 
 Clean break. Three team definitions are seeded unconditionally, replacing whatever
@@ -60,7 +106,10 @@ config read.
    Export them as an ordered `DEFAULT_TEAM_DEFINITIONS` array. Rail order is array
    order — the rail must not sort, because it cannot know definition order (the same
    constraint `shell-strip-team-icons-instead-of-per-terminal-cli-icons.md` records).
-   Retire `OFFERED_TEAM_DEFINITIONS` / `OFFERED_REVIEW_TEAM_GROUP` in favour of it.
+
+   > **Superseded:** Retire `OFFERED_TEAM_DEFINITIONS` / `OFFERED_REVIEW_TEAM_GROUP` in favour of it.
+   > **Reason:** These constants were already removed from `teamWiring.ts:707`, which explicitly states "there is deliberately no `OFFERED_REVIEW_TEAM_GROUP` / `OFFERED_TEAM_DEFINITIONS` export here." The startable team gallery is `AGENT_GROUP_TEMPLATES` in `kanban.html`. There is nothing to retire — `DEFAULT_TEAM_DEFINITIONS` fills the gap they left.
+   > **Replaced with:** Declare `DEFAULT_TEAM_DEFINITIONS` as a new export. No existing constant needs retirement.
 2. **All three are member-less.** A member-less team starts only its head. This is the
    `SEEDED_AGENT_GROUP` precedent (`teamWiring.ts:694`) and it is what keeps seeding
    three rows from spawning a fleet of unrequested agent CLIs on first run.
@@ -127,3 +176,15 @@ config read.
 6. Spawn nine terminals across the three teams; confirm the rail is still 12 buttons.
 7. Delete a default team definition, then click its slot; confirm re-seed and start.
 8. Both hosts — and confirm the seed lands in both, since each reads its own config.
+
+### Goal Invariants
+
+- Assert `DEFAULT_TEAM_DEFINITIONS` is exported from `src/services/teamWiring.ts` as an ordered array of exactly three definitions.
+- Assert each definition in `DEFAULT_TEAM_DEFINITIONS` has a stable `id`, a `headRole`, and `members: []`.
+- Assert `buildTeamsForShell` in `src/webview/terminals.js` always emits exactly three entries, one per `DEFAULT_TEAM_DEFINITIONS` entry, in array order.
+- Assert a team slot renders dim (`.strip-icon.is-dormant`) when its team is not running, and renders with accent fill when running.
+- Assert rail button count is constant at 12 (5 primary + 3 slots + 4 cold) regardless of fleet size.
+- Assert clicking a dim slot starts that team's head role (no second terminal created by a rapid double-click).
+- Assert clicking a running slot navigates to the Terminals panel and switches to that team's live group.
+- Assert a fourth operator-created team does NOT appear as a rail slot.
+- Assert `showStripToast` is still present in `src/webview/shell.js` (kept alive by this plan's start-failure path).

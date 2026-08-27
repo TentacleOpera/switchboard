@@ -32,7 +32,7 @@ and where the card lands depends on the team's `pacing`: **head** hands it to th
 routes it to the complexity-matched seat. `:244` is explicit that pacing is a field the agent
 **reads and does not set** — "Setting pacing is the operator's call on the team."
 
-But there is no way to read it. `resolveTeamPacing` (`KanbanProvider.ts:5532`) returns `'head'` when
+But there is no way to read it. `resolveTeamPacing` (`KanbanProvider.ts:5539`) returns `'head'` when
 the head leads no registered group or the DB is unavailable, and `LocalApiServer.ts:1917` resolves
 `pacingOverride ?? 'head'`, with `:1751` naming `'head'` as "the regression gate for ~4,000
 installs". The backend therefore defaults every unconfigured team to the lead — correctly — while
@@ -68,6 +68,7 @@ needs it, and it arrived after the surface was drawn.
 
 **Complexity:** 4
 **Tags:** feature, backend, api, reliability
+**Project:** Browser Switchboard
 
 ## User Review Required
 
@@ -75,7 +76,7 @@ Yes — one decision.
 
 **One pre-flight endpoint, or a teams endpoint the agent composes with?**
 Recommendation: **a teams endpoint** — `GET /teams?workspaceRoot=…` returning the configured groups
-with roles, head, `pacing`, and each member's live status. Reasons:
+with headRole, head, `pacing`, and each member's live status. Reasons:
 
 - It answers checks 1 and 2 directly *and* serves the dispatch path, which needs pacing and the lead
   name at a different moment from startup. A pre-flight-shaped endpoint would be re-fetched for
@@ -92,7 +93,12 @@ stable; the teams endpoint is better if you expect the checks to move.
 
 ### Routine
 
-- Routing a read to an existing private method.
+- Routing a read to an existing private method (`_readRegisteredTeamGroups`).
+- Adding one import (`readTeamPacing`) to an existing import statement (`LocalApiServer.ts:29`).
+- Adding one route arm to the if-else chain (`LocalApiServer.ts:7553+`, near the other GET endpoints).
+- Using the existing `_handleReadEndpoint` helper for auth + response envelope (`LocalApiServer.ts:5925`).
+- Regenerating `protocol-catalog.json` via `npm run catalog:generate`.
+- Updating two protocol skill files (documentation only).
 
 ### Complex / Risky
 
@@ -108,12 +114,31 @@ stable; the teams endpoint is better if you expect the checks to move.
   team as seated.
 - **Absent `pacing` must serialise as `head`, not null or missing.** That is what the backend
   resolves it to (`:1917`), and an agent seeing `null` will invent a meaning.
-- **Both composition roots must wire it.** Per `CLAUDE.md` the trap is composition-root wiring, not
-  verb reachability — `bootstrap.ts`'s `default:` arm makes a verb audit come back green while a seam
-  is unwired. The callback must be handed to `LocalApiServer` in **`src/extension.ts` and
-  `src/standalone/bootstrap.ts`**, and the diff must show both.
-- **Auth and workspace scoping are not optional.** Same `_checkAuth` as every neighbour, and
-  `workspaceRoot` honoured — a bare call must not silently answer for the primary root.
+- **No new composition-root seam is needed.** The endpoint is self-contained in `LocalApiServer`:
+  `_readRegisteredTeamGroups` is a private method on the same class, `readTeamPacing` is a pure
+  function from `teamWiring.ts` (already imported at `:29`), and `getRegisteredTerminals` is already
+  wired in both hosts (`TaskViewerProvider.ts:3728`, `bootstrap.ts:2765`). No callback addition, no
+  composition-root wiring, no divergence risk. (See Superseded callout in Proposed Changes.)
+- **Auth and workspace scoping are not optional.** Same `_checkAuth` as every neighbour (via
+  `_handleReadEndpoint`), and `workspaceRoot` honoured — a bare call must not silently answer for
+  the primary root.
+
+> **Superseded:** Wire the seam in both composition roots — `src/extension.ts` and
+> `src/standalone/bootstrap.ts` — and show both in the diff.
+> **Reason:** The endpoint needs no new composition-root seam. `_readRegisteredTeamGroups` is a
+> private method on `LocalApiServer` itself — the route handler calls it directly. `readTeamPacing`
+> is a pure function already importable from `teamWiring.ts` (the file is already imported at
+> `LocalApiServer.ts:29`; only `readTeamPacing` needs adding to the named imports).
+> `getRegisteredTerminals` is already wired in both hosts. Creating a callback seam to reach data
+> the class already holds is the exact over-engineering that creates the wiring gap CLAUDE.md warns
+> about — the plan was building a bridge over flat ground.
+>
+> **Related pre-existing finding (out of scope):** The standalone host does NOT wire
+> `resolveTeamPacing` or `resolveTeamMembers` in its `LocalApiServer` options — it wires them on the
+> `ingestionEngine` (the queue watch/sweep) only. This means `dispatchNextFromQueue` in standalone
+> always uses head pacing regardless of the team's configured pacing. The self-contained approach
+> (`readTeamPacing` on the group object) avoids inheriting this bug. Fixing the standalone
+> `LocalApiServer` options gap is a separate plan — this one exposes state, it does not fix dispatch.
 
 ## Edge-Case & Dependency Audit
 
@@ -124,8 +149,8 @@ stable; the teams endpoint is better if you expect the checks to move.
 
 **Security**
 - Terminal names, roles and pacing are not secret, but the route must carry the same auth gate as its
-  neighbours rather than becoming the one unauthenticated read. No prompts, tokens or paths in the
-  payload.
+  neighbours (via `_handleReadEndpoint` → `_checkAuth`) rather than becoming the one unauthenticated
+  read. No prompts, tokens or paths in the payload.
 
 **Side effects**
 - Once pacing is readable, reports should name the mode and the destination returned by
@@ -150,30 +175,147 @@ Key risks: (1) reimplementing the roster read and missing the legacy `terminals.
 installs get a confident "no coding team seated" and a session stops — the failure the method's own
 comment predicts; (2) enriching `/health` instead of adding a route, breaking its consumers and the
 older-build case where `terminals` is absent; (3) merging configured and live so a dead team reads as
-seated; (4) wiring the seam in `extension.ts` only, leaving standalone answering nothing — the
-precedent `CLAUDE.md` records for the four `PlanIngestionEngine` queue seams; (5) serialising an
-absent `pacing` as null, so an agent invents a third mode. Mitigations: call
+seated; (4) creating an unnecessary composition-root seam wired in one host only — superseded: the
+endpoint is self-contained, no seam needed; (5) serialising an absent `pacing` as null, so an agent
+invents a third mode; (6) promising per-member roles the group object does not carry — the registered
+group stores `members: string[]`, not role-tagged objects. Mitigations: call
 `_readRegisteredTeamGroups` and test a legacy-key-only workspace explicitly; add a new route and
-assert `/health` is byte-identical; keep configured and live as separate fields; diff both
-composition roots by hand and verify against both hosts; and normalise absent pacing to `head` at the
-boundary.
+assert `/health` is byte-identical; keep configured and live as separate fields; use `readTeamPacing`
+directly on each group object (no callback, no composition-root wiring); normalise absent pacing to
+`head` at the boundary; and return `headRole` + member names + live status, not per-member roles.
 
 ## Proposed Changes
 
-1. **Add `GET /teams?workspaceRoot=…`** — auth-gated, workspace-scoped — returning the configured
-   groups: id, name, head terminal, members with roles, and `pacing` normalised to `head` when
-   absent, plus a per-member live flag derived from the same source `/health` uses.
-2. **Reuse `_readRegisteredTeamGroups`** for the roster; no second loop over the config keys.
-3. **Keep configured and live as distinct fields** in the response.
-4. **Wire the seam in both composition roots** — `src/extension.ts` and
-   `src/standalone/bootstrap.ts` — and show both in the diff.
-5. **Instrument pre-flight checks 1 and 2** in the protocol against this endpoint, replacing the
-   uninstrumented prose.
-6. **State the routing contract in the protocol** where pacing is discussed: read the mode from this
-   endpoint to know who you are addressing; take the actual destination from the `queue/next`
+### `src/services/LocalApiServer.ts`
+
+**Context:** The server's if-else route chain (`:7319+`) handles every HTTP path. GET read endpoints
+use the `_handleReadEndpoint` helper (`:5925`) for auth + `{ success: true, data }` envelope.
+`_readRegisteredTeamGroups` (`:4869`) is a private method on the same class that reads both
+`TERMINALS_GROUPS_KEY` and legacy `terminals.groups`, deduplicating by id. `readTeamPacing`
+(`teamWiring.ts:143`) is a pure function: `group?.pacing === 'seat' ? 'seat' : 'head'`.
+`getRegisteredTerminals?.()` (options callback, already wired in both hosts) returns `string[]` of
+live terminal names. `teamHeadName` (`teamWiring.ts:1197`, already imported) extracts the `head`
+field from a group.
+
+**Logic:**
+
+1. **Add `readTeamPacing` to the existing import** from `./teamWiring` at `:29`:
+   ```typescript
+   import { plausibleOriginTerminal, describeStandingOrderMigrations, TERMINALS_GROUPS_KEY, applyTeamQueueOrders, teamHeadName, installGlobalQueueDoneOrder, readTeamPacing } from './teamWiring';
+   ```
+
+2. **Add a `_handleGetTeams` method** that:
+   - Calls `_readRegisteredTeamGroups(workspaceRoot)` for the roster (reuses the private method —
+     no second loop over config keys).
+   - For each group, extracts: `id`, `name` (head terminal name), `head` (via `teamHeadName(group)`),
+     `headRole` (group's `headRole` field, defaults to `'lead'`), `pacing` (via `readTeamPacing(group)` —
+     normalises absent to `'head'`), `members` (group's `members` array, `string[]` of terminal names),
+     `externalHead` (boolean).
+   - Calls `this._options.getRegisteredTerminals?.()` for the live terminal name set. Cross-references
+     each member name against this set to produce a per-member `live: boolean` flag. When
+     `getRegisteredTerminals` is absent (headless/test), all members get `live: false`.
+   - Returns `{ teams: [...], snapshot: true }` — the `snapshot` field signals the response is a
+     point-in-time read, not a live subscription.
+
+3. **Add a route arm** in the if-else chain near the other GET endpoints (around `:7553`):
+   ```typescript
+   } else if (pathname === '/teams' && req.method === 'GET') {
+       await this._handleReadEndpoint(req, res, async () => {
+           const wsRoot = new URL(req.url || '', `http://localhost:${this._port}`)
+               .searchParams.get('workspaceRoot') || undefined;
+           return await this._handleGetTeams(wsRoot);
+       });
+   }
+   ```
+   The `_handleReadEndpoint` wrapper provides `_checkAuth` and the `{ success: true, data }` envelope.
+   The `workspaceRoot` query param is read the same way `_resolveDbFromQuery` (`:6241`) reads it.
+
+**Concrete response shape:**
+```json
+{
+  "success": true,
+  "data": {
+    "snapshot": true,
+    "teams": [
+      {
+        "id": "team_Coding",
+        "name": "Coding",
+        "head": "Coding",
+        "headRole": "lead",
+        "pacing": "head",
+        "externalHead": false,
+        "members": [
+          { "name": "Coding", "live": true },
+          { "name": "Coding-coder-1", "live": true },
+          { "name": "Coding-coder-2", "live": false }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Clarification — "members with roles":** The registered group object stores `members` as `string[]`
+(terminal names), not role-tagged objects. The group carries `headRole` (one field for the head's
+role), but per-member roles are in template definitions (`terminals.agentGroups`), not on the
+registered group. The endpoint returns `headRole` + member names + per-member `live` status. This is
+sufficient for pre-flight checks 1 and 2, which ask "is there a team?" and "is there a planner?" —
+answerable from `headRole` + member count + liveness. Per-member roles are out of scope for this
+read-only state endpoint.
+
+**Edge Cases:**
+- Empty roster (no groups configured): returns `{ teams: [], snapshot: true }` — not an error.
+- `getKanbanDatabase` absent (headless/test): `_readRegisteredTeamGroups` returns `[]` (it checks
+  `if (!db) return []`), so the endpoint returns `{ teams: [], snapshot: true }`.
+- Legacy-key-only workspace: `_readRegisteredTeamGroups` reads both keys and dedups — legacy groups
+  appear in the response.
+- `getRegisteredTerminals` absent: all members get `live: false`.
+
+### `protocol-catalog.json`
+
+**Context:** The catalog is generated by `scripts/generate-protocol-catalog.js` which scans
+`LocalApiServer.ts`'s if-else chain for route arms. It is the CI parity gate (`catalog:check`) and
+the discoverability layer (`GET /catalog`).
+
+**Implementation:** After adding the `/teams` route arm, run:
+```bash
+npm run catalog:generate
+```
+This writes the updated `protocol-catalog.json` and verb allowlists. The new `/teams` GET endpoint
+will appear in the catalog automatically — the generator scans the if-else chain.
+
+### `.agents/protocols/switchboard-mission-control/SKILL.md`
+
+**Context:** The pre-flight checks 1 and 2 (`:167-186`) are uninstrumented prose — they describe what
+to check but prescribe no command. Check 5 is the only instrumented one (via the `ready()` helper at
+`:104-112`). The handoff sequence (`:254-278`) and pacing discussion (`:244`) reference pacing as a
+field the agent reads but cannot currently read.
+
+**Implementation:**
+1. **Instrument checks 1 and 2** with a `curl` to `GET /teams?workspaceRoot=$WS` that the agent runs
+   before reporting. The check logic:
+   - Check 1 (coding team): filter teams where `headRole === 'lead'` and `members.length > 1` (a
+     team, not a lone agent). If features are in scope and no such team exists with at least one live
+     member, report it and name the features at risk.
+   - Check 2 (planner): filter teams where `headRole === 'planner'`. If planning-stage work is in
+     scope and no such team exists, report it.
+2. **State the routing contract** where pacing is discussed (`:244`): read the mode from
+   `GET /teams` to know who you are addressing; take the actual destination from the `queue/next`
    response; never infer either from complexity.
-7. **Document the endpoint** in `.agents/protocols/switchboard-mission-control-http/SKILL.md`.
-8. **Leave `/health` untouched.**
+
+### `.agents/protocols/switchboard-mission-control-http/SKILL.md`
+
+**Context:** The HTTP surface skill documents every endpoint agents use. The read-endpoint table is
+at `:62-73`. A new endpoint must be added there.
+
+**Implementation:** Add `GET /teams` to the read-endpoint table:
+```
+| `GET /teams?workspaceRoot=<root>` | `{ teams: [{ id, name, head, headRole, pacing, externalHead, members: [{ name, live }] }], snapshot: true }` — configured team roster with pacing and per-member liveness |
+```
+Add a `curl` example to the examples block (`:74-80`):
+```bash
+curl -s "$BASE/teams?workspaceRoot=$WS"
+```
 
 ### Migration
 
@@ -203,5 +345,17 @@ builds included — changes behaviour.
 10. **Workspace scoping.** In a multi-root setup, call with a non-primary `workspaceRoot`; assert the
     response describes the requested root.
 11. **Both hosts.** Identical payload shape from the VS Code extension host and standalone
-    `npx switchboard`. Inspect the wiring in both composition roots — a green verb audit is not
-    evidence.
+    `npx switchboard`. No composition-root wiring was added — verify the endpoint works in both hosts
+    without any changes to `extension.ts` or `bootstrap.ts`.
+12. **Catalog updated.** Run `npm run catalog:check` after `catalog:generate`; assert it passes and
+    `/teams` appears in `GET /catalog`.
+
+### Goal Invariants
+
+- Assert `GET /teams` exists at `src/services/LocalApiServer.ts` (route arm matching `pathname === '/teams'`).
+- Assert `readTeamPacing` is in the named imports from `./teamWiring` at `LocalApiServer.ts:29`.
+- Assert `GET /health` response shape is unchanged (no `teams` field added to `/health`).
+- Assert no new callback was added to `LocalApiServerOptions` interface (no `getTeamRoster` or similar).
+- Assert `/teams` appears in `protocol-catalog.json` after `catalog:generate`.
+- Assert `GET /teams` is documented in `.agents/protocols/switchboard-mission-control-http/SKILL.md` read-endpoint table.
+- Assert pre-flight checks 1 and 2 in `.agents/protocols/switchboard-mission-control/SKILL.md` prescribe `GET /teams` as the query command.

@@ -39,6 +39,53 @@ transient ring happens to be playing.
 - **Tags:** frontend, ui, ux, refactor
 - **Feature:** 4c1323fb-a025-467f-b289-88f50b1f8347
 
+## User Review Required
+
+No user review required — plan is in PLAN REVIEWED status and ready for dispatch.
+
+## Complexity Audit
+
+### Routine
+- Replacing `.strip-icon.is-active` accent text and border with a left-edge 2px `--text` bar.
+- Applying accent fill to `.strip-team-icon` per the interceptor plan.
+- Deleting `@keyframes strip-term-done-pulse` and `-reduced` CSS blocks.
+- Deleting `.strip-team-queue-depth` CSS and its construction in `shell.js`.
+- Deleting `.strip-term-btn.strip-term-exited` and `.strip-team-btn.strip-term-exited` CSS.
+
+### Complex / Risky
+- Deleting `pulsedDoneStamps` ledger, `DONE_PULSE_MS`, and all pulse arithmetic in the team loop — the rail loses its only completion signal. The Terminals panel sidebar DONE chip becomes the sole completion record. This is a design decision, not a bug: the rail is a navigation surface, not a completion surface.
+- Deleting `clearTeamBadges` relay (`shell.js:1211` and `terminals.js:1173`) — the relay exists because the rail rendered a completion state that had to be acknowledgeable from the rail. With no aggregate done light, there is nothing to acknowledge from the rail. The panel's own `terminalBadges` (7 delete sites, all panel-side) are unaffected.
+- Stopping the relay of `light` and `doneStamp` in the `teams` payload — must also address the per-terminal `light`/`doneStamp` fields in the same relay, which the rail restructure plan makes dead by deleting per-terminal buttons.
+- Re-pointing `terminal-replay-gap-contract.test.js:244` at the new state channel — the test's intent (a replay gap must never light the rail as done) is load-bearing and must be preserved, not deleted with the ring it was written about.
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions:**
+- `pulsedDoneStamps` is cleared on `visibilitychange` (`shell.js:1579`). With the ledger deleted, this handler becomes dead — remove it.
+
+**Security:**
+- No new attack surface. Deleting relay fields reduces the postMessage payload.
+
+**Side Effects:**
+- `refreshTeamQueueDepths` (`terminals.js:1642`) and the `queueDepth` field stay — the dispatched-state plan consumes them. Only the rail badge is deleted, not the queue data.
+- The `terminalBadges` map (`terminals.js:~222`) is panel-side and unaffected — it is set on `agentCompleted` and cleared by 7 panel-side events. The rail never reads it directly; it read the aggregate `light` which this plan stops relaying.
+
+**Dependencies & Conflicts:**
+- **Depends on the rail restructure** — the UFO's cyan leaves with the button (rail restructure deletes it). This plan is left with four signals to remove, not five.
+- **`.strip-icon.is-dormant` promotion** — shared with the rail restructure and team-slots plans. The UFO's dimmed treatment must be promoted before the UFO's rules are deleted.
+- **Team-slots plan** — renders from `running` (not `light`), so the `light`/`doneStamp` relay deletion does not break team slot rendering. But the slots plan must land before or alongside this plan, or the rail has team slots with no state at all.
+- **Dispatched-state plan** — renders from `dispatched` (not `light`), so the relay deletion does not break the dispatched indicator. Same ordering consideration.
+
+## Dependencies
+
+- **Rail restructure** — must have deleted the UFO (its cyan is one of the five hues this plan collapses). The UFO deletion and the `.strip-icon.is-dormant` promotion are shared ordering constraints.
+- **Team-slots plan** — should land before or alongside this plan. After this plan deletes `light`/`doneStamp` from the relay, the rail has no team state except what the team-slots plan (`running`) and dispatched-state plan (`dispatched`) provide.
+- **Dispatched-state plan** — provides the `dispatched` field that replaces the deleted `light` as the rail's team work-state signal.
+
+## Adversarial Synthesis
+
+Key risks: (1) the rail loses its only completion signal — a team that just finished looks identical to an idle team from the rail. This is a deliberate design decision: the completion ring was a transient 2.2s animation, not a durable state; the sidebar DONE chip is the durable record. (2) `clearTeamBadges` relay deletion must not break the panel's own badge clearing — verified: `terminalBadges` is panel-side with 7 independent delete sites. (3) `light`/`doneStamp` relay cleanup must cover both team and per-terminal fields — the per-terminal fields are made dead by the rail restructure's deletion of per-terminal buttons. Mitigations: all three are addressed in edge cases; the completion-surface trade-off is a design decision, not a gap.
+
 ## No migration
 
 Clean break. Pure presentation, no persisted state. Do not preserve any of the removed
@@ -149,3 +196,18 @@ it. If they land together, the interceptor plan's `fill="currentColor"` +
    not deleted with the ring it was written about.
 8. Greyscale the screenshot and confirm selection and team-ness are both still readable.
 9. Both hosts.
+
+### Goal Invariants
+
+- Assert `.strip-icon.is-active` in `src/webview/shell.html` uses a left-edge bar indicator, not `--accent` text or `--accent-dim` border.
+- Assert `@keyframes strip-term-done-pulse` is absent from `src/webview/shell.html`.
+- Assert `pulsedDoneStamps` is absent from `src/webview/shell.js`.
+- Assert `DONE_PULSE_MS` is absent from `src/webview/shell.js`.
+- Assert `clearTeamBadges` message handler is absent from `src/webview/terminals.js`.
+- Assert `.strip-team-queue-depth` is absent from `src/webview/shell.html`.
+- Assert `.strip-term-btn.strip-term-exited` is absent from `src/webview/shell.html`.
+- Assert `.strip-team-btn.strip-term-exited` is absent from `src/webview/shell.html`.
+- Assert `light` and `doneStamp` fields are absent from the `teams` payload in `postFleetStateToShell` (`src/webview/terminals.js`).
+- Assert `.strip-team-icon` uses `var(--accent)` for fill only — no accent border or background.
+- Assert `--accent-dim` is not reintroduced anywhere by this plan.
+- Assert the Terminals panel sidebar DONE chip and pane badge still render (durable completion record survives).

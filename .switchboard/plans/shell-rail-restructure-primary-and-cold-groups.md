@@ -37,6 +37,54 @@ frequently-used ones are interleaved with the cold ones by manifest accident.
 - **Tags:** frontend, ui, ux, refactor
 - **Feature:** 4c1323fb-a025-467f-b289-88f50b1f8347
 
+## User Review Required
+
+No user review required — plan is in PLAN REVIEWED status and ready for dispatch.
+
+## Complexity Audit
+
+### Routine
+- Reordering the manifest array and swapping `placement?: 'bottom'` for `group: 'primary' | 'cold'` in the type definition.
+- Deleting `buildThemeToggle()` and `buildDockToggle()` and their call sites in `renderManifest`.
+- Deleting the ungrouped-terminal loop (`shell.js:1240`) and `buildTerminalButton`.
+- Simplifying `applyBottomAnchor` to a single CSS rule on the first cold-group icon.
+- Adding `railHidden: true` to manifest entries that keep their routes but lose their rail icon.
+
+### Complex / Risky
+- Deleting the UFO (`createMissionControlIcon`, `ensureMissionControlIcon`, three CRITICAL regression-guard call sites, the `missionControlState` postMessage handler, the `#strip-mission-control` CSS block, and the relay source at `terminals.js:1764`) — a cross-file deletion with a postMessage protocol change. The Mission Control PANEL icon is a static manifest entry painted by `selectPanel`, NOT a state-driven element, so deleting the relay does not orphan it — but the plan must state this explicitly so the coder does not hesitate.
+- Promoting `#strip-mission-control.mission-control-dimmed` to `.strip-icon.is-dormant` BEFORE deleting the UFO rules — ordering dependency shared with the colour and team-slots plans.
+- `showStripToast` survival — exists only for the UFO's start feedback, but the team-slots plan's start-failure path uses it. Whichever plan lands second must not delete it.
+- Wiring the new `linear` availability key in both composition roots (`TaskViewerProvider.ts:4102` and `bootstrap.ts:876`) — a pre-existing divergence (bootstrap omits `planning` and `tickets`) means the call is already incomplete.
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions:**
+- `renderTerminalSection` rebuilds every button from scratch on every fleet push. The `ensureMissionControlIcon` call at the end of each rebuild is what kept the UFO alive across rebuilds. With the UFO deleted, the CRITICAL 1 regression guards (`shell.js:1080`, `:1246`, `renderManifest`) become dead code pointing at nothing — delete them, do not leave them.
+
+**Security:**
+- No new attack surface. Deleting the `missionControlState` relay removes a postMessage handler — strictly reduces the shell's message surface.
+
+**Side Effects:**
+- `POST /mission-control/start` keeps a live non-UI caller: the `/switchboard-manage` skill (`LocalApiServer.ts:550`). Do NOT delete the endpoint or its `missionControlStart` option along with the button.
+- The lit-click behaviour (navigate to Terminals, post `switchToController`) is not replaced — deliberately given up.
+
+**Dependencies & Conflicts:**
+- **MUST land first** — declares the group key every other rail subtask renders into, and deletes the UFO. Nothing else in the rail should be attempted against the old flat manifest.
+- **Promote `.strip-icon.is-dormant` before deleting UFO CSS** — shared ordering constraint with the colour and team-slots plans.
+- **`showStripToast` survival** — shared with the team-slots plan. Whichever lands second must not delete it.
+- `pulsedDoneStamps` `term:` branch becomes dead when per-terminal buttons are deleted — remove the dead arm, keep the prune loop.
+
+## Dependencies
+
+- **Rail restructure is the foundation** — every other rail subtask (colour, team slots, dispatched state, top-right cluster) depends on the group key existing and the UFO being deleted.
+- **Colour plan** — depends on the UFO being deleted (its cyan leaves with the button). Depends on `.strip-icon.is-dormant` promotion happening before UFO CSS deletion.
+- **Team-slots plan** — depends on the group key for slot placement. Depends on `.strip-icon.is-dormant` for dormant slot rendering. Depends on `showStripToast` surviving.
+- **Top-right cluster** — depends on the dock toggle being removed from the rail (this plan deletes `buildDockToggle`).
+
+## Adversarial Synthesis
+
+Key risks: (1) cross-file UFO deletion (12 symbols across 2 files) must not orphan the Mission Control panel icon — the panel icon is a static manifest entry, not a state-driven element, so the relay deletion is safe, but the plan must state this. (2) `.strip-icon.is-dormant` promotion must happen before UFO CSS deletion or team slots lose their dim state. (3) `showStripToast` survival depends on landing order with the team-slots plan. Mitigations: all three are named in edge cases and the feature's dependency section; the panel-icon distinction is verified by code reading (`selectPanel` paints from the `icons` map, not from the `missionControlState` relay).
+
 ## No migration
 
 Clean break, no compat shim. Rail composition is UI chrome with no persisted state, and
@@ -156,3 +204,19 @@ silently vanishes in one host. Diff the two calls by hand; no gate catches this.
    path still works after the button is gone — the endpoint outlives its caller here.
 8. Grep for `missionControlState`, `ensureMissionControlIcon` and `strip-mission-control`
    and confirm zero live references remain in either host.
+
+### Goal Invariants
+
+- Assert `PanelManifestEntry` at `src/services/headlessPanelHtml.ts` has a required `group: 'primary' | 'cold'` field and no `placement` field.
+- Assert `buildThemeToggle` is absent from `src/webview/shell.js`.
+- Assert `buildDockToggle` is absent from `src/webview/shell.js`.
+- Assert `createMissionControlIcon` is absent from `src/webview/shell.js`.
+- Assert `ensureMissionControlIcon` is absent from `src/webview/shell.js`.
+- Assert `#strip-mission-control` is absent from `src/webview/shell.html`.
+- Assert `buildTerminalButton` is absent from `src/webview/shell.js`.
+- Assert `missionControlState` is absent from `src/webview/terminals.js` (relay source deleted).
+- Assert `POST /mission-control/start` endpoint is still present in `src/services/LocalApiServer.ts` (endpoint outlives its UI caller).
+- Assert `missionControlStart` option is still wired in both `src/services/TaskViewerProvider.ts` and `src/standalone/bootstrap.ts`.
+- Assert `.strip-icon.is-dormant` class exists in `src/webview/shell.html` (promoted from UFO's dimmed treatment).
+- Assert `defaultPanelId` resolves to `'board'` regardless of manifest order.
+- Assert count of rail buttons equals 5 primary + 3 team slots + 4 cold = 12, independent of fleet size.

@@ -53,13 +53,17 @@ None. Behaviour-restoring bug fix with no schema or config change.
 - **"Unset" must differ from "empty".** `hostRoots` needs three states: never injected (skip the openness gate, preserve today's behaviour), injected and non-empty (enforce), injected and empty (enforce — no folders open, so no redirect). Collapsing unset and empty into one value silently disables all redirects during the activation window before the index is built, or in any host that has not yet wired the seam. Model it as `string[] | null`, not `string[]`.
 - **The memo cache is keyed by input only.** `_mappingCache` (line 21) memoises `workspaceRoot → effectiveRoot`. Its answers become stale the moment the root set changes. `clearMappingCache()` already exists; the root-set setter must call it.
 - **`buildMappingIndexFromDbs` overwrites `_mappingCache` with the index** (line 133: `_mappingCache = new Map(index)`). That pre-seeds resolution results from the index, so the gate must be applied when the index is built as well as in the resolver — fixing only the resolver leaves gated-out redirects reachable through the pre-seeded cache.
-- **`KanbanDatabase._redirectToParentIfMapped`** (`KanbanDatabase.ts:1183-1192`) delegates to the resolver via a dynamic `require`. It inherits the fix, but `KanbanDatabase._instances` is keyed on the redirected root — instances cached before the root set was injected hold the pre-fix key. `invalidateWorkspace` must run for affected roots after a root-set change.
+- **`KanbanDatabase._redirectToParentIfMapped`** (`KanbanDatabase.ts:1186-1193`) delegates to the resolver via a dynamic `require`. It inherits the fix, but `KanbanDatabase._instances` is keyed on the redirected root — instances cached before the root set was injected hold the pre-fix key.
+
+> **Superseded:** `invalidateWorkspace` must run for affected roots after a root-set change.
+> **Reason:** `invalidateWorkspace` calls `_redirectToParentIfMapped` which calls the resolver. After the root set changes, the resolver returns a different result, so `invalidateWorkspace(childRoot)` looks up the NEW key (`childRoot`), not the OLD key (`parentRoot`). The old instance is never found and never invalidated. The proposed fix does not work.
+> **Replaced with:** Accept that old instances are orphaned. After `clearMappingCache()` + root set change, `forWorkspace(childRoot)` resolves to `childRoot` (new key) and creates a fresh instance. The old instance at `parentRoot` is orphaned — nobody asks for it by that key unless the parent is also open (in which case it's the correct instance). The eviction sweep (every 60s) cleans it up. The only residual risk is a transient stale reference in a provider holding the old instance; this self-corrects on the next `forWorkspace` call. Document this in the code comment on `setHostWorkspaceRoots`.
 
 ## Edge-Case & Dependency Audit
 
 ### Race Conditions
 - **Activation window.** `initializeMappingIndex` is async (`extension.ts:206`). Any resolver call before it completes sees `hostRoots === null` and skips the gate — deliberately preserving current behaviour rather than failing into a blank board. This is the same transient-empty-index window that `switchboardLocationGuard.ts:17-27` documents as the root cause of an earlier bug class; the `null` sentinel is what keeps this fix from repeating it.
-- **Workspace folders change mid-session.** `extension.ts:1857` already re-runs `initializeMappingIndex` on `switchboard.mappingsChanged`. Confirm `onDidChangeWorkspaceFolders` also triggers a rebuild; if it does not, add it — otherwise adding a folder to the window leaves a stale root set and the gate rejects a now-legitimate redirect.
+- **Workspace folders change mid-session.** `extension.ts:1787` already re-runs `initializeMappingIndex` on `switchboard.mappingsChanged`. The `onDidChangeWorkspaceFolders` handler at line 1279 does NOT call `initializeMappingIndex` — it only runs integration auto-pull, auto-archive, and migration. This plan adds `initializeMappingIndex(outputChannel)` to that handler; otherwise adding a folder to the window leaves a stale root set and the gate rejects a now-legitimate redirect.
 
 ### Security
 - None. No auth, PII, or trust boundary; all paths are local and already user-configured.
@@ -78,9 +82,9 @@ None inbound. **Plan 3 must not ship before this plan.**
 
 ## Adversarial Synthesis
 
-Key risks: (1) collapsing the `null`/`[]` distinction re-creates the transient-empty-index bug the location guard was written to close; (2) fixing the resolver but not `buildMappingIndexFromDbs` leaves redirects reachable through the pre-seeded `_mappingCache`; (3) stale `KanbanDatabase._instances` keyed on the pre-fix redirect target keep serving the wrong DB until invalidated; (4) the fix could plausibly break the working mega-workspace case, which is the feature users actually rely on.
+Key risks: (1) collapsing the `null`/`[]` distinction re-creates the transient-empty-index bug the location guard was written to close; (2) fixing the resolver but not `buildMappingIndexFromDbs` leaves redirects reachable through the pre-seeded `_mappingCache`; (3) stale `KanbanDatabase._instances` keyed on the pre-fix redirect target are orphaned but not actively invalidated — `invalidateWorkspace` cannot find them because it uses the resolver, which now returns a different key; (4) the fix could plausibly break the working mega-workspace case, which is the feature users actually rely on.
 
-Mitigations: model `hostRoots` as `string[] | null` with an explicit unset arm and test all three states; apply the gate at both index-build and resolve time in the same commit; call `clearMappingCache()` from the root-set setter and invalidate affected `KanbanDatabase` instances; make the multi-root grouping case a first-class item in the verification plan, not an afterthought.
+Mitigations: model `hostRoots` as `string[] | null` with an explicit unset arm and test all three states; apply the gate at both index-build and resolve time in the same commit; call `clearMappingCache()` from the root-set setter and accept that old `KanbanDatabase._instances` entries are orphaned (the eviction sweep reclaims them; transient stale references self-correct on the next `forWorkspace` call); make the multi-root grouping case a first-class item in the verification plan, not an afterthought.
 
 ## Proposed Changes
 
@@ -109,7 +113,7 @@ Replace the single combined loop with:
 
 **Step 4 — Inject the root set at index build.**
 
-In `initializeMappingIndex` (line 206), before `buildMappingIndexFromDbs`, call `setHostWorkspaceRoots(kanbanProvider.getWorkspaceRoots())` — or read the folder list already being walked at line 207. Verify `onDidChangeWorkspaceFolders` re-runs `initializeMappingIndex`; add it if absent.
+In `initializeMappingIndex` (line 206), before `buildMappingIndexFromDbs`, call `setHostWorkspaceRoots(kanbanProvider.getWorkspaceRoots())` — or read the folder list already being walked at line 207. **This plan owns the `onDidChangeWorkspaceFolders` fix** (line 1279): add `initializeMappingIndex(outputChannel)` to the handler so adding a folder mid-session rebuilds the index and refreshes the root set. Plan 3 defers to this plan for this edit.
 
 ### `src/standalone/bootstrap.ts`
 

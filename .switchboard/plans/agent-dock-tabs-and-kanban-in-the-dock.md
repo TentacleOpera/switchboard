@@ -46,6 +46,49 @@ list built for a narrow column — which is what a 648px dock is. The full board
   (`terminals.html:1434`) all stay and keep working.
 - **The Kanban panel is untouched.** The board keeps its own rail icon and its own panel.
 
+## User Review Required
+
+No user review required — plan is in PLAN REVIEWED status and ready for dispatch.
+
+## Complexity Audit
+
+### Routine
+- Adding `activeTab` to `sb.agentDock` through the existing `readDockState`/`writeDockState` pair.
+- Creating a tab strip in `#dock-header` ahead of `#dock-title` and `#dock-close`.
+- Using `display`-toggle-not-`[hidden]` idiom for two iframes.
+- Setting `#dock-title` per occupant (agent: seat friendly name; kanban: column/project).
+
+### Complex / Risky
+- Kanban-only mode for the terminals document (`/terminals?kanban=1&dock=1`) — a new body-class-driven mode that hides the grid, sidebar, and toolbar. Must not inherit solo-specific suppressions by accident, nor re-enable settings writes from a dock frame. The kanban pane may need re-parenting or repositioning when the grid is hidden — the plan says "renders one full-height kanban pane" but does not fully specify how the pane DOM element works when its grid container is hidden.
+- Theme fan-out to both frames — `applyThemeToAll` (`shell.js:692`) must send the theme message to BOTH dock frames. The visible tab looks right and the other is stuck in the old palette until reload — the one-seam-wired-the-other-silently-not failure class.
+- Splitter drag pointer-events — `body.dock-dragging` sets `pointer-events: none` on `.panel-frame` and `#dock-frame`. The selector must cover both dock frames or the drag dies on entering the new one.
+- Doubled background polling — a second `/terminals` document in the dock runs its own fleet poll, queue depth refresh, and agent groups refresh. The `isDockFrame` guard suppresses `postFleetStateToShell` but the polls still run. In kanban mode, suppress `startFleetPoll`, `refreshTeamQueueDepths`, and `refreshAgentGroupsForShell` — the kanban pane reads board state, not fleet state.
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions:**
+- Two kanban panes at once (dock tab + in-grid pane): both read live state over the WS rail. `getFullState` resync-on-connect handles multiple clients; verify convergence rather than special-casing.
+
+**Security:**
+- No new attack surface. The kanban tab is the same `/terminals` document in a new mode.
+
+**Side Effects:**
+- `btn-kanban-toolbar` stays — the in-grid kanban pane is not retired. Both surfaces can coexist.
+- Drag-and-drop across documents: card-to-pane drag works inside the terminals document but crosses an iframe boundary from the dock's kanban tab to a terminal pane in the panel. This will not work; if a card drag starts in the dock, it must fail visibly rather than appear to do nothing.
+
+**Dependencies & Conflicts:**
+- **Dock-starts-MC plan** — retires the role picker. The tab strip must not carry `#dock-role-btn` / `#dock-role-menu` forward. Whichever plan lands second must not re-add the picker.
+- **`activeTab` persistence** — shared with the dock-starts-MC plan's `sb.agentDock` changes. Both plans modify the same localStorage object; coordinate the schema.
+
+## Dependencies
+
+- **Dock-starts-MC plan** — must have retired the role picker. The tab strip has no role picker to accommodate. If tabs land first, building a picker into the header and then removing it is wasted work.
+- **Rail restructure** — no direct dependency, but the dock toggle moves to the top-right cluster (companion plan), which depends on the rail restructure.
+
+## Adversarial Synthesis
+
+Key risks: (1) doubled background polling from a second `/terminals` document — the kanban mode should suppress fleet polling, queue depth refresh, and agent groups refresh. (2) Theme fan-out to both frames — missing the second frame leaves it stuck in the old palette. (3) Kanban mode body class collisions with solo mode — must not inherit solo-specific suppressions. (4) Kanban pane DOM when grid is hidden — the plan needs to specify how the pane renders full-height when its grid container is hidden. Mitigations: (1) suppress fleet polling in kanban mode, (2) plan names both frames, (3) plan names the collision risk, (4) needs clarification.
+
 ## No migration
 
 Clean break. `sb.agentDock` (`shell.js:DOCK_STATE_KEY`) gains an `activeTab` key; a stored
@@ -135,3 +178,17 @@ not add compat shims. CLAUDE.md's migration rule is waived for this release.
 11. A dock kanban tab and an in-grid pane open together: move a card in one, confirm the
     other converges.
 12. Both hosts.
+
+### Goal Invariants
+
+- Assert `#agent-dock` in `src/webview/shell.html` contains two iframes (agent + kanban), not one.
+- Assert `#dock-header` contains a tab strip with two tabs, ahead of `#dock-title` and `#dock-close`.
+- Assert `#dock-role-btn` and `#dock-role-menu` are absent from `#dock-header` (picker retired by dock-starts-MC plan).
+- Assert `sb.agentDock` localStorage includes an `activeTab` key.
+- Assert `applyThemeToAll` in `src/webview/shell.js` sends the theme message to BOTH dock frames.
+- Assert `body.dock-dragging` pointer-events selector covers both dock frames.
+- Assert `/terminals?kanban=1&dock=1` renders a single full-height card list with no grid, no sidebar, and no toolbar.
+- Assert switching tabs does not reload either iframe (terminal scrollback and live WebSocket survive, card-list scroll position survives).
+- Assert `btn-kanban-toolbar` in the Terminals panel still works (in-grid kanban pane not retired).
+- Assert kanban mode does NOT inherit solo-specific suppressions (e.g. `saveSetting` suppression).
+- Assert kanban mode suppresses `startFleetPoll`, `refreshTeamQueueDepths`, and `refreshAgentGroupsForShell` (no doubled background polling).

@@ -46,6 +46,53 @@ another tab inside a panel about something else.
 - **Connections keeps Hand-offs, Jobs, Web Agents and Docs Health**, and keeps its
   Providers tab for every other provider.
 
+## User Review Required
+
+No user review required — plan is in PLAN REVIEWED status and ready for dispatch. The open item about "instructions to do all the stuff in the most recent plans" (section 3 scope) is flagged in the plan body and does not block dispatch — section 3 covers the remote-control loop and nothing more until confirmed.
+
+## Complexity Audit
+
+### Routine
+- Creating `src/webview/linear.html` + `linear.js` following the panel contract (CSP, nonce, transport shim, theme class, tab strip).
+- Adding a manifest entry `{ id: 'linear', label: 'Linear', icon: nav-linear.svg, route: '/linear', group: 'primary' }`.
+- Adding a `getPanelHtmlById` case for `'linear'`.
+- Deep link `/#linear` selects the panel.
+- Cross-panel navigation via existing `postMessage {type:'switchPanel', panel}` bridge.
+
+### Complex / Risky
+- Composition-root wiring — the highest-divergence-risk change in the set. Must add `linear:` to both `TaskViewerProvider.ts:4102` and `bootstrap.ts:876` in the same diff. These two calls already disagree (bootstrap omits `planning` and `tickets`); add `linear` to both regardless and flag the pre-existing divergence for a separate fix.
+- Moving Linear rows out of Connections → Providers — if Providers is a generic list rendered from a provider registry, exclude Linear from that list rather than special-casing its markup. Must not break ClickUp connectivity or Hand-offs/Jobs/Web Agents/Docs Health.
+- Generated instruction text from live mappings — never cache across a mapping change, never persist a copy. Status names are user data: `textContent`, never `innerHTML`.
+- Unauthorised install must not omit the panel — fail-open (`!== false`), like every optional panel except Terminals. An unauthorised Linear panel is exactly where authorising happens.
+- Two surfaces showing remote-control state (this panel + `btn-remote-control` in kanban toolbar) — must read one source and both reflect a change made in the other. Use the WS broadcast rail, not local copies.
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions:**
+- Two surfaces toggling remote control: if both are clicked simultaneously, the WS broadcast rail serialises the state change. Verify convergence rather than special-casing.
+
+**Security:**
+- Linear MCP authorisation is separate from Switchboard's Linear auth. The panel must not conflate the two or imply one grants the other.
+- Status names arrive from Linear and are rendered into instructions: `textContent`, never `innerHTML` — XSS guard.
+
+**Side Effects:**
+- Connections panel loses its Linear rows but keeps every other provider. ClickUp connectivity, Hand-offs, Jobs, Web Agents, Docs Health all intact.
+- Tickets panel is byte-for-byte unaffected: TICKETS, CLICKUP, LINEAR tabs all present and functional.
+- `btn-remote-control` in the kanban toolbar stays — one state, two controls, not a second mechanism.
+
+**Dependencies & Conflicts:**
+- **Rail restructure** — provides the `group: 'primary'` key and the primary rail slot for Linear. The Linear panel takes the primary slot the restructure reserves for it.
+- **Pre-existing divergence** — `bootstrap.ts:876` omits `planning` and `tickets`. This is out of scope; add `linear` to both calls and flag the divergence separately.
+
+## Dependencies
+
+- **Rail restructure** — must have declared the `group: 'primary'` key. The Linear manifest entry uses `group: 'primary'`; without the restructure, the manifest type does not have the `group` field.
+- Independent of all other subtasks — the Linear panel shares only its manifest entry with the rail restructure. It can proceed in parallel once the group key exists.
+
+## Adversarial Synthesis
+
+Key risks: (1) composition-root divergence — `bootstrap.ts` already omits `planning` and `tickets`; adding `linear` to a known-incomplete call is adding to a broken call. Flag the pre-existing divergence as out of scope; add `linear` to both regardless. (2) Unauthorised install must not omit the panel — fail-open, not fail-closed, or the panel where authorising happens is invisible. (3) Generated instruction text drift — generated from live mappings, so it changes when mappings change; never cache or persist. (4) Two surfaces showing remote-control state — must converge via WS broadcast, not local copies. Mitigations: (1) flag divergence, (2) plan specifies fail-open, (3) plan says "never cache across mapping change," (4) plan says "use WS broadcast rail."
+
 ## No migration
 
 Clean break. Linear setup UI relocates; no redirect shims and no preserved deep links to
@@ -163,3 +210,18 @@ the remote-control loop above and nothing more.
 9. Copy the generated agent instruction text; confirm it contains the operator's actual
    status names, and that changing a mapping changes the text.
 10. Theme under both `theme-claudify` and `cyber-theme-enabled`.
+
+### Goal Invariants
+
+- Assert `src/webview/linear.html` exists and follows the panel contract (nonce, CSP, transport shim, theme class, tab strip).
+- Assert `src/webview/linear.js` exists.
+- Assert `getPanelsManifest` in `src/services/headlessPanelHtml.ts` includes an entry with `id: 'linear'` and `group: 'primary'`.
+- Assert `getPanelHtmlById` in `src/services/headlessPanelHtml.ts` has a `case 'linear'`.
+- Assert `linear` availability key is passed in both `src/services/TaskViewerProvider.ts` and `src/standalone/bootstrap.ts`.
+- Assert `/linear` route serves the panel document.
+- Assert `/#linear` deep link selects the panel.
+- Assert the Tickets panel's LINEAR tab is present and functional (byte-for-byte unaffected).
+- Assert Connections panel's ClickUp connectivity, Hand-offs, Jobs, Web Agents, and Docs Health are intact.
+- Assert an unauthorised install renders the Linear panel (fail-open, not omitted).
+- Assert `btn-remote-control` in the kanban toolbar and the Linear panel both reflect remote-control state changes (one source, two controls).
+- Assert generated instruction text uses `textContent` for status names (never `innerHTML`).

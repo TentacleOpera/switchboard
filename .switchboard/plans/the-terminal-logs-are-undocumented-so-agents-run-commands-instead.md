@@ -51,7 +51,7 @@ The `-http` runsheet is the endpoint reference for this persona. It does not kno
 exist.
 
 **And the protocol asks for the capability by name.**
-`.agents/protocols/switchboard-mission-control/SKILL.md:407`, on processing a turn-end notice:
+`.agents/protocols/switchboard-mission-control/SKILL.md:413`, on processing a turn-end notice:
 
 > **`blocked`** (seat went quiet without a completion report) → **check the terminal.** If it is
 > asking a question, answer it or escalate. If it crashed or ran out of context, re-dispatch the
@@ -64,7 +64,7 @@ at `:511`, `rev-list --count` at `:521`, `status --porcelain` at `:522`), the re
 commands. It shells out to git, greps plan files, messages the lead and waits — reconstructing from
 side effects what the transcript states directly.
 
-**The workaround is strictly worse than the thing it replaces.** `:388` warns that terminal silence
+**The workaround is strictly worse than the thing it replaces.** `:392` warns that terminal silence
 is a lead's normal working state, and `:379` that a card resting in a coding column with
 `dispatched_at` cleared is finished rather than in-flight. Distinguishing "asking a question" from
 "crashed" from "idle by design" is exactly what the log's last screenful answers and what git
@@ -82,9 +82,24 @@ Every comparable handler in the file resolves the request's root first —
 `url.searchParams.get('workspaceRoot') || this._options.workspaceRoot` at `:2541`, `:2645`, `:6298`,
 `:6446`. The log handlers skip the first half. In a multi-root server, a caller passing
 `?workspaceRoot=/other/repo` silently gets the **primary** root's logs: a 200, a plausible
-transcript, the wrong terminal. This is the failure Hard Rule 5 exists for
-(`.claude/skills/switchboard/SKILL.md:571`: "A bare call silently targets the primary root — the
-wrong workspace"), and here the rule cannot help, because the parameter is not read.
+transcript, the wrong terminal.
+
+> **Superseded:** This is the failure Hard Rule 5 exists for
+> (`.claude/skills/switchboard/SKILL.md:571`: "A bare call silently targets the primary root — the
+> wrong workspace"), and here the rule cannot help, because the parameter is not read.
+> **Reason:** The cited file (`.claude/skills/switchboard/SKILL.md`) is 123 lines long and contains
+> no "Hard Rules" section at all. The quote "A bare call silently targets the primary root" appears
+> nowhere in the codebase. The actual Hard Rules live in
+> `.agents/protocols/switchboard-mission-control/SKILL.md:21-42`, and actual Hard Rule 5 is
+> "Worktree messaging is one line" — unrelated to workspaceRoot resolution. The multi-root concern
+> is real but its authority is the `-http` runsheet's own section 1 (lines 48-50: "DB-backed
+> endpoints accept an optional `?workspaceRoot=<root>`... omit it to use the primary workspace"),
+> not a phantom rule.
+> **Replaced with:** This is the exact failure the `-http` runsheet's own multi-root contract
+> (`.agents/protocols/switchboard-mission-control-http/SKILL.md:48-50`) describes: omit
+> `workspaceRoot` and you get the primary root. Here the parameter is not read, so even a caller
+> that *supplies* it gets the primary root's logs — the contract is silently broken for this
+> handler.
 
 ### Root Cause
 
@@ -102,8 +117,10 @@ the handler was written for the one-root case the viewer runs in.
   headings and session rolling are all correct and load-bearing.
 - **Not adding retention.** Deferred by the writer's own comment to
   `retention-and-archive-for-unbounded-growth.md`; rotation-as-session-roll stays.
-- **Not making logs the status of record.** Git and the board remain authoritative (Hard Rule 1).
-  The log is how you read a *terminal*, which is a different question from whether work landed.
+- **Not making logs the status of record.** Git and the board remain authoritative (Hard Rule 1,
+  `.agents/protocols/switchboard-mission-control/SKILL.md:22`: "Ground truth over self-report...
+  Judge progress only from git and board state"). The log is how you read a *terminal*, which is a
+  different question from whether work landed.
 - **Not building a new endpoint.** Two exist. They need documenting and one bug fixed.
 
 ## Metadata
@@ -189,7 +206,8 @@ fence caveat named.
 **Side effects**
 - Documenting a 2 MiB-capable read to a context-limited agent invites a context blowout. Mitigated
   by prescribing a diagnostic tail.
-- Agents may start preferring logs over git for completion. Hard Rule 1 must be restated where the
+- Agents may start preferring logs over git for completion. Hard Rule 1
+  (`.agents/protocols/switchboard-mission-control/SKILL.md:22`) must be restated where the
   log guidance lands: the log tells you what a terminal is doing, git tells you what landed.
 
 **Migration**
@@ -201,7 +219,10 @@ fence caveat named.
 
 - **Related:** `the-pre-flight-names-six-checks-and-supplies-one-command.md` — both add endpoint
   documentation to `switchboard-mission-control-http/SKILL.md`; land them in either order but expect
-  a touch in the same file.
+  a touch in the same file. **Note (improve pass):** this file was not found in
+  `.switchboard/plans/` during review — it may have been deleted, renamed, or never created. If it
+  no longer exists, the "touch in the same file" conflict concern is moot. Verify before
+  implementation.
 - **Defers to:** the writer's own `retention-and-archive-for-unbounded-growth.md` for retention.
 - **Reads, does not change:** `switchboard-contracts` (`dispatched_at` as the working-state latch).
 
@@ -214,10 +235,20 @@ so the fallback silently finds nothing for any terminal with a space in its name
 root resolution by joining a caller-supplied path without validating it against `_allRoots`,
 introducing the handler's first traversal surface where none existed; (4) changing the resolution
 order and breaking the log viewer, which calls without the parameter; (5) agents adopting the log as
-completion evidence and abandoning git verification. Mitigations: put the no-verbatim-quoting rule
-in the same paragraph as the endpoint; document the `_`-substitution prefix rule beside the file
-path; validate the root against `_allRoots` and keep `param || _options.workspaceRoot` ordering
-exactly; and restate Hard Rule 1 where the log guidance lands.
+completion evidence and abandoning git verification; (6) the log guidance landing only in the
+`blocked` branch and the `-http` runsheet, leaving the Signals section's "ask the lead" path
+(`:375`) without the mechanism — an agent following that path still reconstructs terminal state by
+running commands. Mitigations: put the no-verbatim-quoting rule in the same paragraph as the
+endpoint; document the `_`-substitution prefix rule beside the file path; validate the root against
+`_allRoots` and keep `param || _options.workspaceRoot` ordering exactly; restate Hard Rule 1
+(`.agents/protocols/switchboard-mission-control/SKILL.md:22`) where the log guidance lands; and
+cross-reference the log flow from the Signals section (`:360-394`), not just the `blocked` branch.
+**Corrected during improve pass:** the original plan cited a fabricated "Hard Rule 5" from
+`.claude/skills/switchboard/SKILL.md:571` (a 123-line file with no Hard Rules section) — the
+multi-root concern is now justified from the `-http` runsheet's own section 1 (`:48-50`). The
+`_allRoots` validation is explicitly framed as a new pattern, not part of the canonical match. A
+phantom dependency (`the-pre-flight-names-six-checks-and-supplies-one-command.md`) was flagged as
+not found.
 
 ## Proposed Changes
 
@@ -225,11 +256,15 @@ exactly; and restate Hard Rule 1 where the log guidance lands.
    `_handleTerminalLogList` (`:4830`): read `workspaceRoot` from the query string first, falling back
    to `this._options.workspaceRoot`, matching `:2541` / `:2645` / `:6298` / `:6446`.
 2. **Validate the supplied root against `_allRoots`** before building a path, rejecting an unknown
-   root rather than joining it.
+   root rather than joining it. **This is a new pattern for this file:** none of the four cited
+   canonical handlers (`:2541`, `:2645`, `:6298`, `:6446`) validate against `_allRoots` — they pass
+   the root to `getKanbanDatabase`, which returns null for unknown roots. The log handlers build a
+   filesystem path directly, so an unvalidated root is a traversal vector. The validation is
+   justified by the path-building surface, not by conformity to the existing pattern.
 3. **Document both endpoints** in `.agents/protocols/switchboard-mission-control-http/SKILL.md`:
    paths, query params (`session`, `tail`, `offset`, `workspaceRoot`), the `Content-Range` and
    `X-Log-Total-Bytes` headers, the default and cap, and the list-then-read flow.
-4. **Replace "check the terminal" at `:407`** with the actual mechanism: list the terminal's
+4. **Replace "check the terminal" at `:413`** with the actual mechanism: list the terminal's
    sessions, read a diagnostic tail of the newest, and use the last `##` heading plus the trailing
    output to distinguish a waiting question from a crash from designed idleness.
 5. **Add the secret-handling rule** in the same section: read to diagnose, never quote verbatim into
@@ -237,10 +272,16 @@ exactly; and restate Hard Rule 1 where the log guidance lands.
 6. **Document the log file layout** as the board-down fallback — `.switchboard/logs/<sanitized-name>-<session-id>.md`,
    the `[^a-zA-Z0-9._-] → _` substitution, the `##` prompt-boundary outline, the ` ```console `
    fences, and the caveat that a raw `tail -c` is not fence-normalized.
-7. **Restate Hard Rule 1** where the guidance lands: the log is how you read a terminal; git and the
-   board remain the status of record.
+7. **Restate Hard Rule 1** (`.agents/protocols/switchboard-mission-control/SKILL.md:22`) where the
+   guidance lands: the log is how you read a terminal; git and the board remain the status of record.
 8. **Note the rename split** — after a fleet rename the pre-rename file keeps its old prefix, so a
    terminal's history can span two prefixes.
+9. **Cross-reference the log guidance from the Signals section**
+   (`.agents/protocols/switchboard-mission-control/SKILL.md:360-394`), not just the `blocked` branch
+   at `:413`. The "ask the lead" path at `:375` and the "Signals" intro at `:362` also involve
+   terminal inspection; an agent following those paths without the log mechanism will still
+   reconstruct terminal state by running commands. Add a one-line pointer in the Signals section to
+   the log-reading flow documented in the `-http` runsheet.
 
 ### Migration
 
@@ -278,3 +319,21 @@ existing client are unaffected.
 12. **Session roll.** Trigger a session boundary between list and read; assert the named file still
     reads and the report states the session's timestamp rather than implying it is live.
 13. **Both hosts.** Repeat 1, 6 and 8 against the extension host and standalone `npx switchboard`.
+14. **Signals section cross-reference.** Assert the Signals section
+    (`.agents/protocols/switchboard-mission-control/SKILL.md:360-394`) contains a pointer to the
+    log-reading flow, and that an agent following the "ask the lead" path at `:375` encounters the
+    log mechanism before falling back to `ptySendPrompt`.
+
+### Goal Invariants
+
+- Assert `GET /terminals/<name>/log` appears in
+  `.agents/protocols/switchboard-mission-control-http/SKILL.md` (grep for the literal path string).
+- Assert `GET /terminals/<name>/logs` appears in the same file.
+- Assert `_handleTerminalLog` in `src/services/LocalApiServer.ts` reads `workspaceRoot` from
+  `url.searchParams` (not from `this._options.workspaceRoot` alone).
+- Assert `_handleTerminalLogList` in the same file does the same.
+- Assert both handlers validate the resolved root against `this._allRoots` before building a path.
+- Assert the `blocked` branch at `.agents/protocols/switchboard-mission-control/SKILL.md:413` no
+  longer contains the bare phrase "check the terminal" without a following log-reading instruction.
+
+**Recommendation:** Complexity 3 → Send to Intern.

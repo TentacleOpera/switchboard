@@ -55,7 +55,7 @@ authoritative reference for what the content *should* be, namely git — never c
 
 ## Metadata
 
-**Complexity:** 2
+**Complexity:** 4
 **Tags:** bugfix, devops, reliability, test
 
 ## User Review Required
@@ -81,13 +81,17 @@ is exactly what nobody read for the four weeks this was happening.
 ### Routine
 
 - A `git status --porcelain -- .agents .claude` call in a test that already walks `.agents/`.
+- Removing the `generatedAt` field from two manifest objects (two lines, one per file).
+- Adding a `.claude/` packaging assertion mirroring the existing `.agents/` one at `:206`.
+- Prepending a guard script call to the `vscode:prepublish` npm script string.
 
 ### Complex / Risky
 
 - **The check must run where packaging happens, not only in CI.** `vscode:prepublish` runs
   `npm run package`, and `package:targets` shells `scripts/package-targets.sh`. A contract test that
-  only runs under `npm test` will pass while a local `vsce package` ships anyway. Wire it into the
-  packaging path, or the guard is advisory.
+  only runs under `npm test` will pass while a local `vsce package` ships anyway. Wire it into
+  `vscode:prepublish` so every `vsce package` invocation hits it (vsce has no `--no-prepublish`
+  flag — verified), or the guard is advisory.
 - **Untracked files must count.** The 52 resurrected skills arrived as *new* files. A check that
   looks only at modifications to tracked files misses the exact failure it exists to catch —
   `--porcelain` reports them as `??` and they must be treated as failure.
@@ -98,13 +102,22 @@ is exactly what nobody read for the four weeks this was happening.
 - **A shallow or absent git context breaks the reference.** In a tarball build or a shallow CI clone
   the comparison may be unavailable. Fail closed with a clear message rather than silently skipping —
   a skipped guard is the state we are already in.
+- **The `generatedAt` removal must land in the same change.** Both ledgers
+  (`.agents/.switchboard-bundled.json`, `.claude/.switchboard-generated.json`) are rewritten with a
+  fresh `generatedAt: new Date().toISOString()` on every activation
+  (`ControlPlaneMigrationService.ts:1410`, `ClaudeCodeMirrorService.ts:410`). Nothing reads that
+  field — the only value consumed from the bundle ledger is `parsed.files`
+  (`ControlPlaneMigrationService.ts:1164-1165`). A guard asserting `git status --porcelain -- .agents
+  .claude` is empty would fail after every activation and be disabled within a day. Removing the
+  field makes each ledger a pure function of the bundle's file list — byte-stable across activations
+  — which fixes the guard and the user-visible churn in the same two lines.
 
 ## Edge-Case & Dependency Audit
 
 **Race conditions**
 - An editor activating *during* packaging can write `.agents/` between the check and the archive
   step. Narrow, and largely mitigated by running the check as late as possible in the packaging
-  script.
+  script (i.e. in `vscode:prepublish`, which fires immediately before vsce archives).
 
 **Security**
 - None. A local test-time git query, no new surface.
@@ -114,6 +127,9 @@ is exactly what nobody read for the four weeks this was happening.
   the message must make "commit it first" obvious.
 - Existing release automation gains a new failure mode. Worth announcing rather than discovering
   during a release.
+- Removing `generatedAt` from the two ledger manifests changes the content of those files on disk.
+  Both are tracked in git, so the first activation after the change produces a one-time diff (the
+  field disappears). This is a one-time churn, not the perpetual churn the field causes today.
 
 **Migration**
 - Test/build tooling only. No schema, settings, stored state, or shipped behaviour change; no impact
@@ -121,54 +137,88 @@ is exactly what nobody read for the four weeks this was happening.
 
 ## Dependencies
 
-- **The ledgers' `generatedAt` stamp must go first, or the guard is unusable — and it is a user-facing
-  bug in its own right.** `.agents/.switchboard-bundled.json` and `.claude/.switchboard-generated.json`
-  are rewritten on every activation with a fresh `generatedAt: new Date().toISOString()`
-  (`ControlPlaneMigrationService.ts:1281`, `ClaudeCodeMirrorService.ts:410`). Nothing reads that field —
-  the only value consumed from the bundle ledger is `parsed.files` (`:1184-1185`). A guard asserting
-  `git status --porcelain -- .agents .claude` is empty would therefore fail after every activation and
-  be disabled within a day. Worse, every user gets a permanently-modified file inside their own
-  repository that they did not create. Removing the field makes each ledger a pure function of the
-  bundle's file list — byte-stable across activations — which fixes the guard and the user-visible
-  churn in the same two lines. Gitignoring them locally fixes neither for anyone else.
-- **The one-time repair must land first.** The tree currently carries the 69-file skills directory.
-  Restore it (`git rm -rq .agents .claude && git checkout abd36593^ -- .agents .claude`, landing on
-  17 skills / 32 protocols / 4 workflows) **before** packaging, or the first thing this guard does is
-  block a release on damage that predates it.
+- **The one-time repair has already landed.** Commit `5cd79357` ("Restore control plane to its
+  pre-sync state") restored `.agents/` to 17 skills / 32 protocols / 4 workflows. The tree is clean
+  (verified: `git status --porcelain -- .agents .claude` reports only `.agents/.switchboard-bundled.json`
+  modified, which is the `generatedAt` churn this plan removes). No repair action is needed before
+  implementing this plan.
+- **The `generatedAt` removal is part of this plan, not a separate prerequisite.** Originally listed
+  as a dependency, but no dedicated plan exists for it. `the-bundle-ledger-belongs-in-the-database-not-the-users-repo.md`
+  would fix it by moving the ledgers to the database, but that is a larger effort that has not landed.
+  The 2-line fix (remove `generatedAt` from both manifest objects) is promoted to a proposed change
+  below — the guard and the removal are one atomic unit; neither works without the other.
 - **Complements** `the-seed-loop-resurrects-files-the-workspace-deleted.md`, which covers the install
   side. Neither blocks the other; this one is the higher-value half because it stops new stale
   artifacts being created at all.
 - **Shrunk by** `protocols-as-db-rows-not-scaffolded-files.md`, which reduces `.agents/` to the four
-  workflows plus `improve-plan` and `improve-feature`.
+  workflows plus `improve-plan` and `improve-feature`. The guard is agnostic to the shape of `.agents/`
+  — it checks against HEAD, whatever HEAD contains.
 
 ## Adversarial Synthesis
 
-Key risks: (1) wiring the check into `npm test` only, so a local `vsce package` still ships a
-clobbered tree and the guard reads as present while being unreachable on the path that matters;
-(2) checking modifications but not untracked files, which misses the 52-file resurrection outright
-since those arrive as `??`; (3) making it a warning, reproducing the four weeks of unread signal;
-(4) failing with a bare "tree is dirty" so a releaser bypasses it; (5) landing it before the repair
-and blocking the next release on pre-existing damage, which gets the guard removed rather than the
-damage fixed. Mitigations: wire into the packaging script and assert its presence there; treat
-`??`, `M`, `A` and `D` alike; fail hard; print the differing paths plus the restore command; and
-sequence the repair first.
+Key risks: (1) the `generatedAt` field was listed as a dependency with no owner, making the guard
+unusable on arrival — promoted to a proposed change; (2) wiring the check into `npm test` only, so a
+local `vsce package` still ships a clobbered tree — mitigated by wiring into `vscode:prepublish`;
+(3) checking modifications but not untracked files, missing the 52-file resurrection — mitigated by
+treating `??`, `M`, `A` and `D` alike; (4) making it a warning, reproducing the four weeks of unread
+signal — rejected; (5) failing with a bare "tree is dirty" so a releaser bypasses it — mitigated by
+printing differing paths plus the restore command; (6) no `.claude/` packaging assertion, so a future
+`.vscodeignore` change could exclude `.claude/` while the guard checks a tree that doesn't ship —
+mitigated by adding a mirror assertion to the contract test. Mitigations are wired into the proposed
+changes, not left as advice.
 
 ## Proposed Changes
 
-1. **Add a packaging assertion** in `src/test/vsix-packaging-contract.test.js`, beside the existing
-   `:206` check: `git status --porcelain -- .agents .claude` must be empty. Treat untracked,
-   modified, staged and deleted alike.
-2. **Wire it into the packaging path**, not just the test suite — `vscode:prepublish` /
-   `scripts/package-targets.sh` — so `vsce package` cannot bypass it.
-3. **Fail closed when git is unavailable**, naming why, rather than skipping.
-4. **Make the message actionable**: list the differing paths and print the restore command.
-5. **Leave the seed loop and the prune untouched.**
+1. **Remove `generatedAt` from both ledger manifests.**
+   - `src/services/ControlPlaneMigrationService.ts:1410` — delete the `generatedAt: new Date().toISOString()`
+     line from the manifest object written to `.agents/.switchboard-bundled.json`.
+   - `src/services/ClaudeCodeMirrorService.ts:410` — delete the `generatedAt: new Date().toISOString()`
+     line from the manifest object written to `.claude/.switchboard-generated.json`.
+   - After removal, both ledgers are pure functions of their file/skill lists — byte-stable across
+     activations. The one-time diff (field disappears) lands on the next activation and is committed
+     as part of this change.
+
+2. **Create `scripts/guard-control-plane.sh`** — a standalone guard script that:
+   - Runs `git status --porcelain -- .agents .claude` and fails if the output is non-empty.
+   - Treats untracked (`??`), modified (`M`), staged (`A`), and deleted (`D`) entries alike.
+   - On failure, prints each differing path and the restore command
+     (`git checkout HEAD -- .agents .claude` for tracked changes; `git clean -fd .agents .claude`
+     for untracked files; or both, depending on what `--porcelain` reports).
+   - Fails closed when git is unavailable (no `.git` directory, git not on PATH) with a clear message
+     naming the cause, rather than silently skipping.
+   - Exits 0 on a clean tree.
+
+3. **Wire the guard into `vscode:prepublish`** in `package.json`:
+   - Change `"vscode:prepublish": "npm run package"` to
+     `"vscode:prepublish": "bash scripts/guard-control-plane.sh && npm run package"`.
+   - vsce runs `vscode:prepublish` before every `vsce package` call (no `--no-prepublish` flag
+     exists — verified). This covers both direct `vsce package` and `scripts/package-targets.sh`
+     (which calls `vsce package` per target). The guard runs once per `vsce package` invocation;
+     in the matrix build that is 5 times (4 targets + universal), which is cheap (a single
+     `git status` call each).
+
+4. **Add a contract test assertion for `.claude/` packaging** in
+   `src/test/vsix-packaging-contract.test.js`, mirroring the existing `.agents/` check at `:206`:
+   - Walk `.claude/` and assert no file is excluded by the vsce filter.
+   - `.claude/` currently ships by default (no `.vscodeignore` rule covers it), but a future
+     `.vscodeignore` change could silently exclude it. The guard checks the working tree against
+     HEAD; this assertion ensures the tree it checks is the tree that ships.
+
+5. **Add a contract test assertion for the guard itself** in
+   `src/test/vsix-packaging-contract.test.js`:
+   - Assert that `scripts/guard-control-plane.sh` exists and is executable.
+   - Assert that `package.json`'s `vscode:prepublish` script string contains a reference to the
+     guard script, so the wiring cannot be silently removed.
+
+6. **Leave the seed loop and the prune untouched.**
 
 ### Migration
 
 Build and test tooling only — no schema, settings, stored state, or shipped behaviour change.
 
 ## Verification Plan
+
+### Automated Tests
 
 1. **Clobbered tree is refused.** Restore the tree, then copy the 69-file `.agents/skills` over it;
    assert packaging fails and the message names `.agents/skills`.
@@ -185,3 +235,27 @@ Build and test tooling only — no schema, settings, stored state, or shipped be
 9. **The loop is broken end to end.** From the repaired tree, package, install, activate, and assert
    `.agents/skills` stays at 17 files and `.agents/workflows/switchboard.md` retains the launcher
    body — the round trip that previously laundered 30 July content into an August build.
+10. **`generatedAt` removal is byte-stable.** Activate the extension twice in sequence; assert
+    `.agents/.switchboard-bundled.json` and `.claude/.switchboard-generated.json` are identical
+    between the two activations (no `generatedAt` field, content is a pure function of the file list).
+11. **`.claude/` packaging assertion.** Assert the contract test walks `.claude/` and fails if any
+    file would be excluded by the vsce filter.
+
+### Goal Invariants
+
+- Assert `scripts/guard-control-plane.sh` exists at the repo root and exits non-zero when
+  `git status --porcelain -- .agents .claude` is non-empty.
+- Assert `package.json` `vscode:prepublish` contains `guard-control-plane.sh` in its script string.
+- Assert the string `generatedAt` is absent from `src/services/ControlPlaneMigrationService.ts`
+  manifest object at `:1407-1412` and from `src/services/ClaudeCodeMirrorService.ts` manifest object
+  at `:407-414`.
+- Assert `src/test/vsix-packaging-contract.test.js` contains a check whose name includes `.claude`
+  and asserts no `.claude/` file is excluded by the vsce filter.
+
+## Outstanding Questions
+
+- **[user]** Should the guard also cover `.agents/personas/` and `.agents/protocols/`, or only the
+  runtime-written surfaces (skills, workflows)? — proceeding on the assumption that **all** of
+  `.agents/` and `.claude/` are in scope, since `git status --porcelain -- .agents .claude` covers
+  every file under both trees regardless of subdirectory. A narrower scope would require path
+  filtering and would miss a clobber in an unprotected subdirectory.

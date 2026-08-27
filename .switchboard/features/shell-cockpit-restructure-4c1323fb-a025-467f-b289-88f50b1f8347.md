@@ -59,14 +59,14 @@ reach it by two different code paths, only one of which knows what a controller 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The Agent Dock Grows Tabs, And The Terminals Kanban Pane Becomes One Of Them](../plans/agent-dock-tabs-and-kanban-in-the-dock.md) — **CREATED** — ID: ff605c7b-585d-412a-ba43-433abc7ff27b
-- [ ] [A Linear Panel: Setup, Agent Wiring, And The Instructions To Drive Switchboard From Linear](../plans/linear-gets-its-own-panel.md) — **CREATED** — ID: c8830aba-dbfa-464f-a66f-42c278bb5f3d
-- [ ] [Opening The Dock Starts Mission Control: One Seat, One Path](../plans/opening-the-dock-starts-mission-control.md) — **CREATED** — ID: e289da85-ee11-43b8-81a9-aa18d5901dc4
-- [ ] [Three Fixed Team Slots In The Rail, Present Whether Or Not The Team Is Running](../plans/shell-rail-fixed-team-slots.md) — **CREATED** — ID: 3f44c1be-63b7-4053-8fc3-81b1cd990a09
-- [ ] [Shell Rail Restructure: A Primary Group, A Cold Group, And No Process List](../plans/shell-rail-restructure-primary-and-cold-groups.md) — **CREATED** — ID: 1a7db09a-1db1-45e6-8c4f-a1b2668d51fd
-- [ ] [One Colour In The Rail: Theme-Accent Team Icons, No Status Palette](../plans/shell-rail-single-colour-state-system.md) — **CREATED** — ID: 73506937-4d66-430f-9145-0e7e68a9a716
-- [ ] [A Top-Right Control Cluster For The Shell's Non-Navigational Controls](../plans/shell-top-right-control-cluster.md) — **CREATED** — ID: cc374dcd-ec39-4ce8-a6c7-9ba6f4e28197
-- [ ] [The Team In-Flight Predicate Already Exists — Expose It To The Rail](../plans/team-dispatched-state-reaches-the-rail.md) — **CREATED** — ID: 1c04999f-7a2e-41aa-8b87-dfa0b7dfbafc
+- [ ] [Opening The Dock Starts Mission Control: One Seat, One Path](../plans/opening-the-dock-starts-mission-control.md) — **PLAN REVIEWED** — ID: cd083484-32c5-40f5-a771-434ce1c0fcf8
+- [ ] [The Agent Dock Grows Tabs, And The Terminals Kanban Pane Becomes One Of Them](../plans/agent-dock-tabs-and-kanban-in-the-dock.md) — **PLAN REVIEWED** — ID: 46caa8cd-d582-4dfc-91f6-455fafd0e055
+- [ ] [Shell Rail Restructure: A Primary Group, A Cold Group, And No Process List](../plans/shell-rail-restructure-primary-and-cold-groups.md) — **PLAN REVIEWED** — ID: 6fe61451-db59-48ba-b56d-e75844dcff9a
+- [ ] [One Colour In The Rail: Theme-Accent Team Icons, No Status Palette](../plans/shell-rail-single-colour-state-system.md) — **PLAN REVIEWED** — ID: b1ba3477-ed3d-44cb-aebc-ab4bce0c588a
+- [ ] [The Team In-Flight Predicate Already Exists — Expose It To The Rail](../plans/team-dispatched-state-reaches-the-rail.md) — **PLAN REVIEWED** — ID: 44b85cfd-b57a-48aa-a1c5-0750fefd81bf
+- [ ] [A Top-Right Control Cluster For The Shell's Non-Navigational Controls](../plans/shell-top-right-control-cluster.md) — **PLAN REVIEWED** — ID: b566e0d0-d066-4c74-a2fa-4e45658a3b70
+- [ ] [Three Fixed Team Slots In The Rail, Present Whether Or Not The Team Is Running](../plans/shell-rail-fixed-team-slots.md) — **PLAN REVIEWED** — ID: fe50ab48-b936-4099-8396-5be08f7e3e9f
+- [ ] [A Linear Panel: Setup, Agent Wiring, And The Instructions To Drive Switchboard From Linear](../plans/linear-gets-its-own-panel.md) — **PLAN REVIEWED** — ID: 63ba35d9-2713-4561-8417-166813ee1965
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -95,6 +95,89 @@ collisions rather than logical dependencies.
 Independent of the rest: the **Linear panel** shares only its manifest entry with the rail
 restructure, so it can proceed in parallel once the group key exists. The **top-right
 cluster** depends on the rail restructure only for the dock toggle's removal from the left.
+
+## Team Dispatch Instructions
+
+### Shell Rail Restructure: A Primary Group, A Cold Group, And No Process List
+- **Seat:** Coder
+- **Acceptance:**
+  - Rail reads Kanban / Mission Control / Agent Control / Terminals / Linear, then team slots, then Project / Artifacts / Tickets / Design at the foot — in both hosts.
+  - No theme button, no dock button, no per-terminal buttons, no UFO Mission Control button in the rail.
+  - `POST /mission-control/start` still answers and the `/switchboard-manage` skill path still works after the button is gone.
+  - Deep-link each of `/#setup`, `/#memo`, `/#connections` and confirm the panel opens with no rail icon present.
+  - `.strip-icon.is-dormant` class exists in `shell.html` (promoted from UFO's dimmed treatment).
+- **Must not touch:** `POST /mission-control/start` endpoint and its `missionControlStart` option — the endpoint outlives its UI caller. The Mission Control panel icon in the primary group is unaffected (static manifest entry, not state-driven).
+
+### A Top-Right Control Cluster For The Shell's Non-Navigational Controls
+- **Seat:** Coder
+- **Acceptance:**
+  - `#top-right-cluster` contains four buttons: Agent Dock, Setup, Memo, Connections — at `position: fixed; top: 6px; right: 6px`.
+  - No panel control sits under the cluster at 1280px or 1920px width (verified per panel).
+  - Opening the dock shifts the cluster left; dragging the splitter tracks continuously.
+  - Resize below 980px gates off the dock button; the other three stay live.
+  - `buildDockToggle` is absent from `shell.js` (moved to cluster, not duplicated).
+- **Must not touch:** `.dock-toggle-btn` class name (queried by `setDockOpen` and `updateDockViableGating`). `sb.agentDock` localStorage persistence (toggle moves, persistence does not).
+
+### One Colour In The Rail: Theme-Accent Team Icons, No Status Palette
+- **Seat:** Coder
+- **Acceptance:**
+  - Rail shows exactly two hues: accent (team icons) and text/dim monochrome ramp — in both themes.
+  - Selection is a left-edge bar, not accent text or accent-dim border.
+  - No completion ring, no queue badge, no exited grayscale on any rail icon.
+  - Terminals panel sidebar DONE chip and pane badge still appear (durable completion record survives).
+  - `pulsedDoneStamps`, `DONE_PULSE_MS`, `clearTeamBadges` relay — zero live references in either host.
+- **Must not touch:** `refreshTeamQueueDepths` and the `queueDepth` field (consumed by the dispatched-state plan). `terminalBadges` map in `terminals.js` (panel-side, 7 delete sites, unaffected). `--accent-dim` must not be reintroduced anywhere.
+
+### Three Fixed Team Slots In The Rail, Present Whether Or Not The Team Is Running
+- **Seat:** Coder
+- **Acceptance:**
+  - Fresh workspace with zero teams started: rail shows exactly three dim team slots in declared order.
+  - Click each dim slot: team's head starts, slot lights, no second terminal from a rapid double-click.
+  - Stop a team: slot returns to dim and no icon below it moves.
+  - Rail is still 12 buttons with nine terminals across three teams.
+  - `showStripToast` is still present in `shell.js` (kept alive by this plan's start-failure path).
+- **Must not touch:** `OFFERED_REVIEW_TEAM_GROUP` / `OFFERED_TEAM_DEFINITIONS` — already deleted from `teamWiring.ts:707`; `DEFAULT_TEAM_DEFINITIONS` fills the gap, nothing to retire. Team names are the operator's — key every binding on definition id, never on display name.
+
+### The Team In-Flight Predicate Already Exists — Expose It To The Rail
+- **Seat:** Coder
+- **Acceptance:**
+  - Dispatch a card to a team: slot shows dispatched within one poll interval.
+  - Post `/kanban/task/complete`: slot returns to free.
+  - Move the card between columns without completing it: slot stays dispatched.
+  - Attempt a second dispatch to a dispatched team: 409 still fires and names the held card.
+  - Kill network to queue endpoint: last known state is held rather than flickering to free.
+- **Must not touch:** The 409 gate is the only authority — nothing in the UI may use the `inFlight` flag to decide whether a dispatch is allowed. The dispatch handler's scan-all-candidates behaviour must be preserved (the helper's short-circuit mode is for the rail path only).
+
+### Opening The Dock Starts Mission Control: One Seat, One Path
+- **Seat:** Coder
+- **Acceptance:**
+  - Fresh workspace with agent configured: open dock, controller seat created, pre-flight interview appears in the dock terminal, answering leads to arming via `/mission-control/confirm`.
+  - Fresh workspace with no agent configured: open dock, launcher text renders in empty state with copy action, no dead shell, no `[Process Exited with code 0]`.
+  - Start Mission Control from `/switchboard-manage` skill, then open dock: adoption, no re-delivered interview.
+  - No role picker in the dock header; Terminals panel's new-terminal and fill-grid pickers still start every other role.
+  - Persisted non-controller seat is discarded and empty state appears.
+- **Must not touch:** `POST /mission-control/start` endpoint (shared with `/switchboard-manage` skill). `missionControlStart` wiring in both composition roots. The dock must NOT call `/mission-control/confirm` — arming is the agent's move. `mcp_monitor` exclusion in `terminals.js` spawn pickers — not this plan's business.
+
+### The Agent Dock Grows Tabs, And The Terminals Kanban Pane Becomes One Of Them
+- **Seat:** Coder
+- **Acceptance:**
+  - Both tabs present in the dock, agent tab active on a fresh profile.
+  - Switch tabs repeatedly: neither iframe reloads (terminal scrollback and live WebSocket survive, card-list scroll position survives).
+  - No role picker in the dock header on either tab.
+  - Toggle theme with each tab active, then switch: both frames repainted.
+  - `btn-kanban-toolbar` in the Terminals panel still works (in-grid kanban pane not retired).
+- **Must not touch:** `btn-kanban-toolbar` and the in-grid kanban pane (stays, not retired). The Kanban panel (keeps its own rail icon and panel). `DOCK_MIN` 648px floor (do not lower). `DOCK_VIABLE_MIN` 980px gate (applies to the whole dock, do not special-case the kanban tab).
+
+### A Linear Panel: Setup, Agent Wiring, And The Instructions To Drive Switchboard From Linear
+- **Seat:** Coder
+- **Acceptance:**
+  - Rail shows Linear in the primary group in both hosts.
+  - `/linear` serves directly; `/#linear` selects from the shell.
+  - Tickets panel is byte-for-byte unaffected: TICKETS, CLICKUP, LINEAR tabs all present and functional.
+  - Connections is unaffected except for Linear's rows: ClickUp, Hand-offs, Jobs, Web Agents, Docs Health all intact.
+  - Unauthorised install: panel renders its connect empty state, is not omitted, and authorising from it succeeds.
+  - Toggle remote control in kanban toolbar: Linear panel reflects it, and the reverse.
+- **Must not touch:** Tickets panel's LINEAR tab (ticket-browsing belongs there). ClickUp connectivity (stays in Connections). Token storage and the OAuth actor path. `btn-remote-control` in the kanban toolbar (stays — one state, two controls).
 
 ## No migration across this feature
 

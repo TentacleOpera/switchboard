@@ -29,7 +29,7 @@ writes those lines as ordinary chat text, where markdown collapses every run of 
 every single newline to a space — producing one long line of titles and hex fragments.
 
 **The upstream helper hands the agent pre-aligned text, so the collapse is inherited.** The
-`ready ()` function at `:104-112` ends with:
+`ready ()` function at `:101-109` ends with:
 
 ```
 .[] | "\(if .isFeature == 1 then "feature" else "plan  " end)\t\(.topic)\t\(.planId)"
@@ -97,10 +97,14 @@ say so explicitly.
 - **The type marker must not become an alignment column again.** `feature`/`plan` is useful; padding
   it to a fixed width is what breaks. Prefix word, not column.
 - **Numbering spans two lanes.** Per-lane numbering gives two cards numbered 1 in one message.
-  Number continuously across both lanes and say so.
+  Number continuously across both lanes and say so. In CommonMark, two separate ordered lists each
+  start at 1 unless the second list's first item explicitly carries the continuation number (e.g.
+  `6.`) — so the second lane's list must begin at N+1 where N is the first lane's last item number.
 - **The number→planId map is load-bearing.** A number the agent cannot resolve is worse than an id
   the operator cannot read. The follow-up action must resolve through the map and re-verify, since
   a card can move between the list and the reply.
+- **Empty lanes.** A lane with zero cards must produce no heading and no list — omit it entirely
+  rather than printing an empty heading or a bare "None".
 
 ## Edge-Case & Dependency Audit
 
@@ -118,48 +122,143 @@ say so explicitly.
   long and prose-like, so this is likely rather than theoretical.
 - Long titles wrap in a list item where a column truncated. Wrapping is the better failure, but the
   wrapped continuation must not acquire its own number.
-- Anything parsing this output (a script, a test) breaks on the change. Worth a grep first.
+- Anything parsing this output (a script, a test) breaks on the change. **Verified by grep:
+  no test, script, or other file parses this template format.** The only consumers are the
+  mission-control skill file itself and this plan.
 
 **Migration**
 - One protocol section and one `jq` expression. No schema, settings, stored state, or endpoints.
 
 ## Dependencies
 
-- **Consumed by the pre-flight.** The pre-flight report ends with this summary, so its output
-  contract and this template must agree.
+- **Consumed by the pre-flight.** The pre-flight report ends with this summary (line 169: "The
+  report ends with the ready-card summary in the format below"), so its output contract and this
+  template must agree.
 - Independent of everything else.
 
 ## Adversarial Synthesis
 
-Key risks: (1) rewriting the template and again omitting the emission rule, so the next agent renders
-a correct-looking spec into a collapsed line — the identical defect one pass later; (2) keeping the
-aligned columns and merely wrapping them in a fence, which fixes rendering but leaves the operator
-with hex ids and no reply token, so addressability stays broken; (3) numbering per-lane and emitting
-two cards numbered 1; (4) dropping the `+N more` remainder or the type marker while simplifying;
-(5) unescaped markdown in titles corrupting the list in a way the old block concealed. Mitigations:
-state the emission rule in the same sentence as the template and verify by rendering rather than by
-reading; number continuously and say so; carry the cap, remainder and marker forward explicitly; and
-include a markdown-bearing title in the verification set.
+Key risks: (1) rewriting the template and again omitting the emission rule, so the next agent
+renders a correct-looking spec into a collapsed line — the identical defect one pass later; (2)
+keeping the aligned columns and merely wrapping them in a fence, which fixes rendering but leaves
+the operator with hex ids and no reply token, so addressability stays broken; (3) numbering
+per-lane and emitting two cards numbered 1 — the CommonMark start-number mechanism must be
+specified explicitly; (4) dropping the `+N more` remainder or the type marker while simplifying;
+(5) unescaped markdown in titles corrupting the list in a way the old block concealed; (6) leaving
+the jq replacement as prose, so the implementer invents a field format. Mitigations: state the
+emission rule in the same sentence as the template and verify by rendering rather than by reading;
+number continuously with the second lane starting at N+1; carry the cap, remainder and marker
+forward explicitly; include a markdown-bearing title in the verification set; and specify the
+concrete jq expression rather than describing it.
 
 ## Proposed Changes
 
-1. **Replace the template at `:114`**: counts line, blank line, then per lane a heading and a
-   markdown ordered list of `<type> — <title>`, numbered continuously across both lanes, no printed
-   ids.
-2. **State the emission rule beside it** — plain markdown list, no fence, no padding.
-3. **Require the internal number→planId map** in the same place, and require the follow-up action to
-   resolve through it and re-verify.
-4. **Reorder the `ready ()` jq output** (`:104-112`) to return fields rather than a pre-formatted,
-   tab-padded row.
-5. **Blank line between lanes**, in template and example.
-6. **Carry forward** the 25-row cap, `+N more`, and the type marker as a prefix word.
-7. **Note the markdown-collapse rule once** in the protocol, so the next template author has it.
+All edits are in a single file: `.agents/protocols/switchboard-mission-control/SKILL.md`.
+
+### 1. Replace the template at `:114-132` (the "shape of the answer" section)
+
+Replace the current space-aligned example and its surrounding instruction with:
+
+- A counts line (unchanged).
+- A blank line.
+- Per lane: a heading (`To code (PLAN REVIEWED):` / `To plan (CREATED):`), then a markdown ordered
+  list of `<type> — <title>`, numbered continuously across both lanes, no printed ids.
+- A blank line between lanes.
+- **Empty lane handling:** a lane with zero cards is omitted entirely — no heading, no list.
+- **Continuous numbering:** the second lane's list starts at N+1 where N is the last number used in
+  the first lane. In CommonMark the first item's number determines the list's start, so write the
+  actual number (e.g. `6.`), not `1.`.
+
+Concrete replacement example (to be placed inside the "shape of the answer" section, replacing the
+current fenced block):
+
+```markdown
+Ready to go — 43 to code, 13 to plan.
+
+To code (PLAN REVIEWED):
+1. feature — Teams You Can See, Start and Trust
+2. plan — Clear the CLI input line before every slash command
+3. plan — A Phone-a-Friend Seat Has No Brand Identity
+```
+
+Note: the example above shows only the coding lane for brevity. When both lanes have cards, the
+planning lane follows after a blank line, continuing the numbering:
+
+```markdown
+To plan (CREATED):
+4. plan — Another Plan Title Here
+5. feature — Another Feature Title Here
+```
+
+### 2. State the emission rule beside the template
+
+Plain markdown list, no fence, no padding. The instruction must say: "Emit this as ordinary
+markdown text — an ordered list, not a fenced code block. Markdown collapses runs of spaces and
+single newlines, so the template must use structural markdown (lists, headings) rather than
+whitespace alignment."
+
+### 3. Require the internal number→planId map
+
+In the same section, state: "The agent maintains an internal number→planId map for the duration of
+the reply exchange. The follow-up action resolves the reply number through this map and re-verifies
+the card is still in the expected column before acting."
+
+### 4. Reorder the `ready ()` jq output (`:101-109`, expression at `:108`)
+
+> **Superseded:** Reorder the `ready ()` jq output (`:104-112`) to return fields rather than a
+> pre-formatted, tab-padded row.
+> **Reason:** The line range was imprecise (function spans lines 101-109, expression at 108), and
+> "return fields" was underspecified — an implementer could produce JSON, CSV, or any delimiter.
+> **Replaced with:** The concrete change below.
+
+Remove the padded `"plan  "` literal from the jq expression. The tabs remain as field separators
+for the agent to parse; the agent formats them into the markdown list per the template above. The
+change is one word — `"plan  "` → `"plan"`:
+
+```bash
+# Before (line 108):
+.[] | "\(if .isFeature == 1 then "feature" else "plan  " end)\t\(.topic)\t\(.planId)"
+
+# After:
+.[] | "\(if .isFeature == 1 then "feature" else "plan" end)\t\(.topic)\t\(.planId)"
+```
+
+The agent reads the three tab-separated fields (type, topic, planId), assigns sequential numbers,
+builds the markdown list, and holds the number→planId map internally. The jq output is intermediate
+data, not the final presentation.
+
+### 5. Blank line between lanes
+
+In both the template instruction and the example, ensure a blank line separates the coding lane's
+last item from the planning lane's heading.
+
+### 6. Carry forward the 25-row cap, `+N more`, and the type marker
+
+- 25-row cap per lane (API already orders newest first).
+- `+N more` remainder line at the end of a truncated lane.
+- Type marker as a prefix word (`feature` / `plan`), never a padded column.
+
+### 7. Note the markdown-collapse rule once in the protocol
+
+Add one sentence immediately after the template example (before the "If a lane holds more than 25
+cards" paragraph at `:130`):
+
+> "Markdown collapses runs of spaces to one and single newlines to spaces in normal text. This
+> template uses structural markdown (ordered lists, headings) rather than whitespace alignment, so
+> it survives rendering. Do not emit it inside a code fence — the operator must be able to reply
+> with a number, and a fence makes the list copy-paste-only."
 
 ### Migration
 
-Documentation plus one `jq` expression. No schema, settings, stored state, or endpoint changes.
+Documentation plus one `jq` expression (one word change: `"plan  "` → `"plan"`). No schema,
+settings, stored state, or endpoint changes.
 
 ## Verification Plan
+
+### Automated Tests
+
+> **Note:** Compilation and automated tests are skipped for this run per dispatch directives. The
+> checks below remain written down for execution when the plan is dispatched to a coder.
 
 1. **Renders, not reads.** Emit a two-lane list through the actual chat renderer; assert one line per
    card. The current format collapses here, so this must fail before the fix.
@@ -176,3 +275,22 @@ Documentation plus one `jq` expression. No schema, settings, stored state, or en
 9. **Stale number.** Move a card after printing, reply with its number; assert the agent re-verifies
    and reports the change rather than acting on the stale row.
 10. **Pre-flight agrees.** Assert the `Pre-flight clear.` report's trailing summary uses this template.
+11. **Empty lane.** With zero cards in one lane, assert that lane's heading and list are absent — no
+    empty heading, no "None" placeholder.
+12. **Continuous numbering across lanes.** With 3 cards in lane 1 and 2 in lane 2, assert the second
+    lane's first item is numbered `4.`, not `1.`.
+
+### Goal Invariants
+
+- Assert `.agents/protocols/switchboard-mission-control/SKILL.md` line 108 does not contain the
+  string `"plan  "` (double-space padded literal).
+- Assert the template example in the "shape of the answer" section (`:114-132`) contains a markdown
+  ordered list (lines starting with `1.`, `2.`, etc.), not space-aligned columns.
+- Assert no `planId` or hex id fragment appears in the template example output.
+- Assert a blank line exists between the `To code` and `To plan` lane headings in the example.
+- Assert the emission rule text contains the word "markdown" and does not contain the word "fence"
+  as a prescribed emission method (fencing is explicitly discouraged for the list output).
+
+## Recommendation
+
+Complexity 2 — **Send to Intern**.

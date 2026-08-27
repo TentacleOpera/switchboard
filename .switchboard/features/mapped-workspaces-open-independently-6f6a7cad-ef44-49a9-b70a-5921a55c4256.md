@@ -4,6 +4,8 @@ description: 'Mapped Workspaces Open Independently'
 
 # Mapped Workspaces Open Independently
 
+**Complexity:** 6
+
 ## Goal
 
 Switchboard's workspace mappings let several repos share one board. Grouping works; opening one member on its own does not. A folder that owns its own control plane can be silently redirected to a group parent that is not even open in the window, and the board then renders permanently blank.
@@ -22,7 +24,9 @@ This feature makes mapping resolution deterministic and window-aware, brings the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] (no subtasks)
+- [ ] [The Browser Host Honours Workspace Mappings](../plans/the-browser-host-honours-workspace-mappings.md) — **PLAN REVIEWED** — ID: 2e268eaf-03af-4909-9595-761c6aec6247
+- [ ] [The Board Shows Only the Workspaces You Opened](../plans/the-board-shows-only-the-workspaces-you-opened.md) — **PLAN REVIEWED** — ID: 8cffe45e-e4c0-4d11-b766-208df5879050
+- [ ] [A Workspace That Owns a Board Opens On Its Own](../plans/a-workspace-that-owns-a-board-opens-on-its-own.md) — **PLAN REVIEWED** — ID: 307c9650-1593-481d-a576-088c9de326ec
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -34,3 +38,38 @@ This feature makes mapping resolution deterministic and window-aware, brings the
 Recommended order: **1 → 2 → 3.** Subtasks 1 and 2 are independent of each other and could be parallelised, but subtask 1 is expected to resolve the reported symptom alone — landing it first allows re-measuring before sizing subtask 2.
 
 Out of scope: `HeadlessSwitchboardOptions.workspaceRoot` is singular, so the browser host still cannot render a multi-parent mega workspace. That is a separate feature (multi-root standalone), not a bug fix.
+
+## Team Dispatch Instructions
+
+### A Workspace That Owns a Board Opens On Its Own
+
+- **Seat:** Coder (Complexity 5)
+- **Acceptance:**
+  - A folder that is both a parent of mapping A and a child of mapping B resolves to itself, for both array orderings
+  - All three `_hostRoots` states behave correctly: `null` (gate off, legacy behaviour), `[]` (gate on, no redirect), populated (gate on, redirect only to listed roots)
+  - `buildMappingIndexFromDbs` two-pass precedence: a both-roles folder maps to itself in the index regardless of mapping order
+  - `child-switchboard-creation-regression.test.ts` passes — no `.switchboard/` created anywhere
+  - Grouping still works: open all group members multi-root → board shows the mega workspace as before
+- **Must not touch:** `isAllowedSwitchboardLocation` (untouched by this plan); `src/standalone/bootstrap.ts` (parity note only — no code changes in this plan)
+
+### The Board Shows Only the Workspaces You Opened
+
+- **Seat:** Coder (Complexity 6)
+- **Acceptance:**
+  - Workspace dropdown lists only host roots plus children of mappings whose parent is a host root — non-open parents never appear
+  - `_getWatchFolders()` always contains the current workspace root, for every combination of mappings-enabled and folder-is-mapped
+  - `refreshUI` with an unresolvable current root posts state or re-activates; never returns silently. `refreshUI` for a genuinely different workspace still returns early
+  - `switchboardLocationGuard.ts` keeps its global `getMappingsFromIndex()` read — the guard is NOT scoped
+  - `child-switchboard-creation-regression.test.ts` passes
+- **Must not touch:** `src/utils/switchboardLocationGuard.ts:94` — deliberate global read (scoping it weakens a safety guard that exists to stop `.switchboard/` appearing in child folders)
+
+### The Browser Host Honours Workspace Mappings
+
+- **Seat:** Coder (Complexity 5)
+- **Acceptance:**
+  - `buildMappingIndexFromDbs` is called in the boot path of `startHeadlessSwitchboard` in `src/standalone/bootstrap.ts`
+  - `getMappingsFromIndex()` returns `{ enabled: true, mappings: [...] }` after standalone boot when a DB with enabled mappings exists at the launch root
+  - `buildWorkspaceItems([workspaceRoot])` returns exactly one item when `workspaceRoot` is a mapped child launched alone (not every workspace in the payload)
+  - No `kanban.db` file exists at a mapped child path after `startHeadlessSwitchboard` boots with the child as `workspaceRoot`
+  - Stored `workspace_mappings` value is byte-identical before and after standalone boot (read-only adoption)
+- **Must not touch:** `HeadlessSwitchboardOptions.workspaceRoot` (singular — multi-root standalone is out of scope); the `onDidChangeWorkspaceFolders` handler in `extension.ts` (owned by subtask 1)

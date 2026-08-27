@@ -66,6 +66,54 @@ over its items 1, 3 and 4, and revises one:
   sidebar half remains. That half stays in scope of the original plan, not this one.
 - **Its item 2** (unstyled dock terminal) is untouched and remains valid there.
 
+## User Review Required
+
+No user review required — plan is in PLAN REVIEWED status and ready for dispatch.
+
+## Complexity Audit
+
+### Routine
+- Replacing the `ptyCreateTerminal` call in `startDockTerminal()` with a `POST /mission-control/start` call for the controller occupant.
+- Handling `mode: 'terminal'` response (mount terminal via `mountDockFrame`).
+- Handling `mode: 'clipboard'` response (render prompt in empty state with copy action).
+- Deleting `#dock-role-btn`, `#dock-role-menu`, `buildDockRoleMenu`, `fetchDockRoles`, `dockRolesCache`, `labelForRole`, `DOCK_SYSTEM_ROLES`, `loadDockRole`, and the `.dock-role-item` / `#dock-role-menu` CSS.
+- Making `dockRole` a constant (the controller role) instead of mutable state.
+
+### Complex / Risky
+- Adopting before starting — if a controller is already seated (from `/switchboard-manage` skill, another shell tab, or a previous session), the dock adopts it and does NOT call start. The persisted `sb.agentDock.seat` may name a reviewer terminal from the picker era; the adopt check must confirm the persisted seat is the controller identity by checking the terminal's ROLE in the fleet data, not merely that it is live.
+- The dock's state channel after relay deletion — the colour plan deletes the `missionControlState` relay from the rail. The dock needs to know whether the session is armed (for `#dock-title`). The plan says "read `autobanState.enabled` server-side" but does not specify the channel. The existing `autobanStateSync` WS broadcast is the likely channel; the plan should specify it.
+- Dead endpoints after role picker retirement — `/setup/verb/getAgentDockRole` and `/setup/verb/setAgentDockRole` become dead. The plan should state whether they are deleted or left as dead endpoints. A dead endpoint is a maintenance trap.
+- `missionControlStart` wiring in both composition roots — verified: wired in both `TaskViewerProvider.ts:4182` and `bootstrap.ts:2907`. The 503 concern is valid but the wiring exists.
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions:**
+- Double-click on the start affordance: the pending-request guard disables the button while the request is pending. The real protection is the singleton guard in `ptyFleetService.create()`. Two shell tabs or a reload mid-flight defeat the client flag.
+- The interview arrives before the frame mounts: the seat is created server-side and the prompt delivered on its own schedule; the dock frame mounts after the response. The terminal's replay shows the prompt, but do not clear the terminal on mount or the interview is wiped.
+
+**Security:**
+- No new attack surface. The dock calls an existing endpoint (`POST /mission-control/start`) that is already used by the `/switchboard-manage` skill.
+
+**Side Effects:**
+- `/setup/verb/getAgentDockRole` and `/setup/verb/setAgentDockRole` become dead endpoints — no consumer after the role picker is retired. State explicitly whether these are deleted or left.
+- `ptyVisibleRoles` was fetched only to label the picker and the empty-state hint. The fetch is deleted — one less request on first open.
+- The `dock-<role>` seat naming convention collapses to a single controller seat name. The name is still whatever the server returns and still opaque.
+
+**Dependencies & Conflicts:**
+- **Dock-tabs plan** — its "hide the role picker on the kanban tab" item is moot; there is no picker. Whichever plan lands second must not re-add it.
+- **Colour plan** — deletes the `missionControlState` relay. The dock's `#dock-title` state display needs its own channel (likely `autobanStateSync` WS broadcast).
+- **Rail restructure** — deletes the UFO. The dock becomes the start affordance, which is what the UFO's item 1 was reaching for.
+
+## Dependencies
+
+- **Rail restructure** — deletes the UFO, making the dock the sole Mission Control start affordance. Can land in either order, but both must ship before the feature is complete.
+- **Colour plan** — deletes the `missionControlState` relay. The dock must have its own state channel for `#dock-title` before or alongside the colour plan's relay deletion.
+- **Dock-tabs plan** — must not carry `#dock-role-btn` / `#dock-role-menu` into the new tabbed header. This plan retires the picker; the tabs plan must not re-add it.
+
+## Adversarial Synthesis
+
+Key risks: (1) controller identity check for persisted seats — the adopt check must verify the terminal's ROLE (not just liveness) to avoid adopting a reviewer terminal as Mission Control. The fleet data should carry a `role` field; the plan should specify the check mechanism. (2) Dead endpoints after role picker retirement — `/setup/verb/getAgentDockRole` and `/setup/verb/setAgentDockRole` have no consumer; state whether they are deleted. (3) Dock state channel after relay deletion — the plan says "read `autobanState.enabled`" but does not specify the channel; `autobanStateSync` WS broadcast is the likely answer. Mitigations: (1) specify the role-check mechanism, (2) name the endpoints as dead or deleted, (3) specify the state channel.
+
 ## No migration
 
 Clean break. `sb.agentDock` (`shell.js:DOCK_STATE_KEY`) keeps `open`, `width` and `seat`;
@@ -203,3 +251,20 @@ Consequences elsewhere:
     confirm it is discarded and the empty state appears, rather than a reviewer's terminal
     being presented as Mission Control.
 11. Both hosts.
+
+### Goal Invariants
+
+- Assert `startDockTerminal()` in `src/webview/shell.js` calls `POST /mission-control/start` (not `ptyCreateTerminal`) for the controller occupant.
+- Assert `#dock-role-btn` is absent from `src/webview/shell.html`.
+- Assert `#dock-role-menu` is absent from `src/webview/shell.html`.
+- Assert `buildDockRoleMenu` is absent from `src/webview/shell.js`.
+- Assert `fetchDockRoles` is absent from `src/webview/shell.js`.
+- Assert `dockRolesCache` is absent from `src/webview/shell.js`.
+- Assert `DOCK_SYSTEM_ROLES` is absent from `src/webview/shell.js`.
+- Assert `loadDockRole` is absent from `src/webview/shell.js`.
+- Assert `dockRole` is a constant (the controller role), not mutable state.
+- Assert the dock handles both `mode: 'terminal'` and `mode: 'clipboard'` responses from `/mission-control/start`.
+- Assert the dock does NOT call `/mission-control/confirm` — arming is the agent's move.
+- Assert a persisted non-controller seat is discarded and the empty state appears (not adopted as Mission Control).
+- Assert `POST /mission-control/start` endpoint is still present in `src/services/LocalApiServer.ts` (shared with the `/switchboard-manage` skill).
+- Assert `missionControlStart` is wired in both `src/services/TaskViewerProvider.ts` and `src/standalone/bootstrap.ts`.

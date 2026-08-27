@@ -30,6 +30,48 @@ rail cannot express.
 - **Tags:** frontend, ui, ux, feature
 - **Feature:** 4c1323fb-a025-467f-b289-88f50b1f8347
 
+## User Review Required
+
+No user review required — plan is in PLAN REVIEWED status and ready for dispatch.
+
+## Complexity Audit
+
+### Routine
+- Creating `<div id="top-right-cluster">` in `shell.html` with `position: fixed; top: 6px; right: 6px; z-index: 40`.
+- Moving `buildDockToggle`'s button creation into the cluster (verbatim, including `aria-expanded` and `.dock-toggle-btn` class).
+- Adding Setup, Memo, and Connections buttons using `buildMaskedGlyph` and `.strip-icon` sizing.
+- Registering Setup and Connections in the `icons` map for `.is-active` painting.
+- Writing `--dock-width` CSS variable on `:root` from `setDockOpen` and the splitter drag handler.
+
+### Complex / Risky
+- The tab-band assumption — every panel's top ~34px of right edge must be tab-strip whitespace, not controls. This is the one assumption the whole placement rests on, and a future panel without a tab bar breaks it. Verification pins this per panel.
+- Tooltip positioning for right-edge buttons — the existing helper assumes a rail on the left edge. Must add a `position: 'left'` mode or inline the positioning for cluster buttons, or long tooltip text overflows the viewport.
+- `--dock-width` tracking — both `setDockOpen` (`shell.js:747`) and the splitter drag handler must write the variable. The splitter drag runs continuously, so this is one extra property write in an existing handler, but missing either write site leaves the cluster overlapping the dock.
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions:**
+- None. The cluster is static chrome; the dock toggle's `aria-expanded` state is set synchronously in `setDockOpen`.
+
+**Security:**
+- No new attack surface. The cluster is in the shell document and cannot be pushed around by panel iframes.
+
+**Side Effects:**
+- `popoutWindows` (`shell.js:672`) opens panels in bare browser windows with no shell — those get no cluster (correct, they also have no rail).
+- The cluster must repaint on `switchboardThemeChanged` — it is in the shell document so it follows `body.className` automatically, but verify under both themes.
+
+**Dependencies & Conflicts:**
+- Depends on the rail restructure plan for the dock toggle's removal from the left rail. The rail restructure deletes `buildDockToggle()`; this plan moves the button into the cluster. If this plan lands first, the dock toggle exists in both places temporarily — acceptable but confusing.
+- The `.dock-toggle-btn` class name is preserved verbatim because `setDockOpen` and `updateDockViableGating` (`shell.js:939`) both query it. Do not rename.
+
+## Dependencies
+
+- **Rail restructure** — must have deleted `buildDockToggle()` from the rail. This plan reuses the button's creation logic in the cluster; the rail deletion and the cluster addition can land in either order, but both must land before the feature ships.
+
+## Adversarial Synthesis
+
+Key risks: (1) the tab-band assumption is a documentation guard, not a structural one — a future panel without a tab bar ships a dead control under the cluster. (2) Tooltip overflow for right-edge buttons needs explicit left-anchor positioning logic, not a hand-wave. (3) `--dock-width` must be written by both `setDockOpen` and the splitter drag. Mitigations: (1) add a comment in `shell.html` naming the reserved band, verify per panel; (2) specify the positioning mode change; (3) plan names both write sites.
+
 ## No migration
 
 Clean break. `sb.agentDock` localStorage state (`shell.js:DOCK_STATE_KEY`) is reused
@@ -118,3 +160,13 @@ assumption the whole placement rests on, and a future panel without a tab bar br
 6. Open Memo from the cluster; confirm the modal covers the cluster and Escape returns
    focus correctly (`modalReturnFocus`, `shell.js:41`).
 7. Both hosts — extension VSIX and standalone `npx`.
+
+### Goal Invariants
+
+- Assert `#top-right-cluster` exists in `src/webview/shell.html` as a child of `body` with `position: fixed`.
+- Assert `#top-right-cluster` contains exactly four buttons: Agent Dock, Setup, Memo, Connections.
+- Assert `buildDockToggle` is absent from `src/webview/shell.js` (moved to the cluster, not duplicated).
+- Assert `.dock-toggle-btn` class is present on the cluster's dock button (queried by `setDockOpen` and `updateDockViableGating`).
+- Assert `--dock-width` CSS variable is written by both `setDockOpen` and the splitter drag handler in `src/webview/shell.js`.
+- Assert `#top-right-cluster` is absent from any pop-out window (pop-out windows have no shell chrome).
+- Assert no panel control in the top-right band is occluded by the cluster at 1280px or 1920px width.

@@ -130,6 +130,12 @@ Both composition roots must be diffed by hand for this change. The consumers abo
 - Unit: `refreshUI` with an unresolvable current root → posts state or re-activates; never returns silently. `refreshUI` for a genuinely different workspace → still returns early.
 - Regression: `src/test/child-switchboard-creation-regression.test.ts`.
 
+### Goal Invariants
+- Assert `_getWorkspaceItems()` never emits a `parentFolder` workspace that is not in the host root set (negative — non-open parents are gone from the dropdown); paired with: assert `_getWorkspaceItems()` emits every host root plus children of any mapping whose `parentFolder` resolves to a host root (positive — the visible set is correct).
+- Assert `_getWatchFolders()` never omits the current workspace root when mappings are enabled and the current root is a mapped child (negative — the open root is not silently dropped); paired with: assert `_getWatchFolders()` always contains `this._currentWorkspaceRoot` regardless of mapping state (positive — the open root is always watched).
+- Assert `refreshUI()` never returns early with only a `console.log` when the board's own current root is unresolvable (negative — no silent blank board); paired with: assert `refreshUI()` either calls `_activateWorkspaceContext` with the resolved root or posts an explicit unavailable state to the webview when the root is unresolvable (positive — recovery or surfacing).
+- Assert `switchboardLocationGuard.ts:94` still calls `getMappingsFromIndex()` (not `getScopedMappingsForBoard`) after this plan lands (negative — the scoping does NOT reach the guard); paired with: assert `isAllowedSwitchboardLocation` still blocks `.switchboard/` creation in mapped children when the index is populated (positive — the guard still works).
+
 ### Manual Verification
 1. **The reported bug.** Open a member repo alone → board renders its cards. Not blank.
 2. **Dropdown honesty.** In that same window the selector lists only that repo — no other group members.
