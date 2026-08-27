@@ -101,6 +101,7 @@ board or an active pair mode would make it wrong.
 | `DELETE /kanban/plans?planId=<id>[&deleteFile=true]` | — | Delete the DB row; `deleteFile=true` also unlinks the `.md` |
 | `PUT /kanban/plans/project` | `{ planId, project, workspaceRoot? }` | Set a plan's project |
 | `PUT /kanban/plans/complexity` | `{ planId, complexity, workspaceRoot? }` | Set a plan's complexity (`"1"`–`"10"` or `"Unknown"`) |
+| `PUT /kanban/plans/priority` | `{ planId, starred, workspaceRoot? }` | Set a plan's priority star (`starred: true/false/1/0/"true"/"false"`). Starred cards sort first in every consumer. Idempotent. Accepts `sessionId` as an alias for `planId`. Returns `{ success, planId, starred }`. |
 | `POST /kanban/plans/import` | `{ workspaceRoot? }` | Rescan `.switchboard/plans/*.md` and upsert |
 
 ```bash
@@ -114,6 +115,9 @@ curl -s -X POST "$BASE/kanban/plans" -H "Content-Type: application/json" -d '{
 
 curl -s -X PUT "$BASE/kanban/plans/project" -H "Content-Type: application/json" \
   -d '{"planId":"a1b2c3d4","project":"Platform"}'
+
+curl -s -X PUT "$BASE/kanban/plans/priority" -H "Content-Type: application/json" \
+  -d '{"planId":"a1b2c3d4","starred":true}'
 
 curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4"                    # DB row only
 curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also remove the file

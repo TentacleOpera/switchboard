@@ -35,6 +35,9 @@ const apiServer = read('src/services/LocalApiServer.ts');
 const database = read('src/services/KanbanDatabase.ts');
 const kanbanHtml = read('src/webview/kanban.html');
 const allowlist = read('src/generated/verbAllowlist.ts');
+const verbSchemas = read('src/services/verbSchemas.ts');
+const orchestrationSkill = read('.agents/skills/switchboard-orchestration/SKILL.md');
+const orchestrationProtocol = read('.agents/protocols/switchboard-mission-control-http/SKILL.md');
 
 let failed = 0;
 function check(name, fn) {
@@ -323,6 +326,62 @@ check('the star control is on the card and does not gate on a confirm', () => {
     assert.ok(/e\.stopPropagation\(\)/.test(body), 'the star click must not reach the card selection handler');
     assert.ok(!/confirm\(/.test(body), 'no confirm gate — project rule, and confirm() is a silent no-op in webviews');
     assert.ok(/type:\s*'setPriorityStarred'/.test(body), 'the handler must post setPriorityStarred');
+});
+
+// ── PUT /kanban/plans/priority — the agent-reachable write path ──────────────
+// The star shipped reachable only over the generic /kanban/verb/* rail, which
+// performs NO payload validation (_handleKanbanVerb never calls
+// validateVerbPayload), so a wrong field name or `starred: "false"` returned a
+// hollow {success:true}. These pin the first-class endpoint that replaced it.
+
+check('the priority endpoint is routed and has its own handler', () => {
+    assert.ok(/pathname === '\/kanban\/plans\/priority' && req\.method === 'PUT'/.test(apiServer),
+        "PUT /kanban/plans/priority must be a real route arm — without it the star is reachable only over the unvalidated verb rail");
+    assert.ok(/private async _handleSetPlanPriority\(/.test(apiServer),
+        '_handleSetPlanPriority must exist as a dedicated handler (the shared _handlePlanFieldUpdate has no session-id fallback)');
+});
+
+check('the priority handler resolves a session-id card key', () => {
+    const fnStart = apiServer.indexOf('private async _handleSetPlanPriority(');
+    assert.notStrictEqual(fnStart, -1, '_handleSetPlanPriority must exist');
+    const body = apiServer.slice(fnStart, apiServer.indexOf('\n    private async _handlePlanFieldUpdate', fnStart));
+    assert.ok(/getPlanBySessionId\(/.test(body),
+        'the card key is planId || sessionId — a card carrying only a session_id must resolve, exactly as KanbanProvider.setPriorityStarred does');
+});
+
+check('the priority handler rejects non-boolean-like starred instead of coercing it', () => {
+    const fnStart = apiServer.indexOf('private async _handleSetPlanPriority(');
+    const body = apiServer.slice(fnStart, apiServer.indexOf('\n    private async _handlePlanFieldUpdate', fnStart));
+    assert.ok(!/!!\s*starredRaw/.test(body),
+        '`!!starredRaw` coerces the string "false" to true — an agent asking to UNSTAR would star instead. That is the exact silent trap this endpoint exists to close.');
+    assert.ok(/typeof starredRaw === 'boolean'/.test(body) && /lower === 'false'/.test(body),
+        'the strict ladder (boolean, 1/0, "true"/"false") must be present');
+    assert.ok(/must be a boolean, 1\/0, or "true"\/"false"/.test(body),
+        'an unrecognised value must be refused with an honest 400 message, not silently coerced');
+});
+
+check('the priority write is keyed to the resolved row\'s workspace, not the server\'s', () => {
+    const fnStart = apiServer.indexOf('private async _handleSetPlanPriority(');
+    const body = apiServer.slice(fnStart, apiServer.indexOf('\n    private async _handlePlanFieldUpdate', fnStart));
+    assert.ok(/record\.workspaceId \|\| await this\._wsId\(db\)/.test(body),
+        'getPlanByPlanId is unscoped but the UPDATE is `WHERE plan_id = ? AND workspace_id = ?`, and _persistedUpdate reports success on zero rows changed. On a DB holding more than one workspace the server\'s own id matches no row and the endpoint reports a star it never wrote.');
+});
+
+check('setPriorityStarred stays out of verbSchemas (it would be dead code)', () => {
+    assert.ok(!/setPriorityStarred/.test(verbSchemas),
+        '_handleKanbanVerb never calls validateVerbPayload, so a kanban verb schema is never consulted. The first-class endpoint is the sole validated write path — a schema entry here would read as enforcement that does not exist.');
+});
+
+check('both live copies of the HTTP contract document the priority endpoint', () => {
+    for (const [label, doc] of [['skills/switchboard-orchestration', orchestrationSkill],
+                                ['protocols/switchboard-mission-control-http', orchestrationProtocol]]) {
+        assert.ok(/\| `PUT \/kanban\/plans\/priority` \|/.test(doc),
+            `${label}/SKILL.md must carry the priority row — it is the only way an agent discovers the capability, and the two copies are maintained byte-identical`);
+        assert.ok(/kanban\/plans\/priority" -H "Content-Type: application\/json"/.test(doc),
+            `${label}/SKILL.md must carry the curl example`);
+    }
+    assert.strictEqual(orchestrationSkill, orchestrationProtocol,
+        'the skills copy and the protocols copy of the HTTP contract are duplicates — updating one and not the other leaves half the agent surface blind to the endpoint');
 });
 
 check('a drag that changed nothing must not arrange the column', () => {

@@ -1191,6 +1191,15 @@ jobs:
       - name: Card priority star + manual column order contract
         run: npm run test:contract:card-priority-order
 
+      # The behavioural half of the priority star. The source-text contract above
+      # pins that the endpoint EXISTS and is shaped right; this drives real
+      # requests through it, because the two defects it replaced are only visible
+      # at runtime: `!!"false"` inverting an unstar into a star, and a scoped
+      # UPDATE that matched zero rows while _persistedUpdate still reported
+      # success — a 200 {success:true} for a star that never landed.
+      - name: Plan priority endpoint (PUT /kanban/plans/priority)
+        run: npm run test:contract:plan-priority-endpoint
+
       # PTY clear readiness + atomic team lifecycle. These four ran green on the
       # coder's machine and were invoked by nothing: three had no npm script at all
       # and pty-clear-policy had a script no workflow step called. That is the exact

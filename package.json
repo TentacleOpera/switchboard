@@ -1022,6 +1022,7 @@
     "test:contract:feature-drive-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/feature-drive-prompt-reframe-contract.test.js",
     "test:contract:drive-mode-prompt-overhaul": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/drive-mode-prompt-overhaul-contract.test.js",
     "test:contract:card-priority-order": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/card-priority-and-column-order-contract.test.js",
+    "test:contract:plan-priority-endpoint": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/plan-priority-endpoint.test.js",
     "test:contract:pty-clear-policy": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-clear-policy-contract.test.js",
     "test:contract:clear-readiness": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/clear-readiness-state-machine.test.js",
     "test:contract:dispatch-curtain": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-curtain-and-ufo-contract.test.js",
