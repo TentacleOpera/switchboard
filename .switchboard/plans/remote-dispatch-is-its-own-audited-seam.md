@@ -58,6 +58,36 @@ same command a manual drag uses."* There is nowhere to attach provenance, nothin
 to log, and no switch — not because the capability is too wide, but because there
 is no seam at all.
 
+### A finding about the git channel's inbound trust guard
+
+`board-state-remote-mirror-channels.md` §3 gates every inbound git delta on an
+**author allowlist**, reusing `PlanAutoFetchService`'s trusted-author mechanism
+(`PlanAutoFetchService.ts:238-251`) — *"the same commit-author-email mechanism,
+git-side"*. It is right that this matters more there than for `planAutoFetch`,
+because an inbound comment on that channel flows directly into agent dispatch
+(`KanbanProvider.ts:1638`) rather than sitting inert in a workspace.
+
+**The commit author email is not an authorization control.** It is self-asserted:
+`git commit --author` accepts anything, and nothing verifies it against the
+pushing identity. Anyone who can push can present any author.
+
+That plan already half-knows this — its User Review item 5 reads *"Trust guard is
+bounded by mirror push-access — confirm acceptable"*, which is the correct
+analysis. So the fix is in how the guard is described, not in adding a mechanism:
+
+- **Push access to the destination is the boundary.** State it that way, and size
+  the destination's collaborator list accordingly.
+- **The author check is a filter, not a gate** — genuinely useful for keeping a
+  bot's own commits or a teammate's unrelated work from being read as signal, and
+  worth keeping for that. It must not appear in a security argument.
+- If trust must be narrower than push access, the mechanism is **signature
+  verification against a key allowlist**, which is unforgeable in the way an
+  author field is not. Optional hardening, not a prerequisite — and on an isolated
+  workstation (§5) it buys little.
+
+Recorded here rather than only in that plan because this is the plan that owns
+what happens once a remote request reaches dispatch.
+
 ### Root Cause
 
 Remote control reused the local dispatch command, which kept dispatch behaviour
@@ -215,9 +245,14 @@ appears on remote work. No existing remote config key changes meaning.
    team, role, seat and outcome; a fallback to column-role resolution says so.
 8. **The order** — present on non-local provenance, absent on local; visible and
    editable in the library.
-9. **Queue mode composes** — in `queue` mode a remote move stages rather than
+9. **Author email is not treated as authorization** — assert no code path grants or
+   denies dispatch on the strength of a commit author field alone, and that any
+   security-facing description of the git channel names push access as the
+   boundary. A source-text and docs assertion: the risk is a true statement in a
+   plan becoming a false one in an implementation comment.
+10. **Queue mode composes** — in `queue` mode a remote move stages rather than
    dispatching, exactly as today; when it does dispatch, it goes through the seam.
-10. **Both hosts** — run a remote-originated dispatch under the extension host and
+11. **Both hosts** — run a remote-originated dispatch under the extension host and
     the standalone host. The remote-control callbacks are wired in the composition
     roots (`onColumnMove` and friends), which is a known divergence risk, so diff
     the two roots by hand for this plan's callbacks rather than trusting verb

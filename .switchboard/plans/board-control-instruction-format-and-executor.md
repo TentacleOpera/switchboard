@@ -1,251 +1,230 @@
-# Board control instructions — the file format and the executor that fires them
+# Board control instructions — a structured command payload on the channel that already exists
 
 ## Goal
 
-Define a single JSON instruction file that names a card and the board actions to
-apply to it, and build the executor that validates one and fires the named
-actions against the board. No git in this plan: the executor takes a parsed
-object and returns a per-action result, so it is fully testable by handing it a
-file. `board-control-repo-poller.md` is what delivers files to it.
+Let a remote author request explicit board actions — move this card, star it,
+dispatch it — by committing one JSON file to the board's configured git
+destination, and have Switchboard validate it, apply the allowlisted actions, and
+publish a receipt saying exactly what happened.
+
+This is the **payload**, not the transport. The transport is
+`board-state-remote-mirror-channels.md` §3's `GitStateProvider`, extended to read
+one more directory.
 
 ### Problem Analysis
 
-**A cloud agent can author plans but cannot touch the board.** Plan files reach
-the board through git: an agent writes `.switchboard/plans/*.md`, pushes, and the
-watcher imports on the next fetch. Nothing equivalent exists for board *actions*.
-Moving a card, starring it, or marking it complete requires the LocalApiServer,
-which binds to localhost and requires a token (`_checkAuth`) — correctly
-unreachable from a cloud VM.
+**The git channel carries signals today and cannot carry commands.**
+Mirror-channels §3 gives the git destinations the same two channels Linear and
+Notion have: a **state signal** (a plan's `**Column:** <name>` line changed) and a
+**comment signal** (new text under that line, appended locally and dispatched to
+the column's agent). It is explicit that this is *"no command-syntax parsing,
+identical behavior to today's Notion/Linear comment flow."*
 
-**So the only inbound channel is a file in git, and one already half-exists.**
-`BoardSnapshotPublisher` (`BoardSnapshotPublisher.ts`) publishes `board.json`,
-`board.md`, and `board.html` for remote reading. Its header is explicit that this
-is *"One-directional, read-only… Sole writer is the extension; always overwrite;
-no diff-ingest, no control"*. This plan and its siblings add the missing
-direction, in a **separate private repository** of its own — see
-`board-control-repo-poller.md` for why access, not history, is what has to be
-isolated, and `board-state-moves-to-a-private-repo.md` for the same move applied
-to the outbound half.
+That covers "the card moved" and "someone said something". It does not cover "star
+this", "set complexity", or "dispatch this to a coder" — and it cannot, because
+those are not expressible as a column value or a comment.
 
-**Bare booleans cannot express the actions worth firing.** A flat
-`{"move": true, "star": true}` map carries no arguments, so the most useful
-action — *move this card to CODED* — is inexpressible, as are set-complexity and
-add-to-milestone. It also has no defined order: JSON object key order is an
-artifact of whatever emitted it, and an agent will emit keys in whatever order it
-pleases, so "star then move" and "move then star" are indistinguishable. The
-template therefore keeps booleans (they are the right shape for *whether* to do
-something) and puts arguments in a sibling block, with execution order fixed by
-the schema rather than by the file.
+**The gap is already an open question on a live plan.**
+`git-carried-shared-board-state.md` asks, under Outstanding Questions: *"Should a
+remote agent be able to write the ref directly (push a board change without
+running Switchboard), and if so does that need a schema-validation guard on
+ingest?"* — and notes in its side-effects that *"a remote agent could now write by
+pushing to the ref, which is a capability worth naming rather than discovering."*
+This plan is the answer: yes, through a declared schema, with validation, an
+allowlist, and a receipt — not by hand-editing board state.
 
-**Replay is the failure mode that matters.** A control file lives in a repo's
-history. Anything that re-presents it — a force-push, a re-clone, a cursor reset,
-a rebuild of the poller's state — re-fires every action in it unless identity is
-carried by the *instruction*, not by the commit. "Move to CODED" replayed is
-survivable; a replayed dispatch is not.
+**A comment that dispatches an agent is the reason validation is not optional.**
+Mirror-channels §3 routes an inbound comment straight into
+`KanbanProvider.ts:1638`, dispatching the current column's agent. So the git
+channel already reaches execution. A command payload on the same channel must
+therefore be *narrower* and *more* checked than the comment path, not looser.
 
-### Root Cause
+**Bare booleans cannot express the actions worth requesting.** A flat
+`{"move": true, "star": true}` map carries no arguments, so the most useful action
+— *move this card to CODED* — is inexpressible, as are set-complexity and dispatch
+to a named role. It also has no defined order: JSON object key order is an artifact
+of whatever emitted it. So the template keeps booleans for *whether*, puts
+arguments in a sibling block, and fixes execution order in the schema.
 
-The board's write surface was built for a caller on the same machine. A remote
-author has no path in, and the file-based path that does exist (plan files)
-carries content, not commands.
+**Replay is the failure mode that matters, and the transport's cursor does not
+prevent it.** `GitStateProvider`'s cursor is the last-processed commit SHA, which
+is correct for deltas and insufficient for commands: a force-push, a re-clone, a
+cursor reset, or the ref hygiene squash that `git-carried-shared-board-state.md`
+plans all re-present the same instruction under a different SHA. A replayed move is
+cosmetic; a replayed dispatch spends tokens and starts a second agent. Identity
+must therefore live in the **instruction**, not the commit.
 
 ### Non-goals
 
-- **Git, fetching, polling, or pushing.** All in the poller plan.
-- **A general RPC channel.** This is a fixed allowlist of board actions, not a
-  way to reach `POST /kanban/verb/<name>` or any other endpoint by name. See the
-  allowlist rule below — it is the security boundary of the whole feature.
+- **The transport.** Polling, fetching, cursors, and reconciliation are
+  mirror-channels §3's. This plan adds a directory to read and a result to
+  publish.
+- **A new repo, ref, or destination.** Instructions live wherever
+  `boardStateExport` points — the control-plane repo, the wiki, or the orphan ref.
+  Adding a placement is what `storage-topology-one-choice-three-stores.md` exists
+  to prevent.
+- **A general RPC channel.** Fixed allowlist; see below.
+- **Replacing the state or comment signals.** They keep working unchanged; this is
+  a third channel for things they cannot express.
 - **Shell, file paths, URLs, or arbitrary payloads** anywhere in the schema.
-- **Creating plans.** Plan files already flow in over git; this is for actions on
-  cards that exist.
+- **Creating plans.** Plan files already flow in over git — mirror-channels §5.
 - **Confirm gates.** Per project rule, none.
 
 ## Metadata
 
 **Complexity:** 6
 **Tags:** feature, backend, api, security, reliability
-**Feature:** 2440474a-cbe2-4876-b65d-3ccffd000aa3
 
 ## Dependencies
 
-None to build. `addMilestoneMember` / `setMilestoneComplete` actions are gated on
-`milestones-long-term-targets-on-the-board.md`; ship the executor without them
-and add them when that lands — the allowlist is a table, so it extends cleanly.
+- **Hard prerequisite:** `board-state-remote-mirror-channels.md` §3
+  (`GitStateProvider`, the cursor, the poll loop, the inbound trust guard).
+- `remote-dispatch-is-its-own-audited-seam.md` for the `dispatch` action — it must
+  not route through the local dispatch command.
+- The `addToMilestone` / `setMilestoneComplete` actions are gated on
+  `milestones-long-term-targets-on-the-board.md`; the allowlist is a table, so it
+  extends cleanly.
 
 ## Proposed Changes
 
 ### 1. The instruction file — `src/services/boardControlSchema.ts`
 
-One file per instruction, named `instructions/<id>.json` in the control repo:
+One file per instruction at `instructions/<id>.json` in the configured
+destination:
 
 ```json
 {
   "schema": 1,
   "id": "2026-08-27-move-auth-refactor-01",
   "target": { "planId": "abc-123" },
-  "actions": {
-    "move":              true,
-    "star":              false,
-    "unstar":            false,
-    "setComplexity":     false,
-    "setPriorityLevel":  false,
-    "addToMilestone":    false,
-    "stageForQueue":     false,
-    "completePlan":      false
-  },
+  "actions": { "move": true, "star": false, "setComplexity": false,
+               "addToMilestone": false, "stageForQueue": false,
+               "completePlan": false, "dispatch": false },
   "params": { "targetColumn": "CODED" },
   "note": "free text, logged, never executed"
 }
 ```
 
-- **`id` is the identity, and it is mandatory.** Idempotency keys on it, not on
-  the commit SHA — a force-push changes the SHA while re-presenting the same
-  instruction. Reject a missing or non-string id; reject an id containing a path
-  separator or `..` (it is used to name the receipt file).
-- **`target`** is `{ planId }` or `{ planName }`. `planId` wins. A `planName` is
-  resolved only if it matches **exactly one** card: zero matches or two both
-  refuse, and the refusal lists the candidates. Never guess — a mis-resolved name
-  applies someone's intent to the wrong card, and the receipt would report
-  success.
-- **`actions`** is a closed boolean map. Every key is validated against the
-  allowlist below; an unknown key is **reported in the receipt and never
-  dispatched**. Non-boolean values are rejected rather than coerced, using the
-  ladder from the star endpoint (`LocalApiServer.ts:6505-6528`) — a `"false"`
-  that coerces to `true` here moves a card nobody asked to move.
-- **`params`** carries arguments for whichever actions need them. A param without
-  its action is ignored (and reported); an action without its required param is a
-  per-action failure, not a whole-file failure.
-- **`schema`** is checked. An unknown version is refused whole, so a future format
-  is never half-interpreted by an old install.
+- **`id` is mandatory and is the identity.** Reject a missing or non-string id, or
+  one containing a path separator or `..` (it names the receipt file).
+- **`target`** is `{ planId }` or `{ planName }`. `planId` wins; a name resolves
+  only if it matches exactly one card, and zero or two both refuse with the
+  candidates listed. Never guess — a mis-resolved name applies someone's intent to
+  the wrong card and the receipt would report success.
+- **`actions`** is a closed boolean map. Unknown keys are reported in the receipt
+  and never dispatched. Non-boolean values are rejected, not coerced, using the
+  ladder from the star endpoint (`LocalApiServer.ts:6505-6528`).
+- **`schema`** is checked; an unknown version refuses the whole file, so a future
+  format is never half-interpreted by an old install.
 
-### 2. The allowlist — the security boundary
-
-A table in one place, each row naming an action, its required params, and the
-single DB or service call it makes:
+### 2. The allowlist is the security boundary
 
 | Action | Params | Effect |
 |---|---|---|
-| `move` | `targetColumn` | The sanctioned move path, the same one `move-card.js` and `POST /kanban/move` take — never a direct SQL column write |
+| `move` | `targetColumn` | The sanctioned move path — the same one `move-card.js` and `POST /kanban/move` take, never raw SQL |
 | `star` / `unstar` | — | `setPriorityStarred` |
 | `setComplexity` | `complexity` | Existing complexity write |
-| `setPriorityLevel` | `priority` | Gated on the priority field landing |
 | `addToMilestone` | `milestoneId` | Gated on the milestones plan |
 | `stageForQueue` | — | Stage into STAGING at the next queue position |
 | `completePlan` | — | The board's own complete path |
-| `dispatch` | `role` (optional) | Send the card to a seat via the remote dispatch seam — the channel's primary action |
+| `dispatch` | `role` (optional) | Via `remote-dispatch-is-its-own-audited-seam.md`, never the local dispatch command |
 
-Rules that make it a boundary rather than a list:
+Rules that make this a boundary rather than a list: **nothing outside the table is
+expressible** — the schema has no field for an endpoint, verb, SQL string, or shell
+command; and **every action takes the path a human's click takes**, board moves in
+particular, since per project rules a SQL move strands cards and skips the move
+side-effects.
 
-- **Nothing outside the table is reachable.** No verb name, endpoint path, SQL,
-  or shell can be expressed in the file at all — there is no field for one.
-- **Every action routes through the same code path a human's click takes.** Board
-  moves in particular go through the sanctioned move path, never raw SQL: per
-  project rules, SQL moves strand cards and skip the move side-effects.
-- **`dispatch` is in v1, and is the point.** The workflow this channel exists for
-  is *author plans in a cloud session, run `improve-plan` in the cloud, dispatch
-  remotely to the local coder* — so a channel without dispatch does not serve its
-  primary use case. It takes an optional `role` param (default: the column's mapped
-  role) and routes through `remote-dispatch-is-its-own-audited-seam.md`, never
-  through the local dispatch command, so it is attributable and logged.
+### 3. Execution order, partial failure, receipts
 
-  Replay matters more for this action than for any other: a re-fired move is
-  cosmetic, a re-fired dispatch spends tokens and starts a second agent. The
-  idempotency in §5 is therefore load-bearing rather than tidy, and its tests are
-  the ones to trust before enabling the channel.
+**Order is fixed by the table's order, not the file**, and asserted in a test —
+`star`-then-`move` regardless of JSON key order.
 
-### 3. Execution order, and partial failure
+**Actions are independent; one failure does not abort the rest.** Aborting on the
+first would leave an instruction half-applied with no record of which half.
 
-**Order is fixed by the allowlist table's order, not by the file.** Documented in
-the schema module and asserted in a test, so `star`-then-`move` is what happens
-whatever order the JSON keys arrive in.
+**The receipt** — `{ status: applied | partial | refused | duplicate, results[],
+ignored[] }` — is published wherever the destination's outbound cycle publishes,
+alongside the mirror content. Every path through the executor produces one,
+including every refusal: it is the only channel by which a remote author learns
+what happened.
 
-**Actions are independent: one failure does not abort the rest.** Each action
-gets its own result, and the receipt reports all of them. Aborting on the first
-failure would leave an instruction half-applied with no record of which half —
-worse than applying what could be applied and saying so precisely.
+**An applied action is never rolled back because its receipt could not be
+published.** If the actions landed and the push failed, they stay landed, the
+cursor is not advanced, and the next cycle re-reads, gets `duplicate`, and retries
+only the publish.
 
-### 4. The receipt
-
-Receipts are published to the **state** repo, not the control repo, so each repo
-keeps exactly one writer — the machine writes state, the agent writes control. The
-executor returns the receipt object; the poller publishes it. That split also means
-a compromised agent credential can file instructions and cannot fabricate a
-receipt claiming one was applied.
-
-```json
-{ "schema": 1, "id": "…", "receivedAt": "…", "resolvedPlanId": "abc-123",
-  "results": [ { "action": "move", "ok": true, "detail": "CREATED → CODED" },
-               { "action": "setComplexity", "ok": false,
-                 "error": "missing required param: complexity" } ],
-  "ignored": [ "frobnicate" ],
-  "status": "applied" }
-```
-
-`status` is `applied` (all requested actions succeeded), `partial`, `refused`
-(whole-file validation failed — bad schema, unresolvable target), or `duplicate`
-(this `id` was already processed; **nothing re-fired**).
-
-The receipt is the only channel by which a remote author learns what happened, so
-it must never be silently absent: every path through the executor produces one,
-including every refusal.
-
-### 5. Idempotency
+### 4. Idempotency, keyed to the instruction
 
 A processed-ids store keyed by `(workspaceId, instructionId)`, written **before**
-the actions fire and completed after, so a crash mid-instruction leaves it marked
-attempted rather than unmarked and replayable. A second sighting of a known id
-returns `duplicate` without dispatching, and re-emits the stored receipt.
+the actions fire and completed after, so a crash leaves it marked attempted rather
+than replayable. A second sighting returns `duplicate` without dispatching and
+re-emits the stored receipt. Bounded: last N ids with timestamps, pruned oldest
+first.
 
-Bounded: keep the last N ids (a few thousand) with a timestamp, pruned oldest-
-first. An unbounded table is a slow leak; a too-small one reopens replay.
+This is what makes the channel safe under `git-carried-shared-board-state.md`'s
+planned ref squashing and under any force-push — neither of which the commit-SHA
+cursor survives.
 
-### Host parity (extension + standalone)
+### 5. Reading them — a directory, not a new service
 
-The executor is a plain service constructed alongside the DB, following
-`BoardSnapshotPublisher`, which is instantiated inside `KanbanDatabase` creation
-(`KanbanDatabase.ts:1319`) rather than in either composition root. That is why the
-snapshot publisher has never diverged between hosts, and this plan copies it
-deliberately: **no new composition-root seam is introduced.** Do not wire this in
-`extension.ts` or `bootstrap.ts`.
+Extend `GitStateProvider` to read `instructions/*.json` in the same
+`git log <lastSeenSha>..<remoteHead>` pass it already makes for state and comment
+deltas, oldest-first by path for determinism. Instructions go through the **same
+inbound trust guard** as every other delta on that channel, before validation.
+
+Add `ls-remote` ahead of the fetch while there: one round trip, no object
+transfer, so the common no-change case is nearly free.
+
+### Host parity
+
+No new composition-root seam. `GitStateProvider` is constructed by
+`RemoteControlService`, whose deps are wired in both roots — and those callbacks
+are a known divergence risk, so diff the two roots by hand for anything this plan
+adds rather than trusting verb reachability.
 
 ### Migration
 
-New state: the processed-ids store and nothing else. Additive table, idempotent
+New state: the processed-ids store. Additive table with an idempotent
 `CREATE TABLE IF NOT EXISTS` plus a migration block per the V63/V64 pattern
-(`KanbanDatabase.ts:626-642`). No existing row is read differently.
+(`KanbanDatabase.ts:626-642`). Mirror-channels is unreleased, so the channel
+itself takes a clean break with no migration.
 
 ## Verification Plan
 
-1. **Schema validation** — unknown `schema` version refused whole; missing `id`
-   refused; an `id` containing `/` or `..` refused; non-boolean action value
-   refused, not coerced (assert `"false"` does not become `true`).
-2. **Target resolution** — `planId` hit; `planName` unique hit; `planName` with
-   zero and with two matches both refuse and the receipt lists candidates; assert
-   **zero actions fired** on any refusal.
-3. **Allowlist** — an unknown action key is reported in `ignored` and dispatches
-   nothing; assert no code path can name an endpoint, verb, SQL string, or shell
-   command (a source-text assertion: the schema type has no such field).
-4. **Order** — a file with all keys true fires them in the table's order
-   regardless of JSON key order. Build the input with keys deliberately reversed.
-5. **Partial failure** — action 2 fails, actions 1 and 3 still apply, and the
-   receipt reports all three honestly.
-6. **Idempotency** — the same id twice → second returns `duplicate`, re-emits the
-   first receipt, and fires nothing; a *different* id with identical content does
-   fire; a simulated crash between mark and completion leaves the id
-   non-replayable.
-7. **Move goes through the sanctioned path** — spy on it and assert no direct SQL
-   column write.
-8. **Every path produces a receipt** — enumerate refusal branches and assert none
-   returns without one.
-9. **Both hosts** — construct the executor under each host's DB creation and run
-   one instruction through each, proving the no-new-seam claim rather than
-   asserting it.
+1. **Schema validation** — unknown version refused whole; missing `id` refused; an
+   `id` with `/` or `..` refused; `"false"` does not become `true`.
+2. **Target resolution** — `planId` hit; unique `planName` hit; zero and two
+   matches both refuse with candidates listed; **zero actions fired** on any
+   refusal.
+3. **Allowlist** — an unknown action key is reported and dispatches nothing;
+   assert by source text that the schema type has no field for an endpoint, verb,
+   SQL, or shell string.
+4. **Order** — all-true with JSON keys deliberately reversed fires in table order.
+5. **Partial failure** — action 2 fails, 1 and 3 apply, receipt reports all three.
+6. **Idempotency under the transport's own edge cases** — the same id after a
+   force-push returns `duplicate`; the same id after a simulated ref squash
+   returns `duplicate`; a different id with identical content fires; a crash
+   between mark and completion leaves it non-replayable. These are the tests to
+   trust before enabling `dispatch`.
+7. **Receipt on every path** — enumerate refusal branches, assert none returns
+   without one; assert an applied action survives a failed receipt push and the
+   next cycle publishes without re-firing.
+8. **Trust guard first** — an instruction from an untrusted author is dropped and
+   surfaced before validation, never applied.
+9. **No second poller** — assert by source text that no new timer or `ls-remote`
+   loop exists outside `GitStateProvider`.
+10. **The other two signals still work** — a `**Column:**` change and an inbound
+    comment behave exactly as mirror-channels specifies, with instructions present
+    in the same commit.
 
 ### Goal Invariants
 
-- An instruction can only do what the allowlist table says, and the file has no
-  syntax for anything else.
+- An instruction can only do what the allowlist says, and the file has no syntax
+  for anything else.
 - No value is silently coerced; ambiguity is refused, never guessed.
-- The same instruction never applies twice, however it is re-presented.
+- The same instruction never applies twice — under force-push, squash, re-clone or
+  crash.
 - Every outcome, including every refusal, is reported in a receipt.
-- Board moves take the same path a human's click takes.
+- One transport, one cursor, one poll loop, shared with the state and comment
+  signals.

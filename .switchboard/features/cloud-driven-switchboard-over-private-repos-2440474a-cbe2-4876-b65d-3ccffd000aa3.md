@@ -1,52 +1,53 @@
 ---
-description: 'Cloud-Driven Switchboard Over Private Repos'
+description: 'Cloud-Driven Switchboard — Commands, Dispatch And Visibility'
 ---
 
-# Cloud-Driven Switchboard Over Private Repos
+# Cloud-Driven Switchboard — Commands, Dispatch And Visibility
 
 **Complexity:** 6
 
 ## Goal
 
-Let a cloud session drive a Switchboard board it cannot reach over the network — author plans, dispatch work to a local coder, and check on progress — using private git repositories as the transport, with the machine boundary rather than endpoint restrictions doing the containment.
+Let a cloud session drive a Switchboard board it cannot reach over the network — request explicit board actions, dispatch work to a local coder, and see how that work is going — and make the record of what the fleet did searchable.
 
-The workflow this exists for: author plans in a cloud session, run `improve-plan` in the cloud, dispatch remotely to the local coder, then read the coder's live output to see how it is going.
+The workflow this exists for: author plans in a cloud session, run `improve-plan` in the cloud, dispatch remotely to the local coder, then read whether the coder is moving or wedged.
 
-Two structural decisions run through every subtask. **Access is isolated by repository, not by branch** — read access on a repo is repo-wide, so an orphan branch in the code repo is readable by every collaborator and every CI token, and a branch cannot be permissioned the way the risk requires. And **each repo has exactly one writer** — the machine writes board state, receipts and logs; the cloud agent writes instructions. That drops every non-fast-forward retry loop and means a compromised agent credential can file work but cannot rewrite published state or fabricate a receipt claiming its instruction ran.
+**This feature was rescoped on 2026-08-27 after an audit against five live plans it had been duplicating.** The transport, the destination and the storage topology were all already decided, and two of the original subtasks contradicted those decisions rather than extending them. Both are now superseded stubs recording why, and the surviving work is layered on the existing designs:
 
-The security posture is isolation first. Switchboard already serves the board loopback-only with tunnel setup documented, so the recommended deployment is a machine you are willing to hand to an agent. The channels are therefore audited and attributable rather than stripped down — capability limits that break `dispatch remotely to the local coder` buy nothing on an isolated workstation.
+- **Transport** is `board-state-remote-mirror-channels.md` §3's `GitStateProvider` — the poll loop, the commit-SHA cursor, the fetch-and-reconcile push, and the inbound trust guard. No second poller is built.
+- **Destination** is whatever `boardStateExport` resolves to. `board-state-remote-mirror-channels.md` already rejected a per-project private companion repo in favour of the control plane, and `storage-topology-one-choice-three-stores.md` exists specifically to stop new storage placements being invented.
+- **Storage** for the log record is the topology plan's **Archive** store, placement derived from the one operator choice.
+
+What the git channel could not do, and this feature adds: carry **commands** rather than only signals (a column value and a comment cannot express "star this" or "dispatch this"), give remote-originated dispatch an **identity** so it is attributable, and make terminal work **findable**.
 
 ## How the Subtasks Achieve This
 
-- **Board state publishes to a private repo of its own, not a branch of the code repo**: moves `BoardSnapshotPublisher` off the `switchboard/board` orphan ref into a private state repo via a cached clone, and stops force-pushing (force would destroy accumulated receipts if the cache were stale). Carries the migration: the `boardStateExport` setting shipped, so it keeps its meaning, and with no repo URL configured publishing *stops* rather than falling back to the branch — a fallback would mean the fix ships and changes nothing. The stale ref is offered for cleanup, never auto-deleted from someone's remote.
+- **Board control instructions — a structured command payload on the channel that already exists**: the JSON schema, a closed action allowlist that is the security boundary (the schema has no field for an endpoint, verb, SQL or shell string), execution order fixed by the allowlist rather than by JSON key order, and receipts. Its idempotency is keyed to an instruction id rather than a commit SHA, which matters because the transport's cursor cannot survive a force-push or the ref-squashing that `git-carried-shared-board-state.md` plans — and a replayed move is cosmetic where a replayed dispatch starts a second agent. Answers that plan's open question about whether a remote agent may write the ref directly: yes, through a validated schema, not by hand-editing board state.
 
-- **Board control instructions — the file format and the executor that fires them**: the JSON template a cloud agent fills, and the thing that validates and applies it. Booleans for which actions to take, a sibling params block for their arguments (a bare boolean map cannot express "move to CODED", and JSON key order cannot express sequence), execution order fixed by the allowlist rather than by the file, and idempotency keyed to the instruction id rather than the commit SHA so a force-push cannot replay. The allowlist is the security boundary: the schema has no field for an endpoint, verb, SQL or shell string, so nothing outside it is expressible.
+- **Remote dispatch is its own seam — audited and attributable, not stripped down**: one entry point replacing two callers of the local dispatch command, whose docstring is the finding — *"the same command a manual drag uses."* Any role the configured team seats is reachable, coder included, because containment belongs to the deployment (Switchboard already serves the board loopback-only with tunnel setup documented) rather than to endpoint restrictions. What it adds is provenance as a value, an untrusted-data envelope around remote-authored card bodies, and per-dispatch logging. Also carries a finding about the git channel's inbound trust guard: the commit author email it relies on is self-asserted, so push access is the real boundary and the check is a filter rather than a gate.
 
-- **Switchboard watches a private control repo and fires the instructions it finds**: `ls-remote` cursor polling (one round trip, no object transfer), fetch only on change, a cached clone so the user's checkout is never touched, and receipts published to the state repo. Read-only against control, which is what keeps the one-writer invariant true rather than aspirational.
+- **A cloud agent fills the template and pushes it**: the authoring skill and shipped template, built around the rule that a successful `git push` means the instruction was *filed*, not that the board changed — and that a rejected push means the machine pushed mirror content, to be replayed rather than forced.
 
-- **Remote dispatch is its own seam — audited and attributable, not stripped down**: one entry point for every remote channel, replacing two callers of the local dispatch command. Any role the configured team seats is reachable, coder included; what it gains is provenance threaded as a value, an untrusted-data envelope around remote-authored card bodies, per-dispatch logging, and a switch independent of local dispatch. Also fixes a standing bug: remote framing is currently keyed on whether the board is under remote control rather than on whether the request arrived remotely.
+- **Terminal logs are named for what they record**: adds CLI, plan slug and short plan id to the filename, keeps the terminal name first because the listing endpoint's prefix filter depends on it, and makes a plan change roll the file so a name claiming a plan cannot be a lie.
 
-- **A cloud agent fills the template and pushes it**: the authoring skill and shipped template — two clones with different access on each, no worktrees, no force-push — built around the rule that a successful `git push` means the instruction was *filed*, not that the board changed. An agent must read a receipt before telling anyone a card moved.
-
-- **Terminal logs are named for what they record**: logs are currently `<terminal>-<session-id>.md`, so the only searchable field is which terminal the work happened in. Adds CLI, plan slug and short plan id, keeps the terminal first because the listing endpoint's prefix filter depends on it, and makes a plan change roll the file so a name claiming a plan cannot be a lie.
-
-- **Terminal logs publish to the board state repo**: full log on session close, a bounded tail on a timer while in flight, and an index keyed by plan so a cloud agent answers "what is happening on this card" in one fetch. Off by default with the disclosure stated at the toggle, because pty output carries secrets and git history keeps whatever is pushed.
+- **Terminal logs go to the Archive store; a Runtime-safe status goes to the board destination**: the record becomes queryable by plan, CLI, terminal, time and content — which a directory of files cannot be. The status payload was redesigned during the audit: terminal names and log tails are Runtime tier, which the topology plan says never leaves the machine and `git-carried-shared-board-state.md` enforces with a contract test, so the default payload carries plan id, state and idle seconds and nothing else. Output tails are a separate opt-in that names itself as an exception.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] (no subtasks)
 <!-- END SUBTASKS -->
 
+## ⚠ Blocked items
+
+**The log Archive subtask is blocked on an open decision in another plan.** `storage-topology-one-choice-three-stores.md`'s User Review item 2 — whether DuckDB is demoted to a never-load-bearing analytics export — is unresolved, and `retention-and-archive-for-unbounded-growth.md` assumes the opposite answer (*"Changing what the archive is (DuckDB stays)"*). A searchable log archive is load-bearing by definition, so the two answers give incompatible destinations. That subtask supplies the evidence and should not be coded until the decision lands.
+
 ## Dependencies & sequencing
 
-Ordered, with two independent starting points.
+External prerequisite for three subtasks: `board-state-remote-mirror-channels.md` §3 must exist, since the instruction payload and the status publishing both ride its provider and its outbound cycle.
 
-1. **Board state private repo** first — it establishes the state repo, its clone cache, and the serialized `withStateRepo` write path that both receipts and logs use.
-2. **Instruction format and executor** can be built in parallel with (1): it takes a parsed object and returns a result, with no git involved, so it is fully testable on its own.
-3. **Control repo poller** needs both — it delivers files to the executor and publishes receipts through the state repo's write path.
-4. **Remote dispatch seam** is independent of (1)–(3) and can land any time; the executor's `dispatch` action routes through it, so it should land before that action is enabled.
-5. **Cloud agent skill** ships in the same release as the poller — a skill describing a channel that is not live would have agents filing instructions nothing reads.
-6. **Log naming** is independent and useful on its own.
-7. **Log publishing** needs (1) for the repo and (6) for meaningful filenames.
+1. **Remote dispatch seam** and **log naming** are independent of everything and can start immediately.
+2. **Instruction format and executor** needs mirror-channels §3 for transport, and the dispatch seam before its `dispatch` action is enabled.
+3. **Cloud agent skill** ships in the same release as the executor — a skill describing a channel that is not live would have agents filing instructions nothing reads.
+4. **Logs to Archive and status** needs log naming, the Archive store from the topology plan, and the DuckDB decision above.
 
-Nothing here depends on the milestone feature or on the priority/ordering plans.
+Nothing here depends on the milestone feature or the priority/ordering plans.
