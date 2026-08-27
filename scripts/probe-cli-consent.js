@@ -19,6 +19,11 @@
  *   --cwd <dir>                  Working directory (default: fresh temporary directory)
  *   --timeout <ms>               Max run duration before abort (default: 15000)
  *   --type-chars <chars>         Characters to type after prompt (default: "abcdefgh")
+ *   --settle <ms>                Type this long after spawn even if nothing renders (default: 2500)
+ *   --ready-delay <ms>           Type this long after a readiness marker appears (default: 1200)
+ *   --keep-env <A,B>             Do NOT strip these trust/auth env vars from the child
+ *
+ * Exit codes: 0 = measured, 2 = bad arguments, 3 = INCONCLUSIVE (no launch / no input sent).
  *
  * Examples:
  *   # 1. Baseline: spawn gemini in fresh dir without flags
@@ -54,6 +59,11 @@ Options:
   --cwd <dir>                  Working directory (default: fresh temporary directory)
   --timeout <ms>               Max run duration before abort (default: 15000)
   --type-chars <chars>         Characters to type after prompt (default: "abcdefgh")
+  --settle <ms>                Type this long after spawn even if nothing renders (default: 2500)
+  --ready-delay <ms>           Type this long after a readiness marker appears (default: 1200)
+  --keep-env <A,B>             Do NOT strip these trust/auth env vars from the child
+
+Exit codes: 0 = measured, 2 = bad arguments, 3 = INCONCLUSIVE (no launch / no input sent).
 `);
     process.exit(0);
 }
@@ -67,6 +77,9 @@ const options = {
     cwd: '',
     timeout: 15000,
     typeChars: 'abcdefgh',
+    settleMs: 2500,
+    readyDelayMs: 1200,
+    keepEnv: [],
 };
 
 for (let i = 1; i < rawArgs.length; i++) {
@@ -85,6 +98,12 @@ for (let i = 1; i < rawArgs.length; i++) {
         options.timeout = parseInt(rawArgs[++i], 10) || 15000;
     } else if (arg === '--type-chars' && i + 1 < rawArgs.length) {
         options.typeChars = rawArgs[++i];
+    } else if (arg === '--settle' && i + 1 < rawArgs.length) {
+        options.settleMs = parseInt(rawArgs[++i], 10) || 2500;
+    } else if (arg === '--ready-delay' && i + 1 < rawArgs.length) {
+        options.readyDelayMs = parseInt(rawArgs[++i], 10) || 1200;
+    } else if (arg === '--keep-env' && i + 1 < rawArgs.length) {
+        options.keepEnv = rawArgs[++i].split(',').map((v) => v.trim()).filter(Boolean);
     }
 }
 
@@ -100,56 +119,77 @@ const tempHome = path.join(tempDir, 'home');
 fs.mkdirSync(tempHome, { recursive: true });
 
 // Pre-populate config file if requested
+const CONFIG_TARGETS = {
+    copilot: '.copilot/config.json',
+    claude: '.claude/settings.json',
+    gemini: '.gemini/trustedFolders.json',
+    agy: '.gemini/antigravity-cli/settings.json',
+};
+
+let configWritten = null;
 if (options.configType || options.configPath) {
     let relConfigPath = options.configPath;
-    let configPayload = {};
 
     if (!relConfigPath) {
-        switch (options.configType.toLowerCase()) {
-            case 'copilot':
-                relConfigPath = '.copilot/config.json';
-                configPayload = { [options.configKey || 'trustedDirectories']: [testCwd] };
-                break;
-            case 'claude':
-                relConfigPath = '.claude/settings.json';
-                configPayload = { [options.configKey || 'trustedDirectories']: [testCwd] };
-                break;
-            case 'gemini':
-                relConfigPath = '.gemini/trustedFolders.json';
-                configPayload = { [options.configKey || 'trustedDirectories']: [testCwd] };
-                break;
-            case 'agy':
-                relConfigPath = '.gemini/antigravity-cli/settings.json';
-                configPayload = { [options.configKey || 'trustedDirectories']: [testCwd] };
-                break;
-            default:
-                console.warn(`[probe] Unrecognized configType: ${options.configType}`);
+        relConfigPath = CONFIG_TARGETS[options.configType.toLowerCase()];
+        if (!relConfigPath) {
+            // Hard error, not a warning: degrading to a baseline run while the
+            // report still carries `configType` records a config test that never
+            // happened, and that lie is what lands in the docs table.
+            console.error(
+                `[probe] Unrecognized --config-type "${options.configType}". ` +
+                `Known types: ${Object.keys(CONFIG_TARGETS).join(', ')}. ` +
+                `Use --config-path <relPath> to target a file directly.`
+            );
+            try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (_) {}
+            process.exit(2);
         }
     }
 
-    if (relConfigPath) {
-        const fullConfigPath = path.join(tempHome, relConfigPath);
-        fs.mkdirSync(path.dirname(fullConfigPath), { recursive: true });
-        fs.writeFileSync(fullConfigPath, JSON.stringify(configPayload, null, 2), 'utf8');
-        console.log(`[probe] Pre-populated config at: ${fullConfigPath}`);
-    }
+    // Built unconditionally: a --config-path run used to skip the switch and
+    // write an empty `{}`, testing nothing while reporting as a config test.
+    const configPayload = { [options.configKey]: [testCwd] };
+    const fullConfigPath = path.join(tempHome, relConfigPath);
+    fs.mkdirSync(path.dirname(fullConfigPath), { recursive: true });
+    fs.writeFileSync(fullConfigPath, JSON.stringify(configPayload, null, 2), 'utf8');
+    configWritten = fullConfigPath;
+    console.log(`[probe] Pre-populated config at: ${fullConfigPath}`);
 }
 
 const started = Date.now();
 const elapsedMs = () => Date.now() - started;
 
 let rawBuffer = '';
-let typed = false;
+let typeScheduled = false;
+let typedSent = false;
+let typedAtOffset = -1;
 let finished = false;
 let typedEchoed = false;
+
+// A baseline arm must actually be untrusted. The operator's own shell may already
+// export trust/auth overrides for these CLIs; inheriting them pre-consents the
+// "without the mechanism" spawn and turns protocol step 1 into a false pass.
+const TRUST_ENV_LEAKS = [
+    'GEMINI_CLI_TRUST_WORKSPACE',
+    'COPILOT_ALLOW_ALL',
+    'CLAUDE_TRUSTED_DIRECTORIES',
+    'FACTORY_API_KEY',
+];
 
 const childEnv = {
     ...process.env,
     HOME: tempHome,
     USERPROFILE: tempHome,
+    XDG_CONFIG_HOME: path.join(tempHome, '.config'),
     NO_COLOR: '1',
     DEVIN_CLI_AUTO_UPDATE: 'false',
 };
+const strippedEnv = [];
+for (const key of TRUST_ENV_LEAKS) {
+    if (options.keepEnv.includes(key)) continue;
+    if (key in childEnv) strippedEnv.push(key);
+    delete childEnv[key];
+}
 
 console.log(`[probe] Spawning ${cliBinary} in ${testCwd} with args: [${options.cliArgs.join(' ')}]`);
 
@@ -168,41 +208,67 @@ try {
     process.exit(1);
 }
 
+const escapeCtl = (str) => str.replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+
 function finish(statusReason) {
     if (finished) return;
     finished = true;
     clearTimeout(timeoutHandle);
+    clearTimeout(settleTimer);
+    clearTimeout(typeTimer);
     try { child.kill(); } catch (_) {}
 
-    // Check if typed chars echoed
-    if (typed && options.typeChars) {
-        typedEchoed = rawBuffer.includes(options.typeChars);
+    // Search only output produced AFTER the write. Searching the whole buffer can
+    // match the payload in text the CLI never echoed back.
+    if (typedSent && options.typeChars) {
+        typedEchoed = rawBuffer.slice(typedAtOffset).includes(options.typeChars);
     }
 
     const hasTrustOrConsentPrompt =
         /trust this (folder|directory|workspace)/i.test(rawBuffer) ||
+        /do you trust/i.test(rawBuffer) ||
         /terms of service/i.test(rawBuffer) ||
-        /1\.\s*Yes.*2\.\s*No/i.test(rawBuffer) ||
+        // [\s\S], not `.`: copilot renders one option per line, and its "No" is
+        // option 3, not 2. The old /1\.\s*Yes.*2\.\s*No/ matched neither.
+        /1\.\s*Yes[\s\S]{0,240}?\d\.\s*No\b/i.test(rawBuffer) ||
         /remember this folder/i.test(rawBuffer) ||
         /Enter to select/i.test(rawBuffer);
+
+    // A CLI that never launched, or died before rendering, measured nothing.
+    // Reporting hasTrustOrConsentPrompt:false for it reads as "no prompt" — the
+    // exact false negative that would propagate into the docs table.
+    const launched = rawBuffer.length > 0;
+    const inconclusive = !launched || !typedSent;
+    const inconclusiveReason = !launched
+        ? 'no output — the CLI did not launch or rendered nothing'
+        : (!typedSent ? 'the probe never sent input, so echo was not measured' : null);
 
     const report = {
         cli: cliBinary,
         args: options.cliArgs,
         configType: options.configType || null,
+        configWritten,
+        strippedEnv,
         durationMs: elapsedMs(),
         statusReason,
+        verdict: inconclusive
+            ? 'INCONCLUSIVE'
+            : (hasTrustOrConsentPrompt ? 'PROMPT_BLOCKED' : (typedEchoed ? 'CLEAR' : 'NO_PROMPT_NO_ECHO')),
+        inconclusiveReason,
         hasTrustOrConsentPrompt,
-        typedSent: typed,
+        typedSent,
         typedEchoed,
-        bufferSnippet: rawBuffer.slice(0, 1000).replace(/\r/g, '\\r').replace(/\n/g, '\\n'),
+        bufferHead: escapeCtl(rawBuffer.slice(0, 1200)),
+        bufferTail: rawBuffer.length > 1200 ? escapeCtl(rawBuffer.slice(-1200)) : '',
     };
 
     console.log('\n=== Probe Result ===');
     console.log(JSON.stringify(report, null, 2));
 
     cleanup();
-    process.exit(0);
+    // Non-zero on INCONCLUSIVE so a scripted sweep cannot silently record a
+    // failed launch as "no prompt".
+    process.exit(inconclusive ? 3 : 0);
 }
 
 function cleanup() {
@@ -211,23 +277,35 @@ function cleanup() {
     } catch (_) {}
 }
 
+function sendTypeChars() {
+    if (finished || typedSent) return;
+    typedAtOffset = rawBuffer.length;
+    typedSent = true;
+    try { child.write(options.typeChars); } catch (_) {}
+    setTimeout(() => finish('observed'), 1000);
+}
+
+function scheduleType(delayMs) {
+    if (typeScheduled) return;
+    typeScheduled = true;
+    clearTimeout(settleTimer);
+    typeTimer = setTimeout(sendTypeChars, delayMs);
+}
+
 const timeoutHandle = setTimeout(() => {
     finish('timeout');
 }, options.timeout);
 
+let typeTimer = null;
+// Fires even when the CLI renders nothing at all (grok's measured case). Without
+// it the probe never reaches protocol step 3 for a silent CLI, so a silent CLI
+// could never qualify no matter what the mechanism did.
+const settleTimer = setTimeout(() => scheduleType(0), options.settleMs);
+
 child.onData((data) => {
     rawBuffer += data;
-
-    // Detect prompt readiness or initial settle to test typing
-    if (!typed && (data.includes('❭') || data.includes('>') || data.includes('?') || elapsedMs() > 2000)) {
-        typed = true;
-        setTimeout(() => {
-            if (finished) return;
-            child.write(options.typeChars);
-            setTimeout(() => {
-                finish('observed');
-            }, 1000);
-        }, 500);
+    if (data.includes('❭') || data.includes('>') || data.includes('?')) {
+        scheduleType(options.readyDelayMs);
     }
 });
 

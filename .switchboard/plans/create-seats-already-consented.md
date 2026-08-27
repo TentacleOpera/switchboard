@@ -220,11 +220,19 @@ Then verify each candidate mechanism rather than trusting the help text. Web
 research (2026-08-26, 55 sources) has narrowed the candidate set significantly —
 several original candidates were confirmed wrong and are marked superseded below.
 
-> **⚠ PROBE-PENDING — every row below is sourced from web research, not from a
-> probe run. Research confirmed flag names and their documented purpose, but
-> runtime behavior in an untrusted directory is still settled by the probe
-> protocol below. Do NOT write any row into user-facing docs until the probe has
-> confirmed it.**
+> **⚠ PROBE-PENDING (superseded 2026-08-27) — every row below was sourced from
+> web research, not from a probe run. Do NOT write any row into user-facing docs
+> until the probe has confirmed it.**
+>
+> **Probe run 2026-08-27 (reviewer pass).** `scripts/probe-cli-consent.js` was
+> run against all eight CLIs, both arms where a mechanism exists. Results are
+> recorded in `docs/AGENT_CLI_CONSENT_FLAGS.md`, which now carries a per-row
+> probe-status column instead of a blanket "verified" claim. Headline: only
+> gemini `--skip-trust` was **confirmed** to remove its gate (the folder-trust
+> dialog). The `trustedDirectories` rows (copilot, claude, agy) were **not
+> confirmed** — each still hit a blocking surface with the config pre-populated.
+> The probe's sandboxed `HOME` is also unauthenticated, so a blocked result may
+> be an auth gate behind a cleared trust gate; the docs state that limit.
 
 > **Superseded:** copilot trust candidate was `--allow-all-paths` ("disable file
 > path verification") + env `COPILOT_ALLOW_ALL`.
@@ -491,3 +499,56 @@ the probe runs against confirmed flag names, not guesses.
 4. **Safety & Zero-Mutation Policy**:
    - Preserved policy invariants: zero automatic rewriting of user startup commands, zero automated permission widening, no runtime code regressions in `src/`.
 
+
+## Review Findings
+
+Reviewer pass 2026-08-27: ran `scripts/probe-cli-consent.js` against all eight CLIs
+and found the shipped `docs/AGENT_CLI_CONSENT_FLAGS.md` published every row as
+"Verified" with no probe behind it — the one thing this plan's PROBE-PENDING banner
+explicitly forbade — and measurement then contradicted it: only gemini
+`--skip-trust` actually removed its gate, while copilot/claude/agy
+`trustedDirectories` each still hit a blocking surface with the config
+pre-populated. Files changed: `docs/AGENT_CLI_CONSENT_FLAGS.md` (rewritten with a
+dated per-row probe-status column, the sandboxed-`HOME` limitation stated, the
+false "`--skip-trust` covers ToS" claim corrected, the unsourced
+`~/.factory/config.json` dropped), `scripts/probe-cli-consent.js` (five measurement
+bugs fixed — it never typed into a silent CLI, reported a failed launch as "no
+prompt" and exited 0, claimed input was sent when it was not, wrote an empty `{}`
+for `--config-path`, and its numbered-menu regex matched neither copilot's nor
+gemini's real menu), and `src/webview/setup.html` (dropped the "verified flags"
+wording). Validation: `tsc --noEmit` clean for this change (5 pre-existing TS2835
+errors at HEAD, none in touched files — no `.ts` was modified);
+`setup-panel-element-ids`, `panel-runtime-surface`, `panel-scrollbars`,
+`shim-injection`, `standalone-parity:check`, `host-seam-parity:check` and
+`parity:check` all green; `mirror:check` red on `switchboard-remote/SKILL.md`,
+pre-existing and unrelated. Remaining risk: every probe arm ran under a sandboxed,
+unauthenticated `HOME`, so the three NOT CONFIRMED rows may be auth gates behind a
+cleared trust gate rather than failed mechanisms — they need a re-probe on a
+signed-in machine before anyone relies on them.
+
+## Deferred Findings
+
+- MAJOR — `docs/AGENT_CLI_CONSENT_FLAGS.md:67-69`: copilot/claude/agy
+  `trustedDirectories` rows are marked NOT CONFIRMED rather than resolved. The
+  probe cannot separate "trust mechanism failed" from "auth gate behind a cleared
+  trust gate" while it sandboxes `HOME`. Resolving needs either a `--real-home`
+  opt-in arm (which would write to the operator's live CLI config, a security
+  trade the plan's Change 3 refuses) or a manual measurement on a signed-in
+  machine. Left for the author.
+- MAJOR — `docs/AGENT_CLI_CONSENT_FLAGS.md:71`: droid measured CLEAR here but the
+  2026-08-23 measurement recorded `> Login / Exit`, and grok/devin both returned
+  NO_PROMPT_NO_ECHO. The 18s probe window may simply be shorter than these CLIs'
+  first render. Needs a longer-window re-probe (`--settle 6000 --timeout 40000`).
+- NIT — `src/webview/setup.html:747-751`: the guidance block sits between AGENT
+  PROTOCOL TARGET and WORKFLOW SETTINGS, not "next to the startup-command fields"
+  as Change 3 specified, because setup.html no longer has startup-command inputs
+  (see the `Setup panel no longer sends commands` comment at `setup.html:2100`).
+  The real fields are in kanban.html's Agents tab, where the coder correctly
+  placed a second hint. The setup.html block could be dropped entirely.
+- NIT — `scripts/probe-cli-consent.js:~200`: `hasTrustOrConsentPrompt` is a
+  keyword heuristic. It missed claude's first-run theme picker, which blocks a
+  seat just as hard as a trust menu. A generic "no echo after N seconds ⇒ blocked"
+  signal would be sounder than enumerating prompt wording, but that is a design
+  change beyond this plan.
+- NIT — commit `19d6c1d1`: the message body ends with a stray `EOF\n)` heredoc
+  artifact. History rewriting is off-limits, so it stays.
