@@ -32,3 +32,7 @@ The shared invariant is worth stating for whoever codes either: exactly one fact
 One cross-feature edge: `advance-when-ready-on-a-scheduled-job.md`, in the scheduling feature, consumes precisely this release signal to fire a job on completion rather than on the clock. If both features are scheduled, landing this one first gives that plan a reliable signal to build on. Neither blocks the other.
 
 The badge behaviour is a non-goal: badges already clear on focus, so the replacement control must not try to preserve the old button's in-memory side effect.
+
+## Completion Summary
+
+Both subtasks implemented and verified. The unconditional "report to head" standing order was replaced with a single context-aware completion order (`CONTEXT_AWARE_COMPLETION_ORDER_BODY`) that routes based on dispatch source, installed at team and team-head scope; the per-team `applySeatPacingOrders`/`applyTeamQueueOrders` install/remove toggling was deleted, with queue mode now stored as a `queueMode` field on the group config. The `ACKNOWLEDGE COMPLETIONS` button was replaced with a `RELEASE` control that POSTs `/kanban/team/release` for every held-uncompleted card, absent when the count is zero and labelled with the count; a shared `completeCardInternal` helper serves both `task/complete` and `team/release`, and a `heldUnposted` per-terminal map rides the existing fleet poll. All affected contract tests pass; pre-existing failures in `stage-marker-commit` and `external-headed-team-contract` are unrelated to this feature.
