@@ -63,6 +63,26 @@ Delivery is unconditional and version-blind. The extension assumes the bundle it
 older than what is on disk — true for a single install upgrading over time, false the moment a second
 install exists.
 
+### Why the version gate was removed, and why this is not a return to it
+
+Delivery **was** originally gated on a version increment. The docstring at `extension.ts:305-311`
+records why it stopped being:
+
+> Workflow files use the same content-hash self-heal as skills (**not a version gate**) so a
+> rename/door-change lands on same-version installs — fixes the delete-without-replace asymmetry
+> where `cleanupLegacyAgentFiles` (unconditional) removed retired workflow files while delivery was
+> gated on a version bump.
+
+That was a real bug and a correct fix: cleanup deleted retired doors unconditionally while delivery
+waited for a version bump, so a same-version install lost workflow files that were never replaced.
+
+But the fix over-corrected. What it needed was "deliver on a version increment **or** a content
+difference"; what it implemented was "deliver always" — discarding the only signal that distinguishes
+an upgrade from a downgrade. This plan restores that third state and nothing else: `same` and `newer`
+keep today's unconditional content-hash behaviour, so the same-version self-heal the July change
+exists for is preserved exactly (verification 5). **Reverting to version-increment gating would
+reintroduce the July bug and is explicitly not proposed.**
+
 ### Relationship to the other two plans
 
 - `the-extension-must-not-seed-its-own-source-repo.md` protects **one** repo (the extension's own
@@ -114,7 +134,21 @@ install exists.
    skipped. Stamping the older version would make the *next* activation read `same` and deliver the
    old bundle after all — reopening the hole one activation later.
 
-5. **Leave the explicit Setup path (`:4455`) working.** A deliberate downgrade (rolling back a broken
+5. **Skip `cleanupLegacyAgentFiles` on a downgrade too.** It is called at `extension.ts:961` — in the
+   activation body, **not** inside `refreshWorkspaceControlPlane` — so the early return in change 3
+   does not cover it. It is ungated three ways: it loops over every `vscode.workspace.workspaceFolders`
+   entry with no `isSwitchboardManagedFolder` check, runs on every activation, and consults no version.
+   It hard-deletes 24 legacy paths under `.agents/` (`:4219-4245`).
+
+   Leaving it live on the skip path recreates precisely the delete-without-replace asymmetry the July
+   change fixed, in the downgrade direction: cleanup deletes, delivery is skipped, nothing replaces.
+   The retirement list also grows over time, so an older install's list is a subset of the current
+   one — meaning any name a newer control plane legitimately *reintroduces* would be deleted by an old
+   install with no authority over it. The principle is the same as change 3: an older extension may
+   not mutate a newer control plane, by writing **or** by deleting. Gate the `:961` loop on the same
+   decision, per root.
+
+6. **Leave the explicit Setup path (`:4455`) working.** A deliberate downgrade (rolling back a broken
    release) needs a way to bring the matching control plane with it. That is a user click, logged, not
    silent activation.
 
@@ -141,7 +175,12 @@ install exists.
 8. **The flip-flop is gone end to end.** Activate `1.7.13`, then `1.6.0`, then `1.7.13` again against
    one workspace; assert `git status --porcelain -- .agents .claude CLAUDE.md AGENTS.md` is empty
    throughout. Today this sequence produces two rewrites.
-9. **Both hosts.** The helper and the decision live in shared code and are unit-tested there.
+9. **Cleanup is skipped on a downgrade.** Place all 24 legacy paths in a fixture's `.agents/`, stamp
+   `1.7.13`, activate `1.6.0`, and assert every one still exists. Spy on `cleanupLegacyAgentFiles` to
+   confirm it was not invoked — file state alone cannot distinguish "skipped" from "ran and found
+   nothing". Then assert an upgrade activation still deletes them, so the guard has not disabled
+   retirement.
+10. **Both hosts.** The helper and the decision live in shared code and are unit-tested there.
    Standalone wires none of these seams, so the expected result for that host is "no behaviour change";
    do not read a green `npm run standalone-parity:check` as parity evidence — it is scoped to the
    browser read-back path, not the composition root.
