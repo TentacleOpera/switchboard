@@ -14,6 +14,8 @@ type ImportablePlanFile = {
 
 export interface ImportPlanFilesResult {
     count: number;
+    written: string[];
+    persisted: boolean;
     planFiles: string[];
     /** Maps planFile → kanbanColumn for integration sync */
     columns: Record<string, string>;
@@ -33,20 +35,20 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
 
     const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
     if (!fs.existsSync(plansDir)) {
-        return { count: 0, planFiles: [], columns: {} };
+        return { count: 0, written: [], persisted: true, planFiles: [], columns: {} };
     }
 
     const files = await listImportablePlanFiles(plansDir);
 
     if (files.length === 0) {
-        return { count: 0, planFiles: [], columns: {} };
+        return { count: 0, written: [], persisted: true, planFiles: [], columns: {} };
     }
 
     // Use effectiveRoot for DB and identity to ensure shared database consistency
     const db = KanbanDatabase.forWorkspace(effectiveRoot);
     const ready = await db.ensureReady();
     if (!ready) {
-        return { count: 0, planFiles: [], columns: {} };
+        return { count: 0, written: [], persisted: true, planFiles: [], columns: {} };
     }
 
     const workspaceId = await ensureWorkspaceIdentity(effectiveRoot);
@@ -135,26 +137,27 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
     }
 
     if (records.length === 0) {
-        return { count: 0, planFiles: [], columns: {} };
+        return { count: 0, written: [], persisted: true, planFiles: [], columns: {} };
     }
 
     // Use insertFileDerivedPlan — this is a file-derived importer that has no
     // business setting DB-owned columns (is_feature, feature_id, kanban_column, status).
-    let allOk = true;
+    const written: string[] = [];
+    let persisted = true;
     for (const record of records) {
         const ok = await db.insertFileDerivedPlan(record);
-        if (!ok) allOk = false;
-    }
-    if (!allOk) {
-        return { count: 0, planFiles: [], columns: {} };
+        written.push(record.planFile);
+        if (!ok) persisted = false;
     }
     const columns: Record<string, string> = {};
     for (const record of records) {
         columns[record.planFile] = record.kanbanColumn;
     }
     return {
-        count: records.length,
-        planFiles: records.map(r => r.planFile),
+        count: written.length,
+        written,
+        persisted,
+        planFiles: written,
         columns
     };
 }

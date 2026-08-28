@@ -5151,6 +5151,7 @@
                         filePath,
                         content: textarea.value,
                         originalContent: diskContent,
+                        workspaceRoot: (tab === 'kanban' && _kanbanSelectedPlan && _kanbanSelectedPlan.workspaceRoot) || undefined,
                         tab
                     });
                     if (tab === 'kanban') {
@@ -6623,6 +6624,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     filePath,
                     content,
                     originalContent,
+                    workspaceRoot: (_kanbanSelectedPlan && _kanbanSelectedPlan.workspaceRoot) || undefined,
                     tab: 'kanban'
                 });
             }

@@ -2040,6 +2040,7 @@
                         filePath,
                         content,
                         originalContent,
+                        workspaceRoot: _kanbanSelectedPlan.workspaceRoot || undefined,
                         tab: 'kanban'
                     });
                 }
@@ -2587,6 +2588,7 @@
                         filePath,
                         content,
                         originalContent,
+                        workspaceRoot: _featureSelectedPlan ? (_featureSelectedPlan.workspaceRoot || undefined) : undefined,
                         tab: 'features'
                     });
                 }
@@ -2661,6 +2663,7 @@
                         filePath,
                         content,
                         originalContent,
+                        workspaceRoot: (plan && plan.workspaceRoot) || undefined,
                         tab: 'features'
                     });
                 }

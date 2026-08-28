@@ -2,6 +2,7 @@ import * as http from 'http';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { URL } from 'url';
@@ -6445,6 +6446,123 @@ export class LocalApiServer {
         return await db.getBoard(wsId);
     }
 
+    /**
+     * Canonicalise a workspace root path with a robust fallback chain:
+     * fs.realpathSync.native() -> fs.realpathSync() -> path.resolve().
+     */
+    private _canonicalizePath(p: string): string {
+        try {
+            return fsSync.realpathSync.native(p);
+        } catch {
+            try {
+                return fsSync.realpathSync(p);
+            } catch {
+                return path.resolve(p);
+            }
+        }
+    }
+
+    /**
+     * The valid-root set is this._allRoots ∪ workspaceRoot ∪ every workspaceFolders / parentFolder
+     * entry from getMappingsFromIndex() (expanded for ~, path.resolved).
+     */
+    private _getKnownRoots(): string[] {
+        const roots: string[] = [];
+        const seen = new Set<string>();
+        const addRoot = (r?: string) => {
+            if (!r || typeof r !== 'string') return;
+            const trimmed = r.trim();
+            if (!trimmed) return;
+            const expanded = trimmed.startsWith('~')
+                ? path.join(os.homedir(), trimmed.slice(1))
+                : trimmed;
+            const resolved = path.resolve(expanded);
+            if (!seen.has(resolved)) {
+                seen.add(resolved);
+                roots.push(expanded);
+            }
+        };
+
+        if (this._options.workspaceRoot) {
+            addRoot(this._options.workspaceRoot);
+        }
+        for (const r of this._allRoots) {
+            addRoot(r);
+        }
+        try {
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                for (const m of cfg.mappings) {
+                    if (Array.isArray(m.workspaceFolders)) {
+                        for (const f of m.workspaceFolders) {
+                            addRoot(f);
+                        }
+                    }
+                    if (m.parentFolder) {
+                        addRoot(m.parentFolder);
+                    }
+                }
+            }
+        } catch {
+            // Standalone or missing mappings index
+        }
+        return roots;
+    }
+
+    /**
+     * Resolve and validate a caller-supplied workspaceRoot against known roots:
+     * - Fail closed (503) if known roots list is empty.
+     * - On POSIX (macOS/Linux): match by dev + ino from fs.statSync (guarding ino !== 0).
+     * - On Windows: match by case-folded canonical path comparison.
+     * - Fallback on POSIX: case-folded canonical path comparison on macOS, exact on Linux.
+     * - Returns the matched root's canonical registered spelling, or an error with status.
+     */
+    private _resolveKnownRoot(given: string): { root: string } | { error: string; status: number } {
+        const knownRoots = this._getKnownRoots();
+        if (knownRoots.length === 0) {
+            return {
+                error: 'No known workspace roots configured on server. See GET /health.',
+                status: 503
+            };
+        }
+
+        const isWindows = process.platform === 'win32';
+        const isDarwin = process.platform === 'darwin';
+        const canonicalGiven = this._canonicalizePath(given);
+
+        for (const knownRoot of knownRoots) {
+            if (!isWindows) {
+                // POSIX primary: dev + ino identity
+                try {
+                    const givenStat = fsSync.statSync(given);
+                    const knownStat = fsSync.statSync(knownRoot);
+                    if (givenStat.ino !== 0 && knownStat.ino !== 0 && givenStat.dev === knownStat.dev && givenStat.ino === knownStat.ino) {
+                        return { root: knownRoot };
+                    }
+                } catch {
+                    // Fallback to path comparison
+                }
+            }
+
+            const canonicalKnown = this._canonicalizePath(knownRoot);
+            if (isWindows || isDarwin) {
+                if (canonicalGiven.toLowerCase() === canonicalKnown.toLowerCase()) {
+                    return { root: knownRoot };
+                }
+            } else {
+                if (canonicalGiven === canonicalKnown) {
+                    return { root: knownRoot };
+                }
+            }
+        }
+
+        return {
+            error: `workspaceRoot '${given}' is not a known workspace root. Known roots: [${knownRoots.map(r => `'${r}'`).join(', ')}]. See GET /health.`,
+            status: 400
+        };
+    }
+
     /** Resolve the KanbanDatabase for a mutation handler, defaulting to the primary root. */
     private async _resolveDbForRoot(wsRoot?: string): Promise<any | null> {
         const getKanbanDatabase = this._options.getKanbanDatabase;
@@ -6547,12 +6665,19 @@ export class LocalApiServer {
         }
         try {
             const body = await this._parseJsonBody(req);
-            const root = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
-            if (!root) {
+            const rawRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            if (!rawRoot) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Missing required field: workspaceRoot' }));
                 return;
             }
+            const rootResolution = this._resolveKnownRoot(rawRoot);
+            if ('error' in rootResolution) {
+                res.writeHead(rootResolution.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: rootResolution.error }));
+                return;
+            }
+            const root = rootResolution.root;
             const title = String(body?.title || body?.topic || '').trim();
             if (!title) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -6815,13 +6940,19 @@ export class LocalApiServer {
             return;
         }
         try {
-            const body = await this._parseJsonBody(req);
-            const root = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
-            if (!root) {
+            const rawRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            if (!rawRoot) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Missing required field: workspaceRoot' }));
                 return;
             }
+            const rootResolution = this._resolveKnownRoot(rawRoot);
+            if ('error' in rootResolution) {
+                res.writeHead(rootResolution.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: rootResolution.error }));
+                return;
+            }
+            const root = rootResolution.root;
             const result = await importPlanFiles(root);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, ...result }));
@@ -7606,7 +7737,7 @@ export class LocalApiServer {
                     status: 'ok',
                     port: this._port,
                     pid: process.pid,
-                    roots: this._allRoots,
+                    roots: this._getKnownRoots(),
                     ...(terminals !== undefined ? { terminals, terminalCount: terminals.length } : {}),
                     ...(selectedWorkspaceRoot !== undefined ? { selectedWorkspaceRoot } : {})
                 }));

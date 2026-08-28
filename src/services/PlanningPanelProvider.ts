@@ -2291,6 +2291,44 @@ Start by checking which documents exist, then present the menu.`;
         return firstAllowed;
     }
 
+    /**
+     * Resolve a save target the SAME way the read path resolves a preview
+     * (_handleFetchKanbanPlanPreview, 1602-1619). Save and Preview MUST agree: two
+     * allowed roots can both hold `.switchboard/plans/<same-name>.md`, and a resolver
+     * that disagrees with the preview overwrites a file the user never looked at.
+     *
+     * Order: caller-supplied root (strict membership) → every allowed root, first that
+     * EXISTS → ambient fallback for a file that exists nowhere yet (new-file case).
+     *
+     * Strict membership, NOT _resolveWorkspaceRoot(): that helper never returns
+     * undefined (2177-2181 fall back to the default/first allowed root), so using it
+     * as a gate silently converts a hostile or stale root into some *other* real root,
+     * which then wins over the ambient fallback. Here, unvalidated means undefined.
+     *
+     * SECURITY: this returns a candidate only. The caller MUST still run the allow-check
+     * on the returned path, unconditionally — same contract as the read path (1618-1619).
+     */
+    private _resolveSaveTarget(filePath: string, explicitRoot?: string): string | undefined {
+        if (!filePath) { return undefined; }
+        if (path.isAbsolute(filePath)) { return path.resolve(filePath); }
+
+        const allowedSet = this._getAllowedRoots();
+        const allowed = Array.from(allowedSet);
+        const validated = explicitRoot && allowedSet.has(path.resolve(explicitRoot))
+            ? path.resolve(explicitRoot)
+            : undefined;
+
+        for (const root of (validated ? [validated, ...allowed] : allowed)) {
+            const candidate = path.resolve(root, filePath);
+            if (fs.existsSync(candidate)) { return candidate; }
+        }
+
+        // Nothing on disk yet — preserve today's behaviour so a genuinely new file
+        // still gets created (edge case 12).
+        const fallback = validated || this._getWorkspaceRoot() || (allowed.length > 0 ? allowed[0] : undefined);
+        return fallback ? path.resolve(fallback, filePath) : undefined;
+    }
+
     private _slugify(text: string): string {
         return text.toString().toLowerCase()
             .replace(/\s+/g, '-')
@@ -4864,21 +4902,36 @@ Please format the updated output document strictly as follows:
                 const content = String(msg.content || '');
                 const originalContent = String(msg.originalContent || '');
                 const tab = String(msg.tab || '');
-                const allRoots = this._getWorkspaceRoots();
+                // _getAllowedRoots(), NOT _getWorkspaceRoots(). The board LISTS
+                // (fetchKanbanPlans, 3506), PREVIEWS (_handleFetchKanbanPlanPreview, 1603)
+                // and OPENS (openKanbanPlan, 3612) plans from the allowed set, which
+                // includes the workspace-identity mapping's parentFolder and
+                // workspaceFolders. The narrow set is open VS Code folders only, so an
+                // ABSOLUTE path to a plan under a mapped parent was listed, previewed,
+                // opened, and then refused on save with 'Invalid file path'. Read and
+                // write must agree on what is in scope.
+                const allRoots = Array.from(this._getAllowedRoots());
                 const saveDestPanel = (tab === 'kanban' || tab === 'constitution' || tab === 'features') ? this._projectPanel : this._panel;
-                let resolved: string;
-                if (!path.isAbsolute(filePath)) {
-                    const wsRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
-                    if (wsRoot) {
-                        resolved = path.resolve(wsRoot, filePath);
-                    } else {
-                        this._pushTo(saveDestPanel, 'planning', { type: 'saveFileContentResult', success: false, error: 'No workspace root to resolve relative path', tab });
-                        break;
-                    }
-                } else {
-                    resolved = path.resolve(filePath);
+                // plan_file is stored RELATIVE to the EFFECTIVE (mapped-parent) root
+                // (PlanFileImporter:92-114), and _getKanbanPlans hands that string to the
+                // webview verbatim — so this arm's normal input is a relative path.
+                // Resolving it against the panel's ambient root (which is RAW, see
+                // extension.ts:1297 → KanbanProvider.getCurrentWorkspaceRoot) aimed the
+                // write at <child>/.switchboard/plans/… — a path that does not exist but
+                // DOES sit under an open folder, so it passed the allow-check and then
+                // fell into the conflict branch as 'Unknown error'.
+                const resolvedTarget = this._resolveSaveTarget(filePath, msg.workspaceRoot ? String(msg.workspaceRoot) : undefined);
+                if (!resolvedTarget) {
+                    const payload = { type: 'saveFileContentResult', success: false, error: 'No workspace root to resolve relative path', tab };
+                    this._pushTo(saveDestPanel, 'planning', payload);
+                    return { success: false, error: payload.error };
                 }
-                let isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
+                const resolved = resolvedTarget;
+                // path.sep boundary: without it an allowed root of `…/Documents/Gitlab`
+                // also authorises `…/Documents/Gitlab-private/…`. Now that the allowed set
+                // includes broad mapped PARENT folders, that prefix escape is worth closing
+                // on the write path.
+                let isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r) + path.sep));
                 if (!isAllowed) {
                     for (const r of allRoots) {
                         try {
@@ -4896,18 +4949,30 @@ Please format the updated output document strictly as follows:
                     }
                 }
                 if (!filePath || !isAllowed) {
-                    this._pushTo(saveDestPanel, 'planning', { type: 'saveFileContentResult', success: false, error: 'Invalid file path', tab });
-                    break;
+                    const payload = { type: 'saveFileContentResult', success: false, error: 'Invalid file path', tab };
+                    this._pushTo(saveDestPanel, 'planning', payload);
+                    return { success: false, error: payload.error };
                 }
                 try {
                     // Conflict detection: compare disk content with original
                     let diskContent = '';
-                    if (fs.existsSync(resolved)) {
+                    const exists = fs.existsSync(resolved);
+                    if (exists) {
                         diskContent = await fs.promises.readFile(resolved, 'utf8');
                     }
                     if (originalContent && diskContent !== originalContent) {
-                        this._pushTo(saveDestPanel, 'planning', { type: 'saveFileContentResult', success: false, conflict: true, diskContent, tab });
-                        break;
+                        // A path that does not exist is a RESOLUTION failure, not a
+                        // concurrent edit. The old code funnelled it into the conflict
+                        // branch, which sends no `error` string — so project.js:1073
+                        // rendered 'Save failed: Unknown error' and the real cause (wrong
+                        // root) was invisible from the UI. Folded into the SAME branch, so
+                        // this costs zero extra exits against the return-contract ratchet.
+                        const payload = exists
+                            ? { type: 'saveFileContentResult', success: false, conflict: true, diskContent, tab }
+                            : { type: 'saveFileContentResult', success: false, tab,
+                                error: `Plan file not found at ${resolved}. It may have been moved, or the wrong workspace root was used to resolve it.` };
+                        this._pushTo(saveDestPanel, 'planning', payload);
+                        return { success: false, conflict: exists || undefined, error: (payload as any).error };
                     }
 
                     // Validate JSON/YAML before write
@@ -4915,26 +4980,28 @@ Please format the updated output document strictly as follows:
                     if (saveExt === '.json') {
                         try { JSON.parse(content); }
                         catch (e: any) {
-                            this._pushTo(saveDestPanel, 'planning', {
+                            const payload = {
                                 type: 'saveFileContentResult',
                                 success: false,
                                 error: `Invalid JSON: ${e.message}`,
                                 tab
-                            });
-                            break;
+                            };
+                            this._pushTo(saveDestPanel, 'planning', payload);
+                            return { success: false, error: payload.error };
                         }
                     }
                     if (saveExt === '.yaml' || saveExt === '.yml') {
                         const yaml = require('js-yaml');
                         try { yaml.load(content); }
                         catch (e: any) {
-                            this._pushTo(saveDestPanel, 'planning', {
+                            const payload = {
                                 type: 'saveFileContentResult',
                                 success: false,
                                 error: `Invalid YAML: ${e.message}`,
                                 tab
-                            });
-                            break;
+                            };
+                            this._pushTo(saveDestPanel, 'planning', payload);
+                            return { success: false, error: payload.error };
                         }
                     }
 
@@ -4970,8 +5037,24 @@ Please format the updated output document strictly as follows:
                                     // This matches the established pattern in extension.ts:3068 (no existsSync pre-check).
                                     await fs.promises.rename(resolved, newPath);
                                     renamedTo = newPath;
-                                    // Update kanban DB if available
-                                    const wsRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
+                                    // Key the DB lookup against the EFFECTIVE root of the root
+                                    // that actually contains the file — derived from `resolved`
+                                    // (ground truth) rather than from caller input or ambient
+                                    // panel state. KanbanDatabase.forWorkspace already redirects
+                                    // to the mapped parent (KanbanDatabase.ts:1080), so the DB was
+                                    // never wrong; the KEY was. PlanFileImporter stores plan_file
+                                    // relative to the effective root, so a raw child root produced
+                                    // '../.switchboard/plans/…' and getPlanByPlanFile missed —
+                                    // the file was renamed on disk while the DB kept pointing at a
+                                    // path that no longer exists.
+                                    // Longest match wins: a child repo and its mapped parent are
+                                    // BOTH allowed roots and both prefix a plan inside the child.
+                                    const containingRoot = allRoots
+                                        .filter(r => resolved.startsWith(path.resolve(r) + path.sep))
+                                        .sort((a, b) => path.resolve(b).length - path.resolve(a).length)[0];
+                                    const wsRoot = containingRoot
+                                        ? this._resolveEffectiveWorkspaceRoot(containingRoot)
+                                        : (this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined));
                                     renameWsRoot = wsRoot;
                                     if (wsRoot) {
                                         const db = KanbanDatabase.forWorkspace(wsRoot);
@@ -4994,20 +5077,22 @@ Please format the updated output document strictly as follows:
                         }
                     }
 
+                    const renamedFilePath = renamedTo && renameWsRoot
+                        ? path.relative(renameWsRoot, renamedTo).replace(/\\/g, '/')
+                        : undefined;
                     this._pushTo(saveDestPanel, 'planning', {
                         type: 'saveFileContentResult',
                         success: true,
                         tab,
                         // Use renameWsRoot (the root used for the DB lookup), NOT this._getWorkspaceRoot().
                         // In multi-root workspaces _getWorkspaceRoot() can be undefined → absolute path → DB mismatch.
-                        renamedFilePath: renamedTo && renameWsRoot
-                            ? path.relative(renameWsRoot, renamedTo).replace(/\\/g, '/')
-                            : undefined
+                        renamedFilePath
                     });
+                    return { success: true, tab, filePath: resolved, renamedFilePath };
                 } catch (err) {
                     this._pushTo(saveDestPanel, 'planning', { type: 'saveFileContentResult', success: false, error: String(err), tab });
+                    return { success: false, error: String(err) };
                 }
-                break;
             }
             // ── 2b: linearLoadProject, linearLoadProjects moved to
             // TicketsPanelProvider. ──

@@ -97,12 +97,12 @@ board or an active pair mode would make it wrong.
 
 | Endpoint | Body | Purpose |
 |---|---|---|
-| `POST /kanban/plans` | `{ title, slug?, complexity?, tags?, project?, description?, body?, workspaceRoot? }` | Create a plan (writes `.switchboard/plans/<slug>.md`, imports it, returns the assigned `planId`) |
+| `POST /kanban/plans` | `{ title, slug?, complexity?, tags?, project?, description?, body?, workspaceRoot? }` | Create a plan (writes `.switchboard/plans/<slug>.md`, imports it, returns assigned `planId`). `workspaceRoot` must match a server root from `GET /health` (`roots`), else `400`. |
 | `DELETE /kanban/plans?planId=<id>[&deleteFile=true]` | — | Delete the DB row; `deleteFile=true` also unlinks the `.md` |
 | `PUT /kanban/plans/project` | `{ planId, project, workspaceRoot? }` | Set a plan's project |
 | `PUT /kanban/plans/complexity` | `{ planId, complexity, workspaceRoot? }` | Set a plan's complexity (`"1"`–`"10"` or `"Unknown"`) |
 | `PUT /kanban/plans/priority` | `{ planId, starred, workspaceRoot? }` | Set a plan's priority star (`starred: true/false/1/0/"true"/"false"`). Starred cards sort first in every consumer. Idempotent. Accepts `sessionId` as an alias for `planId`. Returns `{ success, planId, starred }`. |
-| `POST /kanban/plans/import` | `{ workspaceRoot? }` | Rescan `.switchboard/plans/*.md` and upsert |
+| `POST /kanban/plans/import` | `{ workspaceRoot? }` | Rescan `.switchboard/plans/*.md` and upsert. `workspaceRoot` must match a server root from `GET /health` (`roots`), else `400`. |
 
 ```bash
 # Create — returns { success:true, planId, planFile, slug }
@@ -122,6 +122,10 @@ curl -s -X PUT "$BASE/kanban/plans/priority" -H "Content-Type: application/json"
 curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4"                    # DB row only
 curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also remove the file
 ```
+
+> **`workspaceRoot` validation:** `POST /kanban/plans` and `POST /kanban/plans/import` require `workspaceRoot`
+> (if provided) to match a known registered workspace root as reported by `GET /health` → `roots`.
+> Any unregistered root (or a differently-cased / symlinked spelling that does not match) is refused with `400`.
 
 > **`delete_plan` gotcha:** without `deleteFile=true`, the `.md` file stays on disk and the plan
 > **re-appears on the next `import_plans`** (or a webview reset). Use `deleteFile=true` for a

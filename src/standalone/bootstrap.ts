@@ -4,6 +4,8 @@ import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import { URL } from 'url';
+import { LocalApiServer } from '../services/LocalApiServer';
+import { DEFAULT_KANBAN_COLUMNS } from '../services/agentConfig';
 import { KanbanDatabase } from '../services/KanbanDatabase';
 import {
     resolveParentsForTerminals,
