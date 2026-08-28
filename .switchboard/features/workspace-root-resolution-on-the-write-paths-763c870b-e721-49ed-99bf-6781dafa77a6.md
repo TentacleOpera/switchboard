@@ -25,3 +25,7 @@ Make every write path resolve a workspace root the same way the read paths alrea
 - The Save subtask needs its `verb-returns:check` baseline re-derived with `--write` in the same change. Planning sits at exactly 152 of 152, so any added `break` turns CI red, and hand-editing the ceiling is the documented way this has gone red before.
 - The import subtask records two follow-ups it deliberately does not fix — the fail-open branch in the path normalizer, and the un-canonicalised instance-cache key in `forWorkspace`. Both are small, both are the durable fix, and neither is in scope here.
 
+## Completion Summary
+
+Both subtasks implemented and committed (c0140527). The import endpoint and create-plan endpoint now share `_resolveKnownRoot`, which validates workspace roots by dev+inode on POSIX and case-folded native realpath on Windows against the full known-root set (unfiltered roots plus mapped workspace folders). `PlanFileImporter` returns honest `written` and `persisted` fields instead of a zero count on partial failure, un-breaking integration sync. Plan-card Save now resolves via `_resolveSaveTarget` mirroring the preview resolver, uses `_getAllowedRoots()` with a `path.sep` boundary, keys the rename DB update against the effective containing root, reports missing files as errors instead of conflicts, and converts all six arm exits to returns. Verb-return-contract baseline re-derived (149→143).
+
