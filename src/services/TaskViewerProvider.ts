@@ -4623,10 +4623,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private _getAllowedRoots(): Set<string> {
         const roots = this._getWorkspaceRoots();
-        const allowedRoots = new Set<string>(roots);
+        const allowedRoots = new Set<string>(roots.map(r => path.resolve(r)));
         try {
-            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
-            const cfg = getMappingsFromIndex();
+            const { getScopedMappingsForBoard } = require('./WorkspaceIdentityService');
+            const cfg = getScopedMappingsForBoard(roots);
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 for (const m of cfg.mappings) {
                     const parent = m.parentFolder || (m as any).parentWorkspaceFolder;
@@ -6165,19 +6165,58 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 const resolvedCurrentRoot = currentRoot
                     ? (this._kanbanProvider?.resolveEffectiveWorkspaceRoot(currentRoot) || currentRoot)
                     : null;
-                // Guard: only activate if effectiveRoot matches current selection, or if
-                // nothing is selected yet (initialization). Mirrors KanbanProvider.refreshIfShowing.
-                if (resolvedCurrentRoot && path.resolve(resolvedCurrentRoot) !== path.resolve(effectiveRoot)) {
-                    console.log(
-                        `[TaskViewerProvider] refreshUI: effectiveRoot ${effectiveRoot} differs from resolved current ${resolvedCurrentRoot} — not switching workspace context`
-                    );
-                    return;
+                const hostRoots = this._getWorkspaceRoots().map(r => path.resolve(r));
+
+                // Guard: if resolvedCurrentRoot is valid and within host roots, and differs
+                // from the incoming effectiveRoot, this is an incoming refresh for a different workspace.
+                // Keep the early return to avoid clobbering the current selection.
+                if (resolvedCurrentRoot && hostRoots.includes(path.resolve(resolvedCurrentRoot))) {
+                    if (path.resolve(resolvedCurrentRoot) !== path.resolve(effectiveRoot)) {
+                        console.log(
+                            `[TaskViewerProvider] refreshUI: effectiveRoot ${effectiveRoot} differs from resolved current ${resolvedCurrentRoot} — not switching workspace context`
+                        );
+                        return;
+                    }
+                } else if (resolvedCurrentRoot && !hostRoots.includes(path.resolve(resolvedCurrentRoot))) {
+                    // Current root is outside the host root set (unresolvable/stale).
+                    // Do not return silently: log warning and re-activate workspace context to the incoming effectiveRoot.
+                    const warnMsg = `[Switchboard] refreshUI: current root '${resolvedCurrentRoot}' is outside host roots. Recovering to '${effectiveRoot}'.`;
+                    console.warn(`[TaskViewerProvider] ${warnMsg}`);
+                    this._kanbanProvider?.appendOutputLine?.(warnMsg);
+                    try {
+                        await this._activateWorkspaceContext(effectiveRoot);
+                    } catch (err) {
+                        const errMsg = `[Switchboard] refreshUI: recovery failed for ${effectiveRoot}: ${err}`;
+                        console.warn(`[TaskViewerProvider] ${errMsg}`);
+                        this._kanbanProvider?.appendOutputLine?.(errMsg);
+                        this.postMessage({ type: 'showStatusMessage', message: 'This workspace is not available on this board', isError: true }, SURFACES.kanban);
+                        return;
+                    }
                 }
+
                 if (currentRoot !== effectiveRoot) {
                     this._workspaceId = null;
                     this._workspaceIdRoot = null;
                 }
                 await this._activateWorkspaceContext(effectiveRoot);
+            } else {
+                // Incoming workspaceRoot could not be resolved.
+                const warnMsg = `[Switchboard] refreshUI: workspaceRoot '${workspaceRoot}' cannot be resolved.`;
+                console.warn(`[TaskViewerProvider] ${warnMsg}`);
+                this._kanbanProvider?.appendOutputLine?.(warnMsg);
+                const fallbackRoot = this._resolveWorkspaceRoot();
+                if (fallbackRoot) {
+                    const fallbackEffective = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(fallbackRoot) || fallbackRoot;
+                    try {
+                        await this._activateWorkspaceContext(fallbackEffective);
+                    } catch {
+                        this.postMessage({ type: 'showStatusMessage', message: 'This workspace is not available on this board', isError: true }, SURFACES.kanban);
+                        return;
+                    }
+                } else {
+                    this.postMessage({ type: 'showStatusMessage', message: 'This workspace is not available on this board', isError: true }, SURFACES.kanban);
+                    return;
+                }
             }
         }
         await Promise.all([

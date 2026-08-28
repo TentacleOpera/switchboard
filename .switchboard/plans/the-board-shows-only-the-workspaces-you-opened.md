@@ -151,3 +151,7 @@ Both composition roots must be diffed by hand for this change. The consumers abo
 - **Duplicated item-builders.** Fixing one leaves the Design and Planning panels broken in the same way.
 - **Guard narrowing, not removal.** The early return prevents workspace clobbering; deleting it trades one bug for another.
 - **Existence-pruning is user-visible.** A group member on an unmounted volume vanishes from the board rather than showing a dead row.
+
+## Implementation Summary
+
+Extended `getScopedMappingsForBoard` to accept either single board roots or multi-root host root arrays (`string | string[]`) and query board-reachable mappings. Refactored `buildWorkspaceItems` and `KanbanProvider._getWorkspaceItems()` to share the scoped visibility rule, ensuring non-open parent folders are never emitted in workspace selectors. Updated `_getWatchFolders()` to always watch the current workspace root and restrict watched parents strictly to open host roots. Narrowed `TaskViewerProvider.refreshUI()` to log output channel warnings and auto-recover or surface explicit unavailable status messages on root mismatches instead of silently rendering a blank board. Added comprehensive unit tests in `workspace-identity-precedence.test.ts` verifying visibility isolation and scoping.

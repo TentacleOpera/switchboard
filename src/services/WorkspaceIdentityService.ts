@@ -22,6 +22,90 @@ let _mappingCache: Map<string, string> | null = null;
 let _mappingIndex: Map<string, string> | null = null;
 let _mappingsDocument: { enabled: boolean; mappings: MappingWithProvenance[] } | null = null;
 
+// Module-level host workspace roots (injected by extension / standalone host)
+// null: unset (gate disabled, backwards compatibility before index initialization)
+// string[]: injected list of currently open host workspace roots (gate enabled)
+let _hostRoots: string[] | null = null;
+
+/**
+ * Expand a `~`-prefixed path and resolve it to an absolute path, matching the
+ * expansion used everywhere else in this module. Centralised here so the scope
+ * filter and the existence check expand identically to `resolveParentsForTerminals`.
+ */
+export function expandAndResolve(p: string): string {
+    return path.resolve(p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p);
+}
+
+/**
+ * Sets the list of open workspace roots from the host (e.g. VS Code workspace folders).
+ *
+ * Used by the mapping resolver and index builder to ensure that child folders are only
+ * redirected to parents that are actually open in the current host window/session.
+ *
+ * Passing `null` disables the openness gate (legacy behavior).
+ * Passing an array (even empty `[]`) enables the openness gate.
+ *
+ * NOTE on KanbanDatabase instances:
+ * Calling this function clears the mapping cache. Any previous KanbanDatabase instances
+ * cached under an old redirected key are orphaned. After cache clearing and a root set change,
+ * KanbanDatabase.forWorkspace(childRoot) resolves to childRoot (new key) and creates a fresh
+ * instance. The old instance at parentRoot is orphaned and reclaimed by the 60s eviction sweep.
+ */
+export function setHostWorkspaceRoots(roots: string[] | null): void {
+    if (roots === null) {
+        _hostRoots = null;
+    } else {
+        _hostRoots = roots.map(expandAndResolve);
+    }
+    clearMappingCache();
+}
+
+/**
+ * Checks whether a given path is an open host workspace root.
+ * Returns true if the gate is disabled (_hostRoots === null) or if the path is in _hostRoots.
+ */
+export function isHostRoot(p: string): boolean {
+    if (_hostRoots === null) {
+        return true;
+    }
+    const resolved = expandAndResolve(p);
+    return _hostRoots.includes(resolved);
+}
+
+/**
+ * Resolves the database path for a workspace folder using the three-tier resolution:
+ * 1. .switchboard/db-pointer file in the folder
+ * 2. kanban.dbPath setting (via optional configReader callback)
+ * 3. Default path: <folderPath>/.switchboard/kanban.db
+ */
+export function resolveWorkspaceDbPath(
+    folderPath: string,
+    getConfigDbPath?: (folderPath: string) => string | undefined
+): string {
+    const resolvedFolder = expandAndResolve(folderPath);
+
+    // 1. Check for pointer file
+    const pointerPath = KanbanDatabase.readDbPointer(resolvedFolder);
+    if (pointerPath) {
+        return pointerPath;
+    }
+
+    // 2. Check setting value via host config reader callback
+    let settingValue = '';
+    if (getConfigDbPath) {
+        try {
+            settingValue = String(getConfigDbPath(resolvedFolder) || '').trim();
+        } catch {}
+    }
+    if (settingValue) {
+        const expanded = (KanbanDatabase as any)._expandHome(settingValue);
+        return path.isAbsolute(expanded) ? expanded : path.join(resolvedFolder, expanded);
+    }
+
+    // 3. Default path
+    return path.join(resolvedFolder, '.switchboard', 'kanban.db');
+}
+
 function getCachedMapping(workspaceRoot: string): string | undefined {
     return _mappingCache?.get(workspaceRoot);
 }
@@ -98,23 +182,36 @@ export async function buildMappingIndexFromDbs(dbs: Map<string, KanbanDatabase>,
     // Populate the index per-mapping, gated on THAT mapping's enabled flag —
     // not a single global `anyEnabled`. A disabled DB's mappings must not
     // contribute path→parent entries just because a sibling DB is enabled.
+    //
+    // Two-pass precedence:
+    // Pass A: children → parent, but only when isHostRoot(resolvedParent).
     for (const mapping of allMappings) {
         if (!mapping._enabled) continue;
         const parentEntry = mapping.parentFolder || (Array.isArray(mapping.workspaceFolders) && mapping.workspaceFolders.length > 0 ? mapping.workspaceFolders[0] : undefined);
         if (!parentEntry) continue;
 
-        const resolvedParent = path.resolve(parentEntry.startsWith('~') ? path.join(os.homedir(), parentEntry.slice(1)) : parentEntry);
-
-        // Parent maps to itself
-        index.set(resolvedParent, resolvedParent);
+        const resolvedParent = expandAndResolve(parentEntry);
+        if (!isHostRoot(resolvedParent)) continue;
 
         // Children map to parent
         if (Array.isArray(mapping.workspaceFolders)) {
             for (const child of mapping.workspaceFolders) {
-                const resolvedChild = path.resolve(child.startsWith('~') ? path.join(os.homedir(), child.slice(1)) : child);
+                const resolvedChild = expandAndResolve(child);
                 index.set(resolvedChild, resolvedParent);
             }
         }
+    }
+
+    // Pass B: parents → self, unconditionally.
+    // Pass B runs second so a folder that is both a parent and someone's child ends up mapped to itself.
+    for (const mapping of allMappings) {
+        if (!mapping._enabled) continue;
+        const parentEntry = mapping.parentFolder || (Array.isArray(mapping.workspaceFolders) && mapping.workspaceFolders.length > 0 ? mapping.workspaceFolders[0] : undefined);
+        if (!parentEntry) continue;
+
+        const resolvedParent = expandAndResolve(parentEntry);
+        // Parent maps to itself
+        index.set(resolvedParent, resolvedParent);
     }
 
     // The aggregate enabled flag and the mappings list for existing callers
@@ -143,15 +240,6 @@ export function getMappingsFromIndex(): { enabled: boolean; mappings: WorkspaceD
 }
 
 /**
- * Expand a `~`-prefixed path and resolve it to an absolute path, matching the
- * expansion used everywhere else in this module. Centralised here so the scope
- * filter and the existence check expand identically to `resolveParentsForTerminals`.
- */
-function expandAndResolve(p: string): string {
-    return path.resolve(p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p);
-}
-
-/**
  * Return the subset of the global mapping index that belongs to `boardRoot`'s
  * board — i.e. mappings this board OWNS, not mappings scavenged from an
  * unrelated repo's database that happens to be on disk in the same VS Code
@@ -176,23 +264,34 @@ function expandAndResolve(p: string): string {
  * single `workspace-root` parent — the correct outcome for a board with no
  * mappings of its own.
  */
-export function getScopedMappingsForBoard(boardRoot: string): { enabled: boolean; mappings: WorkspaceDatabaseMapping[] } {
+export function getScopedMappingsForBoard(boardRoot?: string | string[]): { enabled: boolean; mappings: WorkspaceDatabaseMapping[] } {
     const doc = _mappingsDocument;
     if (!doc || !doc.enabled || !Array.isArray(doc.mappings) || doc.mappings.length === 0) {
         return { enabled: false, mappings: [] };
     }
 
-    const resolvedBoardRoot = expandAndResolve(boardRoot);
+    let rootList: string[] = [];
+    if (boardRoot) {
+        rootList = (Array.isArray(boardRoot) ? boardRoot : [boardRoot]).filter(Boolean);
+    } else if (_hostRoots && _hostRoots.length > 0) {
+        rootList = _hostRoots;
+    }
+
+    if (rootList.length === 0) {
+        return { enabled: false, mappings: [] };
+    }
+
+    const resolvedBoardRoots = rootList.map(expandAndResolve);
 
     // Scope: a mapping qualifies when it is reachable from this board's own
-    // workspace — parent, child, or source DB.
+    // workspace (or host roots) — parent, child, or source DB.
     const scoped = doc.mappings.filter(m => {
         const parent = m.parentFolder ? expandAndResolve(m.parentFolder) : null;
         const folders = (m.workspaceFolders || []).map(expandAndResolve);
         const source = (m as MappingWithProvenance).sourceFolder ? expandAndResolve((m as MappingWithProvenance).sourceFolder!) : null;
-        if (parent === resolvedBoardRoot) return true;
-        if (folders.includes(resolvedBoardRoot)) return true;
-        if (source === resolvedBoardRoot) return true;
+        if (parent && resolvedBoardRoots.includes(parent)) return true;
+        if (folders.some(f => resolvedBoardRoots.includes(f))) return true;
+        if (source && resolvedBoardRoots.includes(source)) return true;
         return false;
     });
 
@@ -325,51 +424,45 @@ export function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string)
             return workspaceRoot;
         }
 
-        // workspaceRoot is already resolved by caller
+        const resolvedWorkspaceRoot = expandAndResolve(workspaceRoot);
 
-        // Check if this workspace root is in any mapping (as child OR as parent)
+        // Step 1: Scan ALL mappings for parentFolder === workspaceRoot.
+        // On any hit, cache and return workspaceRoot (self).
+        for (const mapping of cfg.mappings) {
+            let parentEntry: string | undefined = mapping.parentFolder;
+            if (!parentEntry && Array.isArray(mapping.workspaceFolders) && mapping.workspaceFolders.length > 0) {
+                parentEntry = mapping.workspaceFolders[0];
+            }
+            if (!parentEntry) continue;
+
+            const resolvedParent = expandAndResolve(parentEntry);
+            if (resolvedParent === resolvedWorkspaceRoot) {
+                setCachedMapping(workspaceRoot, workspaceRoot);
+                return workspaceRoot;
+            }
+        }
+
+        // Step 2: Scan ALL mappings for workspaceRoot in workspaceFolders.
+        // On a hit, compute parent; return it ONLY IF isHostRoot(parent), otherwise continue scanning.
         for (const mapping of cfg.mappings) {
             if (!Array.isArray(mapping.workspaceFolders)) continue;
 
-            // Check if this root IS the parent folder
-            let isParent = false;
-            if (mapping.parentFolder) {
-                const expandedParent = mapping.parentFolder.startsWith('~')
-                    ? path.join(os.homedir(), mapping.parentFolder.slice(1))
-                    : mapping.parentFolder;
-                    
-                isParent = path.resolve(expandedParent) === workspaceRoot;
-            }
-
-            // Find if this root is listed as a child in the mapping
             const matchingIndex = mapping.workspaceFolders.findIndex((f: string) => {
-                const expanded = f.startsWith('~')
-                    ? path.join(os.homedir(), f.slice(1))
-                    : f;
-                
-                return path.resolve(expanded) === workspaceRoot;
+                return expandAndResolve(f) === resolvedWorkspaceRoot;
             });
 
-            if (isParent || matchingIndex !== -1) {
-                // This root is part of this mapping - return the parent folder
-                let parentEntry: string | undefined;
-                if (mapping.parentFolder) {
-                    parentEntry = mapping.parentFolder;
-                } else if (mapping.workspaceFolders.length > 0) {
+            if (matchingIndex !== -1) {
+                let parentEntry: string | undefined = mapping.parentFolder;
+                if (!parentEntry && mapping.workspaceFolders.length > 0) {
                     parentEntry = mapping.workspaceFolders[0];
                 }
-
                 if (!parentEntry) continue;
 
-                const parentFolder = path.resolve(
-                    parentEntry.startsWith('~')
-                        ? path.join(os.homedir(), parentEntry.slice(1))
-                        : parentEntry
-                );
-
-                // Return parent folder (even if it's the same as workspaceRoot, for DB path resolution)
-                setCachedMapping(workspaceRoot, parentFolder);
-                return parentFolder;
+                const parentFolder = expandAndResolve(parentEntry);
+                if (isHostRoot(parentFolder)) {
+                    setCachedMapping(workspaceRoot, parentFolder);
+                    return parentFolder;
+                }
             }
         }
     } catch {

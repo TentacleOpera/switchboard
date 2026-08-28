@@ -8,6 +8,7 @@ import * as crypto from 'crypto';
 import * as cp from 'child_process';
 import { promisify } from 'util';
 import { SessionActionLog } from './SessionActionLog';
+import { buildWorkspaceItems } from './workspaceUtils';
 import {
     buildKanbanColumns,
     CustomAgentConfig,
@@ -1146,12 +1147,16 @@ export class KanbanProvider implements vscode.Disposable {
         return this._getWorkspaceRoots();
     }
 
+    public appendOutputLine(msg: string): void {
+        this._outputChannel?.appendLine(msg);
+    }
+
     private _getAllowedRoots(): Set<string> {
         const roots = this._getWorkspaceRoots();
-        const allowedRoots = new Set<string>(roots);
+        const allowedRoots = new Set<string>(roots.map(r => path.resolve(r)));
         try {
-            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
-            const cfg = getMappingsFromIndex();
+            const { getScopedMappingsForBoard } = require('./WorkspaceIdentityService');
+            const cfg = getScopedMappingsForBoard(roots);
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 for (const m of cfg.mappings) {
                     const parent = m.parentFolder || (m as any).parentWorkspaceFolder;
@@ -1650,83 +1655,7 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private _getWorkspaceItems(): Array<{ label: string; workspaceRoot: string }> {
-        let mappings: WorkspaceDatabaseMapping[] = [];
-        let enabled = false;
-        try {
-            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
-            const cfg = getMappingsFromIndex();
-            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
-                mappings = cfg.mappings;
-                enabled = true;
-            }
-        } catch { /* ignore */ }
-
-        const items: Array<{ label: string; workspaceRoot: string }> = [];
-        const openRoots = this._getWorkspaceRoots();
-
-        // Check if ANY of the currently open workspace folders is mapped
-        let anyOpenFolderIsMapped = false;
-        if (enabled && mappings.length > 0) {
-            for (const root of openRoots) {
-                const resolvedRoot = path.resolve(root);
-                for (const m of mappings) {
-                    const parent = m.parentFolder || (m as any).parentWorkspaceFolder || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
-                    if (parent) {
-                        const expandedParent = parent.startsWith('~')
-                            ? path.join(os.homedir(), parent.slice(1))
-                            : parent;
-                        if (path.resolve(expandedParent) === resolvedRoot) {
-                            anyOpenFolderIsMapped = true;
-                            break;
-                        }
-                    }
-                    for (const wf of m.workspaceFolders || []) {
-                        const expandedWf = wf.startsWith('~')
-                            ? path.join(os.homedir(), wf.slice(1))
-                            : wf;
-                        if (path.resolve(expandedWf) === resolvedRoot) {
-                            anyOpenFolderIsMapped = true;
-                            break;
-                        }
-                    }
-                    if (anyOpenFolderIsMapped) break;
-                }
-                if (anyOpenFolderIsMapped) break;
-            }
-        }
-
-        if (enabled && mappings.length > 0 && anyOpenFolderIsMapped) {
-            // Multi-root/mapped context: strictly display the custom configured parent mapping names
-            const addedRoots = new Set<string>();
-            for (const m of mappings) {
-                const parent = m.parentFolder || (m as any).parentWorkspaceFolder || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
-                if (parent) {
-                    const expanded = parent.startsWith('~')
-                        ? path.join(os.homedir(), parent.slice(1))
-                        : parent;
-                    const resolvedParent = path.resolve(expanded);
-                    if (!addedRoots.has(resolvedParent)) {
-                        addedRoots.add(resolvedParent);
-                        items.push({
-                            label: m.name || path.basename(resolvedParent),
-                            workspaceRoot: resolvedParent
-                        });
-                    }
-                }
-            }
-        } else {
-            // Independent context or mappings disabled: display the standard open workspace folders
-            for (const root of openRoots) {
-                const resolvedRoot = path.resolve(root);
-                const folder = (vscode.workspace.workspaceFolders || []).find(f => path.resolve(f.uri.fsPath) === resolvedRoot);
-                items.push({
-                    label: folder ? folder.name : path.basename(resolvedRoot),
-                    workspaceRoot: resolvedRoot
-                });
-            }
-        }
-
-        return items;
+        return buildWorkspaceItems(this._getWorkspaceRoots());
     }
 
     dispose() {
@@ -1992,6 +1921,9 @@ export class KanbanProvider implements vscode.Disposable {
 
         if (!workspaceRoot) return folders;
 
+        const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
+        folders.push(resolvedWorkspaceRoot);
+
         const expandHome = (p: string): string => {
             const trimmed = p.trim();
             return trimmed.startsWith('~')
@@ -1999,17 +1931,19 @@ export class KanbanProvider implements vscode.Disposable {
                 : trimmed;
         };
 
+        const hostRoots = this._getWorkspaceRoots().map(r => path.resolve(r));
+
         try {
-            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
-            const cfg = getMappingsFromIndex();
+            const { getScopedMappingsForBoard } = require('./WorkspaceIdentityService');
+            const cfg = getScopedMappingsForBoard(this._getWorkspaceRoots());
 
             if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
                 for (const mapping of cfg.mappings) {
                     // Watch the PARENT workspace folder where .switchboard/ lives,
-                    // not the child workspaceFolders (which share the DB but shouldn't create plans)
+                    // if it is one of the host's roots.
                     if (typeof mapping.parentFolder === 'string') {
                         const resolved = path.resolve(expandHome(mapping.parentFolder));
-                        if (!folders.includes(resolved)) {
+                        if (hostRoots.includes(resolved) && !folders.includes(resolved)) {
                             folders.push(resolved);
                         }
                     }
@@ -2017,21 +1951,6 @@ export class KanbanProvider implements vscode.Disposable {
             }
         } catch {
             // Outside extension host
-        }
-
-        // Fallback: if no mappings configured, watch the current workspace root
-        // If mappings exist but current workspace is not in any mapping, skip it silently
-        if (folders.length === 0) {
-            try {
-                const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
-                const cfg = getMappingsFromIndex();
-                if (!cfg?.enabled || !Array.isArray(cfg.mappings) || cfg.mappings.length === 0) {
-                    folders.push(workspaceRoot);
-                }
-            } catch {
-                // Outside extension host — fall back to current workspace
-                folders.push(workspaceRoot);
-            }
         }
 
         return folders;

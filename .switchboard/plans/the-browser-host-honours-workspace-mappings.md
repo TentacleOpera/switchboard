@@ -169,3 +169,8 @@ The `onDidChangeWorkspaceFolders` handler at line 1279 does not call `initialize
 ---
 
 **Recommendation: Send to Coder** (Complexity 5 — multi-file changes with moderate logic, extending existing patterns; but hard-blocked by Plan 1 and Plan 2 until both land).
+
+## Implementation Summary
+
+Wired workspace mapping resolution and index building into the standalone/browser composition root (`src/standalone/bootstrap.ts`). Extracted a shared three-tier database resolution helper `resolveWorkspaceDbPath` in `src/services/WorkspaceIdentityService.ts` and adopted it across both `src/extension.ts` and `src/standalone/bootstrap.ts` to eliminate composition root drift. Registered `switchboard.mappingsChanged` in the standalone command registry to rebuild the index and refresh UI/watchers when mappings are updated. Added automated unit tests in `src/test/browser-host-workspace-mappings.test.ts` covering DB path resolution tiers, standalone group-parent and member-repo visibility rules, and composition root parity.
+

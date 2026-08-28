@@ -2252,10 +2252,10 @@ Start by checking which documents exist, then present the menu.`;
 
     private _getAllowedRoots(): Set<string> {
         const roots = this._getWorkspaceRoots();
-        const allowedRoots = new Set<string>(roots);
+        const allowedRoots = new Set<string>(roots.map(r => path.resolve(r)));
         try {
-            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
-            const cfg = getMappingsFromIndex();
+            const { getScopedMappingsForBoard } = require('./WorkspaceIdentityService');
+            const cfg = getScopedMappingsForBoard(roots);
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 for (const m of cfg.mappings) {
                     const parent = m.parentFolder || (m as any).parentWorkspaceFolder;

@@ -146,3 +146,8 @@ Standalone does not build the mapping index yet (that is Plan 3), so there is no
 - **Precedence and openness must land together.** Fixing precedence alone still permits redirects to folders that are not open; fixing openness alone leaves the order-dependent parent/child ambiguity.
 - **Index and resolver must be fixed in the same commit.** `_mappingCache` is pre-seeded from the index (line 133), so a resolver-only fix is bypassable.
 - **The mega-workspace case is the feature users rely on.** Any regression there is worse than the bug being fixed. Verify it explicitly.
+
+## Implementation Summary
+
+Implemented deterministic workspace mapping resolution with host-workspace openness gating and parent-first precedence. Added `setHostWorkspaceRoots` and `isHostRoot` in `WorkspaceIdentityService.ts` along with two-pass precedence in both `buildMappingIndexFromDbs` and `resolveEffectiveWorkspaceRootFromMappings` so that folders owning their own control plane resolve to themselves regardless of mapping array order, and child redirects only occur when the parent folder is open in the host. Wired host workspace roots injection in `extension.ts` during index initialization and workspace folder changes, and added comprehensive unit test coverage in `src/test/workspace-identity-precedence.test.ts`.
+

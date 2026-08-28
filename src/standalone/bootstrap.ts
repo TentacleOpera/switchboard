@@ -5,9 +5,17 @@ import * as os from 'os';
 import * as path from 'path';
 import { URL } from 'url';
 import { KanbanDatabase } from '../services/KanbanDatabase';
-import { LocalApiServer } from '../services/LocalApiServer';
-import { resolveParentsForTerminals, pruneNonExistentMappings } from '../services/WorkspaceIdentityService';
-import { DEFAULT_KANBAN_COLUMNS } from '../services/agentConfig';
+import {
+    resolveParentsForTerminals,
+    pruneNonExistentMappings,
+    setHostWorkspaceRoots,
+    buildMappingIndexFromDbs,
+    getMappingsFromIndex,
+    resolveWorkspaceDbPath,
+    clearMappingCache,
+    expandAndResolve,
+} from '../services/WorkspaceIdentityService';
+import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import {
     buildAnalysisScopeLine,
     columnToPromptRole,
@@ -209,6 +217,21 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
     const configProvider = new StandaloneHostPathConfigProvider(workspaceRoot);
     KanbanDatabase.setPathConfigProvider(configProvider);
+
+    // Initialize mapping index for standalone host
+    setHostWorkspaceRoots([workspaceRoot]);
+    const mappingDbs = new Map<string, KanbanDatabase>();
+    const initialDbPath = resolveWorkspaceDbPath(workspaceRoot, () => configProvider.getConfigString('kanban.dbPath'));
+    if (initialDbPath && fs.existsSync(initialDbPath)) {
+        const initialDb = KanbanDatabase.forWorkspace(workspaceRoot, initialDbPath);
+        mappingDbs.set(workspaceRoot, initialDb);
+        console.log(`[bootstrap] [initializeMappingIndex] Found DB for ${path.basename(workspaceRoot)} at ${initialDbPath}`);
+    } else {
+        console.log(`[bootstrap] [initializeMappingIndex] No DB for ${path.basename(workspaceRoot)} (dbPath=${initialDbPath}, exists=${initialDbPath ? fs.existsSync(initialDbPath) : false})`);
+    }
+    await buildMappingIndexFromDbs(mappingDbs);
+    const mappingResult = getMappingsFromIndex();
+    console.log(`[bootstrap] [initializeMappingIndex] After build: enabled=${mappingResult.enabled}, mappings=${mappingResult.mappings?.length ?? 0}`);
 
     /**
      * Clear-before-prompt parity with the extension's terminal dispatch, which
@@ -471,16 +494,36 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     };
 
     const secrets = createStandaloneHostSecrets(workspaceRoot);
-    const db = KanbanDatabase.forWorkspace(workspaceRoot);
+
+    // If workspaceRoot is a mapped child workspace, redirect DB resolution to parent
+    let effectiveDbRoot = workspaceRoot;
+    const mappingsDoc = getMappingsFromIndex();
+    if (mappingsDoc.enabled && Array.isArray(mappingsDoc.mappings)) {
+        const childMapping = mappingsDoc.mappings.find(m =>
+            Array.isArray(m.workspaceFolders) && m.workspaceFolders.some(f => expandAndResolve(f) === workspaceRoot)
+        );
+        if (childMapping) {
+            const parentEntry = childMapping.parentFolder || (childMapping.workspaceFolders && childMapping.workspaceFolders[0]);
+            if (parentEntry) {
+                effectiveDbRoot = expandAndResolve(parentEntry);
+            }
+        }
+    }
+
+    const db = KanbanDatabase.forWorkspace(effectiveDbRoot);
 
     // The database must exist on disk before ensureReady() can initialise it.
+    // Guard on isAllowedSwitchboardLocation — never create kanban.db in a mapped child.
     const dbPath = db.dbPath;
     const dbDir = path.dirname(dbPath);
-    if (!fs.existsSync(dbDir)) {
-        fs.mkdirSync(dbDir, { recursive: true });
-    }
-    if (!fs.existsSync(dbPath)) {
-        fs.writeFileSync(dbPath, Buffer.alloc(0));
+    const dbWorkspace = path.dirname(dbDir);
+    if (isAllowedSwitchboardLocation(dbWorkspace, effectiveDbRoot)) {
+        if (!fs.existsSync(dbDir)) {
+            fs.mkdirSync(dbDir, { recursive: true });
+        }
+        if (!fs.existsSync(dbPath)) {
+            fs.writeFileSync(dbPath, Buffer.alloc(0));
+        }
     }
 
     await db.ensureReady();
@@ -1132,6 +1175,21 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         // call sites, and the kanbanVerb `default:` arm pushes for the same
         // mutation. See schedulePushFullState.
         schedulePushFullState();
+    });
+    switchboardCommandRegistry.register('switchboard.mappingsChanged', async () => {
+        clearMappingCache();
+        setHostWorkspaceRoots([workspaceRoot]);
+        const dbs = new Map<string, KanbanDatabase>();
+        const mappingDbPath = resolveWorkspaceDbPath(workspaceRoot, () => configProvider.getConfigString('kanban.dbPath'));
+        if (mappingDbPath && fs.existsSync(mappingDbPath)) {
+            const reloadedDb = KanbanDatabase.forWorkspace(workspaceRoot, mappingDbPath);
+            dbs.set(workspaceRoot, reloadedDb);
+        }
+        await buildMappingIndexFromDbs(dbs);
+        schedulePushFullState();
+        if (ingestionEngine) {
+            await ingestionEngine.refreshWatchers();
+        }
     });
     switchboardCommandRegistry.register('switchboard.focusTerminalByName', async (terminalName: string, _options?: { silent?: boolean }) => {
         // The standalone host has no VS Code toast to suppress; `options` is accepted

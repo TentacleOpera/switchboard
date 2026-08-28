@@ -204,23 +204,17 @@ async function bootstrapMappingsToDb(context: vscode.ExtensionContext): Promise<
 }
 
 async function initializeMappingIndex(outputChannel?: vscode.OutputChannel): Promise<void> {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    const rootPaths = folders.map(folder => path.resolve(folder.uri.fsPath));
+    const { setHostWorkspaceRoots, buildMappingIndexFromDbs, getMappingsFromIndex, resolveWorkspaceDbPath } = require('./services/WorkspaceIdentityService');
+    setHostWorkspaceRoots(rootPaths);
+
     const dbs = new Map<string, KanbanDatabase>();
-    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    for (const folder of folders) {
         const folderPath = path.resolve(folder.uri.fsPath);
-        // Check for pointer file, then kanban.dbPath setting, then default path
-        let dbPath: string = KanbanDatabase.readDbPointer(folderPath) ?? '';
-        if (!dbPath) {
-            let settingValue = '';
-            try {
-                settingValue = String(vscode.workspace.getConfiguration('switchboard', folder.uri).get('kanban.dbPath') || '').trim();
-            } catch {}
-            if (settingValue) {
-                const expanded = (KanbanDatabase as any)._expandHome(settingValue);
-                dbPath = path.isAbsolute(expanded) ? expanded : path.join(folderPath, expanded);
-            } else {
-                dbPath = path.join(folderPath, '.switchboard', 'kanban.db');
-            }
-        }
+        const dbPath = resolveWorkspaceDbPath(folderPath, () => {
+            return vscode.workspace.getConfiguration('switchboard', folder.uri).get('kanban.dbPath');
+        });
 
         // If the database file exists, open it and read mappings
         if (dbPath && fs.existsSync(dbPath)) {
@@ -232,9 +226,7 @@ async function initializeMappingIndex(outputChannel?: vscode.OutputChannel): Pro
         }
     }
     outputChannel?.appendLine(`[initializeMappingIndex] Found ${dbs.size} DB(s), calling buildMappingIndexFromDbs`);
-    const { buildMappingIndexFromDbs } = require('./services/WorkspaceIdentityService');
     await buildMappingIndexFromDbs(dbs, outputChannel);
-    const { getMappingsFromIndex } = require('./services/WorkspaceIdentityService');
     const result = getMappingsFromIndex();
     outputChannel?.appendLine(`[initializeMappingIndex] After build: enabled=${result.enabled}, mappings=${result.mappings?.length ?? 0}`);
 }
@@ -1277,6 +1269,7 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            void initializeMappingIndex(outputChannel ?? undefined);
             void kanbanProvider!.initializeIntegrationAutoPull();
             void kanbanProvider!.startAutoArchiveForAll();
             // Deferred migration: if activation happened with no workspace folders,

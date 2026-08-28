@@ -1,89 +1,80 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
-import { getMappingsFromIndex } from './WorkspaceIdentityService';
+import { getScopedMappingsForBoard } from './WorkspaceIdentityService';
+
+function expandAndResolve(p: string): string {
+    return path.resolve(p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p);
+}
 
 export function buildWorkspaceItems(openRoots: string[]): Array<{ label: string; workspaceRoot: string }> {
+    const resolvedOpenRoots = openRoots.map(expandAndResolve);
+
     let mappings: any[] = [];
     let enabled = false;
     try {
-        const cfg = getMappingsFromIndex();
+        const cfg = getScopedMappingsForBoard(openRoots);
         if (cfg?.enabled && Array.isArray(cfg.mappings)) {
             mappings = cfg.mappings;
             enabled = true;
         }
     } catch { /* ignore */ }
 
+    // The vscode.workspace lookup is wrapped so headless / HTTP callers (no vscode
+    // host) fall back to basename labels instead of throwing.
+    let workspaceFolders: Array<{ name: string; uri: { fsPath: string } }> = [];
+    try {
+        workspaceFolders = (vscode.workspace?.workspaceFolders || []) as any;
+    } catch { /* headless: no vscode host */ }
+
+    const findFolderName = (resolvedPath: string): string | null => {
+        const folder = workspaceFolders.find(
+            f => path.resolve(f.uri.fsPath) === resolvedPath
+        );
+        return folder ? folder.name : null;
+    };
+
     const items: Array<{ label: string; workspaceRoot: string }> = [];
+    const addedRoots = new Set<string>();
 
-    // Check if ANY of the currently open workspace folders is mapped
-    let anyOpenFolderIsMapped = false;
-    if (enabled && mappings.length > 0) {
-        for (const root of openRoots) {
-            const resolvedRoot = path.resolve(root);
-            for (const m of mappings) {
-                const parent = m.parentFolder || (m as any).parentWorkspaceFolder
-                    || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
-                if (parent) {
-                    const expandedParent = parent.startsWith('~')
-                        ? path.join(os.homedir(), parent.slice(1))
-                        : parent;
-                    if (path.resolve(expandedParent) === resolvedRoot) {
-                        anyOpenFolderIsMapped = true;
-                        break;
-                    }
-                }
-                for (const wf of m.workspaceFolders || []) {
-                    const expandedWf = wf.startsWith('~')
-                        ? path.join(os.homedir(), wf.slice(1))
-                        : wf;
-                    if (path.resolve(expandedWf) === resolvedRoot) {
-                        anyOpenFolderIsMapped = true;
-                        break;
-                    }
-                }
-                if (anyOpenFolderIsMapped) break;
-            }
-            if (anyOpenFolderIsMapped) break;
-        }
-    }
+    // Visibility rule: A workspace is visible iff it is one of the host's roots,
+    // or it is a member of a mapping whose parent is one of the host's roots.
+    // Never emit a parent that is not a host root.
 
-    if (enabled && mappings.length > 0 && anyOpenFolderIsMapped) {
-        // Multi-root/mapped context: display the custom configured parent mapping names
-        const addedRoots = new Set<string>();
-        for (const m of mappings) {
+    for (const root of resolvedOpenRoots) {
+        if (addedRoots.has(root)) continue;
+
+        // Check if this open root is a parent in any scoped mapping
+        const parentMapping = enabled ? mappings.find(m => {
             const parent = m.parentFolder || (m as any).parentWorkspaceFolder
                 || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
-            if (parent) {
-                const expanded = parent.startsWith('~')
-                    ? path.join(os.homedir(), parent.slice(1))
-                    : parent;
-                const resolvedParent = path.resolve(expanded);
-                if (!addedRoots.has(resolvedParent)) {
-                    addedRoots.add(resolvedParent);
-                    items.push({
-                        label: m.name || path.basename(resolvedParent),
-                        workspaceRoot: resolvedParent
-                    });
+            return parent && expandAndResolve(parent) === root;
+        }) : undefined;
+
+        if (parentMapping) {
+            addedRoots.add(root);
+            items.push({
+                label: parentMapping.name || findFolderName(root) || path.basename(root),
+                workspaceRoot: root
+            });
+            // Also emit member children of this mapping
+            if (Array.isArray(parentMapping.workspaceFolders)) {
+                for (const child of parentMapping.workspaceFolders) {
+                    const resolvedChild = expandAndResolve(child);
+                    if (!addedRoots.has(resolvedChild)) {
+                        addedRoots.add(resolvedChild);
+                        items.push({
+                            label: findFolderName(resolvedChild) || path.basename(resolvedChild),
+                            workspaceRoot: resolvedChild
+                        });
+                    }
                 }
             }
-        }
-    } else {
-        // Independent context or mappings disabled: display standard workspace folders.
-        // The vscode.workspace lookup is wrapped so headless / HTTP callers (no vscode
-        // host) fall back to basename labels instead of throwing.
-        let workspaceFolders: Array<{ name: string; uri: { fsPath: string } }> = [];
-        try {
-            workspaceFolders = (vscode.workspace?.workspaceFolders || []) as any;
-        } catch { /* headless: no vscode host */ }
-        for (const root of openRoots) {
-            const resolvedRoot = path.resolve(root);
-            const folder = workspaceFolders.find(
-                f => path.resolve(f.uri.fsPath) === resolvedRoot
-            );
+        } else {
+            addedRoots.add(root);
             items.push({
-                label: folder ? folder.name : path.basename(resolvedRoot),
-                workspaceRoot: resolvedRoot
+                label: findFolderName(root) || path.basename(root),
+                workspaceRoot: root
             });
         }
     }
