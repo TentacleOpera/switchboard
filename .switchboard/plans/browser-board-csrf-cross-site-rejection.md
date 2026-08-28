@@ -31,6 +31,22 @@ And the body parser ignores `Content-Type` entirely — it reads the stream and 
 
 Under standalone the same request is rejected — it carries no bearer header, and `sb_session` is `SameSite=Strict` so the browser does not attach it cross-site. Under the extension it succeeds.
 
+### Measured surface — 42 POST routes, and the verb rails on top
+
+The exposure was quantified against HEAD rather than assumed. Two mechanics make it broad:
+
+**1. `Content-Type` is never inspected.** `_parseJsonBody` collects the body and calls `JSON.parse` on whatever arrived (`LocalApiServer.ts:1396`). So a request sent as `Content-Type: text/plain` parses identically to a JSON one — and `text/plain` is a **CORS-simple** content type, so the browser issues it with **no preflight**. Requiring `application/json` on JSON routes would force a preflight and close this path on its own; it is cheap, independent of the metadata guard, and worth doing as defence in depth.
+
+**2. The reachable set is every `POST`.** Enumerating state-changing routes at HEAD gives **42 POST**, 3 PUT, 1 DELETE. `POST` is a simple method; `PUT` and `DELETE` are not, so they trigger a preflight the server answers only for localhost origins. The result is an accident worth naming: `DELETE /kanban/plans` (with `deleteFile=true`) and the three `PUT`s are protected **by their HTTP verb, not by any check in the code** — and the destructive-sounding route is the safe one.
+
+The 42 include `/kanban/dispatch`, `/terminals/relay`, `/kanban/move`, `/kanban/plans`, `/kanban/feature/delete`, `/kanban/feature/split`, `/mission-control/start|stop|adopt`, `/research/dispatch`, `/phone-a-friend`, `/kanban/transfer/export|import` and `/teams/create-external`.
+
+**Rank `/api/clickup` and `/api/linear` above `relay`.** They proxy to the trackers using the operator's stored credentials, so a hostile page makes *this* server issue authenticated writes to ClickUp and Linear. The page cannot read the response; the write still lands. `relay` is narrower than it first appears — it validates both endpoints against the live pty fleet (`status === 'active'`, 404 otherwise) and delivers into an **agent's** prompt, so the realistic impact is prompt injection into a running agent rather than shell execution. That still matters where seats run with `--dangerously-skip-permissions`.
+
+**The verb rails multiply this and are not in the 42.** `/kanban/verb/<name>`, `/terminals/verb/<name>`, `/planning/verb/<name>`, `/tickets/verb/<name>`, `/project/verb/<name>` and `/mission-control/verb/<name>` are all `POST` with a path suffix, so each one is a family, not a route. Confirm they sit behind the same front-of-request check — a per-route guard would miss them entirely.
+
+**Consequence for this plan's design:** the guard must be a single front-of-`_handleRequest` check over *every* state-changing method, which is what is already proposed. Do not let it become a per-route allowlist — route 43 and the next verb ship unprotected by default. The contract test must assert the property ("no state-changing route accepts a cross-site request"), not enumerate today's routes.
+
 ### Root Cause
 
 The board's protection against a hostile page was **delegated entirely to authentication**, and one of the two hosts serving that board has no authentication. The request-metadata signals that distinguish "the board's own fetch" from "some other page's fetch" — `Sec-Fetch-Site` and `Origin` — are available on every browser request and are checked nowhere: `Sec-Fetch-Site` does not appear in `LocalApiServer.ts` at all, and `Origin` is only ever used to *mirror* a CORS header, never to reject.
@@ -86,6 +102,17 @@ This is the CLAUDE.md composition-root divergence pattern again. Both hosts wire
 None. This plan is independent of the agent-credential work and can ship first.
 
 ## Verification Plan
+
+**Property, not enumeration.** The central test asserts that *no* state-changing route accepts a cross-site request — driven by walking the router's own route table, so a route added tomorrow is covered without editing the test. A test listing today's 42 paths passes forever while the surface grows.
+
+Additional cases the measured surface requires:
+- **A `text/plain` POST is rejected** — the no-preflight path, which is how the hole is actually reached.
+- **The verb rails are covered** — assert one route from each of `/kanban/verb/`, `/terminals/verb/`, `/planning/verb/`, `/tickets/verb/`, `/project/verb/`, `/mission-control/verb/`.
+- **`PUT`/`DELETE` stay working** for same-origin callers — they are protected by preflight today, and the new guard must not double-reject them.
+- **In-tree local clients are unaffected** — `sb_api_call.sh` and the `kanban_operations/*.js` scripts send neither `Origin` nor `Sec-Fetch-Site`, and must continue to succeed. This is the non-breaking gate.
+
+### Original verification plan
+
 
 1. `npm run compile` — 0 errors.
 2. `node --test src/test/board-csrf-guard-contract.test.js` — new test green.
