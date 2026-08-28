@@ -1,5 +1,10 @@
 import { URL } from 'url';
-import { isLoopbackHostHeader, isLoopbackHostname } from '../utils/loopbackHostname';
+import {
+    isAllowedHostFor,
+    isAllowedOriginFor,
+    LOOPBACK_ONLY_POLICY,
+    type BindPolicy,
+} from '../utils/loopbackHostname';
 
 export function parseCookies(req: any): Record<string, string> {
     const raw = req.headers?.cookie || '';
@@ -29,21 +34,21 @@ export function parseCookies(req: any): Record<string, string> {
  * over LocalApiServer.ts — this file was the second predicate it did not look at.
  * It now covers both. Do not re-inline either check.
  */
-export function isLocalhostOrigin(origin: string): boolean {
-    try {
-        const u = new URL(origin);
-        // The editor webview's origin is `vscode-webview://<uuid>`: not a network
-        // name at all, so the loopback predicate cannot speak to it. Kept here
-        // rather than pushed into the shared module, which guards HTTP hosts.
-        if (u.protocol === 'vscode-webview:') { return true; }
-        return isLoopbackHostname(u.hostname);
-    } catch {
-        return false;
-    }
+/**
+ * Origin allowlist under a bind policy. Delegates the hostname decision to the
+ * shared `isAllowedOriginFor` (which itself delegates to `isAllowedHostFor`),
+ * so the WebSocket upgrade Host/Origin set can never drift from the HTTP guard
+ * set — and so tailnet mode widens both in step. The `vscode-webview:` origin
+ * allowance lives in the shared module now (it is a non-network name the
+ * loopback predicate cannot speak to, and the editor webview is never served
+ * over a tailnet listener).
+ */
+export function isLocalhostOrigin(origin: string, policy: BindPolicy = LOOPBACK_ONLY_POLICY): boolean {
+    return isAllowedOriginFor(policy, origin);
 }
 
-export function isAllowedHost(host: string): boolean {
-    return isLoopbackHostHeader(host);
+export function isAllowedHost(host: string, policy: BindPolicy = LOOPBACK_ONLY_POLICY): boolean {
+    return isAllowedHostFor(policy, host);
 }
 
 export function constantTimeEqual(a: string, b: string): boolean {
@@ -57,6 +62,22 @@ export function constantTimeEqual(a: string, b: string): boolean {
 
 export interface WsUpgradeAuthOptions {
     rejectWhenTokenEmpty?: boolean;
+    /**
+     * Bind policy for the Host/Origin allowlist. Defaults to loopback-only —
+     * the historical posture every caller had before tailnet mode. A tailnet
+     * policy widens the accepted Host/Origin set in step with the HTTP guard.
+     */
+    bindPolicy?: BindPolicy;
+    /**
+     * True when this upgrade arrived on the tailnet listener. When true the
+     * token check is skipped (decision 4: tailnet membership is the control),
+     * scoped to that listener and that peer set — a global skip would also
+     * disable the token for the loopback listener and for `Authorization:
+     * Bearer` machine callers. Identified by the socket's `localAddress`
+     * matching the bound tailnet address, the same identification the HTTP
+     * peer check uses.
+     */
+    isTailnetUpgrade?: (req: any) => boolean;
 }
 
 export async function authorizeWsUpgrade(
@@ -64,14 +85,22 @@ export async function authorizeWsUpgrade(
     getAuthToken: () => Promise<string | undefined>,
     opts?: WsUpgradeAuthOptions
 ): Promise<{ authorized: boolean; statusCode?: number; reason?: string }> {
+    const policy = opts?.bindPolicy ?? LOOPBACK_ONLY_POLICY;
     const host = req.headers['host'];
-    if (host && !isAllowedHost(host)) {
+    if (host && !isAllowedHost(host, policy)) {
         return { authorized: false, statusCode: 403, reason: 'Forbidden Host' };
     }
 
     const origin = req.headers['origin'];
-    if (origin && !isLocalhostOrigin(origin)) {
+    if (origin && !isLocalhostOrigin(origin, policy)) {
         return { authorized: false, statusCode: 403, reason: 'Forbidden Origin' };
+    }
+
+    // Decision 4: a request that arrived on the tailnet listener is trusted
+    // exactly as loopback is trusted — no credential, no enrolment. Scoped to
+    // that listener; the loopback listener still enforces the token.
+    if (opts?.isTailnetUpgrade && opts.isTailnetUpgrade(req)) {
+        return { authorized: true };
     }
 
     const reqUrl = new URL(req.url || '', `http://${req.headers['host'] || '127.0.0.1'}`);

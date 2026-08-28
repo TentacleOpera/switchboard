@@ -112,6 +112,8 @@ let LinearDocsAdapterClass: any;
 import { LocalFolderService } from './LocalFolderService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { LocalApiServer } from './LocalApiServer';
+import { LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
+import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
 import { GlobalIntegrationConfigService, AgentGlobalKey, ScheduledJob, SchedulerConfig } from './GlobalIntegrationConfigService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './KanbanDatabase';
@@ -3194,6 +3196,33 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Resolve the bind policy for the LocalApiServer from the
+     * `switchboard.remote.tailnet` setting. When the setting is on, detects the
+     * machine's Tailscale interface address; if Tailscale is down, falls back
+     * to loopback-only (the extension must not refuse to start — the operator
+     * still has the editor webview and local agent clients). The standalone
+     * host exits non-zero in that case; the extension degrades gracefully.
+     */
+    private async _resolveBindPolicy(): Promise<BindPolicy> {
+        try {
+            const tailnetEnabled = vscode.workspace.getConfiguration('switchboard')
+                .get<boolean>('remote.tailnet', false);
+            if (!tailnetEnabled) { return LOOPBACK_ONLY_POLICY; }
+            const addr = await detectTailnetAddress();
+            if (!addr) {
+                console.warn('[TaskViewerProvider] switchboard.remote.tailnet is on but Tailscale is not running — falling back to loopback-only.');
+                return LOOPBACK_ONLY_POLICY;
+            }
+            const magicDnsNames = await resolveMagicDnsNames();
+            console.log(`[TaskViewerProvider] Tailnet mode: ${addr}${magicDnsNames.length ? ` (${magicDnsNames.join(', ')})` : ''}`);
+            return { tailnetAddress: addr, magicDnsNames };
+        } catch (e) {
+            console.warn('[TaskViewerProvider] tailnet detection failed, falling back to loopback-only:', e);
+            return LOOPBACK_ONLY_POLICY;
+        }
+    }
+
+    /**
      * Start the local API server for agent access.
      */
     private async _startLocalApiServer(): Promise<void> {
@@ -4233,7 +4262,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 } catch {
                     return null;
                 }
-            }
+            },
+            bindPolicy: await this._resolveBindPolicy(),
         });
 
         this._broadcaster?.setApiServer(this._localApiServer);
@@ -4370,6 +4400,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      */
     public getLocalApiServerPort(): number {
         return this._localApiServer?.getPort() ?? 0;
+    }
+
+    /**
+     * The bind policy the running LocalApiServer was constructed with. Loopback-only
+     * until `switchboard.remote.tailnet` is on AND Tailscale resolved an address at
+     * start — the setting alone is not the answer, because `_resolveBindPolicy`
+     * degrades to loopback when Tailscale is down. Callers that build a URL must
+     * read the POLICY, never the setting, or they will print a tailnet URL for a
+     * listener that was never opened.
+     */
+    public getLocalApiBindPolicy(): BindPolicy {
+        return this._localApiServer?.bindPolicy ?? LOOPBACK_ONLY_POLICY;
     }
 
     /** Public accessor for the LocalApiServer session token. Plumbed into the parent-side
@@ -24852,7 +24894,8 @@ Each plan file must include:
 
             // Inject shared defaults
             const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
-            content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
+            const clipboardFallbackUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'clipboardFallback.js')).toString();
+            content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>\n<script src="${clipboardFallbackUri}" nonce="${nonce}"></script>`);
 
             const hankenFontUri = webview.asWebviewUri(
                 vscode.Uri.joinPath(this._extensionUri, 'designs', 'HankenGrotesk-Variable.woff2')

@@ -369,8 +369,8 @@
             })
                 .then(function (res) { return res.json(); })
                 .then(function (result) {
-                    if (result && result.prompt && navigator.clipboard && navigator.clipboard.writeText) {
-                        navigator.clipboard.writeText(result.prompt).catch(function (err) {
+                    if (result && result.prompt && window.sbCopyToClipboard) {
+                        window.sbCopyToClipboard(result.prompt).catch(function (err) {
                             console.warn('[transport] Clipboard write failed:', err);
                         });
                     }

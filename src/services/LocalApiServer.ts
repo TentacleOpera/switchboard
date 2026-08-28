@@ -41,7 +41,7 @@ import {
 import { WsHub } from './wsHub';
 import { PLANNING_VERBS, SETUP_VERBS, TASKVIEWER_VERBS } from '../generated/verbAllowlist';
 import { validateVerbPayload } from './verbSchemas';
-import { isLoopbackHostHeader, isLoopbackOrigin } from '../utils/loopbackHostname';
+import { isAllowedHostFor, isAllowedOriginFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
 import { listIconPalette } from './iconPalette';
 import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQueue, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
 import { composeCompletedTurnEndBody, composeCompletionEvidence, TURN_END_VERIFY_INSTRUCTION } from './PlanIngestionEngine';
@@ -129,6 +129,19 @@ function roleToCodingColumn(role: 'intern' | 'coder' | 'lead'): string {
 interface LocalApiServerOptions {
     workspaceRoot: string;
     port?: number;
+    /**
+     * Bind policy — which addresses the server binds and which Host/Origin
+     * names it accepts. Defaults to loopback-only (the historical posture:
+     * bind 127.0.0.1, accept loopback Host names). A tailnet policy opens a
+     * SECOND listener on the tailnet interface address in addition to the
+     * loopback listener, accepts the tailnet address / MagicDNS names as Host,
+     * and trusts peers arriving on that listener without a credential (decision
+     * 4: tailnet membership is the control). The loopback listener is ALWAYS
+     * retained — every in-tree local client talks to loopback, and moving the
+     * bind instead of adding one would break every local agent client the
+     * moment the operator goes remote.
+     */
+    bindPolicy?: BindPolicy;
     clickupMetadataPath: string;
     linearMetadataPath: string;
     getClickUpService: () => ClickUpSyncService | null;
@@ -685,9 +698,21 @@ function composeAcceptanceInstruction(
 
 export class LocalApiServer {
     private _server: http.Server | null = null;
+    /**
+     * The tailnet listener — a second `http.Server` sharing `_handleRequest`
+     * with the loopback listener. Present only under a tailnet bind policy.
+     * `server.listen(port, address)` binds exactly one address, so tailnet mode
+     * is two listeners sharing one request handler, not a bind moved — the
+     * loopback listener (`_server`) is retained so every local agent client
+     * keeps working the moment the operator goes remote.
+     */
+    private _tailnetServer: http.Server | null = null;
     private _port: number;
     private _options: LocalApiServerOptions;
     private _allRoots: string[];
+    private _bindPolicy: BindPolicy;
+    /** The bound tailnet address (v4), or null under loopback-only. */
+    private _tailnetAddress: string | null = null;
     private _nameResolutionCache: Map<string, { id: string; timestamp: number }> = new Map();
     private readonly _CACHE_TTL_MS = 30000; // 30 seconds
     private readonly _MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
@@ -702,6 +727,10 @@ export class LocalApiServer {
         this._options = options;
         this._port = options.port || 0; // 0 ⇒ random port; non-zero lets tests/CLI bind a fixed port
         this._allRoots = options.allRoots || [];
+        this._bindPolicy = options.bindPolicy ?? LOOPBACK_ONLY_POLICY;
+        if (isTailnetPolicy(this._bindPolicy)) {
+            this._tailnetAddress = this._bindPolicy.tailnetAddress;
+        }
     }
 
     /** True only when every feature-management hook is supplied. A partially
@@ -721,6 +750,13 @@ export class LocalApiServer {
      * listen callback never fires, the promise never settles and the port file is
      * never written (the "no port file ⇒ manual reload" failure mode). On timeout
      * the promise rejects with a clear error so the watchdog can retry.
+     *
+     * Under a tailnet bind policy a SECOND listener is opened on the tailnet
+     * interface address, sharing `_handleRequest` and the upgrade router with
+     * the loopback listener. `start()` resolves only when BOTH are listening,
+     * rejects if either errors, and the 5s timeout covers the pair — a failed
+     * tailnet bind (Tailscale not yet up at boot → `EADDRNOTAVAIL`) must leave
+     * a half-started server that rejects, not one that hangs.
      */
     async start(): Promise<number> {
         // Cleanup temp files from previous interrupted writes
@@ -728,10 +764,85 @@ export class LocalApiServer {
         this._isListening = false;
 
         const START_TIMEOUT_MS = 5000;
+
+        // The shared upgrade router. Attached to BOTH listeners so a board that
+        // loads over either address also streams over it — attaching to only the
+        // first is the "board loads, never updates" hang. Closed over `this` so
+        // both servers route to the one WsHub / terminal gateway.
+        const upgradeRouter = async (req: http.IncomingMessage, socket: any, head: any): Promise<void> => {
+            try {
+                const reqUrl = new URL(req.url || '', `http://${req.headers.host || '127.0.0.1'}`);
+                if (reqUrl.pathname === '/ws') {
+                    await this._wsHub!.handleUpgrade(req, socket, head);
+                } else if (reqUrl.pathname === '/ws/terminal' && this._options.terminalWsGateway) {
+                    await this._options.terminalWsGateway.handleUpgrade(req, socket, head);
+                } else {
+                    socket.destroy();
+                }
+            } catch (err) {
+                console.error('[LocalApiServer] Upgrade router error:', err);
+                try { socket.destroy(); } catch { /* ignore */ }
+            }
+        };
+
+        const requestHandler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+            await this._handleRequest(req, res);
+        };
+
+        // The tailnet-listener predicate used by guards 2 and 5 and the WS
+        // upgrade auth: a request arrived on the tailnet listener when the
+        // socket's localAddress is the bound tailnet address. Identified by
+        // localAddress (which listener accepted the connection), NOT by an
+        // allowlist of remote peer addresses — a tailnet peer's address is any
+        // 100.64.0.0/10 node and is not knowable in advance.
+        const isTailnetSocket = (req: http.IncomingMessage): boolean => this._isTailnetSocket(req);
+
         const listenPromise = new Promise<number>((resolve, reject) => {
-            this._server = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {
-                await this._handleRequest(req, res);
-            });
+            let loopbackUp = false;
+            let tailnetUp = !this._tailnetAddress; // no tailnet listener required under loopback-only
+            let settled = false;
+            const settle = (err?: Error) => {
+                if (settled) { return; }
+                settled = true;
+                if (err) { reject(err); } else { resolve(this._port); }
+            };
+            const tryResolve = () => {
+                if (loopbackUp && tailnetUp) { settle(); }
+            };
+
+            // Opens the tailnet listener on the ALREADY-RESOLVED `this._port`.
+            // Declared here, invoked from inside the loopback listen callback —
+            // see the comment at the call site for why the ordering is
+            // load-bearing.
+            const startTailnetListener = (): void => {
+                if (!this._tailnetAddress) { return; }
+                this._tailnetServer = http.createServer(requestHandler);
+                this._tailnetServer.listen(this._port, this._tailnetAddress, () => {
+                    console.log(`[LocalApiServer] Tailnet listener on ${this._tailnetAddress}:${this._port}`);
+                    this._tailnetServer!.on('upgrade', upgradeRouter);
+                    tailnetUp = true;
+                    tryResolve();
+                });
+                this._tailnetServer.on('error', (err: Error) => {
+                    console.error('[LocalApiServer] Tailnet listener error:', err);
+                    // Surface the likely cause rather than a bare stack trace.
+                    const msg = err && (err as any).code === 'EADDRNOTAVAIL'
+                        ? `[LocalApiServer] tailnet address ${this._tailnetAddress} is not available — Tailscale may be down or not yet up at boot. Run 'switchboard local' for loopback, or start Tailscale and retry.`
+                        : `[LocalApiServer] tailnet listener failed: ${err.message}`;
+                    // The loopback listener is already bound at this point, so a
+                    // bare reject would leave it holding the port while start()
+                    // reports failure — and the caller's retry then dies on
+                    // EADDRINUSE against our own orphan. Tear it down first, so a
+                    // failed start leaves nothing listening.
+                    this._isListening = false;
+                    try { this._server?.close(); } catch { /* already closing */ }
+                    try { this._wsHub?.close(); } catch { /* not attached yet */ }
+                    this._wsHub = null;
+                    settle(new Error(msg));
+                });
+            };
+
+            this._server = http.createServer(requestHandler);
 
             this._server.listen(this._port || 0, '127.0.0.1', () => {
                 const address = this._server?.address() as { port: number };
@@ -739,11 +850,15 @@ export class LocalApiServer {
                 this._isListening = true;
                 console.log(`[LocalApiServer] Started on port ${this._port}`);
 
-                // Attach wsHub + single upgrade router to the listening HTTP server.
+                // Attach wsHub + upgrade router to the listening HTTP server.
+                // One WsHub instance shared by both listeners — both servers
+                // route upgrades to it via `upgradeRouter`.
                 this._wsHub = new WsHub({
                     server: this._server!,
                     getAuthToken: this._options.getAuthToken,
                     getFullState: this._options.getFullState,
+                    bindPolicy: this._bindPolicy,
+                    isTailnetUpgrade: (req: any) => isTailnetSocket(req),
                 });
                 this._wsHub.attach(false);
 
@@ -753,30 +868,32 @@ export class LocalApiServer {
                     });
                 }
 
-                this._server!.on('upgrade', async (req: http.IncomingMessage, socket: any, head: any) => {
-                    try {
-                        const reqUrl = new URL(req.url || '', `http://${req.headers.host || '127.0.0.1'}`);
-                        if (reqUrl.pathname === '/ws') {
-                            await this._wsHub!.handleUpgrade(req, socket, head);
-                        } else if (reqUrl.pathname === '/ws/terminal' && this._options.terminalWsGateway) {
-                            await this._options.terminalWsGateway.handleUpgrade(req, socket, head);
-                        } else {
-                            socket.destroy();
-                        }
-                    } catch (err) {
-                        console.error('[LocalApiServer] Upgrade router error:', err);
-                        try { socket.destroy(); } catch { /* ignore */ }
-                    }
-                });
+                this._server!.on('upgrade', upgradeRouter);
 
-                resolve(this._port);
+                loopbackUp = true;
+                // The tailnet listener is opened HERE, inside the loopback
+                // listen callback, and not alongside `this._server.listen(...)`
+                // above. `this._port` is only assigned once the loopback socket
+                // is bound (the line at the top of this callback), so a
+                // `listen(this._port, ...)` issued in the enclosing synchronous
+                // block still sees the CONSTRUCTOR value. Under an ephemeral
+                // port — the extension host passes no `port` at all, and the
+                // CLI falls back to 0 whenever the preferred port is taken —
+                // that value is 0, and the two listeners bind two DIFFERENT
+                // random ports. Nothing errors: start() resolves, the port file
+                // and every printed URL carry the loopback port, and the tailnet
+                // listener sits on an unadvertised port that nothing can reach.
+                // Sequencing the binds is what keeps the pair on one port.
+                startTailnetListener();
+                tryResolve();
             });
 
             this._server.on('error', (err: Error) => {
                 console.error('[LocalApiServer] Server error:', err);
                 this._isListening = false;
-                reject(err);
+                settle(err);
             });
+
         });
 
         let timeoutHandle: NodeJS.Timeout | undefined;
@@ -836,13 +953,20 @@ export class LocalApiServer {
             this._wsHub.close();
             this._wsHub = null;
         }
-        if (this._server) {
+        const closeAll = (srv: http.Server | null): Promise<void> => {
+            if (!srv) { return Promise.resolve(); }
             return new Promise((resolve) => {
-                this._server?.close(() => {
-                    console.log('[LocalApiServer] Stopped');
-                    resolve();
-                });
+                srv.close(() => resolve());
             });
+        };
+        // Close both listeners. The tailnet listener is closed first so a peer
+        // mid-request on it does not race the loopback teardown the local agent
+        // clients still depend on.
+        await closeAll(this._tailnetServer);
+        this._tailnetServer = null;
+        if (this._server) {
+            await closeAll(this._server);
+            console.log('[LocalApiServer] Stopped');
         }
     }
 
@@ -878,7 +1002,72 @@ export class LocalApiServer {
         return result;
     }
 
+    /**
+     * True when `req` arrived on the tailnet listener — identified by the
+     * socket's `localAddress` matching the bound tailnet address, NOT by an
+     * allowlist of remote peer addresses. A tailnet peer's address is any
+     * `100.64.0.0/10` node and is not knowable in advance; the listener that
+     * accepted the connection is the stable fact. Used by guards 2 and 5 and
+     * the WS upgrade auth (decision 4: tailnet membership is the control, so a
+     * peer on that listener is trusted without a credential, scoped there and
+     * nowhere else).
+     */
+    private _isTailnetSocket(req: http.IncomingMessage): boolean {
+        if (!this._tailnetAddress) { return false; }
+        const local = (req.socket as any)?.localAddress;
+        if (!local) { return false; }
+        // Node may report the v4-mapped v6 form `::ffff:100.110.206.86`.
+        const stripped = local.replace(/^::ffff:/i, '');
+        return stripped === this._tailnetAddress;
+    }
+
+    /**
+     * Public tailnet-listener predicate for the terminal WS gateway. The
+     * gateway is constructed before the server starts listening, so it cannot
+     * read `socket.localAddress` itself — it delegates here, where the bound
+     * tailnet address is known. Same identification as guards 2 and 5.
+     */
+    public isTailnetSocket(req: http.IncomingMessage): boolean {
+        return this._isTailnetSocket(req);
+    }
+
+    /** The bind policy the server was constructed with. */
+    public get bindPolicy(): BindPolicy { return this._bindPolicy; }
+
+    /**
+     * Widen a panel's CSP `connect-src` to include the request's own origin.
+     *
+     * The board's CSP is baked at render time with loopback-only `ws://` origins.
+     * A board loaded over a tailnet address (`http://100.110.206.86:port/`)
+     * derives its WebSocket URL from `location.host` at runtime →
+     * `ws://100.110.206.86:port/ws`, which the loopback-only CSP blocks. This
+     * injects the request's Host (as `ws://` and `wss://`) into `connect-src`
+     * so the board streams over whichever address it was loaded from. Only
+     * widens under a tailnet policy — under loopback-only the existing CSP is
+     * already correct and the Host is always loopback.
+     */
+    private _widenCspForRequest(csp: string, req: http.IncomingMessage): string {
+        if (!isTailnetPolicy(this._bindPolicy)) { return csp; }
+        const host = req.headers['host'];
+        if (!host) { return csp; }
+        // Strip the port for the hostname, then rebuild ws://host:port (the
+        // Host header already carries the port the browser is using).
+        const wsOrigin = `ws://${host}`;
+        const wssOrigin = `wss://${host}`;
+        if (csp.includes(wsOrigin)) { return csp; } // already widened
+        return csp.replace('connect-src ', `connect-src ${wsOrigin} ${wssOrigin} `);
+    }
+
     private async _checkAuth(req: http.IncomingMessage, requireAuth: boolean = true): Promise<boolean> {
+        // Decision 4: a request that arrived on the tailnet listener is trusted
+        // exactly as loopback is trusted — no credential, no enrolment. Scoped to
+        // that listener and that peer set; a global `return true` here would also
+        // disable the token for the loopback listener and for `Authorization:
+        // Bearer` machine callers, which is a different and much larger change.
+        // The extension host has no token at all (getAuthToken → '' → the early
+        // return below), so this bypass is load-bearing only on the standalone
+        // host, where a durable/random token would otherwise 401 the tablet.
+        if (this._isTailnetSocket(req)) { return true; }
         const expected = await this._options.getAuthToken();
         // Extension path: no token configured => keep the historical loopback-trust behavior.
         if (!expected) { return true; }
@@ -1022,7 +1211,7 @@ export class LocalApiServer {
                 'Referrer-Policy': 'no-referrer',
             };
             if (csp) {
-                headers['Content-Security-Policy'] = csp;
+                headers['Content-Security-Policy'] = this._widenCspForRequest(csp, req);
             }
             res.writeHead(200, headers);
             res.end(html);
@@ -1074,7 +1263,7 @@ export class LocalApiServer {
                 'Referrer-Policy': 'no-referrer',
             };
             if (csp) {
-                headers['Content-Security-Policy'] = csp;
+                headers['Content-Security-Policy'] = this._widenCspForRequest(csp, req);
             }
             res.writeHead(200, headers);
             res.end(html);
@@ -1128,7 +1317,7 @@ export class LocalApiServer {
                 'Referrer-Policy': 'no-referrer',
             };
             if (csp) {
-                headers['Content-Security-Policy'] = csp;
+                headers['Content-Security-Policy'] = this._widenCspForRequest(csp, req);
             }
             res.writeHead(200, headers);
             res.end(html);
@@ -1202,7 +1391,7 @@ export class LocalApiServer {
                 'Referrer-Policy': 'no-referrer',
             };
             if (result.csp) {
-                headers['Content-Security-Policy'] = result.csp;
+                headers['Content-Security-Policy'] = this._widenCspForRequest(result.csp, req);
             }
             res.writeHead(200, headers);
             res.end(result.html);
@@ -7329,45 +7518,56 @@ export class LocalApiServer {
     }
 
     /**
-     * DNS-rebinding guard. Delegates to the shared loopback-name policy so the
-     * set of names accepted here can never drift from the set the standalone CLI
-     * is willing to print — a `--hostname` the CLI accepts but the server 403s
-     * would be an unopenable board.
-     *
-     * `*.localhost` is included: RFC 6761 reserves that TLD for loopback, so it
-     * cannot be aimed at an attacker's IP. See `utils/loopbackHostname.ts`.
+     * Host allowlist under the bind policy. Delegates to the shared
+     * `isAllowedHostFor` so the set of names accepted here can never drift from
+     * the set the standalone CLI is willing to print, and so tailnet mode
+     * widens the HTTP guard, the WS upgrade guard, and the CLI's `--hostname`
+     * validation in step. `*.localhost` is included: RFC 6761 reserves that TLD
+     * for loopback, so it cannot be aimed at an attacker's IP. Under the tailnet
+     * policy the tailnet address, the MagicDNS FQDN, and its bare first label
+     * also pass — a tailnet name resolves only inside the tailnet, so there is
+     * nothing to rebind. See `utils/loopbackHostname.ts`.
      */
     private _isAllowedHost(host: string | undefined): boolean {
-        return isLoopbackHostHeader(host);
+        return isAllowedHostFor(this._bindPolicy, host);
     }
 
     private _isLocalhostOrigin(origin: string): boolean {
-        return isLoopbackOrigin(origin);
+        return isAllowedOriginFor(this._bindPolicy, origin);
     }
 
     /**
      * Handle incoming HTTP requests.
      */
     private async _handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        // Restrict to localhost only
+        // Guard 2: restrict to localhost OR a peer arriving on the tailnet
+        // listener. The peer is identified by which listener accepted the
+        // connection (socket.localAddress === tailnet address), not by an
+        // allowlist of remote addresses — a tailnet peer's address is any
+        // 100.64.0.0/10 node and is not knowable in advance. A non-tailnet,
+        // non-loopback peer still receives 403.
         const remoteAddress = req.socket.remoteAddress;
-        if (remoteAddress !== '127.0.0.1' && remoteAddress !== '::1') {
+        const onTailnet = this._isTailnetSocket(req);
+        if (!onTailnet && remoteAddress !== '127.0.0.1' && remoteAddress !== '::1') {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Access denied: localhost only' }));
             return;
         }
 
-        // Reject DNS-rebinding by validating Host header. Only enforce when serving the
-        // browser board (standalone), because the extension's existing scripts rely on
-        // raw 127.0.0.1:<port> Host values and never send a non-localhost Host.
+        // Guard 3: reject DNS-rebinding by validating Host header. Only enforce
+        // when serving the browser board (standalone), because the extension's
+        // existing scripts rely on raw 127.0.0.1:<port> Host values and never
+        // send a non-localhost Host. Under the tailnet policy the tailnet
+        // address and MagicDNS names also pass.
         if (this._options.serveStatic && !this._isAllowedHost(req.headers['host'])) {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Access denied: invalid Host header' }));
             return;
         }
 
-        // Same-origin / local clients only: no CORS wildcard. For preflight, mirror the
-        // request Origin only if it is a localhost origin.
+        // Guard 4: same-origin / local clients only — no CORS wildcard. For
+        // preflight, mirror the request Origin only if it is an allowed origin
+        // under the bind policy.
         const origin = req.headers['origin'];
         if (origin && this._isLocalhostOrigin(origin)) {
             res.setHeader('Access-Control-Allow-Origin', origin);

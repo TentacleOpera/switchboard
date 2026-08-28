@@ -1842,7 +1842,7 @@
                 return;
             }
             try {
-                await navigator.clipboard.writeText(prompt);
+                await window.sbCopyToClipboard(prompt);
                 copyResearchPromptBtn.innerText = 'COPIED';
                 setTimeout(() => {
                     if (copyResearchPromptBtn) copyResearchPromptBtn.innerText = originalText;
@@ -1875,7 +1875,7 @@
                 return;
             }
             try {
-                await navigator.clipboard.writeText(prompt);
+                await window.sbCopyToClipboard(prompt);
                 draftWithAnalystBtn.innerText = 'COPIED';
                 setTimeout(() => {
                     if (draftWithAnalystBtn) draftWithAnalystBtn.innerText = originalText;
@@ -5703,7 +5703,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     e.stopPropagation(); // Prevent triggering plan selection
                     const planFile = copyLinkBtn.dataset.planFile;
                     if (planFile) {
-                        navigator.clipboard.writeText(toAgentRef(planFile)).then(() => {
+                        window.sbCopyToClipboard(toAgentRef(planFile)).then(() => {
                             const originalText = copyLinkBtn.textContent;
                             copyLinkBtn.textContent = 'Copied';
                             setTimeout(() => {

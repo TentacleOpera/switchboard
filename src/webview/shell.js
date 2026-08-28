@@ -445,8 +445,8 @@
                         } else if (result.success && result.mode === 'clipboard') {
                             // No agent configured — copy the prompt to clipboard.
                             const text = result.prompt || 'Run /switchboard workflow to start Mission Control';
-                            if (navigator.clipboard && navigator.clipboard.writeText) {
-                                navigator.clipboard.writeText(text).then(() => {
+                            if (window.sbCopyToClipboard) {
+                                window.sbCopyToClipboard(text).then(() => {
                                     showStripToast('Copied: ' + text);
                                 }).catch(() => {
                                     showStripToast(text);

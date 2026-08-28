@@ -71,7 +71,7 @@ function makeNonce(): string {
  * marker deletion that shipped a dead Setup panel in 1.7.13.
  */
 function injectTransportShim(content: string, nonce: string, marker: string, firstScript: string, expectMarker = false): string {
-    const shim = `<script src="/static/webview/sharedDefaults.js" nonce="${nonce}"></script>\n<script src="/static/webview/transport.js" nonce="${nonce}"></script>`;
+    const shim = `<script src="/static/webview/sharedDefaults.js" nonce="${nonce}"></script>\n<script src="/static/webview/clipboardFallback.js" nonce="${nonce}"></script>\n<script src="/static/webview/transport.js" nonce="${nonce}"></script>`;
     // If a marker comment exists (kanban.html / setup.html shape), replace it.
     if (content.includes(marker)) {
         return content.replace(marker, shim);

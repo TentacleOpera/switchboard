@@ -485,7 +485,7 @@
         `;
 
         document.getElementById('btn-copy-inspect-hex')?.addEventListener('click', () => {
-            navigator.clipboard.writeText(color.hex);
+            window.sbCopyToClipboard(color.hex);
             const btn = document.getElementById('btn-copy-inspect-hex');
             if (btn) btn.textContent = 'Copied!';
         });

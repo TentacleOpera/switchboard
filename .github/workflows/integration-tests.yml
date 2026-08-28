@@ -382,6 +382,19 @@ jobs:
       - name: Loopback hostname contract (rebinding guard, one predicate, CSP parity)
         run: npm run test:contract:loopback-hostname
 
+      # Tailnet bind policy. Every failure mode here is silent and reach-shaped:
+      # binding 0.0.0.0 instead of the specific Tailscale address exposes the
+      # board to every network the machine is on; moving the bind instead of
+      # ADDING a second listener kills every local agent client the moment the
+      # operator goes remote; identifying the tailnet peer by a remote-address
+      # allowlist rather than by which listener accepted the connection cannot
+      # work at all (a tailnet peer is any 100.64.0.0/10 node); and widening the
+      # credential skip past that one listener disables the token for loopback
+      # and for Bearer machine callers too. None of these throw — the board
+      # still starts and still serves.
+      - name: Tailscale bind-policy contract (second listener, no wildcard bind, scoped token skip)
+        run: npm run test:contract:tailscale-bind
+
       # Cross-file mismatches that are invisible file-by-file, and each one shipped:
       # terminals.js called term.onFocus (an INTERNAL xterm emitter) and the throw took
       # the WebSocket with it — panes read "connecting" forever; tickets.html shipped a

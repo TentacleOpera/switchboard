@@ -323,6 +323,11 @@
           "default": false,
           "description": "When enabled, Lead Coder execution prompts include an inline challenge step before implementation."
         },
+        "switchboard.remote.tailnet": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, the extension's LocalApiServer also binds the machine's Tailscale interface address, so any device on your tailnet can open the board without a token. Tailscale membership is the control. Requires Tailscale to be running; if it is down the server falls back to loopback-only."
+        },
         "switchboard.reviewer.advancedMode": {
           "type": "boolean",
           "default": true,
@@ -892,6 +897,7 @@
     "test:contract:design-system": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-system-contract.test.js",
     "test:contract:cross-client-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/cross-client-scope-contract.test.js",
     "test:contract:loopback-hostname": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/loopback-hostname-contract.test.js",
+    "test:contract:tailscale-bind": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tailscale-bind-contract.test.js",
     "test:contract:panel-runtime-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/webview-panel-runtime-surface.test.js",
     "test:contract:headless-feature-mgmt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/headless-feature-management-contract.test.js",
     "test:contract:headless-feature-mgmt-destructive": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/headless-feature-management-destructive.test.js",

@@ -10830,7 +10830,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // (it uses data-merge-worktree-id), so this selector never matches it.
                     const btn = document.querySelector(`button[data-wt-id="${msg.worktreeId}"]`);
                     if (btn && msg.prompt) {
-                        navigator.clipboard.writeText(msg.prompt).then(() => {
+                        window.sbCopyToClipboard(msg.prompt).then(() => {
                             const oldText = btn.textContent;
                             btn.textContent = 'COPIED!';
                             setTimeout(() => {
@@ -10861,7 +10861,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         stripBtn.dataset.mergeWorktreeId &&
                         String(msg.worktreeId) === String(stripBtn.dataset.mergeWorktreeId)) {
                         if (msg.prompt) {
-                            navigator.clipboard.writeText(msg.prompt).then(() => {
+                            window.sbCopyToClipboard(msg.prompt).then(() => {
                                 // mergePendingWorktreeId was already set optimistically in the click handler;
                                 // keep it set — updateCreateWorktreeButton() applies the disabled merge-pending state.
                                 stripBtn.setAttribute('data-tooltip', 'Merge prompt copied — awaiting worktree cleanup (cancel via Worktrees tab)');
@@ -10900,7 +10900,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         }, 2000);
                     };
                     if (msg.prompt) {
-                        navigator.clipboard.writeText(msg.prompt).then(() => {
+                        window.sbCopyToClipboard(msg.prompt).then(() => {
                             flashCopyBtn('COPIED!');
                         }).catch(err => {
                             console.error('Failed to copy prompt:', err);
@@ -11318,7 +11318,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // External-mode copy-prompt result. Copy to clipboard.
                     if (msg.prompt) {
                         try {
-                            navigator.clipboard.writeText(msg.prompt);
+                            window.sbCopyToClipboard(msg.prompt);
                             postKanbanMessage({ type: 'showInfo', message: 'External automation prompt copied to clipboard.' });
                         } catch (e) {
                             postKanbanMessage({ type: 'showWarning', message: 'Failed to copy prompt to clipboard.' });

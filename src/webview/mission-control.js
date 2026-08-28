@@ -352,7 +352,7 @@
         // External type: Copy prompt only, no local side effects — no config
         // write, no scheduler change. The plan's "External" section.
         try {
-            navigator.clipboard.writeText(text).then(() => {
+            window.sbCopyToClipboard(text).then(() => {
                 vscode.postMessage({ type: 'mcScheduleExternalCopy', scheduleId: selectedScheduleId, prompt: text });
             }).catch(() => {
                 vscode.postMessage({ type: 'mcScheduleExternalCopy', scheduleId: selectedScheduleId, prompt: text });

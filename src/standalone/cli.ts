@@ -8,10 +8,11 @@ import * as util from 'util';
 import { spawn } from 'child_process';
 import type { HeadlessSwitchboardOptions, HeadlessSwitchboardInstance } from './bootstrap';
 import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackHostname';
+import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
 
 function usage(): string {
-    return `Usage: npx switchboard [options]
-       npx switchboard start [--detach] [--port <number>] [--hostname <name>] [--workspace <path>] [--no-open|--open]
+    return `Usage: npx switchboard [local] [options]      (default: serve the loopback board)
+       npx switchboard tailnet [options]            (serve the loopback board AND your tailnet)
        npx switchboard stop
        npx switchboard status [--json]
        npx switchboard logs [-f|--follow]
@@ -28,6 +29,21 @@ function usage(): string {
        npx switchboard export [--out <path>] [--workspace <path>]
        npx switchboard import <bundle.json> [--workspace <path>]
 
+Serve modes:
+  local               Serve the board on loopback (127.0.0.1) only. This is the
+                      default when no subcommand is given — 'npx switchboard' means
+                      'npx switchboard local'. The board is reachable from this
+                      machine only.
+  tailnet             Serve the board on loopback AND on this machine's Tailscale
+                      interface address, so any device on your tailnet can open it.
+                      No token, no enrolment — tailnet membership is the control.
+                      Fails loudly (non-zero) if Tailscale is absent or down; never
+                      silently falls back to loopback-only and never binds 0.0.0.0.
+                      'switchboard local' is always available as the answer.
+
+  'start' has been replaced. Use 'switchboard local' (this machine) or
+  'switchboard tailnet' (reachable on your tailnet).
+
 Aliases for secrets commands:
   clickup   -> switchboard.clickup.apiToken
   linear    -> switchboard.linear.apiToken
@@ -38,18 +54,20 @@ Aliases for secrets commands:
 Options:
   --workspace <path>   Workspace root to serve or init (default: cwd)
   --out <path>         export: bundle destination (default: ~/.switchboard/transfer/)
-  --import-bundle <p>  start: import a transfer bundle once the plan files have
+  --import-bundle <p>  serve: import a transfer bundle once the plan files have
                        been ingested. This is what the interactive first-run
                        menu's option 3 passes through; use it directly for a
                        non-interactive first run.
   --port <number>      Preferred port; 0 for ephemeral (default: 7777)
   --hostname <name>    Hostname for the board URL (default: ${DEFAULT_DISPLAY_HOSTNAME},
                        falling back to 127.0.0.1 if that name is unreachable).
-                       Must be a loopback name: localhost, 127.0.0.1, or anything
-                       under the reserved .localhost TLD, e.g. ${DEFAULT_DISPLAY_HOSTNAME}
-  --detach             start: run in background (detached). Implies --no-open unless --open is given.
+                       Under 'local' must be a loopback name: localhost, 127.0.0.1,
+                       or anything under the reserved .localhost TLD, e.g.
+                       ${DEFAULT_DISPLAY_HOSTNAME}. Under 'tailnet' a MagicDNS name
+                       or tailnet address is also accepted.
+  --detach             serve: run in background (detached). Implies --no-open unless --open is given.
   --no-open            Do not open a browser
-  --open               start --detach: open a browser anyway (overrides implied --no-open)
+  --open               serve --detach: open a browser anyway (overrides implied --no-open)
   --json               status: machine-readable JSON output
   -f, --follow         logs: tail live output
   --target <name>      Protocol target for 'init': agents, claude, or both (default: both)
@@ -112,18 +130,27 @@ function parseArgs(argv: string[]): { workspace?: string; port?: number; hostnam
  * The failure this prevents is silent and expensive: a non-loopback name would
  * print an inviting URL, open a browser, and then hit the DNS-rebinding guard —
  * burning the one-time token on a request that can never succeed.
+ *
+ * Under `tailnet` mode the tailnet address and MagicDNS names are also accepted
+ * (the server's Host guard widens to match — see `isAllowedHostFor`). Under
+ * `local` mode only loopback names pass.
  */
-function resolveHostname(input: string | undefined): string | undefined {
+function resolveHostname(input: string | undefined, tailnetAcceptable: string[] = []): string | undefined {
     if (input === undefined) { return undefined; }
     const candidate = input.trim().toLowerCase();
-    if (!isLoopbackHostname(candidate)) {
+    if (isLoopbackHostname(candidate)) { return candidate; }
+    if (tailnetAcceptable.some(a => a.toLowerCase() === candidate)) { return candidate; }
+    if (tailnetAcceptable.length > 0) {
+        console.error(`[switchboard] --hostname '${input}' is not a loopback name or a tailnet name.`);
+        console.error('Under tailnet mode the hostname must be a loopback name (localhost, 127.0.0.1,');
+        console.error('*.localhost), the tailnet address, or a MagicDNS name for this tailnet.');
+    } else {
         console.error(`[switchboard] --hostname '${input}' is not a loopback name.`);
         console.error('Switchboard binds 127.0.0.1 only, so the hostname must resolve there:');
         console.error('  127.0.0.1, localhost, or any name under the reserved .localhost TLD');
         console.error('  e.g. --hostname switchboard.localhost');
-        process.exit(1);
     }
-    return candidate;
+    process.exit(1);
 }
 
 /**
@@ -586,6 +613,49 @@ async function runPendingBundleImport(workspaceRoot: string, bundlePath: string)
 }
 
 async function main() {
+    // ── Serve-mode whitelist ──────────────────────────────────────
+    //
+    // 'local' and 'tailnet' are the two serve subcommands. No subcommand (the
+    // bare `npx switchboard`) means 'local' — the historical default. 'start'
+    // is retired: it is the one subcommand an existing script or alias is most
+    // likely to type, so it gets a dedicated redirect rather than the generic
+    // unknown-subcommand error. Any other unrecognized leading token is NOT
+    // silently treated as a hostname or serve mode — it is an error, because
+    // the previous CLI accepted `npx switchboard --hostname foo` (no
+    // subcommand) and that shape must keep working, but `npx switchboard foo`
+    // (a bare token that is not a known subcommand) should not fall through to
+    // serve and silently start a board.
+    const KNOWN_SUBCOMMANDS = new Set([
+        'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
+        'control-plane', 'secrets', 'token', 'export', 'import',
+    ]);
+    const firstArg = process.argv[2];
+    const isFlag = firstArg && firstArg.startsWith('-');
+    let serveMode: 'local' | 'tailnet';
+    if (firstArg === 'start') {
+        console.error('[switchboard] \'start\' has been replaced.');
+        console.error('  Use \'switchboard local\'  — serve the board on this machine (loopback).');
+        console.error('  Use \'switchboard tailnet\' — serve the board on this machine AND your tailnet.');
+        process.exit(1);
+    }
+    if (firstArg && !isFlag && !KNOWN_SUBCOMMANDS.has(firstArg)) {
+        console.error(`[switchboard] Unknown subcommand '${firstArg}'.`);
+        console.error('  Serve modes: switchboard local | switchboard tailnet');
+        console.error('  Run \'switchboard --help\' for the full command list.');
+        process.exit(1);
+    }
+    if (firstArg === 'tailnet') {
+        serveMode = 'tailnet';
+        // Strip the subcommand so parseArgs sees only the options.
+        process.argv.splice(2, 1);
+    } else if (firstArg === 'local') {
+        serveMode = 'local';
+        process.argv.splice(2, 1);
+    } else {
+        // Bare `npx switchboard` or `npx switchboard --hostname foo` → local.
+        serveMode = 'local';
+    }
+
     const args = parseArgs(process.argv.slice(2));
     if (args.help) {
         console.log(usage());
@@ -612,6 +682,7 @@ async function main() {
     if (subcommandTargetsCwd && !fs.existsSync(switchboardDir)) {
         fs.mkdirSync(switchboardDir, { recursive: true });
     }
+
 
     if (process.argv[2] === 'secrets') {
         const sub = process.argv[3];
@@ -1238,7 +1309,30 @@ async function main() {
         process.exit(1);
     }
 
-    const hostname = resolveHostname(args.hostname);
+    // ── Tailnet detection ─────────────────────────────────────────
+    //
+    // 'switchboard tailnet' reads the interface address itself — the operator
+    // types a word, never an IP. detectTailnetAddress probes the CLI binary
+    // (ordered absolute paths, never a bare spawn) then falls back to the
+    // LocalAPI socket. A failure at both steps exits non-zero naming Tailscale,
+    // never silently falls back to loopback-only, and never binds 0.0.0.0.
+    let tailnetAddress: string | null = null;
+    let magicDnsNames: string[] = [];
+    if (serveMode === 'tailnet') {
+        tailnetAddress = await detectTailnetAddress();
+        if (!tailnetAddress) {
+            console.error('[switchboard] Tailscale is not running on this machine (no interface address found).');
+            console.error('[switchboard] Start Tailscale and retry, or use \'switchboard local\' for loopback-only access.');
+            process.exit(1);
+        }
+        magicDnsNames = await resolveMagicDnsNames();
+        console.log(`[switchboard] Tailnet address: ${tailnetAddress}${magicDnsNames.length ? ` (${magicDnsNames.join(', ')})` : ''}`);
+    }
+
+    // Under tailnet mode the hostname may also be a tailnet name; under local
+    // mode only loopback names pass.
+    const tailnetAcceptable = tailnetAddress ? [tailnetAddress, ...magicDnsNames] : [];
+    const hostname = resolveHostname(args.hostname, tailnetAcceptable);
 
     // ── First run: no board yet ────────────────────────────────────
     //
@@ -1272,8 +1366,15 @@ async function main() {
 
         // Build the child's argv: same args minus --detach, plus --no-open
         // unless --open was passed explicitly (a detached launch on a headless
-        // host has no browser to open).
+        // host has no browser to open). Re-inject the serve subcommand so the
+        // child re-enters the same mode (tailnet detection runs again in the
+        // child — the address is stable across the fork).
         const childArgv = process.argv.slice(2).filter(a => a !== '--detach');
+        if (serveMode === 'tailnet' && !childArgv.includes('tailnet')) {
+            childArgv.unshift('tailnet');
+        } else if (serveMode === 'local' && !childArgv.includes('local')) {
+            childArgv.unshift('local');
+        }
         if (!args.open && !childArgv.includes('--no-open')) {
             childArgv.push('--no-open');
         }
@@ -1327,6 +1428,9 @@ async function main() {
         console.log(`[switchboard] Server started in background.`);
         console.log(`  PID:   ${detachPid}`);
         console.log(`  URL:   http://127.0.0.1:${detachPort}`);
+        if (tailnetAddress) {
+            console.log(`  Tailnet: http://${tailnetAddress}:${detachPort}/ (no token, on your tailnet only)`);
+        }
         console.log(`  Logs:  ${logFile}`);
         console.log(`[switchboard] Use 'npx switchboard token show' for a board URL, 'npx switchboard status' to check, or 'npx switchboard stop' to shut down.`);
         process.exit(0);
@@ -1368,11 +1472,15 @@ async function main() {
     const { startHeadlessSwitchboard } = require('./bootstrap') as {
         startHeadlessSwitchboard: (opts: HeadlessSwitchboardOptions) => Promise<HeadlessSwitchboardInstance>;
     };
+    const bindPolicy = tailnetAddress
+        ? { tailnetAddress, magicDnsNames }
+        : { loopbackOnly: true as const };
     const instance = await startHeadlessSwitchboard({
         workspaceRoot,
         port: listenPort,
         hostname,
         verbose: true,
+        bindPolicy,
     });
 
     await waitForHealth(instance.port);
@@ -1389,6 +1497,16 @@ async function main() {
         // secret for `token show` to authenticate a replacement mint with.
         console.log(`Board URL (one-time token): ${boardUrl}`);
         console.log(`For a token that survives restarts and can enrol a second device: npx switchboard token rotate`);
+    }
+    if (tailnetAddress) {
+        // Tailnet mode: no token is required on the tailnet listener (decision 4:
+        // tailnet membership is the control). Print the bare tailnet URL so the
+        // operator can hand it to a phone or tablet on the same tailnet.
+        const tailnetUrl = `http://${tailnetAddress}:${instance.port}/`;
+        console.log(`\nTailnet URL (no token needed, on your tailnet only): ${tailnetUrl}`);
+        if (magicDnsNames.length > 0) {
+            console.log(`  MagicDNS: ${magicDnsNames.map(n => `http://${n}:${instance.port}/`).join(', ')}`);
+        }
     }
     if (displayHost !== '127.0.0.1') {
         // The token is consumed server-side, so a name the browser fails to

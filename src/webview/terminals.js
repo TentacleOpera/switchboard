@@ -7308,7 +7308,7 @@
                     if (data.success) {
                         if (typeof data.prompt === 'string') {
                             try {
-                                await navigator.clipboard.writeText(data.prompt);
+                                await window.sbCopyToClipboard(data.prompt);
                                 copyBtn.textContent = 'Copied!';
                             } catch {
                                 copyBtn.textContent = 'Copy failed';

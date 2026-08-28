@@ -95,7 +95,7 @@ import { createVscodeHostSeams, type HostSeams } from '../services/hostSeams';
 // workspace root before any service that touches `vscode.workspace.getConfiguration`
 // is constructed.
 import { __setStandaloneWorkspaceRoot, createStandaloneSecretStorage } from './vscodeShim';
-import { isLoopbackHostname, resolveDisplayHostname } from '../utils/loopbackHostname';
+import { isLoopbackHostname, resolveDisplayHostname, isAllowedHostFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
 
 export interface HeadlessSwitchboardOptions {
     workspaceRoot: string;
@@ -104,10 +104,19 @@ export interface HeadlessSwitchboardOptions {
     verbose?: boolean;
     /**
      * Hostname to build the returned `url` from. Presentation only — the server
-     * always binds 127.0.0.1, and this name is expected to resolve there (that is
-     * why it is restricted to the loopback-name set). Defaults to `127.0.0.1`.
+     * always binds 127.0.0.1 (loopback listener), and this name is expected to
+     * resolve there (that is why it is restricted to the loopback-name set under
+     * local mode). Under tailnet mode the tailnet address and MagicDNS names are
+     * also accepted. Defaults to `127.0.0.1`.
      */
     hostname?: string;
+    /**
+     * Bind policy — which addresses the server binds and which Host/Origin names
+     * it accepts. Defaults to loopback-only. A tailnet policy opens a second
+     * listener on the tailnet interface address and trusts peers arriving on it
+     * without a credential (decision 4: tailnet membership is the control).
+     */
+    bindPolicy?: BindPolicy;
 }
 
 export interface HeadlessSwitchboardInstance {
@@ -2811,6 +2820,10 @@ Each plan file must include:
         });
     }
 
+    // Bind policy — resolved early so the options object and the hostname
+    // validator both see it. Defaults to loopback-only.
+    const bindPolicy = opts.bindPolicy ?? LOOPBACK_ONLY_POLICY;
+
     const options: any = {
         workspaceRoot,
         port: opts.port,
@@ -3135,9 +3148,18 @@ Each plan file must include:
             getPanelHtml,
             staticRoutes,
         },
+        bindPolicy,
     };
 
     server = new LocalApiServer(options);
+    // Wire the terminal WS gateway's bind policy + tailnet-listener predicate.
+    // The gateway is constructed before the server (it needs the PTY fleet, not
+    // the server), so its policy is set here once the server — and its
+    // `isTailnetSocket` predicate — exist. Reads at call time, so this late wire
+    // still applies to every upgrade.
+    if (terminalWsGateway) {
+        terminalWsGateway.setBindPolicy(server.bindPolicy, (req: any) => server.isTailnetSocket(req));
+    }
     // Point the headless providers' broadcaster at the live WS hub so verb arms
     // that push state updates reach browser clients (additive to the HTTP body).
     designProvider.setApiServer(server);
@@ -3205,14 +3227,20 @@ Each plan file must include:
 
     // The bind address is 127.0.0.1 unconditionally; `hostname` only changes the
     // name the user is handed. Validated here as well as in the CLI so a library
-    // caller cannot mint a URL the server's Host guard would then reject.
+    // caller cannot mint a URL the server's Host guard would then reject. Under
+    // tailnet mode the hostname may also be a tailnet address or MagicDNS name —
+    // the validator widens to match the server's Host guard.
+    const tailnetAcceptable = isTailnetPolicy(bindPolicy) ? [bindPolicy.tailnetAddress, ...bindPolicy.magicDnsNames] : [];
     const displayHost = await resolveDisplayHostname(opts.hostname, port, m => log(opts, m));
-    if (!isLoopbackHostname(displayHost)) {
-        throw new Error(`hostname must resolve to loopback (localhost, *.localhost or 127.0.0.1); got '${displayHost}'`);
+    if (!isLoopbackHostname(displayHost) && !tailnetAcceptable.some(a => a.toLowerCase() === displayHost.toLowerCase())) {
+        throw new Error(`hostname must resolve to loopback (localhost, *.localhost or 127.0.0.1)${tailnetAcceptable.length ? ' or be a tailnet name for this tailnet' : ''}; got '${displayHost}'`);
     }
     const bindUrl = `http://127.0.0.1:${port}`;
     const url = `http://${displayHost}:${port}`;
     log(opts, `Local API server listening on ${bindUrl}${url === bindUrl ? '' : ` (serving as ${url})`}`);
+    if (isTailnetPolicy(bindPolicy)) {
+        log(opts, `Tailnet listener on http://${bindPolicy.tailnetAddress}:${port} (no token, on your tailnet only)`);
+    }
 
     // ── Delegate-children import at startup ──────────────────────────
     // Run importDelegatesIntoTeams once at boot, BEFORE any terminal can be

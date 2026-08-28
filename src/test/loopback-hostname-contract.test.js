@@ -128,12 +128,12 @@ check('mirrors CORS only for loopback origins', () => {
 check('the server Host guard delegates to this module (no second predicate)', () => {
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
     assert.ok(
-        /_isAllowedHost\([^)]*\)\s*:\s*boolean\s*\{\s*return isLoopbackHostHeader\(/.test(src),
-        '_isAllowedHost must delegate to isLoopbackHostHeader'
+        /_isAllowedHost\([^)]*\)\s*:\s*boolean\s*\{\s*return isAllowedHostFor\(/.test(src),
+        '_isAllowedHost must delegate to isAllowedHostFor (the bind-policy-aware predicate)'
     );
     assert.ok(
-        /_isLocalhostOrigin\([^)]*\)\s*:\s*boolean\s*\{\s*return isLoopbackOrigin\(/.test(src),
-        '_isLocalhostOrigin must delegate to isLoopbackOrigin'
+        /_isLocalhostOrigin\([^)]*\)\s*:\s*boolean\s*\{\s*return isAllowedOriginFor\(/.test(src),
+        '_isLocalhostOrigin must delegate to isAllowedOriginFor'
     );
 });
 
@@ -148,18 +148,20 @@ check('the WebSocket upgrade guard delegates too (it was the second predicate)',
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'wsUpgradeAuth.ts'), 'utf8');
     assert.ok(src.includes("from '../utils/loopbackHostname'"), 'wsUpgradeAuth must import the shared policy');
     assert.ok(
-        /export function isAllowedHost\([^)]*\)\s*:\s*boolean\s*\{\s*return isLoopbackHostHeader\(/.test(src),
-        'isAllowedHost must delegate to isLoopbackHostHeader, not re-implement a prefix test'
+        /export function isAllowedHost\([^)]*\)\s*:\s*boolean\s*\{\s*return isAllowedHostFor\(/.test(src),
+        'isAllowedHost must delegate to isAllowedHostFor, not re-implement a prefix test'
     );
     assert.ok(
-        /return isLoopbackHostname\(u\.hostname\)/.test(src),
-        'isLocalhostOrigin must delegate the hostname decision to isLoopbackHostname'
+        /return isAllowedOriginFor\(/.test(src),
+        'isLocalhostOrigin must delegate to isAllowedOriginFor'
     );
-    // The one thing the shared module deliberately cannot answer: the editor
-    // webview's origin is `vscode-webview://<uuid>`, not a network name.
+    // The vscode-webview: origin allowance now lives in the shared module
+    // (isAllowedOriginFor), not in wsUpgradeAuth — but it must survive the
+    // delegation. Check the shared module directly.
+    const loopbackSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'utils', 'loopbackHostname.ts'), 'utf8');
     assert.ok(
-        src.includes("u.protocol === 'vscode-webview:'"),
-        'the vscode-webview: origin allowance must survive the delegation — the editor webview uses this gateway'
+        loopbackSrc.includes("u.protocol === 'vscode-webview:'"),
+        'the vscode-webview: origin allowance must survive in isAllowedOriginFor — the editor webview uses this gateway'
     );
 });
 
@@ -175,12 +177,18 @@ check('the standalone URL is built from the validated hostname', () => {
     assert.ok(/listen\(this\._port/.test(fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8')));
 });
 
-check('the server still binds loopback only — hostname is presentation, not reach', () => {
+check('the server still binds loopback — hostname is presentation, not reach', () => {
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
-    assert.ok(src.includes("this._server.listen(this._port || 0, '127.0.0.1'"), 'bind address must stay 127.0.0.1');
+    assert.ok(src.includes("this._server.listen(this._port || 0, '127.0.0.1'"), 'loopback bind address must stay 127.0.0.1');
     assert.ok(
-        src.includes("if (remoteAddress !== '127.0.0.1' && remoteAddress !== '::1')"),
-        'the non-loopback peer rejection must remain'
+        /remoteAddress !== '127\.0\.0\.1' && remoteAddress !== '::1'/.test(src),
+        'the non-loopback peer rejection must remain (now with a tailnet-listener bypass)'
+    );
+    // The server must NEVER bind 0.0.0.0 — tailnet mode adds a second listener
+    // on the specific tailnet address, not a wildcard.
+    assert.ok(
+        !src.includes("listen(this._port") || !/listen\([^)]*0\.0\.0\.0/.test(src),
+        'the server must never bind 0.0.0.0'
     );
 });
 

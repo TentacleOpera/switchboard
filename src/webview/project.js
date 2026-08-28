@@ -761,7 +761,7 @@
                 break;
             case 'archivesPromptCopied':
                 if (msg.prompt) {
-                    navigator.clipboard.writeText(msg.prompt).then(() => {
+                    window.sbCopyToClipboard(msg.prompt).then(() => {
                         showToast('Archive query prompt copied to clipboard', 'success');
                     }).catch(() => {
                         showToast('Failed to copy prompt to clipboard', 'error');
@@ -1390,7 +1390,7 @@
         if (!button || !filePath) return;
         button.addEventListener('click', e => {
             e.stopPropagation();
-            navigator.clipboard.writeText(toAgentRef(filePath)).then(() => {
+            window.sbCopyToClipboard(toAgentRef(filePath)).then(() => {
                 button.textContent = 'Copied';
                 setTimeout(() => button.textContent = 'Copy Link', 2000);
             });
@@ -1640,7 +1640,7 @@
                 showToast('No plans to link in the current filter.', 'info');
                 return;
             }
-            navigator.clipboard.writeText(links).then(() => {
+            window.sbCopyToClipboard(links).then(() => {
                 const oldText = linkAllBtn.textContent;
                 linkAllBtn.textContent = 'Copied!';
                 setTimeout(() => { linkAllBtn.textContent = oldText; }, 2000);
@@ -1744,7 +1744,7 @@
                 copyLinkBtn.addEventListener('click', e => {
                     e.stopPropagation();
                     const path = copyLinkBtn.dataset.planFile;
-                    navigator.clipboard.writeText(toAgentRef(path)).then(() => {
+                    window.sbCopyToClipboard(toAgentRef(path)).then(() => {
                         copyLinkBtn.textContent = 'Copied';
                         setTimeout(() => copyLinkBtn.textContent = 'Copy Link', 2000);
                     });
@@ -2420,7 +2420,7 @@
                 featureCopyLinkBtn.addEventListener('click', e => {
                     e.stopPropagation();
                     const filePath = featureCopyLinkBtn.dataset.planFile;
-                    navigator.clipboard.writeText(toAgentRef(filePath)).then(() => {
+                    window.sbCopyToClipboard(toAgentRef(filePath)).then(() => {
                         featureCopyLinkBtn.textContent = 'Copied';
                         setTimeout(() => featureCopyLinkBtn.textContent = 'Copy Link', 2000);
                     });
@@ -2672,7 +2672,7 @@
         if (subtaskCopyLinkBtn) {
             subtaskCopyLinkBtn.addEventListener('click', () => {
                 const path = plan.planFile;
-                navigator.clipboard.writeText(toAgentRef(path)).then(() => {
+                window.sbCopyToClipboard(toAgentRef(path)).then(() => {
                     const oldText = subtaskCopyLinkBtn.textContent;
                     subtaskCopyLinkBtn.textContent = 'Copied';
                     setTimeout(() => { subtaskCopyLinkBtn.textContent = oldText; }, 2000);
@@ -3797,7 +3797,7 @@
         const ctx = getReviewContext(activeTab);
         const comment = (document.getElementById('review-comment-input')?.value || '').trim();
         const prompt = `> [${state.reviewSelectedText.replace(/\s+/g, ' ').trim()}]${comment ? ` — Comment: "${comment}"` : ''}${ctx?.topic ? `\nContext: ${ctx.topic}` : ''}`;
-        navigator.clipboard.writeText(prompt).then(() => {
+        window.sbCopyToClipboard(prompt).then(() => {
             reviewCopyPromptBtn.textContent = 'Copied!';
             setTimeout(() => { reviewCopyPromptBtn.textContent = 'Copy Prompt'; }, 2000);
         });

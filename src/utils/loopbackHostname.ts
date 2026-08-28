@@ -81,6 +81,91 @@ export function isLoopbackOrigin(origin: string): boolean {
 }
 
 /**
+ * Bind policy — the single source of truth for "which Host/Origin names may this
+ * listener accept?".
+ *
+ * - `loopbackOnly`: the historical posture. Only names that always resolve to
+ *   this machine (loopback + the reserved `.localhost` TLD) pass. This is the
+ *   DNS-rebinding guard for a server whose only other protection is a loopback
+ *   socket bind.
+ * - `tailnet`: the board is ALSO bound to a Tailscale interface address. The
+ *   tailnet address (a `100.64.0.0/10` CGNAT IP, not internet-routable), its
+ *   MagicDNS FQDN, and the FQDN's bare first label are accepted IN ADDITION to
+ *   every loopback name. Loopback stays accepted because the loopback listener
+ *   is retained in tailnet mode (every in-tree local client talks to loopback).
+ *
+ * A tailnet name resolves only inside the tailnet, from the operator's own
+ * coordination server — there is nothing to rebind, so the DNS-rebinding
+ * rationale that justifies the loopback-only predicate does not survive here.
+ * Tailnet membership is the control: Tailscale admits a node only after it
+ * authenticates to the coordination server, and ACLs narrow which nodes may
+ * reach a port. Demanding a bearer token on top asks the operator to prove
+ * something the network already proved before the packet arrived.
+ */
+export type BindPolicy =
+    | { loopbackOnly: true }
+    | { tailnetAddress: string; magicDnsNames: string[] };
+
+/** The loopback-only policy every caller defaulted to before tailnet mode. */
+export const LOOPBACK_ONLY_POLICY: BindPolicy = { loopbackOnly: true };
+
+/** Type guard: true when `policy` is the tailnet variant. */
+export function isTailnetPolicy(policy: BindPolicy): policy is { tailnetAddress: string; magicDnsNames: string[] } {
+    return !('loopbackOnly' in policy);
+}
+
+/**
+ * True when a `Host` header is acceptable under `policy`.
+ *
+ * Loopback names always pass (the loopback listener is retained in every mode).
+ * Under the tailnet policy the tailnet address, the MagicDNS FQDN, and the bare
+ * first label also pass. Bare-label matching is EXACT, not `startsWith` —
+ * `patrickremotedev.evil.example` must fail even though it starts with the
+ * accepted bare label. Reuses `hostnameFromHostHeader` for port stripping so the
+ * bracketed-IPv6 handling is not re-implemented.
+ */
+export function isAllowedHostFor(policy: BindPolicy, host: string | undefined): boolean {
+    const name = hostnameFromHostHeader(host);
+    if (name === null) { return false; }
+    if (isLoopbackHostname(name)) { return true; }
+    if (!isTailnetPolicy(policy)) { return false; }
+    // Tailnet policy: accept the bound tailnet address (v4 literal, with or
+    // without brackets — hostnameFromHostHeader leaves IPv6 bracketed) and the
+    // MagicDNS names.
+    if (name === policy.tailnetAddress.toLowerCase()) { return true; }
+    // An IPv6 tailnet address arrives bracketed from hostnameFromHostHeader.
+    if (name === `[${policy.tailnetAddress.toLowerCase()}]`) { return true; }
+    const lower = name.toLowerCase();
+    for (const dns of policy.magicDnsNames) {
+        const d = dns.toLowerCase();
+        if (lower === d) { return true; }
+        // Bare first label: exact match only. `foo.bar.ts.net` → bare label `foo`.
+        // `foo.evil.example` must NOT match `foo`.
+        const dot = d.indexOf('.');
+        if (dot > 0 && lower === d.slice(0, dot)) { return true; }
+    }
+    return false;
+}
+
+/**
+ * True when an `Origin` header is acceptable under `policy`.
+ *
+ * Mirrors `isAllowedHostFor` for the Origin URL's hostname. The editor
+ * webview's `vscode-webview:` origin is a non-network name and is accepted
+ * unconditionally — the loopback predicate cannot speak to it, and the editor
+ * webview is never served over a tailnet listener.
+ */
+export function isAllowedOriginFor(policy: BindPolicy, origin: string): boolean {
+    try {
+        const u = new URL(origin);
+        if (u.protocol === 'vscode-webview:') { return true; }
+        return isAllowedHostFor(policy, u.hostname);
+    } catch {
+        return false;
+    }
+}
+
+/**
  * The hostname Switchboard hands the user when nothing else is specified.
  *
  * Not a bind address — the server binds 127.0.0.1 unconditionally. This is the

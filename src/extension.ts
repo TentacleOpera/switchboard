@@ -46,7 +46,7 @@ import { switchboardCommandRegistry } from './services/commandRegistry';
 import { stateFile } from './utils/stateHome';
 import { GlobalIntegrationConfigService } from './services/GlobalIntegrationConfigService';
 import { StandaloneHostSecrets as EncryptedSecretsStore } from './services/encryptedSecretsStore';
-import { resolveDisplayHostname } from './utils/loopbackHostname';
+import { resolveDisplayHostname, isTailnetPolicy } from './utils/loopbackHostname';
 
 /**
  * Verb Engine · 1 — register a `switchboard.*` command in BOTH the host-agnostic
@@ -1306,6 +1306,27 @@ export async function activate(context: vscode.ExtensionContext) {
             return;
         }
         const token = activeTaskViewerProvider.mintBrowserToken();
+        // Under tailnet mode the board is also bound to the machine's Tailscale
+        // address, and that listener needs no credential. Derive the URL from the
+        // BOUND address rather than the loopback name so the URL this button
+        // yields is the one the operator can also type on a phone or tablet —
+        // otherwise the setting opens a listener nothing ever names, and the
+        // tailnet URL is undiscoverable from the extension host. Read the policy,
+        // not the setting: `_resolveBindPolicy` degrades to loopback when
+        // Tailscale is down, and a URL for a listener that was never opened is
+        // worse than the loopback one.
+        const bindPolicy = activeTaskViewerProvider.getLocalApiBindPolicy();
+        if (isTailnetPolicy(bindPolicy)) {
+            const tailnetUrl = `http://${bindPolicy.tailnetAddress}:${port}/`;
+            outputChannel?.appendLine(
+                `[Switchboard] Tailnet board URL (no token needed, on your tailnet only): ${tailnetUrl}`
+                + (bindPolicy.magicDnsNames.length
+                    ? `  MagicDNS: ${bindPolicy.magicDnsNames.map(n => `http://${n}:${port}/`).join(', ')}`
+                    : '')
+            );
+            await vscode.env.openExternal(vscode.Uri.parse(tailnetUrl));
+            return;
+        }
         // Same helper the standalone CLI uses, so the extension button and `npx
         // switchboard` can never hand out different hostnames — and so a name the
         // server's Host guard would 403 can never be opened.

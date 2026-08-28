@@ -115,6 +115,19 @@ export interface WsHubOptions {
      * tests can exercise the loop without 30s waits; production callers omit it.
      */
     pingIntervalMs?: number;
+    /**
+     * Bind policy for the Host/Origin allowlist on WS upgrades. Defaults to
+     * loopback-only. A tailnet policy widens the accepted set in step with the
+     * HTTP guard (LocalApiServer._isAllowedHost), so the board's state socket
+     * accepts the same Host set the page that opened it sent.
+     */
+    bindPolicy?: import('../utils/loopbackHostname').BindPolicy;
+    /**
+     * True when this upgrade arrived on the tailnet listener. When true the
+     * token check is skipped (decision 4), scoped to that listener. Identified
+     * by the socket's `localAddress` matching the bound tailnet address.
+     */
+    isTailnetUpgrade?: (req: any) => boolean;
 }
 
 /** A push payload: either a plain message object (composed once, sent to every
@@ -217,7 +230,10 @@ export class WsHub {
         let auth: { authorized: boolean; statusCode?: number; reason?: string };
         let authTimer: NodeJS.Timeout | undefined;
         try {
-            const authPromise = authorizeWsUpgrade(req, () => this._options.getAuthToken());
+            const authPromise = authorizeWsUpgrade(req, () => this._options.getAuthToken(), {
+                bindPolicy: this._options.bindPolicy,
+                isTailnetUpgrade: this._options.isTailnetUpgrade,
+            });
             const authTimeout = new Promise<never>((_resolve, reject) => {
                 authTimer = setTimeout(() => reject(new Error('upgrade auth timeout')), UPGRADE_AUTH_TIMEOUT_MS);
             });

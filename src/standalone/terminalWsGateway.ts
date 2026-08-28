@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { PtyFleetService, ExtendedTerminalHandle } from './ptyFleetService';
 import { authorizeWsUpgrade } from '../services/wsUpgradeAuth';
+import type { BindPolicy } from '../utils/loopbackHostname';
 
 export const MAX_SCROLLBACK_BYTES = 256 * 1024; // 256 KB
 export const HIGH_WATER_MARK_BYTES = 1024 * 1024; // 1 MB
@@ -285,6 +286,10 @@ export class TerminalWsGateway {
     // here rather than imported so the standalone gateway keeps no dependency on
     // the hub module; the value is a plain string on the wire either way.
     private broadcastWs?: (verb: string, payload: any, surface?: string) => void;
+    /** Bind policy for the Host/Origin allowlist on terminal WS upgrades. */
+    private bindPolicy?: BindPolicy;
+    /** True when an upgrade arrived on the tailnet listener (token skipped). */
+    private isTailnetUpgrade?: (req: any) => boolean;
 
     private scrollbackBuffers = new Map<string, ScrollbackBuffer>();
     private terminalSubscriptions = new Map<string, { dispose: () => void }>();
@@ -477,11 +482,15 @@ export class TerminalWsGateway {
     constructor(
         fleetService: PtyFleetService,
         getAuthToken: () => Promise<string | undefined>,
-        broadcastWs?: (verb: string, payload: any, surface?: string) => void
+        broadcastWs?: (verb: string, payload: any, surface?: string) => void,
+        bindPolicy?: BindPolicy,
+        isTailnetUpgrade?: (req: any) => boolean
     ) {
         this.fleetService = fleetService;
         this.getAuthToken = getAuthToken;
         this.broadcastWs = broadcastWs;
+        this.bindPolicy = bindPolicy;
+        this.isTailnetUpgrade = isTailnetUpgrade;
 
         this.initFleetListeners();
         this.startPingReaper();
@@ -490,6 +499,18 @@ export class TerminalWsGateway {
 
     public setBroadcastWs(broadcastWs: (verb: string, payload: any, surface?: string) => void): void {
         this.broadcastWs = broadcastWs;
+    }
+
+    /**
+     * Set the bind policy + tailnet-listener predicate after construction.
+     * The gateway is built before the LocalApiServer starts listening, so the
+     * bind policy and the `localAddress`-based tailnet identification cannot
+     * be constructor args — they are wired here once the server is up. Reads
+     * at call time, so a late wire still applies to in-flight upgrades.
+     */
+    public setBindPolicy(bindPolicy: BindPolicy, isTailnetUpgrade: (req: any) => boolean): void {
+        this.bindPolicy = bindPolicy;
+        this.isTailnetUpgrade = isTailnetUpgrade;
     }
 
     /**
@@ -931,7 +952,11 @@ export class TerminalWsGateway {
     }
 
     public async handleUpgrade(req: any, socket: any, head: any): Promise<void> {
-        const auth = await authorizeWsUpgrade(req, this.getAuthToken, { rejectWhenTokenEmpty: true });
+        const auth = await authorizeWsUpgrade(req, this.getAuthToken, {
+            rejectWhenTokenEmpty: true,
+            bindPolicy: this.bindPolicy,
+            isTailnetUpgrade: this.isTailnetUpgrade,
+        });
         if (!auth.authorized) {
             const status = auth.statusCode || 401;
             const msg = auth.reason || 'Unauthorized';

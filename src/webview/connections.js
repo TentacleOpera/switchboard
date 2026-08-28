@@ -515,8 +515,8 @@
     document.getElementById('btn-copy-cron-prompt')?.addEventListener('click', () => {
         const text = "Follow your Switchboard context and process your instruction folder";
         const resultEl = document.getElementById('jobs-action-result');
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(() => {
+        if (window.sbCopyToClipboard) {
+            window.sbCopyToClipboard(text).then(() => {
                 if (resultEl) resultEl.textContent = 'Cron prompt copied to clipboard ✓';
                 setTimeout(() => { if (resultEl) resultEl.textContent = ''; }, 3000);
             }).catch(() => {
@@ -770,7 +770,7 @@
                 const btn = document.getElementById('btn-copy-linear-agent-skill');
                 const status = document.getElementById('copy-linear-agent-skill-status');
                 if (msg.text) {
-                    navigator.clipboard.writeText(msg.text).then(() => {
+                    window.sbCopyToClipboard(msg.text).then(() => {
                         if (btn) { btn.textContent = 'Copied!'; }
                         if (status) { status.textContent = ''; }
                         setTimeout(() => { if (btn) { btn.textContent = 'Copy Linear Agent Skill'; } }, 2000);

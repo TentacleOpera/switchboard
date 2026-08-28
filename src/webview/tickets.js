@@ -4748,7 +4748,7 @@
             btn.addEventListener('click', async () => {
                 if (btn.textContent === 'COPIED') return;
                 try {
-                    await navigator.clipboard.writeText(filledPrompt);
+                    await window.sbCopyToClipboard(filledPrompt);
                     btn.textContent = 'COPIED';
                 } catch (err) {
                     console.error('[AgentAPI] clipboard failed:', err);
