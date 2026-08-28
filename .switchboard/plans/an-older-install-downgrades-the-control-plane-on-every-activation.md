@@ -138,7 +138,7 @@ reintroduce the July bug and is explicitly not proposed.**
    activation body, **not** inside `refreshWorkspaceControlPlane` — so the early return in change 3
    does not cover it. It is ungated three ways: it loops over every `vscode.workspace.workspaceFolders`
    entry with no `isSwitchboardManagedFolder` check, runs on every activation, and consults no version.
-   It hard-deletes 24 legacy paths under `.agents/` (`:4219-4245`).
+   It hard-deletes 19 hardcoded legacy paths under `.agents/` (`:4219-4247`) with `access()` then `unlink()`, swallowing every error.
 
    Leaving it live on the skip path recreates precisely the delete-without-replace asymmetry the July
    change fixed, in the downgrade direction: cleanup deletes, delivery is skipped, nothing replaces.
@@ -175,7 +175,7 @@ reintroduce the July bug and is explicitly not proposed.**
 8. **The flip-flop is gone end to end.** Activate `1.7.13`, then `1.6.0`, then `1.7.13` again against
    one workspace; assert `git status --porcelain -- .agents .claude CLAUDE.md AGENTS.md` is empty
    throughout. Today this sequence produces two rewrites.
-9. **Cleanup is skipped on a downgrade.** Place all 24 legacy paths in a fixture's `.agents/`, stamp
+9. **Cleanup is skipped on a downgrade.** Place all 19 legacy paths in a fixture's `.agents/`, stamp
    `1.7.13`, activate `1.6.0`, and assert every one still exists. Spy on `cleanupLegacyAgentFiles` to
    confirm it was not invoked — file state alone cannot distinguish "skipped" from "ran and found
    nothing". Then assert an upgrade activation still deletes them, so the guard has not disabled
