@@ -210,7 +210,28 @@ changes, not left as advice.
    - Assert that `package.json`'s `vscode:prepublish` script string contains a reference to the
      guard script, so the wiring cannot be silently removed.
 
-6. **Leave the seed loop and the prune untouched.**
+6. **Repair the two protocol files the Aug-27 revert missed.** `5cd79357` ("Restore control plane
+   to its pre-sync state") restored `.agents/skills/` and the launcher but does **not** contain
+   `CLAUDE.md` or `AGENTS.md`. The last commit touching either is `abd36593` — the clobber itself.
+   Both therefore still carry pre-cut managed blocks:
+
+   | file | managed block | lines | should be |
+   | :--- | :--- | :--- | :--- |
+   | `CLAUDE.md` | 49–223 | 173 | 612 chars / 7 lines |
+   | `AGENTS.md` | 1–165 | 163 | 612 chars / 7 lines |
+
+   Rewrite each marker-delimited block to `RESIDENT_PROTOCOL_BODY` (`ClaudeCodeMirrorService.ts:148`,
+   527 chars of body, 612 with markers). Preserve everything **outside** the markers — `CLAUDE.md`
+   lines 1–48 are the hand-authored agent rules (confirmation dialogs, host parity, build, migrations)
+   and are not clobber residue. Do not hand-write the body: read the constant so the file cannot drift
+   from the code that regenerates it.
+
+   Sequencing matters. This step lands **after** steps 2–3, never before: restoring the blocks while
+   the guard is absent resets the clock, and the next activation of a pre-`843bae45` build re-inflates
+   them exactly as it did on 25–26 Aug (`AGENTS.md` 616 → 14,296 in one day; `CLAUDE.md`
+   2,604 → 4,238 → 22,336 over two). The guard is what makes the repair durable.
+
+7. **Leave the seed loop and the prune untouched.**
 
 ### Migration
 
@@ -240,6 +261,13 @@ Build and test tooling only — no schema, settings, stored state, or shipped be
     between the two activations (no `generatedAt` field, content is a pure function of the file list).
 11. **`.claude/` packaging assertion.** Assert the contract test walks `.claude/` and fails if any
     file would be excluded by the vsce filter.
+12. **Protocol blocks match the constant.** Assert the managed block in both `CLAUDE.md` and
+    `AGENTS.md` equals `RESIDENT_PROTOCOL_BODY` verbatim (612 chars with markers). This is the
+    regression test for step 6 and the standing detector for any future re-inflation — it fails loudly
+    on the next clobber instead of letting 18KB of dead protocol sit resident for days.
+13. **Content outside the markers survives the repair.** Assert `CLAUDE.md` lines 1–48 (the
+    hand-authored agent rules) are byte-identical before and after step 6. The repair must be scoped
+    to the managed region; a whole-file rewrite would destroy authored content.
 
 ### Goal Invariants
 
