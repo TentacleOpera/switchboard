@@ -162,7 +162,14 @@ function run() {
         { file: 'memo.js', reachable: PLANNING_ROUTE },
         { file: 'tickets.js', reachable: TICKETS_VERBS },
         { file: 'design.js', reachable: DESIGN_VERBS },
-        { file: 'connections.js', reachable: new Set([...SETUP_VERBS, ...PLANNING_VERBS]) },
+        // Connections spans THREE providers, not two. The `/connections/verb/`
+        // resolver (LocalApiServer._handleRequest) tries SETUP_VERBS, then
+        // PLANNING_VERBS, then TASKVIEWER_VERBS before its 404. The third branch
+        // arrived with the Jobs sub-tab (its six jobs* arms and the cron-prompt
+        // button's `copyTextToClipboard` all live in TaskViewerProvider) and this
+        // set was not widened with it, so the panel's own resolver said reachable
+        // while this gate said dead.
+        { file: 'connections.js', reachable: new Set([...SETUP_VERBS, ...PLANNING_VERBS, ...TASKVIEWER_VERBS]) },
     ];
 
     for (const p of panels) {
