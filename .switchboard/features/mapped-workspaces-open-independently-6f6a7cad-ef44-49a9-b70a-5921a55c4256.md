@@ -24,9 +24,9 @@ This feature makes mapping resolution deterministic and window-aware, brings the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The Browser Host Honours Workspace Mappings](../plans/the-browser-host-honours-workspace-mappings.md) — **PLAN REVIEWED** — ID: 2e268eaf-03af-4909-9595-761c6aec6247
-- [ ] [The Board Shows Only the Workspaces You Opened](../plans/the-board-shows-only-the-workspaces-you-opened.md) — **PLAN REVIEWED** — ID: 8cffe45e-e4c0-4d11-b766-208df5879050
-- [ ] [A Workspace That Owns a Board Opens On Its Own](../plans/a-workspace-that-owns-a-board-opens-on-its-own.md) — **PLAN REVIEWED** — ID: 307c9650-1593-481d-a576-088c9de326ec
+- [ ] [The Browser Host Honours Workspace Mappings](../plans/the-browser-host-honours-workspace-mappings.md) — **CODER CODED** — ID: 2e268eaf-03af-4909-9595-761c6aec6247
+- [ ] [The Board Shows Only the Workspaces You Opened](../plans/the-board-shows-only-the-workspaces-you-opened.md) — **CODER CODED** — ID: 8cffe45e-e4c0-4d11-b766-208df5879050
+- [ ] [A Workspace That Owns a Board Opens On Its Own](../plans/a-workspace-that-owns-a-board-opens-on-its-own.md) — **CODER CODED** — ID: 307c9650-1593-481d-a576-088c9de326ec
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

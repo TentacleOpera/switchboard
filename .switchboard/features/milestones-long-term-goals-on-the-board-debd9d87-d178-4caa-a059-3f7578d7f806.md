@@ -22,7 +22,7 @@ Milestones are deliberately inert. Adding a card to one runs nothing, and nothin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] (no subtasks)
+- [ ] [A Milestones tab on the board — goals, their cards, and where those cards are](../plans/milestones-tab-in-the-kanban-panel.md) — **CREATED** — ID: 66dcb1a4-74b9-4eb5-8ce6-3d47d8b3374e
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -30,3 +30,4 @@ Milestones are deliberately inert. Adding a card to one runs nothing, and nothin
 Strictly ordered. The state plan must land first: it owns the tables, the derived column status, and every route the tab calls, and the tab plan adds no state of its own. The state plan is independently shippable and useful on its own — agents can create goals, add cards, read status, and mark completion over HTTP with no UI at all. The tab is the human surface on top of it and is not shippable before it.
 
 Both are independent of the other plans on this branch (`agents-set-a-columns-card-order`, `agents-set-a-cards-priority-level`, `priority-as-a-native-field-and-a-board-wide-order-by`) — different state, different consumers, any order.
+ the other plans on this branch (`agents-set-a-columns-card-order`, `agents-set-a-cards-priority-level`, `priority-as-a-native-field-and-a-board-wide-order-by`) — different state, different consumers, any order.

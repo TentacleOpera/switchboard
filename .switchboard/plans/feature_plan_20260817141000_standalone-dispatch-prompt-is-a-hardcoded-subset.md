@@ -58,7 +58,7 @@ So under `npx switchboard` the port resolves to 0 and both the Phone-a-Friend di
 
 ## Metadata
 
-**Complexity:** 6
+**Complexity:** 7
 **Tags:** backend, cli, bugfix, reliability
 **Project:** Browser Switchboard
 
@@ -108,7 +108,10 @@ None.
 ## Dependencies
 
 - `feature_plan_20260817141300_lead-dispatched-coders-never-get-the-completion-report-directive.md` — same feature; edits the body of `bootstrap.ts` `deliverPrompt` and appends to `src/test/seat-safeguards-fleet-prompt-path.test.js`, both of which this plan also touches. Land that plan first, then this one. Do not run the two concurrently against `bootstrap.ts`.
-- No external dependencies. `buildDispatchPlans` and `generateUnifiedPrompt` are public on `KanbanProvider` at HEAD and already exercised headless by `resolveSeatPromptOptions`'s shared `_getPromptsConfig` path.
+- **Cross-feature, hard: `Batch-to-team-head allocate prompt lacks dispatch means (roster, API port, pty recipe)`** (feature `704248c3`, complexity 6) must land first. It fixes the batch gate at `KanbanProvider.ts:6394` and adds `_buildBatchDrivePrefix`. This plan routes the standalone host *into* that gate — landing first would propagate the broken batch prompt (no roster, no API port, no `ptySendPrompt` recipe) to a second host rather than fixing one.
+- `buildDispatchPlans` and `generateUnifiedPrompt` are public on `KanbanProvider` at HEAD and already exercised headless by `resolveSeatPromptOptions`'s shared `_getPromptsConfig` path.
+
+> **Absorbed 2026-08-28:** `feature_plan_20260827144008_batch-allocate-prompt-extension-only-npx-divergence.md` (feature `704248c3`, complexity 7) proposed the *same* edit — replacing `buildPromptForCards` with `generateUnifiedPrompt` in `src/standalone/bootstrap.ts`. Two features owned one change, each declaring a different prerequisite, so whichever shipped first left the other's coder facing a `bootstrap.ts` that no longer matched its plan. That plan was deleted; this one is the single owner. Its three pieces of unique content — the empty-string fallback, `originTerminal` threading, and dispatch-side cap parity — are carried in Proposed Change 6 below, and its ordering constraint is the cross-feature dependency above.
 
 ## Adversarial Synthesis
 
@@ -230,6 +233,22 @@ test('getLocalApiServerPort resolves the standalone-wired server', () => {
 
 (The existing constant in this file is `TASK_VIEWER_SRC` — not `TASKVIEWER_SRC`.)
 
+### 6. Batch-to-team-head parity — the three items absorbed from the deleted duplicate
+
+Routing standalone through `generateUnifiedPrompt` picks up the batch gate and the prompt-side cap, but not the two things that sit outside the prompt builder. Both are required, and the second is the one that turns a partial fix into a regression.
+
+**6a. Guard on empty, not only on throw.** `generateUnifiedPrompt` returns `''` — it does not throw — when the DB is unavailable or no plans resolve. The `try/catch` in change 3 must therefore also test the return value; a bare `catch` ships an empty prompt as a success.
+
+**6b. Thread `originTerminal` so the team-head gate can fire.** `generateUnifiedPrompt`'s batch branch resolves `const isTeamHead = overrides?.isTeamHead ?? await this.isCodingTeamHead(workspaceRoot, role, overrides?.originTerminal)` (`KanbanProvider.ts:6271`). The standalone `triggerAction` arm has the target terminal in hand (`terminal.friendlyName`, and `payload.terminalName` when the caller overrode it) but currently passes neither. Without it the gate is silently false on every standalone batch, `featureMode`/`driveMode`/`batchMode` stay unset, and the delegation gains none of the batch behaviour it was done for — while every test still passes.
+
+**6c. Cap what MOVES, not only what the prompt names.** This is the load-bearing item. The cap exists twice in the extension host, deliberately. `KanbanProvider.ts:6277` is explicitly *"defence in depth… this second cap only covers callers that build a prompt without moving cards — the prompt previews"*. The real one lives in the dispatch caller, `TaskViewerProvider.handleKanbanBatchTrigger:7605-7623`, whose comment states the hazard directly:
+
+> "capping only the prompt would advance the whole selection while telling the lead about a handful of it — the remainder would sit in the coding column, marked in-flight, with no agent ever told to work them."
+
+Standalone never reaches that caller: `bootstrap.ts:1212` bridges `switchboard.triggerBatchAgentFromKanban` to its own `handlePtyVerb('triggerAction', …)`, and `handleKanbanBatchTrigger` is invoked only from `extension.ts:1828`. `grep TEAM_BATCH_PLAN_CAP|selectTeamBatchPlans|isCodingTeamHead src/standalone/bootstrap.ts` returns nothing — standalone applies no gate and no cap on either side.
+
+So the standalone arm must cap its own set **before** the per-record `updateDispatchInfoByPlanFile` loop, on the same predicate the extension uses (`role === 'lead'` AND over cap AND no feature groups AND `isCodingTeamHead`), leaving the remainder untouched and naming it in the response. Shipping changes 1–5 without this makes standalone *worse* than today: the prompt would name 5 plans while the board advanced all 12, orphaning 7 cards as in-flight with no agent assigned. Today both halves are uncapped — wrong, but consistent.
+
 ## Verification Plan
 
 ### Automated Tests
@@ -238,6 +257,10 @@ test('getLocalApiServerPort resolves the standalone-wired server', () => {
 2. `node --test src/test/seat-safeguards-fleet-prompt-path.test.js` — new section 11 passes; nothing else in that file regresses.
 3. `node --test src/test/dispatch-plan-builder.test.js` — the "plan arrays for dispatch must come from buildDispatchPlans" guardrail still holds and now covers standalone.
 4. Run the full suite and diff against the pre-change baseline. Five tests are red at HEAD independently of this work — stash-verify before attributing any failure to this change.
+5. **Empty-return guard (6a):** stub `generateUnifiedPrompt` to return `''` and assert the arm answers `{success:false,error}` — never a success with an empty prompt.
+6. **Team-head gate fires headless (6b):** with a team-headed lead wired in `terminals.groups`, dispatch a batch through the standalone arm and assert the emitted prompt carries `YOUR TEAM:`, a non-zero `API:` port and the `ptySendPrompt` recipe. A negative case with a non-team lead asserts no drive prefix.
+7. **Dispatch-side cap (6c):** dispatch `TEAM_BATCH_PLAN_CAP + 7` loose plans to a team-headed lead on the standalone host. Assert exactly `cap` cards advanced and were stamped with dispatch identity, the remaining 7 kept their original column with `dispatched_at` NULL, the prompt's `subtaskCount` equals the number sent, and the response names the skipped plans. This is the assertion that distinguishes the fix from the regression.
+8. **Host parity on the cap predicate:** drive the extension and standalone paths with an identical plan set and assert the same partition into sent/skipped.
 
 ### Manual / end-to-end
 
