@@ -215,6 +215,23 @@ export async function writeHeadPromptFile(
 
     const workerLines = workers.map(w => `- **${w.friendlyName}** (${w.role || 'worker'})`).join('\n');
 
+    // Section 7 is emitted in one of two shapes, decided HERE rather than left to
+    // the head to infer. The previous single shape stated the reviewer-seat
+    // precondition in a prose sentence and then restated the action as an
+    // ungated numbered step — a head following steps 1→2 advanced the card
+    // whether or not the precondition held, and did it for a lone plan because
+    // the step's placeholder said `<featurePlanId>` while nothing checked that a
+    // feature was in play. Both preconditions are now structural: a head with no
+    // reviewer seat, or no feature, is handed a section that has no advance in it
+    // at all.
+    const hasReviewerSeat = workers.some(w => String(w.role || '').toLowerCase() === 'reviewer');
+    const canAdvanceToReview = hasReviewerSeat && !!featureId;
+    const reviewSeatReason = !hasReviewerSeat && !featureId
+        ? 'Your team has no reviewer seat, and you were given a plan rather than a feature.'
+        : !hasReviewerSeat
+            ? 'Your team has no reviewer seat, so there is no one for an advance to hand the work to.'
+            : 'You were given a plan rather than a feature, and a lone plan is advanced by Mission Control, not by its coding team.';
+
     const content = `# Team Lead Instructions — ${headName}
 
 You lead this external team via HTTP and filesystem interfaces.
@@ -275,20 +292,35 @@ If you are remote (reaching Switchboard through a tunnel):
 Do not rely on worker self-reports alone; inspect the actual git commits.
 
 ## 7. Triggering Review
-Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. Never move a card to a new column yourself: your only card action is the POST /kanban/dispatch call below, and only when your team has a reviewer seat.
+${canAdvanceToReview ? `Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. Your ONLY card action is the POST /kanban/dispatch call below.
 
-When all subtasks of the feature are complete and verified:
+When every subtask of feature \`${featureId}\` is complete and verified:
 1. Commit all changes once, as the team's head — do not commit after each subtask.
-2. Advance to review:
+2. Advance to review — the feature card, and only the feature card:
 \`\`\`json
 POST /kanban/dispatch
 {
-  "plan": "<featurePlanId>",
+  "plan": "${featureId}",
   "targetColumn": "CODE REVIEWED",
   "from": "${headName}"
 }
 \`\`\`
 *(Do not use /kanban/move for review handoff; /kanban/dispatch triggers the reviewer).*
+
+Never send this for an individual subtask. A subtask's column belongs to its
+feature; advancing one on its own strands it in a coding column, where it reads
+to the board and to Mission Control as unrelated loose work.` : `**You do not advance any card.** ${reviewSeatReason}
+
+When your work is complete and verified:
+1. Commit all changes once, as the team's head — do not commit after each subtask.
+2. Report completion (section 4) and stop. Mission Control owns the transition
+   to CODE REVIEWED and will dispatch a reviewer.
+
+Do NOT POST /kanban/dispatch with a \`targetColumn\`, and do NOT POST
+/kanban/move. Advancing a card you were not given a reviewer for puts it in a
+column no one is watching: the board reports it as reviewed, the review never
+happens, and the next "dispatch what is coded" instruction silently picks up
+something else.`}
 
 ## 8. Pull Next Feature (Lead-Paced Pipeline)
 When the reviewer reports the feature has passed review, pull the next staged feature:
