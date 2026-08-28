@@ -1102,7 +1102,7 @@ new Function('exports', 'module', 'require', tsc.transpileModule(TEAM_WIRING_SRC
     compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
 }).outputText)(teamWiringModule.exports, teamWiringModule, teamWiringRequire);
 
-const { wireSpawnedTeam, TERMINALS_LAYOUT_MODES, SEAT_QUEUE_DONE_ORDER_BODY } = teamWiringModule.exports;
+const { wireSpawnedTeam, TERMINALS_LAYOUT_MODES, CONTEXT_AWARE_COMPLETION_ORDER_BODY, EXTERNAL_HEAD_CALLBACK_INSTRUCTION } = teamWiringModule.exports;
 
 /**
  * The panel's own layout whitelist, read out of terminals.js rather than
@@ -1153,7 +1153,7 @@ const CODER_MEMBERS = [
 ];
 const HEAD_PROMPT = 'Advance finished subtasks to CODE REVIEWED. From: {head}.';
 
-test('wireSpawnedTeam: headPrompt supplied => exactly two orders (team + team-head), same teamId, head order has child === "" and {head} substituted', async () => {
+test('wireSpawnedTeam: headPrompt supplied => exactly three orders (team prompt + team-head prompt + team-head completion), same teamId, head order has child === "" and {head} substituted', async () => {
     const db = makeInMemoryDb();
     await wireSpawnedTeam({
         db, headName: HEAD_NAME, children: CODER_CHILDREN,
@@ -1161,36 +1161,43 @@ test('wireSpawnedTeam: headPrompt supplied => exactly two orders (team + team-he
         headPrompt: HEAD_PROMPT,
     });
     const orders = await db.getConfigJson('terminals.standingOrders', []);
-    assert.strictEqual(orders.length, 2,
-        `expected exactly 2 orders (team + team-head), got ${orders.length}`);
+    assert.strictEqual(orders.length, 3,
+        `expected exactly 3 orders (team + team-head prompt + team-head completion), got ${orders.length}`);
 
     const teamOrders = orders.filter(o => o.scope === 'team');
     const headOrders = orders.filter(o => o.scope === 'team-head');
     assert.strictEqual(teamOrders.length, 1, 'exactly one team-scoped order');
-    assert.strictEqual(headOrders.length, 1, 'exactly one team-head-scoped order');
+    assert.strictEqual(headOrders.length, 2, 'exactly two team-head-scoped orders');
+
+    const headPromptOrder = headOrders.find(o => o.instruction.includes(HEAD_NAME));
+    assert.ok(headPromptOrder, 'head prompt order must exist');
+    const headCompletionOrder = headOrders.find(o => o.id.startsWith('context-aware-completion:'));
+    assert.ok(headCompletionOrder, 'head completion order must exist');
 
     // Same teamId on both.
     const teamId = teamOrders[0].teamId;
     assert.ok(teamId, 'team order must have a teamId');
-    assert.strictEqual(headOrders[0].teamId, teamId,
-        'team-head order must have the same teamId as the team order');
+    assert.strictEqual(headPromptOrder.teamId, teamId,
+        'team-head prompt order must have the same teamId as the team order');
+    assert.strictEqual(headCompletionOrder.teamId, teamId,
+        'team-head completion order must have the same teamId as the team order');
 
-    // Head order has child === '' (old-build safety).
-    assert.strictEqual(headOrders[0].child, '',
+    // Head prompt order has child === '' (old-build safety).
+    assert.strictEqual(headPromptOrder.child, '',
         'team-head order must have child === "" for old-build fall-through safety');
 
     // {head} substituted with the head name in the head order's instruction.
-    assert.ok(headOrders[0].instruction.includes(HEAD_NAME),
+    assert.ok(headPromptOrder.instruction.includes(HEAD_NAME),
         `team-head instruction must have {{head}} replaced with "${HEAD_NAME}"`);
-    assert.ok(!headOrders[0].instruction.includes('{head}'),
+    assert.ok(!headPromptOrder.instruction.includes('{head}'),
         'team-head instruction must NOT contain the literal {head} token after substitution');
 
     // parent on the head order is the head name (delivery target).
-    assert.strictEqual(headOrders[0].parent, HEAD_NAME,
+    assert.strictEqual(headPromptOrder.parent, HEAD_NAME,
         'team-head order parent must be the head name');
 });
 
-test('wireSpawnedTeam: headPrompt absent, empty, or whitespace => exactly one order (team), no fabricated default', async () => {
+test('wireSpawnedTeam: headPrompt absent, empty, or whitespace => exactly two orders (team prompt + team-head completion), no fabricated default', async () => {
     for (const [label, headPrompt] of [['absent', undefined], ['empty', ''], ['whitespace', '   \t\n  ']]) {
         const db = makeInMemoryDb();
         await wireSpawnedTeam({
@@ -1199,16 +1206,19 @@ test('wireSpawnedTeam: headPrompt absent, empty, or whitespace => exactly one or
             headPrompt,
         });
         const orders = await db.getConfigJson('terminals.standingOrders', []);
-        assert.strictEqual(orders.length, 1,
-            `headPrompt ${label}: expected exactly 1 order (team only), got ${orders.length}`);
-        assert.strictEqual(orders[0].scope, 'team',
-            `headPrompt ${label}: the single order must be team-scoped`);
-        assert.strictEqual(orders.filter(o => o.scope === 'team-head').length, 0,
-            `headPrompt ${label}: no team-head order must be fabricated`);
+        assert.strictEqual(orders.length, 2,
+            `headPrompt ${label}: expected exactly 2 orders (team prompt + team-head completion), got ${orders.length}`);
+        assert.strictEqual(orders.filter(o => o.scope === 'team').length, 1,
+            `headPrompt ${label}: exactly one team-scoped order`);
+        const headOrders = orders.filter(o => o.scope === 'team-head');
+        assert.strictEqual(headOrders.length, 1,
+            `headPrompt ${label}: exactly one team-head completion order`);
+        assert.ok(headOrders[0].id.startsWith('context-aware-completion:'),
+            `headPrompt ${label}: no team-head prompt order must be fabricated, only completion order installed`);
     }
 });
 
-test('wireSpawnedTeam: re-run with identical args => still exactly two orders, no duplicate', async () => {
+test('wireSpawnedTeam: re-run with identical args => still exactly three orders, no duplicate', async () => {
     const db = makeInMemoryDb();
     const args = {
         db, headName: HEAD_NAME, children: CODER_CHILDREN,
@@ -1218,12 +1228,12 @@ test('wireSpawnedTeam: re-run with identical args => still exactly two orders, n
     await wireSpawnedTeam(args);
     await wireSpawnedTeam(args);
     const orders = await db.getConfigJson('terminals.standingOrders', []);
-    assert.strictEqual(orders.length, 2,
-        `idempotent re-run: expected still exactly 2 orders, got ${orders.length} — duplicate detection failed`);
+    assert.strictEqual(orders.length, 3,
+        `idempotent re-run: expected still exactly 3 orders, got ${orders.length} — duplicate detection failed`);
     assert.strictEqual(orders.filter(o => o.scope === 'team').length, 1,
         'idempotent re-run: exactly one team order');
-    assert.strictEqual(orders.filter(o => o.scope === 'team-head').length, 1,
-        'idempotent re-run: exactly one team-head order');
+    assert.strictEqual(orders.filter(o => o.scope === 'team-head').length, 2,
+        'idempotent re-run: exactly two team-head orders');
 });
 
 test('wireSpawnedTeam: children: [] => zero orders written and { ok: true } returned', async () => {
@@ -1317,20 +1327,33 @@ test('wireSpawnedTeam: unknown keys on stored roster row survive upsert', async 
     assert.deepStrictEqual(groups[0].members, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-coder-3']);
 });
 
-test('wireSpawnedTeam: switching back to head pacing removes the persisted field and seat orders', async () => {
+test('wireSpawnedTeam: installs context-aware completion orders at team and team-head scopes with groupId and headName baked in', async () => {
     const db = makeInMemoryDb();
     const args = { db, headName: HEAD_NAME, children: CODER_CHILDREN };
-    await wireSpawnedTeam({ ...args, pacing: 'seat' });
-    let groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
+    const res = await wireSpawnedTeam(args);
+    assert.strictEqual(res.ok, true);
+    const expectedOrderText = CONTEXT_AWARE_COMPLETION_ORDER_BODY(res.groupId, HEAD_NAME);
     let orders = await db.getConfigJson('terminals.standingOrders', []);
-    assert.strictEqual(groups[0].pacing, 'seat');
-    assert.strictEqual(orders.filter(o => o.instruction === SEAT_QUEUE_DONE_ORDER_BODY).length, 2);
+    const teamOrder = orders.find(o => o.scope === 'team' && o.teamId === res.groupId);
+    const headOrder = orders.find(o => o.scope === 'team-head' && o.id === `context-aware-completion:${res.groupId}:team-head`);
+    assert.ok(teamOrder, 'team order must be installed');
+    assert.ok(teamOrder.instruction.includes(expectedOrderText), 'team order must contain context-aware completion text');
+    assert.ok(headOrder, 'team-head completion order must be installed');
+    assert.strictEqual(headOrder.instruction, expectedOrderText, 'team-head completion order must match expected body');
+});
 
-    await wireSpawnedTeam(args);
-    groups = await db.getConfigJson('switchboard.prompts.terminals.groups', []);
-    orders = await db.getConfigJson('terminals.standingOrders', []);
-    assert.ok(!Object.prototype.hasOwnProperty.call(groups[0], 'pacing'));
-    assert.strictEqual(orders.filter(o => o.instruction === SEAT_QUEUE_DONE_ORDER_BODY).length, 0);
+test('wireSpawnedTeam: external-headed teams keep EXTERNAL_HEAD_CALLBACK_INSTRUCTION and do not install context-aware order', async () => {
+    const db = makeInMemoryDb();
+    const args = { db, headName: HEAD_NAME, children: CODER_CHILDREN, externalHead: true };
+    const res = await wireSpawnedTeam(args);
+    assert.strictEqual(res.ok, true);
+    const expectedExternalText = EXTERNAL_HEAD_CALLBACK_INSTRUCTION.replace(/\{teamId\}/g, res.groupId).replace(/\{child\}/g, HEAD_NAME);
+    let orders = await db.getConfigJson('terminals.standingOrders', []);
+    const teamOrder = orders.find(o => o.scope === 'team' && o.teamId === res.groupId);
+    assert.ok(teamOrder, 'team order must be installed for external-headed team');
+    assert.ok(teamOrder.instruction.includes(expectedExternalText), 'team order must contain EXTERNAL_HEAD_CALLBACK_INSTRUCTION');
+    const headOrder = orders.find(o => o.scope === 'team-head' && o.id === `context-aware-completion:${res.groupId}:team-head`);
+    assert.strictEqual(headOrder, undefined, 'team-head completion order must not be installed for external heads');
 });
 
 test('wireSpawnedTeam: null/non-object stored entry with matching id is replaced', async () => {

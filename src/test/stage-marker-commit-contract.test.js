@@ -51,8 +51,7 @@ const {
     PRE_REWRITE_CALLBACK_INSTRUCTION,
     STANDING_ORDERS_PREMIGRATION_BAK_KEY,
     TEAM_CODER_QUEUE_DONE_INSTRUCTION,
-    AGENT_GROUP_CALLBACK_INSTRUCTION,
-    SEAT_QUEUE_DONE_ORDER_BODY
+    AGENT_GROUP_CALLBACK_INSTRUCTION
 } = require('../../out/services/teamWiring');
 const { resolvePreset } = require('../../out/services/linkPresets');
 const { STANDING_ORDERS_CONFIG_KEY } = require('../../out/services/standingOrders');

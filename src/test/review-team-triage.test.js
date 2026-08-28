@@ -24,8 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const {
     SEEDED_AGENT_GROUP,
-    TEAM_QUEUE_DONE_ORDER_BODY,
-    REVIEW_TEAM_QUEUE_DONE_ORDER_BODY,
+    CONTEXT_AWARE_COMPLETION_ORDER_BODY,
     NEW_REVIEW_TEAM_HEAD_PROMPT,
     migrateAgentGroups,
 } = require('../../out/services/teamWiring');
@@ -68,27 +67,13 @@ async function runTests() {
         assert.ok(/Never move a card backwards/.test(p), 'the card-movement rule is present');
     });
 
-    // 2. The review-team order body exists AND is installed. A variant body that
-    //    no call site selects is indistinguishable from no variant at all.
-    test('the review-team queue-done order body exists and its call site selects it', () => {
-        const standardOrder = TEAM_QUEUE_DONE_ORDER_BODY('team-coding');
-        assert.ok(standardOrder.includes('context is preserved for review'),
-            'the standard body preserves context for review');
-        assert.ok(standardOrder.includes('POST /kanban/task/complete'),
-            'the standard body names the acceptance POST');
-
-        const reviewOrder = REVIEW_TEAM_QUEUE_DONE_ORDER_BODY('team-review');
-        assert.ok(reviewOrder.includes('relay your completion report to your team lead and dispatch'),
-            'the review-team body relays without the clear fragment');
-        assert.notStrictEqual(reviewOrder, standardOrder, 'the two bodies must differ');
-
-        // The wiring half. applyTeamQueueOrders has exactly one caller; if it
-        // stops passing isReviewTeam, the variant is defined, tested and never
-        // installed — which is how it shipped the first time.
-        const server = fs.readFileSync(
-            path.join(REPO_ROOT, 'src', 'services', 'LocalApiServer.ts'), 'utf8');
-        assert.ok(/applyTeamQueueOrders\(\{[\s\S]{0,400}?isReviewTeam:/.test(server),
-            'the applyTeamQueueOrders call site must pass isReviewTeam, or the review body is never installed');
+    // 2. The context-aware completion order body exists and routes completions.
+    test('the context-aware completion order body exists and routes completions', () => {
+        const order = CONTEXT_AWARE_COMPLETION_ORDER_BODY('team-review', 'lead-1');
+        assert.ok(order.includes('POST /kanban/queue/done'),
+            'the context-aware order routes to /kanban/queue/done');
+        assert.ok(order.includes('/terminals/teams/team-review/queue/done'),
+            'the context-aware order routes to team queue/done for prompt items');
     });
 
     // 3. A two-plan assignment is one batched dispatch, not two.

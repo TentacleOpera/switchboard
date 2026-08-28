@@ -19,8 +19,8 @@ Both write the same fact - completed_at - which is the single thing that release
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Context-Aware Completion Reporting for Teams](../plans/context-aware-completion-reporting.md) — **PLAN REVIEWED** — ID: 2153aaf2-2fc0-41a3-a7c4-92fa27775976
-- [ ] [The team panel releases what the lead did not post](../plans/the-team-panel-releases-what-the-lead-did-not-post.md) — **PLAN REVIEWED** — ID: ba276bc5-fe6b-43df-9d66-e83b1d68f499
+- [ ] [Context-Aware Completion Reporting for Teams](../plans/context-aware-completion-reporting.md) — **CODER CODED** — ID: 2153aaf2-2fc0-41a3-a7c4-92fa27775976
+- [ ] [The team panel releases what the lead did not post](../plans/the-team-panel-releases-what-the-lead-did-not-post.md) — **CODER CODED** — ID: ba276bc5-fe6b-43df-9d66-e83b1d68f499
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -145,27 +145,37 @@ export function readTeamPacing(group: any): 'head' | 'seat' {
 }
 
 /**
- * The standing-order body installed on every seat of a seat-paced team so each
- * seat reports done itself — there is no head to report to. Mirrored at `team`
- * and `team-head` scope (head seat included) by `applySeatPacingOrders`. The
- * body is the contract subtask 2's plan specifies (step 1); subtask 3 owns the
- * install/removal trigger, subtask 2 owns the `outcome: 'failed'` ladder branch
- * inside the `queue/done` critical section.
- *
- * References `POST /kanban/queue/done` (subtask 1's endpoint). Installing this
- * order before subtask 1 lands leaves seats calling a 404 — an operator who
- * toggles seat pacing before the feature is ready gets a degraded run, not a
- * broken one: the watch (subtask 3) catches a seat that never reports.
+ * Context-aware completion standing order installed on every seat of a spawned team.
+ * Instructs the coder to inspect the dispatch source and route its completion:
+ *  1. Dispatched from kanban STAGING column (in a coding column) -> POST /kanban/queue/done
+ *  2. Dispatched from file-based queue (no planId) -> POST /terminals/teams/<groupId>/queue/done
+ *  3. Direct head dispatch / fallback -> ptySendPrompt to head
+ * Feature completion check runs before all paths.
  */
-export const SEAT_QUEUE_DONE_ORDER_BODY =
-    'When you finish the card you were dispatched, POST /kanban/queue/done with '
-    + '{"from":"<your seat name>"} against the port in .switchboard/api-server-port.txt. '
-    + 'Do not wait to be asked; there is no head to report to. '
-    + 'If you cannot complete it, call the same endpoint with {"from":"<your seat name>",'
-    + '"outcome":"failed"} and a one-line reason. Do not attempt work above your tier and '
-    + 'do not report success you cannot evidence. '
-    + 'A response of {"dispatched":null,"reason":"queue empty"} means the run is over — '
-    + 'say so and stop. Do not call POST /kanban/queue/next, and do not move cards.';
+export function CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId: string, headName: string): string {
+    return 'When you finish a task, route your completion report based on where the work came from:\n\n'
+        + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
+        + '   against the port in .switchboard/api-server-port.txt.\n'
+        + '   - If the response shows kanbanColumn is "LEAD CODED", "CODER CODED", or "INTERN CODED",\n'
+        + '     POST /kanban/queue/done with {"from":"<your terminal name>"}.\n'
+        + '     The system will clear your terminal and dispatch the next staged card.\n'
+        + '     A response of {"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
+        + '     If you cannot complete it, POST /kanban/queue/done with\n'
+        + '     {"from":"<your terminal name>","outcome":"failed"} and a one-line reason.\n'
+        + '   - If the response shows any other column, report to your head (step 3).\n\n'
+        + '2. If you do not have a PLAN_ID (ad-hoc prompt, file-based queue item),\n'
+        + '   POST /terminals/teams/' + groupId + '/queue/done with {"from":"<your terminal name>"}.\n'
+        + '   The system will relay your report to your team lead, clear your terminal,\n'
+        + '   and dispatch the next queued item.\n'
+        + '   If the POST fails, report to your head directly (step 3).\n\n'
+        + '3. Fallback: report to your head ' + headName + ' via POST /terminals/verb/ptySendPrompt with\n'
+        + '   {"name":"' + headName + '","data":"<your report>","clearBeforePrompt":false} — naming what\n'
+        + '   you changed and what to review. Do not wait to be asked.\n\n'
+        + 'Before reporting, if you have a featureId, check GET /kanban/plans?featureId=<your feature id> —\n'
+        + 'if all subtasks are in LEAD CODED, POST /kanban/dispatch with\n'
+        + '{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED","from":"<your terminal name>"}\n'
+        + 'instead of any of the above. The feature is complete — hand it to review.';
+}
 
 /**
  * The queue/done instruction appended to the team-scoped standing order for
@@ -174,10 +184,6 @@ export const SEAT_QUEUE_DONE_ORDER_BODY =
  * This is the explicit completion signal that replaces the unreliable mtime-
  * based file-watcher detection. The endpoint clears the card's activity light
  * and fires the turn-end notification to the lead.
- *
- * Mirrors SEAT_QUEUE_DONE_ORDER_BODY but uses <your terminal name> (the coder
- * knows its own terminal name) and adds the "ALL parts" qualifier to prevent
- * premature posts on multi-part plans.
  *
  * **Two copies only: this one and the `terminals.js` mirror** (which cannot
  * import). `stage-marker-commit-contract.test.js` gates both halves.
@@ -193,9 +199,7 @@ export const TEAM_CODER_QUEUE_DONE_INSTRUCTION =
 /**
  * The standing-order body installed at `global` scope so a standalone agent
  * (not on any team) reports done itself — there is no team head to report to
- * and no team-scoped order to carry the instruction. Mirrors
- * {@link SEAT_QUEUE_DONE_ORDER_BODY} but with `<your terminal name>` instead of
- * `<your seat name>`, since a standalone agent has no seat name.
+ * and no team-scoped order to carry the instruction.
  *
  * Installed by {@link installGlobalQueueDoneOrder} on the first non-team queue
  * dispatch (the fallback path in `_runQueuePop`). `global` scope applies to ALL
@@ -245,257 +249,6 @@ export async function installGlobalQueueDoneOrder(db: any): Promise<void> {
         return [...orders, { ...order, id: GLOBAL_QUEUE_ORDER_ID }];
     });
 }
-
-/**
- * Deterministic id prefix for the seat-paced queue/done orders, so they can be
- * found and removed without scanning instruction text. One order per scope
- * (`team`, `team-head`) per team — the prefix + teamId + scope is unique.
- */
-const SEAT_QUEUE_ORDER_ID_PREFIX = 'seat-queue-done:';
-
-/**
- * Install or remove the seat-paced `queue/done` standing orders for a team.
- * Seat pacing installs the {@link SEAT_QUEUE_DONE_ORDER_BODY} at BOTH `team`
- * (members, head excluded by `selectOrders`) and `team-head` (head seat) scope
- * so every seat — head seat included — is told to report done itself. Head
- * pacing removes any previously-installed seat orders for this team in the same
- * mutation, so a stale order never reaches a live agent (the known failure mode
- * `a-stale-standing-order-can-still-reach-a-live-agent.md` exists to prevent).
- *
- * Idempotent: install skips an order that already exists; remove is a no-op when
- * none are present. Serialized through `mutateStandingOrders`' own chain.
- *
- * `roster` is the team's full seat list (head + members) — used only to set the
- * `parent` field so `selectOrders`' head-exclusion resolves correctly. The head
- * name is `headName`; members are the non-head seats.
- */
-export async function applySeatPacingOrders(opts: {
-    db: any;
-    groupId: string;
-    headName: string;
-    roster: string[];
-    pacing: 'head' | 'seat';
-}): Promise<void> {
-    const { db, groupId, headName, roster, pacing } = opts;
-    if (!db || !groupId) return;
-    const members = roster.filter(n => typeof n === 'string' && n.length > 0 && n !== headName);
-    await mutateStandingOrders(db, async (orders) => {
-        const next = orders.filter((o: StandingOrder) =>
-            !(typeof o.id === 'string' && o.id.startsWith(SEAT_QUEUE_ORDER_ID_PREFIX + groupId + ':'))
-        );
-        if (pacing !== 'seat') {
-            // Head pacing: seat orders removed above. Nothing to install.
-            return next;
-        }
-        // Seat pacing: install team + team-head orders. The team order's
-        // `parent` is the head name so selectOrders excludes the head from the
-        // member delivery (same convention as the team-prompt order). The
-        // team-head order's `parent` is also the head name so it delivers to
-        // the head seat. Both are keyed on (scope, teamId) for idempotency.
-        const teamId = `${SEAT_QUEUE_ORDER_ID_PREFIX}${groupId}:team`;
-        const headId = `${SEAT_QUEUE_ORDER_ID_PREFIX}${groupId}:team-head`;
-        const hasTeam = next.some(o => o.id === teamId);
-        const hasHead = next.some(o => o.id === headId);
-        if (!hasTeam) {
-            next.push(makeStandingOrder(
-                headName, '', SEAT_QUEUE_DONE_ORDER_BODY, 'team', groupId,
-            ));
-            // makeStandingOrder mints a random id; overwrite with the
-            // deterministic one so a re-run removes rather than duplicates.
-            next[next.length - 1] = { ...next[next.length - 1], id: teamId };
-        }
-        if (!hasHead) {
-            next.push(makeStandingOrder(
-                headName, '', SEAT_QUEUE_DONE_ORDER_BODY, 'team-head', groupId,
-            ));
-            next[next.length - 1] = { ...next[next.length - 1], id: headId };
-        }
-        // `members` is unused for delivery (selectOrders resolves membership
-        // from the registered group), but referenced here so the parameter is
-        // not dropped — a future editor who needs per-member scoping has the
-        // roster to hand without re-deriving it.
-        void members;
-        return next;
-    });
-}
-
-/**
- * The standing-order body installed on every seat of a team whose work queue is
- * in auto (completion-driven) mode. Replaces the default "report to head"
- * callback: instead of the coder sending its completion directly to the lead's
- * terminal, it POSTs `queue/done`, which relays the report to the lead, clears
- * the finishing terminal, and dispatches the next queued item. The lead stays
- * in the loop (the endpoint is a relay, not a replacement).
- *
- * `groupId` is baked into the text at install time — the coder does not need to
- * discover its team; the order tells it the endpoint directly. Mirrors
- * {@link SEAT_QUEUE_DONE_ORDER_BODY} (the kanban STAGING column's seat-paced
- * equivalent) but targets the file-based team queue
- * (`POST /terminals/teams/<groupId>/queue/done`), not the kanban column.
- *
- * Completion is asserted by the lead via POST /kanban/task/complete — a coder
- * does not infer it from board position. The coder's job is to report its own
- * subtask done via queue/done; the lead declares the feature complete.
- */
-export function TEAM_QUEUE_DONE_ORDER_BODY(groupId: string): string {
-    return 'When you finish the task you were dispatched, POST /terminals/teams/'
-        + `${groupId}/queue/done with {"from":"<your terminal name>"} against the port in `
-        + '.switchboard/api-server-port.txt. '
-        + 'The system will relay your completion report to your team lead and dispatch '
-        + 'the next queued item to the lead. Your terminal context is preserved for review '
-        + 'and fix requests; your lead clears it when it posts completion for this subtask with '
-        + 'POST /kanban/task/complete. '
-        + 'If there are no more items, your terminal stays as-is and the team is done with queued work. '
-        + 'If the POST fails, report to your head directly via ptySendPrompt as a fallback.';
-}
-
-/**
- * Variant of {@link TEAM_QUEUE_DONE_ORDER_BODY} specifically for Review teams.
- * Omits the "clear your terminal" fragment so reviewers retain their review
- * context between the judging turn and the apportioned fix turn.
- *
- * Completion is asserted, never inferred — see {@link TEAM_QUEUE_DONE_ORDER_BODY}.
- * The board-position clause that used to live here is removed for the same
- * reason: a seat must not infer feature completion from "all subtasks in LEAD
- * CODED". The reviewer reports its turn done and requests the next item; the
- * lead declares the feature complete via POST /kanban/task/complete.
- */
-export function REVIEW_TEAM_QUEUE_DONE_ORDER_BODY(groupId: string): string {
-    return 'When you finish the task you were dispatched, POST /terminals/teams/'
-        + `${groupId}/queue/done with {"from":"<your terminal name>"} against the port in `
-        + '.switchboard/api-server-port.txt. '
-        + 'The system will relay your completion report to your team lead and dispatch '
-        + 'the next queued item to the lead. '
-        + 'If there are no more items, your terminal stays as-is and the team is done with queued work. '
-        + 'If the POST fails, report to your head directly via ptySendPrompt as a fallback. '
-        + 'Do not infer feature completion from board position — handing the feature to review is '
-        + 'your lead\'s call, not yours. POST queue/done and let the lead decide.';
-}
-
-/**
- * The `team-head` half of the team-queue standing order — the lead's own.
- *
- * {@link TEAM_QUEUE_DONE_ORDER_BODY} was previously installed at BOTH scopes,
- * which handed the lead text written for a coder. That body names
- * `/kanban/task/complete` only in the THIRD person ("your lead clears it when
- * it posts completion") and promises the reader its report will be relayed "to
- * your team lead" — the head IS the lead. A head reading it is told what
- * somebody else owes and never what it owes itself, while the only first-person
- * instruction it carries is `queue/done`.
- *
- * States the lead's two posts instead: `task/complete` per accepted subtask,
- * then `queue/done` to take the next queued item. Says "seat", not "coder", so
- * it reads correctly for a review team's head as well.
- *
- * Wording is deliberately in step with `KanbanProvider._buildDrivePrefix`'s
- * CLOSE OUT clause and `LocalApiServer`'s `composeAcceptanceInstruction` —
- * three surfaces, one contract. Commit policy is NOT restated here: the head
- * prompt preset owns it, and a per-subtask commit rule stated here would
- * contradict "a team commits once, as its head".
- */
-export function TEAM_HEAD_QUEUE_DONE_ORDER_BODY(groupId: string): string {
-    return 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
-        + 'with it, POST /kanban/task/complete with {"from":"<your terminal name>","planId":'
-        + '"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"} against the port in '
-        + '.switchboard/api-server-port.txt. Post per subtask, with that subtask\'s planId — never '
-        + 'the feature\'s. Accepting and rejecting are not two different endings: you reject by '
-        + 'sending a fix round first, then you post when the subtask is done. Until you post, that '
-        + 'seat is not cleared and you cannot be handed the next subtask. '
-        + 'When every subtask of the item you were dispatched is closed out, POST /terminals/teams/'
-        + `${groupId}/queue/done with {"from":"<your terminal name>"} against the same port to take `
-        + 'the next queued item. You are the lead — there is nobody to relay your report to. '
-        + 'If there are no more items, the team is done with queued work.';
-}
-
-/**
- * Deterministic id prefix for the team-queue completion-driven orders, so they
- * can be found and removed without scanning instruction text. One order per
- * scope (`team`, `team-head`) per team — the prefix + groupId + scope is unique.
- */
-const TEAM_QUEUE_ORDER_ID_PREFIX = 'team-queue-done:';
-
-/**
- * Install or remove the completion-driven `queue/done` standing orders for a
- * team. Auto mode installs {@link TEAM_QUEUE_DONE_ORDER_BODY} at BOTH `team`
- * (members, head excluded by `selectOrders`) and `team-head` (head seat) scope
- * so every seat — head seat included — is told to POST `queue/done` on
- * completion. Manual mode removes any previously-installed team-queue orders
- * for this team in the same mutation, so a stale order never reaches a live
- * agent (the known failure mode
- * `a-stale-standing-order-can-still-reach-a-live-agent.md` exists to prevent).
- *
- * Idempotent: install skips an order that already exists; remove is a no-op
- * when none are present. Serialized through `mutateStandingOrders`' own chain.
- *
- * Mirrors {@link applySeatPacingOrders} (the kanban STAGING column's
- * seat-paced equivalent). `roster` is the team's full seat list (head +
- * members) — referenced so a future editor who needs per-member scoping has the
- * roster to hand without re-deriving it (delivery resolves membership from the
- * registered group, same as seat pacing).
- */
-export async function applyTeamQueueOrders(opts: {
-    db: any;
-    groupId: string;
-    headName: string;
-    roster: string[];
-    enabled: boolean;
-    isReviewTeam?: boolean;
-}): Promise<void> {
-    const { db, groupId, headName, roster, enabled, isReviewTeam } = opts;
-    if (!db || !groupId) return;
-    const members = roster.filter(n => typeof n === 'string' && n.length > 0 && n !== headName);
-    const body = isReviewTeam ? REVIEW_TEAM_QUEUE_DONE_ORDER_BODY(groupId) : TEAM_QUEUE_DONE_ORDER_BODY(groupId);
-    // The head gets its OWN body, not the member text. Both team types' heads
-    // owe the same two posts, so there is one head body rather than a review
-    // variant.
-    const headBody = TEAM_HEAD_QUEUE_DONE_ORDER_BODY(groupId);
-    await mutateStandingOrders(db, async (orders) => {
-        const next = orders.filter((o: StandingOrder) =>
-            !(typeof o.id === 'string' && o.id.startsWith(TEAM_QUEUE_ORDER_ID_PREFIX + groupId + ':'))
-        );
-        if (!enabled) {
-            // Manual mode: team-queue orders removed above. Nothing to install.
-            return next;
-        }
-        // Auto mode: install team + team-head orders. The team order's
-        // `parent` is the head name so selectOrders excludes the head from the
-        // member delivery (same convention as the team-prompt order). The
-        // team-head order's `parent` is also the head name so it delivers to
-        // the head seat. Both are keyed on (scope, teamId) for idempotency.
-        const teamId = `${TEAM_QUEUE_ORDER_ID_PREFIX}${groupId}:team`;
-        const headId = `${TEAM_QUEUE_ORDER_ID_PREFIX}${groupId}:team-head`;
-        const hasTeam = next.some(o => o.id === teamId);
-        const hasHead = next.some(o => o.id === headId);
-        if (!hasTeam) {
-            next.push(makeStandingOrder(
-                headName, '', body, 'team', groupId,
-            ));
-            // makeStandingOrder mints a random id; overwrite with the
-            // deterministic one so a re-run removes rather than duplicates.
-            next[next.length - 1] = { ...next[next.length - 1], id: teamId };
-        }
-        if (!hasHead) {
-            next.push(makeStandingOrder(
-                headName, '', headBody, 'team-head', groupId,
-            ));
-            next[next.length - 1] = { ...next[next.length - 1], id: headId };
-        }
-        // `members` is unused for delivery (selectOrders resolves membership
-        // from the registered group), but referenced here so the parameter is
-        // not dropped — a future editor who needs per-member scoping has the
-        // roster to hand without re-deriving it.
-        void members;
-        return next;
-    });
-}
-
-/**
- * Deterministic id prefix a webview / API caller can scan for to determine
- * whether a team's completion-driven order is installed (the auto/manual
- * toggle's initial state). Exposed so the webview can derive the toggle from
- * the actual order state rather than a persisted hint that can drift.
- */
-export const TEAM_QUEUE_ORDER_ID_PREFIX_EXPORT = TEAM_QUEUE_ORDER_ID_PREFIX;
 
 /** Config key the terminals webview owns for `terminals.groups`. */
 export const TERMINALS_GROUPS_KEY = 'switchboard.prompts.terminals.groups';
@@ -1444,9 +1197,7 @@ export interface WireSpawnedTeamOptions {
      * watch (subtask 3), and `Run queue`'s status text read it through
      * {@link readTeamPacing}. Absent behaves identically to `'head'` — the
      * compatibility contract for the whole install base. When `'seat'`,
-     * {@link applySeatPacingOrders} installs the seat `queue/done` orders at
-     * spawn; when `'head'` (or absent) any prior seat orders are removed in the
-     * same mutation. Owned by subtask 3; the caller copies it from the team
+     * `_runQueuePop` skips in-flight checks. Owned by subtask 3; the caller copies it from the team
      * template (`terminals.agentGroups`).
      */
     pacing?: 'head' | 'seat';
@@ -1538,11 +1289,13 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     // + GIT_SAFETY_DIRECTIVE (imported, not copied).
     const callbackTemplate = opts.externalHead
         ? EXTERNAL_HEAD_CALLBACK_INSTRUCTION.replace(/\{teamId\}/g, groupId)
-        : AGENT_GROUP_CALLBACK_INSTRUCTION;
+        : CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId, headName);
 
     const teamPromptInstruction = prompt
         ? prompt.replace(/\{child\}/g, headName).replace(/\{teamId\}/g, groupId)
-        : `${callbackTemplate.replace(/\{child\}/g, headName)}\n${GIT_SAFETY_DIRECTIVE}\n${TEAM_CODER_QUEUE_DONE_INSTRUCTION}`;
+        : (opts.externalHead
+            ? `${callbackTemplate.replace(/\{child\}/g, headName)}\n${GIT_SAFETY_DIRECTIVE}\n${TEAM_CODER_QUEUE_DONE_INSTRUCTION}`
+            : `${callbackTemplate}\n${GIT_SAFETY_DIRECTIVE}`);
 
     // ── Resolve pair-scoped relationships per child ───────────────────
     // Walk the member definitions and children together — children are in the
@@ -1660,7 +1413,7 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
             const teamExists = next.some((o: StandingOrder) =>
                 o.scope === 'team' && o.teamId === groupId);
             if (!teamExists) {
-                next.push(makeStandingOrder(
+                const teamOrder = makeStandingOrder(
                     headName,           // parent = head (for exclusion)
                     '',                 // child = empty (team-scoped, no child)
                     teamPromptInstruction,
@@ -1668,7 +1421,8 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                     groupId,
                     undefined,          // role
                     teamDefId,          // definitionId
-                ));
+                );
+                next.push({ ...teamOrder, id: `context-aware-completion:${groupId}:team` });
             }
 
             // Head-facing order (skipped for external heads — no head terminal).
@@ -1798,19 +1552,30 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
         return { ok: false, error: `Group registration failed: ${err?.message || err}` };
     }
 
-    // ── Seat-paced queue/done orders (subtask 3) ───────────────────────
-    // Install when pacing is 'seat', remove when 'head'/absent — in the same
-    // wiring pass so a re-spawn never leaves a stale order reaching a live
-    // agent. Runs AFTER the group write so the roster the orders' `parent`
-    // (head name) resolves against is the persisted one. A failure here leaves
-    // a missing/extra order, not a broken team, so it must not fail the wiring.
-    try {
-        await applySeatPacingOrders({
-            db, groupId, headName, roster: groupMembers,
-            pacing: readTeamPacing({ pacing: opts.pacing }),
-        });
-    } catch (orderErr: any) {
-        console.warn(`[teamWiring] applySeatPacingOrders failed for team ${groupId}: ${orderErr?.message || orderErr}`);
+    // ── Context-aware completion order for head seat (team-head scope) ─────
+    // Replaces applySeatPacingOrders/applyTeamQueueOrders. Installed in a separate
+    // mutation so it does not conflict with the head prompt's (scope, teamId)
+    // check in the main mutation. Skipped for external heads.
+    if (!opts.externalHead) {
+        try {
+            const headCompletionOrderId = `context-aware-completion:${groupId}:team-head`;
+            const headCompletionOrderText = CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId, headName);
+            await mutateStandingOrders(db, async (orders) => {
+                if (orders.some(o => o.id === headCompletionOrderId)) {
+                    return orders;
+                }
+                const headOrder = makeStandingOrder(
+                    headName,
+                    '',
+                    headCompletionOrderText,
+                    'team-head',
+                    groupId,
+                );
+                return [...orders, { ...headOrder, id: headCompletionOrderId }];
+            });
+        } catch (orderErr: any) {
+            console.warn(`[teamWiring] context-aware completion order install failed for team-head ${groupId}: ${orderErr?.message || orderErr}`);
+        }
     }
 
     // Head-prompt regeneration (external heads only). Runs AFTER the group write
@@ -1942,28 +1707,6 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
                 drop.add(o.id);
                 touched = true;
                 continue;
-            }
-        }
-
-        // A team's head row still carrying the MEMBER body. applyTeamQueueOrders
-        // runs only on the auto/manual toggle, so a team already in auto mode
-        // would keep the coder-facing text until an operator happened to toggle
-        // it. Rewrite on read instead: loadEffectiveStandingOrders persists this
-        // once (after backupOnce) and delivery uses the result, so every install
-        // heals on its next prompt with no operator action.
-        if (scope === 'team-head' && typeof o.id === 'string'
-            && o.id.startsWith(TEAM_QUEUE_ORDER_ID_PREFIX)) {
-            const sep = o.id.lastIndexOf(':');
-            const groupId = sep > TEAM_QUEUE_ORDER_ID_PREFIX.length - 1
-                ? o.id.slice(TEAM_QUEUE_ORDER_ID_PREFIX.length, sep)
-                : '';
-            // Both member variants are recognised: `isReviewTeam` is not passed
-            // at the shipped call site today, but an older build that passed it
-            // would have installed the review body on a head row.
-            if (groupId && (o.instruction === TEAM_QUEUE_DONE_ORDER_BODY(groupId)
-                || o.instruction === REVIEW_TEAM_QUEUE_DONE_ORDER_BODY(groupId))) {
-                rewrite.set(o.id, TEAM_HEAD_QUEUE_DONE_ORDER_BODY(groupId));
-                touched = true;
             }
         }
     }

@@ -35,7 +35,7 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, applySeatPacingOrders, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead } from './teamWiring';
 import { mutateStandingOrders, makeStandingOrder, validateInstruction, STANDING_ORDERS_CONFIG_KEY, type StandingOrder, type StandingOrderScope } from './standingOrders';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
@@ -5019,8 +5019,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * The pacing field is written to the registered group as `'seat'` or
      * removed (absent = head) — never written as `'head'`, so the install-base
      * compatibility contract (absent reads as head) holds on the registered row
-     * too. The seat-order install/removal runs per live group through
-     * {@link applySeatPacingOrders}.
+     * too.
      */
     private async _propagatePacingToLiveGroups(workspaceRoot: string, template: any): Promise<void> {
         if (!template || typeof template !== 'object' || !template.id) return;
@@ -5048,19 +5047,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     return pacing === 'seat' ? { ...rest, pacing: 'seat' } : rest;
                 });
             });
-            // Re-run seat-order install/removal for each matched live group.
-            for (const g of matches) {
-                const roster: string[] = Array.isArray(g.order) && g.order.length
-                    ? g.order.filter((n: any) => typeof n === 'string' && n.length > 0)
-                    : (Array.isArray(g.members) ? g.members.filter((n: any) => typeof n === 'string' && n.length > 0) : []);
-                try {
-                    await applySeatPacingOrders({
-                        db, groupId: g.id, headName: g.name, roster, pacing,
-                    });
-                } catch (orderErr) {
-                    console.warn(`[KanbanProvider] applySeatPacingOrders failed for live group ${g.id}: ${orderErr instanceof Error ? orderErr.message : String(orderErr)}`);
-                }
-            }
         } catch (propErr) {
             console.warn(`[KanbanProvider] _propagatePacingToLiveGroups failed for template ${template.id}: ${propErr instanceof Error ? propErr.message : String(propErr)}`);
         }

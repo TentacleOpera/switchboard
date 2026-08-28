@@ -256,6 +256,7 @@
     const terminalsMap = new Map();
     let fleetList = [];
     let parentsList = [];
+    let heldUnposted = {};
 
     const listEl = document.getElementById('terminals-list');
     const mainEl = document.getElementById('terminals-main');
@@ -1452,12 +1453,15 @@
             // paint the transient "Connecting…" state before the first fetch.
             // The group record (for the title and header) resolves from
             // loadLayoutSettings' read of terminals.groups.
-            Promise.all([loadLayoutSettings(), fetchAgentNames(), loadQueueModeFromOrders()]).then(() => {
+            Promise.all([loadLayoutSettings(), fetchAgentNames()]).then(() => {
                 const group = getScopedTeamGroup();
                 if (group) {
                     document.title = group.shortName || group.name || 'Team';
                     // Lock to the team's group so seatActiveGroupPage works.
                     activeGroupId = group.id;
+                    _queueMode = group.queueMode === 'auto' ? 'auto' : 'manual';
+                } else {
+                    _queueMode = 'manual';
                 }
                 syncLayoutPickerUI();
                 checkTeamNotFound();
@@ -2203,6 +2207,7 @@
                     hasFetchedList = true;
                     fleetList = data.terminals;
                     parentsList = data.parents || [];
+                    heldUnposted = (data.heldUnposted && typeof data.heldUnposted === 'object') ? data.heldUnposted : {};
                     // Self-heal for a custom agent added mid-session: only re-reads when
                     // a role turns up that the cached label map has never seen, so the
                     // common terminalsChanged refresh costs nothing extra.
@@ -4092,11 +4097,8 @@
         renderSidebarList();
     }
 
-    /** Install (auto) or remove (manual) the completion-driven standing order
-     *  via the queue/mode endpoint, then re-render so the toggle reflects the
-     *  actual order state. The mode is no longer a persisted UI hint — it is a
-     *  standing-order install/remove action, derived from the order state on
-     *  team-scoped init (loadQueueModeFromOrders). */
+    /** Set the team queue auto/manual mode via the queue/mode endpoint.
+     *  The queueMode is stored on the group config in terminals.groups. */
     async function setQueueMode(mode) {
         if (!teamScopeId) { return; }
         try {
@@ -4109,30 +4111,17 @@
             const data = await res.json().catch(() => null);
             if (!res.ok || !data?.success) {
                 showPaneToast(data?.error || `Could not switch queue to ${mode} mode`);
+            } else {
+                _queueMode = mode;
+                const group = getScopedTeamGroup();
+                if (group) {
+                    group.queueMode = mode;
+                }
             }
         } catch (err) {
             showPaneToast(`Could not switch queue mode: ${err.message || String(err)}`);
         }
-        await loadQueueModeFromOrders();
         renderSidebarList();
-    }
-
-    /** Derive the queue mode from the actual standing-order state (whether the
-     *  completion-driven `team-queue-done:<groupId>:` order is installed),
-     *  queried from the standing-orders API. Called during team-scoped init so
-     *  the toggle reflects the real order state rather than a persisted hint
-     *  that can drift. The id prefix is the stable contract
-     *  `TEAM_QUEUE_ORDER_ID_PREFIX` in teamWiring.ts (`team-queue-done:`). */
-    async function loadQueueModeFromOrders() {
-        if (!teamScopeId) { return; }
-        try {
-            const res = await fetch('/terminals/standing-orders', { credentials: 'same-origin' });
-            if (!res.ok) { return; }
-            const data = await res.json();
-            const orders = (data && Array.isArray(data.orders)) ? data.orders : [];
-            const prefix = `team-queue-done:${teamScopeId}:`;
-            _queueMode = orders.some(o => o && typeof o.id === 'string' && o.id.startsWith(prefix)) ? 'auto' : 'manual';
-        } catch { /* default to manual */ }
     }
 
     /** Enqueue an item to the scoped team's queue. Called from drag-drop
@@ -4741,7 +4730,19 @@
         const btnTeamClose = document.getElementById('btn-team-close');
         if (btnTeamClose) { btnTeamClose.hidden = !teamScopeId; }
         const btnTeamAck = document.getElementById('btn-team-ack');
-        if (btnTeamAck) { btnTeamAck.hidden = !teamScopeId; }
+        if (btnTeamAck) {
+            let heldCount = 0;
+            if (teamScopeId) {
+                const snap = getScopedTeamSnapshot();
+                if (snap && Array.isArray(snap.members)) {
+                    for (const member of snap.members) {
+                        heldCount += (heldUnposted[member] || 0);
+                    }
+                }
+            }
+            btnTeamAck.hidden = !teamScopeId || heldCount === 0;
+            btnTeamAck.textContent = `RELEASE ${heldCount} HELD CARD${heldCount === 1 ? '' : 'S'}`;
+        }
         const btnTeamAdd = document.getElementById('btn-team-add');
         if (btnTeamAdd) { btnTeamAdd.hidden = !teamScopeId; }
         // Controller-scoped ops button: visible only in controller scope.
@@ -9224,6 +9225,54 @@
         }
     }
 
+    /** RELEASE HELD CARDS — release cards held by this team with no completion post. */
+    async function releaseTeamHeldCards() {
+        const snap = getScopedTeamSnapshot();
+        if (!snap || !snap.head) { return; }
+        try {
+            const res = await fetch('/kanban/team/release', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ from: snap.head })
+            });
+            if (!res.ok) {
+                showPaneToast(`Release failed: HTTP ${res.status}`);
+                return;
+            }
+            const data = await res.json();
+            if (!data.success) {
+                showPaneToast(`Release failed: ${data.error || 'unknown error'}`);
+                return;
+            }
+            const released = Array.isArray(data.released) ? data.released : [];
+            const failed = Array.isArray(data.failed) ? data.failed : [];
+            const releasedSeats = Array.isArray(data.releasedSeats) ? data.releasedSeats : [];
+
+            let changed = false;
+            for (const seat of releasedSeats) {
+                if (terminalBadges.delete(seat)) { changed = true; }
+                terminalReplayGaps.delete(seat);
+            }
+
+            if (changed) {
+                renderSidebarList();
+                renderPaneGrid();
+                postFleetStateToShell();
+            }
+
+            if (failed.length === 0) {
+                showPaneToast(`Released ${released.length} held card${released.length === 1 ? '' : 's'}`);
+            } else {
+                showPaneToast(`Released ${released.length} card${released.length === 1 ? '' : 's'}, ${failed.length} failed`);
+            }
+        } catch (err) {
+            console.error('[Terminals] Failed to release team held cards:', err);
+            showPaneToast(`Release failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+            await fetchTerminalList();
+        }
+    }
+
     /** CLEAR BADGES — acknowledge every member's completion light at once. */
     function clearTeamBadges() {
         const snap = getScopedTeamSnapshot();
@@ -10851,12 +10900,8 @@
         // up afterwards must not seat its team over the newer one. (Cheap here,
         // and switchToGroup's own guard would only half-catch it.)
         if (teamScopeId !== groupId) { return; }
-        // The Manual/Auto toggle is derived from whether the completion-driven
-        // standing order is installed — never from a persisted hint. init()
-        // derived it on the pop-out path; it has to be derived here too, or the
-        // toggle reports Manual for an auto team and carries the previous
-        // team's mode across a switch.
-        await loadQueueModeFromOrders();
+        const scopedGroup = getScopedTeamGroup();
+        _queueMode = (scopedGroup && scopedGroup.queueMode === 'auto') ? 'auto' : 'manual';
         if (teamScopeId !== groupId) { return; }
         switchToGroup(groupId);  // seats the team's members into panes; renders the sidebar
         syncLayoutPickerUI();
@@ -11990,7 +12035,7 @@
         const btnTeamRestart = document.getElementById('btn-team-restart');
         if (btnTeamRestart) btnTeamRestart.addEventListener('click', () => restartMissingMembers());
         const btnTeamAck = document.getElementById('btn-team-ack');
-        if (btnTeamAck) btnTeamAck.addEventListener('click', () => clearTeamBadges());
+        if (btnTeamAck) btnTeamAck.addEventListener('click', () => releaseTeamHeldCards());
         const btnTeamAdd = document.getElementById('btn-team-add');
         if (btnTeamAdd) btnTeamAdd.addEventListener('click', () => {
             const group = getScopedTeamGroup();

@@ -1234,6 +1234,9 @@ jobs:
       - name: Lead task/complete endpoint contract (acceptance clear, idempotency)
         run: npm run test:contract:task-complete
 
+      - name: Team release control contract (operator release, visibility, completeCardInternal)
+        run: npm run test:contract:team-release-control
+
       # `completed_at` is the ONE fact that releases a team and the ONE fact the
       # pop-time dependency gate evaluates. Its gate was defined in package.json
       # and never invoked here — the exact "green while incomplete" hole.

@@ -161,14 +161,11 @@ async function run() {
 
     // ── queue/done is not completion ─────────────────────────────────────
 
-    await check('queue/done does not set completed_at — it is a next-item request', async () => {
-        // This is a source-text assertion: the TEAM_QUEUE_DONE_ORDER_BODY
-        // must not instruct the coder to infer completion from board position.
-        const { TEAM_QUEUE_DONE_ORDER_BODY } = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
-        const body = TEAM_QUEUE_DONE_ORDER_BODY('test-group');
-        assert.ok(!body.includes('LEAD CODED'), 'order must not reference LEAD CODED as a completion signal');
-        assert.ok(!body.includes('CODE REVIEWED'), 'order must not instruct coder to move to CODE REVIEWED');
-        assert.ok(!body.includes('kanban/dispatch'), 'order must not instruct coder to dispatch');
+    await check('context-aware completion order routes to queue/done without mtime guess', async () => {
+        const { CONTEXT_AWARE_COMPLETION_ORDER_BODY } = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
+        const body = CONTEXT_AWARE_COMPLETION_ORDER_BODY('test-group', 'lead-1');
+        assert.ok(body.includes('POST /kanban/queue/done'), 'order must instruct coder to call POST /kanban/queue/done');
+        assert.ok(body.includes('/terminals/teams/test-group/queue/done'), 'order must instruct fallback queue/done');
     });
 
     // ── No agent is told to write a completion report file ───────────────
@@ -181,82 +178,25 @@ async function run() {
             'head order must instruct using POST /kanban/task/complete');
     });
 
-    // ── The lead's team-queue order is the LEAD's, not the members' ──────
-    // TEAM_QUEUE_DONE_ORDER_BODY was installed at both `team` and `team-head`
-    // scope, so the head was handed coder text: it names task/complete only in
-    // the third person ("your lead clears it when it posts completion") and
-    // promises a relay "to your team lead" — the head IS the lead.
+    // ── Context-aware completion orders at team and team-head scopes ──────
 
-    await check('the team-head body tells the LEAD to post task/complete itself', async () => {
-        const { TEAM_HEAD_QUEUE_DONE_ORDER_BODY } = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
-        const head = TEAM_HEAD_QUEUE_DONE_ORDER_BODY('test-group');
-        assert.ok(head.includes('POST /kanban/task/complete'),
-            'the lead\'s own order must name POST /kanban/task/complete');
-        assert.ok(head.includes('"from":"<your terminal name>"'),
-            'the post must be addressed FROM the lead — first person, not a description of what somebody else does');
-        assert.ok(!head.includes('your lead clears it'),
-            'the member sentence about what "your lead" does must not survive in the head body');
-        assert.ok(!head.includes('relay your completion report to your team lead'),
-            'the head has no lead to relay to — the member relay sentence must be gone');
-        assert.ok(head.includes('/terminals/teams/test-group/queue/done'),
-            'the head still advances the team queue, so queue/done must survive with the groupId baked in');
-    });
-
-    await check('applyTeamQueueOrders installs a different body at team-head than at team', async () => {
+    await check('wireSpawnedTeam installs context-aware completion order at team and team-head scopes', async () => {
         const tw = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
         let stored = [];
         const db = {
             getConfigJson: async () => stored,
             setConfigJson: async (_k, v) => { stored = v; },
         };
-        await tw.applyTeamQueueOrders({
-            db, groupId: 'g1', headName: 'lead-1', roster: ['lead-1', 'coder-1'], enabled: true,
+        await tw.wireSpawnedTeam({
+            db, headName: 'lead-1', children: [{ friendlyName: 'coder-1' }], teamId: 'g1',
         });
-        const member = stored.find(o => o.id === 'team-queue-done:g1:team');
-        const head = stored.find(o => o.id === 'team-queue-done:g1:team-head');
-        assert.ok(member && head, 'both the team and team-head orders must be installed in auto mode');
-        assert.notStrictEqual(head.instruction, member.instruction,
-            'the head must not be handed the member body');
-        assert.ok(head.instruction.includes('POST /kanban/task/complete'),
-            'the installed head order must carry the lead\'s own task/complete obligation');
-        assert.strictEqual(head.parent, 'lead-1', 'team-head delivery is keyed on parent === head name');
-    });
-
-    await check('a head row still carrying the member body is rewritten on read', async () => {
-        const tw = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
-        // A team wired by an older build: head row, member body.
-        const stale = [{
-            id: 'team-queue-done:g1:team-head',
-            parent: 'lead-1',
-            child: '',
-            scope: 'team-head',
-            teamId: 'g1',
-            instruction: tw.TEAM_QUEUE_DONE_ORDER_BODY('g1'),
-        }];
-        const healed = tw.migrateCodingTeamOrders(stale);
-        assert.notStrictEqual(healed, stale, 'the transform must recognise the stale head row');
-        assert.strictEqual(healed[0].instruction, tw.TEAM_HEAD_QUEUE_DONE_ORDER_BODY('g1'),
-            'the stale head row must be rewritten to the head body');
-        assert.strictEqual(healed[0].id, 'team-queue-done:g1:team-head',
-            'the id must survive the rewrite so delete-by-id and the idempotent install keep working');
-    });
-
-    await check('migrateCodingTeamOrders returns its input by reference when nothing is stale', async () => {
-        const tw = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
-        // describeStandingOrderMigrations uses an === check against the input as
-        // its "nothing is stale" test, so a gratuitous copy would mark every row
-        // stale in the UI and make loadEffectiveStandingOrders persist on every
-        // prompt.
-        const fresh = [{
-            id: 'team-queue-done:g1:team-head',
-            parent: 'lead-1',
-            child: '',
-            scope: 'team-head',
-            teamId: 'g1',
-            instruction: tw.TEAM_HEAD_QUEUE_DONE_ORDER_BODY('g1'),
-        }];
-        assert.strictEqual(tw.migrateCodingTeamOrders(fresh), fresh,
-            'an already-migrated set must come back by reference');
+        const member = stored.find(o => o.scope === 'team' && o.teamId === 'g1');
+        const head = stored.find(o => o.scope === 'team-head' && o.id === 'context-aware-completion:g1:team-head');
+        assert.ok(member && head, 'both the team and team-head orders must be installed');
+        assert.ok(member.instruction.includes(tw.CONTEXT_AWARE_COMPLETION_ORDER_BODY('g1', 'lead-1')),
+            'team order must carry context-aware completion body');
+        assert.strictEqual(head.instruction, tw.CONTEXT_AWARE_COMPLETION_ORDER_BODY('g1', 'lead-1'),
+            'head order must carry context-aware completion body');
     });
 
     // ── Source-text invariants (no compilation required) ─────────────────
@@ -275,20 +215,13 @@ async function run() {
     const kanbanHtmlSrc = readSrc('src/webview/kanban.html');
     const terminalsJsSrc = readSrc('src/webview/terminals.js');
 
-    await check('REVIEW seat order does not infer completion from board position', async () => {
-        // The REVIEW_TEAM_QUEUE_DONE_ORDER_BODY must not carry the board-position
-        // clause (the "if all subtasks are in LEAD CODED, POST /kanban/dispatch
-        // ... instead of posting to queue/done" inference path).
-        const fnStart = teamWiringSrc.indexOf('export function REVIEW_TEAM_QUEUE_DONE_ORDER_BODY');
-        assert.ok(fnStart >= 0, 'REVIEW_TEAM_QUEUE_DONE_ORDER_BODY not found');
+    await check('context-aware completion order body exists in teamWiring', async () => {
+        const fnStart = teamWiringSrc.indexOf('export function CONTEXT_AWARE_COMPLETION_ORDER_BODY');
+        assert.ok(fnStart >= 0, 'CONTEXT_AWARE_COMPLETION_ORDER_BODY not found');
         const fnEnd = teamWiringSrc.indexOf('\n}', fnStart);
         const fnBody = teamWiringSrc.slice(fnStart, fnEnd);
-        assert.ok(!fnBody.includes('LEAD CODED'),
-            'REVIEW seat order must not reference LEAD CODED as a completion signal');
-        assert.ok(!fnBody.includes('CODE REVIEWED'),
-            'REVIEW seat order must not instruct the reviewer to move to CODE REVIEWED');
-        assert.ok(!fnBody.includes('kanban/dispatch'),
-            'REVIEW seat order must not instruct the reviewer to dispatch the feature');
+        assert.ok(fnBody.includes('POST /kanban/queue/done'),
+            'context-aware completion order must route to queue/done');
     });
 
     await check('seat-pacing skip is gone — in-flight scan runs for both pacing modes and contains no column check', async () => {

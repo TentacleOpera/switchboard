@@ -588,8 +588,15 @@ async function run() {
         const predicate = src.slice(i, refusal);
         assert.ok(!/CODING_COLUMNS/.test(predicate), 'in-flight predicate must not reference CODING_COLUMNS');
         assert.ok(!/kanbanColumn/.test(predicate), 'in-flight predicate must not compare kanbanColumn');
-        assert.ok(/!p\.completedAt/.test(predicate) || /!inFlightCard\.completedAt/.test(predicate) || /!\w+\.completedAt/.test(predicate),
-            'in-flight predicate must check completedAt');
+        // The predicate delegates to the module-level heldByTeam helper (which
+        // checks completedAt), or checks completedAt inline.
+        const heldByTeamDef = /export function heldByTeam\(/.test(src);
+        assert.ok(
+            heldByTeamDef
+                ? /heldByTeam\(/.test(predicate)
+                : (/!p\.completedAt/.test(predicate) || /!inFlightCard\.completedAt/.test(predicate) || /!\w+\.completedAt/.test(predicate)),
+            'in-flight predicate must check completedAt (directly or via heldByTeam helper)'
+        );
     });
 
     await check('a stale-completed first candidate does not release a team still holding a second card', async () => {
@@ -869,16 +876,15 @@ async function run() {
         assert.ok(/dispatchData\?\.success !== false/.test(send), 'HTTP 200 with success:false is not a successful dispatch');
     });
 
-    await check('auto mode is standing-order state, not an optimistic UI flag', () => {
+    await check('auto mode updates group config and UI state', () => {
         const fs = require('fs');
         const webview = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'terminals.js'), 'utf8');
         const modeStart = webview.indexOf('async function setQueueMode(mode)');
         const mode = webview.slice(modeStart, webview.indexOf('\n    /**', modeStart + 10));
-        assert.ok(/await loadQueueModeFromOrders\(\)/.test(mode));
-        assert.ok(/!res\.ok \|\| !data\?\.success/.test(mode), 'a failed mode write must be surfaced and re-read');
+        assert.ok(/_queueMode = mode/.test(mode));
+        assert.ok(/!res\.ok \|\| !data\?\.success/.test(mode), 'a failed mode write must be surfaced');
         const wiring = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'teamWiring.ts'), 'utf8');
-        assert.ok(/export async function applyTeamQueueOrders/.test(wiring));
-        assert.ok(/team-queue-done:/.test(wiring));
+        assert.ok(/export function CONTEXT_AWARE_COMPLETION_ORDER_BODY/.test(wiring));
     });
 
     // ── Standalone host: the four queue seams + armQueueWatch ─────────────

@@ -1084,7 +1084,7 @@ test('the team action verbs are static sidebar buttons, not a header strip', () 
         ['btn-team-clear-members', 'CLEAR MEMBERS (KEEP HEAD)'],
         ['btn-team-close', 'STOP ALL TERMINALS'],
         ['btn-team-restart', 'RESTART EXITED MEMBERS'],
-        ['btn-team-ack', 'ACKNOWLEDGE COMPLETIONS'],
+        ['btn-team-ack', 'RELEASE'],
         ['btn-team-add', 'ADD TERMINAL'],
         ['btn-team-automations', 'SCHEDULED AUTOMATIONS'],
         ['btn-team-orders', 'STANDING ORDERS']
@@ -1161,8 +1161,8 @@ test('entering and leaving team scope re-reads the settings for that scope', () 
     assert.ok(scopeAt < loadAt && loadAt < switchAt,
         'the load must sit between setting teamScopeId and switchToGroup — before the scope is set it reads the fleet keys, after switchToGroup it is too late');
     assert.ok(
-        enter.includes('await loadQueueModeFromOrders()'),
-        'enterTeamScope must derive the Manual/Auto toggle from the installed standing order — in-place entry is the only entry path left'
+        enter.includes('getScopedTeamGroup()') && enter.includes('queueMode'),
+        'enterTeamScope must read the Manual/Auto toggle from the group record — in-place entry is the only entry path left'
     );
 
     const exit = block(terminalsJs, 'async function exitTeamScope()', 'function scopedFleet(');
@@ -1368,10 +1368,10 @@ test('a direct team-to-team switch clears the outgoing queue before the scope ch
     assert.ok(itemsAt < scopeAt && modeAt < scopeAt,
         'the reset must precede the scope change, or the outgoing team\'s items paint for a frame under the new team'
     );
-    // The mode is then DERIVED, never left at the reset default.
+    // The mode is then read from group config, never left at the reset default.
     assert.ok(
-        enter.indexOf('await loadQueueModeFromOrders()') > modeAt,
-        'the Manual/Auto mode must be re-derived after the reset'
+        enter.indexOf('getScopedTeamGroup()') > modeAt,
+        'the Manual/Auto mode must be re-derived from the group record after the reset'
     );
 });
 
