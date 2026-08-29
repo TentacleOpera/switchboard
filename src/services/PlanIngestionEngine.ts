@@ -98,6 +98,12 @@ export interface TurnEndInfo {
     /** Pre-composed evidence body for the nudge (remaining subtasks, their seats, silence, mtime).
      *  Hosts send this verbatim when set and fall back to their own one-line message when absent. */
     body?: string;
+    /** `false` = machine signal only. Consumers that DELIVER text (the pty send and the
+     *  orchestrator report mirror) must skip it; state consumers (handleAutobanTurnEnd)
+     *  must still run. Used by the blocked arm, which fires per seat at the sweep's own
+     *  cadence for autoban while its lead-facing text is paced and aggregated into one
+     *  digest by _runBlockedDigestSweep. Absent/true = deliver, today's behaviour. */
+    deliver?: boolean;
 }
 
 /**
@@ -620,6 +626,7 @@ export class PlanIngestionEngine {
                         // outstanding, so a stall does not double-wake a head that
                         // the per-dispatch backstop already poked this tick.
                         const notifiedSeatsThisTick = new Set<string>();
+                        const blockedThisTick: Array<{ terminalName: string; planFile: string }> = [];
                         // Persist heartbeats for live active terminals BEFORE the
                         // sweep so the widened basis is in the row the sweep reads.
                         // ~1 write per live card per 10s — well within the sql.js
@@ -669,15 +676,33 @@ export class PlanIngestionEngine {
                                         this._host.logger.appendLine(
                                             `[GlobalPlanWatcher] Turn-end (silence) marked blocked for ${terminalName}: ${record.planFile}`
                                         );
-                                        // The `!record.blockedAt` guard IS the single-fire gate for the
-                                        // blocked arm — once blockedAt is stamped this branch cannot
-                                        // re-enter, so the notifier fires exactly once per blocked turn.
+                                        // `blocked_at` is NOT a single-fire latch: recordLiveness
+                                        // (above, KanbanDatabase.recordLiveness) NULLs it on every
+                                        // burst of terminal output, so a seat that alternates
+                                        // read/think/act re-enters this branch every ~2 minutes.
+                                        // The notice therefore fires once per SILENCE EPISODE, not
+                                        // once per dispatch.
+                                        //
+                                        // The signal still fires per seat at this cadence because
+                                        // handleAutobanTurnEnd keys on it to retire the card's
+                                        // in-flight record and halt its lane — but it is NOT
+                                        // delivered as text, and it does NOT count as a wake for
+                                        // notifiedSeatsThisTick. The lead-facing message is paced
+                                        // and aggregated in _runBlockedDigestSweep below.
                                         if (this._turnEndNotifier) {
-                                            notifiedSeatsThisTick.add(terminalName);
-                                            try { this._turnEndNotifier({ seatName: terminalName, planFile: record.planFile, outcome: 'blocked', workspaceRoot: folder }); } catch (cbErr) {
+                                            try {
+                                                this._turnEndNotifier({
+                                                    seatName: terminalName,
+                                                    planFile: record.planFile,
+                                                    outcome: 'blocked',
+                                                    workspaceRoot: folder,
+                                                    deliver: false,
+                                                });
+                                            } catch (cbErr) {
                                                 this._host.logger.appendLine(`[GlobalPlanWatcher] turnEndNotifier callback failed: ${cbErr}`);
                                             }
                                         }
+                                        blockedThisTick.push({ terminalName, planFile: record.planFile });
                                     }
                                 }
                             } catch (silenceErr) {
@@ -693,6 +718,15 @@ export class PlanIngestionEngine {
                                     : '')
                             );
                             this._firePlanDiscovered(folder);
+                        }
+                        const blockedNotifyIntervalMs = activityCfg.getNumber('blockedNotifyIntervalMs', turnEndSilenceMs);
+                        try {
+                            await this._runBlockedDigestSweep({
+                                db, folder, wsId, nowMs, intervalMs: blockedNotifyIntervalMs,
+                                liveness, blockedThisTick, notifiedSeatsThisTick,
+                            });
+                        } catch (digestErr) {
+                            this._host.logger.appendLine(`[GlobalPlanWatcher] blocked digest sweep failed for ${folder}: ${digestErr}`);
                         }
                         // ── Feature-level stall nudge ───────────────────────────────
                         // A head driving a feature can stall in the window where no
@@ -1079,11 +1113,100 @@ export class PlanIngestionEngine {
                     `[GlobalPlanWatcher] regenerateFeatureFile failed for ${featureRow.planId}: ${regenErr instanceof Error ? regenErr.message : String(regenErr)}`
                 );
             }
-        } catch (e) {
-            this._host.logger.appendLine(
-                `[GlobalPlanWatcher] _applyFeatureLink failed for ${relativePath}: ${e instanceof Error ? e.message : String(e)}`
-            );
         }
+    }
+
+    /**
+     * Paced, aggregated "seat is stuck" wake — the blocked-arm counterpart to
+     * _runFeatureNudgeSweep. The per-seat notice it replaces fired once per
+     * SILENCE EPISODE, not once per dispatch, because recordLiveness nulls
+     * `blocked_at` on any output; a lead therefore received one interrupt per
+     * seat per ~2 minutes for seats that were merely reading.
+     *
+     * Pacing state lives in the DB config key `kanban.blockedNotifyPacing`
+     * ({ "<workspaceId>|<seat>": epochMs }), NOT in memory: each host builds its
+     * own engine and an extension reload would otherwise reset every window and
+     * produce a burst.
+     */
+    private async _runBlockedDigestSweep(args: {
+        db: KanbanDatabase;
+        folder: string;
+        wsId: string;
+        nowMs: number;
+        intervalMs: number;
+        liveness: Array<{ friendlyName: string; lastDataAt: number; status: string }>;
+        blockedThisTick: Array<{ terminalName: string; planFile: string }>;
+        notifiedSeatsThisTick: Set<string>;
+    }): Promise<void> {
+        const { db, folder, wsId, nowMs, intervalMs, liveness, blockedThisTick, notifiedSeatsThisTick } = args;
+        if (!this._turnEndNotifier || blockedThisTick.length === 0) { return; }
+
+        const KEY = 'kanban.blockedNotifyPacing';
+        let pacing: Record<string, number> = {};
+        try { pacing = await db.getConfigJson<Record<string, number>>(KEY, {}) || {}; } catch { return; }
+
+        // Only seats outside their pace window, and only those STILL blocked at
+        // compose time — a seat can have produced output between the stamp above
+        // and here, which nulls blocked_at and makes the report a lie.
+        const due: Array<{ terminalName: string; planFile: string; silentFor: number }> = [];
+        const byName = new Map(liveness.map(e => [e.friendlyName, e]));
+        for (const cand of blockedThisTick) {
+            const key = `${wsId}|${cand.terminalName}`;
+            const last = pacing[key] || 0;
+            if (last > 0 && nowMs - last < intervalMs) { continue; }
+            const rec = await db.getActiveDispatchedByTerminal(wsId, cand.terminalName);
+            if (!rec || !rec.blockedAt) { continue; }
+            const lastDataAt = byName.get(cand.terminalName)?.lastDataAt || 0;
+            due.push({
+                terminalName: cand.terminalName,
+                planFile: cand.planFile,
+                silentFor: lastDataAt > 0 ? Math.round((nowMs - lastDataAt) / 1000) : 0,
+            });
+        }
+        if (due.length === 0) { return; }
+
+        // Evidence, not a poke — same contract as the feature nudge.
+        const lines = [
+            `[switchboard:turn-end] ${due.length} seat(s) have gone quiet without writing a completion report — they may be waiting on input:`
+        ];
+        for (const d of due) {
+            const silence = d.silentFor > 0 ? `, silent ${d.silentFor}s` : '';
+            lines.push(`  - ${d.terminalName} on ${d.planFile}${silence}`);
+        }
+        lines.push('Check each seat and unblock it, or re-dispatch its plan. No action is needed for a seat that is simply working.');
+
+        // Recipient is resolved by the HOST from the FIRST due seat's parent chain —
+        // the engine has no fleet identity data and must stay host-agnostic. Where a
+        // workspace runs two teams this addresses one lead; every seat is named in the
+        // body, and the log line below makes the under-notification visible.
+        try {
+            this._turnEndNotifier({
+                seatName: due[0].terminalName,
+                planFile: due[0].planFile,
+                outcome: 'blocked',
+                workspaceRoot: folder,
+                body: lines.join('\n'),
+            });
+        } catch (cbErr) {
+            this._host.logger.appendLine(`[GlobalPlanWatcher] blocked digest notifier failed: ${cbErr}`);
+        }
+        this._host.logger.appendLine(
+            `[GlobalPlanWatcher] Blocked digest fired for ${folder} → recipient resolved from '${due[0].terminalName}' (${due.map(d => d.terminalName).join(', ')}).`
+        );
+
+        for (const d of due) {
+            pacing[`${wsId}|${d.terminalName}`] = nowMs;
+            notifiedSeatsThisTick.add(d.terminalName);
+        }
+        // Prune seats no longer in the fleet. An EMPTY liveness snapshot is no
+        // evidence (same guard as _runFeatureNudgeSweep) — skip the prune then.
+        if (liveness.length > 0) {
+            for (const key of Object.keys(pacing)) {
+                const seat = key.slice(key.indexOf('|') + 1);
+                if (!byName.has(seat)) { delete pacing[key]; }
+            }
+        }
+        try { await db.setConfigJson(KEY, pacing); } catch { /* next tick retries */ }
     }
 
     /**

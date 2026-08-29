@@ -260,3 +260,8 @@ Import `roleTakesDispatchDirectives` alongside the existing `ensureDispatchProto
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder**.
+
+## Implementation Summary
+
+Implemented role-gated dispatch protocol directives appending on the pty prompt delivery path in both VS Code extension (`TaskViewerProvider.ts`) and standalone (`bootstrap.ts`) hosts. Added `roleTakesDispatchDirectives` helper in `agentPromptBuilder.ts` to allowlist code-touching roles (`coder`, `intern`, `lead`, `custom_agent_*`) with case normalization while excluding empty/non-coder roles. Appended the full directive bundle (`ensureDispatchProtocolDirectives`) within the `applySeatBlock` branch positioned before standing orders. Updated skill documentation in `switchboard-orchestration/SKILL.md` and added contract test assertions in `seat-safeguards-fleet-prompt-path.test.js`.
+

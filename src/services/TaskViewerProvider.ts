@@ -84,6 +84,7 @@ import {
     resolveDelegateIdentityForTerminal,
     buildSeatDirectiveBlock,
     ensureDispatchProtocolDirectives,
+    roleTakesDispatchDirectives,
     validateDispatchPayload,
     PHONE_A_FRIEND_DONE_DIRECTIVE,
     TEAM_BATCH_PLAN_CAP
@@ -1003,10 +1004,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // string, unknown name) falls back to workspace defaults
                     // (guardrail ON) — never an empty block.
                     if (applySeatBlock) {
+                        let role = '';
                         try {
                             data = stripStandingOrdersBlock(data);
                             const targetRow = roleRows.find((t: any) => t.friendlyName === payload.name);
-                            const role = targetRow?.role || '';
+                            role = targetRow?.role || '';
                             const seatOpts = this._kanbanProvider
                                 ? await this._kanbanProvider.resolveSeatPromptOptions(role)
                                 : null;
@@ -1071,6 +1073,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             }
                         } catch (err) {
                             console.warn('[TaskViewerProvider] Seat directive block append failed:', err);
+                        }
+
+                        // Dispatch-protocol handshake for lead-/orchestrator-dispatched
+                        // work. The board path gets this from buildKanbanBatchPrompt and a
+                        // folded `dispatch` payload gets it above; a lead composing its own
+                        // prose via a plain ptySendPrompt reaches neither, so its coders were
+                        // never told to append to the plan file — and the plan-file mtime
+                        // advance is the ONLY thing that clears the card's working-state light
+                        // (PlanIngestionEngine silence sweep). Idempotent, so a prompt that
+                        // already carries it is untouched. Deliberately NOT inside the
+                        // seat-block cache: every dispatch is about a different plan file.
+                        // Placed before applyStandingOrders — the SO block must stay last.
+                        if (roleTakesDispatchDirectives(role)) {
+                            data = ensureDispatchProtocolDirectives(data);
                         }
                     }
 
@@ -1918,14 +1934,24 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * malformed parent chain), skip. Derived entirely from the pty stream — no
      * hooks, no tokens, no agent-side obligation.
      */
-    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean }): void {
+    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean; deliver?: boolean }): void {
         void (async () => {
+            // Machine-only signal (the blocked arm's per-seat emission). The lead-facing
+            // text for those seats arrives as one paced digest from
+            // PlanIngestionEngine._runBlockedDigestSweep; handleAutobanTurnEnd — the
+            // OTHER consumer of this single-slot notifier — still receives every one of
+            // them, which is what keeps autoban lanes halting on their existing cadence.
+            // Deliberately unlogged: this fires per blocked seat per tick and the digest
+            // logs the seats it reported.
+            if (info.deliver === false) { return; }
+
             const seatName = info.seatName;
             const planFile = info.planFile;
             // `body` (pre-composed evidence) wins when set; otherwise the host
             // composes its own one-line message. `stalled` always carries a body
             // from the engine, but the fallback keeps a malformed nudge honest.
-            // Note: `composeCompletedTurnEndBody` in PlanIngestionEngine is the real producer for completed.
+            // Note: `composeCompletedTurnEndBody` in PlanIngestionEngine is the real producer for completed;
+            // `_runBlockedDigestSweep` in PlanIngestionEngine is the real producer for blocked.
             const message = info.body ?? (info.outcome === 'completed'
                 ? `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${planFile}'.`
                 : info.outcome === 'stalled'
@@ -4401,7 +4427,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * server isn't running (the directive is omitted when apiPort is falsy).
      */
     public getLocalApiServerPort(): number {
-        return this._localApiServer?.getPort() ?? 0;
+        // `_localApiServer` is assigned only by the extension's own
+        // `_startLocalApiServer`. The standalone host hands its server in through
+        // `setApiServer`, which lands in `_apiServerForBroadcast` — so without this
+        // fallback every headless prompt resolves apiPort to 0 and silently drops
+        // the Phone-a-Friend and delegate directives.
+        const server = this._apiServerForBroadcast ?? this._localApiServer;
+        return typeof server?.getPort === 'function' ? (server.getPort() ?? 0) : 0;
     }
 
     /**

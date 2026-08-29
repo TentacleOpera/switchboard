@@ -1,6 +1,6 @@
 # Dispatch prompt and completion handshake
 
-**Complexity:** 6
+**Complexity:** 7
 
 ## Goal
 
@@ -29,8 +29,8 @@ They are grouped because they are one causal chain, not three tickets. A dispatc
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone Dispatch Builds Its Own Prompt Instead of Calling generateUnifiedPrompt](../plans/feature_plan_20260817141000_standalone-dispatch-prompt-is-a-hardcoded-subset.md) — **PLAN REVIEWED** — ID: 9462a083-dcd4-411f-b528-bf4f2da8e8c5
-- [ ] [The "Seat Has Gone Quiet" Notice Flaps, and Every Flap Wakes the Lead](../plans/feature_plan_20260817141200_seat-gone-quiet-notice-flaps-and-spams-the-lead.md) — **PLAN REVIEWED** — ID: 0843501b-09d0-4fd6-a71f-089816399bba
-- [ ] [Lead-Dispatched Coders Never Receive the Completion-Report Directive](../plans/feature_plan_20260817141300_lead-dispatched-coders-never-get-the-completion-report-directive.md) — **PLAN REVIEWED** — ID: 68df47bb-f275-4f17-b3bf-531e81c27c42
+- [ ] [Standalone Dispatch Builds Its Own Prompt Instead of Calling generateUnifiedPrompt](../plans/feature_plan_20260817141000_standalone-dispatch-prompt-is-a-hardcoded-subset.md) — **LEAD CODED** — ID: 9462a083-dcd4-411f-b528-bf4f2da8e8c5
+- [ ] [The "Seat Has Gone Quiet" Notice Flaps, and Every Flap Wakes the Lead](../plans/feature_plan_20260817141200_seat-gone-quiet-notice-flaps-and-spams-the-lead.md) — **LEAD CODED** — ID: 0843501b-09d0-4fd6-a71f-089816399bba
+- [ ] [Lead-Dispatched Coders Never Receive the Completion-Report Directive](../plans/feature_plan_20260817141300_lead-dispatched-coders-never-get-the-completion-report-directive.md) — **LEAD CODED** — ID: 68df47bb-f275-4f17-b3bf-531e81c27c42
 <!-- END SUBTASKS -->
 

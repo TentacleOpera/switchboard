@@ -632,6 +632,14 @@
           "description": "How long (ms) a team lead must be silent with work pending before a stall nudge fires. Default 10 min. Separate from turnEndSilenceMs (which gates turn-end detection at 90s) — a nudge is a backstop, not a turn-boundary probe. Only applies to the feature-level and queue-level stall nudges; turn-end classification (completed/blocked) is unaffected.",
           "scope": "resource"
         },
+        "switchboard.activityLight.blockedNotifyIntervalMs": {
+          "type": "integer",
+          "default": 90000,
+          "minimum": 10000,
+          "maximum": 3600000,
+          "description": "Minimum interval between 'seat has gone quiet' wakes for the same seat. Notices are batched into one message per interval.",
+          "scope": "resource"
+        },
         "switchboard.activityLight.blockedTimeoutMs": {
           "type": "integer",
           "default": 14400000,

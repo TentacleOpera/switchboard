@@ -1187,6 +1187,27 @@ export function ensureDispatchProtocolDirectives(text: string, missionControlAct
 }
 
 /**
+ * Roles whose prompts must carry the dispatch-protocol bundle regardless of who
+ * composed them. The board path appends it inside buildKanbanBatchPrompt and the
+ * folded `dispatch` payload appends it at the pty verb; a lead composing its own
+ * prose via a plain ptySendPrompt reaches neither, which is why its coders were
+ * never told to append to the plan file. Keep this list in step with
+ * generateUnifiedPrompt's code-touching branch.
+ */
+export const DISPATCH_DIRECTIVE_ROLES = new Set(['coder', 'intern', 'lead']);
+
+/** True when `role` should receive the dispatch-protocol bundle on the pty
+ *  delivery path. An EMPTY/unknown role returns false: an unresolved seat is not
+ *  assumed to be a coder — unlike the seat block, whose fail-safe is "guardrail
+ *  ON", a plan-file instruction to a non-coder is noise. Normalises here so the
+ *  extension (which has _normalizeAgentKey) and standalone (which compares raw
+ *  handle.role) cannot disagree about `Coder` vs `coder`. */
+export function roleTakesDispatchDirectives(role: string): boolean {
+    const key = (role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return DISPATCH_DIRECTIVE_ROLES.has(key) || key.startsWith('custom_agent_');
+}
+
+/**
  * Roles a `dispatch.role` may name. `dispatch.role` is METADATA written to
  * `dispatched_agent` — it never selects a seat safeguard set (the seat block
  * resolves role from the terminal record, which is why `seatBlock` is stripped

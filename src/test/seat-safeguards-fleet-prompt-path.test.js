@@ -44,6 +44,7 @@ const {
     ensureDispatchProtocolDirectives,
     validateDispatchPayload,
     DISPATCH_ROLES,
+    roleTakesDispatchDirectives,
 } = require('../../out/services/agentPromptBuilder');
 
 const AGENT_PROMPT_BUILDER_SRC = fs.readFileSync(
@@ -741,46 +742,27 @@ test('standalone deliverPrompt calls resolveSeatPromptOptions on kanbanProvider'
     );
 });
 
-// ── 11. Standalone buildPromptForCards cleanup ───────────────────────────
-
-test('standalone buildPromptForCards no longer hardcodes GIT_SAFETY_DIRECTIVE', () => {
-    const fnStart = BOOTSTRAP_SRC.indexOf('async function buildPromptForCards');
-    const fnEnd = BOOTSTRAP_SRC.indexOf('return blocks.join', fnStart);
-    const fnBody = BOOTSTRAP_SRC.slice(fnStart, fnEnd);
-    assert.ok(
-        !fnBody.includes('GIT_SAFETY_DIRECTIVE'),
-        'buildPromptForCards must NOT hardcode GIT_SAFETY_DIRECTIVE — the seat block supplies it from config'
-    );
+// ── 11. Standalone dispatch uses the shared prompt builder ──────────────
+test('standalone triggerAction calls generateUnifiedPrompt, not a local builder', () => {
+    assert.ok(!/function buildPromptForCards/.test(BOOTSTRAP_SRC),
+        'buildPromptForCards must be gone — the standalone host builds prompts via KanbanProvider');
+    assert.ok(/kanbanProvider\.buildDispatchPlans\(/.test(BOOTSTRAP_SRC),
+        'standalone must funnel records through buildDispatchPlans (feature subtasks are dropped otherwise)');
+    assert.ok(/kanbanProvider\.generateUnifiedPrompt\(/.test(BOOTSTRAP_SRC),
+        'standalone must build its dispatch prompt with generateUnifiedPrompt');
 });
 
-test('standalone buildPromptForCards no longer hardcodes SKIP_COMPILATION_DIRECTIVE', () => {
-    const fnStart = BOOTSTRAP_SRC.indexOf('async function buildPromptForCards');
-    const fnEnd = BOOTSTRAP_SRC.indexOf('return blocks.join', fnStart);
-    const fnBody = BOOTSTRAP_SRC.slice(fnStart, fnEnd);
-    assert.ok(
-        !fnBody.includes('SKIP_COMPILATION_DIRECTIVE'),
-        'buildPromptForCards must NOT hardcode SKIP_COMPILATION_DIRECTIVE — the seat block supplies it from config'
-    );
+test('standalone dispatch does not re-append the seat directive block', () => {
+    const arm = BOOTSTRAP_SRC.slice(BOOTSTRAP_SRC.indexOf("case 'triggerAction'"));
+    const call = arm.slice(0, arm.indexOf('updateDispatchInfoByPlanFile'));
+    assert.ok(/deliverPrompt\(terminal, prompt, getPromptDeliveryOptions\(\), true, false\)/.test(call),
+        'a composed prompt must pass applySeatBlock=false or the git policy block is delivered twice');
 });
 
-test('standalone buildPromptForCards no longer hardcodes SKIP_TESTS_DIRECTIVE', () => {
-    const fnStart = BOOTSTRAP_SRC.indexOf('async function buildPromptForCards');
-    const fnEnd = BOOTSTRAP_SRC.indexOf('return blocks.join', fnStart);
-    const fnBody = BOOTSTRAP_SRC.slice(fnStart, fnEnd);
-    assert.ok(
-        !fnBody.includes('SKIP_TESTS_DIRECTIVE'),
-        'buildPromptForCards must NOT hardcode SKIP_TESTS_DIRECTIVE — the seat block supplies it from config'
-    );
-});
-
-test('standalone buildPromptForCards keeps FOCUS_DIRECTIVE (dispatch-scoped)', () => {
-    const fnStart = BOOTSTRAP_SRC.indexOf('async function buildPromptForCards');
-    const fnEnd = BOOTSTRAP_SRC.indexOf('return blocks.join', fnStart);
-    const fnBody = BOOTSTRAP_SRC.slice(fnStart, fnEnd);
-    assert.ok(
-        fnBody.includes('FOCUS_DIRECTIVE'),
-        'buildPromptForCards must keep FOCUS_DIRECTIVE — it is dispatch-scoped (references the plan list below it)'
-    );
+test('getLocalApiServerPort resolves the standalone-wired server', () => {
+    const fn = TASK_VIEWER_SRC.slice(TASK_VIEWER_SRC.indexOf('public getLocalApiServerPort()'));
+    assert.ok(/_apiServerForBroadcast/.test(fn.slice(0, 400)),
+        'the accessor must fall back to the field setApiServer writes, or every headless prompt reads apiPort 0');
 });
 
 // ── 12. Standalone ptySendPrompt strips host-only fields ─────────────────
@@ -1646,6 +1628,40 @@ test('BEHAVIOUR: reversed DB row order yields a byte-identical block (sort makes
     assert.strictEqual(blockForward, blockReversed,
         'reversed DB row order must produce a byte-identical seat block — ' +
         'the content-keyed cache suppresses the second send only if the string is stable');
+});
+
+// ── 11. Dispatch protocol directives append on pty delivery path ─────────
+
+test('pty delivery appends the dispatch-protocol bundle for code-touching roles', () => {
+    for (const src of [TASK_VIEWER_SRC, BOOTSTRAP_SRC]) {
+        assert.ok(/roleTakesDispatchDirectives\(/.test(src),
+            'both hosts must gate the dispatch directives on the recipient role');
+    }
+});
+
+test('the pty-path append uses the whole bundle, not the completion half', () => {
+    for (const src of [TASK_VIEWER_SRC, BOOTSTRAP_SRC]) {
+        const at = src.indexOf('roleTakesDispatchDirectives(');
+        const window = src.slice(at, at + 240);
+        assert.ok(/ensureDispatchProtocolDirectives\(/.test(window),
+            'the role-gated append must use ensureDispatchProtocolDirectives — a bare ensureCompletionDirective forks the protocol');
+    }
+});
+
+test('the dispatch directives are appended before standing orders', () => {
+    for (const src of [TASK_VIEWER_SRC, BOOTSTRAP_SRC]) {
+        const directivesAt = src.indexOf('roleTakesDispatchDirectives(');
+        const soAt = src.indexOf('applyStandingOrders(', directivesAt);
+        assert.ok(directivesAt > -1 && soAt > -1 && directivesAt < soAt,
+            'STANDING_ORDERS_BLOCK_RE is $-anchored — the SO block must stay last');
+    }
+});
+
+test('an unresolved role does not take the dispatch directives', () => {
+    assert.strictEqual(roleTakesDispatchDirectives(''), false);
+    assert.strictEqual(roleTakesDispatchDirectives('reviewer'), false);
+    assert.strictEqual(roleTakesDispatchDirectives('Coder'), true, 'role comparison must normalise case');
+    assert.strictEqual(roleTakesDispatchDirectives('custom_agent_x'), true);
 });
 
 // ── Summary ──────────────────────────────────────────────────────────────

@@ -363,3 +363,8 @@ Add `switchboard.activityLight.blockedNotifyIntervalMs` (number, default `90000`
 ---
 
 **Recommendation:** Complexity 6 → **Send to Coder**.
+
+## Implementation Summary
+
+Replaced the per-silence-episode "gone quiet" notification with a paced, aggregated wake mechanism in `PlanIngestionEngine.ts`. The blocked state is still stamped in the DB and signals machine consumers via `deliver: false` on every silence tick (preserving autoban lane halt behavior), while lead-facing text is aggregated and paced per workspace via `_runBlockedDigestSweep` (storing per-seat pacing timestamps in `kanban.blockedNotifyPacing`). Added `deliver?: boolean` to `TurnEndInfo` and guarded prompt delivery in both `TaskViewerProvider.notifyTurnEnd` and `bootstrap.handleTurnEndNotify`. Added `switchboard.activityLight.blockedNotifyIntervalMs` to `package.json` and unit test coverage in `src/test/plan-ingestion-blocked-digest.test.js`.
+

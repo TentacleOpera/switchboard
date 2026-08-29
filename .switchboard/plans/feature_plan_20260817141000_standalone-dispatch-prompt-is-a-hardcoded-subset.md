@@ -277,3 +277,7 @@ So the standalone arm must cap its own set **before** the per-record `updateDisp
 ---
 
 **Recommendation:** Complexity 6 → **Send to Coder**.
+
+## Implementation Summary
+
+Unified standalone prompt generation with the extension host by replacing `buildPromptForCards` with `KanbanProvider.generateUnifiedPrompt` via `buildDispatchPlans`. Updated `TaskViewerProvider.getLocalApiServerPort()` to fall back to `_apiServerForBroadcast` so headless standalone prompts resolve live local API port numbers. Threaded `originTerminal`, destination column, and team-head batch dispatch capping (`selectTeamBatchPlans`) into `triggerAction` while passing `applySeatBlock=false` to prevent duplicate seat directive injection. Updated regression tests in `src/test/seat-safeguards-fleet-prompt-path.test.js` to enforce the shared prompt builder and accessor fallback contracts.

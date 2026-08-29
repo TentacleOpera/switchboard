@@ -19,12 +19,13 @@ import {
 } from '../services/WorkspaceIdentityService';
 import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import {
-    buildAnalysisScopeLine,
     columnToPromptRole,
-    FOCUS_DIRECTIVE,
     buildSeatDirectiveBlock,
     ensureDispatchProtocolDirectives,
+    roleTakesDispatchDirectives,
     validateDispatchPayload,
+    partitionPlansByFeature,
+    TEAM_BATCH_PLAN_CAP,
 } from '../services/agentPromptBuilder';
 import { writeMissionControlReport } from '../services/ScheduledJobsService';
 import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets } from './hostServices';
@@ -158,64 +159,6 @@ function htmlEscapeJson(json: string): string {
     return json.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-async function buildPromptForCards(role: string, records: any[], root: string): Promise<string | null> {
-    if (records.length === 0) return null;
-    // FOCUS_DIRECTIVE is dispatch-scoped (it references the plan list below it)
-    // and stays here. The seat-scoped directives (git safety, skip-compilation,
-    // skip-tests) were hardcoded here unconditionally — they are now supplied by
-    // the seat block in the delivery layer (deliverPrompt) from the configured
-    // role addons, so both hosts agree and an operator who disabled them stops
-    // receiving them.
-    const blocks: string[] = [
-        `You are acting as the Switchboard ${role} agent.`,
-        FOCUS_DIRECTIVE,
-        '',
-        `Process the following ${records.length} plan(s):`,
-    ];
-    for (const rec of records) {
-        const planFile = rec.planFile || '';
-        let planPath = planFile;
-        if (planPath.startsWith('file://')) {
-            try { planPath = new URL(planPath).pathname; } catch { planPath = planPath.replace(/^file:\/\/\/?/, ''); }
-            if (process.platform !== 'win32' && !planPath.startsWith('/')) { planPath = '/' + planPath; }
-        }
-        const resolvedPath = path.isAbsolute(planPath) ? planPath : path.resolve(root, planPath);
-        let content = '';
-        try { content = fs.readFileSync(resolvedPath, 'utf8'); } catch { /* file may be transient */ }
-        blocks.push(`\n--- ${rec.planFile} (topic: ${rec.topic || 'Untitled'}) ---\n${content.slice(0, 20000)}`);
-    }
-    return blocks.join('\n\n');
-}
-
-/**
- * The `dispatch-analysis` planner prompt, byte-for-byte the shape
- * KanbanProvider.generateUnifiedPrompt emits for the extension host. Deliberately
- * does NOT inline plan bodies: this pass is read-only and the skill re-queries the
- * board itself, so the plan list is a starting point, not the payload.
- */
-function buildDispatchAnalysisPrompt(records: any[], root: string, apiPort: number, scope?: string | null): string {
-    const planList = records.map(rec => {
-        const planFile = rec.planFile || '';
-        let planPath = planFile;
-        if (planPath.startsWith('file://')) {
-            try { planPath = new URL(planPath).pathname; } catch { planPath = planPath.replace(/^file:\/\/\/?/, ''); }
-            if (process.platform !== 'win32' && !planPath.startsWith('/')) { planPath = '/' + planPath; }
-        }
-        const absolutePath = planPath ? (path.isAbsolute(planPath) ? planPath : path.resolve(root, planPath)) : '';
-        const planIdLine = rec.planId ? `\nPLAN_ID=${rec.planId}` : '';
-        return `- [${rec.topic || 'Untitled'}] Plan File: ${absolutePath}${planIdLine}`;
-    }).join('\n');
-    // Same shared resolver the extension host's arm uses — the `PROJECT=` line
-    // cannot fork between the two prompt builders because there is only one.
-    const scopeLine = buildAnalysisScopeLine(scope);
-    return `Read and follow .agents/protocols/dispatch-analysis/SKILL.md now.\n` +
-        `This is a read-only analysis pass — do not modify any plan file.\n` +
-        `WORKSPACE_ROOT=${root}\n` +
-        `API_PORT=${apiPort}\n` +
-        `${scopeLine}` +
-        `\nPLANS TO PROCESS:\n${planList}`;
-}
-
 export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions): Promise<HeadlessSwitchboardInstance> {
     const workspaceRoot = path.resolve(opts.workspaceRoot);
     if (!fs.existsSync(workspaceRoot)) {
@@ -287,6 +230,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
      * field. Both default true; machine-origin notices (turn-end) pass standing
      * orders ON and the seat block OFF — the recipient acts on the notice, so its
      * durable orders belong in it, but a notice carries no task to constrain.
+     * Composed prompts (triggerAction board dispatch) also pass applySeatBlock OFF
+     * because generateUnifiedPrompt already emitted the git policy / skip / caveman
+     * directives, and the dispatch-protocol bundle, inside the prompt body.
      * `dispatch` (6th) controls the dispatch protocol directives bundle when present.
      *
      * Ordering (constraint 1): apply dispatch protocol directives →
@@ -410,6 +356,15 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     }
                 }
             } catch { /* a degraded prompt beats a lost dispatch */ }
+
+            // Twin of TaskViewerProvider.ts's append — see the comment there.
+            // Positional `applySeatBlock` is this host's `addonsComposed`, so a
+            // board-composed prompt (which passes false) is not touched, and the
+            // turn-end notice (which passes false) never carries a plan-file
+            // instruction to a lead.
+            if (roleTakesDispatchDirectives(handle.role || '')) {
+                out = ensureDispatchProtocolDirectives(out);
+            }
         }
         if (applyOrders) {
             try {
@@ -2280,21 +2235,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const targetRole = payload.role || (targetColumn
                         ? (DEFAULT_KANBAN_COLUMNS.find(c => c.id === targetColumn)?.role || columnToPromptRole(targetColumn) || 'lead')
                         : 'coder');
-                    // Instruction parity with the extension host. buildPromptForCards has no
-                    // notion of `instruction`, so without this arm the Analyze button in the
-                    // browser silently delivers a normal planner prompt (plan bodies inlined,
-                    // "process the following plans") — the planner then REWRITES the plan
-                    // files, which is the exact opposite of a read-only analysis pass.
-                    // Mirrors KanbanProvider.generateUnifiedPrompt's dispatch-analysis arm.
-                    // If analysisScope is undefined (a caller that did not forward it),
-                    // fall back to the provider's project filter, which setProjectFilter
-                    // persists to the DB config key (parity with the extension host).
-                    const analysisScope = payload.analysisScope !== undefined ? payload.analysisScope : kanbanProvider.getProjectFilter();
-                    const prompt = payload.instruction === 'dispatch-analysis'
-                        ? buildDispatchAnalysisPrompt(records, root, server?.getPort() ?? 0, analysisScope)
-                        : await buildPromptForCards(targetRole, records, root);
-                    if (!prompt) { return { success: false, error: 'Failed to build dispatch prompt' }; }
-
                     // getWorktrees() takes no arguments — it already filters status='active'
                     // in SQL and is scoped to this workspace's db.
                     const activeWorktrees = await db.getWorktrees();
@@ -2329,7 +2269,61 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         terminal = await ptyFleetService.create(targetRole, overrideName, matchedWtPath || root, matchedWtPath);
                     }
 
-                    const deliveryReadiness = await deliverPrompt(terminal, prompt, getPromptDeliveryOptions());
+                    // BATCH TO A TEAM HEAD — cap what MOVES, not only what the prompt names (Change 6c).
+                    // Loose plans only: a group carrying a feature takes the feature branch in
+                    // generateUnifiedPrompt, which is not batch mode and is not capped.
+                    let cappedOut: any[] = [];
+                    if (targetRole === 'lead'
+                        && records.length > TEAM_BATCH_PLAN_CAP
+                        && partitionPlansByFeature(records).featureGroups.length === 0
+                        && kanbanProvider
+                        && await kanbanProvider.isCodingTeamHead(root, targetRole, terminal.friendlyName)) {
+                        const { sent, skipped } = kanbanProvider.selectTeamBatchPlans(records);
+                        records = sent;
+                        cappedOut = skipped;
+                    }
+
+                    const analysisScope = payload.analysisScope !== undefined
+                        ? payload.analysisScope
+                        : kanbanProvider.getProjectFilter();
+
+                    let prompt: string | null = null;
+                    try {
+                        // ONE builder for both hosts. No worktreePathMap: this is the
+                        // CLI/trigger mode, where buildDispatchPlans resolves worktrees
+                        // from the record itself (matchWorktreePath), which is exactly
+                        // what the terminal-resolution block above already does.
+                        const dispatchPlans = await kanbanProvider.buildDispatchPlans(root, records);
+                        prompt = await kanbanProvider.generateUnifiedPrompt(
+                            targetRole,
+                            dispatchPlans,
+                            root,
+                            {
+                                instruction: payload.instruction,
+                                analysisScope,
+                                initiatorProject: kanbanProvider.getProjectFilter(),
+                                originTerminal: terminal.friendlyName,
+                                ...(targetColumn ? { destinationColumn: targetColumn } : {}),
+                            }
+                        );
+                    } catch (promptErr) {
+                        // generateUnifiedPrompt THROWS for the tester role with no PRD.
+                        // buildPromptForCards never threw, so this arm had no failure
+                        // path. Report it instead of rejecting out of the verb handler.
+                        return {
+                            success: false,
+                            error: promptErr instanceof Error ? promptErr.message : String(promptErr)
+                        };
+                    }
+                    if (!prompt) { return { success: false, error: 'Failed to build dispatch prompt' }; }
+
+                    // 4th arg: standing orders still apply (a dispatched seat reports to
+                    // its head). 5th arg: the seat block does NOT — generateUnifiedPrompt
+                    // already emitted the git policy / skip / caveman directives, and the
+                    // dispatch-protocol bundle, inside the prompt body. This is the
+                    // positional twin of the extension's `addonsComposed: true`
+                    // (TaskViewerProvider.ts:460).
+                    const deliveryReadiness = await deliverPrompt(terminal, prompt, getPromptDeliveryOptions(), true, false);
 
                     // A CLI that exits during boot (auth failure, bad command) aborts
                     // delivery — the prompt was never written. Report an error rather
@@ -2357,14 +2351,27 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         }
                     }
 
-                    if (targetColumn && sessionIds.length > 0) {
+                    const movedSessionIds = records.map((r: any) => r.sessionId || r.planId).filter(Boolean);
+                    if (targetColumn && movedSessionIds.length > 0) {
                         const moveFrom = sourceColumn || records[0]?.kanbanColumn;
                         if (moveFrom && moveFrom !== targetColumn) {
-                            await moveSessionsToColumn(sessionIds, targetColumn);
-                            server.broadcastWs('moveCards', { sessionIds, targetColumn }, SURFACES.kanban);
+                            await moveSessionsToColumn(movedSessionIds, targetColumn);
+                            server.broadcastWs('moveCards', { sessionIds: movedSessionIds, targetColumn }, SURFACES.kanban);
                         }
                     }
-                    server.broadcastWs('showStatusMessage', { message: `Dispatched ${records.length} plan(s) to ${terminal.friendlyName}.`, isError: false }, SURFACES.common);
+                    if (cappedOut.length > 0) {
+                        server.broadcastWs('moveCardsFailed', {
+                            failures: cappedOut
+                                .map((p: any) => ({
+                                    id: p.planId || p.sessionId || '',
+                                    sourceColumn: p.column || p.kanbanColumn || '',
+                                    reason: `over the ${TEAM_BATCH_PLAN_CAP}-plan limit for one team head — not sent`
+                                }))
+                                .filter((f: any) => f.id && f.sourceColumn)
+                        }, SURFACES.kanban);
+                    }
+                    const stayed = cappedOut.length > 0 ? ` Left in place: ${cappedOut.map((p: any) => p.topic || p.planId || p.sessionId || 'Untitled').join(', ')}.` : '';
+                    server.broadcastWs('showStatusMessage', { message: `Dispatched ${records.length} plan(s) to ${terminal.friendlyName}.${stayed}`, isError: false }, SURFACES.common);
                     return {
                         success: true,
                         targetColumn,
@@ -2643,11 +2650,21 @@ Each plan file must include:
     // log, opts — all in scope here.
     const handleTurnEndNotify = (info: any) => {
         void (async () => {
+            // Machine-only signal (the blocked arm's per-seat emission). The lead-facing
+            // text for those seats arrives as one paced digest from
+            // PlanIngestionEngine._runBlockedDigestSweep; handleAutobanTurnEnd — the
+            // OTHER consumer of this single-slot notifier — still receives every one of
+            // them, which is what keeps autoban lanes halting on their existing cadence.
+            // Deliberately unlogged: this fires per blocked seat per tick and the digest
+            // logs the seats it reported.
+            if (info.deliver === false) { return; }
+
             const seatName = info.seatName;
             const planFile = info.planFile;
             // `body` (pre-composed evidence) wins when set; otherwise compose the
             // host's own one-line message. `stalled` always carries a body.
-            // Note: `composeCompletedTurnEndBody` in PlanIngestionEngine is the real producer for completed.
+            // Note: `composeCompletedTurnEndBody` in PlanIngestionEngine is the real producer for completed;
+            // `_runBlockedDigestSweep` in PlanIngestionEngine is the real producer for blocked.
             const message = info.body ?? (info.outcome === 'completed'
                 ? `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${planFile}'.`
                 : info.outcome === 'stalled'
