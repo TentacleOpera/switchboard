@@ -69,7 +69,7 @@ seat:
 | how it is woken | mission transition points (`supervised-missions-wake-the-controller-on-transitions.md`) | its own host scheduler, after it dispatches |
 | replaceable? | **no** — an attended mission requires the controller seated | n/a |
 | needs an interval tick? | no | yes, but not one Switchboard builds |
-| project management via | buttons in its dock strip | the run sheet's menu |
+| project management via | buttons in the `#agent-dock` header | the run sheet's menu |
 
 **Step 2 inverts this today.** `.agents/workflows/switchboard.md` says *"**You are the orchestrator.
 Not a terminal you start — this one.** Adopt the seat and run the pre-flight here, in this
@@ -93,18 +93,27 @@ difference, and it decides the affordance:
 | | affordance | why |
 | :--- | :--- | :--- |
 | `/switchboard` agent | the run sheet's menu | a conversation with no surface to click |
-| mission controller | buttons in its dock strip | it is embedded in a panel that can render controls |
+| mission controller | buttons in the `#agent-dock` header | it runs in an expanding shell panel that can render controls |
 
 A menu prompt is a **substitute for buttons**, not a superior form of them. Where a UI exists, buttons
 win on every axis that matters here: they cost no resident context, they need no parsing, they cannot
 be misread, and they can be stateful — disabled when the action does not apply, which a menu line
 cannot be.
 
-**The dock is already there.** `mission-control.js` renders `mc-controller-strip` above
-`mc-controller-frame`, which embeds the seated controller's terminal via `/terminals?solo=<seat>`
-(`:393-407`). The strip currently carries nothing; the panel's ten wired buttons are all mission and
-schedule operations (`mc-launch`, `mc-ready-mission`, `mc-new-schedule`, …). Project-management
-controls belong in that strip.
+**The dock is already there, and it is a shell surface — not the Mission Control panel.** `#agent-dock`
+(`shell.html:440`, `shell.js:20-33`) is a right-hand flex child beside `#content` that hosts one live
+terminal via `/terminals?solo=&dock=1`, with its own splitter, header, role picker and close button.
+It expands and collapses; it is not a tab inside the panel. (The panel has its own separate embed,
+`mc-controller-strip` / `mc-controller-frame` at `mission-control.js:393-407` — a different surface,
+and not the one this section is about.)
+
+Its header carries **three** controls today — `dock-role-btn` (the one `.dock-chip`), `dock-title`,
+and `dock-close`, plus `dock-start` in the empty state (`shell.html:615-624`). No project-management
+controls exist there.
+
+And the dock already opens on the right role: `dockRole` defaults to **`'project_manager'`**
+(`shell.js:60`). So these are not new controls bolted to a foreign surface — they are the controls
+that role has been missing, on the panel that already exists to host it.
 
 **And the mechanism is the house pattern.** Switchboard already generates prompts from buttons —
 `refine_ticket` and `refine_feature` are described in `CLAUDE.md` as backend-consumed skills fired
