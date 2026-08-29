@@ -509,9 +509,18 @@ test('_ptyHostVerb skips the seat block when seatBlock is false (host-only opt-o
 });
 
 test('_ptyHostVerb calls ptyListTerminals exactly once (reused for both SO and seat block)', () => {
-    const verbStart = TASK_VIEWER_SRC.indexOf('private async _ptyHostVerb');
+    // SCOPED to the composition block, not the whole method. The contract is
+    // "one round-trip serves both the live set and the seat role", and that is a
+    // statement about THIS block. The team roster-clear barrier earlier in
+    // _ptyHostVerb makes its own call, deliberately: it runs before this block,
+    // only when a dispatch opens a NEW work context on a team, and it needs a
+    // fresh lastDataAt snapshot to compute busy/deferred seats — it could not
+    // reuse a result that has not been fetched yet. A whole-method count read
+    // that legitimate second call as a violation and turned this gate into noise.
+    const verbStart = TASK_VIEWER_SRC.indexOf('const applySO = payload?.standingOrders');
     const verbEnd = TASK_VIEWER_SRC.indexOf('const http = require', verbStart);
     const verbBody = TASK_VIEWER_SRC.slice(verbStart, verbEnd);
+    assert.ok(verbStart > 0 && verbEnd > verbStart, 'composition block not found in _ptyHostVerb');
     // Count actual INVOCATIONS, not textual mentions — the earlier form counted
     // comment prose and would have tolerated a second real round-trip while
     // failing on a clarifying comment.
@@ -601,58 +610,116 @@ test('_attemptDirectTerminalPush accepts promptComposed and sets addonsComposed 
  * two composing callers would silently exempt five uncomposed dispatch paths,
  * and a presence-only assertion cannot see the difference.
  */
+/**
+ * Read the 6th positional argument by BALANCING the call's parentheses and
+ * splitting on top-level commas.
+ *
+ * The previous form took `lines.slice(i, i + 12)`, cut at the first `);`, and
+ * tail-anchored `/,\s*true\s*$/`. That failed open on any site whose 7th
+ * `delivery` argument follows the marker — the `true` was no longer last, so two
+ * genuinely composed sites (the standing-orders one-shot and the single-card
+ * board dispatch) were classified UNCOMPOSED and waved through by the per-site
+ * "must NOT pass true" loop below. Cutting at the first `);` also truncated any
+ * call containing a nested `)` before its own close. Parse the arguments.
+ */
+function dispatchCallArgs(lines, startIdx) {
+    const text = lines.slice(startIdx, startIdx + 40).join('\n');
+    let i = text.indexOf('_dispatchExecuteMessage(') + '_dispatchExecuteMessage('.length;
+    const args = [];
+    let cur = '';
+    let depth = 1;
+    let quote = null;
+    for (; i < text.length; i++) {
+        const c = text[i];
+        if (quote) {
+            if (c === '\\') { cur += text[i] + (text[i + 1] || ''); i++; continue; }
+            if (c === quote) { quote = null; }
+            cur += c;
+            continue;
+        }
+        if (c === '\'' || c === '"' || c === '`') { quote = c; cur += c; continue; }
+        if (c === '(' || c === '[' || c === '{') { depth++; cur += c; continue; }
+        if (c === ')' || c === ']' || c === '}') {
+            depth--;
+            if (depth === 0) { break; }
+            cur += c;
+            continue;
+        }
+        if (c === ',' && depth === 1) { args.push(cur); cur = ''; continue; }
+        cur += c;
+    }
+    if (cur.trim()) { args.push(cur); }
+    return args;
+}
+
 function classifyDispatchCallSites() {
     const lines = TASK_VIEWER_SRC.split('\n');
     const composed = [];
     const uncomposed = [];
     for (let i = 0; i < lines.length; i++) {
-        if (!/(?:await\s+)?this\._dispatchExecuteMessage\(/.test(lines[i])) { continue; }
-        // The call may span several lines; take up to the first `);` after it.
-        const chunk = lines.slice(i, i + 12).join('\n');
-        const end = chunk.indexOf(');');
-        const call = end >= 0 ? chunk.slice(0, end) : chunk;
-        // The 6th positional argument is promptComposed. It is only ever passed
-        // as a bare literal after the sender string.
-        (/'[a-z]+',\s*true\s*$/m.test(call.trimEnd()) || /,\s*true\s*$/.test(call.trimEnd()))
-            ? composed.push(i + 1)
-            : uncomposed.push(i + 1);
+        if (!/this\._dispatchExecuteMessage\(/.test(lines[i])) { continue; }
+        const args = dispatchCallArgs(lines, i);
+        // 6th positional argument is `promptComposed` (default false). Strip any
+        // trailing line comment before comparing.
+        const sixth = args.length >= 6 ? args[5].replace(/\/\/.*/g, '').trim() : '';
+        (sixth === 'true' ? composed : uncomposed).push(i + 1);
     }
     return { composed, uncomposed };
 }
 
-test('exactly 7 _dispatchExecuteMessage call sites exist, and exactly 2 pass promptComposed: true', () => {
+// Audit re-run 2026-08-30 (reviewer pass). The counts below were 7/2/5 and had
+// drifted to 12/5/7 while the tail-anchored classifier hid two of the marked
+// sites, so the gate was reporting the wrong shape in the UNSAFE direction. The
+// five marked sites, each justified:
+//   1. the standing-orders one-shot — the rendered orders block IS the payload,
+//      so a seat directive block appended after it would be a second suffix;
+//   2. batch-group dispatch — prompt from buildKanbanBatchPrompt;
+//   3. mechanical-gate findings to the reviewer's coder;
+//   4. phone-a-friend pre-review findings to the reviewer's coder;
+//   5. single-card dispatch — prompt from generateUnifiedPrompt (it grew a 7th
+//      `delivery` argument carrying originTerminal, which is what defeated the
+//      old tail anchor).
+// 3 and 4 are the debatable pair: their prompts are inline template literals,
+// not agentPromptBuilder output, and they ask a coder to change code. Their
+// recipient is mid-turn with its seat block already cached, so nothing is lost
+// today — but the marker is doing semantic work it was not designed for. Left
+// as-is deliberately and recorded, rather than changed by a reviewer on a path
+// outside the plan under review.
+test('exactly 12 _dispatchExecuteMessage call sites exist, and exactly 5 pass promptComposed: true', () => {
     const { composed, uncomposed } = classifyDispatchCallSites();
     assert.strictEqual(
-        composed.length + uncomposed.length, 7,
-        `Expected 7 _dispatchExecuteMessage call sites (the audited set), found ${composed.length + uncomposed.length}. ` +
+        composed.length + uncomposed.length, 12,
+        `Expected 12 _dispatchExecuteMessage call sites (the audited set), found ${composed.length + uncomposed.length}. ` +
         'A new call site must be classified deliberately: it defaults to promptComposed=false and therefore ' +
         'GAINS the seat block, which is the safe direction — but the audit must be re-run.'
     );
     assert.strictEqual(
-        composed.length, 2,
-        `Exactly 2 call sites may pass promptComposed: true (batch-group dispatch and single-card dispatch — ` +
-        `the only two whose prompt came out of generateUnifiedPrompt/buildKanbanBatchPrompt). ` +
+        composed.length, 5,
+        `Exactly 5 call sites may pass promptComposed: true (see the audit note above this test). ` +
         `Found ${composed.length} at lines [${composed.join(', ')}]. ` +
-        'Marking a third exempts an uncomposed path from its seat safeguards, silently.'
+        'Marking a sixth exempts an uncomposed path from its seat safeguards, silently.'
     );
 });
 
-test('each of the 5 uncomposed dispatch call sites is enumerated and unmarked', () => {
+test('each of the 7 uncomposed dispatch call sites is enumerated and unmarked', () => {
     const { uncomposed } = classifyDispatchCallSites();
     assert.strictEqual(
-        uncomposed.length, 5,
-        `Expected 5 uncomposed dispatch call sites — dispatchCustomPromptToRole, Mission Control kickoff, ` +
-        `the pair-programming send, _tryFleetDeliveryForRole and the Airlock patch hand-off. ` +
-        `Found ${uncomposed.length} at lines [${uncomposed.join(', ')}].`
+        uncomposed.length, 7,
+        `Expected 7 uncomposed dispatch call sites — dispatchCustomPromptToRole, the two Mission Control ` +
+        `kickoffs, the pair-programming send, _tryFleetDeliveryForRole, the Airlock patch hand-off and the ` +
+        `team-automation scheduler send. Found ${uncomposed.length} at lines [${uncomposed.join(', ')}].`
     );
     // Each must reach the funnel WITHOUT the marker, so the delivery layer
     // appends the seat block. Assert per site, not in aggregate.
+    const srcLines = TASK_VIEWER_SRC.split('\n');
     for (const line of uncomposed) {
-        const call = TASK_VIEWER_SRC.split('\n').slice(line - 1, line + 11).join('\n');
-        const end = call.indexOf(');');
-        const sliced = end >= 0 ? call.slice(0, end) : call;
-        assert.ok(
-            !/,\s*true\s*$/.test(sliced.trimEnd()),
+        // Same parser as the classifier — a tail anchor here missed a marker
+        // followed by a 7th `delivery` argument, which is the whole reason two
+        // marked sites were mis-filed into this list in the first place.
+        const args = dispatchCallArgs(srcLines, line - 1);
+        const sixth = args.length >= 6 ? args[5].replace(/\/\/.*/g, '').trim() : '';
+        assert.notStrictEqual(
+            sixth, 'true',
             `Uncomposed dispatch call site at line ${line} must NOT pass promptComposed: true — ` +
             'its prompt was never composed by agentPromptBuilder, so suppressing the seat block ' +
             'would reproduce the incident on that path.'

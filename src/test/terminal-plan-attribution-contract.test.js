@@ -395,9 +395,13 @@ test('the feature nudge sweep treats an empty liveness snapshot as no evidence',
     // reload, ptyHost still booting, fleet-less host). Without an early return the
     // next tick reads every armed head as "absent" and permanently drops every
     // watch for heads that are still running. Same contract as `lastDataAt > 0`.
+    // Ends at the NEXT method, not at _retryPendingFeatureLinks: _runQueueNudgeSweep
+    // was inserted between the two, so the old bound swallowed it and every
+    // assertion below could be satisfied by the QUEUE sweep instead of the
+    // FEATURE sweep it names.
     const sweep = planIngestionTs.substring(
         planIngestionTs.indexOf('private async _runFeatureNudgeSweep('),
-        planIngestionTs.indexOf('private async _retryPendingFeatureLinks(')
+        planIngestionTs.indexOf('private async _runQueueNudgeSweep(')
     );
     assert.ok(sweep.length > 0, '_runFeatureNudgeSweep must exist');
     assert.ok(sweep.includes('if (liveness.length === 0) return;'), 'an empty liveness snapshot must abort the tick, never drop watches');
@@ -411,10 +415,14 @@ test('the feature nudge sweep treats an empty liveness snapshot as no evidence',
     assert.ok(sweep.includes('notifiedSeatsThisTick.has('), 'a seat notified this tick must suppress the nudge');
     assert.ok(sweep.includes('!!s.dispatchedAt'), 'an outstanding dispatch must suppress the nudge — the per-dispatch backstop owns that window');
     // Cancellation + pacing.
-    assert.ok(sweep.includes('nowMs - watch.lastNudgedAt < turnEndSilenceMs'), 'the nudge must be paced by lastNudgedAt');
+    // Paced on `nudgeSilenceMs` (default 10 min), deliberately NOT `turnEndSilenceMs`
+    // (90s): the nudge is a backstop, not a turn-boundary probe. This assertion
+    // pinned turnEndSilenceMs and went stale when the two constants were split.
+    assert.ok(sweep.includes('nowMs - watch.lastNudgedAt < nudgeSilenceMs'), 'the nudge must be paced by lastNudgedAt');
     assert.ok(sweep.includes('recipientSeat: watch.headTerminal'), 'the head IS the recipient — parent resolution must be skipped');
     // Evidence, not a poke (the PRD "done" definition for this payload).
     assert.ok(sweep.includes('s.dispatchedTerminal') && sweep.includes('s.kanbanColumn') && sweep.includes('s.planFile'),
+        'the nudge payload must name the seat, its column and its plan file — evidence, not a bare poke');
 });
 
 test('watchFeature / unwatchFeature are catalogued, allowlisted, schema\'d and return their state', () => {
