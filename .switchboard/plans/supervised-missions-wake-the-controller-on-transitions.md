@@ -115,10 +115,9 @@ selects supervision selects nothing.
 
 ## Outstanding Questions
 
-- **[user] Does a supervised mission still need the interval tick at all?** If supervision is
-  wake-on-transition, the 619-line protocol's interval apparatus — the tick, silent-when-idle, the
-  stall counters in `progress.json` — is answering a question transitions answer better, except for
-  one case: a mission that transitions to `in-flight` and then **stops** produces no further edge, so
-  only a timer notices. Transitions plus a stall timeout may replace the whole tick loop. That is the
-  single biggest simplification available to `replace-the-mission-control-persona-with-a-run-sheet.md`,
-  and it should be decided before that plan's "watch an armed run" branch is written.
+- **Settled: missions need no ticker.** An attended mission is supervised by a **seated controller
+  terminal**, woken on transitions. The controller is not replaceable by a `/switchboard` session and
+  does not poll — an earlier revision asked whether transitions plus a stall timeout could replace the
+  interval tick; the answer is that the interval tick was never the mission's to own. The stall case
+  (a mission that goes `in-flight` and then stops) belongs to whoever dispatched, not to the mission —
+  see `replace-the-mission-control-persona-with-a-run-sheet.md`.
