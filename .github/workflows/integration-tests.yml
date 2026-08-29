@@ -1258,6 +1258,17 @@ jobs:
       - name: Roster clear mid-turn deferral contract (origin exclusion + busy deferral)
         run: npm run test:contract:roster-clear-mid-turn
 
+      # Workspace-mapping resolution: parent-hood beats child-hood, and a child is
+      # only redirected to a parent that is actually open in the host window. Both
+      # halves are silent when broken — a mapped repo hands its board to a folder
+      # that is not open and the board renders blank, with no error. Runs against
+      # out/, so it must stay AFTER "Compile test outputs". Also carries the
+      # composition-root assertion that BOTH hosts build the mapping index, and the
+      # child-scaffold regression (no `.switchboard/` minted in a mapped child),
+      # which had no gate wiring of its own.
+      - name: Workspace mapping precedence, visibility and child-scaffold guard
+        run: npm run test:contract:workspace-mappings
+
       - name: Run integration suite
         run: npm run test:integration:all
 

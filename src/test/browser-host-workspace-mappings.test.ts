@@ -11,6 +11,10 @@ import {
 } from '../services/WorkspaceIdentityService';
 import { buildWorkspaceItems } from '../services/workspaceUtils';
 
+// `__dirname` is `out/test` when these run against the compiled output, so a
+// source-text assertion must resolve against the repo's `src/`, not `out/`.
+const SRC_ROOT = path.resolve(__dirname, '..', '..', 'src');
+
 suite('Browser Host Workspace Mappings Suite', () => {
     let tmpDir: string;
 
@@ -129,8 +133,8 @@ suite('Browser Host Workspace Mappings Suite', () => {
     });
 
     test('4. Composition root check — both extension and bootstrap call buildMappingIndexFromDbs and setHostWorkspaceRoots', () => {
-        const extensionSrc = fs.readFileSync(path.resolve(__dirname, '..', 'extension.ts'), 'utf8');
-        const bootstrapSrc = fs.readFileSync(path.resolve(__dirname, '..', 'standalone', 'bootstrap.ts'), 'utf8');
+        const extensionSrc = fs.readFileSync(path.join(SRC_ROOT, 'extension.ts'), 'utf8');
+        const bootstrapSrc = fs.readFileSync(path.join(SRC_ROOT, 'standalone', 'bootstrap.ts'), 'utf8');
 
         assert.ok(extensionSrc.includes('buildMappingIndexFromDbs'), 'extension.ts must call buildMappingIndexFromDbs');
         assert.ok(extensionSrc.includes('setHostWorkspaceRoots'), 'extension.ts must call setHostWorkspaceRoots');
@@ -178,14 +182,22 @@ suite('Browser Host Workspace Mappings Suite', () => {
         );
 
         // Verify bootstrap.ts guards DB file creation
-        const bootstrapSrc = fs.readFileSync(path.resolve(__dirname, '..', 'standalone', 'bootstrap.ts'), 'utf8');
+        const bootstrapSrc = fs.readFileSync(path.join(SRC_ROOT, 'standalone', 'bootstrap.ts'), 'utf8');
         assert.ok(
-            bootstrapSrc.includes('isAllowedSwitchboardLocation(dbWorkspace, effectiveDbRoot)'),
+            bootstrapSrc.includes('isAllowedSwitchboardLocation(markerWorkspace, workspaceRoot)'),
             'bootstrap.ts must guard DB file creation with isAllowedSwitchboardLocation'
         );
+        // The DB root must come from the shared resolver, never from a redirect
+        // re-derived in the composition root — a local re-derivation reinstates the
+        // child-wins behaviour the precedence fix exists to remove.
         assert.ok(
-            bootstrapSrc.includes('childMapping'),
-            'bootstrap.ts must redirect effectiveDbRoot to parent for mapped children'
+            bootstrapSrc.includes('KanbanDatabase.forWorkspace(workspaceRoot)'),
+            'bootstrap.ts must resolve the DB root via KanbanDatabase.forWorkspace(workspaceRoot)'
+        );
+        assert.strictEqual(
+            bootstrapSrc.includes('effectiveDbRoot'),
+            false,
+            'bootstrap.ts must not re-derive a child→parent DB redirect of its own'
         );
     });
 });

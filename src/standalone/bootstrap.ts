@@ -15,7 +15,6 @@ import {
     getMappingsFromIndex,
     resolveWorkspaceDbPath,
     clearMappingCache,
-    expandAndResolve,
 } from '../services/WorkspaceIdentityService';
 import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import {
@@ -493,29 +492,24 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
     const secrets = createStandaloneHostSecrets(workspaceRoot);
 
-    // If workspaceRoot is a mapped child workspace, redirect DB resolution to parent
-    let effectiveDbRoot = workspaceRoot;
-    const mappingsDoc = getMappingsFromIndex();
-    if (mappingsDoc.enabled && Array.isArray(mappingsDoc.mappings)) {
-        const childMapping = mappingsDoc.mappings.find(m =>
-            Array.isArray(m.workspaceFolders) && m.workspaceFolders.some(f => expandAndResolve(f) === workspaceRoot)
-        );
-        if (childMapping) {
-            const parentEntry = childMapping.parentFolder || (childMapping.workspaceFolders && childMapping.workspaceFolders[0]);
-            if (parentEntry) {
-                effectiveDbRoot = expandAndResolve(parentEntry);
-            }
-        }
-    }
-
-    const db = KanbanDatabase.forWorkspace(effectiveDbRoot);
+    // DB root resolution goes through KanbanDatabase.forWorkspace, which routes
+    // via resolveEffectiveWorkspaceRootFromMappings — the SAME resolver the
+    // extension uses, carrying the parent-first precedence rule and the openness
+    // gate. Standalone's root set is [workspaceRoot], so a mapped child launched
+    // alone resolves to ITSELF (its parent is not open) and a launch inside a
+    // group parent keeps the parent. Re-deriving the redirect here would restore
+    // the child-wins behaviour this feature exists to remove.
+    const db = KanbanDatabase.forWorkspace(workspaceRoot);
 
     // The database must exist on disk before ensureReady() can initialise it.
-    // Guard on isAllowedSwitchboardLocation — never create kanban.db in a mapped child.
+    // Guard on isAllowedSwitchboardLocation — never mint a `.switchboard/kanban.db`
+    // control-plane marker inside a mapped child. The guard governs `.switchboard`
+    // locations only: a `kanban.dbPath` override pointing outside one is not a
+    // marker and is created unconditionally, as it was before this guard existed.
     const dbPath = db.dbPath;
     const dbDir = path.dirname(dbPath);
-    const dbWorkspace = path.dirname(dbDir);
-    if (isAllowedSwitchboardLocation(dbWorkspace, effectiveDbRoot)) {
+    const markerWorkspace = path.basename(dbDir) === '.switchboard' ? path.dirname(dbDir) : null;
+    if (!markerWorkspace || isAllowedSwitchboardLocation(markerWorkspace, workspaceRoot)) {
         if (!fs.existsSync(dbDir)) {
             fs.mkdirSync(dbDir, { recursive: true });
         }

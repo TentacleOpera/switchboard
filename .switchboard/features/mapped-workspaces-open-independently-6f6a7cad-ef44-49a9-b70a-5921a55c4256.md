@@ -24,9 +24,9 @@ This feature makes mapping resolution deterministic and window-aware, brings the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The Browser Host Honours Workspace Mappings](../plans/the-browser-host-honours-workspace-mappings.md) — **CODER CODED** — ID: 2e268eaf-03af-4909-9595-761c6aec6247
-- [ ] [The Board Shows Only the Workspaces You Opened](../plans/the-board-shows-only-the-workspaces-you-opened.md) — **CODER CODED** — ID: 8cffe45e-e4c0-4d11-b766-208df5879050
-- [ ] [A Workspace That Owns a Board Opens On Its Own](../plans/a-workspace-that-owns-a-board-opens-on-its-own.md) — **CODER CODED** — ID: 307c9650-1593-481d-a576-088c9de326ec
+- [ ] [The Browser Host Honours Workspace Mappings](../plans/the-browser-host-honours-workspace-mappings.md) — **CODE REVIEWED** — ID: 2e268eaf-03af-4909-9595-761c6aec6247
+- [ ] [The Board Shows Only the Workspaces You Opened](../plans/the-board-shows-only-the-workspaces-you-opened.md) — **CODE REVIEWED** — ID: 8cffe45e-e4c0-4d11-b766-208df5879050
+- [ ] [A Workspace That Owns a Board Opens On Its Own](../plans/a-workspace-that-owns-a-board-opens-on-its-own.md) — **CODE REVIEWED** — ID: 307c9650-1593-481d-a576-088c9de326ec
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -73,3 +73,27 @@ Out of scope: `HeadlessSwitchboardOptions.workspaceRoot` is singular, so the bro
   - No `kanban.db` file exists at a mapped child path after `startHeadlessSwitchboard` boots with the child as `workspaceRoot`
   - Stored `workspace_mappings` value is byte-identical before and after standalone boot (read-only adoption)
 - **Must not touch:** `HeadlessSwitchboardOptions.workspaceRoot` (singular — multi-root standalone is out of scope); the `onDidChangeWorkspaceFolders` handler in `extension.ts` (owned by subtask 1)
+
+## Review Findings
+
+Reviewed commit `efe6e936` against all three subtask plans, then fixed three material defects.
+**(1) CRITICAL — `src/standalone/bootstrap.ts` re-derived its own child→parent DB redirect** (`effectiveDbRoot`), bypassing `KanbanDatabase.forWorkspace`'s call to the newly-corrected resolver and reinstating the exact child-wins behaviour this feature removes; the plan's preferred option ("redirect DB resolution via the resolver from Plan 1") is now what runs, and the `isAllowedSwitchboardLocation` guard was narrowed to `.switchboard`-shaped paths so a `kanban.dbPath` override outside one is still created.
+**(2) MAJOR — `TaskViewerProvider.refreshUI` activated the workspace context twice** on the new recovery arm (once inline, once at the shared tail); collapsed to one activation with the failure-surfacing preserved, and dropped the unreachable "not available on this board" toast that fired only when the host has zero workspace folders.
+**(3) MAJOR — 4 of the 11 new tests failed and none of them were invoked by any gate**; the two suites plus the long-unwired `child-switchboard-creation-regression.test.ts` now run under `npm run test:contract:workspace-mappings`, wired into `.github/workflows/integration-tests.yml`.
+Files changed by this review: `src/standalone/bootstrap.ts`, `src/services/TaskViewerProvider.ts`, `src/test/browser-host-workspace-mappings.test.ts`, `src/test/workspace-identity-precedence.test.ts`, `src/test/bootstrap/vscodeStub.js` (new), `package.json`, `.github/workflows/integration-tests.yml`.
+Validation: `tsc -p tsconfig.test.json --noEmit` clean; `npm run compile` clean; eslint 0 errors; `npm run test:contract:workspace-mappings` 18/18 passing; `parity:check`, `push-routing:check`, `standalone-parity:check`, `standalone-fork:check`, `host-seam-parity:check`, `kanban-dispatch-callers:check`, `verb-returns:check`, `goal-invariant-verification` all pass. Pre-existing and unrelated red at HEAD (verified untouched by this commit): `catalog:check`, `mirror:check`, `test:contract:verb-engine`, `test:contract:headless-feature-mgmt`, `test:contract:memo-workspace-binding`.
+
+## Deferred Findings
+
+- MAJOR — Plan 2's two named automated tests were never written: no unit test asserts `_getWatchFolders()` always contains the current workspace root, and none asserts `refreshUI()` recovers instead of returning silently. `src/services/KanbanProvider.ts:1924`, `src/services/TaskViewerProvider.ts:6213`.
+- MAJOR — `npx switchboard` in a mapped child still creates an empty `.switchboard/` directory there, so Plan 3's manual step 3 ("no `.switchboard/` appeared in any folder that lacked one") is not met. The `kanban.db` marker is correctly withheld, and the directory holds the host's own runtime files (`api-server-port.txt`, `auth_token`), so guarding it needs its own plan. `src/standalone/bootstrap.ts:168`.
+- MAJOR — the multi-root grouping dropdown changes shape: it used to show one entry labelled with the mapping name, and now shows the parent plus every member as separate entries. This is exactly what Plan 2's goal invariant demands, and it contradicts the feature file's "Grouping keeps working exactly as it does today". `src/services/workspaceUtils.ts:38`.
+- MAJOR — Plan 3's negative invariant is asserted structurally, not behaviourally: no test boots `startHeadlessSwitchboard` with a mapped child and then asserts no `kanban.db` exists at that path. `src/test/browser-host-workspace-mappings.test.ts:145`.
+- NIT — `scripts/check-standalone-push-parity.js` was not extended; the "both roots build the mapping index" assertion lives in the mocha suite instead. It is CI-invoked, so the hole is closed, but the parity script still cannot see composition-root index wiring. `scripts/check-standalone-push-parity.js:1`.
+- NIT — `_getAllowedRoots` admits a mapping's non-open parent whenever an open child pulls that mapping into scope, so a folder that is not open remains selectable. Within Plan 2's wording ("mappings reachable from a host root"), but looser than the visibility rule the dropdown enforces. `src/services/TaskViewerProvider.ts:4677`.
+- NIT — the standalone `switchboard.mappingsChanged` handler rebuilds the index but leaves `KanbanDatabase._instances` keyed on pre-change roots; Plan 1's superseded block accepts this (the 60s eviction sweep reclaims them). `src/standalone/bootstrap.ts:1225`.
+- NIT — nothing rebuilds the standalone mapping index when `workspace_mappings` is edited outside the board, so a change made elsewhere is served stale until restart. `src/standalone/bootstrap.ts:177`.
+
+### Goal verdict (feature)
+
+Achieved. Mapping resolution is now deterministic (parent-hood beats child-hood in both `buildMappingIndexFromDbs` and `resolveEffectiveWorkspaceRootFromMappings`) and window-aware (redirects gated on `isHostRoot`, with `null`/`[]`/populated modelled distinctly). The board's consumers read `getScopedMappingsForBoard` instead of the unscoped index, `_getWatchFolders` no longer drops the open root, and `refreshUI` recovers rather than blanking. The standalone host builds the index and honours the same visibility rule. `isAllowedSwitchboardLocation` and its global `getMappingsFromIndex()` read are untouched, as all three plans required. No destination or approach named in any plan's Goal was changed by this review: removing bootstrap's hand-rolled redirect restores the option Plan 3's own Proposed Changes called preferable.

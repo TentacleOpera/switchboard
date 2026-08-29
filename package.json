@@ -1049,7 +1049,8 @@
     "test:contract:agents-seed-deletion-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/agents-seed-deletion-guard-contract.test.js",
     "test:contract:review-column-persistence": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/review-column-persistence-regression.test.js",
     "test:contract:team-release-control": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-release-control-contract.test.js",
-    "test:contract:roster-clear-mid-turn": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/roster-clear-mid-turn-deferral.test.js"
+    "test:contract:roster-clear-mid-turn": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/roster-clear-mid-turn-deferral.test.js",
+    "test:contract:workspace-mappings": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js --require ./src/test/bootstrap/vscodeStub.js out/test/workspace-identity-precedence.test.js out/test/browser-host-workspace-mappings.test.js out/test/child-switchboard-creation-regression.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

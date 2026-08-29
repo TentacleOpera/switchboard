@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as path from 'path';
 import * as os from 'os';
+import * as fs from 'fs';
 import {
     clearMappingCache,
     setHostWorkspaceRoots,
@@ -12,10 +13,27 @@ import {
 } from '../services/WorkspaceIdentityService';
 
 suite('WorkspaceIdentityService Precedence & Openness Suite', () => {
+    // `getScopedMappingsForBoard` and `buildWorkspaceItems` prune mappings whose
+    // parentFolder is absent from disk, so any test that exercises the SCOPED path
+    // must use real directories — synthetic `/test/workspaces/...` paths are pruned
+    // and the assertion measures the prune, not the visibility rule.
+    let tmpDir: string;
+
+    setup(() => {
+        tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-mapping-precedence-')));
+    });
+
     teardown(() => {
         setHostWorkspaceRoots(null);
         clearMappingCache();
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
     });
+
+    const realDir = (name: string): string => {
+        const p = path.join(tmpDir, name);
+        fs.mkdirSync(p, { recursive: true });
+        return p;
+    };
 
     test('1. resolveEffectiveWorkspaceRootFromMappings — parent precedence over child in both array orders', async () => {
         const repoA = path.resolve('/test/workspaces/repoA');
@@ -219,23 +237,32 @@ suite('WorkspaceIdentityService Precedence & Openness Suite', () => {
     });
 
     test('5. getScopedMappingsForBoard accepts string or string[] and prunes non-qualifying mappings', async () => {
-        const parentA = path.resolve('/test/workspaces/parentA');
-        const childA = path.resolve('/test/workspaces/childA');
-        const parentB = path.resolve('/test/workspaces/parentB');
-        const childB = path.resolve('/test/workspaces/childB');
+        const parentA = realDir('parentA');
+        const childA = realDir('childA');
+        const parentB = realDir('parentB');
+        const childB = realDir('childB');
 
         const { getScopedMappingsForBoard } = require('../services/WorkspaceIdentityService');
 
+        // Two separate DBs, so provenance (sourceFolder) does not pull map-b into
+        // parentA's scope. A mapping stored in parentA's OWN database is in scope for
+        // parentA's board by design — see the docstring on getScopedMappingsForBoard —
+        // so scoping can only be measured across distinct source DBs.
         const mockDbs = new Map<string, any>([
             [parentA, {
                 ensureReady: async () => true,
                 dbPath: path.join(parentA, '.switchboard', 'kanban.db'),
                 getWorkspaceMappings: async () => ({
                     enabled: true,
-                    mappings: [
-                        { id: 'map-a', parentFolder: parentA, workspaceFolders: [childA], _enabled: true },
-                        { id: 'map-b', parentFolder: parentB, workspaceFolders: [childB], _enabled: true }
-                    ]
+                    mappings: [{ id: 'map-a', parentFolder: parentA, workspaceFolders: [childA], _enabled: true }]
+                })
+            }],
+            [parentB, {
+                ensureReady: async () => true,
+                dbPath: path.join(parentB, '.switchboard', 'kanban.db'),
+                getWorkspaceMappings: async () => ({
+                    enabled: true,
+                    mappings: [{ id: 'map-b', parentFolder: parentB, workspaceFolders: [childB], _enabled: true }]
                 })
             }]
         ]);
@@ -254,15 +281,15 @@ suite('WorkspaceIdentityService Precedence & Openness Suite', () => {
         assert.strictEqual(scopedMulti.mappings.length, 2);
 
         // Unrelated root
-        const scopedOther = getScopedMappingsForBoard('/unrelated/path');
+        const scopedOther = getScopedMappingsForBoard(path.join(tmpDir, 'unrelated'));
         assert.strictEqual(scopedOther.enabled, false);
         assert.strictEqual(scopedOther.mappings.length, 0);
     });
 
     test('6. buildWorkspaceItems visibility rule — never emits non-open parents', async () => {
-        const parent = path.resolve('/test/workspaces/parent');
-        const childA = path.resolve('/test/workspaces/childA');
-        const childB = path.resolve('/test/workspaces/childB');
+        const parent = realDir('parent');
+        const childA = realDir('childA');
+        const childB = realDir('childB');
 
         const { buildWorkspaceItems } = require('../services/workspaceUtils');
 
