@@ -95,8 +95,16 @@ historical loopback-trust behavior"* — so on the machine running the board the
 credentials at all. When a token **is** set, it accepts `Authorization: Bearer <token>` or the
 `sb_session` cookie, constant-time compared.
 
-`switchboard secrets set apiToken <value>` already exists, so the CLI can read the token from the
-secrets store and attach the header itself. The user authenticates once; every later command is a bare
+**Two sibling plans own the credential path, and this one must not solve it a third time.**
+`switchboard-clients-send-api-auth-header.md` opens with the fact that decides it: *"Not one shipped
+client sends an `Authorization` header."* A new client that invents its own token lookup makes that
+worse. That plan adds *"one shared discovery routine per language (bash, Node)"* — the CLI is Node and
+uses that routine.
+`publish-agent-api-token-for-out-of-process-agents.md` supplies what the routine discovers: an agent
+token minted at boot and published to `.switchboard/api-server-token.txt` at `0600`, **beside the port
+file this CLI already reads**. Same directory, same pattern, one extra read.
+
+Between them the user authenticates once and attaches nothing by hand. The user authenticates once; every later command is a bare
 verb. That is what makes the over-Tailscale case (an iPad against a homelab board) as terse as the
 local one — and it means the token never appears in shell history or in a command an agent printed for
 someone to paste.
@@ -146,31 +154,50 @@ disagree about an outcome, that is the bug this section exists to prevent.
 
 6. **Exit codes that mean something.** `0` dispatched or listed; `1` no running instance; `2` nothing
    ready; `3` dispatch refused by the server (no live terminal, no coding agent enabled), with the
-   server's own error text printed rather than a paraphrase.
+   server's own error text printed rather than a paraphrase; **`4` authentication failed**.
+
+   `4` is separate from `1` deliberately. `switchboard-clients-send-api-auth-header.md` names the
+   failure it prevents: a 401 reported as *"the extension isn't running"* sends the user to restart a
+   board that is running fine. A board answering `401` is reachable — say so, and name the remedy.
+
+## Dependencies
+
+- **`switchboard-clients-send-api-auth-header.md`** — the shared per-language token discovery routine.
+  The CLI consumes it rather than adding a fourth lookup.
+- **`publish-agent-api-token-for-out-of-process-agents.md`** — publishes `api-server-token.txt` beside
+  the port file, which is what that routine discovers.
+
+Neither blocks shipping: with no token configured, `_checkAuth` returns `true` and the CLI works
+unauthenticated on loopback today. They block the **remote** case — an iPad against a homelab board —
+so the ordering is: commands first, credentials when the surface leaves loopback.
 
 ## Verification Plan
 
-1. **The phone path end to end.** With a running instance and cards in `PLAN REVIEWED`, run
+1. **A 401 is not reported as a dead board.** With auth enabled and no credential, assert exit `4` and
+   a message naming authentication and its remedy — never the "No running Switchboard instance"
+   message. This is the specific misdiagnosis the sibling plan exists to prevent, and a new client is
+   the most likely place to reintroduce it.
+2. **The terminal path end to end.** With a running instance and cards in `PLAN REVIEWED`, run
    `switchboard ready`, enter `2`, assert the second listed card is dispatched — verified by asking the
    API, not by trusting the command's own output.
-2. **It calls the shared entry point.** Assert the CLI reaches `performKanbanDispatch` over HTTP and
+3. **It calls the shared entry point.** Assert the CLI reaches `performKanbanDispatch` over HTTP and
    does not implement routing, the agent-visibility check, or the column move itself. This is the
    *One implementation* rule made testable, and it is the assertion that stops the third door becoming
    a third implementation.
-3. **Never blocks without a TTY.** Run with stdin piped from `/dev/null` and assert it lists and exits
+4. **Never blocks without a TTY.** Run with stdin piped from `/dev/null` and assert it lists and exits
    0 rather than waiting. Repeat with `--json`.
-4. **`--json` is parseable.** Assert stdout is valid JSON with logs on stderr, matching `status`'s
+5. **`--json` is parseable.** Assert stdout is valid JSON with logs on stderr, matching `status`'s
    contract.
-5. **The ready set matches the protocol's.** Assert the command's output equals what
+6. **The ready set matches the protocol's.** Assert the command's output equals what
    `## What Is Ready To Go` defines — subtasks excluded, only the two columns, project filter honoured.
    A card listed here that an agent would not consider ready is two definitions of one question.
-6. **No instance, no side effects.** In a directory with no `.switchboard/`, assert the command exits 1
+7. **No instance, no side effects.** In a directory with no `.switchboard/`, assert the command exits 1
    with the standard message and **creates no directory** — the `subcommandTargetsCwd` guarantee.
-7. **Refusals surface verbatim.** With no live coding terminal, assert exit 3 and the server's own
+8. **Refusals surface verbatim.** With no live coding terminal, assert exit 3 and the server's own
    error text, not a rewrite of it.
-8. **Empty board.** Assert exit 2 and a plain "nothing ready" line, not an empty list that reads like a
+9. **Empty board.** Assert exit 2 and a plain "nothing ready" line, not an empty list that reads like a
    failure.
-9. **Both hosts.** The CLI is the standalone host's entry point, so this ships there by construction —
+10. **Both hosts.** The CLI is the standalone host's entry point, so this ships there by construction —
    but assert the extension host is unaffected: the same `LocalApiServer` serves both, and adding a CLI
    caller must not change any behaviour the extension sees.
 
