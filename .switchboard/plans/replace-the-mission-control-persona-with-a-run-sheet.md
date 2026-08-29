@@ -34,6 +34,25 @@ in sync with all of them — and it is not: `rename-the-orchestrator-to-mission-
 endpoints and the launcher still names `/orchestration/confirm`, a route that does not exist. A
 pointer cannot rot the way a copy does.
 
+**The liveness ceremony discards the answer it asked for.** `GET /health` is not a bare probe — it
+returns `{ service, status, port, pid, roots, terminals, terminalCount, selectedWorkspaceRoot }`
+(`LocalApiServer.ts`, the `/health` branch). The protocol calls it with
+`curl -s -o /dev/null -w '%{http_code}'` — **discarding the body and keeping the status code** — and
+pastes that four-line preamble **four times** in the 619-line document and twice more in the launcher.
+Three costs, all avoidable by dropping one flag:
+
+- **The misdiagnosis warning exists only because of it.** `## Port Discovery` spends a paragraph on
+  *"Never report an empty fleet, an empty board, or a missing team off a resolve that never got a
+  200."* That conflation is possible only when the agent holds a bare status code and must *remember*
+  the distinction. Reading the body makes it structural: no response is down, `terminals: []` is
+  up-with-nothing-seated. The rule stops needing to be stated.
+- **`roots` and `selectedWorkspaceRoot` answer the question the section raises and then drops.** It
+  correctly warns that *"every workspace's port file holds the same port, so its presence proves
+  nothing about this workspace"* — and then throws away the two fields that settle exactly that. A
+  200 cannot tell you it is *your* board; the body can.
+- **Pre-flight check 1 needs this data anyway.** "Is there a coding team, not merely a coding agent?"
+  requires the terminal roster, which is already in the response the agent just made and binned.
+
 **The one case that genuinely needs resident instructions.** Under `## Context Is Cleared Every Tick`,
 every wake starts from a cleared terminal. On tick 40 there is no operator to ask, so the tick's rules
 must be in the prompt. That is an argument for the *armed* branch carrying its protocol resident — not
@@ -66,6 +85,12 @@ prompt was never given a way to ask what the operator came for.
 - **The front-door plan ships first.** It repairs `POST /orchestration/confirm` →
   `/mission-control/confirm` and the two legacy `.switchboard/orchestrator/` paths. Building a menu on
   top of a step 2 that cannot arm would bury the broken call one level deeper.
+- **Teams remain unreadable over HTTP.** There is no `GET /teams` — only `/teams/create-external` —
+  which is the subject of `mission-control-cannot-see-teams-over-http.md`
+  (*"Mission Control cannot see teams over HTTP, so it cannot answer its own pre-flight"*). So the
+  orientation call in change 4 can distinguish *board down* from *nothing seated*, but not *team* from
+  *lone agent*. Pre-flight check 1 stays partially unanswerable until that plan lands; this plan must
+  not pretend otherwise.
 - Its posture fix (`ATTENDED=true` on interview) is also assumed here: a run sheet whose first act is
   to ask is attended by construction, and the flag must agree.
 
@@ -84,7 +109,7 @@ prompt was never given a way to ask what the operator came for.
 
    | branch | protocol content | lines |
    | :--- | :--- | :--- |
-   | *(always)* | Role & Scope, Hard Rules, Port Discovery | 57 |
+   | *(always)* | Role & Scope, Hard Rules, orientation call (Port Discovery, shrunk per change 4) | <57 |
    | What's ready / board state | `## What Is Ready To Go` | 72 |
    | Run a batch now | Pre-flight, Handoff-or-arm, The handoff sequence | 154 |
    | Watch an armed run | The Tick, Signals, Context Is Cleared, Verify via Git, Messaging Leads | 228 |
@@ -95,7 +120,23 @@ prompt was never given a way to ask what the operator came for.
    `switchboard-mission-control-http` (364) and `switchboard-contracts` (127) stay where they are and
    are named by the branches that need them, not inlined.
 
-4. **Assemble per mode in `buildMissionControlKickoffPrompt`.** Replace the single concatenation with
+4. **Make the resolve an orientation step, not a ceremony.** Replace the repeated
+   `-o /dev/null -w '%{http_code}'` probe with a single call that **keeps the body**, and fold it into
+   the always-on preamble once instead of pasting it per snippet. The agent reads `terminals` /
+   `terminalCount` (the roster it needs regardless), `roots` and `selectedWorkspaceRoot` (whether this
+   is the board for *this* workspace), and treats absence of a response — not an empty array — as
+   "board is down".
+
+   Delete the "never report an empty fleet" paragraph rather than rewording it: with the body in hand
+   the error it guards against cannot be made. A rule that is unnecessary is better than a rule that
+   is stated well.
+
+   **Keep step 1's probe separate.** In the launcher, the check runs *before* any real work because it
+   decides whether to spawn `npx switchboard`; there is no call to fold it into. Read the body there
+   too — `roots` tells the fail-safe branch whether the live server actually serves this workspace,
+   which it currently guesses at — but leave it as its own step.
+
+5. **Assemble per mode in `buildMissionControlKickoffPrompt`.** Replace the single concatenation with
    a mode-keyed one:
 
    | mode | receives |
@@ -107,19 +148,19 @@ prompt was never given a way to ask what the operator came for.
    The three-way branch already exists at `:11769-11783`; this keys the document to it rather than
    only the closing instruction.
 
-5. **Rewrite launcher step 2** to hand off to the run sheet rather than to a persona. It stops saying
+6. **Rewrite launcher step 2** to hand off to the run sheet rather than to a persona. It stops saying
    "become the orchestrator" — a phrase that predates the rename and describes a role the design
    deliberately does not have (see `rename-the-orchestrator-to-mission-control.md`: *"the design is a
    monitor with escalation rights and no dispatch authority"*). Edit `.agents/workflows/switchboard.md`;
    `.claude/skills/switchboard/SKILL.md` is generated from it.
 
-6. **Keep the menu honest by construction.** Every entry names a protocol path. A menu entry whose
+7. **Keep the menu honest by construction.** Every entry names a protocol path. A menu entry whose
    protocol is missing is worse than no entry — it is the `/orchestration/confirm` failure again, in a
    new file. Verification 2 asserts existence; change 8 keeps verbs out of the menu entirely.
 
-7. **Leave the `no-persona` branch alone.** Its stand-by message is correct.
+8. **Leave the `no-persona` branch alone.** Its stand-by message is correct.
 
-8. **Name protocols, not verbs.** The menu points at protocol files; `GET /catalog` and
+9. **Name protocols, not verbs.** The menu points at protocol files; `GET /catalog` and
    `switchboard-orchestration` remain the source of truth for endpoints and payloads. This is the rule
    that stops the run sheet re-accreting into a second persona: a menu entry may name a file, never
    restate an endpoint.
@@ -145,14 +186,28 @@ prompt was never given a way to ask what the operator came for.
 7. **The menu size holds.** Assert the run sheet is under 80 lines. It exists because the 619 was
    unconditional; a run sheet that grows into a second persona has failed, and only a bound catches
    that.
-8. **The menu states no endpoints.** Assert no `POST /` or `GET /` string appears in the run sheet
-   outside the `## Port Discovery` health check. This is change 8 made enforceable.
+8. **The menu states no endpoints.** Assert the only endpoint named anywhere in the run sheet is the
+   single `GET /health` orientation call from change 4 — no `POST /` at all, and no other `GET /`.
+   This is change 9 made enforceable, and it is why change 4 folds the resolve into the preamble
+   rather than leaving it inline per branch.
 9. **Launcher and mirror agree.** Assert `.claude/skills/switchboard/SKILL.md` matches
    `.agents/workflows/switchboard.md` modulo frontmatter.
 10. **Both hosts.** All extension call sites and the three in `src/standalone/bootstrap.ts` share the
     builder, so assemble-per-mode is tested by calling the builder directly, host-agnostically. Note
     standalone passes no `deliveryMode` and therefore always receives the internal runsheet — carried
     forward as-is by this plan and recorded as a question, not fixed here.
+
+11. **The body is read, not discarded.** Assert no `-o /dev/null` appears in the run sheet, the
+    branch protocols, or `.agents/workflows/switchboard.md`, and that the orientation snippet parses
+    `terminals` from the response. The defect is one curl flag; the assertion should be about that
+    flag.
+12. **Down and empty are distinguishable.** Two fixtures: board unreachable, and board up with
+    `terminals: []`. Assert the run sheet's stated handling differs — the first reports the board
+    down, the second reports nothing seated. This is the misdiagnosis the deleted paragraph used to
+    guard by instruction.
+13. **The resolve appears once.** Assert the orientation snippet occurs exactly once across the
+    always-on preamble and is not repeated per branch protocol. It is pasted six times today, and
+    repetition is what made agents skip it.
 
 ## Outstanding Questions
 
