@@ -2,7 +2,8 @@
 
 ## Goal
 
-Expose Switchboard's board and terminal operations as MCP tools reachable by local coding hosts
+Expose Switchboard's three common agent operations — read board state, dispatch a team, run the
+Mission Control lifecycle — as a small MCP surface reachable by local coding hosts
 (Claude Code, Cursor, Windsurf, Codex CLI), via a stdio shim that resolves the dynamic API port at
 call time. The point is not transport — it is **approval surface**: MCP tools are granted once at
 connect time, while every `curl` is a fresh Bash invocation a permission-gating host prompts for.
@@ -124,20 +125,40 @@ be redundant where it works and unreachable where it would help.
    the same condition surfaces as a raw connection-refused out of curl, which the agent then has to
    interpret — and `## Port Discovery` spends a paragraph telling it how.
 
-4. **Keep the tool surface a capability grant.** No generic `{method, path}` passthrough: a
-   passthrough turns a curated list into the entire private API. Start from the parked plan's twelve,
-   which are ground-truth-verified against `LocalApiServer` on path *and* method:
+4. **Keep the surface small and use-case shaped — not endpoint shaped.** The tool list is scoped to
+   three things an agent actually comes to do, not to the API's shape. Four tools:
 
-   | group | tools |
-   | :--- | :--- |
-   | features | `features_list`, `features_assign`, `features_reconcile`, `feature_split`, `feature_delete` |
-   | cards | `plans_list`, `card_move`, `card_dispatch` |
-   | terminals | `terminals_list`, `terminal_send_prompt`, `terminal_create`, `terminal_close` |
+   | tool | covers | backing |
+   | :--- | :--- | :--- |
+   | `switchboard_status` | board state **and** the terminal roster in one call — what is ready, what is seated | `_resolveBoard(db)` filtered by column, features read (`:2397`), plus `/health`'s `terminals` / `roots` |
+   | `switchboard_dispatch` | hand work to a team: stage the queue, then hand out the first card | `stageForQueue`, then `performKanbanDispatch(workspaceRoot, ref, rawColumn)` — the documented in-process entry (`:1141-1180`) |
+   | `mission_control` | the session lifecycle: `adopt`, `confirm`, `handoff` | the three `/mission-control/*` handlers |
+   | `message_terminal` | talk to a lead | `_options.terminalVerb('ptySendPrompt', {name, data, clearBeforePrompt?})` — **never `ptyWrite`** |
 
-   Carry forward the notes attached to them: `card_dispatch` calls
-   `performKanbanDispatch(workspaceRoot, ref, rawColumn)` directly rather than the route;
-   `card_move`'s `_canonicalColumnId` 400 lists valid IDs and that text is the model's self-correction
-   signal, so surface it; `terminal_send_prompt` uses `ptySendPrompt`, never `ptyWrite`.
+   `mission_control`'s `action` is a **closed enum of three named lifecycle steps**, not a mode string
+   and not a passthrough: the set is fixed at registration and unknown values are rejected. A
+   `{method, path}` passthrough remains forbidden — it converts a curated list into the entire private
+   API.
+
+   **What the parked twelve contained and this drops, with reasons:**
+
+   - `card_move` — `CLAUDE.md` is explicit that column transitions are automatic and *"Execution
+     agents must NEVER attempt to update kanban columns directly"*, with manual moves going through
+     the `kanban_operations` skill and the orchestrator as the sanctioned exception. A tool that
+     every connected agent can call is the wrong shape for a rule-bound, rare operation.
+   - `features_assign`, `features_reconcile`, `feature_split`, `feature_delete` — owned by the
+     `manage-features` skill. Restructuring a feature is deliberate, infrequent work done with a
+     skill's guidance, not a common call worth a permanent tool slot.
+   - `terminal_create`, `terminal_close` — fleet management, not a common use case. Seating and
+     closing terminals is the board's job.
+   - `features_list`, `plans_list`, `terminals_list` — not dropped, **merged** into
+     `switchboard_status`. Three calls to answer "what is going on" is the endpoint shape leaking into
+     the tool shape.
+
+   **The tradeoff, stated plainly:** a four-tool surface leaves some curls in place. That is
+   deliberate. Every tool costs context in every session that connects, and a tool list that grows
+   toward the API becomes a second surface to maintain and a wider standing grant. Coverage is not
+   the goal; the common path is. Anything outside it keeps working through the skills, unchanged.
 
 5. **Register conditionally.** Where a backing callback is absent in this host (`_options.moveCard`,
    `reconcileFeatures`, `terminalVerb` are all optional), do **not** register that tool. An absent
@@ -182,16 +203,11 @@ be redundant where it works and unreachable where it would help.
 
 ## Outstanding Questions
 
-- **[user] The twelve tools do not cover the hot path.** They were scoped for Spark's use case — board
-  and terminal operations — not for eliminating a Claude Code session's curl traffic. The heaviest
-  callers are `switchboard-orchestration/SKILL.md` (21 curls) and
-  `switchboard-mission-control-http/SKILL.md` (21), whose traffic is dominated by `GET /health`
-  orientation, board reads, the queue verbs (`queue/next`, `stageForQueue`), the
-  `mission-control/{adopt,confirm,handoff}` lifecycle and worktree reads — **none of which are in the
-  twelve**. (The reports channel is excluded by *The file/state line*, not by scope.) So v1 as scoped removes perhaps half the prompts. Recommend adding a
-  read-only orientation tool (`health`, wrapping the call the run-sheet plan makes the single entry
-  point) and the queue/lifecycle verbs, and re-deriving the list from *observed call frequency* rather
-  than inheriting a list designed for a different consumer. Confirm before implementation.
+- **Settled: four tools, use-case shaped.** An earlier revision of this plan recommended re-deriving
+  the list from observed call frequency and adding the queue verbs, worktree reads and an orientation
+  tool. **That recommendation is withdrawn.** Call frequency measures how repetitive the protocol is,
+  not how many distinct things an agent does — the four-line port preamble alone appears six times.
+  Scoping to use cases gives four tools; scoping to call sites gives twenty and a maintenance surface.
 - **Settled: no `plan_read`, and no reports-channel tools.** The parked surface cut plan-content reads
   on network-exposure grounds. Those grounds are weaker on a loopback stdio surface, but the cut
   stands for a better reason — see *The file/state line* below. Recorded here so it is not
