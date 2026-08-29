@@ -3933,7 +3933,7 @@ export class LocalApiServer {
                     if (terminalVerb) {
                         const listed = await terminalVerb('ptyListTerminals', {});
                         if (listed?.success) {
-                            return [...(listed.terminals || []), ...(listed.hiddenTerminals || [])]
+                            return [...(listed.terminals || [])]
                                 .filter((t: any) => t.parentInstanceId && t.status === 'active').length;
                         }
                     }
@@ -4478,8 +4478,7 @@ export class LocalApiServer {
             const workspaceRoot = String(this._options.workspaceRoot || '').trim() || undefined;
             const listed = await terminalVerb('ptyListTerminals', {}, workspaceRoot);
             const fleet: any[] = []
-                .concat(Array.isArray(listed?.terminals) ? listed.terminals : [])
-                .concat(Array.isArray(listed?.hiddenTerminals) ? listed.hiddenTerminals : []);
+                .concat(Array.isArray(listed?.terminals) ? listed.terminals : []);
             const isActive = (name: string) => fleet.some(t => t && t.friendlyName === name && t.status === 'active');
             if (!isActive(from)) {
                 res.writeHead(404, { 'Content-Type': 'application/json' });

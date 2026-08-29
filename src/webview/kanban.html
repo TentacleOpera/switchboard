@@ -3368,6 +3368,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <input id="agent-groups-name" class="modal-input" type="text" placeholder="e.g. Feature Implementation">
             <label class="modal-label" for="agent-groups-head-role">Head role</label>
             <select id="agent-groups-head-role" class="modal-input"></select>
+            <div style="display:flex; align-items:center; gap:6px; margin-top:10px;">
+              <input type="checkbox" id="agent-groups-worktree-mode" style="margin:0; cursor:pointer;">
+              <label for="agent-groups-worktree-mode" style="font-size:11px; cursor:pointer; margin:0;">Spawn in own worktree</label>
+            </div>
             <div style="font-size:11px; font-weight:600; margin-top:10px; margin-bottom:4px;">Team icon</div>
             <div id="agent-groups-icon-picker" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
               <button id="agent-groups-icon-preview" type="button" class="strip-btn" style="padding:4px; width:40px; height:40px; display:flex; align-items:center; justify-content:center;" title="Choose icon"></button>
@@ -5240,6 +5244,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 card.appendChild(autoDiv);
             }
 
+            // WORKTREE badge
+            if (group.worktreeMode === 'auto') {
+                const wtBadge = document.createElement('div');
+                wtBadge.className = 'teams-card-autostart';
+                const wtLabel = document.createElement('span');
+                wtLabel.className = 'teams-card-autostart-label';
+                wtLabel.textContent = 'WORKTREE';
+                wtBadge.appendChild(wtLabel);
+                card.appendChild(wtBadge);
+            }
+
             card.addEventListener('click', () => {
                 teamsTabPickedKey = key;
                 teamsTabRenderGallery();
@@ -5687,6 +5702,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (promptEl) { promptEl.value = group?.prompt || ''; }
             const headPromptEl = document.getElementById('agent-groups-head-prompt');
             if (headPromptEl) { headPromptEl.value = group?.headPrompt || ''; }
+            const wtModeCb = document.getElementById('agent-groups-worktree-mode');
+            if (wtModeCb) { wtModeCb.checked = group?.worktreeMode === 'auto'; }
             // Load the existing icon value (or clear for a new team) and render
             // the preview. The hidden input is the source of truth for save.
             teamsTabSetIconValue(group?.icon || '');
@@ -5699,6 +5716,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             agentsTabEditingGroupId = null;
             document.getElementById('agent-groups-inline-form').classList.add('hidden');
             document.getElementById('agent-groups-error').textContent = '';
+            const wtModeCb = document.getElementById('agent-groups-worktree-mode');
+            if (wtModeCb) { wtModeCb.checked = false; }
             // Collapse the icon grid so a re-open starts clean.
             const grid = document.getElementById('agent-groups-icon-grid');
             if (grid) { grid.style.display = 'none'; }
@@ -6030,6 +6049,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // cannot blank it. The hidden input is populated by
             // teamsTabShowGroupForm on every form open.
             const iconValue = teamsTabIconValue() || prevGroup?.icon || '';
+            const worktreeModeEl = document.getElementById('agent-groups-worktree-mode');
+            const worktreeMode = worktreeModeEl
+                ? (worktreeModeEl.checked ? 'auto' : undefined)
+                : (prevGroup?.worktreeMode ? prevGroup.worktreeMode : undefined);
             const group = {
                 id, name, headRole, members,
                 ...(promptText ? { prompt: promptText } : {}),
@@ -6038,6 +6061,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 ...(prevGroup?.startOnLoad ? { startOnLoad: true } : {}),
                 ...(prevGroup?.startWorktree ? { startWorktree: prevGroup.startWorktree } : {}),
                 ...(prevGroup?.pacing ? { pacing: prevGroup.pacing } : {}),
+                ...(worktreeMode ? { worktreeMode } : {}),
             };
             // Replace or append
             const idx = agentsTabAgentGroups.findIndex(g => g.id === id);
@@ -12617,10 +12641,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const descriptionDiv = document.createElement('div');
             descriptionDiv.style.cssText = 'padding:8px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            descriptionDiv.innerHTML = '<strong>Routing order:</strong> feature worktree → project worktree → main repo.<br><br>' +
-                'When a worktree is active, Switchboard automatically opens agent terminals inside the worktree and routes work in features or projects to the relevant worktree. ' +
-                'Coder prompts reference the worktree path so agents edit code inside the worktree instead of the workspace root. ' +
-                'If no worktree matches a plan, the plan runs in the main repo terminals as usual.';
+            descriptionDiv.innerHTML = '<strong>Routing:</strong> feature worktree → project worktree → main repo.';
             configSection.appendChild(descriptionDiv);
             container.appendChild(configSection);
 
@@ -12647,13 +12668,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             checkboxRow.appendChild(suppressCheckbox);
             checkboxRow.appendChild(suppressLabel);
             settingsSection.appendChild(checkboxRow);
-
-            const suppressDesc = document.createElement('div');
-            suppressDesc.style.cssText = 'font-size:10px; color:var(--text-secondary); line-height:1.4; padding:2px 0 0 24px; margin-top:2px;';
-            suppressDesc.innerHTML = 'When checked, the main <strong>Agents</strong> button will NOT open terminals in the workspace root. ' +
-                'Instead, terminals are opened only for worktrees that have the per-row <em>Agent terminals</em> checkbox enabled. ' +
-                'Use this when all agent work should happen inside worktrees, never in the main repo.';
-            settingsSection.appendChild(suppressDesc);
 
             // ── Worktree strategy ────────────────────────────────────────────
             // The user's choice, and the only writer of feature_worktree_mode. Checked
@@ -12753,65 +12767,28 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             const worktrees = (config && config.worktrees) || [];
-            const featureWTs = worktrees.filter(w => w.featureTopic);
-            const projectWTs = worktrees.filter(w => w.project && !w.featureTopic);
-            const unboundWTs = worktrees.filter(w => !w.project && !w.featureTopic);
+            const sortedWorktrees = [...worktrees].sort((a, b) => {
+                const getPriority = (w) => (w.featureTopic ? 1 : (w.project ? 2 : 3));
+                const pA = getPriority(a);
+                const pB = getPriority(b);
+                if (pA !== pB) return pA - pB;
+                return String(a.branch || '').localeCompare(String(b.branch || ''));
+            });
 
-            // ==========================================
-            // FEATURES SECTION
-            // ==========================================
-            const featuresSection = createSubsection('FEATURES');
+            // Creation row — project worktree + unbound worktree
+            // Feature creation lives on the STAGING toggle, not here.
+            // Feature worktrees are provisioned at STAGING time by the Worktrees toggle
+            // in the STAGING column header, which is the moment the work is actually about to run.
+            const creationRow = document.createElement('div');
+            creationRow.style.cssText = 'display: flex; gap: 8px; align-items: center; padding: 4px 8px;';
 
-            // FEATURES -> creation lives on the STAGING toggle, not here.
-            // The "Create Feature Worktree" dropdown + button was removed: it cut a
-            // worktree for any feature at any time, off whatever the default branch
-            // happened to be, for work that may never be staged. Two features cut
-            // that way off the same base cannot see each other's changes and nothing
-            // knew one depended on the other — the confusion this consolidation
-            // exists to remove. Feature worktrees are now provisioned at STAGING
-            // time by the Worktrees toggle in the STAGING column header, which is
-            // the moment the work is actually about to run. This section lists what
-            // exists and offers merge/cleanup per worktree; it does not create.
-            //
-            // The `createWorktreeForFeature` verb survives as the programmatic path
-            // (allowlist + KanbanProvider arm) — the narrowing is UI-only.
-
-            // FEATURES -> Active Worktrees
-            const activeFeatureHeader = document.createElement('div');
-            activeFeatureHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0; border-top: 1px solid var(--border-subtle);';
-            activeFeatureHeader.textContent = 'Active Feature Worktrees';
-            featuresSection.appendChild(activeFeatureHeader);
-
-            const activeFeatureListContainer = document.createElement('div');
-            activeFeatureListContainer.style.cssText = 'padding: 0 8px 8px;';
-            activeFeatureListContainer.appendChild(renderWorktreeList(featureWTs, 'No active feature worktrees.'));
-            featuresSection.appendChild(activeFeatureListContainer);
-
-            container.appendChild(featuresSection);
-
-            // ==========================================
-            // PROJECTS SECTION
-            // ==========================================
-            const projectsSection = createSubsection('PROJECTS');
-
-            // PROJECTS -> Manual Creation
-            const manualProjHeader = document.createElement('div');
-            manualProjHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 4px;';
-            manualProjHeader.textContent = 'Manual Creation';
-            projectsSection.appendChild(manualProjHeader);
-
-            const projForm = document.createElement('div');
-            projForm.style.cssText = 'display: flex; gap: 8px; align-items: center; padding: 4px 8px 8px;';
-            const projLabel = document.createElement('span');
-            projLabel.style.fontSize = '11px';
-            projLabel.textContent = 'Project:';
             const projSelect = document.createElement('select');
             projSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
             const defaultOpt = document.createElement('option');
             defaultOpt.value = '';
             defaultOpt.textContent = '-- Choose a Project --';
             projSelect.appendChild(defaultOpt);
-            
+
             const projects = (config && config.projects) || [];
             projects.forEach(p => {
                 const opt = document.createElement('option');
@@ -12844,32 +12821,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
                 setTimeout(() => { createProjBtn.disabled = false; }, 5000);
             });
-            projForm.appendChild(projLabel);
-            projForm.appendChild(projSelect);
-            projForm.appendChild(createProjBtn);
-            projectsSection.appendChild(projForm);
 
-            // PROJECTS -> Active Worktrees
-            const activeProjHeader = document.createElement('div');
-            activeProjHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0; border-top: 1px solid var(--border-subtle);';
-            activeProjHeader.textContent = 'Active Project Worktrees';
-            projectsSection.appendChild(activeProjHeader);
-
-            const activeProjListContainer = document.createElement('div');
-            activeProjListContainer.style.cssText = 'padding: 0 8px 8px;';
-            activeProjListContainer.appendChild(renderWorktreeList(projectWTs, 'No active project worktrees.'));
-            projectsSection.appendChild(activeProjListContainer);
-
-            container.appendChild(projectsSection);
-
-            // ==========================================
-            // UNBOUND SECTION
-            // ==========================================
-            const unboundSection = createSubsection('UNBOUND');
-
-            const unboundCreationContainer = document.createElement('div');
-            unboundCreationContainer.style.cssText = 'padding: 8px 8px 0; display: flex; justify-content: flex-end;';
-            
             const createUnboundBtn = document.createElement('button');
             createUnboundBtn.className = 'btn-secondary';
             createUnboundBtn.style.fontSize = '10px';
@@ -12887,20 +12839,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
                 setTimeout(() => { createUnboundBtn.disabled = false; }, 5000);
             });
-            unboundCreationContainer.appendChild(createUnboundBtn);
-            unboundSection.appendChild(unboundCreationContainer);
 
-            const activeUnboundHeader = document.createElement('div');
-            activeUnboundHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0; border-top: 1px solid var(--border-subtle); margin-top: 8px;';
-            activeUnboundHeader.textContent = 'Active Unbound Worktrees';
-            unboundSection.appendChild(activeUnboundHeader);
+            creationRow.appendChild(projSelect);
+            creationRow.appendChild(createProjBtn);
+            creationRow.appendChild(createUnboundBtn);
+            container.appendChild(creationRow);
 
-            const activeUnboundListContainer = document.createElement('div');
-            activeUnboundListContainer.style.cssText = 'padding: 0 8px 8px;';
-            activeUnboundListContainer.appendChild(renderWorktreeList(unboundWTs, 'No active unbound worktrees.'));
-            unboundSection.appendChild(activeUnboundListContainer);
-
-            container.appendChild(unboundSection);
+            // ==========================================
+            // WORKTREES LIST SECTION
+            // ==========================================
+            const worktreesSection = createSubsection('WORKTREES');
+            const worktreesListContainer = document.createElement('div');
+            worktreesListContainer.style.cssText = 'padding: 0 8px 8px;';
+            worktreesListContainer.appendChild(renderWorktreeList(sortedWorktrees, 'No worktrees.'));
+            worktreesSection.appendChild(worktreesListContainer);
+            container.appendChild(worktreesSection);
 
             // Send request for statuses
             if (worktrees.length > 0) {

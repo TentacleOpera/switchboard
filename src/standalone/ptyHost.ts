@@ -102,7 +102,6 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                     payload.parentInstanceId,
                     undefined,
                     {
-                        hidden: payload.hidden === true,
                         // Boolean off the wire, resolved by whichever host proxied us.
                         // Defaults to true if absent so a caller that predates this
                         // field still gets the fixed behaviour.
@@ -127,8 +126,7 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                         agentInstanceId: terminal.agentInstanceId,
                         parentInstanceId: terminal.parentInstanceId,
                         role: terminal.role,
-                        status: terminal.status,
-                        hidden: terminal.hidden === true
+                        status: terminal.status
                     },
                     delegates: spawned.children.map(t => ({
                         friendlyName: t.friendlyName,
@@ -142,7 +140,6 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
             case 'ptyCreateBatch': {
                 const result = await fleet.createBatch(
                     Array.isArray(payload.allocation) ? payload.allocation : [],
-                    payload.hidden === true,
                     payload.cwd,
                     payload.worktreePath,
                     // Boolean off the wire, resolved by whichever host proxied us.
@@ -163,9 +160,6 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 return { success: ok };
             }
             case 'ptyListTerminals': {
-                // Hidden terminals ride a SIBLING `hiddenTerminals` key, just like
-                // `liveness`. The rendered `terminals` array stays the safe projection
-                // it has always been — every consumer that selects by role reads it.
                 const all = fleet.list();
                 const project = (terminals: any[]) => terminals.map(t => ({
                     friendlyName: t.friendlyName,
@@ -190,8 +184,7 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 }));
                 return {
                     success: true,
-                    terminals: project(all.filter(t => !t.hidden)),
-                    hiddenTerminals: project(all.filter(t => t.hidden)),
+                    terminals: project(all),
                     liveness: fleet.getLiveness(),
                 };
             }

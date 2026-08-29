@@ -29,12 +29,10 @@ const PTY_VERBS = [
 ];
 
 // The subset the terminals webview actually calls. `ptyCreateBatch` is
-// deliberately agent-only: a planner creates a hidden fleet over HTTP, never a
-// button, and the hidden-fleet design requires NO change to terminals.js (a
-// change there would mean hidden-ness was implemented as a UI filter instead of
-// a projection). Demanding a webview call site for it would force exactly the
-// edit the design forbids. The NEGATIVE assertion — never on /kanban/verb/ —
-// still covers every verb, batch included.
+// deliberately agent-only: batch creation is an agent-only API (no webview button
+// for it), called by agent automation over HTTP. Demanding a webview call site for
+// it would force an unnecessary UI control. The NEGATIVE assertion — never on
+// /kanban/verb/ — still covers every verb, batch included.
 const WEBVIEW_PTY_VERBS = PTY_VERBS.filter(v => v !== 'ptyCreateBatch');
 
 let failures = 0;

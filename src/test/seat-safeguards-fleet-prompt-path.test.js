@@ -660,23 +660,6 @@ test('each of the 5 uncomposed dispatch call sites is enumerated and unmarked', 
     }
 });
 
-test('_ptyHostVerb resolves the seat role from hidden terminals too (relay targets them)', () => {
-    const verbStart = TASK_VIEWER_SRC.indexOf('private async _ptyHostVerb');
-    const verbEnd = TASK_VIEWER_SRC.indexOf('const http = require', verbStart);
-    const verbBody = TASK_VIEWER_SRC.slice(verbStart, verbEnd);
-    assert.ok(
-        verbBody.includes('hiddenTerminals'),
-        '_ptyHostVerb must search hiddenTerminals as well as terminals when resolving the seat role. ' +
-        'ptyListTerminals returns hidden seats in a SIBLING array, and /terminals/relay validates its ' +
-        'recipient against both — so a terminals-only lookup delivers to a hidden seat while resolving ' +
-        'its role to \'\', dropping that seat\'s configured safeguards.'
-    );
-    assert.ok(
-        /roleRows\.find\(/.test(verbBody),
-        'The seat-role lookup must run over the combined rows (roleRows), not the render-only terminals array.'
-    );
-});
-
 // ── 10. Standalone chokepoint (deliverPrompt) ────────────────────────────
 
 test('standalone deliverPrompt accepts applySeatBlock as a 5th parameter defaulting to true', () => {

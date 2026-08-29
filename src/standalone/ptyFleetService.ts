@@ -57,7 +57,6 @@ export interface FleetTerminalInfo {
     startTime: string;
     worktreePath?: string;
     cwd?: string;
-    hidden?: boolean;
     ideName: string;
     purpose: string;
     agentInstanceId: string;
@@ -76,7 +75,6 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
     worktreePath?: string;
     cwd: string;
     exitCode?: number;
-    hidden?: boolean;
     cliFamily: CliFamily;
     /**
      * Internal: marks a terminal spawned by spawnDelegates as a team member,
@@ -120,8 +118,6 @@ export interface FleetLivenessEntry {
 }
 
 export interface CreateOptions {
-    /** When true, the terminal is excluded from render lists and role-based dispatch pools. */
-    hidden?: boolean;
     /**
      * Internal: marks a terminal spawned by spawnDelegates as a team member,
      * suppressing auto-start triggering. A shared member is unparented by
@@ -451,7 +447,6 @@ export class PtyFleetService {
             status: 'active',
             worktreePath: worktreePath || undefined,
             cwd: effectiveCwd,
-            hidden: opts?.hidden === true,
             _isTeamMember: opts?._isTeamMember === true,
             // Recorded so spawnDelegates can hand each team member the SAME decision the
             // head spawned under. Delegates are ordinary PTY seats in the same cockpit
@@ -802,13 +797,12 @@ export class PtyFleetService {
 
     public async createBatch(
         allocation: Array<{ role: string; count: number }>,
-        hidden: boolean,
         cwd?: string,
         worktreePath?: string,
         claudeInlineRendering?: boolean
-    ): Promise<{ success: boolean; created: Array<{ friendlyName: string; role: string; hidden: boolean }>; failed: Array<{ role: string; reason: string; kind: string }>; error?: string; estimatedDurationMs: number }> {
+    ): Promise<{ success: boolean; created: Array<{ friendlyName: string; role: string }>; failed: Array<{ role: string; reason: string; kind: string }>; error?: string; estimatedDurationMs: number }> {
         const MAX_BATCH = 32;
-        const created: Array<{ friendlyName: string; role: string; hidden: boolean }> = [];
+        const created: Array<{ friendlyName: string; role: string }> = [];
         const failed: Array<{ role: string; reason: string; kind: string }> = [];
 
         if (!Array.isArray(allocation) || allocation.length === 0) {
@@ -842,8 +836,8 @@ export class PtyFleetService {
                     continue;
                 }
                 try {
-                    const t = await this.create(a.role, undefined, cwd, worktreePath, null, undefined, { hidden, claudeInlineRendering });
-                    created.push({ friendlyName: t.friendlyName, role: t.role, hidden: t.hidden === true });
+                    const t = await this.create(a.role, undefined, cwd, worktreePath, null, undefined, { claudeInlineRendering });
+                    created.push({ friendlyName: t.friendlyName, role: t.role });
                 } catch (err: any) {
                     const msg = err instanceof Error ? err.message : String(err);
                     let kind = 'unknown';
@@ -933,7 +927,6 @@ export class PtyFleetService {
                     startTime: t.startTime,
                     worktreePath: t.worktreePath,
                     cwd: t.cwd,
-                    hidden: t.hidden === true,
                     ideName: PTY_IDE_NAME,
                     purpose: 'pty',
                     agentInstanceId: t.agentInstanceId,

@@ -177,3 +177,9 @@ No change to the terminals sidebar — the sidebar shows running terminals, not 
 - Assert `migrateAgentGroups` (teamWiring.ts) does NOT reference `worktreeMode` — the field is never normalized in the migration pass.
 - Assert no reference to "START ALL TEAMS" exists in the plan's code changes (the feature does not exist).
 - Assert the "Spawn in own worktree" checkbox in kanban.html is NOT gated behind the `startOnLoad` toggle (i.e., it appears regardless of whether START ON LOAD is checked).
+
+## Implementation Summary
+
+Added the `provisionTeamWorktree` public method to `KanbanProvider` which resolves the default branch, invokes `_createSafetyWorktree`, and registers the worktree in the database with `tier: 'team'`.
+Updated `startTeamForWorkspace` in `TaskViewerProvider` and `startAgentGroupById` in `KanbanProvider` to check `worktreeMode === 'auto'` and route the team's spawn directory to the newly provisioned worktree when no explicit `startWorktree` path is configured.
+Enhanced `kanban.html` with a 'Spawn in own worktree' checkbox in the team configuration form, added `worktreeMode` carry-forward handling during saves, and rendered a 'WORKTREE' badge on gallery cards for teams configured with automatic worktree provisioning.

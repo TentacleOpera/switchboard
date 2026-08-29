@@ -471,3 +471,9 @@ None.
 ## Outstanding Questions
 
 None.
+
+## Implementation Summary
+
+Condensed the WORKTREES tab from three separate filtered subsections into a single sorted list preceded by a unified creation row.
+The unified creation row houses the project `<select>` with its 'Create Project Worktree' button alongside the 'Create Worktree (Unbound)' button, preserving the explicit-mode empty-repo guard on both.
+The unified list stably sorts all worktrees by scope priority (feature → project → unbound) and branch name, while trimming verbose explanatory prose down to a single concise routing line and preserving the strategy radio, target repo selector, and status post.

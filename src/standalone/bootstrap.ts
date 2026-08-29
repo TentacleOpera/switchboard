@@ -1626,7 +1626,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     payload = { ...payload, delegates: [] };
                     delete payload.startupCommand;
                     const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, targetCwd, payload.worktreePath, payload.parentInstanceId, undefined, {
-                        hidden: payload.hidden === true,
                         // HOST-resolved, never from the wire — see CreateOptions.
                         claudeInlineRendering: configProvider.getConfigBoolean('terminal.claudeInlineRendering', true)
                     });
@@ -1662,13 +1661,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             try { server.broadcastWs('terminalsGroupsChanged', { type: 'terminalsGroupsChanged' }, SURFACES.terminals); } catch { /* broadcast failure must not fail the create */ }
                         }
                     }
-                    return { success: true, terminal: { friendlyName: terminal.friendlyName, agentInstanceId: terminal.agentInstanceId, parentInstanceId: terminal.parentInstanceId, role: terminal.role, status: terminal.status, hidden: terminal.hidden === true }, delegates: spawned.children.map(t => ({ friendlyName: t.friendlyName, agentInstanceId: t.agentInstanceId, role: t.role, status: t.status, hidden: t.hidden === true })), ...(spawned.error ? { delegateError: spawned.error } : {}), ...(wiringError ? { wiringError } : {}), ...(teamGroupId ? { teamGroupId } : {}) };
+                    return { success: true, terminal: { friendlyName: terminal.friendlyName, agentInstanceId: terminal.agentInstanceId, parentInstanceId: terminal.parentInstanceId, role: terminal.role, status: terminal.status }, delegates: spawned.children.map(t => ({ friendlyName: t.friendlyName, agentInstanceId: t.agentInstanceId, role: t.role, status: t.status })), ...(spawned.error ? { delegateError: spawned.error } : {}), ...(wiringError ? { wiringError } : {}), ...(teamGroupId ? { teamGroupId } : {}) };
                 }
 
                 case 'ptyCreateBatch': {
                     const result = await ptyFleetService.createBatch(
                         Array.isArray(payload.allocation) ? payload.allocation : [],
-                        payload.hidden === true,
                         payload.cwd,
                         payload.worktreePath,
                         // HOST-resolved, never from the wire — see CreateOptions.
@@ -1691,8 +1689,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
 
                 case 'ptyListTerminals': {
                     const all = ptyFleetService.list();
-                    const visible = all.filter(t => !t.hidden);
-                    const hidden = all.filter(t => t.hidden);
                     const projectTerminals = (terminals: any[]) => terminals.map(t => ({
                         friendlyName: t.friendlyName,
                         agentInstanceId: t.agentInstanceId,
@@ -1709,7 +1705,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // headless mode to arm the boot-phase curtain.
                         promptCount: t.promptCount,
                     }));
-                    const liveTerminals = projectTerminals(visible);
+                    const liveTerminals = projectTerminals(all);
                     // `terminals` stays EXACTLY the live-handle projection it has
                     // always been (plus V58's `lastDataAt`). recentlyClosed
                     // tombstones ride a SIBLING `liveness` key — never appended to
@@ -1755,7 +1751,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return {
                         success: true,
                         terminals,
-                        hiddenTerminals: projectTerminals(hidden),
                         parents,
                         liveness: ptyFleetService.getLiveness(),
                     };

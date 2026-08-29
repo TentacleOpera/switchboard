@@ -35,7 +35,7 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead, resolveTeamById } from './teamWiring';
 import { mutateStandingOrders, makeStandingOrder, validateInstruction, STANDING_ORDERS_CONFIG_KEY, type StandingOrder, type StandingOrderScope } from './standingOrders';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
@@ -4987,10 +4987,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (!db || !(await db.ensureReady())) {
             return { success: false, error: 'Kanban DB not ready' };
         }
+        let effectiveSpawnCwd = spawnCwd || workspaceRoot;
+        const team = await resolveTeamById(db, teamId);
+        if (team && team.worktreeMode === 'auto' && !team.startWorktree) {
+            const wt = await this.provisionTeamWorktree(workspaceRoot, team.name);
+            if (wt?.path) {
+                effectiveSpawnCwd = wt.path;
+            }
+        }
         return startTeamById({
             db,
             teamId,
-            workspaceRoot: spawnCwd || workspaceRoot,
+            workspaceRoot: effectiveSpawnCwd,
             liveTerminals,
             instantiator: this._agentGroupInstantiator,
         });
@@ -14719,6 +14727,23 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         await this._removeWorktreeRow(workspaceRoot, db, wtRow, 'merged');
         await this._pruneWorktrees(workspaceRoot);
         vscode.window.showInformationMessage(`Cleaned up worktree: ${wtRow.branch}`);
+    }
+
+    public async provisionTeamWorktree(workspaceRoot: string, teamName: string): Promise<{ branch: string; path: string } | null> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) {
+                console.warn(`[KanbanProvider] provisionTeamWorktree: DB not ready for '${workspaceRoot}'`);
+                return null;
+            }
+            const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
+            const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, teamName, undefined, defaultBranch);
+            await db.addWorktree(branch, wtPath, undefined, undefined, undefined, defaultBranch, 'team');
+            return { branch, path: wtPath };
+        } catch (err: any) {
+            console.warn(`[KanbanProvider] provisionTeamWorktree failed for team '${teamName}' in '${workspaceRoot}':`, err);
+            return null;
+        }
     }
 
     private async _createSafetyWorktree(workspaceRoot: string, featureTopic?: string, repoName?: string, baseBranch?: string): Promise<{ branch: string; path: string }> {

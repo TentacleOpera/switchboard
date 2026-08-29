@@ -222,3 +222,8 @@ The `hidden` attribute is used (not `display:none` CSS) so the team-scoped / con
 - Assert `updateTeamStartButtons` is called in `refreshAgentGroupsForShell`'s `.then()` callback in `src/webview/terminals.js`.
 - Assert the START ALL TEAMS pre-filter checks `t.status === 'active'` (not `!== 'exited'`) in `src/webview/terminals.js`.
 - Assert no `confirm(` or `window.confirm(` calls were added to `src/webview/terminals.js` or `src/webview/terminals.html`.
+
+## Completion Summary
+
+The team-start UX overhaul has been implemented across `terminals.html` and `terminals.js`. The START TEAM form's target workspace dropdown now defaults to `initialWorkspaceRoot` when available. `startTeam()` was updated to return the response payload/null and accept an `opts.silent` flag to suppress individual toasts for batch operations. `OPEN AGENT TERMINALS` (`#btn-open-all`) was retired and replaced with the `START ALL TEAMS` button (`#btn-start-all-teams`) with scoped CSS hide rules, sequential spawning logic, and active head-role pre-filtering.
+

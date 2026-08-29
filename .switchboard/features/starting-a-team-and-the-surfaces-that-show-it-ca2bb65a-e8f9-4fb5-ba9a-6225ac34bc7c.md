@@ -19,10 +19,10 @@ Two surfaces also carry weight they have not earned: a hidden-terminal mechanism
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminals Sidebar: Team-Start UX Overhaul](../plans/terminals-team-start-ux-overhaul.md) — **PLAN REVIEWED** — ID: d7acd263-5a98-4bc4-b763-cf2ab89a4f5d
-- [ ] [Per-Team Worktree Provisioning for Explicit Starts](../plans/per-team-worktree-provisioning.md) — **PLAN REVIEWED** — ID: 7c65bdf1-ccb0-4e9b-98ec-f80d85635d09
-- [ ] [Remove Hidden Terminals](../plans/remove-hidden-terminals.md) — **PLAN REVIEWED** — ID: 8131f510-037f-4d47-a567-fe4575990e25
-- [ ] [The WORKTREES tab is a list, not a console](../plans/worktrees-tab-is-a-list-not-a-console.md) — **PLAN REVIEWED** — ID: 1b0e8808-6fbc-4752-8fd7-8de528f52cd2
+- [ ] [Terminals Sidebar: Team-Start UX Overhaul](../plans/terminals-team-start-ux-overhaul.md) — **CODER CODED** — ID: d7acd263-5a98-4bc4-b763-cf2ab89a4f5d
+- [ ] [Per-Team Worktree Provisioning for Explicit Starts](../plans/per-team-worktree-provisioning.md) — **CODER CODED** — ID: 7c65bdf1-ccb0-4e9b-98ec-f80d85635d09
+- [ ] [Remove Hidden Terminals](../plans/remove-hidden-terminals.md) — **CODER CODED** — ID: 8131f510-037f-4d47-a567-fe4575990e25
+- [ ] [The WORKTREES tab is a list, not a console](../plans/worktrees-tab-is-a-list-not-a-console.md) — **CODER CODED** — ID: 1b0e8808-6fbc-4752-8fd7-8de528f52cd2
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -34,3 +34,7 @@ Two adjacencies to watch. `per-team-worktree-provisioning` and `worktrees-tab-is
 Two constraints from the plans themselves. `per-team-worktree-provisioning` reuses the existing `tier` column with value `team`, which is disjoint from the future high/low complexity values but would affect any future code filtering `tier IS NULL` for untyped worktrees. Its `worktreeMode` field is new and optional — absent means current behaviour — so on ~4,000 installs users see no change unless they opt in, and no schema migration is required.
 
 `remove-hidden-terminals` is the one subtask whose scope must not creep: the `ptyCreateBatch` verb accepting `hidden` is agent-reachable, so removing the parameter is a verb-contract change, not only dead-code deletion.
+
+## Implementation Summary
+
+All four subtasks implemented and committed. Start-team workspace selector now defaults to initialWorkspaceRoot like every other selector. OPEN AGENT TERMINALS fully retired — button, handler, and disconnected-fleet spawn path removed; START ALL TEAMS replaces it with sequential team spawning and active head-role pre-filtering. Per-team worktree provisioning extended from autostart-only to explicit START TEAM via a new optional `worktreeMode` field, with `provisionTeamWorktree` wired into both start paths. Hidden-terminal mechanism deleted across all three hosts (ptyFleetService, ptyHost, bootstrap), TaskViewerProvider, and LocalApiServer — `hidden` field, `hiddenTerminals` sibling array, and `ptyCreateBatch` hidden parameter all removed. WORKTREES tab collapsed from five sections (FEATURES/PROJECTS/UNBOUND each with header, form, prose) to one sorted list plus one creation row, with routing prose trimmed.

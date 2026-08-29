@@ -123,76 +123,7 @@ async function main() {
         assert.ok(/never asks in chat|Never ask/i.test(contracts), 'the never-ask-in-chat rule is missing from the behaviour contract');
     });
 
-    // ─── Subtask 1: hidden fleet, batched creation ────────────────────────────
-    //
-    // The fleet lives in a child process (extension host) or in-process
-    // (standalone), so these are asserted against the three sources rather than a
-    // live spawn. What matters is that the three implementations move in lockstep:
-    // a `hidden` split applied to two of three produces a host where hidden means
-    // nothing, and every visual check still passes.
-
-    await test('all three hosts project hidden terminals onto a SIBLING key, never into `terminals`', () => {
-        for (const rel of ['src/standalone/ptyHost.ts', 'src/standalone/bootstrap.ts']) {
-            const src = read(rel);
-            assert.ok(/hiddenTerminals:/.test(src), `${rel} does not return a hiddenTerminals sibling key`);
-            assert.ok(/filter\(t => !t\.hidden\)/.test(src), `${rel} does not exclude hidden rows from the rendered \`terminals\` array`);
-        }
-        // The extension proxy enriches after the child returns; both arrays must get it.
-        const tvp = read('src/services/TaskViewerProvider.ts');
-        assert.ok(
-            /if \(Array\.isArray\(result\.hiddenTerminals\)\)[\s\S]{0,120}plan\(result\.hiddenTerminals\)/.test(tvp),
-            'the extension proxy does not apply parents/planId enrichment to hiddenTerminals'
-        );
-    });
-
-    await test('hidden workers are NOT selectable — registry read drops them, dispatch pre-flight excludes them', () => {
-        const tvp = read('src/services/TaskViewerProvider.ts');
-        // Registry side: the autoban pool resolver and the pool reconciler both read
-        // runtime.terminals through _getAliveAutobanTerminalRegistry.
-        assert.ok(
-            /_getAliveAutobanTerminalRegistry[\s\S]{0,3000}info\.hidden === true[\s\S]{0,80}continue;/.test(tvp),
-            '_getAliveAutobanTerminalRegistry does not drop hidden rows — hidden improvers would join autoban role pools'
-        );
-        // Verb side: _ptyTerminalNames feeds getRegisteredTerminals, which is
-        // /kanban/dispatch's "is any terminal live?" pre-flight.
-        assert.ok(
-            /_ptyTerminalNames = \(result\.terminals \|\| \[\]\)/.test(tvp),
-            '_ptyTerminalNames must be populated from `terminals` only, never from hiddenTerminals'
-        );
-        assert.ok(
-            /_ptyHiddenTerminalNames = \(result\.hiddenTerminals \|\| \[\]\)/.test(tvp),
-            'hidden names must land in their OWN cache, kept separate from the dispatch pre-flight cache'
-        );
-        // getRegisteredTerminals is /kanban/dispatch's "is any terminal live?"
-        // pre-flight. Widening it to hidden names makes a dispatch that should 409
-        // pass and then fail to find a target.
-        const preflight = tvp.slice(tvp.indexOf('getRegisteredTerminals: () => {'));
-        assert.ok(preflight.length > 0, 'getRegisteredTerminals not found');
-        assert.ok(
-            !/_ptyHiddenTerminalNames/.test(preflight.slice(0, 1200)),
-            'hidden names leaked into the /kanban/dispatch live-terminal pre-flight'
-        );
-    });
-
-    await test('hidden workers ARE mirrored into runtime.terminals on both hosts (they are real processes)', () => {
-        const tvp = read('src/services/TaskViewerProvider.ts');
-        const mirrorStart = tvp.indexOf('const updateMirrorRegistry');
-        assert.ok(mirrorStart > 0, 'updateMirrorRegistry not found');
-        const mirrorBody = tvp.slice(mirrorStart, mirrorStart + 2500);
-        assert.ok(
-            /parsed\.hiddenTerminals/.test(mirrorBody),
-            'the extension mirror drops hidden rows — /health under-reports and the two hosts disagree'
-        );
-        assert.ok(
-            /hidden,/.test(mirrorBody),
-            'mirrored hidden rows are not stamped `hidden` — the registry read cannot then tell them apart'
-        );
-        const fleet = read('src/standalone/ptyFleetService.ts');
-        assert.ok(/hidden: t\.hidden === true,/.test(fleet), 'standalone updateRegistryState does not stamp `hidden`');
-        // Load-bearing for the boot reap and the merge loop — both key on these.
-        assert.ok(/ideName: PTY_IDE_NAME,/.test(fleet), 'hidden rows must keep ideName: PTY_IDE_NAME or the boot reap misses them');
-        assert.ok(/purpose: 'pty',/.test(fleet), "hidden rows must keep purpose: 'pty'");
-    });
+    // ─── Batched terminal creation ────────────────────────────────────────────
 
     await test('ptyCreateBatch validates the whole allocation BEFORE spawning anything', () => {
         const fleet = read('src/standalone/ptyFleetService.ts');

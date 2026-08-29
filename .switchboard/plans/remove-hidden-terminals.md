@@ -244,3 +244,7 @@ Key risks: (1) missed `.hidden` references in the autoban selection path (lines 
 ## Outstanding Questions
 
 - **[user]** No external automation script outside this repo is known to call `ptyCreateBatch` with `hidden: true` over HTTP. If one exists, it will silently get visible terminals after this change. Proceeding on the assumption that none exist, since the selector methods were never wired and the feature was never documented.
+
+## Implementation Summary
+
+Successfully removed the dead `hidden` terminal mechanism across both extension and standalone hosts. Removed `hidden` options and projections from `ptyFleetService.ts`, `ptyHost.ts`, `bootstrap.ts`, `TaskViewerProvider.ts`, and `LocalApiServer.ts`, unifying `ptyListTerminals` into a single `terminals` list. Deleted unused `getUnattendedPlannerTerminal` and `getUnattendedImproverTerminals` selector methods and their backing cache. Updated and cleaned up contract tests to remove assertions on the deleted hidden-fleet sibling projections while preserving unattended prompt and batch creation validation.

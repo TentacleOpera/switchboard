@@ -922,18 +922,57 @@
             btnClearAll.addEventListener('click', () => withClearingFeedback(btnClearAll, clearAllTerminals));
         }
 
-        const btnOpenAll = document.getElementById('btn-open-all');
-        if (btnOpenAll) {
-            btnOpenAll.addEventListener('click', async () => {
-                if (btnOpenAll.disabled) { return; }
-                btnOpenAll.disabled = true;
-                const label = btnOpenAll.textContent;
-                btnOpenAll.textContent = 'OPENING…';
+        const btnStartAllTeams = document.getElementById('btn-start-all-teams');
+        if (btnStartAllTeams) {
+            btnStartAllTeams.addEventListener('click', async () => {
+                if (btnStartAllTeams.disabled) { return; }
+                const teams = await fetchAgentGroups();
+                if (!Array.isArray(teams) || teams.length === 0) {
+                    showPaneToast('No teams defined — add one in the TEAMS tab.');
+                    return;
+                }
+                const liveHeadRoles = new Set(
+                    (Array.isArray(fleetList) ? fleetList : [])
+                        .filter(t => t && t.status === 'active' && !t.parentInstanceId && t.role)
+                        .map(t => t.role)
+                );
+                const toStart = teams.filter(team => {
+                    if (!team || !team.id) { return false; }
+                    const headRole = team.headRole || 'lead';
+                    return !liveHeadRoles.has(headRole);
+                });
+                const skippedCount = teams.length - toStart.length;
+                if (toStart.length === 0) {
+                    showPaneToast('All teams already running.');
+                    return;
+                }
+                btnStartAllTeams.disabled = true;
+                const label = btnStartAllTeams.textContent;
+                btnStartAllTeams.textContent = 'STARTING…';
+                let startedCount = 0;
+                let finalSkippedCount = skippedCount;
                 try {
-                    await openAllTerminals();
+                    const targetSpec = initialWorkspaceRoot ? { parentRoot: initialWorkspaceRoot } : undefined;
+                    for (const team of toStart) {
+                        const data = await startTeam({ id: team.id }, targetSpec, { silent: true });
+                        if (data && data.success) {
+                            startedCount++;
+                        } else if (data && data.success === false && typeof data.error === 'string' && data.error.includes('already live')) {
+                            finalSkippedCount++;
+                        } else if (data && data.success === false) {
+                            showPaneToast(`Could not start team '${team.name || team.id}': ${data.error || 'request failed'}`);
+                        } else if (data === null) {
+                            showPaneToast(`Could not start team '${team.name || team.id}' — network error.`);
+                        }
+                    }
+                    if (finalSkippedCount > 0) {
+                        showPaneToast(`Started ${startedCount} team${startedCount === 1 ? '' : 's'}, skipped ${finalSkippedCount} running.`);
+                    } else {
+                        showPaneToast(`Started ${startedCount} team${startedCount === 1 ? '' : 's'}.`);
+                    }
                 } finally {
-                    btnOpenAll.disabled = false;
-                    btnOpenAll.textContent = label;
+                    btnStartAllTeams.disabled = false;
+                    btnStartAllTeams.textContent = label;
                 }
             });
         }
@@ -1047,6 +1086,9 @@
                     opt.value = r.path;
                     opt.textContent = r.name;
                     startTeamTarget.appendChild(opt);
+                }
+                if (initialWorkspaceRoot) {
+                    startTeamTarget.value = initialWorkspaceRoot;
                 }
                 startTeamTarget.hidden = roots.length < 2;
 
@@ -1500,6 +1542,7 @@
         });
 
         startFleetPoll();
+        updateTeamStartButtons();
     }
 
     function postFleetStateToShell() {
@@ -1625,6 +1668,14 @@
     let _agentGroupsCache = [];
     let _agentGroupsFetchInFlight = false;
 
+    function updateTeamStartButtons() {
+        const hasTeams = (_agentGroupsCache && _agentGroupsCache.length > 0);
+        const btnAllTeams = document.getElementById('btn-start-all-teams');
+        const btnOpenAll = document.getElementById('btn-open-all');
+        if (btnAllTeams) { btnAllTeams.hidden = !hasTeams; }
+        if (btnOpenAll)  { btnOpenAll.hidden  =  hasTeams; }
+    }
+
     /** Refresh the cached agent group definitions in the background. Called
      *  from postFleetStateToShell so the cache stays current without blocking
      *  the relay. The definitions carry the `icon` field the team icon picker
@@ -1634,6 +1685,7 @@
         _agentGroupsFetchInFlight = true;
         fetchAgentGroups().then(groups => {
             _agentGroupsCache = Array.isArray(groups) ? groups : [];
+            updateTeamStartButtons();
         }).catch(() => { /* keep stale cache */ }).finally(() => {
             _agentGroupsFetchInFlight = false;
         });
@@ -8394,8 +8446,9 @@
      * `targetSpec` is the same workspace target the role picker uses, so a
      * team started from a group's `+` spawns into that group's workspace.
      */
-    async function startTeam(team, targetSpec) {
-        if (!team || !team.id) { return; }
+    async function startTeam(team, targetSpec, opts) {
+        const silent = opts && opts.silent;
+        if (!team || !team.id) { return null; }
         try {
             const payload = { teamId: team.id };
             if (typeof targetSpec === 'string') {
@@ -8463,26 +8516,38 @@
                 const seatNote = seatFallbackReason
                     ? ` Team seated without its group — ${seatFallbackReason}.`
                     : '';
-                if (data.delegateError) {
-                    showPaneToast(`Team started with a delegate warning: ${data.delegateError}${seatNote}`);
-                } else if (data.error) {
-                    // Terminals created but wiring failed — surface it.
-                    showPaneToast(`Team started with a warning: ${data.error}${seatNote}`);
-                } else if (seatNote) {
-                    showPaneToast(seatNote.trim());
+                if (!silent) {
+                    if (data.delegateError) {
+                        showPaneToast(`Team started with a delegate warning: ${data.delegateError}${seatNote}`);
+                    } else if (data.error) {
+                        // Terminals created but wiring failed — surface it.
+                        showPaneToast(`Team started with a warning: ${data.error}${seatNote}`);
+                    } else if (seatNote) {
+                        showPaneToast(seatNote.trim());
+                    }
                 }
+                return data;
             } else if (data && data.error) {
                 // Verbatim start failure — cap refusal, double-start refusal,
                 // PTY unavailable, missing team. These are the messages that
                 // used to reach nobody because the path was unwired.
-                showPaneToast(`Could not start team: ${data.error}`);
+                if (!silent) {
+                    showPaneToast(`Could not start team: ${data.error}`);
+                }
                 console.error('[Terminals] Team start rejected:', data.error);
+                return data;
             } else {
-                showPaneToast('Could not start team — the request failed.');
+                if (!silent) {
+                    showPaneToast('Could not start team — the request failed.');
+                }
+                return data;
             }
         } catch (err) {
             console.error('[Terminals] Failed to start team:', err);
-            showPaneToast('Could not start team — a network error occurred.');
+            if (!silent) {
+                showPaneToast('Could not start team — a network error occurred.');
+            }
+            return null;
         }
     }
 

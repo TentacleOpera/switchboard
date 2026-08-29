@@ -2146,7 +2146,7 @@
            irrelevant to a single team's view. The team-relevant controls
            (#btn-team-orders, #btn-team-automations) are shown/hidden by
            renderSidebarList based on teamScopeId — they stay visible. */
-        body.is-team-scoped #btn-open-all,
+        body.is-team-scoped #btn-start-all-teams,
         body.is-team-scoped #btn-fill-grid,
         body.is-team-scoped #fill-grid-form,
         body.is-team-scoped #btn-start-team,
@@ -2162,7 +2162,7 @@
            #btn-team-close — the end-session control lives here, where it
            can carry a label, rather than on the unlabeled rail icon. The
            rail button is now navigational (lit → reveal this scope). */
-        body.is-controller-scoped #btn-open-all,
+        body.is-controller-scoped #btn-start-all-teams,
         body.is-controller-scoped #btn-fill-grid,
         body.is-controller-scoped #fill-grid-form,
         body.is-controller-scoped #btn-start-team,
@@ -2510,8 +2510,8 @@
              Clear All lived in the layout toolbar wearing .btn-layout, where it
              read as a seventh grid option. -->
         <div class="sidebar-ops">
-            <button type="button" id="btn-open-all" class="secondary-btn is-teal w-full"
-                    title="Open a terminal for every visible agent role">OPEN AGENT TERMINALS</button>
+            <button type="button" id="btn-start-all-teams" class="secondary-btn is-teal w-full"
+                    title="Start every defined team in the current workspace (skips teams already running)" hidden>START ALL TEAMS</button>
             <button type="button" id="btn-fill-grid" class="secondary-btn w-full"
                     title="Create a grid full of one role's agents">FILL GRID</button>
             <form id="fill-grid-form" class="fill-grid-form" hidden>

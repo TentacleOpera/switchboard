@@ -939,22 +939,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             .filter((t: any) => t.status === 'active')
                             .map((t: any) => t.friendlyName)
                     );
-                    // Role resolution reads BOTH lists. ptyListTerminals returns
-                    // hidden seats in a sibling `hiddenTerminals` array, and a
-                    // hidden seat is a real prompt target: /terminals/relay
-                    // (LocalApiServer._handleTerminalRelay) validates its
-                    // recipient against terminals + hiddenTerminals, and the
-                    // child's `fleet.get(name)` resolves either. Searching only
-                    // `terminals` would deliver to a hidden seat while resolving
-                    // its role to '' — dropping that seat's configured
-                    // safeguards, which is the defect this change exists to fix.
-                    // `live` deliberately stays terminals-only: it is the
-                    // standing-orders membership set and its semantics are
-                    // unchanged by this plan.
-                    const roleRows = [
-                        ...terminals,
-                        ...(Array.isArray(listed?.hiddenTerminals) ? listed.hiddenTerminals : [])
-                    ];
+                    const roleRows = [...terminals];
 
                     // Resolve role for the parse-based dispatch backstop from
                     // the same list call (no second list call — see :487). Best
@@ -966,8 +951,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         parsedDispatchRole = regRow?.role || '';
                     }
 
-                    // Prune cache against live roleRows (terminals + hiddenTerminals)
-                    if (listed && (Array.isArray(listed.terminals) || Array.isArray(listed.hiddenTerminals))) {
+                    // Prune cache against live roleRows
+                    if (listed && Array.isArray(listed.terminals)) {
                         const liveInstanceIds = new Set<string>();
                         for (const row of roleRows) {
                             if (row?.agentInstanceId) {
@@ -1101,9 +1086,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     if (applySO) {
                         if (effectiveOrders.length > 0) {
                             // Build a terminal-name → role map from the same
-                            // roleRows list used for seat-block resolution
-                            // (terminals + hiddenTerminals). This is the
-                            // snapshot `selectOrders` uses to resolve
+                            // roleRows list used for seat-block resolution.
+                            // This is the snapshot `selectOrders` uses to resolve
                             // `role`-scoped standing orders — built once per
                             // dispatch, so a role change between dispatch and
                             // delivery is picked up on the next dispatch.
@@ -1532,9 +1516,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * ptyListTerminals, so this stays fresh exactly when browser terminals matter.
      */
     private _ptyTerminalNames: string[] = [];
-    /** Hidden PTY fleet names (active only), used for unattended improver dispatch. */
-    private _ptyHiddenTerminalNames: string[] = [];
-    private _unattendedPlannerCursor = 0;
     private _seatBlockCache = new Map<string, { name: string; block: string }>();
     private _lastWorkContextByTerminal = new Map<string, string>();
     private _lastWorkContextByTeam = new Map<string, string>();
@@ -1580,8 +1561,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * Public wrapper around `_ptyHostVerb('ptyListTerminals', {})` so KanbanProvider
      * can resolve per-terminal roles for the drive-mode roster without reaching into
      * the private verb rail. Returns the `terminals` array entries (each carrying
-     * `{ friendlyName, role, status, ... }`) plus any `hiddenTerminals` — the same
-     * union the parse-based dispatch backstop uses (see :643-646). Returns an empty
+     * `{ friendlyName, role, status, ... }`). Returns an empty
      * array when the pty host is unavailable (fleet not booted, standalone without a
      * host). Best-effort: any throw is caught and yields `[]`.
      */
@@ -1592,7 +1572,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (!res || !res.success) return [];
             const rows: any[] = [];
             if (Array.isArray(res.terminals)) rows.push(...res.terminals);
-            if (Array.isArray(res.hiddenTerminals)) rows.push(...res.hiddenTerminals);
             return rows.map((t: any) => ({
                 friendlyName: t?.friendlyName,
                 role: t?.role,
@@ -3309,7 +3288,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     this._ptyHostChild = undefined;
                     this._ptyHostPort = undefined;
                     this._ptyTerminalNames = [];
-                    this._ptyHiddenTerminalNames = [];
                 });
                 await new Promise<void>((resolve) => {
                     child.stdout.on('data', (data: Buffer) => {
@@ -3364,19 +3342,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         if (entry && (entry as any).ideName === PTY_IDE_NAME) continue;
                         terminalMap[name] = entry;
                     }
-                    // Hidden workers are mirrored too, stamped `hidden: true`. They are
-                    // REAL processes: omitting them makes /health under-report the fleet
-                    // and leaves the extension host's registry disagreeing with
-                    // standalone's (PtyFleetService.updateRegistryState already writes
-                    // `hidden` there) — the two-of-three host split this design exists to
-                    // avoid. Selectability is denied at the READ side instead:
-                    // `_getAliveAutobanTerminalRegistry` drops hidden rows, and
-                    // `_ptyTerminalNames` is populated from `terminals` only.
-                    const mirrorRows: Array<{ row: any; hidden: boolean }> = [
-                        ...parsed.terminals.map((t: any) => ({ row: t, hidden: false })),
-                        ...(Array.isArray(parsed.hiddenTerminals) ? parsed.hiddenTerminals : []).map((t: any) => ({ row: t, hidden: true })),
+                    const mirrorRows: Array<any> = [
+                        ...parsed.terminals,
                     ];
-                    for (const { row: t, hidden } of mirrorRows) {
+                    for (const t of mirrorRows) {
                         terminalMap[t.friendlyName] = {
                             friendlyName: t.friendlyName,
                             role: t.role,
@@ -3384,7 +3353,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             pid: t.pid,
                             startTime: t.startTime,
                             worktreePath: t.worktreePath,
-                            hidden,
                             ideName: PTY_IDE_NAME,
                             purpose: 'pty',
                         };
@@ -3512,7 +3480,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // Same cwd resolution as ptyCreateTerminal above, for the same reason.
                 // Without it a batch falls back to PtyFleetService's own workspaceRoot,
                 // which in a multi-root window is not the board's selected repo — so
-                // hidden improvers would spawn pointed at a different `.switchboard/plans/`
+                // batch workers would spawn pointed at a different `.switchboard/plans/`
                 // than the one holding the plans they were created to improve.
                 if (!payload.cwd && !payload.worktreePath) {
                     const selected = this._kanbanProvider?.getCurrentWorkspaceRoot();
@@ -3718,9 +3686,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this._ptyTerminalNames = (result.terminals || [])
                     .filter((t: any) => t.status === 'active')
                     .map((t: any) => t.friendlyName);
-                this._ptyHiddenTerminalNames = (result.hiddenTerminals || [])
-                    .filter((t: any) => t.status === 'active')
-                    .map((t: any) => t.friendlyName);
                 const fallback = root || effectiveRoot;
                 // Scope the mapping set to THIS board's own workspaces before
                 // resolving parents. The global index (getMappingsFromIndex)
@@ -3756,9 +3721,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     planTitle: planMap.get(t.friendlyName)?.planTitle ?? null,
                 }));
                 result.terminals = plan(result.terminals);
-                if (Array.isArray(result.hiddenTerminals)) {
-                    result.hiddenTerminals = plan(result.hiddenTerminals);
-                }
             }
             return result;
         };
@@ -7991,36 +7953,6 @@ Each plan file must include:
     }
 
     /**
-     * Hidden PTYs eligible to receive an unattended plan-improve dispatch.
-     *
-     * Role-scoped, NOT "every hidden terminal". Batch workers are named
-     * `${role}-N`, so the normalised name carries the role: `planner-1` and
-     * `improver_claude-1` qualify, a hidden `coder-1` does not. The previous
-     * fallback returned the whole hidden fleet whenever no `planner`-named worker
-     * existed — and since batch improvers are named `improver_*`, that fallback WAS
-     * the live path, so a hidden coder seat could be handed an improve prompt.
-     *
-     * `getUnattendedPlannerTerminal` draws from exactly this set. Any future
-     * clamp must share this predicate: a count computed over a different set than
-     * the picker draws from sizes itself against terminals it will never select.
-     */
-    public getUnattendedImproverTerminals(): string[] {
-        return this._ptyHiddenTerminalNames.filter(name => {
-            const normalized = this._normalizeAgentKey(this._stripIdeSuffix(name));
-            return !!normalized && (normalized.startsWith('planner') || normalized.startsWith('improver'));
-        });
-    }
-
-    /** Picks the next active hidden planner/improver PTY for an unattended dispatch. */
-    public getUnattendedPlannerTerminal(): string | null {
-        const pool = this.getUnattendedImproverTerminals();
-        if (pool.length === 0) return null;
-        const picked = pool[this._unattendedPlannerCursor % pool.length];
-        this._unattendedPlannerCursor = (this._unattendedPlannerCursor + 1) % pool.length;
-        return picked;
-    }
-
-    /**
      * Persistent round-robin cursor for planner dispatch, keyed by terminal-set
      * location (see getRoleTerminalSet) and stored in globalState so it is shared
      * across all Switchboard workspaces serving the same terminals. Used so that
@@ -11221,16 +11153,6 @@ Each plan file must include:
         for (const [name, rawInfo] of Object.entries(terminalsMap)) {
             const info = { ...(rawInfo as any) };
 
-            // Hidden fleet workers are live and addressable but NEVER selectable. This
-            // is the registry-side half of that rule: everything downstream of this
-            // function — `_selectAutobanTerminal`, the autoban dispatch target resolver,
-            // `_getAliveAutobanTerminalNames` — picks a dispatch target by matching
-            // `role` against these rows, so ten hidden `planner` improvers would
-            // otherwise join the planner and start absorbing board dispatches
-            // while every visual check passed. The verb-side half is that
-            // `ptyListTerminals.terminals` excludes hidden by projection.
-            if (info.hidden === true) { continue; }
-
             // PTY fleet rows are maintained by their own writer; when the caller asks
             // for them, their own `status` is the liveness authority. See the matching
             // single-dispatch workaround at _resolveAgentTerminalForPlan (8379-8404).
@@ -11290,7 +11212,6 @@ Each plan file must include:
         return Object.entries(aliveTerminals)
             .filter(([, info]) => this._normalizeAgentKey((info as any)?.role) === normalizedRole)
             .filter(([, info]) => includeBackups || !this._isAutobanBackupTerminalInfo(info))
-            .filter(([, info]) => !info?.hidden)
             .map(([name]) => name)
             .sort((a, b) => a.localeCompare(b));
     }
@@ -11336,7 +11257,6 @@ Each plan file must include:
         const aliveEntries = Object.entries(aliveRegistry)
             .filter(([, info]) => this._normalizeAgentKey((info as any)?.role) === normalizedRole)
             .filter(([, info]) => !this._isAutobanBackupTerminalInfo(info))
-            .filter(([, info]) => !info?.hidden)
             .sort(([a], [b]) => a.localeCompare(b));
 
         if (aliveEntries.length === 0) {
@@ -12932,7 +12852,7 @@ Each plan file must include:
         // Spawn cwd is UNCHANGED from the verb's existing rule and stays
         // independent of the definition root: a team started from a worktree
         // must still resolve its definition from a directory that has a board.
-        const spawnCwd = payloadCwd
+        let spawnCwd = payloadCwd
             || (!worktreePath && parentRoot ? parentRoot : undefined)
             || pinnedRoot;
         // Definition root: the SAME ordered candidates ptyListAgentGroups walked, so
@@ -12943,6 +12863,12 @@ Each plan file must include:
         if (!match) {
             return { success: false, error: `No team found with id '${teamId}' in ${roots.join(', ')}` };
         }
+        if (match.team.worktreeMode === 'auto' && !match.team.startWorktree) {
+            const wt = await this._kanbanProvider?.provisionTeamWorktree(match.root, match.team.name);
+            if (wt?.path) {
+                spawnCwd = wt.path;
+            }
+        }
         console.log(`[TaskViewerProvider] Team start: '${match.team.name}' `
             + `(${(match.team.members || []).length} member definitions) from '${match.root}', spawning in '${spawnCwd}'`);
         const result = await startTeamById({
@@ -12952,7 +12878,7 @@ Each plan file must include:
             liveTerminals: async () => {
                 const listed = await this._ptyHostVerb('ptyListTerminals', {});
                 if (!listed?.success) { return []; }
-                return [...(listed.terminals || []), ...(listed.hiddenTerminals || [])];
+                return [...(listed.terminals || [])];
             },
             instantiator: (group: any, groupRoot: string) => this.instantiateAgentGroup(group, groupRoot),
         });
@@ -13122,7 +13048,7 @@ Each plan file must include:
             liveDelegateCount: async () => {
                 const listed = await this._ptyHostVerb('ptyListTerminals', {});
                 if (!listed?.success) { return 0; }
-                return [...(listed.terminals || []), ...(listed.hiddenTerminals || [])]
+                return [...(listed.terminals || [])]
                     .filter((t: any) => t.parentInstanceId && t.status === 'active').length;
             },
             // Calling _ptyHostVerb directly (not handlePtyVerb) preserves our
@@ -13208,7 +13134,7 @@ Each plan file must include:
             liveDelegateCount: async () => {
                 const listed = await this._ptyHostVerb('ptyListTerminals', {});
                 if (!listed?.success) { return 0; }
-                return [...(listed.terminals || []), ...(listed.hiddenTerminals || [])]
+                return [...(listed.terminals || [])]
                     .filter((t: any) => t.parentInstanceId && t.status === 'active').length;
             },
             createDelegatesOnly: async (spec) => {
@@ -24273,7 +24199,6 @@ Each plan file must include:
             this._ptyHostChild = undefined;
             this._ptyHostPort = undefined;
             this._ptyTerminalNames = [];
-            this._ptyHiddenTerminalNames = [];
         }
         this._apiServerDiagnosticsChannelInstance?.dispose();
         void this._stopLocalApiServer();
