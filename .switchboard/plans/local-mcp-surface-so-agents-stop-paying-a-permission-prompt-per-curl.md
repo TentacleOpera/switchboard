@@ -2,8 +2,8 @@
 
 ## Goal
 
-Expose Switchboard's three common agent operations — read board state, dispatch a team, run the
-Mission Control lifecycle — as a small MCP surface reachable by local coding hosts
+Expose Switchboard's common agent operations — read board state, dispatch work, message a lead — as
+a small MCP surface reachable by local coding hosts
 (Claude Code, Cursor, Windsurf, Codex CLI), via a stdio shim that resolves the dynamic API port at
 call time. The point is not transport — it is **approval surface**: MCP tools are granted once at
 connect time, while every `curl` is a fresh Bash invocation a permission-gating host prompts for.
@@ -145,19 +145,30 @@ be redundant where it works and unreachable where it would help.
    interpret — and `## Port Discovery` spends a paragraph telling it how.
 
 4. **Keep the surface small and use-case shaped — not endpoint shaped.** The tool list is scoped to
-   three things an agent actually comes to do, not to the API's shape. Four tools:
+   three things an agent actually comes to do, not to the API's shape. Three tools:
 
    | tool | covers | backing |
    | :--- | :--- | :--- |
    | `switchboard_status` | board state **and** the terminal roster in one call — what is ready, what is seated | `_resolveBoard(db)` filtered by column, features read (`:2397`), plus `/health`'s `terminals` / `roots` |
    | `switchboard_dispatch` | move one or more cards to a column **with triggers on** — the board's drag semantics, not a separate mechanism | `performKanbanDispatch(workspaceRoot, ref, rawColumn)`, the documented in-process entry; `auto` column ⇒ complexity routing |
-   | `mission_control` | the session lifecycle: `adopt`, `confirm`, `handoff` | the three `/mission-control/*` handlers |
    | `message_terminal` | talk to a lead | `_options.terminalVerb('ptySendPrompt', {name, data, clearBeforePrompt?})` — **never `ptyWrite`** |
 
-   `mission_control`'s `action` is a **closed enum of three named lifecycle steps**, not a mode string
-   and not a passthrough: the set is fixed at registration and unknown values are rejected. A
-   `{method, path}` passthrough remains forbidden — it converts a curated list into the entire private
-   API.
+A `{method, path}` passthrough remains forbidden — it converts a curated list into the entire
+   private API.
+
+   **Why there is no `mission_control` tool.** An earlier revision included one wrapping
+   `adopt`/`confirm`/`handoff`. All three are **seat lifecycle, not work**: `adopt` claims the seat and
+   returns the kickoff prompt, `confirm` sets `missionControlArmed`, and
+   `handoffMissionControlSession` is almost entirely guards — 409 if already handed off, if already
+   armed, if the head terminal is not live, or if nothing is staged — before marking the session
+   `handed-off`. None of them starts work; dispatch does. They exist because Mission Control is
+   modelled as a persona occupying a seat, and a seat must be claimed, armed and released.
+
+   Starting a mission is dispatching its card. Handoff's guards are questions dispatch already answers
+   at the moment they matter — it refuses with *"No coding agent is currently enabled"* and 409s when
+   no live terminal exists. And `handoff` 409s when the session is **already armed**, so armed and
+   handed-off are mutually exclusive states: arming is the other branch, not a step toward starting
+   work. It is a board toggle, not a ceremony for an agent to perform over MCP.
 
    **What the parked twelve contained and this drops, with reasons:**
 
@@ -179,7 +190,7 @@ be redundant where it works and unreachable where it would help.
      `switchboard_status`. Three calls to answer "what is going on" is the endpoint shape leaking into
      the tool shape.
 
-   **The tradeoff, stated plainly:** a four-tool surface leaves some curls in place. That is
+   **The tradeoff, stated plainly:** a three-tool surface leaves some curls in place. That is
    deliberate. Every tool costs context in every session that connects, and a tool list that grows
    toward the API becomes a second surface to maintain and a wider standing grant. Coverage is not
    the goal; the common path is. Anything outside it keeps working through the skills, unchanged.
@@ -233,11 +244,11 @@ be redundant where it works and unreachable where it would help.
   the board's without merging them, because converging them is a refactor with its own risk and
   belongs in its own plan. Worth deciding whether that plan should exist: two implementations of one
   concept is how the agent-facing side drifted from the board's in the first place.
-- **Settled: four tools, use-case shaped.** An earlier revision of this plan recommended re-deriving
+- **Settled: three tools, use-case shaped.** An earlier revision of this plan recommended re-deriving
   the list from observed call frequency and adding the queue verbs, worktree reads and an orientation
   tool. **That recommendation is withdrawn.** Call frequency measures how repetitive the protocol is,
   not how many distinct things an agent does — the four-line port preamble alone appears six times.
-  Scoping to use cases gives four tools; scoping to call sites gives twenty and a maintenance surface.
+  Scoping to use cases gives three tools; scoping to call sites gives twenty and a maintenance surface.
 - **Settled: no `plan_read`, and no reports-channel tools.** The parked surface cut plan-content reads
   on network-exposure grounds. Those grounds are weaker on a loopback stdio surface, but the cut
   stands for a better reason — see *The file/state line* below. Recorded here so it is not
