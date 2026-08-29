@@ -976,6 +976,17 @@ jobs:
       - name: Autoban state + completion-driven dispatch contract
         run: npm run test:contract:autoban-state
 
+      # The blocked-seat digest. The defect it closes was a lead being interrupted
+      # every ~2 minutes per seat because `blocked_at` is nulled by recordLiveness on
+      # any output, so the "single-fire gate" fired once per SILENCE EPISODE. Nothing
+      # else in CI exercises the pacing map, the recovered-seat exclusion, or the
+      # empty-liveness prune guard, and all three fail silently: an over-eager digest
+      # reads as chatter, a suppressed one as a quiet fleet. Also pins both hosts'
+      # `deliver: false` guard as present in source — the machine/text split has no
+      # compiler behind it.
+      - name: Blocked-seat digest pacing contract
+        run: npm run test:contract:blocked-digest
+
       # Mission Control's ticking deliverables are two rewritten agent personas and
       # a filesystem channel, and nothing else in CI reads either. Three of the four
       # subtasks named an automated check and none was wired, which is the exact

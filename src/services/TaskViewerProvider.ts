@@ -1083,8 +1083,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         // already carries it is untouched. Deliberately NOT inside the
                         // seat-block cache: every dispatch is about a different plan file.
                         // Placed before applyStandingOrders — the SO block must stay last.
+                        // `missionControlActive` is threaded for the same reason the folded
+                        // `dispatch` arm threads it (:702): MISSION_CONTROL_REPORT_DIRECTIVE
+                        // tells the seat to post report files to a directory nothing reads
+                        // when no Mission Control is armed. Omitting the argument here would
+                        // ALSO undo that arm's decision — the completion sentinel is already
+                        // present so it no-ops, but the mission-control sentinel is not, so a
+                        // folded dispatch sent with Mission Control off would pick the
+                        // directive back up on the way through this branch.
                         if (roleTakesDispatchDirectives(role) && !payload?.machineOrigin) {
-                            data = ensureDispatchProtocolDirectives(data);
+                            data = ensureDispatchProtocolDirectives(data, this.isOversightAgentRunning());
                         }
                     }
 
@@ -1932,11 +1940,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         void (async () => {
             // Machine-only signal (the blocked arm's per-seat emission). The lead-facing
             // text for those seats arrives as one paced digest from
-            // PlanIngestionEngine._runBlockedDigestSweep; handleAutobanTurnEnd — the
-            // OTHER consumer of this single-slot notifier — still receives every one of
-            // them, which is what keeps autoban lanes halting on their existing cadence.
-            // Deliberately unlogged: this fires per blocked seat per tick and the digest
-            // logs the seats it reported.
+            // PlanIngestionEngine._runBlockedDigestSweep, so this path must not also
+            // deliver it. The split was designed to keep feeding a STATE consumer on the
+            // same single-slot notifier; there is none at HEAD (handleAutobanTurnEnd went
+            // with the scheduling consolidation in 25fdb6d9), so a `deliver: false`
+            // emission stops here and reaches nobody — see TurnEndInfo.deliver before
+            // assuming otherwise. Deliberately unlogged: this fires per blocked seat per
+            // tick and the digest logs the seats it reported.
             if (info.deliver === false) { return; }
 
             const seatName = info.seatName;

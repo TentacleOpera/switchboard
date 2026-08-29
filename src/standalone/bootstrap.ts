@@ -378,8 +378,10 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             // board-composed prompt (which passes false) is not touched, and the
             // turn-end notice (which passes false) never carries a plan-file
             // instruction to a lead.
+            // `missionControlActive` threaded for the same reason the folded `dispatch`
+            // arm threads it (:285) — see the twin's comment.
             if (roleTakesDispatchDirectives(handle.role || '') && !machineOrigin) {
-                out = ensureDispatchProtocolDirectives(out);
+                out = ensureDispatchProtocolDirectives(out, taskViewerProvider?.isOversightAgentRunning() ?? true);
             }
         }
         if (applyOrders) {
@@ -2346,7 +2348,18 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         && partitionPlansByFeature(records).featureGroups.length === 0
                         && kanbanProvider
                         && await kanbanProvider.isCodingTeamHead(root, targetRole, terminal.friendlyName)) {
-                        const { sent, skipped } = kanbanProvider.selectTeamBatchPlans(records);
+                        // The extension caps a BatchPromptPlan[] (post-buildDispatchPlans);
+                        // this arm caps raw KanbanPlanRecords, which carry every field the
+                        // shared precedence comparator reads EXCEPT the column, which they
+                        // spell `kanbanColumn`. Without the alias `selectTeamBatchPlans`
+                        // resolves sortColumn to '' — so a STAGING batch would order by
+                        // column_order (always NULL in STAGING) instead of queue_position,
+                        // and the two hosts would partition one selection into different
+                        // sent/skipped sets. Shallow copies: every downstream read
+                        // (planFile, workspaceId, sessionId, planId, kanbanColumn, topic)
+                        // survives the spread.
+                        const orderable = records.map((r: any) => ({ ...r, column: r.column || r.kanbanColumn || '' }));
+                        const { sent, skipped } = kanbanProvider.selectTeamBatchPlans(orderable);
                         records = sent;
                         cappedOut = skipped;
                     }
@@ -2725,11 +2738,13 @@ Each plan file must include:
         void (async () => {
             // Machine-only signal (the blocked arm's per-seat emission). The lead-facing
             // text for those seats arrives as one paced digest from
-            // PlanIngestionEngine._runBlockedDigestSweep; handleAutobanTurnEnd — the
-            // OTHER consumer of this single-slot notifier — still receives every one of
-            // them, which is what keeps autoban lanes halting on their existing cadence.
-            // Deliberately unlogged: this fires per blocked seat per tick and the digest
-            // logs the seats it reported.
+            // PlanIngestionEngine._runBlockedDigestSweep, so this path must not also
+            // deliver it. The split was designed to keep feeding a STATE consumer on the
+            // same single-slot notifier; there is none at HEAD (handleAutobanTurnEnd went
+            // with the scheduling consolidation in 25fdb6d9), so a `deliver: false`
+            // emission stops here and reaches nobody — see TurnEndInfo.deliver before
+            // assuming otherwise. Deliberately unlogged: this fires per blocked seat per
+            // tick and the digest logs the seats it reported.
             if (info.deliver === false) { return; }
 
             const seatName = info.seatName;

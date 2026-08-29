@@ -1005,6 +1005,7 @@
     "test:contract:teams-tab-no-start": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/teams-tab-no-start-contract.test.js",
     "test:contract:standalone-agent-isolation": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-agent-team-isolation-contract.test.js",
     "test:contract:autoban-state": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-state-regression.test.js",
+    "test:contract:blocked-digest": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/plan-ingestion-blocked-digest.test.js",
     "test:contract:completion-asserted-never-inferred": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/completion-asserted-never-inferred.test.js",
     "test:contract:terminal-plan-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-plan-attribution-contract.test.js",
     "test:contract:scheduled-jobs": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/scheduled-jobs-and-connections.test.js",

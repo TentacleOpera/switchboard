@@ -4,13 +4,13 @@
  * Plan Ingestion Blocked Digest Contract Test
  *
  * Covers:
- * 1. Flapping seat (blocked -> live -> blocked) inside interval produces one delivered call.
+ * 1. Flapping seat (blocked -> live -> blocked) inside interval produces one delivered
+ *    call, and notifiedSeatsThisTick is populated for the reported tick only.
  * 2. Two seats blocked in same tick produce one delivered call whose body lists both.
  * 3. Seat whose blocked_at was nulled between stamp and digest is excluded.
- * 4. Every blocked seat produces deliver: false notifier call (autoban signal).
- * 5. notifiedSeatsThisTick populated for reported seats only.
- * 6. Empty liveness snapshot does not prune the pacing map.
- * 7. TaskViewerProvider and bootstrap deliver: false guards.
+ * 4. Empty liveness snapshot does not prune the pacing map.
+ * 5. TaskViewerProvider and bootstrap deliver: false guards, and the engine's per-seat
+ *    blocked emission carries deliver: false (the machine half of the split).
  */
 
 const assert = require('assert');
@@ -227,6 +227,16 @@ async function run() {
 
         assert.ok(tvpSrc.includes('if (info.deliver === false) { return; }'), 'TaskViewerProvider.ts has deliver === false guard');
         assert.ok(bspSrc.includes('if (info.deliver === false) { return; }'), 'bootstrap.ts has deliver === false guard');
+
+        // The per-seat emission lives in the main sweep loop, not in
+        // _runBlockedDigestSweep, so a unit call on the sweep cannot reach it. Pin it
+        // in source: dropping `deliver: false` here would restore the flapping notice
+        // the digest exists to replace, and every assertion above would still pass.
+        const engineSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'PlanIngestionEngine.ts'), 'utf8');
+        const blockedArm = engineSrc.slice(engineSrc.indexOf('Turn-end (silence) marked blocked'));
+        const emission = blockedArm.slice(0, blockedArm.indexOf('blockedThisTick.push'));
+        assert.ok(/outcome: 'blocked'/.test(emission) && /deliver: false/.test(emission),
+            "the blocked arm's per-seat notifier emission must carry deliver: false");
     });
 
     if (failures > 0) {

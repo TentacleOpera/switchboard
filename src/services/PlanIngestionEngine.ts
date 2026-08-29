@@ -99,10 +99,19 @@ export interface TurnEndInfo {
      *  Hosts send this verbatim when set and fall back to their own one-line message when absent. */
     body?: string;
     /** `false` = machine signal only. Consumers that DELIVER text (the pty send and the
-     *  orchestrator report mirror) must skip it; state consumers (handleAutobanTurnEnd)
-     *  must still run. Used by the blocked arm, which fires per seat at the sweep's own
-     *  cadence for autoban while its lead-facing text is paced and aggregated into one
-     *  digest by _runBlockedDigestSweep. Absent/true = deliver, today's behaviour. */
+     *  Mission Control report mirror) must skip it; a STATE consumer — one that reacts to
+     *  the fact of a turn ending rather than to its message — must still run.
+     *  Used by the blocked arm, which fires per seat at the sweep's own cadence while its
+     *  lead-facing text is paced and aggregated into one digest by _runBlockedDigestSweep.
+     *
+     *  NOTE (verify before relying on this): there is NO state consumer at HEAD. The one
+     *  this split was designed around, `TaskViewerProvider.handleAutobanTurnEnd`, was
+     *  deleted in 25fdb6d9 when scheduling consolidated onto Mission Control, and both
+     *  hosts' notifier closures now call only their text-delivering path — which returns
+     *  immediately on this flag. So a `deliver: false` emission currently reaches nobody.
+     *  It is kept as the signal/delivery seam for the next state consumer (a Mission
+     *  Control lane halt is the obvious one), NOT because something is listening today.
+     *  Absent/true = deliver, today's behaviour. */
     deliver?: boolean;
 }
 
@@ -694,10 +703,11 @@ export class PlanIngestionEngine {
                                             // The notice therefore fires once per SILENCE EPISODE, not
                                             // once per dispatch.
                                             //
-                                            // The signal still fires per seat at this cadence because
-                                            // handleAutobanTurnEnd keys on it to retire the card's
-                                            // in-flight record and halt its lane — but it is NOT
-                                            // delivered as text, and it does NOT count as a wake for
+                                            // The signal still fires per seat at this cadence, as the
+                                            // machine-readable half of the split (see TurnEndInfo
+                                            // .deliver — no state consumer is wired at HEAD, so this
+                                            // emission currently reaches nobody). It is NOT delivered
+                                            // as text and it does NOT count as a wake for
                                             // notifiedSeatsThisTick. The lead-facing message is paced
                                             // and aggregated in _runBlockedDigestSweep below.
                                             if (this._turnEndNotifier) {
