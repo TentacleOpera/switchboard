@@ -1,19 +1,26 @@
-# Give the CLI board commands, so a phone with an SSH client can list and dispatch without an agent
+# Give the CLI board commands, so the board can be driven from a terminal without a GUI or an agent
 
 ## Goal
 
 Add read-and-dispatch board commands to `npx switchboard`, so the common lifecycle — see what is ready,
 pick one, dispatch it — is a terminal command rather than a conversation. The work is mechanical: an
-agent is an expensive way to make an HTTP call, and from a phone SSH client a numbered picker beats a
-chat loop on latency, determinism and typing.
+agent is an expensive way to make an HTTP call.
+
+**The audience is anyone at a terminal**, not a mobile edge case: an iPad with a keyboard over SSH, a
+laptop user who would rather type than reach for a browser tab, a tmux session on the machine itself,
+and a phone. The GUI is one way to drive the board and should not be the only one.
 
 ### Problem Analysis
 
 **The only way to drive the board today is an agent or a browser.** Every board operation goes through
 `curl` against `LocalApiServer`, and the surfaces that wrap it are the browser board, the VS Code
-panels, and agent skills. On a phone with an SSH client and a running homelab instance, none of those
-are pleasant: the browser board is a desktop UI, and an agent session costs a model round trip, a
-permission prompt per shell call, and non-determinism, for an operation that is a `GET` and a `POST`.
+panels, and agent skills. For anyone working in a terminal, none of those fit: the board is a desktop
+GUI, and an agent session costs a model round trip, a permission prompt per shell call, and
+non-determinism, for an operation that is a `GET` and a `POST`.
+
+That gap is widest away from a desktop — an SSH session from an iPad or a phone has no browser board
+worth using — but it is not created by the small screen. A keyboard user on the same machine as the
+board has the same objection: a GUI and a chat loop are both slower than a command they already know.
 
 **The CLI already has the shape.** `src/standalone/cli.ts` dispatches on `process.argv[2]` and already
 implements `secrets`, `scaffold`, `control-plane`, `stop`, `status`, `logs`, `init`, `migrate`,
@@ -27,9 +34,15 @@ returns a port or null; `getHealthJson(port)` fetches health; a `--json` flag ca
 `routeLogsToStderr()` then `emitJson(...)` so stdout is machine-readable; `exitFlushed(n)` sets the
 code. Every piece a new command needs already exists and is already used this way.
 
-**Typing decides the shape.** Two commands — list, then `dispatch <planId>` — means typing a UUID on a
-phone keyboard. A numbered picker is one keystroke. So the default path must be interactive; the
-scriptable path is the `--json` flag that already exists on `status`.
+**Both affordances are first-class.** A numbered picker is the fastest way to act on something you are
+looking at, on any device — no id to read, copy or retype. A direct `dispatch <id>` is the fastest way
+to act on something you already know, which is the common case for a keyboard user returning to a card
+they just planned. Neither is a concession to the other, and the plan ships both rather than treating
+one as a fallback.
+
+What the small screen does change is id entry: a full UUID is unreasonable to type anywhere and
+actively hostile on glass. Accepting a unique short prefix (the listing already prints one) removes
+that cost for every device at once.
 
 ### Root Cause
 
@@ -72,14 +85,15 @@ disagree about an outcome, that is the bug this section exists to prevent.
    uses, so there is one answer to "what is ready" rather than two. Output is a numbered list of
    `type · title · short id`.
 
-   Then it **prompts for a number and dispatches that card.** Enter alone exits without acting. This is
-   the phone path: one command, one keystroke.
+   Then it **prompts for a number and dispatches that card.** Enter alone exits without acting — one
+   command, one keystroke, on any device.
 
    Naming is the user's call — `ready` matches the existing protocol vocabulary, but the request was
    phrased as `switchboard planned`. Pick one name and use it in both the CLI and the MCP tool.
 
-2. **`switchboard dispatch <planId> [column]`** — the non-interactive form, for scripts and for when
-   the id is already known. Omitted column means `auto`, which is `performKanbanDispatch`'s existing
+2. **`switchboard dispatch <planId|prefix> [column]`** — the direct form, for when the card is already
+   known. Accepts a unique short id prefix as well as a full planId; an ambiguous prefix lists the
+   matches and exits non-zero rather than picking one. Omitted column means `auto`, which is `performKanbanDispatch`'s existing
    complexity routing. Surface the `400` from `_canonicalColumnId` verbatim on a bad column: it lists
    the valid ids and is the caller's self-correction signal.
 
