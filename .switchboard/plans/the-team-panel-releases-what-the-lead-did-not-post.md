@@ -355,3 +355,32 @@ and `:9046`.
 
 Send to Coder. The visibility rule is not separable from the button — shipping the control
 always-visible delivers the habit this plan exists to prevent.
+
+## Review Findings
+
+Reviewer pass. No code fix was required for this subtask — the implementation matches the plan
+and every Goal Invariant holds: `clearTeamBadges` has no click-handler caller (it survives only
+for the bulk-clear paths at `terminals.js:9018`/`:9046`), the button is hidden at count 0 and
+labelled `RELEASE ${heldCount} HELD CARD(S)`, the request body carries only `from`, the released
+set and the in-flight refusal share the module-level `heldByTeam(p, teamSet)` helper,
+`POST /kanban/task/complete` and `POST /kanban/team/release` both route through
+`completeCardInternal` (so the seat resolution, idempotency check, `plan_events` row and
+`clearTerminalContext` cannot drift), `heldUnposted` is a per-terminal map on the existing
+`ptyListTerminals` poll, and badges clear only for seats the server reports released. Verified
+too that the release route's `teamSet` fallback is byte-identical to `_runQueuePop`'s, and that
+`resolveTeamMembers` is wired in **both** composition roots (`extension.ts:1054`,
+`standalone/bootstrap.ts:2880`) so the control is not extension-only. Validation: the CI-wired
+`team-release-control-contract` suite passes (all cases), as do `task-complete`,
+`atomic-team-lifecycle`, `shell-terminal-strip`, `catalog:check`, `parity:check`,
+`standalone-parity:check` and `host-seam-parity:check`; `tsc` clean, `eslint src` 0 errors.
+
+Goal verdict: **achieved.** `ACKNOWLEDGE COMPLETIONS` is gone from `terminals.html` and its
+handler is no longer reachable from a click; the control at `btn-team-ack` now POSTs
+`/kanban/team/release`, which writes `completed_at` for every card the scoped team holds with no
+completion, and it is absent whenever that count is zero. No destination or approach was changed.
+
+## Deferred Findings
+
+- NIT — `_handleTerminalVerb` runs a full `getBoard` scan on **every** `ptyListTerminals` HTTP call, not only the panel's 5s poll, so agent-driven calls pay for a map no caller reads; the plan accepted one scan per poll and this is the same order of cost. `src/services/LocalApiServer.ts:4302`
+- NIT — a successful release renders twice: once inline after the badge deletions and again from the `fetchTerminalList()` in the `finally`; harmless, and the button it repaints is the same one either way. `src/webview/terminals.js:9345`
+- NIT — `btnTeamAck.textContent` is written even when the button is hidden, so a count of 0 briefly exists as a label nobody sees. `src/webview/terminals.js:4744`

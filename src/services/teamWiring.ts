@@ -150,7 +150,15 @@ export function readTeamPacing(group: any): 'head' | 'seat' {
  *  1. Dispatched from kanban STAGING column (in a coding column) -> POST /kanban/queue/done
  *  2. Dispatched from file-based queue (no planId) -> POST /terminals/teams/<groupId>/queue/done
  *  3. Direct head dispatch / fallback -> ptySendPrompt to head
- * Feature completion check runs before all paths.
+ *
+ * Reading `kanbanColumn` here picks an ENDPOINT; it never decides that work is
+ * finished. The body says so explicitly, because the two look alike and only
+ * one of them is legal: completion is the lead's asserted
+ * `POST /kanban/task/complete`, never a column, an mtime, or silence.
+ *
+ * Members only. The head seat gets
+ * {@link CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY} — this body's fallback names
+ * the head as the recipient, which for the head is itself.
  */
 export function CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId: string, headName: string): string {
     return 'When you finish a task, route your completion report based on where the work came from.\n'
@@ -174,10 +182,46 @@ export function CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId: string, headName: s
         + '   via POST /terminals/verb/ptySendPrompt with\n'
         + '   {"name":"' + headName + '","data":"<your report>","clearBeforePrompt":false,"machineOrigin":true} —\n'
         + '   naming what you changed and what to review. Do not wait to be asked.\n\n'
-        + 'Before reporting, if you have a featureId, check GET /kanban/plans?featureId=<your feature id> —\n'
-        + 'if all subtasks are in LEAD CODED, POST /kanban/dispatch with\n'
-        + '{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED","from":"<your terminal name>"}\n'
-        + 'instead of any of the above. The feature is complete — hand it to review.';
+        + 'Report YOUR task, and only yours. Do not infer that a feature is finished from board\n'
+        + 'position: a column advances when work STARTS, not when it finishes, so "every subtask is\n'
+        + 'in a coding column" is not evidence of anything. Handing a feature to review is your\n'
+        + 'lead\'s call, not yours — the lead asserts completion with POST /kanban/task/complete.';
+}
+
+/**
+ * The `team-head` half of the context-aware completion order — the lead's own.
+ *
+ * The member body above cannot be handed to the head: its fallback names the
+ * head as the recipient, so a head reading it is told to ptySendPrompt itself,
+ * and it never states the one post only a lead can make. `completed_at` has a
+ * single writer that the system acts on, and the lead's `task/complete` is it —
+ * an order installed on the head that omits it leaves nothing to release the
+ * team.
+ *
+ * Wording is deliberately in step with `KanbanProvider._buildDrivePrefix`'s
+ * CLOSE OUT clause and `LocalApiServer`'s `composeAcceptanceInstruction` —
+ * three surfaces, one contract. Commit policy is NOT restated here: the head
+ * prompt preset owns it, and a per-subtask commit rule stated here would
+ * contradict "a team commits once, as its head".
+ */
+export function CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(groupId: string): string {
+    return 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
+        + 'with it, POST /kanban/task/complete with {"from":"<your terminal name>","planId":'
+        + '"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"} against the port in '
+        + '.switchboard/api-server-port.txt. Post per subtask, with that subtask\'s planId — never '
+        + 'the feature\'s. Accepting and rejecting are not two different endings: you reject by '
+        + 'sending a fix round first, then you post when the subtask is done. Until you post, that '
+        + 'seat is not cleared and you cannot be handed the next subtask.\n\n'
+        + 'Then take the next item, routed by where your own work came from:\n'
+        + '- If you hold a card dispatched from the board, POST /kanban/queue/done with '
+        + '{"from":"<your terminal name>"} against the same port. A response of '
+        + '{"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
+        + '- Otherwise POST /terminals/teams/' + groupId + '/queue/done with '
+        + '{"from":"<your terminal name>"} to take the next queued item. If there are no more '
+        + 'items, the team is done with queued work.\n\n'
+        + 'You are the lead — there is nobody to relay your report to, so do not prompt yourself. '
+        + 'Do not infer completion from board position: a column advances when work STARTS, not '
+        + 'when it finishes. Your POST is the only fact that releases a seat.';
 }
 
 /**
@@ -210,6 +254,42 @@ function LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId: string, headName: s
         + '3. Fallback: report to your head ' + headName + ' via POST /terminals/verb/ptySendPrompt with\n'
         + '   {"name":"' + headName + '","data":"<your report>","clearBeforePrompt":false} — naming what\n'
         + '   you changed and what to review. Do not wait to be asked.\n\n'
+        + 'Before reporting, if you have a featureId, check GET /kanban/plans?featureId=<your feature id> —\n'
+        + 'if all subtasks are in LEAD CODED, POST /kanban/dispatch with\n'
+        + '{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED","from":"<your terminal name>"}\n'
+        + 'instead of any of the above. The feature is complete — hand it to review.';
+}
+
+/**
+ * The second superseded body: exclusive routing and `machineOrigin` had landed,
+ * but it still ended with the board-position paragraph that told a seat to
+ * dispatch a feature to review once "all subtasks are in LEAD CODED" — an
+ * inference the release contract forbids, since a column advances when work
+ * STARTS. Recognised alongside {@link LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY}
+ * so an install carrying either stale form heals on its next prompt.
+ */
+function LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2(groupId: string, headName: string): string {
+    return 'When you finish a task, route your completion report based on where the work came from.\n'
+        + 'These routes are EXCLUSIVE: the first one that succeeds ends your report. Do NOT also take\n'
+        + 'the other routes — reporting twice sends duplicate prompts to your lead.\n\n'
+        + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
+        + '   against the port in .switchboard/api-server-port.txt.\n'
+        + '   - If the response shows kanbanColumn is "LEAD CODED", "CODER CODED", or "INTERN CODED",\n'
+        + '     POST /kanban/queue/done with {"from":"<your terminal name>"}.\n'
+        + '     The system will clear your terminal and dispatch the next staged card.\n'
+        + '     A response of {"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
+        + '     If you cannot complete it, POST /kanban/queue/done with\n'
+        + '     {"from":"<your terminal name>","outcome":"failed"} and a one-line reason.\n'
+        + '   - If the response shows any other column, report to your head (step 3).\n\n'
+        + '2. If you do not have a PLAN_ID (ad-hoc prompt, file-based queue item),\n'
+        + '   POST /terminals/teams/' + groupId + '/queue/done with {"from":"<your terminal name>"}.\n'
+        + '   The system will relay your report to your team lead, clear your terminal,\n'
+        + '   and dispatch the next queued item.\n'
+        + '   If the POST fails, report to your head directly (step 3).\n\n'
+        + '3. Fallback (only when steps 1 and 2 did not apply or failed): report to your head ' + headName + '\n'
+        + '   via POST /terminals/verb/ptySendPrompt with\n'
+        + '   {"name":"' + headName + '","data":"<your report>","clearBeforePrompt":false,"machineOrigin":true} —\n'
+        + '   naming what you changed and what to review. Do not wait to be asked.\n\n'
         + 'Before reporting, if you have a featureId, check GET /kanban/plans?featureId=<your feature id> —\n'
         + 'if all subtasks are in LEAD CODED, POST /kanban/dispatch with\n'
         + '{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED","from":"<your terminal name>"}\n'
@@ -1598,7 +1678,10 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     if (!opts.externalHead) {
         try {
             const headCompletionOrderId = `context-aware-completion:${groupId}:team-head`;
-            const headCompletionOrderText = CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId, headName);
+            // The HEAD body, not the member body: the member fallback names the
+            // head as the recipient, so installing it here tells the lead to
+            // ptySendPrompt itself and never names the lead's own task/complete.
+            const headCompletionOrderText = CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(groupId);
             await mutateStandingOrders(db, async (orders) => {
                 if (orders.some(o => o.id === headCompletionOrderId)) {
                     return orders;
@@ -1750,12 +1833,13 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
         }
 
         // Context-aware completion order: system-installed (id prefix
-        // `context-aware-completion:`), frozen at install time. The body was
-        // changed to make routing exclusive and add `machineOrigin` to the
-        // step-3 fallback. Rewrite orders whose instruction still carries the
-        // pre-exclusivity text so existing installs get the new routing on
-        // their next message — the install path skips rows that already exist
-        // (line 1564), so without this a re-spawn never updates the text.
+        // `context-aware-completion:`), frozen at install time. The body has
+        // been revised twice — exclusive routing plus `machineOrigin`, then the
+        // removal of the board-position "hand the feature to review" paragraph —
+        // and the head scope now takes a body of its own. Rewrite orders whose
+        // instruction still carries a superseded text so existing installs heal
+        // on their next message; the install path skips rows that already exist,
+        // so without this a re-spawn never updates the text.
         //
         // The team-head order's instruction IS the raw body; the team order's
         // instruction is the body + '\n' + GIT_SAFETY_DIRECTIVE (default
@@ -1765,14 +1849,26 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
         if (typeof o.id === 'string' && o.id.startsWith('context-aware-completion:')) {
             const gid = o.teamId || '';
             const head = o.parent || '';
-            const legacyBody = LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head);
-            const currentBody = CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head);
-            if (scope === 'team-head' && o.instruction === legacyBody) {
-                rewrite.set(o.id, currentBody);
-                touched = true;
-            } else if (scope === 'team' && o.instruction === legacyBody + '\n' + GIT_SAFETY_DIRECTIVE) {
-                rewrite.set(o.id, currentBody + '\n' + GIT_SAFETY_DIRECTIVE);
-                touched = true;
+            const staleBodies = [
+                LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head),
+                LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2(gid, head),
+            ];
+            if (scope === 'team-head') {
+                // Every stale form on a head row is a MEMBER body: the head-scope
+                // install handed out the member text until the head body existed.
+                // The current member body is stale here too, for the same reason —
+                // its fallback tells the head to prompt itself.
+                const memberBodies = [...staleBodies, CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head)];
+                if (memberBodies.includes(o.instruction)) {
+                    rewrite.set(o.id, CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(gid));
+                    touched = true;
+                }
+            } else if (scope === 'team') {
+                const currentBody = CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head);
+                if (staleBodies.some(b => o.instruction === b + '\n' + GIT_SAFETY_DIRECTIVE)) {
+                    rewrite.set(o.id, currentBody + '\n' + GIT_SAFETY_DIRECTIVE);
+                    touched = true;
+                }
             }
         }
     }

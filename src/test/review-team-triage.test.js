@@ -74,6 +74,15 @@ async function runTests() {
             'the context-aware order routes to /kanban/queue/done');
         assert.ok(order.includes('/terminals/teams/team-review/queue/done'),
             'the context-aware order routes to team queue/done for prompt items');
+        // A review team's seats read this same order. The board-position clause
+        // the review variant existed to exclude must not come back through it:
+        // handing a feature to review is the lead's call, and a column advances
+        // when work STARTS, so "all subtasks in a coding column" evidences
+        // nothing.
+        assert.ok(!order.includes('kanban/dispatch'),
+            'the order must not instruct a reviewer to dispatch the feature');
+        assert.ok(!order.includes('CODE REVIEWED'),
+            'the order must not instruct a reviewer to move the feature to CODE REVIEWED');
     });
 
     // 3. A two-plan assignment is one batched dispatch, not two.

@@ -198,3 +198,46 @@ Key risks: (1) the `GET /kanban/plan` HTTP call adds latency and a failure mode 
 17. Manual: toggle pacing from head to seat mid-run. No standing order change. The in-flight check behaviour changes (head: one-in-one-out; seat: skip). Coder's next completion still routes correctly via the context-aware order.
 18. Manual: toggle queue mode from manual to auto. The `queueMode` field is written to the group config. The webview reflects the toggle state. No standing order change. The file-based `queue/done` endpoint dispatches the next item on completion.
 19. Manual: spawn an external-headed team. Workers get `EXTERNAL_HEAD_CALLBACK_INSTRUCTION` (file-based reports). The context-aware order is NOT installed. Workers write report files to `.switchboard/teams/<teamId>/reports/`.
+
+## Review Findings
+
+Reviewer pass. Fixed two material defects in `src/services/teamWiring.ts`: (1) the order body
+ended with a paragraph telling any seat to `POST /kanban/dispatch` a feature to `CODE REVIEWED`
+once "all subtasks are in LEAD CODED" — an inference the parent feature explicitly forbids and
+which is factually wrong (a column advances when work *starts*), and the implementing commit had
+deleted the three CI-gated assertions in `completion-asserted-never-inferred.test.js` and
+`review-team-triage.test.js` that existed to forbid it; the paragraph is gone, replaced by an
+explicit prohibition, and the guards are restored and widened. (2) The `team-head` install handed
+the head the *member* body, whose step-3 fallback names the head as the recipient — the lead was
+told to `ptySendPrompt` itself, and the order never named the lead's own `POST /kanban/task/complete`;
+a new `CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(groupId)` is installed at that scope instead, and
+`migrateCodingTeamOrders` now heals head rows carrying any member body rather than rewriting them
+to a newer member body. Files changed: `src/services/teamWiring.ts`,
+`src/test/completion-asserted-never-inferred.test.js`, `src/test/review-team-triage.test.js`,
+`src/test/standing-orders-marker-contract.test.js`, `src/test/queue-pipeline-contract.test.js`,
+`protocol-catalog.json` (regenerated — `catalog:check` was red at HEAD from unrelated line drift).
+Validation: `tsc -p tsconfig.test.json` clean, `eslint src` 0 errors, `catalog:check` /
+`parity:check` / `standalone-parity:check` / `host-seam-parity:check` all pass, and
+completion-asserted-never-inferred, standing-orders-marker (65/0), review-team-triage,
+team-release-control, task-complete, atomic-team-lifecycle, shell-terminal-strip,
+link-presets-mirror and queue-done-relay are green; three pre-existing failures unrelated to this
+plan remain (see Deferred Findings).
+
+Goal verdict: **achieved.** The unconditional report-to-head callback is gone from
+`wireSpawnedTeam`; `AGENT_GROUP_CALLBACK_INSTRUCTION` survives only on the delegate/link-preset
+path, external heads keep `EXTERNAL_HEAD_CALLBACK_INSTRUCTION`, and `applySeatPacingOrders` /
+`applyTeamQueueOrders` and their three call sites and two imports are deleted with no orphaned
+references. One deviation from the plan text: the plan's step-1 order body specified the
+feature-completion board-position paragraph; it is removed, because the parent feature file
+("Neither subtask may infer completion from a column, an mtime, or silence") and two pre-existing
+CI gates forbid it. Routing on `kanbanColumn` to pick an *endpoint* is kept — that is the plan's
+actual mechanism and is not an inference about doneness.
+
+## Deferred Findings
+
+- NIT — the `team` scope install is guarded by `(scope, teamId)` existence, so a team wired by an earlier build keeps its old team-order text on re-spawn rather than being updated; `migrateCodingTeamOrders` heals the known stale bodies on read, which covers it. `src/services/teamWiring.ts:1508`
+- NIT — stale `seat-queue-done:` / `team-queue-done:` standing orders from earlier dev builds are never removed now that their only remover is deleted; teams have never shipped, so this is dev-local litter, not an install-base migration. `src/services/teamWiring.ts:1790`
+- NIT — the member order still claims `queue/done` will "clear your terminal", which is not true for a review team's seats (the old `REVIEW_TEAM_QUEUE_DONE_ORDER_BODY` omitted that fragment); the endpoint's behaviour is unchanged, only the description is now uniform. `src/services/teamWiring.ts:160`
+- MAJOR (pre-existing, not this plan) — `queue-pipeline-contract.test.js` asserts `private async _scheduleQueuePop` exists in `LocalApiServer.ts`; the scheduling-consolidation commit removed it and left the gate red. `src/test/queue-pipeline-contract.test.js:838`
+- MAJOR (pre-existing, not this plan) — `external-headed-team-contract.test.js` case 8 asserts the generated external head prompt names "your only card action is the POST /kanban/dispatch"; that phrase is no longer in `agentGroupInstantiation.ts`. `src/test/external-headed-team-contract.test.js:410`
+- MAJOR (pre-existing, not this plan) — `stage-marker-commit-contract.test.js` has two red cases: `KanbanProvider.ts` now makes a raw `getConfigJson(STANDING_ORDERS_CONFIG_KEY)` read outside `loadEffectiveStandingOrders`, and the definitions library stamps `definitionId` onto rows the "nothing stale" case expects untouched. `src/test/stage-marker-commit-contract.test.js:507`

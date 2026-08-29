@@ -1102,7 +1102,7 @@ new Function('exports', 'module', 'require', tsc.transpileModule(TEAM_WIRING_SRC
     compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
 }).outputText)(teamWiringModule.exports, teamWiringModule, teamWiringRequire);
 
-const { wireSpawnedTeam, TERMINALS_LAYOUT_MODES, CONTEXT_AWARE_COMPLETION_ORDER_BODY, EXTERNAL_HEAD_CALLBACK_INSTRUCTION } = teamWiringModule.exports;
+const { wireSpawnedTeam, TERMINALS_LAYOUT_MODES, CONTEXT_AWARE_COMPLETION_ORDER_BODY, CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY, EXTERNAL_HEAD_CALLBACK_INSTRUCTION } = teamWiringModule.exports;
 
 /**
  * The panel's own layout whitelist, read out of terminals.js rather than
@@ -1333,13 +1333,18 @@ test('wireSpawnedTeam: installs context-aware completion orders at team and team
     const res = await wireSpawnedTeam(args);
     assert.strictEqual(res.ok, true);
     const expectedOrderText = CONTEXT_AWARE_COMPLETION_ORDER_BODY(res.groupId, HEAD_NAME);
+    // The head takes its OWN body. The member body's fallback names the head as
+    // the recipient, so installing it at team-head scope tells the lead to
+    // ptySendPrompt itself and never names the lead's own task/complete.
+    const expectedHeadText = CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(res.groupId);
     let orders = await db.getConfigJson('terminals.standingOrders', []);
     const teamOrder = orders.find(o => o.scope === 'team' && o.teamId === res.groupId);
     const headOrder = orders.find(o => o.scope === 'team-head' && o.id === `context-aware-completion:${res.groupId}:team-head`);
     assert.ok(teamOrder, 'team order must be installed');
     assert.ok(teamOrder.instruction.includes(expectedOrderText), 'team order must contain context-aware completion text');
     assert.ok(headOrder, 'team-head completion order must be installed');
-    assert.strictEqual(headOrder.instruction, expectedOrderText, 'team-head completion order must match expected body');
+    assert.strictEqual(headOrder.instruction, expectedHeadText, 'team-head completion order must carry the HEAD body, not the member body');
+    assert.notStrictEqual(headOrder.instruction, expectedOrderText, 'the head must not be handed the member body');
 });
 
 test('wireSpawnedTeam: external-headed teams keep EXTERNAL_HEAD_CALLBACK_INSTRUCTION and do not install context-aware order', async () => {

@@ -19,8 +19,8 @@ Both write the same fact - completed_at - which is the single thing that release
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Context-Aware Completion Reporting for Teams](../plans/context-aware-completion-reporting.md) — **PLAN REVIEWED** — ID: 2153aaf2-2fc0-41a3-a7c4-92fa27775976
-- [ ] [The team panel releases what the lead did not post](../plans/the-team-panel-releases-what-the-lead-did-not-post.md) — **PLAN REVIEWED** — ID: ba276bc5-fe6b-43df-9d66-e83b1d68f499
+- [ ] [Context-Aware Completion Reporting for Teams](../plans/context-aware-completion-reporting.md) — **CODE REVIEWED** — ID: 2153aaf2-2fc0-41a3-a7c4-92fa27775976
+- [ ] [The team panel releases what the lead did not post](../plans/the-team-panel-releases-what-the-lead-did-not-post.md) — **CODE REVIEWED** — ID: ba276bc5-fe6b-43df-9d66-e83b1d68f499
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -32,3 +32,25 @@ The shared invariant is worth stating for whoever codes either: exactly one fact
 One cross-feature edge: `advance-when-ready-on-a-scheduled-job.md`, in the scheduling feature, consumes precisely this release signal to fire a job on completion rather than on the clock. If both features are scheduled, landing this one first gives that plan a reliable signal to build on. Neither blocks the other.
 
 The badge behaviour is a non-goal: badges already clear on focus, so the replacement control must not try to preserve the old button's in-memory side effect.
+
+## Review Findings
+
+Reviewer pass over both subtasks. The panel-release half needed no code fix — the control,
+its visibility rule, the shared `completeCardInternal` helper and the shared `heldByTeam`
+predicate all match the plan, and `resolveTeamMembers` is wired in both composition roots.
+The reporting half needed two: the completion order carried a paragraph telling any seat to
+`POST /kanban/dispatch` a feature to `CODE REVIEWED` once "all subtasks are in LEAD CODED" —
+exactly the board-position inference this feature's sequencing section forbids — and the
+implementing commit had deleted the CI-gated assertions that forbade it; and the `team-head`
+scope was handed the *member* body, so the lead was told to `ptySendPrompt` itself and was
+never told to post `task/complete`, the one fact that releases a team. Both are fixed in
+`src/services/teamWiring.ts` with the guards restored and a head-specific order body added.
+Validation: `tsc` clean, `eslint src` 0 errors, all four parity/catalog gates green, and nine
+contract suites green including the new CI-wired `team-release-control`; three pre-existing
+failures unrelated to this feature remain, listed on the subtask plans.
+
+## Deferred Findings
+
+See the two subtask plans' `## Deferred Findings` sections — six items total, three NITs on
+each subtask plus three pre-existing MAJORs (`_scheduleQueuePop`, the external head prompt
+phrase, and two `stage-marker-commit` cases) that belong to other work.

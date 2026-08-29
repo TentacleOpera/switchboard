@@ -166,6 +166,16 @@ async function run() {
         const body = CONTEXT_AWARE_COMPLETION_ORDER_BODY('test-group', 'lead-1');
         assert.ok(body.includes('POST /kanban/queue/done'), 'order must instruct coder to call POST /kanban/queue/done');
         assert.ok(body.includes('/terminals/teams/test-group/queue/done'), 'order must instruct fallback queue/done');
+        // Reading `kanbanColumn` to pick an ENDPOINT is routing and is allowed.
+        // Reading it to decide that WORK IS FINISHED is the inference this file
+        // exists to forbid — a column advances when work starts. The order must
+        // therefore never tell a seat to move or dispatch a card.
+        assert.ok(!body.includes('kanban/dispatch'),
+            'order must not instruct the seat to dispatch a feature');
+        assert.ok(!body.includes('CODE REVIEWED'),
+            'order must not instruct the seat to move work to CODE REVIEWED');
+        assert.ok(!/all subtasks are in/i.test(body),
+            'order must not read "all subtasks are in <column>" as a completion signal');
     });
 
     // ── No agent is told to write a completion report file ───────────────
@@ -182,21 +192,49 @@ async function run() {
 
     await check('wireSpawnedTeam installs context-aware completion order at team and team-head scopes', async () => {
         const tw = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
-        let stored = [];
+        // Key-AWARE store. wireSpawnedTeam writes three config keys (orders,
+        // order definitions, terminal groups); a stub that returns one shared
+        // array for every key lets the groups write clobber the orders and the
+        // assertions below read a groups array.
+        const store = {};
         const db = {
-            getConfigJson: async () => stored,
-            setConfigJson: async (_k, v) => { stored = v; },
+            getConfigJson: async (k, d) => (store[k] !== undefined ? store[k] : d),
+            setConfigJson: async (k, v) => { store[k] = v; },
         };
         await tw.wireSpawnedTeam({
             db, headName: 'lead-1', children: [{ friendlyName: 'coder-1' }], teamId: 'g1',
         });
+        const stored = store['terminals.standingOrders'] || [];
         const member = stored.find(o => o.scope === 'team' && o.teamId === 'g1');
         const head = stored.find(o => o.scope === 'team-head' && o.id === 'context-aware-completion:g1:team-head');
         assert.ok(member && head, 'both the team and team-head orders must be installed');
         assert.ok(member.instruction.includes(tw.CONTEXT_AWARE_COMPLETION_ORDER_BODY('g1', 'lead-1')),
             'team order must carry context-aware completion body');
-        assert.strictEqual(head.instruction, tw.CONTEXT_AWARE_COMPLETION_ORDER_BODY('g1', 'lead-1'),
-            'head order must carry context-aware completion body');
+        assert.strictEqual(head.instruction, tw.CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY('g1'),
+            'head order must carry the HEAD completion body, not the member body');
+    });
+
+    // ── The head's own order is the LEAD's, not the members' ─────────────
+    // The member body's fallback names the head as the recipient, so a head
+    // handed that text is told to ptySendPrompt itself — and it never names the
+    // one post only a lead can make. `completed_at` is the single fact that
+    // releases a team; an order on the head that omits it releases nothing.
+
+    await check('the team-head body tells the LEAD to post task/complete and not to prompt itself', async () => {
+        const tw = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
+        const head = tw.CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY('test-group');
+        const member = tw.CONTEXT_AWARE_COMPLETION_ORDER_BODY('test-group', 'lead-1');
+        assert.notStrictEqual(head, member, 'the head must not be handed the member body');
+        assert.ok(head.includes('POST /kanban/task/complete'),
+            'the lead\'s own order must name POST /kanban/task/complete');
+        assert.ok(head.includes('"from":"<your terminal name>"'),
+            'the post must be addressed FROM the lead — first person, not a description of what somebody else does');
+        assert.ok(!head.includes('ptySendPrompt'),
+            'the head has nobody to relay to — a self-prompt fallback must not survive in the head body');
+        assert.ok(head.includes('/terminals/teams/test-group/queue/done'),
+            'the head still advances the team queue, so queue/done must survive with the groupId baked in');
+        assert.ok(!head.includes('kanban/dispatch') && !head.includes('CODE REVIEWED'),
+            'the head body must not infer completion from board position either');
     });
 
     // ── Source-text invariants (no compilation required) ─────────────────
@@ -222,6 +260,10 @@ async function run() {
         const fnBody = teamWiringSrc.slice(fnStart, fnEnd);
         assert.ok(fnBody.includes('POST /kanban/queue/done'),
             'context-aware completion order must route to queue/done');
+        assert.ok(!fnBody.includes('kanban/dispatch'),
+            'the order body must not instruct a seat to dispatch a feature');
+        assert.ok(!fnBody.includes('CODE REVIEWED'),
+            'the order body must not instruct a seat to move work to CODE REVIEWED');
     });
 
     await check('seat-pacing skip is gone — in-flight scan runs for both pacing modes and contains no column check', async () => {

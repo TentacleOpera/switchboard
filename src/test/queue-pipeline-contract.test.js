@@ -588,15 +588,29 @@ async function run() {
         const predicate = src.slice(i, refusal);
         assert.ok(!/CODING_COLUMNS/.test(predicate), 'in-flight predicate must not reference CODING_COLUMNS');
         assert.ok(!/kanbanColumn/.test(predicate), 'in-flight predicate must not compare kanbanColumn');
-        // The predicate delegates to the module-level heldByTeam helper (which
-        // checks completedAt), or checks completedAt inline.
-        const heldByTeamDef = /export function heldByTeam\(/.test(src);
+        // The predicate may check completedAt inline, delegate to the
+        // module-level heldByTeam helper, or delegate to resolveTeamInFlight
+        // (which is itself built on heldByTeam). All three are the same fact —
+        // what is forbidden is deciding in-flight from a column.
+        const helperDefined = /export function heldByTeam\(/.test(src);
+        const resolverDefined = /export async function resolveTeamInFlight\(/.test(src);
+        const inline = /!p\.completedAt/.test(predicate)
+            || /!inFlightCard\.completedAt/.test(predicate)
+            || /!\w+\.completedAt/.test(predicate);
         assert.ok(
-            heldByTeamDef
-                ? /heldByTeam\(/.test(predicate)
-                : (/!p\.completedAt/.test(predicate) || /!inFlightCard\.completedAt/.test(predicate) || /!\w+\.completedAt/.test(predicate)),
-            'in-flight predicate must check completedAt (directly or via heldByTeam helper)'
+            inline
+            || (helperDefined && /heldByTeam\(/.test(predicate))
+            || (resolverDefined && /resolveTeamInFlight\(/.test(predicate)),
+            'in-flight predicate must check completedAt (inline, via heldByTeam, or via resolveTeamInFlight)'
         );
+        if (resolverDefined && /resolveTeamInFlight\(/.test(predicate)) {
+            // The delegation only counts if the callee still reads completedAt
+            // and still names no column.
+            const rStart = src.indexOf('export async function resolveTeamInFlight(');
+            const rBody = src.slice(rStart, src.indexOf('\n}', rStart));
+            assert.ok(/heldByTeam\(/.test(rBody), 'resolveTeamInFlight must use the heldByTeam predicate');
+            assert.ok(!/CODING_COLUMNS/.test(rBody), 'resolveTeamInFlight must not reference CODING_COLUMNS');
+        }
     });
 
     await check('a stale-completed first candidate does not release a team still holding a second card', async () => {
