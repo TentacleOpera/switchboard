@@ -69,7 +69,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
 // only server-side reader of `terminals.standingOrders` in either host.
 import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
-import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets } from '../services/workContextResolver';
+import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from '../services/workContextResolver';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -1748,6 +1748,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 case 'ptyCloseTerminal': {
                     const ok = ptyFleetService.kill(payload.name);
                     lastWorkContextByTerminal.delete(payload.name);
+                    // The deferred-clear set holds terminal NAMES and needs the same
+                    // lifecycle maintenance: a closed seat's entry would otherwise
+                    // outlive it and hand a phantom clear to the next seat that takes
+                    // the name.
+                    dropDeferredClear(deferredClearsByTeam, payload.name);
                     return { success: ok };
                 }
 
@@ -1834,6 +1839,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             lastWorkContextByTerminal.delete(payload.name);
                             lastWorkContextByTerminal.set(payload.alias, oldWorkKey);
                         }
+                        // Re-key the deferred clear too. rename() mutates friendlyName in
+                        // place, so an un-rekeyed entry is looked up under the NEW name by
+                        // the same-feature intercept, never matches, and the seat carries
+                        // the previous run's context into the next one — the exact
+                        // invariant the deferral exists to hold.
+                        renameDeferredClear(deferredClearsByTeam, payload.name, payload.alias);
                     }
                     return { success: ok };
                 }
@@ -1845,6 +1856,8 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         seatBlockCache.delete(handle.agentInstanceId);
                     }
                     lastWorkContextByTerminal.delete(payload.name);
+                    // A seat cleared by hand has nothing left to defer.
+                    dropDeferredClear(deferredClearsByTeam, payload.name);
                     if (handle.status === 'active') { await clearPty(handle); }
                     return { success: true };
                 }
@@ -2481,6 +2494,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // a seat holding no git/subagent policy.
                         if (text.trim() === '/clear' && handle.agentInstanceId) {
                             seatBlockCache.delete(handle.agentInstanceId);
+                        }
+                        if (text.trim() === '/clear') {
+                            // Same reason as ptyClearTerminal: a seat cleared by hand
+                            // has nothing left to defer.
+                            dropDeferredClear(deferredClearsByTeam, handle.friendlyName);
                         }
                         await writeSlashCommand(handle, text);
                     } else {

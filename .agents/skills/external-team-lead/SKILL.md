@@ -121,6 +121,7 @@ If you are remote:
     -d '{
       "name": "<workerName>",
       "data": "<instructions>",
+      "origin": "<your-agent-name>",
       "clearBeforePrompt": false
     }'
   ```

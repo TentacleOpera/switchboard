@@ -380,7 +380,18 @@ async function main() {
         assert.strictEqual(result.success, true);
         // success:true alone would also hold if the arm resolved nothing and
         // short-circuited; assert the text actually reached the seam.
-        assert.deepStrictEqual(recorders.terminalSends, [{ name: 'term1', text: 'echo hi' }]);
+        //
+        // TWO sends, not one: the payload and the newline that submits it are
+        // separate writes with an awaited settle between them. A CR that arrives
+        // in the same read as printable text is inserted as a literal newline
+        // rather than submitted by devin 3000.5.20 (see ptyPromptDelivery.ts
+        // rule 2), so `sendText(input, true)` — one write of `text + '\r'` on
+        // the pty seam — never submits. Collapsing these back into one entry
+        // means the split was reverted.
+        assert.deepStrictEqual(recorders.terminalSends, [
+            { name: 'term1', text: 'echo hi' },
+            { name: 'term1', text: '' },
+        ]);
 
         // The not-found path must stay reachable — an unseeded name resolves to
         // nothing and fails in-body rather than throwing.

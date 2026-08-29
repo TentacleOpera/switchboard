@@ -57,6 +57,28 @@ const sendPromptEnd = BOOT.indexOf("case '", sendPromptStart + 50);
 assert.ok(sendPromptEnd > 0, 'ptySendPrompt case must have a closing boundary');
 const SEND_PROMPT_SRC = BOOT.slice(sendPromptStart, sendPromptEnd);
 
+/**
+ * Slice the same-work-context branch out of a barrier body. Both roots open it
+ * with the same compare and close it with the same `} else {`.
+ */
+function sliceSameFeatureBranch(src, label) {
+    const open = 'if (lastTeamWorkKey === workContextKey) {';
+    const start = src.indexOf(open);
+    assert.ok(start >= 0, `${label} must have a same-work-context branch`);
+    // Brace-match rather than scanning for the next `} else {`: the branch now
+    // contains its own if/else (the deferred-clear intercept), and the first
+    // `} else {` is that inner one — a scan stops short and the fallback arm
+    // falls outside the slice.
+    let depth = 0;
+    let i = start + open.length - 1;
+    for (; i < src.length; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}') { depth--; if (depth === 0) break; }
+    }
+    assert.ok(depth === 0 && i < src.length, `${label}'s same-work-context branch must be brace-balanced`);
+    return src.slice(start, i + 1);
+}
+
 let failures = 0;
 function test(name, fn) {
     try { fn(); console.log(`  ✅ ${name}`); }
@@ -329,21 +351,47 @@ test('both hosts check work-key existence before overriding (first dispatch is n
 });
 
 test('both hosts suppress the destination clear for a same-work-context team dispatch', () => {
+    // The same-feature branch acquired the deferred-clear intercept between the
+    // key compare and the suppression, so this is sliced rather than windowed:
+    // a fixed character window silently turns into "the branch got longer" the
+    // next time anything is inserted, and the assertion stops meaning anything.
+    const extBranch = sliceSameFeatureBranch(PTY_HOST_VERB_SRC, 'TaskViewerProvider.ts');
     assert.ok(
-        /lastTeamWorkKey === workContextKey[\s\S]{0,400}clearBeforePrompt: false/.test(PTY_HOST_VERB_SRC),
+        /clearBeforePrompt: false/.test(extBranch),
         '_ptyHostVerb must send clearBeforePrompt:false when the team already holds this work context'
     );
+    const stdBranch = sliceSameFeatureBranch(SEND_PROMPT_SRC, 'bootstrap.ts');
     assert.ok(
-        /lastTeamWorkKey === workContextKey[\s\S]{0,400}clearBeforePrompt = false/.test(SEND_PROMPT_SRC),
+        /clearBeforePrompt = false/.test(stdBranch),
         'ptySendPrompt case must send clearBeforePrompt=false when the team already holds this work context'
+    );
+});
+
+// The suppression is conditional now: a destination sitting in the team's
+// deferred-clear set is the one case that must OVERRIDE back to true, because
+// its barrier clear was skipped for being mid-turn and the delivery path is
+// where it gets paid. Pin both halves, or "always false" passes the test above
+// while silently dropping every deferred clear.
+test('both hosts override the suppression for a destination in the deferred-clear set', () => {
+    const extBranch = sliceSameFeatureBranch(PTY_HOST_VERB_SRC, 'TaskViewerProvider.ts');
+    assert.ok(
+        /_deferredClearsByTeam\.get\(teamId\)/.test(extBranch) && /clearBeforePrompt: true/.test(extBranch),
+        '_ptyHostVerb must override to clearBeforePrompt:true for a deferred destination'
+    );
+    const stdBranch = sliceSameFeatureBranch(SEND_PROMPT_SRC, 'bootstrap.ts');
+    assert.ok(
+        /deferredClearsByTeam\.get\(teamId\)/.test(stdBranch) && /clearBeforePrompt = true/.test(stdBranch),
+        'ptySendPrompt case must override to clearBeforePrompt=true for a deferred destination'
     );
 });
 
 // --- 13. The roster barrier names the seat that failed ---
 
 test('extension host abort message names the failed seat, not its error text', () => {
+    // `activeMembers` became `toClear` when the target-set computation moved into
+    // computeRosterClearTargets; the array it indexes is what matters, not its name.
     assert.ok(
-        /Team preparation clear failed for '\$\{activeMembers\[failedIdx\]\}'/.test(PTY_HOST_VERB_SRC),
+        /Team preparation clear failed for '\$\{toClear\[failedIdx\]\}'/.test(PTY_HOST_VERB_SRC),
         'the abort message must interpolate the failed member NAME — the result objects carry no name, so failed.error in that slot reported the error twice and the seat never'
     );
 });

@@ -35,8 +35,10 @@ const WCR_SRC = read('src/services/workContextResolver.ts');
 
 // Load the compiled helper for behavioural tests.
 let computeRosterClearTargets;
+let dropDeferredClear;
+let renameDeferredClear;
 try {
-    ({ computeRosterClearTargets } = require(path.join(REPO_ROOT, 'out', 'services', 'workContextResolver.js')));
+    ({ computeRosterClearTargets, dropDeferredClear, renameDeferredClear } = require(path.join(REPO_ROOT, 'out', 'services', 'workContextResolver.js')));
 } catch {
     // out/ may not be compiled yet; behavioural tests will be skipped.
 }
@@ -526,6 +528,112 @@ test('regression — lead dispatches to coder-1 while itself mid-turn: lead is o
     assert.ok(!res.deferred.includes('Coding'), 'lead must NOT be in deferred (origin exclusion takes priority)');
     assert.deepStrictEqual(res.toClear, ['Coding-coder-2']);
     assert.deepStrictEqual(res.deferred, []);
+});
+
+// ── 7. Deferred-set lifecycle: close, clear, rename ───────────────────
+//
+// The deferred set holds terminal NAMES, so it needs the same lifecycle
+// maintenance the sibling per-terminal maps already get. The rename case is
+// the one that silently defeats the feature: rename() mutates friendlyName in
+// place, so an un-rekeyed entry is looked up under the NEW name by the
+// same-feature intercept, never matches, and the seat carries the previous
+// run's context into the next one.
+
+test('dropDeferredClear removes a seat from every team and prunes the empty team', () => {
+    if (typeof dropDeferredClear !== 'function') {
+        console.log('  ⏭️  (skipped — out/services/workContextResolver.js not compiled)');
+        return;
+    }
+    const map = new Map([
+        ['team_a', new Set(['coder-1', 'coder-2'])],
+        ['team_b', new Set(['coder-1'])],
+    ]);
+    dropDeferredClear(map, 'coder-1');
+    assert.deepStrictEqual([...map.keys()], ['team_a'], 'a team left empty must be pruned');
+    assert.deepStrictEqual([...map.get('team_a')], ['coder-2']);
+});
+
+test('dropDeferredClear is a no-op for an unknown name', () => {
+    if (typeof dropDeferredClear !== 'function') return;
+    const map = new Map([['team_a', new Set(['coder-1'])]]);
+    dropDeferredClear(map, 'nobody');
+    assert.deepStrictEqual([...map.get('team_a')], ['coder-1']);
+});
+
+test('renameDeferredClear re-keys a deferred seat so the same-feature intercept still matches', () => {
+    if (typeof renameDeferredClear !== 'function') return;
+    const map = new Map([['team_a', new Set(['coder-1', 'coder-2'])]]);
+    renameDeferredClear(map, 'coder-1', 'coder-1-renamed');
+    assert.deepStrictEqual([...map.get('team_a')].sort(), ['coder-1-renamed', 'coder-2']);
+});
+
+test('renameDeferredClear does not ADD a name that was not deferred', () => {
+    if (typeof renameDeferredClear !== 'function') return;
+    const map = new Map([['team_a', new Set(['coder-2'])]]);
+    renameDeferredClear(map, 'coder-1', 'coder-1-renamed');
+    assert.deepStrictEqual([...map.get('team_a')], ['coder-2'], 'rename must never widen the deferred set');
+});
+
+test('TaskViewerProvider.ts maintains the deferred set on close, clear and rename', () => {
+    assert.ok(
+        /dropDeferredClear\(this\._deferredClearsByTeam, payload\.name\)/.test(TVP),
+        'TaskViewerProvider.ts must drop the deferred entry on close and on a hand clear'
+    );
+    assert.ok(
+        /renameDeferredClear\(this\._deferredClearsByTeam, payload\.name, payload\.alias\)/.test(TVP),
+        'TaskViewerProvider.ts must re-key the deferred entry on rename'
+    );
+});
+
+test('bootstrap.ts maintains the deferred set on close, clear and rename', () => {
+    assert.ok(
+        /dropDeferredClear\(deferredClearsByTeam, payload\.name\)/.test(BOOT),
+        'bootstrap.ts must drop the deferred entry on close and on ptyClearTerminal'
+    );
+    assert.ok(
+        /dropDeferredClear\(deferredClearsByTeam, handle\.friendlyName\)/.test(BOOT),
+        "bootstrap.ts must drop the deferred entry on a bare '/clear' sendToTerminal"
+    );
+    assert.ok(
+        /renameDeferredClear\(deferredClearsByTeam, payload\.name, payload\.alias\)/.test(BOOT),
+        'bootstrap.ts must re-key the deferred entry on rename'
+    );
+});
+
+// ── 8. `origin` is a DECLARED wire field, not an undeclared extra ─────
+//
+// A remote lead sets `origin` by hand on POST /terminals/verb/ptySendPrompt —
+// it is the one path where the host cannot derive it. An undeclared field
+// passes validation whatever its type, and a non-string silently disables the
+// exclusion, which is the failure this plan exists to stop.
+
+test('ptySendPrompt declares an `origin` string field in the verb schema', () => {
+    const schemas = read('src/services/verbSchemas.ts');
+    const from = schemas.indexOf('ptySendPrompt: {');
+    assert.ok(from > 0, 'ptySendPrompt schema must exist');
+    const to = schemas.indexOf('sendToTerminal: {', from);
+    const block = schemas.slice(from, to);
+    assert.ok(
+        /origin:\s*\{\s*type:\s*'string'\s*\}/.test(block),
+        "ptySendPrompt's schema must declare origin as a string field"
+    );
+});
+
+test('the agent-facing HTTP contract documents `origin` on ptySendPrompt', () => {
+    for (const rel of [
+        '.agents/skills/switchboard-orchestration/SKILL.md',
+        '.agents/protocols/switchboard-mission-control-http/SKILL.md',
+    ]) {
+        const doc = read(rel);
+        assert.ok(
+            /ptySendPrompt`? \| `\{ name, data, clearBeforePrompt, origin\?, dispatch\? \}`/.test(doc),
+            `${rel} must list origin in the ptySendPrompt payload shape`
+        );
+        assert.ok(
+            /Pass `origin:/.test(doc),
+            `${rel} must tell a dispatching seat to pass its own name as origin`
+        );
+    }
 });
 
 // ── Summary ───────────────────────────────────────────────────────────

@@ -1252,6 +1252,12 @@ jobs:
       - name: Queue stall watch contract (completed card not in flight, dead pacer, ladder backstop)
         run: npm run test:contract:queue-stall-watch
 
+      # The roster barrier must not clear the seat that issued the dispatch, and
+      # must defer a seat that is mid-turn rather than wiping it. Defined but
+      # never invoked until now — the exact "green while incomplete" hole.
+      - name: Roster clear mid-turn deferral contract (origin exclusion + busy deferral)
+        run: npm run test:contract:roster-clear-mid-turn
+
       - name: Run integration suite
         run: npm run test:integration:all
 

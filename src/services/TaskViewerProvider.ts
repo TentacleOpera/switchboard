@@ -49,7 +49,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // four-site-convention hole the loader closed.
 import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
-import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets } from './workContextResolver';
+import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from './workContextResolver';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -522,6 +522,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // dropped too — the terminal is gone.
         if (verb === 'ptyCloseTerminal' && typeof payload?.name === 'string') {
             this._lastWorkContextByTerminal.delete(payload.name);
+            // The deferred-clear set holds terminal NAMES and needs the same
+            // lifecycle maintenance: a closed seat's entry would otherwise
+            // outlive it and hand a phantom clear to the next seat that takes
+            // the name.
+            dropDeferredClear(this._deferredClearsByTeam, payload.name);
         }
         const seatCacheDropName =
             (verb === 'ptyClearTerminal' || verb === 'ptyRenameTerminal'
@@ -543,8 +548,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (oldWorkKey) {
                     this._lastWorkContextByTerminal.set(payload.alias, oldWorkKey);
                 }
+                // Re-key the deferred clear too. rename() mutates friendlyName in
+                // place, so an un-rekeyed entry is looked up under the NEW name by
+                // the same-feature intercept, never matches, and the seat carries
+                // the previous run's context into the next one — the exact
+                // invariant the deferral exists to hold.
+                renameDeferredClear(this._deferredClearsByTeam, payload.name, payload.alias);
             } else {
                 this._lastWorkContextByTerminal.delete(payload.name);
+                // A seat cleared by hand has nothing left to defer.
+                dropDeferredClear(this._deferredClearsByTeam, payload.name);
             }
             // Restore a coder's callback standing order when it is cleared.
             // A reviewer-callback override may have been installed during

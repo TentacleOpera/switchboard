@@ -1402,6 +1402,14 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
             standingOrders: { type: 'boolean' },
             dispatch: { type: 'object' },
             workspaceRoot: { type: 'string' },
+            // The terminal that REQUESTED the send. The roster barrier excludes
+            // it from the clear set so a lead is never cleared by its own
+            // dispatch. Declared here rather than left as an undeclared extra:
+            // this is the one field on this verb a remote agent is expected to
+            // set by hand, so a wrong type must fail at the boundary instead of
+            // silently disabling the exclusion. Absent on operator-driven
+            // (board drag) dispatches, which still clear the whole roster.
+            origin: { type: 'string' },
         },
     },
     sendToTerminal: {

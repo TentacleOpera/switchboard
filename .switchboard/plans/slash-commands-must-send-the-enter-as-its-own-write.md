@@ -125,3 +125,13 @@ On a devin seat in `terminals.html`, with 3000.5.20:
 4. Repeat 1 on a claude seat → unchanged, confirming the split is harmless where the old shape worked.
 
 The probe harness used for the measurements above lives in this session's scratchpad (`devin-cr-probe2.js`, parameterised by gap, and `devin-clearbeforeprompt-probe.js`, which stops before the submit CR so nothing is dispatched). `scripts/capture-cli-modes.js` is the committed sibling for startup-mode questions; if this recurs on another CLI, extend that script rather than writing a third harness.
+
+## Review Findings
+
+All three proposed changes landed as written: `writeSlashCommandLocked` splits the CR behind an awaited `SUBMIT_SETTLE_MS`, the `TaskViewerProvider` seam leg splits at the call site rather than in `TerminalHandle.sendText`, and the framing-rules comment now records the 2026-08-23 measurement instead of an open question. One CI gate was left red by the change and is fixed here: `src/test/verb-engine-headless-seams.test.js` asserted `terminalSends` held exactly one entry, but the headless seam records every `sendText`, so the split makes two — that suite runs at `integration-tests.yml:513`. Files changed by this review: `src/test/verb-engine-headless-seams.test.js`. Validation: `tsc -p tsconfig.test.json` clean, `eslint` 0 errors, `test:contract:pty-prompt-delivery-framing` and `test:contract:pty-route-surface` green, and `verb-engine-headless-seams` reports 25 passed / 0 failed. Remaining risk: that suite still hard-exits in CI on a pre-existing unhandled rejection from 2026-07-13 constructor migrations, unrelated to this plan.
+
+## Deferred Findings
+
+- NIT — `SUBMIT_SETTLE_MS` is now defined twice at 40 (`src/standalone/ptyPromptDelivery.ts:17` and `src/services/terminalUtils.ts:65`); the plan intended one dial. Unifying would require the vscode-free standalone module to import a vscode-carrying one, so the duplication is forced and documented in both comments.
+- NIT — The seam leg at `src/services/TaskViewerProvider.ts:15232` splits payload from CR for prompts as well as control strings, broader than the plan's step 2 specified. Correct either way; it satisfies the goal invariant more completely.
+- MAJOR (pre-existing, out of scope) — `test:contract:verb-engine` (`.github/workflows/integration-tests.yml:513`) exits non-zero on an unhandled rejection raised by `_foldAgentConfigToGlobalFile` / `_migratePlannerWorkflowPathProfileTiersWorkflowsToSkills` reaching `vscode.workspace` during headless construction (`src/services/TaskViewerProvider.ts:1395`). Introduced 2026-07-13, long before this plan. Every assertion passes under `--unhandled-rejections=warn`.
