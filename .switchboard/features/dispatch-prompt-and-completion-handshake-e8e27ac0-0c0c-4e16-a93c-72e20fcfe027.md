@@ -34,3 +34,7 @@ They are grouped because they are one causal chain, not three tickets. A dispatc
 - [ ] [Lead-Dispatched Coders Never Receive the Completion-Report Directive](../plans/feature_plan_20260817141300_lead-dispatched-coders-never-get-the-completion-report-directive.md) — **LEAD CODED** — ID: 68df47bb-f275-4f17-b3bf-531e81c27c42
 <!-- END SUBTASKS -->
 
+## Implementation Summary
+
+All three subtasks implemented and committed (0b124e0c). The dispatch-prompt and completion-handshake chain is restored end to end on both hosts. Subtask 1 (completion-directive) added roleTakesDispatchDirectives gating at both pty delivery chokepoints so lead-composed prompts now carry the completion-report bundle. Subtask 2 (standalone-parity) deleted the hand-rolled buildPromptForCards and routed standalone triggerAction through KanbanProvider.generateUnifiedPrompt with port widening, originTerminal threading, and batch capping. Subtask 3 (blocked-digest) replaced the flapping per-silence notice with a paced aggregated digest in PlanIngestionEngine, suppressing lead-facing text via deliver:false while keeping the autoban signal flowing. Contract tests added for both the pty-path append and the digest sweep.
+
