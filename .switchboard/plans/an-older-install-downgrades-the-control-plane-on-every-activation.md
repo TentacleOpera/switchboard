@@ -105,6 +105,85 @@ reintroduce the July bug and is explicitly not proposed.**
 **Tags:** infrastructure, reliability, bugfix
 **Feature:** d84a2df3-59d5-4f57-a894-26291e9625ae
 
+## User Review Required
+
+No — the fix is version-generic. The one open question (which IDEs hold old installs) sizes
+exposure but does not block implementation.
+
+## Complexity Audit
+
+### Routine
+
+- A dotted-numeric compare helper (split on `.`, compare first three components numerically).
+- Changing `shouldRefreshAgentWorkspaceFiles` from returning `boolean` to returning a decision
+  enum/string.
+- Adding an early return in `refreshWorkspaceControlPlane` before the seed loops.
+- Skipping `setLastCopiedAgentVersion` on the skip path (one `if` guard).
+- Logging one line naming the versions and the skip.
+
+### Complex / Risky
+
+- **Gating `cleanupLegacyAgentFiles` at `:961` per-root.** This loop is in the activation body,
+  not inside `refreshWorkspaceControlPlane`, so the early return does not cover it. The version
+  decision must be computed inside the loop body for each root, not hoisted outside — a workspace
+  with multiple roots stamped at different versions must gate each independently.
+- **Spark context generation at `:367-384` is also skipped.** It sits inside the
+  `if (needsAgentRefresh || agentsChanged)` block, so the early return prevents it. This is
+  intended (a downgrade should not regenerate spark context from the older bundle), but a coder
+  unaware of this may re-add it outside the gate. Document the skip as intended.
+- **The three-state decision must preserve same-version behaviour exactly.** The July fix exists
+  for same-version self-heal; any change to the `same` path reintroduces the delete-without-replace
+  bug. The decision enum must map `same` → deliver, not `same` → skip.
+
+## Edge-Case & Dependency Audit
+
+**Race conditions**
+- Two IDEs activating simultaneously on the same workspace could interleave reads and writes of
+  `.switchboard/.agent_version.json`. Narrow — the stamp is a single small JSON file, and the worst
+  case is a double-deliver on the same version, which is a no-op. Not worth a lock.
+
+**Security**
+- None. A local version-string comparison, no new surface.
+
+**Side effects**
+- An older install that previously overwrote `.agents/` on every activation now silently skips.
+  Users who relied on the overwrite as an unintentional "reset" lose that behaviour. The
+  same-version repair path covers the legitimate case.
+- `cleanupLegacyAgentFiles` no longer runs on a downgrade, so legacy files a newer install
+  retired will persist until the next upgrade activation. This is the correct trade-off —
+  deleting without replacing is the bug the July fix addressed.
+
+**Dependencies & conflicts**
+- Complements `the-extension-must-not-seed-its-own-source-repo.md`: that plan protects one repo
+  from all versions; this plan protects all workspaces from older versions. They overlap on the
+  Switchboard repo. Both add early returns to `refreshWorkspaceControlPlane` — the source-repo
+  check should run first (broader predicate), then the version check.
+- Complements `packaging-must-refuse-a-clobbered-control-plane.md`: that plan is the backstop
+  catching a clobber before it ships. This plan prevents the clobber at activation.
+- No conflict with `delete-the-claude-mirror-generator.md`: the mirror removal widens
+  `seedBundleSurface`, this plan gates the call to it. They compose — the gate prevents the call,
+  the widening changes what the call does when it runs.
+
+## Dependencies
+
+- **Sequenced before** `packaging-must-refuse-a-clobbered-control-plane.md` — guarding the package
+  while activation still clobbers means the guard fires on damage that should not exist.
+- **Sequenced before or alongside** `the-extension-must-not-seed-its-own-source-repo.md` — both add
+  early returns to `refreshWorkspaceControlPlane`; the source-repo check runs first, then the
+  version check.
+- **Independent of** `delete-the-claude-mirror-generator.md` — the mirror removal does not touch
+  the version gate or the seed-loop gating.
+
+## Adversarial Synthesis
+
+Key risks: (1) gating `cleanupLegacyAgentFiles` once outside the loop instead of per-root, missing
+multi-root workspaces with mixed version stamps — mitigated by computing the decision inside the
+loop body; (2) silently skipping spark context generation without noting it, leading a coder to
+re-add it outside the gate — mitigated by documenting the skip as intended; (3) accidentally
+narrowing the `same`-version path and reintroducing the July delete-without-replace bug —
+mitigated by the three-state decision mapping `same` → deliver. Mitigations are documented in the
+Complexity Audit, not left as advice.
+
 ## Proposed Changes
 
 1. **Add a version comparison helper** in `ControlPlaneMigrationService` (shared code, so a later
@@ -185,6 +264,18 @@ reintroduce the July bug and is explicitly not proposed.**
    Standalone wires none of these seams, so the expected result for that host is "no behaviour change";
    do not read a green `npm run standalone-parity:check` as parity evidence — it is scoped to the
    browser read-back path, not the composition root.
+
+### Goal Invariants
+
+- Assert `shouldRefreshAgentWorkspaceFiles` returns a skip decision (not `true`) when
+  `installed < stamped` for numeric versions `1.6.0` and `1.7.13`.
+- Assert `shouldRefreshAgentWorkspaceFiles` returns a deliver decision when
+  `installed === stamped` and when `installed > stamped`.
+- Assert `shouldRefreshAgentWorkspaceFiles` returns a deliver decision when either version
+  is missing or unparseable.
+- Assert `cleanupLegacyAgentFiles` is not invoked for a root whose stamped version is newer
+  than the installed version.
+- Assert `setLastCopiedAgentVersion` is not called on the skip path.
 
 ## Outstanding Questions
 

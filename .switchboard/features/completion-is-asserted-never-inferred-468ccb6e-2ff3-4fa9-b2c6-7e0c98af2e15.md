@@ -14,9 +14,9 @@ Make an explicit completion post the only way the system learns that work finish
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add a task-complete endpoint the lead posts to](../plans/add-a-task-complete-endpoint-for-the-lead.md) — **CODE REVIEWED** — ID: 4e00f321-0987-43a9-a8b7-38a4e1125b24
-- [ ] [Completion is asserted, never inferred — and silence halts](../plans/completion-is-asserted-never-inferred.md) — **CODE REVIEWED** — ID: aa1f49da-ae96-4db1-b0f1-f6829078fd27
-- [ ] [Revise the in-flight plans for asserted completion](../plans/revise-the-in-flight-plans-for-asserted-completion.md) — **CODE REVIEWED** — ID: df870968-3e92-4e60-8053-038b0528c562
+- [ ] [Add a task-complete endpoint the lead posts to](../plans/add-a-task-complete-endpoint-for-the-lead.md) — **CODER CODED** — ID: 4e00f321-0987-43a9-a8b7-38a4e1125b24
+- [ ] [Completion is asserted, never inferred — and silence halts](../plans/completion-is-asserted-never-inferred.md) — **CODER CODED** — ID: aa1f49da-ae96-4db1-b0f1-f6829078fd27
+- [ ] [Revise the in-flight plans for asserted completion](../plans/revise-the-in-flight-plans-for-asserted-completion.md) — **CODER CODED** — ID: df870968-3e92-4e60-8053-038b0528c562
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

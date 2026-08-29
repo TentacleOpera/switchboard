@@ -64,6 +64,37 @@ selects supervision selects nothing.
 **Tags:** backend, reliability, feature
 **Feature:** 73ebf150-50f9-4e8f-b9db-58af49202c6a
 
+## User Review Required
+
+**No.** The Outstanding Questions are settled (missions need no ticker; the controller is a seated terminal woken on transitions). No open `[user]` decision gates the implementation.
+
+## Complexity Audit
+
+### Routine
+- Calling `getMissionsForMember` + `_deriveMissionRunState` on a turn-end — both exist.
+- Adding the `last_notified_run_state` column and the `type === 'operation'` gate.
+- Delivering through `ptySendPrompt` / reports directory (an existing channel, new message kind).
+
+### Complex / Risky
+- **Concurrent turn-ends on a multi-member mission.** Two members dispatched together complete near-simultaneously; both fire `notifyTurnEnd`; both recompute `runState`, both read the watermark as `not-started`, both see the edge, both wake. The watermark compare-and-set is not atomic, so verification 1's "exactly one wake" is false under concurrency unless the detector serializes. The common batch case (multi-member, simultaneous start) is exactly the case that races.
+- **Watermark must never become a cached status.** Every reader keeps calling `_deriveMissionRunState`; the watermark exists only to fire-once. A future reader that consults it breaks the derived design silently. Mitigated by naming (`last_notified_run_state`, never `runState`) and verification 3, but enforcement is a durable-codebase negative.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** Concurrent turn-ends for members of the same mission can double-wake on a single transition (see Complexity Audit). Mitigation: serialize the watermark compare-and-set per mission (a per-mission write lock, or re-check the watermark under a lock before emitting the wake), OR state and verify that turn-ends are single-threaded in both hosts. Verification 7 asserts a shared code path, not shared serialization — a shared path with a different concurrency model is a shared race.
+- **Security:** None. No auth or credential surfaces.
+- **Side Effects:** Every unsupervised mission currently pays no per-turn-end cost; this plan makes unsupervised missions run `getMissionsForMember` + derivation on every member turn-end to keep their watermark current for a flip that rarely happens. **Recommended refinement:** short-circuit the watermark update for unsupervised missions and seed the watermark from the current derived state on a flip to `operation` — same no-replay guarantee (verification 6), none of the per-card tax on the unsupervised majority.
+- **Dependencies & Conflicts:** Informs the run-sheet subtask (wake-on-transition is what lets the run sheet delete the interval tick) — read together, either may land first. No shared file writes with the other subtasks (detector lives beside the turn-end notifier; watermark in `KanbanDatabase`).
+
+## Dependencies
+
+- **No hard upstream dependency.** May be implemented before or after the run-sheet subtask; the two inform each other and should be read together. Wake-on-transition is what allows the run sheet to delete the interval tick; the run sheet establishes that the controller is a seated terminal rather than the `/switchboard` conversation.
+- **No file-write overlap** with the front-door, run-sheet, or ready-gate subtasks.
+
+## Adversarial Synthesis
+
+Key risks: concurrent turn-ends on a multi-member mission can double-wake on one transition because the watermark compare-and-set is not atomic (the common batch case is the racing case); the watermark could silently become a cached status if a future reader consults it. Mitigations: serialize the per-mission watermark compare-and-set (or verify single-threaded turn-ends in both hosts) and add a Goal Invariant asserting one wake per transition under concurrent member completion; name the watermark so it cannot be mistaken for `runState` and assert no reader consults it (verification 3).
+
 ## Proposed Changes
 
 1. **Detect the edge where the per-card signal already lands.** On a turn-end for a card, call
@@ -113,6 +144,23 @@ selects supervision selects nothing.
    it. Assert the standalone host reaches the same code path rather than assuming it — per `CLAUDE.md`,
    the seam each host *wires* is the audit, and the queue-seam precedent is that a wiring gap shows up
    as "never armed" rather than as an error.
+8. **One wake per transition under concurrent completion.** Launch an `operation` with two members
+   dispatched simultaneously and assert **exactly one** wake on `not-started → in-flight` even when
+   both member turn-ends fire in the same window. This is the race verification 1 does not cover —
+   without serialization the watermark compare-and-set double-fires on the common batch case.
+
+### Goal Invariants
+
+- **A supervised mission wakes exactly once per transition, including when multiple members complete
+  concurrently** (positive — the edge detector fires once, not per-card; the concurrency case is the
+  load-bearing one).
+- **An unsupervised mission never wakes** (negative — `type === 'mission'` selects no supervision,
+  regardless of transitions).
+- **No reader consults `last_notified_run_state` as a source of truth** — every read path calls
+  `_deriveMissionRunState` (negative — the watermark is not a cached `runState`; the derived design
+  holds).
+- **`last_notified_run_state` is absent from every read/return path that exposes mission state**
+  (negative — it is never surfaced as a status field, only used internally to fire-once).
 
 ## Outstanding Questions
 

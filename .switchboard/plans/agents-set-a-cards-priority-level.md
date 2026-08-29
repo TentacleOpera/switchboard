@@ -35,7 +35,7 @@ the board shows the change, and the tracker silently disagrees until it wins.
 
 **But the DB-direct route family deliberately has no provider.**
 `PUT /kanban/plans/priority` resolves a `KanbanDatabase` and writes
-(`LocalApiServer.ts:6531-6555`). Tracker write-back lives provider-side
+(`LocalApiServer.ts:7118-7143`). Tracker write-back lives provider-side
 (`LinearSyncService.updateIssuePriority` at `:1217`, `ClickUpSyncService.updateTask`
 at `:1525`), reachable only through a seam on `LocalApiServerOptions`. Adding one
 is unavoidable, and it is precisely the hazard this project has a rule about:
@@ -50,6 +50,10 @@ stopped syncing — the `PlanIngestionEngine` queue-seam precedent verbatim. So
 the seam must be **wired in both roots and observable in the response**, not
 trusted.
 
+> **Superseded:** Adding a `notifyPriorityChanged?: (planId, priority) => Promise<…>` seam on `LocalApiServerOptions`, wired in both composition roots, to give `_handleSetPlanPriority` tracker write-back without the route calling a provider directly.
+> **Reason:** The seam IS the hazard the plan warns about. `LocalApiServer` already calls `this._options.getLinearService()` / `this._options.getClickUpService()` directly inside 15+ existing route handlers (`:1718`, `:7335`, `:7549`, `:7843`, …) — the "DB-direct routes have no provider" property is not a hard constraint, it is the current state of routes that did not need write-back. Both composition roots already wire `getLinearService` / `getClickUpService` into the options object (extension `TaskViewerProvider.ts:3732-3733`; standalone `bootstrap.ts:3001-3002`, services constructed at `:530-531`). A new seam (a) recreates the "never wired = working" failure mode verbatim, (b) forces the composition root to RE-RESOLVE the record to find its `linearIssueId` / `clickupTaskId` because the signature passes only `(planId, priority)` — a second DB lookup for data the handler already holds, and (c) introduces `trackerSync: "unavailable"`, a value that exists only to detect a seam that should not exist. If there is no seam, the failure mode cannot occur.
+> **Replaced with:** Call the already-wired service accessors directly inside `_handleSetPlanPriority`. The handler already loads the record (`getPlanByPlanId` / `getPlanBySessionId`, `:7126-7127`), which carries `linearIssueId` and `clickupTaskId`. Pick the tracker from the record, call `getLinearService()?.updateIssuePriority(issueId, priority ?? 0)` or `getClickUpService()?.updateTask(taskId, { priority: priority ?? null })`, and compute `trackerSync` inline. No new option, no new seam, no `"unavailable"` value. The `trackerSync` enum becomes `"linear"` / `"clickup"` (written), `"none"` (card has no tracker link — local card), or `"failed"` (attempted, tracker rejected — the DB write stands, last-write-wins). Both roots are covered by the SAME options they already construct; there is nothing extra to wire, so there is nothing to forget to wire.
+
 **One tracker-code hazard is worth naming even though the decision defuses it.**
 `ClickUpSyncService.createTask` guards with `if (priority) body.priority = priority`
 (`:1457`) — falsy for `0`, so a `0` would be dropped without error. Since 0 is
@@ -58,6 +62,8 @@ guard today. It is recorded because the guard is wrong in general and because th
 Linear side proves the pattern is avoidable: `updateIssuePriority` (`:1217`)
 validates `0 <= priority <= 4` and passes `0` through cleanly, which is what makes
 the NULL → Linear-0 write-back safe.
+
+> **Clarification — `updateTask` has no such guard.** The plan's original §2 said "check `updateTask`'s guard anyway — if it guards with `if (priority)` like `createTask` does, tighten it." `ClickUpSyncService.updateTask` (`:1525-1576`) does NOT guard — it passes the `updates` object verbatim to `httpRequest('PUT', …)`. The `if (priority)` guard exists only in `createTask` (`:1457`), which this endpoint never calls. So that tightening step is a no-op for `updateTask`; the `createTask` guard is wrong-in-general but out of scope for this endpoint. No change to `updateTask` is needed for levels 1–4 (truthy, passed through). The clear path is handled directly — see §2.
 
 ### Root Cause
 
@@ -86,25 +92,127 @@ the first caller that has to reconcile them.
 **Complexity:** 5
 **Tags:** backend, api, feature, reliability
 
+## User Review Required
+
+None. The parent plan's three design questions are resolved (2026-08-27); this
+plan is additive on top of them and introduces no new product decision. ClickUp's
+ability to clear priority over the API (`{"priority": null}`) was confirmed by
+web research (2026-08-30) and is wired directly — no open items remain.
+
+## Complexity Audit
+
+### Routine
+
+- Extending `_handleSetPlanPriority` (`LocalApiServer.ts:7077`) to accept an
+  optional `priority` beside `starred`, with a validation ladder modelled on the
+  star's (`:7090-7116`).
+- Reusing unchanged: `planId` / `sessionId` resolution (`:7084`, `:7126-7127`),
+  the workspace-keyed write (`:7140-7141`), and the 404 / 503 / auth paths.
+- Extending the response with `priority`, `priorityLabel`, `orderBy`,
+  `trackerSync` — additive; existing callers reading `success` / `starred` are
+  unaffected.
+- The orchestration SKILL.md row (`:104`) and `curl` example (`:119`) — doc copy.
+- `npm run catalog:generate` (`package.json:956`); `catalog:check` is the gate.
+
+### Complex / Risky
+
+- **Tracker write-back honesty.** The response must not claim a tracker write
+  that did not happen, and must distinguish "no tracker to write" from "tracker
+  refused." This is the whole point of `trackerSync`, and it is the place a
+  silent lie is most likely (see the ClickUp-clear gap).
+- **ClickUp clear requires an explicit `null`, not omission.** `updateTask`
+  (`:1525`) passes `updates` verbatim and throws on an empty updates object
+  (`:1550-1552`). Omitting `priority` leaves ClickUp's old value intact while the
+  DB goes NULL — a divergence the response would hide. Web research (2026-08-30)
+  confirmed ClickUp API v2 accepts `{"priority": null}` to clear priority, so the
+  write-back sends `priority: null` explicitly (via `priority ?? null`), not an
+  omission. `0` and `""` are rejected by the API — the validation ladder already
+  rejects them at 400, so they never reach the write-back.
+- **Both-hosts coverage is not automatic.** With the seam removed, both roots
+  are covered by the options they already construct — but the verification must
+  still exercise write-back under each host, because `npm run
+  standalone-parity:check` is scoped to the browser read-back path and would
+  pass with the service accessor returning null in either root.
+- **`orderBy` depends on the parent plan.** `db.getOrderByMode` does not exist
+  yet (parent plan §1 unshipped as of this review). The handler must call
+  `db.getOrderByMode?.(wsId) ?? 'manual'` defensively so this plan can land
+  before or alongside the parent without a hard dependency on the method's
+  presence.
+
+## Edge-Case & Dependency Audit
+
+**Race conditions**
+- Priority changed in the tracker and locally between polls: last-write-wins,
+  and the response records which side won via `trackerSync` so a surprise is
+  diagnosable. The DB write lands first; the tracker write is best-effort and
+  its outcome is reported, not gated on the DB write.
+- Tracker write in flight when an inbound sync poll runs: the poll may overwrite
+  the just-written value. Last-write-wins is the settled policy; the Linear
+  round-trip (NULL → 0 → NULL) is stable by construction, so no oscillation.
+
+**Security**
+- Anyone who can call this endpoint (auth-gated, `:7078`) can change a card's
+  priority and, with a priority sort active, what runs next. Same authority as
+  the star, which is already exposed on this route. No new authority surface.
+
+**Side effects**
+- Setting a level writes `plans.priority` (parent plan's column) AND the tracker.
+  The DB write is the source of truth for the board; the tracker write is the
+  reconciliation. A failed tracker write does NOT roll back the DB write
+  (last-write-wins) — `trackerSync: "failed"` reports it.
+- The response gains fields. Existing callers that destructure `{ success,
+  starred }` are unaffected; callers that assert exact-shape equality on the
+  response body would break. No in-tree caller does (the test asserts specific
+  fields, not whole-body equality).
+
+**Dependencies & Conflicts**
+- **Blocked on** `priority-as-a-native-field-and-a-board-wide-order-by.md` §1 —
+  the `plans.priority` column, its migration, `PLAN_COLUMNS`, the record mapper,
+  and `setCardPriority` / `getOrderByMode`. That plan's decision 1 is resolved
+  (2026-08-27): one no-priority state, NULL; 0 is never stored. This endpoint's
+  validation ladder encodes that ruling. As of this review the parent plan §1 is
+  **unshipped** (`KanbanDatabase.ts` has no `priority` column, no
+  `setCardPriority`, no `getOrderByMode`), so this plan cannot land alone.
+- **Independent of** `agents-set-a-columns-card-order.md`; they touch different
+  fields and can ship in either order.
+- The `orderBy` response field reads `db.getOrderByMode`; call it defensively
+  (`?.`) so a build against a DB without the method does not throw.
+
 ## Dependencies
 
-Blocked on `priority-as-a-native-field-and-a-board-wide-order-by.md` §1 — the
-`plans.priority` column, its migration, `PLAN_COLUMNS`, and the record mapper.
-That plan's **decision 1 is resolved** (2026-08-27): there is exactly one
-no-priority state and it is NULL — a tracker is not a special source of "no
-priority", so Linear's 0 and ClickUp's blank both import as NULL and 0 is never
-stored. This endpoint's validation ladder encodes that ruling.
+- `priority-as-a-native-field-and-a-board-wide-order-by.md` §1 — the
+  `plans.priority` column, its migration, `PLAN_COLUMNS`, the record mapper, and
+  `setCardPriority` / `getOrderByMode`. That plan's **decision 1 is resolved**
+  (2026-08-27): there is exactly one no-priority state and it is NULL — a tracker
+  is not a special source of "no priority", so Linear's 0 and ClickUp's blank
+  both import as NULL and 0 is never stored. This endpoint's validation ladder
+  encodes that ruling.
+- Independent of `agents-set-a-columns-card-order.md`; they touch different
+  fields and can ship in either order.
 
-Independent of `agents-set-a-columns-card-order.md`; they touch different
-fields and can ship in either order.
+## Adversarial Synthesis
+
+Key risks: (1) the original seam design recreated the exact "never-wired =
+working" hazard the plan exists to close — superseded with a direct service call
+using the already-wired `getLinearService` / `getClickUpService` accessors; (2)
+ClickUp cannot clear priority by omitting the field (`updateTask` passes updates
+verbatim and throws on empty), so a clear would silently diverge while the
+response claimed success — resolved by sending `{"priority": null}` explicitly
+(confirmed by web research 2026-08-30); (3) `orderBy` depends on the unshipped
+parent plan, so the handler must read it defensively. Mitigations: no new seam
+(both roots already wire the service accessors); honest `trackerSync` enum
+without an `"unavailable"` value that detects nothing; defensive
+`getOrderByMode?.()` call; both-hosts write-back verified by hand since
+`standalone-parity:check` does not cover it.
 
 ## Proposed Changes
 
 ### 1. `src/services/LocalApiServer.ts` — accept `priority` beside `starred`
 
-`_handleSetPlanPriority` (`:6490`) gains an optional `priority`. `starred` stays
+`_handleSetPlanPriority` (`:7077`) gains an optional `priority`. `starred` stays
 optional. **At least one must be present** — a body with neither is 400, which is
-the current behaviour for a missing `starred` and stays honest for both.
+the current behaviour for a missing `starred` (`:7093-7096`) and stays honest for
+both.
 
 ```
 PUT /kanban/plans/priority
@@ -113,7 +221,7 @@ PUT /kanban/plans/priority
 { "planId": "…", "starred": true, "priority": 1 }  → both, one request
 ```
 
-**Validation ladder**, modelled on the star's (`:6505-6528`) and for the same
+**Validation ladder**, modelled on the star's (`:7090-7116`) and for the same
 reason — a permissive coercion here writes the wrong urgency and reports success:
 
 | Input | Result |
@@ -136,12 +244,12 @@ invented here: it is Linear's own, at `LinearSyncService.ts:2753`
 retyping it — but note index 0 is `''` there, so the label lookup must treat
 NULL separately rather than reading slot 0.
 
-Reuse unchanged from the star arm: `planId` / `sessionId` resolution (`:6538`),
-and keying the write to `record.workspaceId` rather than the server's
-(`:6544-6551`) — the reported-but-unwritten trap. Priority has identical
+Reuse unchanged from the star arm: `planId` / `sessionId` resolution (`:7084`,
+`:7126-7127`), and keying the write to `record.workspaceId` rather than the
+server's (`:7140-7141`) — the reported-but-unwritten trap. Priority has identical
 exposure.
 
-**Response** — extended, with two fields that exist to stop the endpoint lying
+**Response** — extended, with fields that exist to stop the endpoint lying
 by omission:
 
 ```json
@@ -158,50 +266,69 @@ by omission:
   agent confidently reports a re-prioritisation that did not happen — the parent
   plan's own thesis (*"the board shows one order and the system acts on
   another, and nothing reports the discrepancy"*) applied to the reply instead of
-  the screen.
+  the screen. Read via `db.getOrderByMode?.(wsId) ?? 'manual'` — defensive
+  because the parent plan that adds `getOrderByMode` is unshipped.
 - **`trackerSync`** — `"linear"` / `"clickup"` (written), `"none"` (card is
   local, nothing to write), `"failed"` (attempted, tracker rejected — the DB
-  write stands, last-write-wins), or **`"unavailable"`** (this host wired no
-  callback). `"unavailable"` is the whole point: it converts the never-wired
-  composition-root failure from invisible into a value in every response.
+  write stands, last-write-wins). There is no `"unavailable"` value: with the
+  seam removed (see the Superseded callout in Problem Analysis), there is no
+  "nobody wired this" failure mode to detect. The service accessor returning null
+  (host unconfigured) is reported as `"none"`, not a wiring defect — a host with
+  no tracker configured has nothing to write, which is the truth.
 
-### 2. `LocalApiServerOptions` — one seam, wired in both roots
+### 2. Tracker write-back — direct service call, no new seam
+
+> **Superseded:** A `notifyPriorityChanged?: (planId: string, priority: number | null) => Promise<'linear' | 'clickup' | 'none' | 'failed'>` seam on `LocalApiServerOptions`, wired in both composition roots next to `getKanbanDatabase`.
+> **Reason:** The seam recreates the "never-wired = working" hazard the plan's own Problem Analysis names. Both roots already wire `getLinearService` / `getClickUpService` (extension `TaskViewerProvider.ts:3732-3733`; standalone `bootstrap.ts:3001-3002`, services at `:530-531`), and `LocalApiServer` already calls those accessors directly from 15+ route handlers. A seam also forces a second record lookup (the root must re-resolve the card to find its tracker ID, since the signature carries only `planId, priority`) for data the handler already holds.
+> **Replaced with:** Inside `_handleSetPlanPriority`, after the DB write, resolve the tracker from the record the handler already loaded (`record.linearIssueId` / `record.clickupTaskId`, present on `KanbanPlanRecord` and used elsewhere at `TaskViewerProvider.ts:5919-5920`):
 
 ```ts
-notifyPriorityChanged?: (planId: string, priority: number | null)
-    => Promise<'linear' | 'clickup' | 'none' | 'failed'>;
+// After db.setCardPriority(record.planId, wsId, priority) succeeds:
+let trackerSync: 'linear' | 'clickup' | 'none' | 'failed' = 'none';
+const linear = this._options.getLinearService();
+const clickup = this._options.getClickUpService();
+try {
+    if (record.linearIssueId && linear) {
+        await linear.updateIssuePriority(record.linearIssueId, priority ?? 0); // NULL → 0
+        trackerSync = 'linear';
+    } else if (record.clickupTaskId && clickup) {
+        // ClickUp API v2 accepts {"priority": null} to clear (confirmed
+        // 2026-08-30). Omitting the field does NOT clear — updateTask passes
+        // updates verbatim and throws on empty, so an explicit null is required.
+        await clickup.updateTask(record.clickupTaskId, { priority: priority ?? null });
+        trackerSync = 'clickup';
+    }
+} catch (err) {
+    console.error('[LocalApiServer] priority tracker write-back failed:', err);
+    trackerSync = 'failed';
+}
 ```
 
-It **returns** its outcome rather than being `Promise<void>`. That is deliberate:
-a void callback is the shape the project's rule names, where "never wired" and
-"working" are the same observable value. A returned outcome, surfaced as
-`trackerSync`, cannot be silently absent.
-
-Wire it in **both** composition roots, next to where each already wires
-`getKanbanDatabase`:
-
-- **extension** — `TaskViewerProvider.ts:3714`. Resolve the card, pick the
-  tracker from `linearIssueId` / `clickupTaskId`, call
-  `updateIssuePriority(issueId, priority ?? 0)` or
-  `updateTask(taskId, { priority })`.
-- **standalone** — `bootstrap.ts:2769`. Same, using whichever sync services the
-  standalone host holds; where it holds none, wire a callback that returns
-  `'none'` explicitly rather than leaving the option undefined, so the response
-  distinguishes "this host does not sync" from "nobody wired this".
-
-Diff the two roots by hand. The seams each host *wires* are the audit, not the
-verbs each host answers.
-
 **NULL on write-back.** Linear has no null — write `0`, which
-`updateIssuePriority` accepts (`:1217` validates 0–4). This is not lossy under the
-resolved decision: 0 is exactly what Linear means by no priority, and the return
-trip collapses it back to NULL, so the round-trip is stable. ClickUp has no
-"clear" — omit the field.
+`updateIssuePriority` accepts (`:1228` validates 0–4). This is not lossy under
+the resolved decision: 0 is exactly what Linear means by no priority, and the
+return trip collapses it back to NULL, so the round-trip is stable.
 
-**Check `updateTask`'s guard anyway.** Levels 1–4 are truthy so nothing breaks
-today, but if it guards with `if (priority)` like `createTask` does (`:1457`),
-tighten it to `if (priority !== undefined)` while here — the next caller with a
-falsy-but-meaningful value should not have to rediscover this.
+**ClickUp clear.** `updateTask` (`:1525`) passes `updates` verbatim to
+`httpRequest('PUT', …)` and throws on an empty updates object (`:1550-1552`).
+Omitting `priority` does NOT clear it — ClickUp keeps its old value while the DB
+goes NULL, and the response would claim `trackerSync: "clickup"` for a write that
+did not happen. Web research (2026-08-30) confirmed ClickUp API v2 accepts
+`{"priority": null}` to clear priority, so the write-back sends
+`{ priority: priority ?? null }` — an explicit null, not an omission. `0` and
+`""` are rejected by the ClickUp API (the research confirmed `0` returns 400 or
+is silently ignored, and `""` is a type mismatch), but the validation ladder
+already rejects both at 400 before they reach the write-back, so they never hit
+the tracker. The clear path is now a real write, not an `"unsupported"` report.
+
+**No `updateTask` guard to tighten.** The original plan said "check
+`updateTask`'s guard anyway — if it guards with `if (priority)` like
+`createTask` does (`:1457`), tighten it to `if (priority !== undefined)`."
+`updateTask` has no such guard — it passes `updates` verbatim. The `if
+(priority)` guard is in `createTask` only, which this endpoint never calls.
+Levels 1–4 are truthy and pass through `updateTask` cleanly. No change to
+`updateTask` is needed for the set path; the clear path is the only ClickUp
+hazard, handled above.
 
 ### 3. `.agents/skills/switchboard-orchestration/SKILL.md` — document the level
 
@@ -212,14 +339,17 @@ Extend the star's row at `:104` and its `curl` example at `:119`. State plainly:
 - the star and the level are different things — the star directs, the level
   describes; starring is not "priority 1";
 - **check `orderBy`** before telling a user the board has been re-prioritised;
-- **check `trackerSync`** before telling a user Linear or ClickUp was updated;
+- **check `trackerSync`** before telling a user Linear or ClickUp was updated —
+  `"none"` means the card has no tracker link (local card), `"failed"` means the
+  tracker rejected the write (the DB still changed);
 - the standing advisory: do not set priority unless the user asked for it.
 
 ### 4. Catalog
 
-`npm run catalog:generate` (`package.json:942`); `catalog:check` is the gate. The
-route already exists, so this is a payload change — confirm the catalog records
-the new field rather than assuming a same-path route needs no regeneration.
+`npm run catalog:generate` (`package.json:956`); `catalog:check` (`:957`) is the
+gate. The route already exists, so this is a payload change — confirm the catalog
+records the new response fields rather than assuming a same-path route needs no
+regeneration.
 
 ### Migration
 
@@ -240,19 +370,30 @@ callers reading `success` / `starred`.
    - `starred`-only requests behave **exactly** as before, byte-for-byte on the
      existing assertions — this is the regression that matters most;
    - server workspace id ≠ resolved row's → the write is keyed to the row's id;
-   - `trackerSync` is `"unavailable"` when no callback is wired, `"failed"` when
-     the callback throws or returns `'failed'`, and the DB write still stands;
-   - `orderBy` reflects the `config` value, including its default when unset.
+   - `trackerSync` is `"none"` when the card has no tracker link, `"failed"` when
+     the service call throws, and the DB write still stands;
+   - a ClickUp clear (priority null) sends `{ priority: null }` to `updateTask`
+     (not an omission), and `trackerSync` is `"clickup"`;
+   - `orderBy` reflects the `config` value, including its `'manual'` default when
+     `getOrderByMode` is absent (defensive `?.` path).
 2. **Tracker write-back unit test** — a fake sync service asserting Urgent → `1`
-   for Linear and for ClickUp, and NULL → `0` for Linear / field omitted for
-   ClickUp. Add the Linear round-trip: NULL → write 0 → read 0 → NULL, asserting
-   the card does not oscillate between states across a sync poll.
+   for Linear and for ClickUp, and NULL → `0` for Linear / `{ priority: null }`
+   for ClickUp. Add the Linear round-trip: NULL → write 0 → read 0 → NULL,
+   asserting the card does not oscillate between states across a sync poll.
 3. **Both hosts, by hand** — set a level under the extension host and under the
-   standalone host, and assert `trackerSync` is not `"unavailable"` in either.
-   `npm run standalone-parity:check` is scoped to the browser read-back path and
-   would pass with the seam wired in neither root, so it cannot be the evidence
-   here.
+   standalone host, and assert `trackerSync` is `"linear"` or `"clickup"` (not
+   `"none"` due to a missing service) in either. `npm run
+   standalone-parity:check` is scoped to the browser read-back path and would
+   pass with the service accessor returning null in either root, so it cannot be
+   the evidence here.
 4. **`npm run catalog:check`** passes.
+
+### Automated Tests
+
+Covered by items 1–2 above (extend `plan-priority-endpoint.test.js`; add a
+tracker write-back unit test with a fake sync service). The endpoint test loads
+compiled output (`out/services/LocalApiServer.js`), so a compile is required to
+run it — recorded here, not run in this pass per session directives.
 
 ### Goal Invariants
 
@@ -263,7 +404,11 @@ callers reading `success` / `starred`.
 - There is one no-priority state end to end: an inbound `0`, `"none"`, or
   `null` all land as NULL, and no path writes 0 into `plans.priority`.
 - A response never claims a tracker write that did not happen, and never hides
-  that this host cannot make one.
+  that this host cannot make one (`"none"` for a local card; `"failed"` for a
+  rejected write).
 - A response never implies work was re-sequenced when the board's sort mode
   means it was not.
 - The star's existing contract is unchanged.
+- No new `LocalApiServerOptions` seam is introduced — the write-back uses the
+  already-wired `getLinearService` / `getClickUpService` accessors, so there is
+  no "never wired" failure mode to detect.

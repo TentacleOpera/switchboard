@@ -40,10 +40,10 @@ a gate that stops a user launching a mission on purpose.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The ready flag gates the Launch button, turning an explicit mission start into a two-click pattern](../plans/ready-filters-bulk-start-it-should-not-gate-an-explicit-launch.md) — **CREATED** — ID: 86af94b7-55e4-4387-a9d7-6c0a56a557a9
-- [ ] [Replace the Mission Control persona with a run sheet that asks what you want and loads only that protocol](../plans/replace-the-mission-control-persona-with-a-run-sheet.md) — **CREATED** — ID: 254f724e-df9c-45e4-b4fc-e9c400eadc99
-- [ ] [A supervised mission has no supervision: `type` is stored, shown and reported, but nothing wakes on a transition](../plans/supervised-missions-wake-the-controller-on-transitions.md) — **CREATED** — ID: 9516c942-a3af-42d3-8607-f904ac4113be
-- [ ] [The /switchboard front door arms against an endpoint that does not exist, delivers the persona twice, and hardcodes the wrong posture](../plans/the-mission-control-front-door-delivers-twice-and-lies-about-the-posture.md) — **CREATED** — ID: 135f2c7b-a953-4a03-ba70-5e20928b97e3
+- [ ] [The ready flag gates the Launch button, turning an explicit mission start into a two-click pattern](../plans/ready-filters-bulk-start-it-should-not-gate-an-explicit-launch.md) — **PLAN REVIEWED** — ID: 86af94b7-55e4-4387-a9d7-6c0a56a557a9
+- [ ] [Replace the Mission Control persona with a run sheet that asks what you want and loads only that protocol](../plans/replace-the-mission-control-persona-with-a-run-sheet.md) — **PLAN REVIEWED** — ID: 254f724e-df9c-45e4-b4fc-e9c400eadc99
+- [ ] [A supervised mission has no supervision: `type` is stored, shown and reported, but nothing wakes on a transition](../plans/supervised-missions-wake-the-controller-on-transitions.md) — **PLAN REVIEWED** — ID: 9516c942-a3af-42d3-8607-f904ac4113be
+- [ ] [The /switchboard front door arms against an endpoint that does not exist, delivers the persona twice, and hardcodes the wrong posture](../plans/the-mission-control-front-door-delivers-twice-and-lies-about-the-posture.md) — **PLAN REVIEWED** — ID: 135f2c7b-a953-4a03-ba70-5e20928b97e3
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -57,3 +57,48 @@ what establishes that the controller is a seated terminal rather than the `/swit
 Either may be implemented first; neither should be implemented without the other having been read.
 
 The ready-gate subtask is a one-line fix with no dependencies and may ship at any point.
+
+## Team Dispatch Instructions
+
+### The /switchboard front door arms against an endpoint that does not exist, delivers the persona twice, and hardcodes the wrong posture
+
+- **Seat:** Intern (Complexity 3)
+- **Acceptance:**
+  - No `/orchestration/` string remains in `.agents/workflows/switchboard.md` or its mirror; every `POST /` path the launcher names is registered in `LocalApiServer.ts`.
+  - A `/switchboard` session arms end-to-end (adopt → confirm → `missionControlArmed` true) — must fail on the current tree, pass after the fix.
+  - The launcher states the `prompt` field is the persona and gives no instruction to read `switchboard-mission-control/SKILL.md`; the read ban is scoped to inline content.
+  - `interview`/`stale-session` prompts carry `ATTENDED=true` (not `UNATTENDED=true`); `resume` carries `UNATTENDED=true` (not `ATTENDED=true`); `no-persona` carries neither.
+  - `manage-features/SKILL.md:412` distinguishes the two flags by exact token; grouping asks in an attended interview and skips when unattended.
+- **Must not touch:** `launchMission` (already correct); the `no-persona` branch; the `UNATTENDED IMPROVER CONTRACT` at `agentPromptBuilder.ts:1963` (out of scope).
+
+### Replace the Mission Control persona with a run sheet that asks what you want and loads only that protocol
+
+- **Seat:** Coder (Complexity 6)
+- **Acceptance:**
+  - The `interview` prompt contains the menu heading and NOT `## The Tick`, `## Merge-Back`, or `stallCount`.
+  - Every protocol path the menu names resolves on disk.
+  - The `resume` prompt contains `## The Tick`, `## Signals`, `## Verify via Git`, and the `progress.json` stall-counter contract, and carries no menu.
+  - Intentionally-removed sections (Tick, Context Is Cleared, the empty-fleet paragraph) are absent from the interview prompt and present in the resume prompt where they belong.
+  - The run sheet is under 80 lines; no `-o /dev/null` appears anywhere; the orientation snippet appears exactly once; launcher and mirror agree modulo frontmatter.
+- **Must not touch:** `switchboard-mission-control-http` and `switchboard-contracts` skills (named by branches, not inlined); the standalone `deliveryMode` question (recorded, not fixed here); the `#agent-dock` project-management buttons (a separate controller-UI plan).
+
+### A supervised mission has no supervision: `type` is stored, shown and reported, but nothing wakes on a transition
+
+- **Seat:** Coder (Complexity 5)
+- **Acceptance:**
+  - A supervised (`operation`) mission wakes exactly once per transition, including when multiple members complete concurrently (the watermark compare-and-set is serialized).
+  - An unsupervised (`mission`) mission never wakes; a later flip to `operation` produces no backfilled wakes and the next real transition wakes normally.
+  - Every read path calls `_deriveMissionRunState`; no reader consults `last_notified_run_state` as truth, and the watermark is absent from state-exposing return paths.
+  - The wake payload carries the mission id, both states, and the member card that caused the transition.
+  - Both hosts reach the same detector code path beside the existing turn-end notifier.
+- **Must not touch:** `runState` persistence (stays derived, never persisted); the `mission` (unsupervised) behaviour; the interval tick (supervision is wake-on-transition, not polling).
+
+### The ready flag gates the Launch button, turning an explicit mission start into a two-click pattern
+
+- **Seat:** Intern (Complexity 2)
+- **Acceptance:**
+  - An unready mission with at least one member has Launch enabled and launches successfully.
+  - `start-ready-mission` still picks up `ready` missions and skips unready ones; the READY badge and `mc-ready-mission` still work.
+  - In-flight and completed missions stay disabled; no-members is the only remaining hard block.
+  - `ready` is absent from the `mc-launch` predicate at `mission-control.js:205`; both hosts carry the same predicate.
+- **Must not touch:** `launchMission` (already correct); `runState` (derived, never persisted); the `ready` flag itself (badge, mark-ready control, and schedule action keep it).

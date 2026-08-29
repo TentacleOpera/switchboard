@@ -172,6 +172,33 @@ prompt was never given a way to ask what the operator came for.
 **Tags:** refactor, ux, docs, reliability
 **Feature:** 73ebf150-50f9-4e8f-b9db-58af49202c6a
 
+## User Review Required
+
+**Yes.** Two `[user]` questions in Outstanding Questions (the menu's launch entries; whether to offer resume of a handed-off session) shape the deliverable. The decomposition and tick deletion proceed regardless of the answers.
+
+## Complexity Audit
+
+### Routine
+- Writing the run sheet (40–60 lines) and the branch protocol files — content moves verbatim where it can.
+- Replacing the repeated `-o /dev/null` probe with a single body-reading orientation call.
+- Per-mode assembly in `buildMissionControlKickoffPrompt` keys the document to the existing 3-way branch.
+
+### Complex / Risky
+- **Decomposition completeness vs intentional deletion.** The tick, the context-clearing apparatus, the `progress.json` stall counters, and the "never report an empty fleet" paragraph are *intentionally removed*, not re-homed. Verification 5 must distinguish "re-homed and covered" from "intentionally cut and absent from the branch that no longer needs it" — a heading-union check alone cannot, because the deleted headings are simply absent from the union.
+- **Tick deletion rests on a load-bearing premise** — that the host has its own scheduler. If false, an armed unattended session dispatches and is never woken (the exact failure the tick prevented). Recorded as a stated assumption with a documented fallback, not verified.
+- **Menu names files; the front-door plan forbids file reads.** Cross-subtask contradiction — see Dependencies and the reconciliation audit. The front-door's "no file read" must be scoped to inline content; branch protocols named by the menu are not inline.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** None in the decomposition itself (static files). The per-mode assembly is synchronous in the builder.
+- **Security:** None.
+- **Side Effects:** Deleting the tick apparatus removes the self-wake loop and stall counters from the armed branch's protocol. Any consumer that relied on `progress.json` stall data (reports tooling) must be checked — the armed branch keeps the stall-counter *contract* (verification 3) but the loop that populates it is gone.
+- **Dependencies & Conflicts:**
+  - Ships after the front-door plan (endpoint repair + `ATTENDED=true` on interview assumed).
+  - **Read-instruction scope conflict with the front-door plan's change 2** — the front-door says "no file is to be read"; this plan's menu names branch protocol files for on-demand loading. Reconciled end-state: the front-door's ban is scoped to "do not re-read content already inline in the prompt"; branch protocols named by the menu are not inline and are the intended on-demand reads. Both plans must state this scope.
+  - The dock project-management buttons discussed in the plan are a **design rationale, not deliverable work here** — they belong to a separate controller-UI plan. Recording this so the run sheet does not accrete button-building scope and breach its 80-line bound.
+  - `mission-control-cannot-see-teams-over-http.md` (no `GET /teams`) keeps pre-flight check 1 partially unanswerable; this plan must not pretend otherwise.
+
 ## Dependencies
 
 - **The front-door plan ships first.** It repairs `POST /orchestration/confirm` →
@@ -185,8 +212,16 @@ prompt was never given a way to ask what the operator came for.
   not pretend otherwise.
 - Its posture fix (`ATTENDED=true` on interview) is also assumed here: a run sheet whose first act is
   to ask is attended by construction, and the flag must agree.
+- **Read-instruction scope (cross-subtask):** the front-door plan's change 2 bans file reads; this
+  plan's menu names branch protocol files for on-demand loading. The ban must be scoped to inline
+  content only — see Edge-Case & Dependency Audit above.
+
+## Adversarial Synthesis
+
+Key risks: the decomposition's "no content lost" check (verification 5) is heading-only and cannot distinguish intentional cuts from silent deletion; the tick deletion rests on an unverified host-scheduler premise whose failure mode is a silently dead unattended session; the menu's file-naming mechanism contradicts the front-door's no-file-read ban unless the ban is scoped to inline content. Mitigations: verification 5 lists intentionally-removed sections by name and asserts each is absent from the branch that no longer needs it and present where it does; the host-scheduler premise stays a stated assumption with its fallback documented; the read-ban scope is reconciled across both plans (inline-only).
 
 ## Proposed Changes
+
 
 1. **Write `.agents/protocols/switchboard-mission-control-runsheet/SKILL.md`** — the menu. Target
    40–60 lines. It states the two-line role, resolves the port once (`## Port Discovery`), asks the
@@ -301,6 +336,23 @@ prompt was never given a way to ask what the operator came for.
 13. **The resolve appears once.** Assert the orientation snippet occurs exactly once across the
     always-on preamble and is not repeated per branch protocol. It is pasted six times today, and
     repetition is what made agents skip it.
+14. **Intentional deletions are auditable.** Assert `## The Tick`, `## Context Is Cleared Every Tick`,
+    the `progress.json` stall-counter *loop* (not the contract), and the "never report an empty fleet"
+    paragraph are **absent from the interview prompt** (negative — the cuts landed where intended) and
+    that `## The Tick` and the stall-counter contract are **present in the resume prompt** (positive —
+    the armed branch kept what it needs). This makes verification 5's heading-union check able to
+    distinguish a cut from a loss.
+
+### Goal Invariants
+
+- **The interview prompt contains no `## The Tick` and no `stallCount`** (negative — the unconditional
+  tick protocol is gone from the door a human just typed into).
+- **The resume prompt contains `## The Tick`, `## Signals`, and the `progress.json` stall-counter
+  contract** (positive — the armed branch kept the protocol that clears context every wake).
+- **Every protocol path the menu names resolves on disk** (positive — the menu's mechanism is live,
+  not the `/orchestration/confirm` dead-end in another file).
+- **No `-o /dev/null` appears** in the run sheet, branch protocols, or `.agents/workflows/switchboard.md`
+  (negative — the body-discarding probe is gone; the orientation reads the body).
 
 ## Outstanding Questions
 

@@ -17,6 +17,8 @@ Make the board's own state internally consistent, and make the agent-facing inst
 - [ ] [Feature Creation Can Produce a Column-Mixed Feature — Propagate the Column to the Subtasks, Not Just the Feature Card](../plans/feature_plan_20260814110809_feature-creation-produces-column-mixed-features.md) — **PLAN REVIEWED** — ID: 3b1e22b2-8e09-483a-8fee-a836c380902c
 - [ ] [`improve-feature` Tells Agents Plan Deletion Hard-Deletes the Card. It Soft-Deletes, and the Card Stays.](../plans/fix-improve-feature-plan-deletion-instruction.md) — **PLAN REVIEWED** — ID: ac839ce1-730b-4b05-801b-cc465acccaa7
 - [ ] [A Reconciliation Skill for When the Board and Disk Disagree](../plans/add-board-disk-reconciliation-skill.md) — **PLAN REVIEWED** — ID: 24dd7d7c-d15e-4ed4-a33e-55f4e8ac148e
+- [ ] [Every Feature Move Carries Its Subtasks](../plans/every-feature-move-carries-its-subtasks.md) — **PLAN REVIEWED** — ID: fda2bd88-0e50-47b7-a889-faabd45e0988
+- [ ] [A Subtask's Column Is Its Feature's Column](../plans/a-subtask-column-is-its-features-column.md) — **PLAN REVIEWED** — ID: 6f858db8-9e7e-4dea-9c9f-f067d1271bff
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

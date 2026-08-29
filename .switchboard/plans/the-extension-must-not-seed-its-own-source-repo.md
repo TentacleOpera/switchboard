@@ -66,6 +66,87 @@ the prune discriminator, the packaging assertion — is a consequence of that on
 **Tags:** infrastructure, reliability, bugfix
 **Feature:** d84a2df3-59d5-4f57-a894-26291e9625ae
 
+## User Review Required
+
+No — the predicate is self-referential and requires no user decision. The one open question
+(dogfooding a clone as a real workspace) is handled by leaving the Setup button as the
+deliberate path.
+
+## Complexity Audit
+
+### Routine
+
+- A two-condition predicate: parse two `package.json` files, compare `name` and `publisher`,
+  check a file exists. All standard `fs` operations.
+- An early return at the top of `refreshWorkspaceControlPlane` with one log line.
+- Skipping `setLastCopiedAgentVersion` on the skip path (one `if` guard).
+
+### Complex / Risky
+
+- **`cleanupLegacyAgentFiles` at `:961` is NOT inside `refreshWorkspaceControlPlane`.** The early
+  return does not cover it. An old install activating on the source repo still deletes 19 hardcoded
+  legacy paths. This plan must also guard the `:961` loop, or the source-repo protection is
+  incomplete. See proposed change 5.
+- **The `src/services/ControlPlaneMigrationService.ts` existence check is a hardcoded path.** A
+  rename during a refactor silently disables the predicate. A self-test asserting
+  `isExtensionSourceRepo` returns `true` for the current repo catches this at CI time rather than
+  at clobber time.
+- **Fail-open on malformed `package.json` is asymmetric.** For a user workspace, fail-open (seed
+  normally) is the safer default. For the source repo, fail-open means the predicate cannot
+  recognise itself and seeds. The source repo's `package.json` is authored and tracked, so this is
+  academic — but the packaging guard is the backstop, not this plan.
+
+## Edge-Case & Dependency Audit
+
+**Race conditions**
+- None. The predicate is a read-only check that runs before any write. Two IDEs activating
+  simultaneously on the source repo both skip — no conflict.
+
+**Security**
+- None. A local filesystem check, no new surface.
+
+**Side effects**
+- The source repo no longer receives automatic control-plane delivery. Developers who relied on
+  activation to sync `.agents/` must use the Setup button or `git pull`. This is strictly better
+  than overwriting authored content from a stale build.
+- `cleanupLegacyAgentFiles` no longer runs on the source repo. Legacy files that should be retired
+  must be removed by a commit, not by activation. This is the correct trade-off — the source repo
+  is authored, not managed.
+
+**Dependencies & conflicts**
+- Complements `an-older-install-downgrades-the-control-plane-on-every-activation.md`: that plan
+  protects all workspaces from older versions; this plan protects one repo from all versions. Both
+  add early returns to `refreshWorkspaceControlPlane` — this plan's check should run first (broader
+  predicate: skip all delivery for this repo), then the version check.
+- Both this plan and the downgrade guard need to gate `cleanupLegacyAgentFiles` at `:961`. The
+  cleanest approach: a shared helper that combines both predicates (is-source-repo OR
+  is-downgrade), called per-root inside the `:961` loop.
+- Complements `packaging-must-refuse-a-clobbered-control-plane.md`: that plan is the backstop. This
+  plan prevents the clobber at activation; the packaging guard catches it if this plan's predicate
+  fails (e.g. after a service-file rename).
+
+## Dependencies
+
+- **Sequenced after or alongside** `an-older-install-downgrades-the-control-plane-on-every-activation.md`
+  — both add early returns to `refreshWorkspaceControlPlane`; this plan's check runs first, then
+  the version check. Both gate `cleanupLegacyAgentFiles` at `:961`.
+- **Sequenced before** `packaging-must-refuse-a-clobbered-control-plane.md` — the packaging guard
+  is the backstop; this plan is the primary prevention. The protocol-file repair inside the
+  packaging plan depends on this plan's guard being in place so the repair is durable.
+- **Independent of** `delete-the-claude-mirror-generator.md` — the mirror removal does not touch
+  the source-repo predicate.
+
+## Adversarial Synthesis
+
+Key risks: (1) `cleanupLegacyAgentFiles` at `:961` is in the activation body, not inside
+`refreshWorkspaceControlPlane`, so the early return does not cover it — an old install on the
+source repo still deletes legacy paths; mitigated by adding a guard at `:961` (proposed change 5);
+(2) the `ControlPlaneMigrationService.ts` path check is a hardcoded string that a refactor can
+silently break — mitigated by a self-test asserting the predicate matches the current repo; (3)
+fail-open on malformed `package.json` is safe for users but unsafe for the source repo — academic,
+the packaging guard is the backstop. Mitigations are wired into the proposed changes, not left as
+advice.
+
 ## Proposed Changes
 
 1. **Add `isExtensionSourceRepo(root, extensionPath)` to `ControlPlaneMigrationService`.** Shared
@@ -102,6 +183,19 @@ the prune discriminator, the packaging assertion — is a consequence of that on
    target is the source repo so the effect is visible in the output channel. The packaging guard is
    the backstop if a click leaves the tree dirty.
 
+5. **Guard `cleanupLegacyAgentFiles` at `:961` for the source-repo case.** This loop is in the
+   activation body, not inside `refreshWorkspaceControlPlane`, so the early return in change 2
+   does not cover it. An old install activating on the source repo would still delete 19 hardcoded
+   legacy paths. Gate the `:961` loop on `isExtensionSourceRepo` per-root — if the root is the
+   source repo, skip `cleanupLegacyAgentFiles` for that root. This composes with the downgrade
+   guard's per-root gating: a shared helper that checks (is-source-repo OR is-downgrade) per root
+   is the cleanest approach, so both predicates are consulted in one place.
+
+6. **Add a self-test asserting the predicate matches the current repo.** Assert
+   `isExtensionSourceRepo(process.cwd(), extensionPath)` returns `true` when run in the source
+   repo. This catches a rename of `ControlPlaneMigrationService.ts` at CI time rather than at
+   clobber time — the hardcoded path in the predicate is a drift risk that the test makes visible.
+
 ## Verification Plan
 
 1. **The source repo is untouched by activation.** Activate against a fixture that satisfies both
@@ -125,6 +219,23 @@ the prune discriminator, the packaging assertion — is a consequence of that on
    wires none of these seams today, so the expected result for that host is "no behaviour change" —
    record it as such, and do not read a green `npm run standalone-parity:check` as parity evidence,
    since it is scoped to the browser read-back path rather than the composition root.
+9. **`cleanupLegacyAgentFiles` is skipped for the source repo.** Place all 19 legacy paths in a
+   fixture's `.agents/`, activate against a fixture satisfying the predicate, and assert every one
+   still exists. Spy on `cleanupLegacyAgentFiles` to confirm it was not invoked for that root.
+10. **Self-test matches the current repo.** Assert `isExtensionSourceRepo(process.cwd(),
+    extensionPath)` returns `true` when run in the source repo, so a rename of
+    `ControlPlaneMigrationService.ts` fails CI rather than silently disabling the guard.
+
+### Goal Invariants
+
+- Assert `isExtensionSourceRepo` returns `true` when `<root>/package.json` name matches the
+  extension's own `package.json` AND `<root>/src/services/ControlPlaneMigrationService.ts` exists.
+- Assert `isExtensionSourceRepo` returns `false` when only one of the two conditions holds.
+- Assert `isExtensionSourceRepo` returns `false` on malformed or unreadable `<root>/package.json`.
+- Assert `cleanupLegacyAgentFiles` is not invoked for a root where `isExtensionSourceRepo` returns
+  `true`.
+- Assert `setLastCopiedAgentVersion` is not called when `refreshWorkspaceControlPlane` returns early
+  due to the source-repo predicate.
 
 ## Outstanding Questions
 

@@ -148,6 +148,20 @@ is exactly what nobody read for the four weeks this was happening.
   would fix it by moving the ledgers to the database, but that is a larger effort that has not landed.
   The 2-line fix (remove `generatedAt` from both manifest objects) is promoted to a proposed change
   below — the guard and the removal are one atomic unit; neither works without the other.
+- **The `generatedAt` removal from `ClaudeCodeMirrorService.ts:410` is superseded if the mirror
+  removal plan lands first.** `delete-the-claude-mirror-generator.md` deletes the entire
+  `generateClaudeMirror` function, which contains the `:410` line. If that plan lands first, this
+  plan only needs to remove `generatedAt` from `ControlPlaneMigrationService.ts:1410`. If this plan
+  lands first, the mirror removal simply includes the already-removed line. No conflict either way.
+- **The protocol-file repair (step 6) depends on the source-repo guard for durability.**
+  `the-extension-must-not-seed-its-own-source-repo.md` prevents a stale build from re-inflating the
+  managed blocks at activation time. This plan's packaging guard catches a clobber at packaging time.
+  Without the source-repo guard, a stale build activating on the source repo re-inflates the blocks
+  between the repair and the next package — the guard fires (correct), but the repair is undone. The
+  source-repo guard is what makes the repair durable; the packaging guard is the backstop.
+- **Sequenced after** `an-older-install-downgrades-the-control-plane-on-every-activation.md` and
+  `the-extension-must-not-seed-its-own-source-repo.md` — guarding the package while activation still
+  clobbers means the guard fires on damage that should not exist.
 - **Complements** `the-seed-loop-resurrects-files-the-workspace-deleted.md`, which covers the install
   side. Neither blocks the other; this one is the higher-value half because it stops new stale
   artifacts being created at all.
@@ -165,8 +179,12 @@ treating `??`, `M`, `A` and `D` alike; (4) making it a warning, reproducing the 
 signal — rejected; (5) failing with a bare "tree is dirty" so a releaser bypasses it — mitigated by
 printing differing paths plus the restore command; (6) no `.claude/` packaging assertion, so a future
 `.vscodeignore` change could exclude `.claude/` while the guard checks a tree that doesn't ship —
-mitigated by adding a mirror assertion to the contract test. Mitigations are wired into the proposed
-changes, not left as advice.
+mitigated by adding a mirror assertion to the contract test; (7) the protocol-file repair depending
+only on the packaging guard for durability, when the source-repo guard is the primary prevention —
+mitigated by documenting the cross-plan dependency; (8) the `generatedAt` removal from
+`ClaudeCodeMirrorService.ts:410` being a no-op if the mirror removal lands first — noted as a
+conditional dependency, not a conflict. Mitigations are wired into the proposed changes, not left as
+advice.
 
 ## Proposed Changes
 

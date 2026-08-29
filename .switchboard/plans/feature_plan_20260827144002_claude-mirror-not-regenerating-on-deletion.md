@@ -16,6 +16,14 @@ The `<available_skills>` symptom — which the protocols migration existed to fi
 **Tags:** backend, bugfix, reliability
 **Project:** Browser Switchboard
 
+## User Review Required
+
+No — the fix is a localized signal-addition with a traced end-to-end path. The one open scope question (bootstrap-path mirror regen) is recorded under Outstanding Questions and does not block implementation.
+
+## Dependencies
+
+- `feature_plan_<merged-deletion-guard-and-ledger>` — *Deletion guard and bundle ledger cover all .agents surfaces and all copy paths* (merged from the deletion-guard-gaps and protocols-no-ledger subtasks). This plan introduces the `deletionSkipped` return flag on `seedBundleSurface`; the merged plan extends the surface type to `protocols` and wires `protocolResult.deletionSkipped` into the `deletionRespected` OR. **Ship this plan FIRST** so the flag exists when the merged plan adds the protocols seed call.
+
 ## Complexity Audit
 
 **Routine:**
@@ -33,6 +41,10 @@ The `<available_skills>` symptom — which the protocols migration existed to fi
 - **First-run:** No ledger → no skips → no deletion signal → scaffold fires normally via `needsAgentRefresh`. No regression.
 - **Multiple deletions:** Each skip sets the flag; the scaffold fires once. Correct.
 - **Deletion + addition in same pass:** Both `agentsChanged` and the deletion flag are true; scaffold fires once. Correct.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) the `deletionSkipped` signal must stay distinct from `agentsChanged` so the version stamp is not wrongly advanced on a no-op skip; (2) the full `scaffoldProtocolLayers` call rewrites AGENTS.md/CLAUDE.md managed blocks on every deletion-respected activation — idempotent but heavier than a mirror-only regen; (3) the `_bootstrapControlPlaneLayout` path has the same `needsAgentMigration || agentsChanged` mirror gate (ControlPlaneMigrationService.ts:741) and is NOT fixed here, so a deletion respected on the `npx switchboard init` path still strands the stale mirror entry. Mitigations: separate `else if (deletionRespected)` branch with no version stamp; scaffold idempotency makes the extra rewrite safe; the bootstrap gap is recorded under Outstanding Questions for a follow-up.
 
 ## Proposed Changes
 
@@ -113,6 +125,8 @@ if (needsAgentRefresh || agentsChanged) {
 }
 ```
 
+> **Note (cross-subtask):** The sibling merged plan (*Deletion guard and bundle ledger cover all .agents surfaces and all copy paths*) adds a third `seedBundleSurface('protocols', ...)` call and extends both `agentsChanged` and `deletionRespected` to include `protocolResult`. This plan lands first and shows the skills/workflows-only block; the merged plan reconciles the combined block.
+
 ## Verification Plan
 
 1. **Unit test:** Seed a workspace with the bundle, delete a skill from `.agents/`, record the ledger, then run `refreshWorkspaceControlPlane` — assert the corresponding `.claude/skills/<name>/SKILL.md` is removed.
@@ -120,3 +134,18 @@ if (needsAgentRefresh || agentsChanged) {
 3. **Unit test:** Fresh workspace (no ledger) — run `refreshWorkspaceControlPlane` — assert no deletion flag is set and the scaffold fires normally.
 4. **Unit test:** Delete a skill AND add a new one in the same pass — assert both the mirror regen and the new skill copy happen.
 5. **Manual test:** Delete a skill from `.agents/`, reload the VS Code window — assert the `.claude/skills/` mirror no longer contains the deleted skill.
+
+### Goal Invariants
+
+- After `refreshWorkspaceControlPlane` with a ledger-tracked skill deleted from `.agents/skills/`, the file `.claude/skills/<deleted-skill-name>/SKILL.md` is ABSENT from the workspace.
+- After `refreshWorkspaceControlPlane` with a ledger-tracked skill deleted, `setLastCopiedAgentVersion` is NOT called (no version stamp advance) — assert the stamped version file's mtime/content is unchanged across the run.
+- After `refreshWorkspaceControlPlane` on a fresh workspace (no ledger), `seedBundleSurface` returns `deletionSkipped === false` for both skills and workflows.
+- `seedBundleSurface`'s return type includes the `deletionSkipped: boolean` field (symbol resolvable in `ControlPlaneMigrationService.ts`).
+
+## Outstanding Questions
+
+- **[user]** The `_bootstrapControlPlaneLayout` path (ControlPlaneMigrationService.ts:741) gates `generateClaudeMirror` on `needsAgentMigration || agentsChanged` — the same pattern this plan fixes in the activation path. Once the sibling merged plan threads the deletion guard into bootstrap, a deletion respected on the `npx switchboard init` path will skip re-copy AND skip mirror regen, stranding the stale `.claude/` entry. Should the bootstrap path receive the same `deletionRespected` signal? — proceeding on the assumption that this is a follow-up, not part of this plan, because bootstrap is init-oriented and the recurring activation path is the one that hits existing workspaces.
+
+## Recommendation
+
+**Complexity 4 → Send to Coder.** Single signal-addition with a traced end-to-end path; the only design choice (full scaffold vs mirror-only) is resolved in favor of the idempotent full scaffold. Ship before the sibling merged plan so the `deletionSkipped` flag exists when it extends the surface type.

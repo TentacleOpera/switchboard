@@ -106,6 +106,37 @@ revisited for a door with a human standing in it.
 **Tags:** bugfix, docs, reliability
 **Feature:** 73ebf150-50f9-4e8f-b9db-58af49202c6a
 
+## User Review Required
+
+**Yes.** Two `[user]` questions in Outstanding Questions (panel Start button posture; standalone wake delivery) gate decisions this plan proceeds on by assumption. The endpoint/read/posture fixes themselves do not need review — they are wrong under either answer.
+
+## Complexity Audit
+
+### Routine
+- Endpoint and path string repair in one workflow file + its mirror — blast radius grep-confirmed (four lines, two files).
+- Relocating `UNATTENDED=true` out of `baseLines` into the existing 3-way branch; no new plumbing.
+- Dropping the redundant read instruction; one sentence replacement.
+
+### Complex / Risky
+- **Substring hazard:** `UNATTENDED=true` contains `ATTENDED=true` as a substring. The one consumer (`manage-features/SKILL.md:412`) and the contract test (`mission-control-tick-and-reports-contract.test.js:322`) must distinguish the two flags by exact token, not by `includes('ATTENDED=true')` — which would match the armed prompt. Verification 7 covers this; change 4 must state the distinction mechanism explicitly.
+- **Hard Rule 4 walk-back removal:** keying the rule to the flag is correct, but the rule must retain the per-posture *meaning* (attended = wait for the user; unattended = no confirmation gates), not merely swap a label. Dropping the walk-back without preserving the armed branch's no-confirmation-gate contract would tell an armed session it may block for approval.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** None. `buildMissionControlKickoffPrompt` is synchronous per call; the flag is emitted, not mutated concurrently.
+- **Security:** None. No credentials or auth surfaces touched.
+- **Side Effects:** One behavioural change — during an attended interview, `manage-features` grouping asks instead of skipping the confirm gate. This is the intended and correct effect; verification 9 tests it directly.
+- **Dependencies & Conflicts:** Ships **first** in the feature — the run-sheet subtask's step-2 rewrite builds on the repaired endpoints and assumes `ATTENDED=true` on interview (recorded in its Dependencies). The mirror file (`.claude/skills/switchboard/SKILL.md`) must agree after the edit (verification 5).
+
+## Dependencies
+
+- **No upstream plan dependency** — this is the foundation subtask and ships first.
+- **Downstream:** `replace-the-mission-control-persona-with-a-run-sheet.md` depends on this plan's endpoint repair and posture fix (its step-2 rewrite assumes both).
+
+## Adversarial Synthesis
+
+Key risks: the `ATTENDED=true`/`UNATTENDED=true` substring overlap can silently match the wrong prompt if the consumer uses a naive substring test; removing the Hard Rule 4 walk-back must preserve the armed branch's no-confirmation-gate *meaning*, not just relabel it. Mitigations: change 4 must specify exact-token distinction (test `UNATTENDED=true` for the skip; test `ATTENDED=true` without `UNATTENDED=true` for the gate), and the contract test must assert the effect count stays one across both flags; Hard Rule 4 keeps per-posture semantics keyed to the flag.
+
 ## Proposed Changes
 
 1. **Repair step 2's endpoint and paths** in `.agents/workflows/switchboard.md` — ship this first; it is
@@ -123,6 +154,12 @@ revisited for a door with a human standing in it.
    plus shared logic plus the mode instruction — and is to be followed directly. State explicitly that
    no file is to be read, because an agent told to "follow the persona" will otherwise reach for the
    path it can see in the text.
+
+   **Scope the ban to inline content.** "No file is to be read" means: do not re-read any file whose
+   contents are already inline in the `prompt`. It does **not** forbid on-demand reads of branch
+   protocol files named by a run-sheet menu (see `replace-the-mission-control-persona-with-a-run-sheet.md`
+   changes 7/9) — those are not inline and loading them is the intended flow. Stated here so this fix
+   does not block the run sheet's menu mechanism.
 
    Keep the inlining. The server picks the runsheet from `deliveryMode` and appends the mode-specific
    instruction; an agent reading files itself would have to be told which runsheet applies, which is
@@ -198,6 +235,20 @@ revisited for a door with a human standing in it.
 10. **Both hosts.** All four extension call sites and the three in `src/standalone/bootstrap.ts` go
    through the same builder, so the flag fix covers both roots by construction — assert that by
    calling the builder directly in a host-agnostic test rather than by exercising either host.
+11. **`no-persona` carries neither flag.** Assert the `no-persona` prompt contains neither
+    `ATTENDED=true` nor `UNATTENDED=true` — the fourth mode the per-mode assertions in check 6
+    omit, so a regression here is invisible to that suite.
+
+### Goal Invariants
+
+- **No `/orchestration/` string remains** in `.agents/workflows/switchboard.md` or
+  `.claude/skills/switchboard/SKILL.md` (negative — the dead surface is gone).
+- **Every `POST /…` path the launcher names is registered** in `LocalApiServer.ts` (positive — the
+  replacement surface is live, not just renamed).
+- **No instruction to read `switchboard-mission-control/SKILL.md`** remains in the launcher
+  (negative — the redundant read is removed).
+- **The launcher states the `prompt` field is the persona** (positive — the replacement description
+  is present, not just the old one absent).
 
 ## Outstanding Questions
 

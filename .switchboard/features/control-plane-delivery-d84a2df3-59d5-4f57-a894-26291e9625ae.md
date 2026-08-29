@@ -40,9 +40,9 @@ revert that repaired `.agents/` did not touch those two files.
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Packaging accepts a clobbered .agents/, so a stale control plane launders itself into the next build](../plans/packaging-must-refuse-a-clobbered-control-plane.md) — **PLAN REVIEWED** — ID: d8d3ea12-a3c8-4e8f-8b1e-198bb24cfaff
-- [ ] [An older install overwrites the control plane on every activation, so opening the repo in a second IDE downgrades it](../plans/an-older-install-downgrades-the-control-plane-on-every-activation.md) — **CREATED** — ID: b5fcf774-754a-4188-bd7d-05a5c7c01679
-- [ ] [Delete the Claude mirror generator and commit the eight skill files as ordinary bundle assets](../plans/delete-the-claude-mirror-generator.md) — **CREATED** — ID: 6c25a1e1-7b7a-4002-a9a3-f4aca43d1412
-- [ ] [The extension seeds its own source repo, so a stale build overwrites the authoritative control plane](../plans/the-extension-must-not-seed-its-own-source-repo.md) — **CREATED** — ID: 8633bcba-169c-4b9f-ab30-cd5d8cd617db
+- [ ] [An older install overwrites the control plane on every activation, so opening the repo in a second IDE downgrades it](../plans/an-older-install-downgrades-the-control-plane-on-every-activation.md) — **PLAN REVIEWED** — ID: b5fcf774-754a-4188-bd7d-05a5c7c01679
+- [ ] [Delete the Claude mirror generator and commit the eight skill files as ordinary bundle assets](../plans/delete-the-claude-mirror-generator.md) — **PLAN REVIEWED** — ID: 6c25a1e1-7b7a-4002-a9a3-f4aca43d1412
+- [ ] [The extension seeds its own source repo, so a stale build overwrites the authoritative control plane](../plans/the-extension-must-not-seed-its-own-source-repo.md) — **PLAN REVIEWED** — ID: 8633bcba-169c-4b9f-ab30-cd5d8cd617db
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -58,3 +58,45 @@ before; the 25–26 August history shows an unguarded repair being undone within
 The mirror removal is independent and may ship at any point. Its one open question — whether `.claude/`
 is already packaged — is answered inside the packaging subtask, so sequencing it after that subtask
 saves a verification step.
+
+## Team Dispatch Instructions
+
+### An older install overwrites the control plane on every activation, so opening the repo in a second IDE downgrades it
+- **Seat:** Coder (complexity 4)
+- **Acceptance:**
+  - Downgrade activation (1.6.0 over stamp 1.7.13) leaves `.agents/`, `CLAUDE.md`, `AGENTS.md`, `.claude/skills/` byte-identical
+  - `seedBundleSurface` not invoked on skip path (spy, not file state inference)
+  - Same-version repair still works (corrupt a bundled skill, activate same version, assert restored)
+  - `cleanupLegacyAgentFiles` skipped per-root on downgrade (spy confirms not invoked; legacy files persist)
+  - Comparison unit tests pass: `1.7.13 > 1.7.9` (numeric not lexicographic), `1.10.0 > 1.9.99`, unknown → deliver
+- **Must not touch:** None specified.
+
+### The extension seeds its own source repo, so a stale build overwrites the authoritative control plane
+- **Seat:** Coder (complexity 4)
+- **Acceptance:**
+  - Source repo untouched by activation (`.agents/`, `CLAUDE.md`, `AGENTS.md` byte-identical before and after)
+  - Real workspace still gets full delivery (`.agents/skills`, `.agents/workflows`, `.claude/skills/`, managed blocks created)
+  - Both predicate conditions required (name match alone or source file alone → treated as ordinary workspace)
+  - `cleanupLegacyAgentFiles` skipped for source repo (spy confirms not invoked for that root)
+  - Self-test: `isExtensionSourceRepo` returns `true` for the current repo
+- **Must not touch:** None specified.
+
+### Packaging accepts a clobbered .agents/, so a stale control plane launders itself into the next build
+- **Seat:** Coder (complexity 4)
+- **Acceptance:**
+  - `vsce package` (not just `npm test`) refuses a clobbered `.agents/` tree with an actionable message naming differing paths and the restore command
+  - Untracked files (`??`) and deletions (`D`) fail the guard, not just modifications
+  - Clean tree (`.agents` and `.claude` matching HEAD) packages successfully; unrelated dirt under `src/` does not block
+  - `generatedAt` absent from both ledger manifests; activating twice produces byte-identical ledgers
+  - Protocol blocks in `CLAUDE.md` and `AGENTS.md` match `RESIDENT_PROTOCOL_BODY` verbatim; hand-authored content outside markers preserved
+- **Must not touch:** The seed loop (`seedBundleSurface`, `pruneRetiredBundleFiles`) must not be modified. No ledger hashes, sidecars, or merge policy.
+
+### Delete the Claude mirror generator and commit the eight skill files as ordinary bundle assets
+- **Seat:** Coder (complexity 5)
+- **Acceptance:**
+  - Eight `.claude/skills/*/SKILL.md` files byte-identical before and after; drift test asserts each matches `.agents/` counterpart modulo frontmatter
+  - `mergePermissionsAllowList` called after generator deletion (`.claude/settings.json` has Switchboard allow entries; user entries preserved)
+  - Both `generateClaudeMirror` call sites removed (`extension.ts:4106` and `ControlPlaneMigrationService.ts:743`); zero grep matches outside the deleted function
+  - `.claude/.switchboard-generated.json` absent from committed tree; archived as `.migrated.bak` at runtime on upgrade
+  - `seedBundleSurface` accepts `claude-skills` surface and writes to `.claude/` destination root; ledger key is `claude-skills/<posix-rel>`
+- **Must not touch:** Do not wire the standalone composition root — this plan must not deepen the standalone wiring gap.

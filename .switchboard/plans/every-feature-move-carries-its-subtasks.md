@@ -61,13 +61,19 @@ the set of things the board says are awaiting work.
 3. Several writers change `kanban_column` with no feature awareness at all. Any
    of them, handed a feature row, moves the feature and nothing else:
 
-   | method | line |
-   | --- | --- |
-   | `updateColumnByPlanFileWithReason` | `KanbanDatabase.ts:2663` |
-   | `movePlanByPlanFile` | `KanbanDatabase.ts:2916` |
-   | `archivePlan` | `KanbanDatabase.ts:3147` |
-   | `completeMultipleByPlanFile` | `KanbanDatabase.ts:5564` |
-   | `completeMultiple` | `KanbanDatabase.ts:5602` |
+   | method | line | feature-aware? |
+   | --- | --- | --- |
+   | `updateColumnByPlanFileWithReason` | `KanbanDatabase.ts:2663` | no |
+   | `movePlanByPlanFile` | `KanbanDatabase.ts:2916` | no |
+   | `archivePlan` | `KanbanDatabase.ts:3147` | no |
+   | `completeMultiple` | `KanbanDatabase.ts:5602` | no (deprecated, zero callers) |
+
+   `completeMultipleByPlanFile` (`KanbanDatabase.ts:5564`) was originally listed
+   here as feature-blind, but code inspection reveals it **already has an inline
+   cascade** — it queries `is_feature` and runs `UPDATE plans SET status =
+   'completed', kanban_column = 'COMPLETED' ... WHERE feature_id = ? AND status =
+   'active'` when the plan is a feature. See the Superseded callout in Proposed
+   Changes §1 for the correction.
 
    The `plan_file`-keyed ones are the importer/watcher paths, which is consistent
    with the observed move recording no `plan_events` row.
@@ -80,7 +86,7 @@ several rather than the only door.
 ## Metadata
 
 **Complexity:** 5
-**Tags:** backend, bug, reliability, data-integrity
+**Tags:** backend, bugfix, reliability, database
 **Project:** Browser Switchboard
 
 ---
@@ -94,6 +100,11 @@ several rather than the only door.
   subtask `UPDATE`. A second hand-rolled cascade is the bug this plan closes.
 * **Delete `updateColumnWithFeatureCascadeByPlanId`.** Zero callers, and its
   caller-supplied set is unsound by construction. It is not kept "in case".
+* **Delete `completeMultiple` (deprecated).** Zero callers, session-keyed in a
+  plan_id world. Same dead-code rationale.
+* **Refactor `completeMultipleByPlanFile`, do not layer on it.** It already has
+  an inline cascade; the fix replaces the inline cascade with delegation to
+  `cascadeFeatureByPlanId`, not a second cascade on top.
 * **Repair the existing strand.** One subtask is diverged today. A one-shot
   reconciliation at startup re-aligns diverged subtasks to their feature. This is
   a data fix for shipped state, so it is idempotent and logs what it changed.
@@ -109,8 +120,11 @@ several rather than the only door.
 ### Routine
 * `cascadeFeatureByPlanId` already exists, is transactional, and is used by
   thirteen call sites — this plan adds callers, it does not design a mechanism.
-* Deleting a zero-caller method.
+* Deleting two zero-caller methods (`updateColumnWithFeatureCascadeByPlanId`
+  and the deprecated `completeMultiple`).
 * The `is_feature` flag is already on every row and already read elsewhere.
+* `completeMultipleByPlanFile` already cascades — refactoring it to delegate to
+  `cascadeFeatureByPlanId` is a replacement, not new logic.
 
 ### Complex / Risky
 * **The `plan_file`-keyed writers do not have a `plan_id` in hand.** They must
@@ -119,9 +133,12 @@ several rather than the only door.
 * **Re-entrancy.** `cascadeFeatureByPlanId` calls `flushPersist()`. A
   feature-blind writer that now delegates must not also persist, or an import
   sweep over many files pays a synchronous disk flush per file.
-* **`archivePlan` and the `completeMultiple*` pair also write `status`.** The
-  cascade takes an optional `targetStatus`; these callers must pass it, or a
-  feature is archived while its subtasks stay active.
+* **`archivePlan` also writes `status`.** The cascade takes an optional
+  `targetStatus`; this caller must pass it, or a feature is archived while its
+  subtasks stay active.
+* **`completeMultipleByPlanFile` refactor must not double-cascade.** The inline
+  cascade block must be removed when `_cascadeIfFeature` is added, or subtasks
+  are written twice in one call.
 * **Shipped state.** Features are on the board in released versions, so the
   reconciliation is a migration over user data. It must be idempotent and must
   never invent a column for a feature that has none.
@@ -134,9 +151,13 @@ several rather than the only door.
 * `cascadeFeatureByPlanId` already documents and closes the debounced-persist
   race by calling `flushPersist()` before returning (`KanbanDatabase.ts:6853-6859`).
   New callers inherit that; they must not add a second flush.
-* The startup reconciliation must run **after** schema migration and **after**
-  the plan importer's first sweep, or it re-aligns rows the importer is about to
-  rewrite.
+* The startup reconciliation must run **after** schema migration (`ensureReady()`)
+  and **before** the first board read. In `extension.ts`, it goes after
+  `reconcileHotCold` (line ~723). In `bootstrap.ts`, it goes after `ensureReady()`
+  (line 511) and before `ingestionEngine.initialize()` (line 830). The plan
+  importer's first sweep is asynchronous (`PlanIngestionEngine._runStartupScan()`)
+  and does not block activation, so the reconciliation runs before the sweep
+  completes — this is correct, as it fixes existing DB rows, not pending imports.
 
 ### Security
 * None. No new endpoint, no new input, no change to who may move a card.
@@ -159,22 +180,67 @@ several rather than the only door.
 
 ---
 
+## Dependencies
+
+_(None — this is a self-contained invariant-enforcement plan. No prerequisite
+sessions. The sibling plan **A Subtask's Column Is Its Feature's Column** is not
+blocking; see Dependencies & Conflicts above for the independence note.)_
+
+---
+
+## Adversarial Synthesis
+
+Key risks: (1) `completeMultipleByPlanFile` already has an inline cascade —
+adding `_cascadeIfFeature` to it without removing the inline cascade
+double-writes subtasks in one call; (2) `completeMultiple` (5602) is deprecated
+with zero callers — fixing it is wasted work, deleting it is better; (3) the two
+composition roots have different startup sequences — `extension.ts` runs
+migrations + `reconcileHotCold` synchronously, `bootstrap.ts` runs only
+`ensureReady()`, so the reconciliation wiring is not symmetric; (4)
+re-entrancy — `cascadeFeatureByPlanId` calls `flushPersist()`, so new callers
+must not also persist. Mitigations: refactor `completeMultipleByPlanFile` to
+delegate to `cascadeFeatureByPlanId` instead of layering a second cascade; delete
+`completeMultiple` alongside the dead `updateColumnWithFeatureCascadeByPlanId`;
+wire reconciliation after `ensureReady()` in both roots with `extension.ts`
+also placing it after `migrateDeprecatedColumns`; delegate to cascade only (no
+extra persist).
+
+---
+
 ## Proposed Changes
 
 ### 1. `src/services/KanbanDatabase.ts` — one door
 
 * Delete `updateColumnWithFeatureCascadeByPlanId` (`:6767-6800`). Zero callers.
+* Delete `completeMultiple` (`:5602`). Deprecated, zero callers — same dead-code
+  rationale as `updateColumnWithFeatureCascadeByPlanId`.
 * Add a private helper `_cascadeIfFeature(planId, targetColumn, targetStatus?)`
   that returns `true` when the row is `is_feature = 1` and it delegated to
   `cascadeFeatureByPlanId`, `false` when the row is not a feature and the caller
   should do its own single-row update.
 * Call it first in each feature-blind writer:
   `updateColumnByPlanFileWithReason` (`:2663`), `movePlanByPlanFile` (`:2916`),
-  `archivePlan` (`:3147`), `completeMultipleByPlanFile` (`:5564`),
-  `completeMultiple` (`:5602`). The `plan_file`-keyed ones resolve the row once
+  `archivePlan` (`:3147`). The `plan_file`-keyed ones resolve the row once
   and pass the resolved `plan_id` through.
-* `archivePlan` and both `completeMultiple*` pass their `status` as
-  `targetStatus` so status cascades with the column.
+* `archivePlan` passes its `status` as `targetStatus` so status cascades with
+  the column.
+
+> **Superseded:** `completeMultipleByPlanFile` (`:5564`) was listed as a
+> feature-blind writer to receive `_cascadeIfFeature`. Code inspection reveals
+> it **already has an inline cascade**: it queries `is_feature`, and when true,
+> runs `UPDATE plans SET status = 'completed', kanban_column = 'COMPLETED' ...
+> WHERE feature_id = ? AND status = 'active'`.
+> **Reason:** Adding `_cascadeIfFeature` to this method without removing the
+> inline cascade would double-write subtasks — the helper's
+> `cascadeFeatureByPlanId` writes the feature + subtasks, then the method's own
+> inline cascade writes the subtasks again. Same transaction, same `now`, so the
+> shared-timestamp gate passes, but it is wasted work and a maintenance trap.
+> **Replaced with:** Refactor `completeMultipleByPlanFile` to **replace** its
+> inline cascade with a call to `_cascadeIfFeature(planId, 'COMPLETED',
+> 'completed')`. Remove the inline `is_feature` query and the hand-rolled
+> `UPDATE ... WHERE feature_id = ?` block. The method becomes: single-row
+> update for non-features, `_cascadeIfFeature` delegation for features — the
+> same shape as the other three writers.
 
 **Edge cases:** a feature with zero subtasks cascades to itself and returns
 `true` — correct, not a special case. A row that no longer exists returns
@@ -187,11 +253,24 @@ row, update active subtasks whose `kanban_column` differs to the feature's
 column, in one transaction per feature. Return the count and log one line per
 feature it changed. Idempotent — a second run changes nothing.
 
-Call it once at startup, after migrations and after the importer's first sweep,
-in **both** composition roots: `src/extension.ts` and
-`src/standalone/bootstrap.ts`. Wiring it in one host only is the exact
-composition-root divergence `CLAUDE.md` names; the seam must appear in both
-diffs.
+Call it once at startup, in **both** composition roots. The two roots have
+different startup sequences:
+
+* **`src/extension.ts`**: runs `db.ensureReady()` (schema migration) at line 711,
+  then `migrateDeprecatedColumns` at 719, then `reconcileHotCold` at 722. Place
+  `reconcileFeatureSubtaskColumns` immediately after `reconcileHotCold` (line
+  ~723), before the first board read. The plan importer is NOT called during
+  activation — `GlobalPlanWatcherService.initialize()` (line 791) triggers
+  `PlanIngestionEngine._runStartupScan()` asynchronously, so the reconciliation
+  runs before the first scan completes, which is correct (it fixes existing DB
+  rows, not pending imports).
+* **`src/standalone/bootstrap.ts`**: runs `db.ensureReady()` at line 511. There
+  are NO migrations and NO `reconcileHotCold` call. Place
+  `reconcileFeatureSubtaskColumns` immediately after `ensureReady()`, before
+  `ingestionEngine.initialize()` (line 830).
+
+Wiring it in one host only is the exact composition-root divergence `CLAUDE.md`
+names; the seam must appear in both diffs.
 
 **Edge cases:** a feature whose own column is empty or invalid is skipped and
 logged, never used as a target. Subtasks with `status != 'active'` are left
@@ -207,7 +286,8 @@ is the "green while incomplete" hole this plan exists to close.
 
 ## Files Changed
 
-* `src/services/KanbanDatabase.ts`
+* `src/services/KanbanDatabase.ts` (delete 2 dead methods, add `_cascadeIfFeature`,
+  refactor `completeMultipleByPlanFile`, add `reconcileFeatureSubtaskColumns`)
 * `src/extension.ts`, `src/standalone/bootstrap.ts` (reconciliation wiring, both roots)
 * `src/test/feature-subtask-column-contract.test.js` — new
 * `package.json`, `.github/workflows/integration-tests.yml` (gate wiring)
@@ -218,25 +298,42 @@ is the "green while incomplete" hole this plan exists to close.
 
 ### Automated
 
-1. **Every feature-blind writer cascades.** For each of the five methods: move a
-   feature with three subtasks, assert all four rows share the new column **and
-   the same `column_entered_at`**. The shared timestamp is the assertion that
-   distinguishes a real cascade from N single-row writes.
-2. **Non-features are untouched.** The same five methods against a plain plan
+1. **Every feature-blind writer cascades.** For each of the three genuinely
+   feature-blind writers (`updateColumnByPlanFileWithReason`, `movePlanByPlanFile`,
+   `archivePlan`): move a feature with three subtasks, assert all four rows share
+   the new column **and the same `column_entered_at`**. The shared timestamp is
+   the assertion that distinguishes a real cascade from N single-row writes.
+2. **`completeMultipleByPlanFile` cascades via the shared primitive.** Move a
+   feature with three subtasks to `COMPLETED`; assert all four rows share the
+   column, status, and `column_entered_at`. Assert the inline cascade block
+   (the old `UPDATE ... WHERE feature_id = ?` inside the method) is gone —
+   `cascadeFeatureByPlanId` is the only cascade path.
+3. **Non-features are untouched.** The same four methods against a plain plan
    update exactly one row.
-3. **Status cascades too.** `archivePlan` and both `completeMultiple*` leave no
-   subtask `active` under a completed feature.
-4. **`updateColumnWithFeatureCascadeByPlanId` is gone** — zero occurrences in
+4. **Status cascades too.** `archivePlan` and `completeMultipleByPlanFile` leave
+   no subtask `active` under a completed feature.
+5. **`updateColumnWithFeatureCascadeByPlanId` is gone** — zero occurrences in
    `src/`, so the caller-supplied-set primitive cannot be reintroduced by
    autocomplete.
-5. **Reconciliation.** Seed a feature in `CODE REVIEWED` with one subtask in
+6. **`completeMultiple` is gone** — zero occurrences in `src/`. The deprecated
+   session-keyed method is deleted alongside the dead cascade primitive.
+7. **Reconciliation.** Seed a feature in `CODE REVIEWED` with one subtask in
    `CODER CODED`; run it; assert the subtask moved and the feature did not. Run
    again; assert zero changes.
-6. **Both roots wire it.** Assert `reconcileFeatureSubtaskColumns` appears in
-   `src/extension.ts` **and** `src/standalone/bootstrap.ts`.
-7. **The invariant holds.** Over a seeded board, assert zero rows where a
+8. **Both roots wire it.** Assert `reconcileFeatureSubtaskColumns` appears in
+   `src/extension.ts` (after `reconcileHotCold`) **and** in
+   `src/standalone/bootstrap.ts` (after `ensureReady()`).
+9. **The invariant holds.** Over a seeded board, assert zero rows where a
    subtask's column differs from its feature's.
-8. **Gate wiring.** The new script is invoked by CI, not merely defined.
+10. **Gate wiring.** The new script is invoked by CI, not merely defined.
+
+### Goal Invariants
+
+1. `updateColumnWithFeatureCascadeByPlanId` is absent from all files in `src/`.
+2. `completeMultiple` (the deprecated session-keyed method) is absent from all files in `src/`.
+3. `reconcileFeatureSubtaskColumns` appears in both `src/extension.ts` and `src/standalone/bootstrap.ts`.
+4. Zero rows in `plans` where `is_feature = 1 AND EXISTS (SELECT 1 FROM plans sub WHERE sub.feature_id = plans.plan_id AND sub.kanban_column != plans.kanban_column AND sub.status = 'active')` after reconciliation.
+5. `completeMultipleByPlanFile` contains no inline `WHERE feature_id = ?` UPDATE — it delegates to `cascadeFeatureByPlanId` via `_cascadeIfFeature`.
 
 ### Manual
 

@@ -56,6 +56,35 @@ answer, and nothing in the service layer ever asked it.
 **Tags:** bugfix, ui, ux
 **Feature:** 73ebf150-50f9-4e8f-b9db-58af49202c6a
 
+## User Review Required
+
+**No.** No open questions. The fix is a one-line predicate change; the optional change 3 is a UX refinement, not a decision that gates the work.
+
+## Complexity Audit
+
+### Routine
+- Dropping the `ready` term from the Launch predicate at `src/webview/mission-control.js:205` — one line.
+- Leaving `mc-ready-mission`, the READY badge, and the `start-ready-mission` schedule action untouched.
+
+### Complex / Risky
+- **Change 3 (optional) must mirror `launchMission`'s member set.** If the no-members disabled state is taken, the UI predicate must compute members as `[...(plans || []), ...(features || [])]` — exactly `KanbanProvider.ts:14571`. A `plans`-only check would light up Launch for a feature-only mission and then fail at the backend, moving the lie from `ready` to `plans`-only.
+- None otherwise — the headline fix has no design surface.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** None. `updateMissionControls` runs synchronously on selection/render; `launchMission` is a separate call.
+- **Security:** None.
+- **Side Effects:** None beyond the intended one — an unready mission with members becomes launchable. `ready`'s real job (filtering unattended/bulk start) is untouched (verification 2).
+- **Dependencies & Conflicts:** None. Independent of the other three subtasks; ships at any point. No shared file writes (`mission-control.js:205` is touched only here).
+
+## Dependencies
+
+- **None.** Independent one-line fix with no upstream or downstream coupling to the front-door, run-sheet, or supervision subtasks. May ship at any point.
+
+## Adversarial Synthesis
+
+Key risk: if the optional change 3 (disable on no-members) is taken, the UI predicate must compute members as `plans ∪ features` matching `launchMission` exactly, or a feature-only mission shows Launch enabled and then fails at the backend. Mitigation: state the member-set computation explicitly in change 3, or leave change 3 untaken. The headline fix (drop `ready`) is sound and needs no further work.
+
 ## Proposed Changes
 
 1. **Drop the `ready` term from the Launch predicate** at `src/webview/mission-control.js:205`:
@@ -97,3 +126,12 @@ answer, and nothing in the service layer ever asked it.
 6. **Both hosts.** `mission-control.js` is served to the extension webview and to standalone via
    `headlessPanelHtml.getMissionControlHtml` (`headlessPanelHtml.ts:233`), so a single edit covers
    both — assert the standalone-served panel carries the same predicate rather than assuming it.
+
+### Goal Invariants
+
+- **`ready` is absent from the `mc-launch` enable predicate** at `src/webview/mission-control.js:205`
+  (negative — the gate is gone from the place the goal says it should not be).
+- **An unready mission with at least one member has Launch enabled** when `status === 'not-started'`
+  (positive — the explicit-launch path works regardless of the flag).
+- **`ready` still gates `start-ready-mission` and `mc-ready-mission`** (positive — the flag's real
+  job survives in the readers that should keep it).

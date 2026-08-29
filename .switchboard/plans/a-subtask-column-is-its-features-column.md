@@ -13,10 +13,10 @@ dispatch candidates, the queue pop, or a "dispatch what is coded" instruction.
 **The containment predicate exists, in exactly one place.** The rule "a subtask
 is contained by its feature and must not also render as loose work" is written
 down as `featureId && !isFeature` and enforced at precisely one call site:
-`KanbanProvider._resolveStageablePlanIds` (`KanbanProvider.ts:8422`), which
+`KanbanProvider._resolveStageablePlanIds` (`KanbanProvider.ts:8415`), which
 refuses to stage a subtask into `STAGING`. Its own docblock states the contract
 ("Features stage as one card; subtasks never stage"), and
-`KanbanDatabase.isMissionMember` (`:11580-11588`) cites it as the reference the
+`KanbanDatabase.isMissionMember` (`:11640-11650`) cites it as the reference the
 mission analogue is modelled on — calling it *"the containment predicate"*.
 
 Every other path has no such check:
@@ -44,7 +44,7 @@ route to the same rogue card.
 Containment is enforced as a **check some callers remember to make**, not as a
 property of the data. Nine-ish paths read plans by column; one of them knows
 about `featureId`. The predicate is not exported, not named, and not shared —
-`KanbanProvider.ts:8422` spells it inline, and the only other mention is a
+`KanbanProvider.ts:8415` spells it inline, and the only other mention is a
 comment in a different file describing what it does.
 
 ---
@@ -52,7 +52,7 @@ comment in a different file describing what it does.
 ## Metadata
 
 **Complexity:** 6
-**Tags:** backend, bug, reliability, data-integrity, api
+**Tags:** backend, bugfix, reliability, database, api
 **Project:** Browser Switchboard
 
 ---
@@ -81,7 +81,7 @@ comment in a different file describing what it does.
 * **Score:** 6 / 10
 
 ### Routine
-* The predicate itself is one line and already written at `KanbanProvider.ts:8422`.
+* The predicate itself is one line and already written at `KanbanProvider.ts:8415`.
 * A refusal branch in a move handler follows the shape of the existing
   `stageableColumns` refusal beside it.
 
@@ -103,8 +103,10 @@ comment in a different file describing what it does.
 * **Shipped state.** Features are on the board in released versions, and at least
   one workspace has a diverged subtask today. Turning on a refusal without
   reconciling first leaves that card unmovable by any route.
-* **Two hosts.** Any refusal added to the HTTP move path must also appear on the
-  extension's own move path, or the same click behaves differently per host.
+* **Two hosts, one choke point + one batch path.** Both hosts' webview-driven
+  moves converge on `moveCardToColumnWithReason` — the refusal there covers both.
+  But the standalone's `moveSessionsToColumn` (`bootstrap.ts:1282`) is a separate
+  batch path that also moves subtasks without refusal. Both must be covered.
 
 ---
 
@@ -122,8 +124,9 @@ comment in a different file describing what it does.
 
 ### Side Effects
 * Any agent skill or script that moves a subtask directly starts receiving a
-  refusal. `.agents/` must be swept for such instructions in the same change, or
-  the refusal turns working automation into a loop of retried failures.
+  refusal. A sweep of `.agents/` found no instruction that tells an agent to
+  move a subtask card directly — the existing guidance says to move the feature.
+  The sweep is a defensive verification, not a known-broken-text fix.
 * `move-card.js` (the sanctioned manual path) gains the refusal, which is the
   point — but its error output must name the feature and the detach escape.
 
@@ -138,34 +141,84 @@ comment in a different file describing what it does.
 
 ---
 
+## Dependencies
+
+_(None — this is a self-contained invariant-enforcement plan. No prerequisite
+sessions. The sibling plan **Every Feature Move Carries Its Subtasks** is not
+blocking; see Dependencies & Conflicts above for the landing-order note.)_
+
+---
+
+## Adversarial Synthesis
+
+Key risks: (1) the orphan guard must be at the refusal site, not in the
+predicate — a pure one-liner returns `true` for orphans, making them unmovable;
+(2) `moveSessionsToColumn` in `bootstrap.ts` is a second standalone move path
+that the original plan missed — without the refusal there, a batch-dispatched
+subtask still moves freely; (3) enumerating every loose-work set by grep is the
+core work — missing one leaves a dispatchable stranded subtask. Mitigations:
+orphan guard as a separate DB lookup step; `moveSessionsToColumn` refusal in the
+same change; grep-based enumeration with a contract test that counts covered
+paths.
+
+---
+
 ## Proposed Changes
 
 ### 1. One exported predicate
 
 Add `isFeatureSubtask(plan): boolean` — `!!plan.featureId && !plan.isFeature` —
-to a single shared module, with a docblock stating the contract: *a subtask is
-contained by its feature; it renders inside the feature, it never counts as
-loose work.* Replace the inline copy at `KanbanProvider.ts:8422` with an import.
+to `src/utils/featureContainment.ts`, following the `src/utils/loopbackHostname.ts`
+single-predicate pattern (one exported function, one contract test that counts
+definitions). The docblock states the contract: *a subtask is contained by its
+feature; it renders inside the feature, it never counts as loose work.* Replace
+the inline copy at `KanbanProvider.ts:8415` with an import.
 
-**Edge cases:** a plan whose `featureId` points at a feature row that no longer
-exists is an orphan, not a subtask — it must return `false` so the card stays
-reachable rather than becoming unmovable and invisible.
+**Edge cases — orphaned subtasks:** a plan whose `featureId` points at a feature
+row that no longer exists is an orphan, not a subtask — it must be movable, not
+refused. The pure predicate `!!plan.featureId && !plan.isFeature` returns `true`
+for an orphan because it only inspects the plan's own fields. The orphan check
+must therefore happen at the **refusal site**, not inside the predicate: before
+refusing, look up whether the feature row exists (`db.getPlanByPlanId(plan.featureId)`).
+If the feature is gone, treat the plan as loose (not a subtask) and allow the
+move. The predicate itself stays pure and one-liner-shaped; the orphan guard is
+a separate step at each refusal site.
 
 ### 2. Refuse a direct subtask column move
 
-At the move handlers — the HTTP `POST /kanban/move` path in `LocalApiServer` and
-the extension's own move path in `KanbanProvider` — refuse when
-`isFeatureSubtask(plan)` and the caller is not the cascade. Return a 4xx naming
-the feature and the detach escape:
+The move architecture converges on **one choke point**:
+`KanbanProvider.moveCardToColumnWithReason` (`KanbanProvider.ts:8264`). Both
+hosts reach it:
+
+* **Extension:** `POST /kanban/move` in `LocalApiServer` delegates to a
+  `moveCard` callback injected by `TaskViewerProvider` (`:3851`), which calls
+  `moveCardToColumnWithReason`.
+* **Standalone:** `POST /kanban/move` returns 503 (no `moveCard` callback is
+  wired in `bootstrap.ts` options). Standalone webview moves go through
+  `kanbanVerb` default → `kanbanProvider.handleServiceVerb` →
+  `moveCardToColumnWithReason` — the same method.
+
+Place the refusal in `moveCardToColumnWithReason`, in the `else` branch (line
+8288) where non-feature plans are moved via `db.updateColumnWithReason`. When
+`isFeatureSubtask(plan)` is true and the orphan guard passes (feature row
+exists), refuse with a 4xx naming the feature and the detach escape:
 
 > `Refused: '<subtask topic>' is a subtask of feature '<feature topic>' and takes
 > its column from that feature. Move the feature, or detach the subtask first.`
 
-Both hosts, one diff. The refusal lives above `KanbanDatabase` so
-`cascadeFeatureByPlanId` is unaffected.
+The refusal lives above `KanbanDatabase` so `cascadeFeatureByPlanId` (which
+writes subtask rows directly in SQL, bypassing the handler layer entirely) is
+unaffected — the cascade never calls `moveCardToColumnWithReason`.
 
-**Edge cases:** a move whose target column equals the feature's current column is
-a no-op, not a refusal — it asks for the state the invariant already wants.
+**Additional standalone path — `moveSessionsToColumn`** (`bootstrap.ts:1282`):
+this is called from the team batch dispatch path (`:2356`). It checks
+`isFeature` and cascades, else does `db.updateColumn(sid, targetColumn)` for
+each non-feature plan. A subtask in the batch moves without refusal. Add the
+same `isFeatureSubtask` + orphan guard check here, in the `else` branch, before
+the `db.updateColumn` call.
+
+**Edge cases:** a move whose target column equals the feature's current column
+is a no-op, not a refusal — it asks for the state the invariant already wants.
 
 ### 3. Exclude subtasks from every loose-work set
 
@@ -178,10 +231,15 @@ feature's children.
 **Edge cases:** a feature whose every subtask is coded is itself the candidate —
 excluding subtasks must not make the feature un-dispatchable.
 
-### 4. Sweep `.agents/` for instructions that move a subtask
+### 4. Verify `.agents/` guidance is consistent
 
-Any skill or workflow text that tells an agent to move a subtask card is now
-wrong. Fix the text in the same change.
+A sweep of `.agents/` skill and workflow files found **no instruction that tells
+an agent to move a subtask card directly.** The existing guidance already says to
+move the feature (subtasks cascade) or use `POST /kanban/move` / `move-card.js`
+(which inherits the cascade). This step is a **defensive verification**, not a
+known-broken-text fix: confirm no skill or workflow text contradicts the refusal
+by instructing a direct subtask move. If any is found, fix it in the same change.
+If none is found (as expected), document the verification in the PR description.
 
 ### 5. Reconcile before enforcing
 
@@ -193,10 +251,12 @@ before the refusal can strand them. If the sibling plan has landed, reuse its
 
 ## Files Changed
 
-* the shared predicate module + `src/services/KanbanProvider.ts`
-* `src/services/LocalApiServer.ts` (move refusal, dispatch/pop exclusion)
-* `src/extension.ts`, `src/standalone/bootstrap.ts` (reconciliation, both roots)
-* `.agents/` skill text referencing subtask card moves
+* `src/utils/featureContainment.ts` — new (exported predicate)
+* `src/services/KanbanProvider.ts` (refusal in `moveCardToColumnWithReason`, predicate import)
+* `src/standalone/bootstrap.ts` (refusal in `moveSessionsToColumn`, reconciliation wiring)
+* `src/services/LocalApiServer.ts` (dispatch/pop exclusion)
+* `src/extension.ts` (reconciliation wiring)
+* `.agents/` skill text (defensive verification only — fix only if contradicts)
 * `src/test/feature-containment-contract.test.js` — new
 * `package.json`, `.github/workflows/integration-tests.yml` (gate wiring)
 
@@ -213,18 +273,28 @@ before the refusal can strand them. If the sibling plan has landed, reuse its
 3. **A no-op move is not refused** — target equal to the feature's column returns
    success.
 4. **An orphaned subtask is movable** — `featureId` pointing at a missing feature
-   returns `false` from the predicate.
+   is not refused by the move handler (the orphan guard at the refusal site
+   allows the move).
 5. **The cascade is not self-refused.** `cascadeFeatureByPlanId` moves subtask
    rows with the refusal active.
 6. **Subtasks are absent from every loose-work set** — dispatch candidates, the
    queue pop, and each column-keyed listing — while the feature is present, and
    while the subtasks still render inside their feature.
-7. **Both hosts refuse identically**: assert the refusal appears on the
-   `LocalApiServer` path and the extension path, and that reconciliation is wired
-   in both composition roots.
+7. **Both hosts refuse identically**: assert the refusal appears in
+   `moveCardToColumnWithReason` (covers extension HTTP + webview, and standalone
+   webview) and in `moveSessionsToColumn` (standalone batch path), and that
+   reconciliation is wired in both composition roots.
 8. **The invariant holds after reconciliation:** zero rows where a subtask's
    column differs from its feature's.
 9. **Gate wiring.** The new script is invoked by CI, not merely defined.
+
+### Goal Invariants
+
+1. `isFeatureSubtask` is defined in exactly one file in `src/` (`src/utils/featureContainment.ts`).
+2. The string `featureId && !isFeature` (or `feature_id` + `is_feature` inline containment logic) appears in zero files in `src/` outside `src/utils/featureContainment.ts` and test files.
+3. A subtask move via `moveCardToColumnWithReason` returns `ok: false` when `isFeatureSubtask(plan)` is true, the feature row exists, and the target column differs from the feature's current column.
+4. A subtask move via `moveCardToColumnWithReason` returns `ok: true` when the feature row does NOT exist (orphan guard).
+5. Zero rows in `plans` where `feature_id != '' AND is_feature = 0 AND kanban_column != (SELECT kanban_column FROM plans WHERE plan_id = feature_id)` after reconciliation.
 
 ### Manual
 
