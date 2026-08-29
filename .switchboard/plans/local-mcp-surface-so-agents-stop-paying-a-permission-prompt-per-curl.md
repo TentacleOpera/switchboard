@@ -2,8 +2,8 @@
 
 ## Goal
 
-Expose Switchboard's common agent operations — read board state, dispatch work, message a lead — as
-a small MCP surface reachable by local coding hosts
+Expose Switchboard's common agent operations — read board state, dispatch work, message a lead, and
+full mission management — as a small MCP surface reachable by local coding hosts
 (Claude Code, Cursor, Windsurf, Codex CLI), via a stdio shim that resolves the dynamic API port at
 call time. The point is not transport — it is **approval surface**: MCP tools are granted once at
 connect time, while every `curl` is a fresh Bash invocation a permission-gating host prompts for.
@@ -69,6 +69,34 @@ for shell access per invocation and for tool access per connection.
 
 **Complexity:** 6
 **Tags:** infrastructure, backend, ux, reliability
+
+### Missions already exist, and their state model needs no MCP surface
+
+Missions are a first-class entity, not a planned one: `missions(id, name, type, goal, ready, team,
+max_extra_worktrees, workspace_id, …)` and `mission_members(mission_id, member_id, member_kind)`
+(`KanbanDatabase.ts:638-639`), with seven endpoints already live — `create`, `update`, `delete`,
+`member/add`, `member/remove`, `GET /kanban/missions`, `GET /kanban/mission/active`. `mission_members`
+is the "membership" `the-automation-model-four-things-not-a-mode-axis.md` means when it says both
+Mission Control flavours are *"bound by the mission's membership"*, and `type` (`'mission'` /
+`'operation'`, with `supervised = type === 'operation'` and `maxExtraWorktrees` clamped 1 / 99) is that
+plan's two flavours already in the schema.
+
+**Two axes, one stored and one derived — and only one is settable.**
+
+| | what it is | stored? | who sets it |
+| :--- | :--- | :--- | :--- |
+| `ready` | intent: "assembled, start when you can" | yes | the human, or `mission_update` |
+| `runState` | fact: `not-started` / `in-flight` / `completed` | **no — derived from member cards** | nobody |
+
+`ready` gates the Launch button (`mission-control.js:205`), shows the READY badge (`:112`), and is what
+the `start-ready-mission` schedule action (`:28`) looks for. `runState` is derived and the code says so
+three times (`KanbanDatabase.ts:11306`, `KanbanProvider.ts:9967`, `:10007` — *"not by writing a status:
+`runState` is derived"*). `GET /kanban/mission/active` is a query over it, not a stored flag: first
+`in-flight`, else the last `not-started`.
+
+So the tool surface exposes `ready` and nothing else about status. There is no `mission_start` and no
+status setter — starting is dispatching the member cards, and progress is read from them. A tool that
+wrote a run state would be inventing the self-report the whole system is built to distrust.
 
 ### Dispatch is the board's motion, not a parallel mechanism
 
@@ -145,13 +173,17 @@ be redundant where it works and unreachable where it would help.
    interpret — and `## Port Discovery` spends a paragraph telling it how.
 
 4. **Keep the surface small and use-case shaped — not endpoint shaped.** The tool list is scoped to
-   three things an agent actually comes to do, not to the API's shape. Three tools:
+   what an agent actually comes to do, not to the API's shape. Seven tools:
 
    | tool | covers | backing |
    | :--- | :--- | :--- |
    | `switchboard_status` | board state **and** the terminal roster in one call — what is ready, what is seated | `_resolveBoard(db)` filtered by column, features read (`:2397`), plus `/health`'s `terminals` / `roots` |
    | `switchboard_dispatch` | move one or more cards to a column **with triggers on** — the board's drag semantics, not a separate mechanism | `performKanbanDispatch(workspaceRoot, ref, rawColumn)`, the documented in-process entry; `auto` column ⇒ complexity routing |
    | `message_terminal` | talk to a lead | `_options.terminalVerb('ptySendPrompt', {name, data, clearBeforePrompt?})` — **never `ptyWrite`** |
+   | `mission_create` | a named goal plus its member cards, in one call | `POST /kanban/mission/create`, then `/kanban/mission/member/add` per member |
+   | `mission_update` | edit name, goal, `type`, `team`, `maxExtraWorktrees`, and the `ready` flag | `POST /kanban/mission/update` |
+   | `mission_members` | add or remove member cards — **arranging cards that already exist** | `POST /kanban/mission/member/{add,remove}` |
+   | `mission_delete` | remove a mission | `POST /kanban/mission/delete` |
 
 A `{method, path}` passthrough remains forbidden — it converts a curated list into the entire
    private API.
@@ -190,7 +222,7 @@ A `{method, path}` passthrough remains forbidden — it converts a curated list 
      `switchboard_status`. Three calls to answer "what is going on" is the endpoint shape leaking into
      the tool shape.
 
-   **The tradeoff, stated plainly:** a three-tool surface leaves some curls in place. That is
+   **The tradeoff, stated plainly:** this surface leaves some curls in place. That is
    deliberate. Every tool costs context in every session that connects, and a tool list that grows
    toward the API becomes a second surface to maintain and a wider standing grant. Coverage is not
    the goal; the common path is. Anything outside it keeps working through the skills, unchanged.
@@ -244,11 +276,11 @@ A `{method, path}` passthrough remains forbidden — it converts a curated list 
   the board's without merging them, because converging them is a refactor with its own risk and
   belongs in its own plan. Worth deciding whether that plan should exist: two implementations of one
   concept is how the agent-facing side drifted from the board's in the first place.
-- **Settled: three tools, use-case shaped.** An earlier revision of this plan recommended re-deriving
+- **Settled: seven tools, use-case shaped.** An earlier revision of this plan recommended re-deriving
   the list from observed call frequency and adding the queue verbs, worktree reads and an orientation
   tool. **That recommendation is withdrawn.** Call frequency measures how repetitive the protocol is,
   not how many distinct things an agent does — the four-line port preamble alone appears six times.
-  Scoping to use cases gives three tools; scoping to call sites gives twenty and a maintenance surface.
+  Scoping to use cases gives seven tools; scoping to call sites gives twenty and a maintenance surface.
 - **Settled: no `plan_read`, and no reports-channel tools.** The parked surface cut plan-content reads
   on network-exposure grounds. Those grounds are weaker on a loopback stdio surface, but the cut
   stands for a better reason — see *The file/state line* below. Recorded here so it is not
