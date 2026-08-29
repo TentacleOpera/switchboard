@@ -4,6 +4,24 @@
 
 Give Switchboard exactly one remote story, as its own subcommand: **`switchboard tailnet`** binds the board to the machine's Tailscale interface and serves it to that tailnet. **`switchboard local`** is the loopback board. Two named modes, no flags to remember. No token, no enrolment, no pairing, no tunnel to maintain. Loopback stays the default. **No other bind address is offered** — not a LAN address, not `0.0.0.0`, not an arbitrary IP. One supported way to be remote, and it is the one that cannot be reached from the internet.
 
+### A fourth guard, and the old story that must retire with this one
+
+**Three guards were identified; there is a fourth.** Even with the bind, the Host allowlist and the
+Origin allowlist changed, `switchboard tailnet` still demands a bearer token — contradicting this
+plan's own help text, *"No token, no enrolment — tailnet membership is the control."* The cause is
+outside the three: `bootstrap.ts:590-603` mints a session token on every standalone launch, so
+`getAuthToken()` is never empty and `_checkAuth`'s loopback-trust branch is unreachable. That is
+`auth-belongs-at-a-boundary-and-a-local-cli-is-not-one.md`, and without it this plan ships a promise
+the server does not keep.
+
+**And the old remote story has to go at the same time.** This plan's problem statement names it —
+`token rotate` documented as enrolling *"a second device"*, `--hostname`, `docs/REMOTE_ACCESS.md` — but
+naming it is not retiring it. Left in place they remain the *documented* path: `REMOTE_ACCESS.md` still
+instructs the reader to `token rotate` *"so the credential survives restarts"*, and `cli.ts:110-120`
+still rejects any `--hostname` that is not a loopback name. A user or agent following the shipped docs
+lands on the token path because it is the only one written down. Retiring them is part of shipping this,
+not a follow-up.
+
 ### The problem, and the root cause
 
 **Remote does not work, and the product is full of remote-shaped features that cannot function.** `token rotate` is documented as enrolling *"a second device"*. `--hostname` exists. `docs/REMOTE_ACCESS.md` is published. There is a `switchboard-remote` skill and a Remote Control feature. Every one of them sits on a transport that accepts connections from exactly one machine.

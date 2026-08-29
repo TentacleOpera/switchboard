@@ -4,6 +4,24 @@
 
 Make every in-tree client of the local API discover and present a credential, via one shared discovery routine per language (bash, Node), so the skills and scripts work identically under both hosts. A 401 must also be reported as a 401 — with the actual remedy — rather than as "the extension isn't running".
 
+### Scope — what survives once the mandatory token goes
+
+`auth-belongs-at-a-boundary-and-a-local-cli-is-not-one.md` identifies why every one of these clients
+401s: `bootstrap.ts:590-603` mints a session token on every standalone launch, so `_checkAuth` never
+reaches its loopback-trust branch. Fixing that at the source repairs *"the entire skill layer is dead on
+the standalone host"* without any client sending a header.
+
+Two parts of this plan survive that and remain worth doing:
+
+- **The 401-reporting fix.** *"A 401 must also be reported as a 401 — with the actual remedy — rather
+  than as 'the extension isn't running'."* Independent of whether auth is on by default; a
+  misdiagnosed error is a bug in any configuration.
+- **The shared discovery routine, one per language.** Still needed for the opt-in case, and still the
+  right answer to seven Node scripts and one bash helper each rolling their own port lookup.
+
+What no longer holds is the framing that this plan is a **precondition** for the skill layer working.
+It is the fix for the configured-token case; the default case is fixed upstream.
+
 ### Problem Analysis
 
 Not one shipped client sends an `Authorization` header.

@@ -8,6 +8,20 @@ Give any process running as the launching user that can read a Switchboard works
 > **Reason:** `0600` permissions restrict file reads to the *launching user*. On a single-user machine (the common case) this is every process. On a multi-user host, a different user can read the workspace directory but not the token file — which is correct behavior (do not hand credentials to a different user on a shared host), but the original phrasing overstated reach. The threat model is single-user loopback; `0600` is the right gate, and the Goal should state it precisely.
 > **Replaced with:** "Give any process running as the launching user that can read a Switchboard workspace a credential it can present to the local API"
 
+### Scope — same machine, and only when a token is configured
+
+**This is not the remote story.** The title reads broader than the plan is: it solves *out-of-process*,
+not *off-machine*. `0600` restricts the file to the launching user, so a process on another machine —
+an agent on a laptop or in the cloud reaching the board over the tailnet — cannot read it and gains
+nothing here. Remote access is `remote-switchboard-is-tailscale-and-nothing-else.md`, where tailnet
+membership is the control and no credential is published at all.
+
+**And it is conditional on a token existing.** `auth-belongs-at-a-boundary-and-a-local-cli-is-not-one.md`
+stops the standalone host minting one unconditionally, which is what makes a local process need a
+credential today. Once that lands, this plan applies only when the user has deliberately configured a
+token — the opt-in case — rather than to every standalone launch. It stays correct; its blast radius
+shrinks from "always" to "when asked for".
+
 ### Problem Analysis
 
 Under `npx switchboard`, an agent running in a process the host did not spawn cannot call the local API at all. Every request 401s, and nothing on disk lets it do better.
