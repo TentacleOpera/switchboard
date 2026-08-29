@@ -177,10 +177,14 @@ The credential difference is the auth model:
 - A **browser** uses the `sb_session` cookie, obtained via the one-time `?token=`
   exchange at launch.
 - An **agent** uses `Authorization: Bearer <token>` — which `_checkAuth`
-  (`src/services/LocalApiServer.ts`) already accepts. Set a durable
-  `switchboard.apiToken` (`npx switchboard token rotate`) so the credential
-  survives restarts; without one the server mints a fresh secret per launch and
-  the agent's token dies on every relaunch.
+  (`src/services/LocalApiServer.ts`) accepts when a token is configured. A
+  durable `switchboard.apiToken` (`npx switchboard token rotate`) is **opt-in**:
+  set one only if you want credential enforcement on loopback (e.g. a second uid
+  on the host you need to exclude). Without one, the server does not mint a
+  secret — loopback callers (CLI, skill scripts, agents on the host) need no
+  credential, because a shell user on the board's machine already has the
+  filesystem, `kanban.db`, and the server process. The single-user loopback
+  threat model is the load-bearing assumption; file permissions are the control.
 
 On a tailnet listener, agents are trusted without a token — same as browsers.
 The tailnet membership is the control.

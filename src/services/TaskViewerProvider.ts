@@ -919,8 +919,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
 
-            const applySO = payload?.standingOrders !== false;
-            const applySeatBlock = payload?.addonsComposed !== true && payload?.seatBlock !== false;
+            const applySO = payload?.standingOrders !== false && !payload?.machineOrigin;
+            const applySeatBlock = payload?.addonsComposed !== true && payload?.seatBlock !== false && !payload?.machineOrigin;
             if (applySO || applySeatBlock) {
                 try {
                     // The LATCHED fleet root — pinned once per extension-host lifetime
@@ -1070,7 +1070,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         // already carries it is untouched. Deliberately NOT inside the
                         // seat-block cache: every dispatch is about a different plan file.
                         // Placed before applyStandingOrders — the SO block must stay last.
-                        if (roleTakesDispatchDirectives(role)) {
+                        if (roleTakesDispatchDirectives(role) && !payload?.machineOrigin) {
                             data = ensureDispatchProtocolDirectives(data);
                         }
                     }

@@ -153,6 +153,45 @@ export function readTeamPacing(group: any): 'head' | 'seat' {
  * Feature completion check runs before all paths.
  */
 export function CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId: string, headName: string): string {
+    return 'When you finish a task, route your completion report based on where the work came from.\n'
+        + 'These routes are EXCLUSIVE: the first one that succeeds ends your report. Do NOT also take\n'
+        + 'the other routes — reporting twice sends duplicate prompts to your lead.\n\n'
+        + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
+        + '   against the port in .switchboard/api-server-port.txt.\n'
+        + '   - If the response shows kanbanColumn is "LEAD CODED", "CODER CODED", or "INTERN CODED",\n'
+        + '     POST /kanban/queue/done with {"from":"<your terminal name>"}.\n'
+        + '     The system will clear your terminal and dispatch the next staged card.\n'
+        + '     A response of {"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
+        + '     If you cannot complete it, POST /kanban/queue/done with\n'
+        + '     {"from":"<your terminal name>","outcome":"failed"} and a one-line reason.\n'
+        + '   - If the response shows any other column, report to your head (step 3).\n\n'
+        + '2. If you do not have a PLAN_ID (ad-hoc prompt, file-based queue item),\n'
+        + '   POST /terminals/teams/' + groupId + '/queue/done with {"from":"<your terminal name>"}.\n'
+        + '   The system will relay your report to your team lead, clear your terminal,\n'
+        + '   and dispatch the next queued item.\n'
+        + '   If the POST fails, report to your head directly (step 3).\n\n'
+        + '3. Fallback (only when steps 1 and 2 did not apply or failed): report to your head ' + headName + '\n'
+        + '   via POST /terminals/verb/ptySendPrompt with\n'
+        + '   {"name":"' + headName + '","data":"<your report>","clearBeforePrompt":false,"machineOrigin":true} —\n'
+        + '   naming what you changed and what to review. Do not wait to be asked.\n\n'
+        + 'Before reporting, if you have a featureId, check GET /kanban/plans?featureId=<your feature id> —\n'
+        + 'if all subtasks are in LEAD CODED, POST /kanban/dispatch with\n'
+        + '{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED","from":"<your terminal name>"}\n'
+        + 'instead of any of the above. The feature is complete — hand it to review.';
+}
+
+/**
+ * The pre-exclusivity body — the exact text `CONTEXT_AWARE_COMPLETION_ORDER_BODY`
+ * produced before routing was made exclusive and `machineOrigin` was added to the
+ * step-3 fallback. Used ONLY by {@link migrateCodingTeamOrders} to recognise
+ * system-installed context-aware completion orders whose frozen instruction text
+ * predates the change, so they can be rewritten to the current body on read.
+ *
+ * This is a recogniser for a system-generated order (id prefix
+ * `context-aware-completion:`), not a frozen prompt snapshot — the same pattern
+ * `migrateCodingTeamOrders` already uses to match reviewer preset text.
+ */
+function LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId: string, headName: string): string {
     return 'When you finish a task, route your completion report based on where the work came from:\n\n'
         + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
         + '   against the port in .switchboard/api-server-port.txt.\n'
@@ -1707,6 +1746,33 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
                 drop.add(o.id);
                 touched = true;
                 continue;
+            }
+        }
+
+        // Context-aware completion order: system-installed (id prefix
+        // `context-aware-completion:`), frozen at install time. The body was
+        // changed to make routing exclusive and add `machineOrigin` to the
+        // step-3 fallback. Rewrite orders whose instruction still carries the
+        // pre-exclusivity text so existing installs get the new routing on
+        // their next message — the install path skips rows that already exist
+        // (line 1564), so without this a re-spawn never updates the text.
+        //
+        // The team-head order's instruction IS the raw body; the team order's
+        // instruction is the body + '\n' + GIT_SAFETY_DIRECTIVE (default
+        // prompt only — a custom-prompt team order is left alone because its
+        // instruction will not match the legacy default). Matching by exact
+        // text, not by id alone, preserves operator customisations.
+        if (typeof o.id === 'string' && o.id.startsWith('context-aware-completion:')) {
+            const gid = o.teamId || '';
+            const head = o.parent || '';
+            const legacyBody = LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head);
+            const currentBody = CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head);
+            if (scope === 'team-head' && o.instruction === legacyBody) {
+                rewrite.set(o.id, currentBody);
+                touched = true;
+            } else if (scope === 'team' && o.instruction === legacyBody + '\n' + GIT_SAFETY_DIRECTIVE) {
+                rewrite.set(o.id, currentBody + '\n' + GIT_SAFETY_DIRECTIVE);
+                touched = true;
             }
         }
     }

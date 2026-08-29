@@ -35,6 +35,7 @@ import {
     getProjectHtml as sharedGetProjectHtml,
     getPanelsManifest as sharedGetPanelsManifest,
     getPanelHtmlById as sharedGetPanelHtmlById,
+    injectBodyAttributes,
     resolveRepoRootFromDir,
     type HostCapabilities,
 } from '../services/headlessPanelHtml';
@@ -246,8 +247,24 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         opts: any,
         applyOrders = true,
         applySeatBlock = true,
-        dispatch?: any
+        dispatch?: any,
+        machineOrigin = false
     ): Promise<ClearReadinessResult | undefined> => {
+        // A machine-origin delivery (a queue/done relay, a coder's fallback
+        // report) carries NONE of the three appends — not standing orders, not
+        // the seat directive block, not the dispatch-protocol directive. All
+        // three exist to equip a seat for work it is about to do; a seat being
+        // told that someone else finished is not about to do that work. Folded
+        // into the two flags here rather than into the branch conditions below
+        // so this host reads the same shape as TaskViewerProvider's twin (which
+        // ANDs `!payload?.machineOrigin` into its `applySO` / `applySeatBlock`
+        // consts) — the source-text gates in
+        // seat-safeguards-fleet-prompt-path.test.js anchor on the literal
+        // `if (applySeatBlock) {`.
+        if (machineOrigin) {
+            applyOrders = false;
+            applySeatBlock = false;
+        }
         // Prune cache against live active fleet
         try {
             const activeHandles = ptyFleetService.listActive();
@@ -362,7 +379,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             // board-composed prompt (which passes false) is not touched, and the
             // turn-end notice (which passes false) never carries a plan-file
             // instruction to a lead.
-            if (roleTakesDispatchDirectives(handle.role || '')) {
+            if (roleTakesDispatchDirectives(handle.role || '') && !machineOrigin) {
                 out = ensureDispatchProtocolDirectives(out);
             }
         }
@@ -542,25 +559,51 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const ingestionEngine = new PlanIngestionEngine(getClickUpService, getLinearService, ingestionHost, getNotionService);
 
     let server: LocalApiServer;
-    const sessionToken = crypto.randomBytes(32).toString('hex');
 
-    // Resolve the durable session token once at boot. The standalone secret store
+    // The terminal WebSocket channel is RCE-grade: a browser page that reached
+    // the loopback listener and then attached to an agent shell could type into
+    // it. That threat is not answered by the OS file-permission boundary that
+    // bounds the HTTP API on a single-user machine, so the terminal gateway keeps
+    // its own always-minted credential — parity with the extension host's ptyHost
+    // child, which mints `_terminalSessionToken` independently of
+    // `switchboard.apiToken` (ptyHost.ts). It is injected into the terminals
+    // panel HTML as a body data-attribute and presented as `?token=` on the
+    // /ws/terminal upgrade, where `authorizeWsUpgrade`'s `rejectWhenTokenEmpty:
+    // true` enforces it. This is deliberately SEPARATE from the HTTP auth token
+    // resolved below — see the plan
+    // `auth-belongs-at-a-boundary-and-a-local-cli-is-not-one.md`. Coupling them
+    // (the previous behaviour, where `resolvedToken` fed both surfaces) is what
+    // made the HTTP token mandatory on loopback: emptying it to gain loopback
+    // trust would also empty the terminal gate and 401 every /ws/terminal
+    // upgrade — terminals that render but never stream.
+    const terminalSessionToken = crypto.randomBytes(32).toString('hex');
+
+    // Resolve the HTTP API auth token once at boot. The standalone secret store
     // may already hold a `switchboard.apiToken` (set via `switchboard secrets set
     // apiToken <value>` or `switchboard token set <value>`); if present and
-    // non-blank after trimming, it becomes the live session secret so the board
-    // survives restarts and a second device can enrol. A whitespace-only value
-    // must fall through to the random token — _checkAuth treats an empty expected
-    // as loopback-trust (allow everything), so a blank stored secret would
-    // silently disable auth on a host serving a browser board.
+    // non-blank after trimming, it becomes the live HTTP session secret so the
+    // board survives restarts and a second device can enrol. When NONE is stored,
+    // `resolvedToken` is `''` — `_checkAuth`'s local-trust branch then fires for
+    // loopback peers (and the tailnet listener bypass fires for tailnet peers),
+    // matching the extension host's historical behaviour. A shell user on the
+    // board's machine already has the filesystem, `kanban.db`, and the server
+    // process; demanding a credential from them guards a door inside a building
+    // they are standing in. A whitespace-only stored value trims to '' and is
+    // treated as "no token" — loopback trust, not a silently-disabled credential
+    // on a browser board (the browser surface is guarded by the Host allowlist
+    // and the planned Sec-Fetch-Site/Origin metadata guard, not by this token).
+    // The token stays opt-in: setting one restores credential enforcement on
+    // loopback (`_checkAuth` still compares the bearer header / sb_session cookie
+    // against a non-empty `expected`).
     const storedApiToken = await secrets.get('switchboard.apiToken').catch(() => undefined);
     const trimmedStored = (storedApiToken || '').trim();
     const usingDurableToken = trimmedStored.length > 0;
-    const resolvedToken = usingDurableToken ? trimmedStored : sessionToken;
+    const resolvedToken = usingDurableToken ? trimmedStored : '';
     if (usingDurableToken) {
         log(opts, `Using durable session token (switchboard.apiToken from secret store).`);
         log(opts, `Pre-existing switchboard.apiToken adopted as the board's session secret.`);
     } else {
-        log(opts, `No durable token configured — using ephemeral session token (per-launch).`);
+        log(opts, `No durable token configured — loopback callers need no credential (single-user trust). Set one with 'npx switchboard token rotate' to opt into credential enforcement.`);
     }
 
     // Enrolment tokens: single-use, short-TTL, minted on demand. The boot-time
@@ -927,6 +970,27 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
         const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps());
         if (!result) { return null; }
+        if (id === 'terminals' && terminalSessionToken) {
+            // The terminal WS channel is RCE-grade and keeps its own credential,
+            // independent of the HTTP auth token (see the terminalSessionToken
+            // comment above). Carried as a body data-attribute — NOT an inline
+            // <script> — because the terminals panel serves a nonce-based CSP
+            // (headlessPanelHtml.getTerminalsHtml), so a nonce-less inline script
+            // is blocked outright and the token would never reach terminals.js.
+            // A data-attribute is not script, so no CSP interaction. terminals.js
+            // reads document.body.dataset.terminalToken and appends `&token=` to
+            // the /ws/terminal upgrade URL, which authorizeWsUpgrade checks
+            // against the gateway's terminalSessionToken. Parity with the
+            // extension host's TaskViewerProvider injection. Without this, the
+            // browser would fall back to the sb_session cookie, which is empty
+            // under loopback trust (no HTTP token) and would 401 against the
+            // gateway's rejectWhenTokenEmpty guard — terminals that render but
+            // never stream. The token is hex (crypto.randomBytes) so it needs no
+            // escaping, but it is stripped to alphanumerics anyway to keep that a
+            // local property.
+            const attrSafeToken = terminalSessionToken.replace(/[^a-zA-Z0-9]/g, '');
+            return { ...result, html: injectBodyAttributes(result.html, `data-terminal-token="${attrSafeToken}"`) };
+        }
         return result;
     };
 
@@ -2097,7 +2161,8 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             },
                             payload.standingOrders !== false,
                             true,
-                            payload.dispatch
+                            payload.dispatch,
+                            payload.machineOrigin === true
                         );
                         // A CLI that exits during boot aborts delivery — the prompt
                         // was never written. Report an error so the caller knows.
@@ -2206,7 +2271,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const workspaceId = await getWorkspaceId();
                     if (!workspaceId) { return { success: false, error: 'No workspace ID' }; }
 
-                    const records: any[] = [];
+                    let records: any[] = [];
                     if (sessionIds.length > 0) {
                         for (const sid of sessionIds) {
                             const p = await db.getPlanBySessionId(sid);
@@ -2918,7 +2983,7 @@ Each plan file must include:
     // router destroys `/ws/terminal` outright — the same posture the extension host
     // has, rather than a gateway that accepts sockets for a fleet that can't spawn.
     const terminalWsGateway = ptyReady
-        ? new TerminalWsGateway(ptyFleetService, async () => resolvedToken)
+        ? new TerminalWsGateway(ptyFleetService, async () => terminalSessionToken)
         : undefined;
 
     // Terminal log writer — tees flushed pty output to per-session markdown files

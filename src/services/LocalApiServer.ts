@@ -446,7 +446,7 @@ interface LocalApiServerOptions {
      * Optional — absent in headless/test harnesses (no broadcast, pop still
      * proceeds).
      */
-    onWorkingStateCleared?: (record: any, workspaceRoot: string) => void;
+    onWorkingStateCleared?: (record: any, workspaceRoot: string, meta?: { planCount?: number }) => void;
     /**
      * Fired when a seat's turn ends via queue/done. Mirrors
      * PlanIngestionEngine._turnEndNotifier → notifyTurnEnd + handleAutobanTurnEnd.
@@ -1137,12 +1137,27 @@ export class LocalApiServer {
         // that listener and that peer set; a global `return true` here would also
         // disable the token for the loopback listener and for `Authorization:
         // Bearer` machine callers, which is a different and much larger change.
-        // The extension host has no token at all (getAuthToken → '' → the early
-        // return below), so this bypass is load-bearing only on the standalone
-        // host, where a durable/random token would otherwise 401 the tablet.
+        // This bypass is load-bearing whenever a configured token would otherwise
+        // 401 a legitimate tailnet peer — primarily the standalone host in durable
+        // mode, where `resolvedToken` is non-empty and a tablet on the tailnet
+        // must not be asked for a credential the network already proved. Without
+        // it a durable token would 401 the tablet.
         if (this._isTailnetSocket(req)) { return true; }
         const expected = await this._options.getAuthToken();
-        // Extension path: no token configured => keep the historical loopback-trust behavior.
+        // Local-trust path: no token configured => trust the local peer. This
+        // branch fires for two boundaries the deployment already chose, both of
+        // which a credential would add nothing to on a single-user machine:
+        //   (1) loopback — the request reached a socket bound to 127.0.0.1/::1,
+        //       where the caller already has the filesystem, kanban.db, and the
+        //       server process (file permissions are the control);
+        //   (2) the tailnet listener — handled by the bypass above (tailnet
+        //       membership is the control).
+        // On the extension host getAuthToken() is always '' (no token setter UI),
+        // so this branch has always been the live path there. On the standalone
+        // host it is now reachable too: bootstrap.ts resolves `resolvedToken` to
+        // '' when no durable `switchboard.apiToken` is stored, instead of minting
+        // a random secret unconditionally. Setting a durable token opts back into
+        // credential enforcement — the `expected` comparison below then runs.
         if (!expected) { return true; }
 
         // Standalone path: accept either an Authorization: Bearer <token> header or the
@@ -1174,13 +1189,15 @@ export class LocalApiServer {
         return false;
     }
 
-    // NOTE: The extension host has no API-token setter UI, so getAuthToken() is
-    // empty there and auth is localhost-trust. The standalone host, however,
-    // resolves a durable or ephemeral session token at boot (bootstrap.ts), so
-    // this 401 fires whenever a request lacks a valid Bearer header or sb_session
-    // cookie. A blank/empty expected token falls through to loopback-trust —
-    // bootstrap.ts guards against this by trimming the stored value and falling
-    // back to a random token when it is blank.
+    // NOTE: Both hosts now share the same auth posture. getAuthToken() returns ''
+    // when no durable `switchboard.apiToken` is stored — on the extension host
+    // (no token setter UI) and on the standalone host (bootstrap.ts no longer
+    // mints a random secret unconditionally). In that state _checkAuth's
+    // local-trust branch fires and this 401 never reaches a loopback caller.
+    // This 401 fires only when a durable token IS configured and the request
+    // lacks a valid Bearer header or sb_session cookie — the opt-in credential
+    // path. bootstrap.ts trims the stored value and treats whitespace-only as
+    // "no token" (loopback trust) rather than a silently-blank credential.
     private _sendUnauthorized(res: http.ServerResponse): void {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -3442,6 +3459,7 @@ export class LocalApiServer {
                                 data: relayMsg,
                                 clearBeforePrompt: false,
                                 standingOrders: false,
+                                machineOrigin: true,
                             }, workspaceRoot);
                             if (relayRes?.success === false) {
                                 console.warn(`[LocalApiServer] queue/done relay to team lead '${relayHead}' failed: ${relayRes.error || 'unknown error'} (seat '${from}').`);
@@ -5644,6 +5662,7 @@ export class LocalApiServer {
                                 data: relayMsg,
                                 clearBeforePrompt: false,
                                 standingOrders: false,
+                                machineOrigin: true,
                             }, workspaceRoot);
                         } catch (relayErr) {
                             console.warn('[LocalApiServer] queue/done relay to lead failed:', relayErr);
@@ -7944,7 +7963,15 @@ export class LocalApiServer {
         // when serving the browser board (standalone), because the extension's
         // existing scripts rely on raw 127.0.0.1:<port> Host values and never
         // send a non-localhost Host. Under the tailnet policy the tailnet
-        // address and MagicDNS names also pass.
+        // address and MagicDNS names also pass. This guard is gated on
+        // `serveStatic`, NOT on auth — it runs regardless of whether a token is
+        // configured, so the browser surface's cross-site / rebinding defence
+        // stays live when the HTTP token is empty (loopback trust). The token
+        // never covered the browser case; after bootstrap.ts stopped minting an
+        // unconditional session secret, assuming it did would be actively wrong.
+        // The planned Sec-Fetch-Site/Origin metadata guard
+        // (browser-board-csrf-cross-site-rejection.md) must likewise be
+        // credential-independent when it lands.
         if (this._options.serveStatic && !this._isAllowedHost(req.headers['host'])) {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Access denied: invalid Host header' }));

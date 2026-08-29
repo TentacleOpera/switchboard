@@ -1163,6 +1163,10 @@ export class PlanIngestionEngine {
                     `[GlobalPlanWatcher] regenerateFeatureFile failed for ${featureRow.planId}: ${regenErr instanceof Error ? regenErr.message : String(regenErr)}`
                 );
             }
+        } catch (e) {
+            this._host.logger.appendLine(
+                `[GlobalPlanWatcher] _applyFeatureLink failed for ${relativePath}: ${e instanceof Error ? e.message : String(e)}`
+            );
         }
     }
 
