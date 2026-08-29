@@ -3,8 +3,8 @@
 ## Goal
 
 Mount a small MCP surface on `LocalApiServer` so Claude Desktop can drive the board. Desktop is the
-only host in use that has no shell and no filesystem reach into the workspace, so it is the only one
-that cannot use the CLI, `curl`, or the skill layer. Every other host has a terminal and is better
+only host in use with no shell, so it is the only one that cannot use the CLI, `curl`, or the skill
+layer — while still reading plan content directly from a connected workspace folder. Every other host has a terminal and is better
 served by `board-commands-in-the-switchboard-cli.md`.
 
 ### Problem Analysis
@@ -45,6 +45,12 @@ fetch originates from the vendor's servers, which is why Gemini Spark was parked
 not rescue that case either. The audience is an MCP-capable application running as a process on the
 user's own machine, without a shell. Claude Desktop is that, and the user reports it as a significant
 surface.
+
+**It is not, however, cut off from the workspace.** Desktop reads local files through connected
+folders — a grant separate from MCP. So the gap this plan fills is narrower and cleaner than "Desktop
+can see nothing": it has the *files* and lacks the *board*. Column, membership, `dispatched_at` and the
+terminal roster live in `kanban.db`, and dispatch is an action, not a file. That is precisely the
+MCP-shaped remainder.
 
 ### Root Cause
 
@@ -102,12 +108,24 @@ reintroduce them.
    derived from them (`KanbanDatabase.ts:11306`). A tool that wrote a run state would invent the
    self-report the system is built to distrust.
 
-3. **The file/state line — and why it is different here.** The rule elsewhere is "if it is a file, the
-   host reads it natively." Claude Desktop has no workspace filesystem access, so plan bodies, the
-   reports directory and `session.md` are unreachable to it by any means. That is a real gap and this
-   plan does **not** close it by adding `plan_read` — read tools are a separate decision with their own
-   grant implications. State the limitation plainly: Desktop can see and move work, not read its
-   contents.
+3. **The file/state line applies here too — via connected folders.** Claude Desktop reads local files
+   when the user grants a folder, through a mechanism separate from MCP (the parked bridge plan records
+   the same split for Spark: *"local disk access is a separate, unrelated mechanism (Settings →
+   Connected Folders, native macOS permissions)"*). So the rule that governs every other host governs
+   this one unchanged:
+
+   | lives in | reached by |
+   | :--- | :--- |
+   | plan `.md` bodies, `.switchboard/mission-control/reports/*`, `session.md`, feature files | **the connected folder** |
+   | column, feature membership, `dispatched_at`, terminal roster | **MCP** |
+   | dispatch, mission mutation, messaging a seat | **MCP** |
+
+   `plan_read` therefore stays out for the same reason it stays out everywhere — not as a limitation
+   accepted, but because the workspace already answers it. MCP is for what is not a file.
+
+   **Setup is two grants, both one-time:** the `/mcp` endpoint, and the workspace folder. Document them
+   together — an endpoint without the folder gives an assistant that can dispatch work it cannot read,
+   which is the shape that would read as "buggy" all over again.
 
 4. **Dispatch means what dragging a card means.** The board's drop path (`KanbanProvider.ts:11604`) is
    the reference implementation: complexity-route, visible-agent check, move, fire. `_cliTriggersEnabled`
@@ -147,9 +165,6 @@ reintroduce them.
 
 ## Outstanding Questions
 
-- **[user] Is Desktop's read gap acceptable for v1?** Without `plan_read` it can see titles, columns and
-  membership but not plan bodies — enough to triage and dispatch, not enough to review. If reviewing
-  from Desktop is the point, that changes the tool list.
 - **[user] Does the connector UI come back?** The old *"Connect Claude Desktop"* button is what wrote the
   twelve entries. A one-URL config could equally be copy-paste from the Setup panel, which has no
   cleanup problem because it writes nothing.
