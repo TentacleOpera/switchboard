@@ -69,6 +69,29 @@ for shell access per invocation and for tool access per connection.
 **Complexity:** 6
 **Tags:** infrastructure, backend, ux, reliability
 
+### The file/state line
+
+The tool surface follows one rule, and it is the rule that decides every future addition:
+
+> **If it is a file in the workspace, the host reads it natively. MCP is for what is not a file.**
+
+A local agent's Read/Write/Glob are not shell invocations, so they cost no permission prompt — the
+friction this plan exists to remove simply does not apply to them. MCP earns its place only where the
+answer lives somewhere the filesystem cannot show:
+
+| lives in | examples | surface |
+| :--- | :--- | :--- |
+| workspace files | plan `.md` bodies, `.switchboard/mission-control/reports/*`, claim markers, `session.md` | **host's native tools** |
+| `kanban.db` / runtime | column, feature membership, `dispatched_at`, terminal roster, worktrees | **MCP** |
+| side effects | card moves, dispatch, queue verbs, terminal sends, lifecycle | **MCP** |
+
+This is why `plans_list` and `features_list` belong and `plan_read` does not: the `.md` holds the
+plan's **content**, the database holds **where it is**. And it removes the reports channel from the
+candidate list — that directory is files, and claiming one is a file write.
+
+A cloud agent cannot reach `127.0.0.1` (park reason 1 of the bridge plan), so a plan-read tool would
+be redundant where it works and unreachable where it would help.
+
 ## Proposed Changes
 
 1. **Mount a `/mcp` route on `LocalApiServer` using Streamable HTTP.** The parked plan's change 1
@@ -164,12 +187,12 @@ for shell access per invocation and for tool access per connection.
   callers are `switchboard-orchestration/SKILL.md` (21 curls) and
   `switchboard-mission-control-http/SKILL.md` (21), whose traffic is dominated by `GET /health`
   orientation, board reads, the queue verbs (`queue/next`, `stageForQueue`), the
-  `mission-control/{adopt,confirm,handoff}` lifecycle, worktree reads and the reports channel — **none
-  of which are in the twelve**. So v1 as scoped removes perhaps half the prompts. Recommend adding a
+  `mission-control/{adopt,confirm,handoff}` lifecycle and worktree reads — **none of which are in the
+  twelve**. (The reports channel is excluded by *The file/state line*, not by scope.) So v1 as scoped removes perhaps half the prompts. Recommend adding a
   read-only orientation tool (`health`, wrapping the call the run-sheet plan makes the single entry
   point) and the queue/lifecycle verbs, and re-deriving the list from *observed call frequency* rather
   than inheriting a list designed for a different consumer. Confirm before implementation.
-- **[user] Plan-content reads were cut deliberately** from the parked surface, on the grounds that a
-  network-reachable curated list must not become the private API. On a loopback-only stdio surface
-  that reasoning is weaker. Reinstating `plan_read` would remove a large share of the remaining curls;
-  it also widens the grant. Your call — the plan currently keeps the cut.
+- **Settled: no `plan_read`, and no reports-channel tools.** The parked surface cut plan-content reads
+  on network-exposure grounds. Those grounds are weaker on a loopback stdio surface, but the cut
+  stands for a better reason — see *The file/state line* below. Recorded here so it is not
+  reintroduced as a convenience.
