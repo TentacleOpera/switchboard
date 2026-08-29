@@ -49,7 +49,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // four-site-convention hole the loader closed.
 import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
-import { resolveWorkContext, resolveTeamGroupForTerminal } from './workContextResolver';
+import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets } from './workContextResolver';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -60,7 +60,7 @@ import { KanbanProvider } from './KanbanProvider';
 import type { SetupPanelProvider } from './SetupPanelProvider';
 import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock, clearTerminalInputLine, CLEAR_INPUT_LINE, CLEAR_INPUT_SETTLE_MS, SUBMIT_SETTLE_MS } from './terminalUtils';
 import { buildFetchPlansPrompt, buildReconcilePrompt, buildTeamAutomationPrompt } from './schedulerPresets';
-import { PipelineOrchestrator } from './PipelineOrchestrator';
+import { nextCronTime } from './cronUtils';
 import {
     CustomAgentConfig,
     CustomAgentAddons,
@@ -134,13 +134,7 @@ import {
     buildAutobanBroadcastState,
     getNextAutobanTerminalName,
     MAX_AUTOBAN_TERMINALS_PER_ROLE,
-    normalizeAutobanBatchSize,
     normalizeAutobanConfigState,
-    SingleColumnAutobanConfig,
-    normalizeSingleColumnConfig,
-    DEFAULT_SINGLE_COLUMN_CONFIG,
-    AUTOBAN_SOURCE_COLUMN,
-    AUTOBAN_RUN_SHEET_TICK_KEY,
     MissionControlConfig,
     DEFAULT_MISSION_CONTROL_CONFIG,
     MISSION_CONTROL_TERMINAL_NAME,
@@ -255,6 +249,16 @@ type ConfiguredKanbanDispatchOptions = {
     analysisScope?: string | null;
     /** When true, the dispatched improver is running unattended and must not ask in chat. */
     unattended?: boolean;
+    /**
+     * The terminal that *requested* this dispatch (the caller), threaded from
+     * `POST /kanban/dispatch`'s `originTerminal` / `POST /kanban/queue/next`'s
+     * `from`. The roster barrier uses it to exclude the caller from its own
+     * clear: a lead that dispatches to its own coder must not be cleared by
+     * that dispatch. Absent on operator-driven (board drag) paths, where the
+     * current behaviour — clear the whole active roster minus the destination
+     * — is correct.
+     */
+    originTerminal?: string;
 };
 
 type ClickUpSetupColumnState = {
@@ -408,6 +412,12 @@ export { explicitScopeValue, resolvePtyClearDelay, resolvePtyClearPolicy, type P
 type DirectPushDelivery = {
     clearBeforePrompt?: boolean;
     standingOrders?: false;
+    /**
+     * The terminal that requested this dispatch (the caller). Threaded into
+     * the `ptySendPrompt` payload as `origin` so the roster barrier can
+     * exclude it from the clear set. Absent on operator-driven paths.
+     */
+    originTerminal?: string;
 };
 
 /**
@@ -552,6 +562,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._lastWorkContextByTerminal.clear();
             this._lastWorkContextByTeam.clear();
             this._teamPreparationChains.clear();
+            this._deferredClearsByTeam.clear();
         }
 
         // Append seat-scoped directive block AND standing-orders block at the
@@ -711,8 +722,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     const lastTeamWorkKey = this._lastWorkContextByTeam.get(teamId);
 
                     if (lastTeamWorkKey === workContextKey) {
-                        // Same feature/work context: preserve context across coder reports, review, fixes, and handoffs
-                        payload = { ...payload, clearBeforePrompt: false };
+                        // Same feature/work context: preserve context across coder reports, review, fixes, and handoffs.
+                        // Intercept: if the destination is in the team's deferred-clear set,
+                        // override to clearBeforePrompt: true and remove it from the set. The
+                        // delivery path already does readiness-gated clears — no sweep hook, no
+                        // timer. A deferred seat that is never dispatched to again is cleared by
+                        // the next feature run's barrier (different work-context key).
+                        const deferredSet = this._deferredClearsByTeam.get(teamId);
+                        if (deferredSet && deferredSet.has(payload.name) && clearEnabled) {
+                            deferredSet.delete(payload.name);
+                            if (deferredSet.size === 0) { this._deferredClearsByTeam.delete(teamId); }
+                            payload = { ...payload, clearBeforePrompt: true };
+                        } else {
+                            payload = { ...payload, clearBeforePrompt: false };
+                        }
                     } else {
                         // New feature/work context enters the team: prepare entire roster barrier once
                         let prevChain = this._teamPreparationChains.get(teamId) || Promise.resolve();
@@ -726,16 +749,42 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             }
                             // Clear all active roster members concurrently
                             const listed = await this._ptyHostVerb('ptyListTerminals', {});
+                            const allTerminals = listed?.terminals || [];
                             const liveActiveNames = new Set<string>(
-                                (listed?.terminals || [])
+                                allTerminals
                                     .filter((t: any) => t.status === 'active')
                                     .map((t: any) => t.friendlyName)
                             );
-                            // SIBLINGS ONLY. The destination is excluded: it is about to receive
-                            // a prompt, so its clear belongs to the delivery path, which is the one
-                            // place a clear is followed by a write with no gap. Mirrors bootstrap.ts.
-                            const activeMembers = roster.filter(name => liveActiveNames.has(name) && name !== payload.name);
-                            if (activeMembers.length > 0) {
+                            // Build the busy set from lastDataAt: a seat is mid-turn when
+                            // `now - lastDataAt < livenessWindowMs` (recently emitting) OR
+                            // `lastDataAt === 0` (no heartbeat data — "no evidence" is not
+                            // "at rest", matching the sweep's own `lastDataAt > 0` guard).
+                            const livenessWindowMs = vscode.workspace.getConfiguration('switchboard').get<number>('activityLight.livenessWindowMs', 90000);
+                            const nowMs = Date.now();
+                            const busySet = new Set<string>(
+                                allTerminals
+                                    .filter((t: any) => t.status === 'active' && typeof t.lastDataAt === 'number')
+                                    .filter((t: any) => t.lastDataAt === 0 || (nowMs - t.lastDataAt) < livenessWindowMs)
+                                    .map((t: any) => t.friendlyName)
+                            );
+                            // Shared pure helper: both hosts produce byte-identical target sets
+                            // for identical inputs. Excludes the destination (delivery path owns
+                            // its clear) and the origin (the caller must not be cleared by its
+                            // own dispatch). Busy seats are deferred, not skipped.
+                            const { toClear, deferred } = computeRosterClearTargets({
+                                roster,
+                                liveActive: liveActiveNames,
+                                destination: payload.name,
+                                origin: payload.origin,
+                                busySet,
+                            });
+                            // Record deferred seats for the same-feature branch intercept.
+                            if (deferred.length > 0) {
+                                const deferredSet = this._deferredClearsByTeam.get(teamId) || new Set<string>();
+                                for (const name of deferred) { deferredSet.add(name); }
+                                this._deferredClearsByTeam.set(teamId, deferredSet);
+                            }
+                            if (toClear.length > 0) {
                                 // Arm the curtain on EVERY roster pane before any clear I/O
                                 // starts. Without this the extension host runs a multi-second
                                 // Devin barrier with a dead-looking board, while the standalone
@@ -745,9 +794,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 const teamOpId = `ext-team-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
                                 const teamStartAt = Date.now();
                                 const cliFamilyByName = new Map<string, string>(
-                                    (listed?.terminals || []).map((t: any) => [t.friendlyName, t.cliFamily || 'unknown'])
+                                    allTerminals.map((t: any) => [t.friendlyName, t.cliFamily || 'unknown'])
                                 );
-                                for (const name of activeMembers) {
+                                for (const name of toClear) {
                                     const prepMsg = {
                                         type: 'terminalDispatchPreparing',
                                         operationId: teamOpId,
@@ -763,7 +812,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 let teamErr: Error | null = null;
                                 try {
                                     results = await Promise.all(
-                                        activeMembers.map(name => this.clearTerminalContext(dispatchWsRoot, name))
+                                        toClear.map(name => this.clearTerminalContext(dispatchWsRoot, name))
                                     );
                                     // Correlate by INDEX: the result objects carry
                                     // {cleared,error,reason} and no seat name, so
@@ -772,14 +821,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                     // error text twice and the seat never.
                                     const failedIdx = results.findIndex(r => r && r.cleared === false && r.error);
                                     if (failedIdx >= 0) {
-                                        teamErr = new Error(`Team preparation clear failed for '${activeMembers[failedIdx]}': ${results[failedIdx].error}. Aborting dispatch.`);
+                                        teamErr = new Error(`Team preparation clear failed for '${toClear[failedIdx]}': ${results[failedIdx].error}. Aborting dispatch.`);
                                         throw teamErr;
                                     }
                                 } catch (err: any) {
                                     teamErr = teamErr || err;
                                     throw err;
                                 } finally {
-                                    activeMembers.forEach((name, i) => {
+                                    toClear.forEach((name, i) => {
                                         const finishMsg = {
                                             type: 'terminalDispatchFinished',
                                             operationId: teamOpId,
@@ -795,7 +844,46 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                     });
                                 }
                             }
-                            this._lastWorkContextByTeam.set(teamId, workContextKey);
+                            // Report deferred seats on the same lifecycle event with a
+                            // distinct reason so the pane shows "deferred" rather than a
+                            // silent success.
+                            if (deferred.length > 0) {
+                                const deferOpId = `ext-team-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                                const deferStartAt = Date.now();
+                                const cliFamilyByName = new Map<string, string>(
+                                    allTerminals.map((t: any) => [t.friendlyName, t.cliFamily || 'unknown'])
+                                );
+                                for (const name of deferred) {
+                                    const prepMsg = {
+                                        type: 'terminalDispatchPreparing',
+                                        operationId: deferOpId,
+                                        terminalName: name,
+                                        cliFamily: cliFamilyByName.get(name) || 'unknown',
+                                        teamName: teamId,
+                                        phase: 'clearing',
+                                    };
+                                    this.postMessage(prepMsg, SURFACES.terminals);
+                                    this._broadcaster?.push(prepMsg, SURFACES.terminals);
+                                    const finishMsg = {
+                                        type: 'terminalDispatchFinished',
+                                        operationId: deferOpId,
+                                        terminalName: name,
+                                        success: true,
+                                        reason: 'deferred',
+                                        elapsedMs: Math.max(0, Date.now() - deferStartAt),
+                                    };
+                                    this.postMessage(finishMsg, SURFACES.terminals);
+                                    this._broadcaster?.push(finishMsg, SURFACES.terminals);
+                                }
+                            }
+                            // Record the work-context key only when the barrier actually
+                            // cleared someone OR there was nobody to clear (roster already
+                            // clean). When every active member was busy (toClear empty,
+                            // deferred non-empty), the run is NOT prepared — leave the key
+                            // unrecorded so the next dispatch can try again.
+                            if (toClear.length > 0 || deferred.length === 0) {
+                                this._lastWorkContextByTeam.set(teamId, workContextKey);
+                            }
                         });
                         this._teamPreparationChains.set(teamId, prepPromise.catch(() => {}));
                         try {
@@ -1435,6 +1523,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _lastWorkContextByTerminal = new Map<string, string>();
     private _lastWorkContextByTeam = new Map<string, string>();
     private _teamPreparationChains = new Map<string, Promise<void>>();
+    /**
+     * Per-team deferred-clear sets: seats that were mid-turn when the roster
+     * barrier fired and could not be cleared. The same-feature branch
+     * intercept checks this set before each dispatch and overrides
+     * `clearBeforePrompt` to `true` for a deferred seat, then removes it —
+     * the delivery path already does readiness-gated clears. A deferred seat
+     * that is never dispatched to again is cleared by the next feature run's
+     * barrier (different work-context key → barrier fires → clears if at
+     * rest).
+     */
+    private _deferredClearsByTeam = new Map<string, Set<string>>();
 
     /**
      * Liveness snapshot cache (all statuses), refreshed from the same
@@ -1516,25 +1615,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // This survives workspace switches because it's derived from the actual
     // running terminal, not from the currently-selected workspace's state.json.
     private _terminalAgentInfo = new Map<string, { role: string; displayName: string }>();
-    private _pipeline: PipelineOrchestrator;
     private _tombstones: Set<string> = new Set();
     private _tombstonesReady: Promise<void> | null = null;
-    // Autoban continuous background polling engine
-    // Note: _autobanTimers may contain mixed setTimeout (resume one-shot) and setInterval (regular tick) handles.
-    // V8's clearInterval/clearTimeout are interchangeable, so clearInterval works for both.
-    private _autobanTimers = new Map<string, NodeJS.Timeout>();
-    private _autobanLastTickAt = new Map<string, number>();
-    // WHEN control: cron-driven timer (replaces the fixed interval when whenSchedule is set).
-    private _whenScheduleTimer?: NodeJS.Timeout;
-    // Serialization queue: ensures only one column tick runs at a time to prevent terminal dispatch contention.
-    private _autobanTickQueue: Promise<void> = Promise.resolve();
     private _autobanState: AutobanConfigState = normalizeAutobanConfigState();
     private _missionControlSessionState: 'none' | 'interviewing' | 'armed' | 'handed-off' = 'none';
-    private _singleColumnAutobanState: SingleColumnAutobanConfig = DEFAULT_SINGLE_COLUMN_CONFIG;
-    private _migratedBoardBatchNotice: string | undefined;
-    private _droppedCustomJobsNotice: string | undefined;
-    private _retiredAutomationModeNotice: string | undefined;
-    private _recurringJobsResumedNotice: string | undefined;
     private _postAutobanStateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private _activeDispatchSessions = new Map<string, string>();
 
@@ -1542,8 +1626,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _dispatchCardId(card: KanbanDispatchCard): string {
         return card.planId || card.sessionId;
     }
-    // Safety-net sweep: checks every 60s whether source columns are empty and stops autoban if so.
-    private _autobanEmptyColumnSweepTimer?: NodeJS.Timeout;
     // ─── Survivor scheduler state ──────────────────────────────────────────
     // fetch-plans and reconcile have no interval of their own. They used to ride
     // the run-sheet tick; the run sheet is being deleted as a decision structure,
@@ -1697,89 +1779,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // stranding the row on a path that no longer exists.
         void this._migratePlannerWorkflowPathDbTiers()
             .then(() => this._migratePlannerWorkflowPathWorkflowsToSkills());
-        this._pipeline = new PipelineOrchestrator(
-            () => this._postPipelineState(),
-            async (role, sessionId, instruction) => {
-                const dispatched = await this._handleTriggerAgentActionInternal(role, sessionId, instruction);
-                if (!dispatched) {
-                    throw new Error(`Pipeline dispatch failed for role '${role}' in session '${sessionId}'.`);
-                }
-            },
-            async (sheet) => {
-                const sessionId = String(sheet?.sessionId || '').trim();
-                if (!sessionId) {
-                    return false;
-                }
-                const workspaceRoot = await this._resolveWorkspaceRootForSession(sessionId);
-                return this._isAcceptanceTesterActive(workspaceRoot || undefined);
-            },
-            () => {
-                const root = this._resolveWorkspaceRoot();
-                return root ? this._getSessionLog(root).getRunSheets() : Promise.resolve([]);
-            },
-            this._context.globalState
-        );
         // Restore persisted Autoban state
         const savedAutoban = this._context.workspaceState.get<Partial<AutobanConfigState>>('autoban.state');
         this._autobanState = normalizeAutobanConfigState(savedAutoban);
 
-        // Restore persisted Single Column state
-        const savedSingleColumn = this._context.workspaceState.get<Partial<SingleColumnAutobanConfig>>('singleColumn.autoban.state');
-        this._singleColumnAutobanState = normalizeSingleColumnConfig(savedSingleColumn);
-
-        // One-time board-batch migration: if a board-batch job exists in the raw
-        // persisted scheduler config, migrate its interval into the run-sheet
-        // schedule (singleColumnConfig.intervalMinutes) and leave automation OFF.
-        // The read-filter drops the job on subsequent reads; this reads the raw
-        // file once to capture the interval before it disappears. The notice is
-        // latched behind the same guard so it shows exactly once — on the
-        // activation that performed the migration — and never on restarts after.
-        const migratedInterval = GlobalIntegrationConfigService.getMigratedBoardBatchInterval();
-        const alreadyMigrated = this._context.workspaceState.get<boolean>('boardBatch.migrated') === true;
-        if (migratedInterval !== undefined && !alreadyMigrated) {
-            this._singleColumnAutobanState = { ...this._singleColumnAutobanState, intervalMinutes: migratedInterval };
-            void this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
-            void this._context.workspaceState.update('boardBatch.migrated', true);
-            this._migratedBoardBatchNotice = `Board-batch job migrated: run-sheet interval set to ${migratedInterval} min. Automation is off until you start it.`;
-        }
-
-        // One-time notice for dropped `custom` scheduler jobs. Reads the raw
-        // config (bypassing the DROPPED_SOURCES filter) so the labels are
-        // visible. Latches behind a workspaceState flag so it shows on exactly
-        // one activation — the same pattern boardBatch.migrated uses.
-        const alreadyNoticedCustom = this._context.workspaceState.get<boolean>('customJobs.dropped') === true;
-        if (!alreadyNoticedCustom) {
-            const droppedLabels = GlobalIntegrationConfigService.getDroppedCustomJobLabels();
-            if (droppedLabels.length > 0) {
-                this._droppedCustomJobsNotice = `Custom scheduler job${droppedLabels.length > 1 ? 's' : ''} stopped: ${droppedLabels.join(', ')}. The job record${droppedLabels.length > 1 ? 's are' : ' is'} preserved in integration-config.json but no longer run — the scheduler surface has been retired.`;
-            }
-            void this._context.workspaceState.update('customJobs.dropped', true);
-        }
-
-        // One-time notice for a retired automationMode. The normalizer already
-        // forced enabled: false — this latch controls the DISPLAY so the notice
-        // shows on exactly one activation, not every restart. Same pattern as
-        // boardBatch.migrated and customJobs.dropped.
-        const alreadyNoticedRetiredMode = this._context.workspaceState.get<boolean>('retiredAutomationMode.noticed') === true;
-        if (!alreadyNoticedRetiredMode) {
-            if (this._autobanState.retiredAutomationModeNotice) {
-                this._retiredAutomationModeNotice = this._autobanState.retiredAutomationModeNotice;
-            }
-            void this._context.workspaceState.update('retiredAutomationMode.noticed', true);
-        }
-
-        // One-time notice for recurring jobs resuming on upgrade from external mode.
-        const alreadyNoticedRecurringResumed = this._context.workspaceState.get<boolean>('recurringJobsResumed.noticed') === true;
-        if (!alreadyNoticedRecurringResumed) {
-            if (this._autobanState.recurringJobsResumedNotice) {
-                this._recurringJobsResumedNotice = this._autobanState.recurringJobsResumedNotice;
-            }
-            void this._context.workspaceState.update('recurringJobsResumed.noticed', true);
-        }
-
         // Ensure pair programming defaults to OFF on load regardless of previous session state
         this._autobanState.pairProgrammingMode = 'off';
-
     }
 
 
@@ -1829,15 +1834,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         void this._validateNoSwitchboardPollution();
 
         this._initEventHandlers();
-    }
-
-    public getAutomationMode(): string | undefined {
-        // The mode axis is deleted. Return a synthetic value for backward compat
-        // with callers that still read this — the two switches map back to the
-        // old modes so the panel can render during the transition.
-        if (this._autobanState.missionControlArmed) { return 'agent-managed'; }
-        if (this._autobanState.enabled) { return 'scheduled'; }
-        return 'external';
     }
 
     /**
@@ -2070,22 +2066,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 console.warn(`[TaskViewerProvider] turn-end delivery to '${recipientName}' failed:`, err);
             }
         })().catch(e => console.error('[TaskViewerProvider] turn-end notify failed:', e));
-    }
-
-    /**
-     * Turn-end notifier: called from inside the turn-end notifier closure
-     * (extension.ts / bootstrap.ts) when a seat finishes its turn.
-     *
-     * The dispatch arm is deleted — the schedule calls the queue pop, and a
-     * self-pacing lead calls it directly. Turn-end detection survives to drive
-     * the activity light and feed subtask 3's queue watch. This method is now
-     * a no-op for dispatch purposes; it remains as the notifier hook so the
-     * turn-end signal path stays intact.
-     */
-    public handleAutobanTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string }): void {
-        // Turn-end detection survives, but completion-driven dispatch is deleted.
-        // The schedule calls the queue pop; a self-pacing lead calls it directly.
-        // Nothing to do here — the notifier hook stays for the activity light.
     }
 
     private _initEventHandlers() {
@@ -3572,10 +3552,32 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (payload.addonsComposed !== undefined) { delete payload.addonsComposed; }
                 if (payload.seatBlock !== undefined) { delete payload.seatBlock; }
             }
+            // Detect boot phase: a first delivery (promptCount === 0) gets the
+            // cold-boot first-readiness gate inside sendPromptToPty, which
+            // suppresses the clear and waits for the CLI to produce output.
+            // Change 1 kills the curtain's only trigger (isClearing) on new
+            // seats, so arm on boot phase too — with a distinct phase so the
+            // pane shows "starting up" rather than "resetting context" for a
+            // cold boot. The fleet list query is best-effort: a failure leaves
+            // isBooting false and falls back to the isClearing path.
+            let isBooting = false;
+            if (verb === 'ptySendPrompt' && typeof payload?.name === 'string') {
+                try {
+                    const fleetRes = await this._ptyHostVerb('ptyListTerminals', {});
+                    if (fleetRes?.success && Array.isArray(fleetRes.terminals)) {
+                        const target = fleetRes.terminals.find((t: any) => t.friendlyName === payload.name);
+                        if (target && target.promptCount === 0) {
+                            isBooting = true;
+                        }
+                    }
+                } catch { /* fleet query is best-effort for curtain phase */ }
+            }
             const isClearing = verb === 'ptySendPrompt' && payload?.clearBeforePrompt === true;
-            const opId = (verb === 'ptySendPrompt' && payload?.operationId) || (isClearing ? `ext-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` : undefined);
+            const shouldArmCurtain = isClearing || isBooting;
+            const curtainPhase = isBooting ? 'booting' : 'clearing';
+            const opId = (verb === 'ptySendPrompt' && payload?.operationId) || (shouldArmCurtain ? `ext-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` : undefined);
             const startAt = Date.now();
-            if (isClearing && opId) {
+            if (shouldArmCurtain && opId) {
                 const prepMsg = {
                     type: 'terminalDispatchPreparing',
                     operationId: opId,
@@ -3585,7 +3587,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // resolves the family from its own fleet list (ptyListTerminals,
                     // host-resolved) when the event does not name one.
                     cliFamily: 'unknown',
-                    phase: 'clearing',
+                    phase: curtainPhase,
                 };
                 this.postMessage(prepMsg, SURFACES.terminals);
                 this._broadcaster?.push(prepMsg, SURFACES.terminals);
@@ -3594,7 +3596,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             try {
                 result = await this._ptyHostVerb(verb, payload, signal);
             } finally {
-                if (isClearing && opId) {
+                if (shouldArmCurtain && opId) {
                     const finishMsg = {
                         type: 'terminalDispatchFinished',
                         operationId: opId,
@@ -3810,8 +3812,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             },
             onTurnEndNotify: (info) => {
                 this.notifyTurnEnd(info);
-                this.handleAutobanTurnEnd(info);
             },
+            onTeamReleased: async (wsRoot, teamMemberNames) => this.clearAdvanceWhenReadyJobs(wsRoot, teamMemberNames),
             notifyOperator: (wsRoot, message) => this.notifyOperator(wsRoot, message),
             createExternalTeam: async (wsRoot, template, headName, featureId) =>
                 this.instantiateExternalTeam(wsRoot || effectiveRoot, template, headName, featureId),
@@ -7074,6 +7076,7 @@ Each plan file must include:
             targetTerminalOverride: options.targetTerminalOverride,
             persistColumnOnError: true,
             unattended: options.unattended,
+            originTerminal: options.originTerminal,
         };
 
         if (options.dragDropMode === 'prompt') {
@@ -11089,11 +11092,6 @@ Each plan file must include:
     }
 
     private async _persistAutobanState(): Promise<void> {
-        // The mode axis is deleted — always sync single-column state.
-        this._singleColumnAutobanState.enabled = this._autobanState.enabled;
-        this._singleColumnAutobanState.batchSize = this._autobanState.batchSize;
-        this._singleColumnAutobanState.complexityFilter = this._autobanState.complexityFilter;
-        await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
         await this._context.workspaceState.update('autoban.state', this._autobanState);
     }
 
@@ -11335,167 +11333,6 @@ Each plan file must include:
         };
     }
 
-    private async _stopAutobanWithMessage(message: string, level: 'info' | 'warning' = 'warning'): Promise<void> {
-        this._autobanState = normalizeAutobanConfigState({
-            ...this._autobanState,
-            enabled: false
-        });
-        this._stopAutobanEngine(message);
-        await this._persistAutobanState();
-        this._postAutobanState();
-        if (level === 'info') {
-            this._showTemporaryNotification(message);
-            return;
-        }
-        this._seams().ui.showWarningMessage(message);
-    }
-
-    private async _stopAutobanForNoValidTickets(): Promise<void> {
-        await this._stopAutobanWithMessage('Autoban stopped: no more valid tickets remain in enabled columns.', 'info');
-    }
-
-    private _getEnabledAutobanSourceColumns(): string[] {
-        // The run sheet and per-column rules are deleted. The schedule dispatches
-        // via the queue pop, which reads STAGING / PLAN REVIEWED directly. This
-        // helper remains for the empty-column sweep, which checks whether any
-        // source column still has eligible cards.
-        return [AUTOBAN_SOURCE_COLUMN];
-    }
-
-    private _getEligibleAutobanCards(cardsInColumn: KanbanDispatchCard[]): KanbanDispatchCard[] {
-        return [...cardsInColumn]
-            .sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''))
-            .filter(card => this._activeDispatchSessions.get(this._dispatchCardId(card)) !== card.sourceColumn);
-    }
-
-    private async _selectAutobanPlanReviewedCards(
-        workspaceRoot: string,
-        eligibleCards: KanbanDispatchCard[],
-        batchSize: number
-    ): Promise<Array<{ sessionId: string; planId: string; complexity: string; sourceColumn: string; planFile?: string }>> {
-        const complexityFilter = this._autobanState.complexityFilter;
-        const selectedCards: Array<{ sessionId: string; planId: string; complexity: string; sourceColumn: string; planFile?: string }> = [];
-
-        for (const card of eligibleCards) {
-            let complexity: string = '8'; // default to high
-            try {
-                if (card.planFile) {
-                    complexity = await this._kanbanProvider!.getComplexityFromPlan(workspaceRoot, card.planFile);
-                    if (complexity === 'Unknown') complexity = '8';
-                }
-            } catch {
-                complexity = '8';
-            }
-
-            if (!this._autobanMatchesComplexityFilter(complexity, complexityFilter)) {
-                continue;
-            }
-
-            selectedCards.push({ sessionId: this._dispatchCardId(card), planId: card.planId, complexity, sourceColumn: card.sourceColumn, planFile: card.planFile });
-            if (selectedCards.length >= batchSize) {
-                break;
-            }
-        }
-
-        return selectedCards;
-    }
-
-    private async _autobanColumnHasEligibleCards(
-        sourceColumn: string,
-        cardsInColumn: KanbanDispatchCard[],
-        workspaceRoot: string
-    ): Promise<boolean> {
-        const eligibleCards = this._getEligibleAutobanCards(cardsInColumn);
-        if (eligibleCards.length === 0) {
-            return false;
-        }
-
-        if (sourceColumn !== 'PLAN REVIEWED' || !this._kanbanProvider) {
-            return true;
-        }
-
-        const selectedCards = await this._selectAutobanPlanReviewedCards(workspaceRoot, eligibleCards, 1);
-        return selectedCards.length > 0;
-    }
-
-    private async _autobanHasEligibleCardsInEnabledColumns(workspaceRoot: string): Promise<boolean> {
-        const enabledColumns = this._getEnabledAutobanSourceColumns();
-        if (enabledColumns.length === 0) {
-            return false;
-        }
-
-        const { cardsInColumn, currentColumnBySession } = await this._collectKanbanCardsInColumns(workspaceRoot, enabledColumns);
-        this._releaseSettledDispatchLocks(currentColumnBySession);
-
-        const cardsByColumn = new Map<string, KanbanDispatchCard[]>();
-        for (const card of cardsInColumn) {
-            const columnCards = cardsByColumn.get(card.sourceColumn) || [];
-            columnCards.push(card);
-            cardsByColumn.set(card.sourceColumn, columnCards);
-        }
-
-        for (const column of enabledColumns) {
-            if (await this._autobanColumnHasEligibleCards(column, cardsByColumn.get(column) || [], workspaceRoot)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private async _stopAutobanIfNoValidTicketsRemain(workspaceRoot: string): Promise<boolean> {
-        if (!this._autobanState.enabled) {
-            return false;
-        }
-        // A Mission Control is still working the board (grouping plans,
-        // handling judgement transitions), so an empty column is not a stop
-        // condition while one is armed. The user stops it via the toggle.
-        if (this.isOversightAgentRunning()) {
-            return false;
-        }
-        // The schedule now pops the STAGING session queue, so "no work left"
-        // has to include the queue. Checking only the `rules` columns is the
-        // run sheet's question, and it has the worst possible answer for the
-        // headline flow: stage five plans into STAGING with CREATED and PLAN
-        // REVIEWED empty, and this sweep turns the schedule off within 60s —
-        // silently, while the work the user just staged sits there.
-        if (await this._autobanHasStagedQueueCards(workspaceRoot)) {
-            return false;
-        }
-        const hasEligible = await this._autobanHasEligibleCardsInEnabledColumns(workspaceRoot);
-        console.log(`[Autoban] Empty-column check: eligible=${hasEligible}`);
-        if (hasEligible) {
-            return false;
-        }
-        await this._stopAutobanForNoValidTickets();
-        return true;
-    }
-
-    /**
-     * True when the STAGING session queue holds at least one un-dispatched
-     * top-level card — the same predicate `dispatchNextFromQueue` pops with
-     * (column STAGING, no `dispatchedAt`, empty `featureId`). Read directly
-     * from the board so it cannot disagree with the pop.
-     */
-    private async _autobanHasStagedQueueCards(workspaceRoot: string): Promise<boolean> {
-        try {
-            const db = await this._getKanbanDb(workspaceRoot);
-            if (!db) { return false; }
-            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
-            const board: any[] = (await db.getBoard?.(wsId)) || [];
-            return board.some((p: any) =>
-                p && p.kanbanColumn === 'STAGING'
-                && !p.dispatchedAt
-                && (!p.featureId || p.featureId === '')
-            );
-        } catch (err) {
-            // Unreadable board is no evidence. Treat it as "there may be work"
-            // rather than stopping the schedule off a transient read failure.
-            console.warn('[Autoban] Staged-queue check failed:', err);
-            return true;
-        }
-    }
-
     private async _createAutobanTerminal(role: string, requestedName?: string, cwd?: string, skipStatePoolUpdate: boolean = false, reveal: boolean = true): Promise<{ role: string; name: string } | undefined> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
@@ -11635,14 +11472,7 @@ Each plan file must include:
     }
 
     private _getAutobanBroadcastState(): AutobanConfigState {
-        return buildAutobanBroadcastState({
-            ...this._autobanState,
-            singleColumnConfig: this._singleColumnAutobanState,
-            migratedBoardBatchNotice: this._migratedBoardBatchNotice,
-            droppedCustomJobsNotice: this._droppedCustomJobsNotice,
-            retiredAutomationModeNotice: this._retiredAutomationModeNotice,
-            recurringJobsResumedNotice: this._recurringJobsResumedNotice
-        }, this._autobanLastTickAt.entries());
+        return buildAutobanBroadcastState(this._autobanState);
     }
 
     /**
@@ -11701,13 +11531,6 @@ Each plan file must include:
             .catch(() => { /* best-effort — role scan is the fallback */ });
     }
 
-    private _postPipelineState(): void {
-        this.postMessage({
-            type: 'pipelineState',
-            state: this._pipeline.getState()
-        });
-    }
-
     /** Restore Autoban engine if it was running before reload. */
     /**
      * Public entry for hosts with no sidebar webview.
@@ -11727,37 +11550,7 @@ Each plan file must include:
             await this._pruneStaleBackupRegistry(workspaceRoot);
         }
         this._kanbanProvider?.updateAutobanConfig(this._getAutobanBroadcastState());
-        if (this._autobanState.enabled && !this._autobanState.paused) {
-            this._startAutobanEngine();
-        }
-        // Survivor jobs (fetch-plans, reconcile) run on their own
-        // activation-scoped timer, independent of the schedule engine — a cloud
-        // VM pushes plans whether or not a queue is running. Started here so a
-        // restart re-arms it; stopped only on dispose.
         this._startSurvivorJobsTimer();
-    }
-
-    /** Called by Kanban controls strip to toggle the shared Autoban engine state. */
-    public async setAutobanEnabledFromKanban(enabled: boolean): Promise<void> {
-        // The mode axis is deleted. This toggle controls the schedule switch
-        // only. Mission Control switch is controlled separately (via
-        // setAutomationModeFromKanban or the Start/Stop Mission Control buttons).
-        const wasEnabled = this._autobanState.enabled;
-        this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, enabled });
-
-        if (enabled && !wasEnabled) {
-            this._startAutobanEngine();
-        } else if (!enabled && wasEnabled) {
-            this._autobanState.paused = false;
-            delete this._autobanState.pausedRemainingMs;
-            this._stopAutobanEngine();
-        } else if (enabled) {
-            // Preserve existing behavior when config changes while enabled.
-            this._startAutobanEngine();
-        }
-
-        await this._persistAutobanState();
-        this._postAutobanStateNow();
     }
 
     /**
@@ -12326,110 +12119,6 @@ Each plan file must include:
         }
     }
 
-    public async setAutomationModeFromKanban(msg: any): Promise<void> {
-        // The mode axis is deleted. Two independent switches:
-        //  - scheduleEnabled (on/off, with interval or cron)
-        //  - missionControlArmed (on/off, with wake interval)
-        // Both can be on simultaneously. The UI sends these flags directly;
-        // a legacy `mode` field is mapped for backward compatibility.
-
-        // Backward compat: map old mode field to the new switches.
-        if (msg.mode && msg.scheduleEnabled === undefined && msg.missionControlArmed === undefined) {
-            if (msg.mode === 'scheduled') { msg.scheduleEnabled = msg.enabled ?? true; msg.missionControlArmed = false; }
-            else if (msg.mode === 'agent-managed') { msg.scheduleEnabled = false; msg.missionControlArmed = msg.enabled ?? true; }
-            else if (msg.mode === 'external') { msg.scheduleEnabled = false; msg.missionControlArmed = false; }
-        }
-
-        const wasEnabled = this._autobanState.enabled;
-        if (wasEnabled) {
-            this._stopAutobanEngine();
-        }
-
-        // Schedule switch
-        const scheduleEnabled = msg.scheduleEnabled === undefined ? this._autobanState.enabled : !!msg.scheduleEnabled;
-        const intervalMinutes = msg.intervalMinutes || this._singleColumnAutobanState.intervalMinutes || 10;
-        const batchSize = msg.batchSize || this._singleColumnAutobanState.batchSize || 1;
-        const complexityFilter = msg.complexityFilter || this._singleColumnAutobanState.complexityFilter || 'all';
-        const routingMode = msg.routingMode || this._autobanState.routingMode || 'dynamic';
-
-        this._singleColumnAutobanState = {
-            ...this._singleColumnAutobanState,
-            enabled: scheduleEnabled,
-            intervalMinutes,
-            batchSize,
-            complexityFilter
-        };
-        await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
-
-        // Orchestrator switch
-        const missionControlArmed = msg.missionControlArmed === undefined ? !!this._autobanState.missionControlArmed : !!msg.missionControlArmed;
-        const orchIntervalMinutes = msg.orchIntervalMinutes || this._autobanState.missionControlConfig?.intervalMinutes || 10;
-
-        this._autobanState = normalizeAutobanConfigState({
-            ...this._autobanState,
-            enabled: scheduleEnabled,
-            missionControlArmed,
-            batchSize,
-            complexityFilter,
-            routingMode,
-            singleColumnConfig: this._singleColumnAutobanState,
-            missionControlConfig: { intervalMinutes: orchIntervalMinutes }
-        });
-
-        if (scheduleEnabled) {
-            this._startAutobanEngine();
-        }
-
-        await this._persistAutobanState();
-        this._postAutobanStateNow();
-    }
-
-    public async updateAutobanConfigFromKanban(state: any): Promise<void> {
-        this._autobanState = normalizeAutobanConfigState({
-            ...this._autobanState,
-            ...state
-        });
-        if (this._autobanState.paused && this._autobanState.pausedRemainingMs) {
-            const updatedRemaining: Record<string, number> = {};
-            for (const [column, oldRemaining] of Object.entries(this._autobanState.pausedRemainingMs)) {
-                const rule = this._autobanState.rules[column];
-                if (rule?.enabled) {
-                    const intervalMs = Math.max(rule.intervalMinutes, 1) * 60 * 1000;
-                    // Cap remaining time to the new interval
-                    updatedRemaining[column] = Math.min(oldRemaining, intervalMs);
-                }
-            }
-            this._autobanState.pausedRemainingMs = updatedRemaining;
-        }
-        await this._persistAutobanState();
-        this._postAutobanStateNow();
-    }
-
-    /**
-     * Set the WHEN schedule for the run sheet. null = OFF (continuous,
-     * completion-paced); a 5-field cron string = ON (fires on the cron line).
-     * Persists alongside singleColumnConfig and restarts the engine if running
-     * so the new schedule takes effect immediately.
-     */
-    public async setWhenSchedule(schedule: string | null): Promise<void> {
-        const validated = schedule && schedule.trim() ? schedule.trim() : null;
-        // Validate the cron expression if non-null.
-        if (validated) {
-            const next = TaskViewerProvider._nextCronTime(validated);
-            if (!next) {
-                this._seams().ui.showWarningMessage(`Invalid cron expression: "${validated}". Use standard 5-field cron (minute hour day month weekday).`);
-                return;
-            }
-        }
-        this._singleColumnAutobanState = { ...this._singleColumnAutobanState, whenSchedule: validated };
-        void this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
-        // Restart the engine if enabled so the new schedule takes effect.
-        if (this._autobanState.enabled) {
-            this._startAutobanEngine();
-        }
-        this._postAutobanStateNow();
-    }
-
     /** Called by Kanban controls strip to set Pair Programming mode. */
     public async setPairProgrammingMode(mode: string): Promise<void> {
         const valid = ['off', 'cli-cli', 'cli-ide', 'ide-cli', 'ide-ide'];
@@ -12623,133 +12312,6 @@ Each plan file must include:
         return false;
     }
 
-    /** Called by Kanban reset-timer button to restart countdown intervals and fire an immediate tick. */
-    public async resetAutobanTimersFromKanban(): Promise<void> {
-        if (!this._autobanState.enabled) { return; }
-        // The mode axis is deleted — no mode gate. The schedule runs whenever
-        // enabled is true.
-
-        if (this._autobanState.paused) {
-            this._autobanState.paused = false;
-            delete this._autobanState.pausedRemainingMs;
-        }
-
-        // Clear only the setInterval timers — do NOT clear the tick queue or dispatch guards.
-        for (const [, timer] of this._autobanTimers) {
-            clearInterval(timer);
-        }
-        this._autobanTimers.clear();
-
-        // Restart the run-sheet clock. When WHEN is set, do NOT fire an
-        // immediate tick — the run sheet fires only on the cron line.
-        const { batchSize } = this._autobanState;
-        const intervalMinutes = Math.max(this._singleColumnAutobanState.intervalMinutes || 10, 1);
-        const whenSchedule = this._singleColumnAutobanState.whenSchedule;
-
-        if (whenSchedule) {
-            const installed = this._startWhenScheduleTimer();
-            if (!installed) {
-                // Invalid cron — fall back to interval mode.
-                console.error(`[Autoban] WHEN schedule "${whenSchedule}" is invalid — falling back to interval mode (${intervalMinutes}m).`);
-                this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-                void this._scheduleQueuePop();
-                const timer = setInterval(() => {
-                    void this._scheduleQueuePop();
-                }, intervalMinutes * 60 * 1000);
-                this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
-            }
-        } else {
-            this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-            void this._scheduleQueuePop();
-            const timer = setInterval(() => {
-                void this._scheduleQueuePop();
-            }, intervalMinutes * 60 * 1000);
-            this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
-        }
-
-        await this._persistAutobanState();
-        this._postAutobanStateNow();
-    }
-
-    public async setAutobanPausedFromKanban(paused: boolean): Promise<void> {
-        if (paused) {
-            if (!this._autobanState.enabled) { return; }
-            this._autobanState.pausedRemainingMs = this._autobanState.pausedRemainingMs || {};
-            // Bank the remaining time on the run-sheet clock so resume restarts the
-            // countdown where it left off rather than from a full interval.
-            for (const [key, timer] of this._autobanTimers) {
-                const lastTickAt = this._autobanLastTickAt.get(key) ?? Date.now();
-                const intervalMs = Math.max(this._singleColumnAutobanState.intervalMinutes || 10, 1) * 60 * 1000;
-                this._autobanState.pausedRemainingMs[key] = Math.max(0, (lastTickAt + intervalMs) - Date.now());
-                clearInterval(timer);
-            }
-            this._autobanTimers.clear();
-            this._clearWhenScheduleTimer();
-            if (this._autobanEmptyColumnSweepTimer) {
-                clearInterval(this._autobanEmptyColumnSweepTimer);
-                this._autobanEmptyColumnSweepTimer = undefined;
-            }
-            this._autobanState.paused = true;
-        } else {
-            if (!this._autobanState.paused) { return; }
-            // Resume is a THIRD timer-install path alongside _startAutobanEngine
-            // and resetAutobanTimersFromKanban, and the run sheet is SCHEDULED
-            // mode's clock alone. `paused` survives a switch into external or
-            // agent-managed (only `enabled` is touched), so without this the
-            // resume branch below installs a live run-sheet interval in a mode
-            // that must run none. Clear the paused flag so the state is honest,
-            // The mode axis is deleted — no mode gate.
-            this._autobanState.paused = false;
-            const whenSchedule = this._singleColumnAutobanState.whenSchedule;
-            if (whenSchedule) {
-                // WHEN mode: restart the cron timer. Do NOT fire an immediate
-                // tick — the schedule fires only on the cron line.
-                const installed = this._startWhenScheduleTimer();
-                if (!installed) {
-                    // Invalid cron — fall back to interval mode and fire immediately.
-                    const intervalMinutes = Math.max(this._singleColumnAutobanState.intervalMinutes || 10, 1);
-                    console.error(`[Autoban] WHEN schedule "${whenSchedule}" is invalid — falling back to interval mode (${intervalMinutes}m).`);
-                    this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-                    void this._scheduleQueuePop();
-                    const timer = setInterval(() => {
-                        void this._scheduleQueuePop();
-                    }, intervalMinutes * 60 * 1000);
-                    this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
-                }
-            } else if (this._autobanState.pausedRemainingMs) {
-                const remainingMs = this._autobanState.pausedRemainingMs[AUTOBAN_RUN_SHEET_TICK_KEY];
-                const intervalMs = Math.max(this._singleColumnAutobanState.intervalMinutes || 10, 1) * 60 * 1000;
-                // Clock mode: resume the countdown where it was paused, then fall
-                // back into the regular interval.
-                const resumeIn = Number.isFinite(remainingMs) ? Math.max(0, remainingMs) : intervalMs;
-                this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now() - (intervalMs - resumeIn));
-                const timeoutHandle = setTimeout(() => {
-                    void this._scheduleQueuePop();
-                    const intervalHandle = setInterval(() => {
-                        void this._scheduleQueuePop();
-                    }, intervalMs);
-                    this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, intervalHandle);
-                }, resumeIn);
-                this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timeoutHandle);
-            }
-            if (!this._autobanEmptyColumnSweepTimer) {
-                this._autobanEmptyColumnSweepTimer = setInterval(async () => {
-                    if (this._autobanState.enabled) {
-                        const workspaceRoot = this._resolveWorkspaceRoot();
-                        if (workspaceRoot) {
-                            await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
-                        }
-                    }
-                }, 60_000);
-            }
-            delete this._autobanState.pausedRemainingMs;
-        }
-        await this._persistAutobanState();
-        this._postAutobanStateNow();
-    }
-
-
-
     /**
      * Dispatch a prompt to the coder terminal. Resolution considers both terminal
      * sets (fleet + VS Code) with live-first/fleet-wins precedence.
@@ -12777,66 +12339,6 @@ Each plan file must include:
     /** Public accessor for role resolution (used by command handlers) */
     public async getAgentNameForRole(role: string, workspaceRoot?: string): Promise<string | undefined> {
         return this._getAgentNameForRole(role, workspaceRoot);
-    }
-
-    /** Column-to-role mapping for Autoban dispatches.
-     *  Delegates unconditionally to columnToPromptRole to avoid a dual source-of-truth.
-     *  columnToPromptRole handles all built-in columns and custom_agent_* columns;
-     *  returns null for unmapped custom columns. */
-    private _autobanColumnToRole(column: string): string | null {
-        return columnToPromptRole(column);
-    }
-
-    private _autobanMatchesComplexityFilter(
-        complexity: string,
-        filter: AutobanConfigState['complexityFilter']
-    ): boolean {
-        if (filter === 'all') return true;
-
-        let score = parseComplexityScore(complexity);
-        if (score === 0) score = 8; // Treat Unknown as High for filtering
-
-        switch (filter) {
-            case 'low_and_below':
-                return score <= 4;
-            case 'medium_and_below':
-                return score <= 6;
-            case 'medium_and_above':
-                return score >= 5;
-            case 'high_and_above':
-                return score >= 7;
-            default:
-                return true;
-        }
-    }
-
-    private _autobanRoutePlanReviewedCard(
-        complexity: string,
-        routingMode: AutobanConfigState['routingMode']
-    ): 'intern' | 'coder' | 'lead' {
-        if (routingMode === 'all_coder') {
-            return 'coder';
-        }
-        if (routingMode === 'all_lead') {
-            return 'lead';
-        }
-        const score = parseComplexityScore(complexity);
-        if (this._kanbanProvider) {
-            return this._kanbanProvider.resolveRoutedRole(score);
-        }
-        // Fallback: no KanbanProvider available — use default routing with pair bypass
-        let role = scoreToRoutingRole(score);
-        const isPairMode = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
-        if (isPairMode && role === 'intern') {
-            role = 'coder';
-        }
-        return role;
-    }
-
-    /** Column-to-instruction mapping for Autoban dispatches. */
-    private _autobanColumnToInstruction(column: string): string | undefined {
-        if (column === 'CREATED') { return 'improve-plan'; }
-        return undefined;
     }
 
     private async _collectKanbanCardsInColumns(
@@ -13976,354 +13478,6 @@ Each plan file must include:
         return uniqueColumns.sort((a, b) => a.localeCompare(b)).join(' + ');
     }
 
-    /**
-     * The schedule's dispatch path. Instead of walking the run sheet, the
-     * interval and cron timers call this — which resolves the live coding head
-     * (lead first, then coder — the same order `runQueue` uses) and calls
-     * `dispatchNextFromQueue` up to `batchSize` times. Each 409 (team in
-     * flight) or empty-queue result stops the loop: the pop's serialization is
-     * the only guard, and a refused pop is a normal outcome, not an error.
-     *
-     * No head live → no-op (the schedule will try again next tick). This is
-     * NOT an error: a schedule running with no team seated is a config issue
-     * the user sees in the panel, not a crash.
-     */
-    private async _scheduleQueuePop(): Promise<void> {
-        if (!this._autobanState.enabled || this._autobanState.paused) { return; }
-        const workspaceRoot = this._resolveWorkspaceRoot();
-        if (!workspaceRoot) { return; }
-        const apiServer = this._localApiServer;
-        if (!apiServer || typeof apiServer.dispatchNextFromQueue !== 'function') { return; }
-
-        // Resolve the live coding head — lead first, then coder.
-        //
-        // This MUST go through the same resolver `Run queue`, `stageForQueue`
-        // and the queue watch use (`terminals.groups` in the DB config, live
-        // per `getFleetLiveness()`), not `getAliveRoleTerminalNames` — that one
-        // resolves through `_readTerminalRegistryState`, i.e. the deprecated
-        // `.switchboard/state.json`, with `allowPtyFleet: false`. A pty-fleet
-        // team is invisible to it, so the schedule would silently no-op on
-        // exactly the seats the rest of this feature dispatches to; and if the
-        // registry happened to hold a stale name, `dispatchNextFromQueue` would
-        // reject it with a 400 because `from` resolves to no live team. The
-        // registry path stays as a fallback for editor-registered terminals
-        // that were never wired into a team group.
-        let headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(workspaceRoot)) || '';
-        if (!headTerminal) {
-            const leads = await this.getAliveRoleTerminalNames('lead', workspaceRoot);
-            if (leads.length > 0) {
-                headTerminal = leads[0];
-            } else {
-                const coders = await this.getAliveRoleTerminalNames('coder', workspaceRoot);
-                if (coders.length > 0) { headTerminal = coders[0]; }
-            }
-        }
-        if (!headTerminal) { return; } // no team seated — try again next tick
-
-        const batchSize = normalizeAutobanBatchSize(this._autobanState.batchSize);
-        for (let i = 0; i < batchSize; i++) {
-            try {
-                const outcome = await apiServer.dispatchNextFromQueue({ workspaceRoot, from: headTerminal });
-                const status = outcome?.status ?? 500;
-                // 409 = team in flight, 200 with dispatched === null = queue empty.
-                // Both are normal outcomes that stop the loop.
-                if (status === 409) { break; }
-                if (status >= 200 && status < 300 && outcome?.payload?.dispatched === null) { break; }
-                if (status < 200 || status >= 300) {
-                    console.warn(`[Autoban] Schedule queue pop returned ${status}: ${outcome?.payload?.error ?? 'unknown'}`);
-                    break;
-                }
-            } catch (e) {
-                console.error('[Autoban] Schedule queue pop failed:', e);
-                break;
-            }
-        }
-        this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-        this._postAutobanState();
-    }
-
-    /**
-     * Minimal 5-field cron evaluator. Parses `minute hour day month weekday`
-     * (standard syntax: `*`, comma lists `1,15`, ranges `1-5`, and step
-     * suffixes written with a slash — e.g. `0-59/6`, or `*` with a step.
-     * NOTE: never write the star-slash step form literally in this comment;
-     * that character pair closes the block and detonates the whole file.)
-     * and returns the next Date >= `fromNow` that matches, or null if the
-     * expression is invalid. Extended tokens (`L`, `W`, `?`, named days) are
-     * NOT supported — same constraint as the deleted scheduler target-contract
-     * block, and documented in the WHEN control placeholder.
-     *
-     * Day-of-month / day-of-week follow standard cron OR semantics: when BOTH
-     * are restricted (neither is `*`), a match on EITHER suffices. When one is
-     * `*`, the other is ANDed as usual.
-     */
-    private static _nextCronTime(expr: string, fromNow: Date = new Date()): Date | null {
-        const fields = expr.trim().split(/\s+/);
-        if (fields.length !== 5) return null;
-        const [minF, hourF, domF, monF, dowF] = fields;
-
-        const parseField = (field: string, min: number, max: number): number[] | null => {
-            const result = new Set<number>();
-            for (const part of field.split(',')) {
-                let step = 1;
-                let range = part;
-                const slashIdx = part.indexOf('/');
-                if (slashIdx !== -1) {
-                    step = parseInt(part.slice(slashIdx + 1), 10);
-                    if (!Number.isFinite(step) || step < 1) return null;
-                    range = part.slice(0, slashIdx);
-                }
-                let lo: number, hi: number;
-                if (range === '*') {
-                    lo = min; hi = max;
-                } else {
-                    const dashIdx = range.indexOf('-');
-                    if (dashIdx !== -1) {
-                        lo = parseInt(range.slice(0, dashIdx), 10);
-                        hi = parseInt(range.slice(dashIdx + 1), 10);
-                    } else {
-                        // Bare value. WITH a step it is the range start and runs
-                        // to the field max, so `5/15` yields 5,20,35,50. WITHOUT
-                        // one it is exactly that value — `0 3 * * *` must mean
-                        // 3am, not "every minute from 3am onward".
-                        lo = parseInt(range, 10);
-                        hi = slashIdx !== -1 ? max : lo;
-                    }
-                    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo < min || hi > max || lo > hi) return null;
-                }
-                for (let v = lo; v <= hi; v += step) {
-                    result.add(v);
-                }
-            }
-            return Array.from(result).sort((a, b) => a - b);
-        };
-
-        const minutes = parseField(minF, 0, 59);
-        const hours = parseField(hourF, 0, 23);
-        const doms = parseField(domF, 1, 31);
-        const mons = parseField(monF, 1, 12);
-        const dows = parseField(dowF, 0, 6); // 0 = Sunday
-        if (!minutes || !hours || !doms || !mons || !dows) return null;
-
-        // Standard cron OR rule: when both dom and dow are restricted (non-*),
-        // a match on EITHER suffices. When one is *, the other is ANDed.
-        const domRestricted = domF !== '*';
-        const dowRestricted = dowF !== '*';
-        const bothRestricted = domRestricted && dowRestricted;
-
-        // Search the next matching minute, up to 366 days ahead.
-        //
-        // Start at the NEXT minute boundary, never the current one. Zeroing the
-        // seconds of `fromNow` and testing i=0 returns a time in the PAST for
-        // the whole minute a cron matches — and the caller clamps a negative
-        // delay to 1s, re-fires, recomputes the same past minute, and dispatches
-        // once a second until the minute rolls over. Strictly-future is also
-        // what standard cron `next()` means.
-        const start = new Date(fromNow);
-        start.setSeconds(0, 0);
-        start.setMinutes(start.getMinutes() + 1);
-        for (let i = 0; i < 366 * 24 * 60; i++) {
-            const d = new Date(start.getTime() + i * 60_000);
-            if (!mons.includes(d.getMonth() + 1)) continue;
-            if (!hours.includes(d.getHours())) continue;
-            if (!minutes.includes(d.getMinutes())) continue;
-            const domMatch = doms.includes(d.getDate());
-            const dowMatch = dows.includes(d.getDay());
-            if (bothRestricted) {
-                if (!domMatch && !dowMatch) continue;
-            } else {
-                if (!domMatch || !dowMatch) continue;
-            }
-            return d;
-        }
-        return null;
-    }
-
-    /**
-     * setTimeout ceiling. Node coerces delays above 2^31-1 ms (~24.85 days) to
-     * 1, causing an immediate fire. We clamp to 6h: if the next cron fire is
-     * further out than this, we arm a re-arm-only timer that reschedules
-     * WITHOUT dispatching a tick, and only fire when the real cron time is
-     * reached.
-     */
-    private static readonly _WHEN_TIMER_CEILING_MS = 6 * 60 * 60 * 1000; // 6 hours
-
-    /**
-     * Install the WHEN cron timer. Schedules a one-shot setTimeout for the next
-     * cron fire time. If the delay exceeds the ceiling, arms a re-arm-only
-     * timer that reschedules without dispatching, preventing the setTimeout
-     * overflow that would otherwise cause a hot dispatch loop.
-     *
-     * Returns true if a timer was installed, false if the cron expression was
-     * invalid (caller should fall back to interval mode).
-     */
-    private _startWhenScheduleTimer(after?: Date): boolean {
-        this._clearWhenScheduleTimer();
-        const cron = this._singleColumnAutobanState.whenSchedule;
-        if (!cron) return true; // No schedule = nothing to install, not an error.
-        // Node may fire a setTimeout a millisecond EARLY. Rescheduling from
-        // `Date.now()` alone would then land back inside the cron minute that
-        // just fired and dispatch it a second time, so the fire path passes the
-        // cron time it consumed and the search resumes strictly after it.
-        const baseline = new Date(Math.max(Date.now(), after ? after.getTime() : 0));
-        const next = TaskViewerProvider._nextCronTime(cron, baseline);
-        if (!next) {
-            return false;
-        }
-        const delay = Math.max(1000, next.getTime() - Date.now());
-        const ceiling = TaskViewerProvider._WHEN_TIMER_CEILING_MS;
-        const isRealFire = delay <= ceiling;
-        const armedDelay = Math.min(delay, ceiling);
-
-        this._whenScheduleTimer = setTimeout(() => {
-            this._whenScheduleTimer = undefined;
-            if (isRealFire) {
-                // Real cron fire — dispatch via the queue pop.
-                if (this._autobanState.enabled && !this._autobanState.paused) {
-                    this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-                    void this._scheduleQueuePop();
-                }
-            } else {
-                // Re-arm only — the real cron time is still in the future.
-                // Do NOT dispatch a tick.
-            }
-            // Reschedule the next fire. After a real fire, hand the consumed
-            // cron time forward as the search baseline so an early-firing timer
-            // cannot re-match the minute it just dispatched.
-            if (this._autobanState.enabled) {
-                this._startWhenScheduleTimer(isRealFire ? next : undefined);
-            }
-        }, armedDelay);
-        console.log(`[Autoban] WHEN schedule "${cron}" — next fire at ${next.toISOString()} (in ${Math.round(delay / 1000)}s${isRealFire ? '' : `, re-arming in ${Math.round(armedDelay / 1000)}s`})`);
-        return true;
-    }
-
-    private _clearWhenScheduleTimer(): void {
-        if (this._whenScheduleTimer) {
-            clearTimeout(this._whenScheduleTimer);
-            this._whenScheduleTimer = undefined;
-        }
-    }
-
-    /** Start the continuous Autoban background polling engine. */
-    private _startAutobanEngine(): void {
-        // The schedule is one of two independent switches. No mode gate —
-        // Mission Control can be armed simultaneously, and both call the
-        // queue pop. The pop's 409 arbitrates between them.
-        this._stopAutobanEngine();
-
-        // Starting clears any recorded halt reason. `stopReason` explains an OFF
-        // state; carrying the last halt's reason into a running schedule would
-        // make the reason a permanent fixture — set once, never absent again —
-        // and its display home (the schedules Logs view) would report a halt for
-        // a live engine. Absent reads as "no recorded reason", which is correct
-        // for an engine that is running.
-        delete this._autobanState.stopReason;
-
-        const { batchSize } = this._autobanState;
-
-        // The schedule calls the queue pop on each tick.
-        const intervalMinutes = Math.max(this._singleColumnAutobanState.intervalMinutes || 10, 1);
-        const whenSchedule = this._singleColumnAutobanState.whenSchedule;
-
-        // WHEN control: if a cron schedule is set (ON), install the cron timer
-        // and do NOT fire an immediate tick — the run sheet fires only on the
-        // cron line. If the cron is invalid, fall back to interval mode and
-        // log honestly. If no schedule (OFF), fire immediately and install the
-        // fixed interval (existing behaviour).
-        if (whenSchedule) {
-            const installed = this._startWhenScheduleTimer();
-            if (!installed) {
-                // Invalid cron — fall back to interval mode, not a clockless void.
-                console.error(`[Autoban] WHEN schedule "${whenSchedule}" is invalid — falling back to interval mode (${intervalMinutes}m).`);
-                this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-                void this._scheduleQueuePop();
-                const timer = setInterval(() => {
-                    void this._scheduleQueuePop();
-                }, intervalMinutes * 60 * 1000);
-                this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
-            }
-        } else {
-            this._autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY, Date.now());
-            void this._scheduleQueuePop();
-            const timer = setInterval(() => {
-                void this._scheduleQueuePop();
-            }, intervalMinutes * 60 * 1000);
-            this._autobanTimers.set(AUTOBAN_RUN_SHEET_TICK_KEY, timer);
-        }
-
-        // Safety-net: periodically check if all source columns are empty and auto-stop
-        this._autobanEmptyColumnSweepTimer = setInterval(async () => {
-            if (this._autobanState.enabled) {
-                const workspaceRoot2 = this._resolveWorkspaceRoot();
-                if (workspaceRoot2) {
-                    await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot2);
-                }
-            }
-        }, 60_000);
-
-        this._postAutobanState();
-        const scheduleDesc = whenSchedule
-            ? `WHEN "${whenSchedule}"`
-            : `every ${intervalMinutes}m`;
-        console.log(
-            `[Autoban] Engine started — schedule ${scheduleDesc}, queue pop dispatch.`
-        );
-    }
-
-    /** Stop all Autoban background timers. */
-    private _stopAutobanEngine(reason?: string): void {
-        for (const [, timer] of this._autobanTimers) {
-            clearInterval(timer);
-        }
-        this._autobanTimers.clear();
-        this._clearWhenScheduleTimer();
-        if (this._autobanEmptyColumnSweepTimer) {
-            clearInterval(this._autobanEmptyColumnSweepTimer);
-            this._autobanEmptyColumnSweepTimer = undefined;
-        }
-
-        this._autobanState.paused = false;
-        delete this._autobanState.pausedRemainingMs;
-        this._autobanLastTickAt.clear();
-        this._activeDispatchSessions.clear();
-        this._autobanTickQueue = Promise.resolve();
-
-        // Record the stop reason on _autobanState so the off state explains itself.
-        // The reason is recorded regardless of whether a Mission Control exists —
-        // a halt must be distinguishable from a hang.
-        if (reason) {
-            this._autobanState.stopReason = reason;
-            this._context?.workspaceState?.update?.('autoban.state', this._autobanState);
-        }
-
-        // Relay the halt to Mission Control when one is active. The message is
-        // agent-facing text rendered as text — no security concern. The relay
-        // uses clearBeforePrompt: false AND standingOrders: false so it never
-        // resets the recipient's context — the established machine-origin relay
-        // shape (see LocalApiServer's /terminals/relay route). standingOrders:
-        // false stops the delivery layer recomposing an orders block the
-        // Mission Control already has; omitting it would drop the role-scoped
-        // rules on the VS Code path and silently reset the controller's context.
-        if (reason && this._hasMissionControl()) {
-            const adoptedName = this._autobanState?.missionControlSeat?.terminalName;
-            if (adoptedName) {
-                void this._ptyHostVerb('ptySendPrompt', {
-                    name: adoptedName,
-                    data: `[AUTOMATION HALT] ${reason}`,
-                    clearBeforePrompt: false,
-                    standingOrders: false,
-                }).then((sendRes: any) => {
-                    if (sendRes?.success === false) {
-                        console.warn(`[TaskViewerProvider] automation halt relay to '${adoptedName}' failed: ${sendRes.error || 'unknown error'}.`);
-                    }
-                }).catch((err: any) => {
-                    console.warn(`[TaskViewerProvider] automation halt relay to '${adoptedName}' failed:`, err);
-                });
-            }
-        }
-    }
-
     public async handleBatchDispatchLow(workspaceRoot?: string): Promise<boolean> {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot) { return false; }
@@ -14337,7 +13491,7 @@ Each plan file must include:
         const { cardsInColumn, currentColumnBySession } = await this._collectKanbanCardsInColumn(resolvedWorkspaceRoot, sourceColumn);
         this._releaseSettledDispatchLocks(currentColumnBySession);
 
-        const batchSize = normalizeAutobanBatchSize(this._autobanState.batchSize);
+        const batchSize = 5;
         const orderedCandidates = [...cardsInColumn]
             .sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''))
             .filter(card => this._activeDispatchSessions.get(this._dispatchCardId(card)) !== sourceColumn);
@@ -14447,8 +13601,6 @@ Each plan file must include:
                     await this._initialSyncPromise;
                     await this._tryRestoreAutoban();
                     this._postAutobanState();
-                    await this._pipeline.restore();
-                    this._postPipelineState();
                 }, 100);
             }
         }).catch(err => {
@@ -15880,48 +15032,7 @@ Each plan file must include:
                         const activity = await this._postRecentActivity(limit, beforeTimestamp);
                         return { success: true, ...(activity || {}) };
                     }
-                    case 'updateAutobanState': {
-                        // Sidebar Autoban configuration changed
-                        if (data.state) {
-                            const wasEnabled = this._autobanState.enabled;
-                            const { lastTickAt: _ignoredLastTickAt, ...incomingState } = data.state;
-                            this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, ...incomingState });
-                            // The mode axis is deleted — no mode-specific guards.
-                            if (this._autobanState.enabled && !wasEnabled) {
-                                this._startAutobanEngine();
-                            } else if (!this._autobanState.enabled && wasEnabled) {
-                                this._stopAutobanEngine();
-                            } else if (this._autobanState.enabled) {
-                                // Rules changed while running — restart with new config
-                                this._startAutobanEngine();
-                            }
-                            await this._persistAutobanState();
-                            this._postAutobanStateNow();
-                        }
-                        return { success: true };
-                    }
 
-                    case 'pipelineStart': {
-                        const requestedInterval = typeof data.intervalSeconds === 'number'
-                            ? data.intervalSeconds
-                            : undefined;
-                        this._pipeline.start(requestedInterval);
-                        return { success: true };
-                    }
-                    case 'pipelineStop':
-                        this._pipeline.stop();
-                        return { success: true };
-                    case 'pipelinePause':
-                        this._pipeline.pause();
-                        return { success: true };
-                    case 'pipelineUnpause':
-                        this._pipeline.unpause();
-                        return { success: true };
-                    case 'pipelineSetInterval':
-                        if (typeof data.intervalSeconds === 'number' && Number.isFinite(data.intervalSeconds)) {
-                            this._pipeline.setInterval(data.intervalSeconds);
-                        }
-                        return { success: true };
                     case 'airlock_sendToCoder':
                         if (data.text) {
                             this._handleAirlockSendToCoder(data.text);
@@ -21812,15 +20923,6 @@ Each plan file must include:
     }
 
     private async _deregisterAllTerminals(silent: boolean = false) {
-        // Stop the autoban engine first.
-        // Wrapped in try/catch so a partial autoban stop failure doesn't block the rest of deregistration.
-        try {
-            this._stopAutobanEngine();
-            await this._persistAutobanState();
-        } catch (e) {
-            console.error('[TaskViewerProvider] Failed to stop autoban during deregistration:', e);
-        }
-
         // Pre-fetch PIDs outside the state lock to avoid holding the file lock for multiple seconds.
         //
         // IMPORTANT: `vscode.Terminal.processId` is IPC-backed; each terminal that
@@ -22203,7 +21305,12 @@ Each plan file must include:
                             // (handlePtyVerb) so a caller cannot set it. Default
                             // false — a call site added later gets the safeguard by
                             // omission rather than losing it.
-                            addonsComposed: promptComposed
+                            addonsComposed: promptComposed,
+                            // Thread the dispatch origin (the terminal that requested
+                            // this send) into the ptySendPrompt payload so the roster
+                            // barrier can exclude it from the clear set. Absent on
+                            // operator-driven (board drag) paths.
+                            ...(delivery?.originTerminal ? { origin: delivery.originTerminal } : {}),
                         });
                         if (writeRes?.success) { return true; }
                         console.error(`[TaskViewerProvider] PTY prompt delivery to '${terminalName}' failed:`, writeRes?.error);
@@ -22858,7 +21965,12 @@ Each plan file must include:
 
         // 4. Send Message (Write to Inbox) — dispatch after column is moved
         try {
-            const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, messagePayload, messageMetadata, 'sidebar', true);
+            const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, messagePayload, messageMetadata, 'sidebar', true,
+                // Thread the dispatch origin (the terminal that requested this
+                // send) into the ptySendPrompt payload so the roster barrier can
+                // exclude it. Absent on operator-driven (board drag) paths.
+                options?.originTerminal ? { originTerminal: options.originTerminal } : undefined
+            );
 
             if (success) {
                 // Dispatch succeeded — no additional state updates needed (already done above)
@@ -25054,7 +24166,6 @@ Each plan file must include:
 
 
     public dispose() {
-        this._stopAutobanEngine();
         this._stopSurvivorJobsTimer();
         this.stopPlanScanner();
         // Clear all Phone-a-Friend stall timers — they hold references to the
@@ -25067,7 +24178,6 @@ Each plan file must include:
             clearTimeout(this._postAutobanStateDebounceTimer);
             this._postAutobanStateDebounceTimer = null;
         }
-        this._pipeline.dispose();
         this._stateWatcher?.dispose();
         this._planWatcher?.dispose();
         this._sessionWatcher?.dispose();
@@ -28252,18 +27362,53 @@ Each plan file must include:
     }
 
     /**
-     * Tick the surviving scheduler jobs (fetch-plans, reconcile, team-automation) on their
+     * SCHEDULING RULE:
+     * 1. Recurring work is dispatched by exactly ONE runner — this ScheduledJob poll
+     *    (_survivorJobsTimer -> runSchedulerJob).
+     * 2. It has exactly two front ends: team automations (Terminals tab) and the
+     *    Mission Control Schedules tab, both backed by getSchedulerConfig/setSchedulerConfig.
+     * 3. Anything else that wants to happen on a timer either becomes a ScheduledJob
+     *    or does not exist. Infrastructure timers (polling data, caches, socket pings)
+     *    are permitted, but any timer that dispatches work/prompts agents MUST use this runner.
+     *
+     * Tick the surviving scheduler jobs (fetch-plans, reconcile, team-automation, and Mission Control schedules) on their
      * own activation-scoped timer. Reads the scheduler config, filters to
      * enabled jobs with surviving sources, and delivers the prompt via runSchedulerJob.
      */
     private async _tickSurvivorSchedulerJobs(): Promise<void> {
         const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
-        const survivorSources = new Set(['fetch-plans', 'reconcile', 'team-automation']);
+        const survivorSources = new Set([
+            'fetch-plans',
+            'reconcile',
+            'team-automation',
+            'custom',
+            'advance-plan',
+            'phone-a-friend',
+            'advance-feature',
+            'batch-advance-planning',
+            'review-code-vs-intent',
+            'process-memo',
+            'improve-docs',
+            'update-readme',
+            'send-plans-to-jules',
+            'start-ready-mission',
+            'research',
+            'git-pull-push'
+        ]);
         const now = Date.now();
         for (const job of sched.jobs) {
             if (!job.enabled || !survivorSources.has(job.source)) continue;
-            const intervalMs = Math.max(Number(job.intervalMinutes) || 1, 1) * 60 * 1000;
-            if (job.lastRunAt && now - job.lastRunAt < intervalMs) continue;
+            if (job.sourceConfig?.type === 'external') continue;
+
+            const cronExpr = typeof job.sourceConfig?.cron === 'string' ? job.sourceConfig.cron.trim() : '';
+            if (cronExpr) {
+                const next = nextCronTime(cronExpr, new Date(job.lastRunAt || 0));
+                if (next && next.getTime() > now) continue;
+            } else {
+                const intervalMs = Math.max(Number(job.intervalMinutes) || 1, 1) * 60 * 1000;
+                if (job.lastRunAt && now - job.lastRunAt < intervalMs) continue;
+            }
+
             if (this._schedulerInFlight.get(job.id)) continue;
             void this.runSchedulerJob(job).catch(e =>
                 console.error(`[Autoban] Survivor scheduler job '${job.source}' tick failed:`, e)
@@ -28272,6 +27417,8 @@ Each plan file must include:
     }
 
     /**
+     * SCHEDULING RULE: Sole work-dispatching execution runner for ScheduledJob entries.
+     *
      * Run a scheduled job on-demand (RUN NOW) or from the survivor scheduler tick.
      * Shares `_schedulerInFlight` guard between tick and RUN NOW to prevent duplicate runs.
      * Records outcome (lastRunAt, lastOutcome, lastTarget) in the job's config.
@@ -28281,6 +27428,10 @@ Each plan file must include:
         const job = typeof jobOrId === 'string' ? sched.jobs.find(j => j.id === jobOrId) : jobOrId;
         if (!job) {
             return { success: false, outcome: 'job not found' };
+        }
+
+        if (job.sourceConfig?.type === 'external') {
+            return { success: false, outcome: 'external schedule not executed by host' };
         }
 
         if (this._schedulerInFlight.get(job.id)) {
@@ -28296,13 +27447,91 @@ Each plan file must include:
                 const res = await this._deliverTeamAutomationJob(job);
                 outcome = res.outcome;
                 resolvedTarget = res.target;
-            } else if (job.source === 'fetch-plans' || job.source === 'reconcile') {
-                const prompt = (job.promptOverride || '').trim()
-                    || (job.source === 'fetch-plans' ? buildFetchPlansPrompt(job) : buildReconcilePrompt());
+            } else if (
+                job.source === 'advance-plan' ||
+                job.source === 'phone-a-friend' ||
+                job.source === 'advance-feature' ||
+                job.source === 'batch-advance-planning' ||
+                job.source === 'start-ready-mission'
+            ) {
+                // Host-executed actions: deterministic code through dispatch path, no prompt.
+                const wsRoot = this._getWorkspaceRoot() || this._apiServerWorkspaceRoot || '';
+                const apiServer: any = this._localApiServer || this._apiServerForBroadcast;
+                if (job.source === 'start-ready-mission') {
+                    const db = await this._getKanbanDb(wsRoot);
+                    const wsId = db ? ((await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '') : '';
+                    const missions = db ? await db.getMissions(wsId) : [];
+                    const readyMission = missions.find(m => m.ready && m.runState !== 'in-flight' && m.runState !== 'completed');
+                    if (!readyMission) {
+                        outcome = 'no ready mission found';
+                    } else if (this._kanbanProvider) {
+                        const res = await this._kanbanProvider.launchMission(wsRoot, readyMission.id);
+                        outcome = res.success ? `launched mission '${readyMission.name || readyMission.id}'` : (res.error || 'launch failed');
+                        resolvedTarget = res.dispatched || undefined;
+                    } else {
+                        outcome = 'kanban provider unavailable';
+                    }
+                } else if (apiServer && typeof apiServer.dispatchNextFromQueue === 'function') {
+                    let headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(wsRoot)) || '';
+                    if (!headTerminal) {
+                        const codingTerminals = this.getAliveCodingTerminalNames();
+                        if (codingTerminals.length > 0) headTerminal = codingTerminals[0];
+                    }
+                    if (!headTerminal) {
+                        outcome = 'no coding terminal live';
+                    } else {
+                        const pop = await apiServer.dispatchNextFromQueue({ workspaceRoot: wsRoot, from: headTerminal });
+                        outcome = (pop && pop.status === 200) ? `dispatched to ${headTerminal}` : (pop?.payload?.error || 'dispatch refused');
+                        resolvedTarget = headTerminal;
+                    }
+                } else {
+                    outcome = 'dispatch API unavailable';
+                }
+            } else if (
+                job.source === 'fetch-plans' ||
+                job.source === 'reconcile' ||
+                job.source === 'custom' ||
+                job.source === 'review-code-vs-intent' ||
+                job.source === 'process-memo' ||
+                job.source === 'improve-docs' ||
+                job.source === 'update-readme' ||
+                job.source === 'send-plans-to-jules' ||
+                job.source === 'research' ||
+                job.source === 'git-pull-push'
+            ) {
+                // Agent-executed actions: prompt delivery to terminal, no board authority.
+                const UNATTENDED_ORDER = [
+                    'This is an unattended task; user questions will not be answered.',
+                    'If user answers are required to proceed: move the plan back to CREATED with the open questions listed on it.',
+                    'If research is required but no researcher is available: move the plan back to CREATED with a note that the planning workflow is complete but needs uncertainty resolved.'
+                ].join('\n');
+
+                let prompt = (job.promptOverride || '').trim() || (typeof job.sourceConfig?.prompt === 'string' ? job.sourceConfig.prompt.trim() : '');
+                if (!prompt) {
+                    if (job.source === 'fetch-plans') prompt = buildFetchPlansPrompt(job);
+                    else if (job.source === 'reconcile') prompt = buildReconcilePrompt();
+                    else if (job.source === 'review-code-vs-intent') prompt = 'Review the code changes against the plan intent for plans in CODE REVIEWED in the last period. Produce a document summarising where intent was met and where it diverged.';
+                    else if (job.source === 'process-memo') prompt = 'Process the memo file: create one plan per entry.\n\n' + UNATTENDED_ORDER;
+                    else if (job.source === 'improve-docs') prompt = 'Improve the project documentation based on the current codebase state.\n\n' + UNATTENDED_ORDER;
+                    else if (job.source === 'update-readme') prompt = 'Update the project README to reflect the current state of the codebase.';
+                    else if (job.source === 'send-plans-to-jules') prompt = 'Send the selected plans to Jules for coding, respecting the complexity filters.';
+                    else if (job.source === 'research') prompt = 'Research the open questions on the selected plans and write findings to the artifacts folder.\n\n' + UNATTENDED_ORDER;
+                    else if (job.source === 'git-pull-push') prompt = 'Run git pull, then git push, resolving any conflicts.';
+                    else if (job.source === 'custom') prompt = 'Execute scheduled custom task.';
+                }
+
                 if (!prompt) {
                     outcome = 'empty prompt';
                 } else {
-                    const terminal = await this._ensureSurvivorTerminal(job);
+                    let terminal: any = null;
+                    const targetTerminalName = typeof job.sourceConfig?.targetTerminal === 'string' ? job.sourceConfig.targetTerminal.trim() : '';
+                    if (targetTerminalName && targetTerminalName !== '__custom') {
+                        const openTerminals = vscode.window.terminals || [];
+                        terminal = openTerminals.find(t => t.name === targetTerminalName && t.exitStatus === undefined);
+                    }
+                    if (!terminal) {
+                        terminal = await this._ensureSurvivorTerminal(job);
+                    }
                     if (!terminal) {
                         outcome = 'terminal creation failed';
                     } else {
@@ -28328,7 +27557,13 @@ Each plan file must include:
                 const latestSched = await GlobalIntegrationConfigService.getSchedulerConfig();
                 const targetJob = latestSched.jobs.find(j => j.id === job.id);
                 if (targetJob) {
-                    targetJob.lastRunAt = Date.now();
+                    const intervalMs = Math.max(Number(targetJob.intervalMinutes) || 1, 1) * 60 * 1000;
+                    const isSuccess = outcome === 'sent' || outcome.startsWith('dispatched') || outcome.startsWith('launched');
+                    if (targetJob.advanceWhenReady && !isSuccess) {
+                        targetJob.lastRunAt = Date.now() - (intervalMs - 30 * 1000);
+                    } else {
+                        targetJob.lastRunAt = Date.now();
+                    }
                     targetJob.lastOutcome = outcome;
                     targetJob.lastTarget = resolvedTarget;
                     await GlobalIntegrationConfigService.setSchedulerConfig(latestSched);
@@ -28338,7 +27573,75 @@ Each plan file must include:
             }
         }
 
-        return { success: outcome === 'sent', outcome, target: resolvedTarget };
+        return { success: outcome === 'sent' || outcome.startsWith('dispatched') || outcome.startsWith('launched'), outcome, target: resolvedTarget };
+    }
+
+    /**
+     * Called when a team is released (via onTeamReleased).
+     * Finds enabled team-automation jobs with advanceWhenReady === true whose target
+     * group matches any member in teamMemberNames, and clears lastRunAt to 0.
+     */
+    public async clearAdvanceWhenReadyJobs(workspaceRoot: string, teamMemberNames: string[]): Promise<void> {
+        if (!Array.isArray(teamMemberNames) || teamMemberNames.length === 0) {
+            return;
+        }
+        const wsRoot = workspaceRoot || this._getWorkspaceRoot() || this._apiServerWorkspaceRoot || '';
+        const db = await this._getKanbanDb(wsRoot);
+        let groups: any[] = [];
+        try {
+            if (this._kanbanProvider) {
+                groups = this._kanbanProvider._getScopedSetting<any[]>(TERMINALS_GROUPS_KEY, []) || [];
+            } else if (db) {
+                const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+                groups = Array.isArray(raw) ? [...raw] : [];
+                const bare = await db.getConfigJson('terminals.groups', []) as any[];
+                if (Array.isArray(bare)) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            }
+        } catch { /* best effort */ }
+
+        const matchingGroupIds = new Set<string>();
+        for (const group of groups) {
+            if (!group || !group.id) continue;
+            const groupMembers: string[] = Array.isArray(group.order) && group.order.length
+                ? group.order
+                : (Array.isArray(group.members) ? group.members : []);
+            const head = teamHeadName(group);
+            if (head) groupMembers.push(head);
+            if (teamMemberNames.some(name => groupMembers.includes(name))) {
+                matchingGroupIds.add(group.id);
+            }
+        }
+
+        if (matchingGroupIds.size === 0) {
+            return;
+        }
+
+        try {
+            const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
+            let changed = false;
+            for (const job of sched.jobs) {
+                if (!job.enabled || !job.advanceWhenReady || job.source !== 'team-automation') {
+                    continue;
+                }
+                if (job.teamTarget?.groupId && matchingGroupIds.has(job.teamTarget.groupId)) {
+                    job.lastRunAt = 0;
+                    changed = true;
+                }
+            }
+            if (changed) {
+                await GlobalIntegrationConfigService.setSchedulerConfig(sched);
+            }
+        } catch (err) {
+            console.warn('[TaskViewerProvider] clearAdvanceWhenReadyJobs failed:', err);
+        }
     }
 
     /**

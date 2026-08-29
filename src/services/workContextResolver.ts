@@ -161,3 +161,89 @@ export async function resolveTeamGroupForTerminal(
 
     return null;
 }
+
+// ── Roster barrier target-set computation ──────────────────────────────
+
+/**
+ * Input to {@link computeRosterClearTargets}. All fields are host-supplied:
+ * the helper is pure and does not read the fleet, the clock, or config.
+ *
+ * - `roster` — the resolved team roster (from {@link resolveTeamGroupForTerminal}).
+ * - `liveActive` — names of terminals whose pty exists (`status === 'active'`).
+ * - `destination` — the terminal the prompt is going to. Always excluded: its
+ *   clear belongs to the delivery path, which is the one place a clear is
+ *   followed by a write with no gap.
+ * - `origin` — the terminal that *requested* the send (the caller), or
+ *   `undefined`/`''` when the dispatch is operator-driven (a board drag).
+ *   When present and on the roster, the origin is excluded: a lead that
+ *   dispatches to its own coder must not be cleared by its own dispatch.
+ *   An origin that names a terminal NOT on the roster is a no-op exclusion
+ *   (never widen the roster from caller-supplied data).
+ * - `busySet` — names of seats that are mid-turn (`now - lastDataAt <
+ *   livenessWindowMs`, or `lastDataAt === 0` for no heartbeat data). Built
+ *   host-side from each root's own `lastDataAt` source so the helper stays
+ *   pure. A seat with `lastDataAt === 0` is deferred — "no evidence" is not
+ *   "at rest", matching the sweep's own `lastDataAt > 0` guard.
+ */
+export interface RosterClearTargetInput {
+    roster: string[];
+    liveActive: Set<string>;
+    destination: string;
+    origin?: string;
+    busySet: Set<string>;
+}
+
+/**
+ * Result of {@link computeRosterClearTargets}.
+ *
+ * - `toClear` — names to clear immediately (at rest, not the destination,
+ *   not the origin).
+ * - `deferred` — names to defer (mid-turn). A deferred seat is NOT skipped
+ *   permanently: the same-feature branch intercept clears it before its
+ *   next prompt delivery.
+ */
+export interface RosterClearTargetResult {
+    toClear: string[];
+    deferred: string[];
+}
+
+/**
+ * Compute the roster barrier's target set: which active siblings to clear
+ * immediately and which to defer because they are mid-turn.
+ *
+ * Pure and host-agnostic — both composition roots (extension host
+ * `TaskViewerProvider.ts` and standalone `bootstrap.ts`) call this so the
+ * two hosts produce byte-identical target sets for identical inputs.
+ *
+ * Exclusion rules (applied in order):
+ *  1. Not in `liveActive` → skip (pty does not exist).
+ *  2. Is the `destination` → skip (delivery path owns its clear).
+ *  3. Is the `origin` (when present and on the roster) → skip (the caller
+ *     must not be cleared by its own dispatch).
+ *  4. In `busySet` → defer (mid-turn; cleared later via the same-feature
+ *     branch intercept).
+ *  5. Otherwise → clear immediately.
+ *
+ * Security: `origin` is caller-supplied and used only to REMOVE a name from
+ * the target set, never to add one or widen scope. `resolveTeamGroupForTerminal`
+ * stays the sole roster source.
+ */
+export function computeRosterClearTargets(input: RosterClearTargetInput): RosterClearTargetResult {
+    const { roster, liveActive, destination, origin, busySet } = input;
+    const toClear: string[] = [];
+    const deferred: string[] = [];
+    const originName = (typeof origin === 'string' && origin.trim()) ? origin.trim() : '';
+
+    for (const name of roster) {
+        if (!liveActive.has(name)) continue;
+        if (name === destination) continue;
+        if (originName && name === originName) continue;
+        if (busySet.has(name)) {
+            deferred.push(name);
+        } else {
+            toClear.push(name);
+        }
+    }
+
+    return { toClear, deferred };
+}

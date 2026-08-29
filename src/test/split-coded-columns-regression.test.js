@@ -16,7 +16,7 @@ function expectRegex(source, regex, message) {
 function run() {
     expectRegex(
         agentConfigSource,
-        /{ id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli'[^}]*}[\s\S]*{ id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli'[^}]*}/s,
+        /{ id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', dragDropMode: 'cli'[^}]*}[\s\S]*{ id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', dragDropMode: 'cli'[^}]*}/s,
         'Expected built-in Kanban columns to define separate Lead Coder and Coder lanes.'
     );
     expectRegex(
@@ -31,7 +31,7 @@ function run() {
     );
     expectRegex(
         kanbanHtmlSource,
-        /{ id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', autobanEnabled: true },[\s\S]*{ id: 'CODER CODED', label: 'Coder', role: 'coder', autobanEnabled: true },[\s\S]*{ id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', autobanEnabled: false },[\s\S]*{ id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', autobanEnabled: false },/s,
+        /{ id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', kind: 'coded' },[\s\S]*{ id: 'CODER CODED', label: 'Coder', role: 'coder', kind: 'coded' },[\s\S]*{ id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer' },/s,
         'Expected the Kanban webview to render separate Lead Coder and Coder columns.'
     );
     assert.ok(!kanbanHtmlSource.includes('coded-target-select'), 'Expected the Kanban coded-target dropdown to be removed.');

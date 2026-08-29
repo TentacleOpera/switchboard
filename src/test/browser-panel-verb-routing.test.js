@@ -202,9 +202,6 @@ function run() {
     // by exact name so they cannot be mistaken for working, and so an ELEVENTH
     // unreachable verb — in particular a new mission verb — still fails.
     const MC_UNBUILT_AUTOMATION_VERBS = new Set([
-        'mcNewSchedule', 'mcUpdateSchedule', 'mcDeleteSchedule',
-        'mcStartSchedule', 'mcStopSchedule', 'mcScheduleLoadLog',
-        'mcScheduleExternalCopy',
         'mcControllerStop', 'mcControllerRestart', 'mcControllerAck',
     ]);
 
@@ -230,10 +227,10 @@ function run() {
             + 'data-panel, so without this arm every mc* verb 404s while every other gate stays green.');
     });
 
-    test('the unbuilt-automation ratchet holds at exactly ten verbs', () => {
+    test('the unbuilt-automation ratchet holds at exactly three verbs', () => {
         // A ratchet, not an allowlist: this set may only ever shrink. Growing it
         // is how "the panel does not work" becomes a permanently green test.
-        assert.strictEqual(MC_UNBUILT_AUTOMATION_VERBS.size, 10,
+        assert.strictEqual(MC_UNBUILT_AUTOMATION_VERBS.size, 3,
             'MC_UNBUILT_AUTOMATION_VERBS must only shrink — build the handler instead of naming another verb here.');
         for (const verb of MC_UNBUILT_AUTOMATION_VERBS) {
             assert.ok(!KANBAN_VERBS.has(verb),

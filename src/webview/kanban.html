@@ -643,14 +643,12 @@
            the cue, and an ID-scoped filter would clobber the Claudify colour
            icon opt-in rules. Mix with --panel-bg2 (not transparent) so the
            tint is opaque and clearly visible against the dark background. */
-        #btn-remote-control.is-active,
-        #btn-autoban.is-active {
+        #btn-remote-control.is-active {
             border-color: var(--accent-teal);
             background: color-mix(in srgb, var(--accent-teal) 30%, var(--panel-bg2));
             box-shadow: var(--glow-teal);
         }
-        #btn-remote-control.is-active:hover:not(:disabled),
-        #btn-autoban.is-active:hover:not(:disabled) {
+        #btn-remote-control.is-active:hover:not(:disabled) {
             background: color-mix(in srgb, var(--accent-teal) 40%, var(--panel-bg2));
             box-shadow: var(--glow-teal);
         }
@@ -1764,44 +1762,7 @@
             color: var(--accent-teal);
         }
 
-        /* Autoban status bar */
-        .autoban-status-bar {
-            display: flex;
-            align-items: center;
-            padding: 4px 8px;
-            background: var(--panel-bg2);
-            border-bottom: 1px solid var(--border-color);
-            font-size: 9px;
-            min-height: 22px;
-        }
 
-        .autoban-indicator {
-            color: var(--text-secondary);
-            white-space: nowrap;
-            letter-spacing: 0.5px;
-        }
-
-        .autoban-indicator.is-active {
-            color: var(--accent-teal);
-        }
-
-        @keyframes autobanPulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
-        .autoban-indicator.is-active::before {
-            content: '';
-            display: inline-block;
-            width: 10px;
-            height: 10px;
-            margin-right: 4px;
-            background-color: currentColor;
-            mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tYm9sdC5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik05LjUgMEwyIDloNXY3bDcuNS05SDlWMHoiLz4KPC9zdmc+Cg==');
-            mask-size: contain;
-            mask-repeat: no-repeat;
-            animation: autobanPulse 2s ease-in-out infinite;
-        }
 
         /* ===== ULTRACODE blast — Afterburner only, fired on toggle-on. Deliberately obnoxious. ===== */
         #ultracode-blast {
@@ -2120,33 +2081,7 @@
             box-shadow: 0 0 4px var(--accent-teal);
         }
 
-        /* Inline autoban timers in controls strip */
-        .autoban-timers-inline {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            flex-wrap: wrap;
-        }
-        .autoban-timers-inline.is-empty {
-            display: none;
-        }
 
-        .autoban-timer-badge {
-            font-family: var(--font-code);
-            font-size: 9px;
-            letter-spacing: 0.5px;
-            color: var(--text-secondary);
-            background: color-mix(in srgb, var(--accent-teal) 6%, transparent);
-            border: 1px solid color-mix(in srgb, var(--accent-teal) 15%, transparent);
-            padding: 2px 6px;
-            border-radius: 2px;
-            white-space: nowrap;
-        }
-
-        .autoban-timer-badge.is-active {
-            color: var(--accent-teal);
-            border-color: color-mix(in srgb, var(--accent-teal) 35%, transparent);
-        }
 
         /* CLI toggle inline label */
         .cli-toggle-inline {
@@ -3000,9 +2935,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <button class="strip-icon-btn" id="btn-scan-folders" data-tooltip="Scan all configured folders for plan files now (forces immediate pickup of anything the watchers missed)">
                 <img src="{{ICON_IMPORT_PLANS}}" alt="Scan Folders">
             </button>
-            <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
-                <img src="{{ICON_22}}" alt="Start Automation">
-            </button>
             <button class="strip-icon-btn" id="btn-remote-control" data-tooltip="Start or stop remote control">
                 <img src="{{ICON_REMOTE}}" alt="Remote Control">
             </button>
@@ -3045,16 +2977,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
         <div style="position: relative; display: flex; flex-direction: column; flex: 1; overflow: hidden;">
             <div id="kanban-sub-bar" class="kanban-sub-bar">
-                <div class="autoban-timers-inline is-empty" id="autoban-timers-inline"></div>
-                <button class="strip-icon-btn" id="btn-pause-autoban-timer" data-tooltip="Pause automation timers" style="display:none;">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" width="14" height="14" style="color: var(--accent-teal);">
-                        <rect x="3" y="2" width="3.5" height="12" rx="1"/>
-                        <rect x="9.5" y="2" width="3.5" height="12" rx="1"/>
-                    </svg>
-                </button>
-                <button class="strip-icon-btn" id="btn-reset-autoban-timer" data-tooltip="Reset and restart automation timers" style="display:none;">
-                    <img src="{{ICON_22}}" alt="Reset Timers" style="width: 17px; height: 17px;">
-                </button>
                 <button class="strip-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">CHAT PROMPT</button>
                 <button class="strip-btn" id="btn-suggest-features" data-tooltip="Scan pre-coding columns and copy a prompt asking an agent to propose feature groupings">SUGGEST FEATURES</button>
                 <button class="strip-btn is-teal" id="btn-project-manager" data-tooltip="Activate the Switchboard management console in the Project Manager agent terminal. If none is running, the prompt is copied to your clipboard instead — paste it into any agent chat.">MANAGE</button>
@@ -6235,14 +6157,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             hideTooltip();
         });
         let columnDefinitions = [
-            { id: 'CREATED', label: 'New', role: null, autobanEnabled: true },
-            { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', autobanEnabled: true },
-            { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', kind: 'coded', autobanEnabled: true },
-            { id: 'CODER CODED', label: 'Coder', role: 'coder', kind: 'coded', autobanEnabled: true },
-            { id: 'INTERN CODED', label: 'Intern', role: 'intern', kind: 'coded', autobanEnabled: true },
-            { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', autobanEnabled: false },
-            { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'tester', autobanEnabled: true },
-            { id: 'COMPLETED', label: 'Completed', kind: 'completed', autobanEnabled: false }
+            { id: 'CREATED', label: 'New', role: null },
+            { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner' },
+            { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', kind: 'coded' },
+            { id: 'CODER CODED', label: 'Coder', role: 'coder', kind: 'coded' },
+            { id: 'INTERN CODED', label: 'Intern', role: 'intern', kind: 'coded' },
+            { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer' },
+            { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'tester' },
+            { id: 'COMPLETED', label: 'Completed', kind: 'completed' }
         ];
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
         // Cached from the `startupCommands` broadcast. The AUTOMATION tab reads it to
@@ -6295,9 +6217,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 : logicalCol;
         }
 
-        let autobanConfig = null; // Received from backend: { enabled, batchSize, rules }
-        let autobanCountdownTimer = null;
-        let autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
         let lastBoardSignature = '';
         // Signature of the unfiltered allCards cache. Tracked separately from the
         // filtered board signature so a hidden-project card add (no visible change)
@@ -6551,7 +6470,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         const COLUMN_ABBREV = { 'CREATED': 'C', 'PLAN REVIEWED': 'P', 'STAGING': 'S', 'INTERN CODED': 'I', 'LEAD CODED': 'L', 'CODER CODED': 'R', 'CODED_AUTO': 'A', 'COMPLETED': 'D' };
 
         // Icon URIs injected by extension
-        const ICON_AUTOBAN = '{{ICON_22}}';           // Play/automation icon
         const ICON_CLI_TRIGGERS = '{{ICON_CLI_TRIGGERS}}';      // dedicated global-toggle icon (distinct from the column/card CLI glyph)
         const ICON_COLLAPSE_CODERS = '{{ICON_COLLAPSE_CODERS}}';   // Toggle-like icon
 
@@ -7993,7 +7911,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         role: null,
                         order: coderDefs[0].order || 180,
                         kind: 'coded',
-                        autobanEnabled: true,
                         dragDropMode: 'cli'
                     };
                     renderDefs = columnDefinitions
@@ -8581,70 +8498,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             document.querySelectorAll('[data-action="julesSelected"]').forEach(btn => {
                 btn.style.display = isVisible ? '' : 'none';
             });
-        }
-
-        function updateAutobanButtonState() {
-            const autobanBtn = document.getElementById('btn-autoban');
-            if (!autobanBtn) return;
-            const isEnabled = !!(autobanConfig && autobanConfig.enabled);
-            // The toolbar button is a pure mirror of the tab's ON/OFF. It reads
-            // the same single armed flag and posts the same toggle message.
-            let isActive = isEnabled;
-            let tooltipText = isEnabled ? 'Stop automation' : 'Start automation';
-            autobanBtn.classList.toggle('is-active', isActive);
-            autobanBtn.setAttribute('data-tooltip', tooltipText);
-            autobanBtn.title = tooltipText;
-            const img = autobanBtn.querySelector('img');
-            if (img) {
-                img.alt = isActive ? 'Stop Automation' : 'Start Automation';
-            }
-            autobanBtn.style.display = '';
-
-            const resetBtn = document.getElementById('btn-reset-autoban-timer');
-            if (resetBtn) {
-                // Reset is a timer reset — meaningful whenever the SCHEDULE is on.
-                // It used to also require the retired mode axis to read "scheduled",
-                // which made the schedule's own controls vanish the moment Mission
-                // Control was armed (the synthetic mode resolves to agent-managed
-                // when both switches are on). The axis is gone: the two switches are
-                // independent, so the schedule's controls follow the schedule flag
-                // and nothing else.
-                resetBtn.style.display = isEnabled ? '' : 'none';
-            }
-
-            const pauseBtn = document.getElementById('btn-pause-autoban-timer');
-            if (pauseBtn) {
-                // Pause is a timer pause — follows the schedule flag alone, for the
-                // same reason as Reset above.
-                pauseBtn.style.display = isEnabled ? '' : 'none';
-                const isPaused = !!(autobanConfig && autobanConfig.paused);
-                pauseBtn.classList.toggle('is-paused', isPaused);
-                pauseBtn.classList.toggle('is-active', !isPaused);
-                const svg = pauseBtn.querySelector('svg');
-                if (svg) {
-                    if (isPaused) {
-                        svg.innerHTML = '<polygon points="4,2 14,8 4,14"/>';
-                        pauseBtn.setAttribute('data-tooltip', 'Resume automation timers');
-                        pauseBtn.title = 'Resume automation timers';
-                    } else {
-                        svg.innerHTML = '<rect x="3" y="2" width="3.5" height="12" rx="1"/><rect x="9.5" y="2" width="3.5" height="12" rx="1"/>';
-                        pauseBtn.setAttribute('data-tooltip', 'Pause automation timers');
-                        pauseBtn.title = 'Pause automation timers';
-                    }
-                }
-            }
-        }
-
-        function syncAutobanCountdownTimer() {
-            const shouldRun = !!(autobanConfig && autobanConfig.enabled);
-            if (shouldRun && !autobanCountdownTimer) {
-                autobanCountdownTimer = setInterval(updateAutobanIndicators, 1000);
-                return;
-            }
-            if (!shouldRun && autobanCountdownTimer) {
-                clearInterval(autobanCountdownTimer);
-                autobanCountdownTimer = null;
-            }
         }
 
         function updateWorktreeIndicator(worktreePath) {
@@ -10953,14 +10806,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (Array.isArray(msg.columns) && msg.columns.length > 0) {
                         columnDefinitions = msg.columns;
                         columns = columnDefinitions.map(col => col.id);
-                        autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
                         lastBoardSignature = '';
                         lastWorkspaceDropdownSignature = null;
                         clearOptimisticGuard();  // a deliberate workspace switch ends any in-flight drag guard
                         renderColumns();
                         renderBoard(currentCards);
                         updateAllColumnAgents();
-                        updateAutobanIndicators();
                     }
                     break;
                 case 'uatData':
@@ -11209,12 +11060,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'remoteControlState':
                     remoteControlActive = !!msg.active;
                     applyRemoteControlButtonState();
-                    break;
-                case 'updateAutobanConfig':
-                    autobanConfig = msg.state || null;
-                    updateAutobanIndicators(true);
-                    syncAutobanCountdownTimer();
-                    updateAutobanButtonState();
                     break;
                 case 'updatePairProgrammingMode': {
                     const ppSelect = document.getElementById('pairProgrammingModeSelect');
@@ -11493,114 +11338,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         });
 
-        /** Format seconds as MM:SS */
-        function formatCountdown(secs) {
-            const m = Math.floor(secs / 60);
-            const s = secs % 60;
-            return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-        }
-
-        /** Update autoban timer badges inline in the sub-bar. */
-        function updateAutobanIndicators(forceRebuild) {
-            const container = document.getElementById('autoban-timers-inline');
-            if (!container) { updateAutobanButtonState(); return; }
-
-            if (!autobanConfig || !autobanConfig.enabled) {
-                if (container.innerHTML !== '') { container.innerHTML = ''; }
-                container.classList.add('is-empty');
-                updateAutobanButtonState();
-                return;
-            }
-            container.classList.remove('is-empty');
-
-            if (autobanConfig.paused) {
-                const badgeData = autobanColumns.map(col => {
-                    const abbrev = COLUMN_ABBREV[col] || col.charAt(0);
-                    const rule = autobanConfig.rules && autobanConfig.rules[col];
-                    if (rule && rule.enabled) {
-                        const remainingMs = autobanConfig.pausedRemainingMs?.[col];
-                        if (typeof remainingMs === 'number' && remainingMs > 0) {
-                            const remainingSec = Math.ceil(remainingMs / 1000);
-                            return { text: `${abbrev}: ${formatCountdown(remainingSec)}`, active: false };
-                        }
-                        return { text: `${abbrev}: --:--`, active: false };
-                    }
-                    return { text: `${abbrev}: off`, active: false };
-                });
-                // Badges belong to the SCHEDULE clock, so they follow the schedule
-                // switch. Keying them on the retired mode axis hid them whenever
-                // Mission Control was armed alongside a running schedule — the
-                // residual exclusivity the four-thing model exists to remove.
-                let filteredBadgeData = [];
-                if (autobanConfig.enabled === true) {
-                    const sourceIdx = autobanColumns.indexOf('PLAN REVIEWED');
-                    filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-                }
-                if (forceRebuild || container.children.length !== filteredBadgeData.length) {
-                    container.innerHTML = filteredBadgeData.map(b =>
-                        `<span class="autoban-timer-badge${b.active ? ' is-active' : ''}">${b.text}</span>`
-                    ).join('');
-                } else {
-                    for (let i = 0; i < filteredBadgeData.length; i++) {
-                        const el = container.children[i];
-                        const data = filteredBadgeData[i];
-                        if (el.textContent !== data.text) { el.textContent = data.text; }
-                        el.classList.toggle('is-active', data.active);
-                    }
-                }
-                updateAutobanButtonState();
-                return;
-            }
-
-            // Compute desired state for each badge
-            const badgeData = autobanColumns.map(col => {
-                const abbrev = COLUMN_ABBREV[col] || col.charAt(0);
-                const rule = autobanConfig.rules && autobanConfig.rules[col];
-                if (rule && rule.enabled) {
-                    const lastTickAt = Number(autobanConfig.lastTickAt && autobanConfig.lastTickAt[col]) || Date.now();
-                    const intervalMs = Math.max(1, Number(rule.intervalMinutes) || 1) * 60 * 1000;
-                    const nextTickAt = lastTickAt + intervalMs;
-                    const remainingSec = Math.max(0, Math.ceil((nextTickAt - Date.now()) / 1000));
-                    const text = remainingSec > 0 ? `${abbrev}: ${formatCountdown(remainingSec)}` : `${abbrev}: GO`;
-                    return { text, active: true };
-                } else {
-                    return { text: `${abbrev}: off`, active: false };
-                }
-            });
-
-            // Badges follow the schedule switch — see the note on the twin above.
-            let filteredBadgeData = [];
-            if (autobanConfig.enabled === true) {
-                const sourceIdx = autobanColumns.indexOf('PLAN REVIEWED');
-                filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-            }
-
-            const existingBadges = container.children;
-
-            // Full rebuild when structure changes or forced (config update)
-            if (forceRebuild || existingBadges.length !== filteredBadgeData.length) {
-                container.innerHTML = filteredBadgeData.map(b =>
-                    `<span class="autoban-timer-badge${b.active ? ' is-active' : ''}">${b.text}</span>`
-                ).join('');
-                updateAutobanButtonState();
-                return;
-            }
-
-            // Targeted update: only touch badges whose content or state changed
-            for (let i = 0; i < filteredBadgeData.length; i++) {
-                const el = existingBadges[i];
-                const data = filteredBadgeData[i];
-                if (el.textContent !== data.text) {
-                    el.textContent = data.text;
-                }
-                const hasActive = el.classList.contains('is-active');
-                if (data.active !== hasActive) {
-                    el.classList.toggle('is-active', data.active);
-                }
-            }
-            updateAutobanButtonState();
-        }
-
         function updateReassignButtonVisibility() {
             const btn = document.getElementById('btn-assign-workspace-project');
             if (btn) {
@@ -11799,12 +11536,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 btnDeleteProject.setAttribute('data-tooltip', !disabled ? 'Delete selected project' : 'Select a project to delete');
             }
         });
-        document.getElementById('btn-autoban')?.addEventListener('click', () => {
-            // Pure mirror of the tab's ON/OFF — posts the same toggle message.
-            // External mode hides this button entirely (updateAutobanButtonState).
-            const currentlyEnabled = !!(autobanConfig && autobanConfig.enabled);
-            postKanbanMessage({ type: 'toggleAutoban', enabled: !currentlyEnabled });
-        });
         // ── Remote Control (§10) ──────────────────────────────────────────────
         // The Remote config tab moved to project.html; only the toolbar
         // start/stop toggle lives here. Its state hydrates from the
@@ -11818,16 +11549,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             postKanbanMessage({ type: remoteControlActive ? 'stopRemoteControl' : 'startRemoteControl' });
         });
 
-        document.getElementById('btn-reset-autoban-timer')?.addEventListener('click', () => {
-            postKanbanMessage({ type: 'resetAutobanTimers' });
-            // Brief visual cooldown to prevent rapid-fire clicks
-            const btn = document.getElementById('btn-reset-autoban-timer');
-            if (btn) { btn.disabled = true; setTimeout(() => { btn.disabled = false; }, 2000); }
-        });
-        document.getElementById('btn-pause-autoban-timer')?.addEventListener('click', () => {
-            const isPaused = !!(autobanConfig && autobanConfig.paused);
-            postKanbanMessage({ type: 'toggleAutobanPause', paused: !isPaused });
-        });
         document.getElementById('btn-cli-triggers')?.addEventListener('click', () => {
             cliTriggersEnabled = !cliTriggersEnabled;
             updateCliToggleUi();
@@ -11903,8 +11624,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         updateFeatureWorkflowToggleUi();
         renderColumns();
         renderBoard([]);
-        updateAutobanButtonState();
-        syncAutobanCountdownTimer();
 
         document.getElementById('integration-autopull-toggle')?.addEventListener('change', updateIntegrationIntervalState);
         document.getElementById('integration-settings-close')?.addEventListener('click', closeIntegrationSettings);

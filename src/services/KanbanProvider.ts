@@ -28,7 +28,7 @@ import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, t
 import { compareByPrecedence } from './kanbanOrdering';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
-import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
+import { GlobalIntegrationConfigService, type ScheduledJob, type SchedulerConfig } from './GlobalIntegrationConfigService';
 import { BOARD_DRIVING_CONTRACT as SHARED_BOARD_DRIVING_CONTRACT } from './schedulerPresets';
 import { KanbanMigration } from './KanbanMigration';
 import { SURFACES } from './wsHub';
@@ -4365,12 +4365,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         }
     }
 
-    private _columnsSignature(columns: Array<{ id: string; label: string; role?: string | null; autobanEnabled?: boolean }>): string {
+    private _columnsSignature(columns: Array<{ id: string; label: string; role?: string | null }>): string {
         return JSON.stringify(columns.map(col => ({
             id: col.id,
             label: col.label,
-            role: col.role ?? null,
-            autobanEnabled: !!col.autobanEnabled
+            role: col.role ?? null
         })));
     }
 
@@ -9833,12 +9832,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // therefore in PlanningPanelProvider; the dispatch-path resolvers
             // (_resolveProjectContextEnabled / _resolveProjectPrd) remain here, plus the public
             // getProjectContextEnabled / setProjectContextEnabled accessors the Project panel calls.
-            case 'setAutomationMode': {
-                if (this._taskViewerProvider) {
-                    await this._taskViewerProvider.setAutomationModeFromKanban(msg);
-                }
-                return { success: true };
-            }
             case 'startOrchestrator': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (workspaceRoot && this._taskViewerProvider) {
@@ -9874,46 +9867,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 return { success: false, error: 'jobId is required' };
             }
-            case 'getAutobanConfig': {
-                return { success: true, type: 'updateAutobanConfig', state: this._autobanState };
-            }
-            case 'updateAutobanConfig': {
-                if (this._taskViewerProvider && msg.state) {
-                    await this._taskViewerProvider.updateAutobanConfigFromKanban(msg.state);
-                }
-                return { success: true };
-            }
-            case 'toggleAutoban': {
-                const enabled = !!msg.enabled;
-                if (this._autobanState) {
-                    this._autobanState = { ...this._autobanState, enabled };
-                }
-                this._markConfigDirty();
-                try {
-                    await this._seams().commands.executeCommand('switchboard.setAutobanEnabledFromKanban', enabled);
-                } catch (e) {
-                    console.error('[KanbanProvider] toggleAutoban failed:', e);
-                    if (this._autobanState) {
-                        this._autobanState = { ...this._autobanState, enabled: !enabled };
-                    }
-                }
-                this.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
-                return { success: true, state: this._autobanState };
-            }
-            case 'resetAutobanTimers': {
-                await this._seams().commands.executeCommand('switchboard.resetAutobanTimersFromKanban');
-                return { success: true };
-            }
-            case 'toggleAutobanPause': {
-                await this._seams().commands.executeCommand('switchboard.setAutobanPausedFromKanban', !!msg.paused);
-                return { success: true };
-            }
-            case 'setWhenSchedule': {
-                if (this._taskViewerProvider) {
-                    await this._taskViewerProvider.setWhenSchedule(msg.schedule ?? null);
-                }
-                return { success: true };
-            }
             case 'setPairProgrammingMode': {
                 const mode = msg.mode;
                 const valid = ['off', 'cli-cli', 'cli-ide', 'ide-cli', 'ide-ide'];
@@ -9937,7 +9890,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this.postMessage({ type: 'mcMissions', missions: missionsList });
                 const config = await GlobalIntegrationConfigService.getSchedulerConfig();
                 this.postMessage({ type: 'updateSchedulerConfig', config });
-                return { success: true, missions: missionsList };
+                const schedulesList = this._mapSchedulerConfigToMcSchedules(config);
+                this.postMessage({ type: 'mcSchedules', schedules: schedulesList });
+                return { success: true, missions: missionsList, schedules: schedulesList };
             }
             case 'mcNewMission': {
                 const ctx = await this._resolveMissionDb(msg.workspaceRoot);
@@ -10040,6 +9995,122 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (!ctx || !msg.missionId || !msg.name) return { success: false, error: 'Invalid arguments' };
                 await ctx.db.removeMissionMember(msg.missionId, msg.name);
                 await this._postMissions(ctx);
+                return { success: true };
+            }
+
+            // ── Mission Control Schedules Tab ──────────────────────────
+            case 'mcNewSchedule': {
+                const id = 'sched_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+                const newJob: ScheduledJob = {
+                    id,
+                    label: 'New Schedule',
+                    enabled: false,
+                    source: 'advance-plan',
+                    target: 'local-terminal',
+                    intervalMinutes: 10,
+                    sourceConfig: {
+                        type: 'internal',
+                        schedule: 'every 10 min',
+                        fromColumn: 'CREATED',
+                        toColumn: 'PLAN REVIEWED'
+                    }
+                };
+                const cfg = await GlobalIntegrationConfigService.getSchedulerConfig();
+                cfg.jobs = [...(cfg.jobs || []), newJob];
+                await GlobalIntegrationConfigService.setSchedulerConfig(cfg);
+                await this._postSchedules();
+                return { success: true, schedule: newJob };
+            }
+            case 'mcUpdateSchedule': {
+                if (!msg.scheduleId) return { success: false, error: 'scheduleId required' };
+                const cfg = await GlobalIntegrationConfigService.getSchedulerConfig();
+                const job = (cfg.jobs || []).find(j => j.id === msg.scheduleId);
+                if (!job) return { success: false, error: 'Schedule not found' };
+
+                const field = String(msg.field || '');
+                const val = msg.value;
+                if (!job.sourceConfig) job.sourceConfig = {};
+
+                if (field === 'name' || field === 'label') {
+                    job.label = String(val || '').trim() || 'Schedule';
+                } else if (field === 'action') {
+                    job.source = val as any;
+                } else if (field === 'type') {
+                    job.sourceConfig.type = val;
+                } else if (field === 'schedule') {
+                    job.sourceConfig.schedule = val;
+                    const schedStr = String(val || '');
+                    if (schedStr.startsWith('every 5')) job.intervalMinutes = 5;
+                    else if (schedStr.startsWith('every 10')) job.intervalMinutes = 10;
+                    else if (schedStr.startsWith('every 15')) job.intervalMinutes = 15;
+                    else if (schedStr.startsWith('every 30')) job.intervalMinutes = 30;
+                    else if (schedStr.startsWith('hourly')) job.intervalMinutes = 60;
+                    else if (schedStr.startsWith('every 2')) job.intervalMinutes = 120;
+                    else if (schedStr.startsWith('every 6')) job.intervalMinutes = 360;
+                    else if (schedStr.startsWith('daily')) job.intervalMinutes = 1440;
+                    else if (schedStr.startsWith('weekly')) job.intervalMinutes = 10080;
+                } else if (field === 'fromColumn') {
+                    job.sourceConfig.fromColumn = val;
+                } else if (field === 'toColumn') {
+                    job.sourceConfig.toColumn = val;
+                } else if (field === 'complexityFilter') {
+                    job.sourceConfig.complexityFilter = val;
+                } else if (field === 'artifactsFolder') {
+                    job.sourceConfig.artifactsFolder = val;
+                } else if (field === 'targetTerminal') {
+                    job.sourceConfig.targetTerminal = val;
+                    if (!job.teamTarget) job.teamTarget = { groupId: '' };
+                    job.teamTarget.role = val;
+                } else if (field === 'prompt') {
+                    job.promptOverride = String(val || '');
+                    job.sourceConfig.prompt = val;
+                } else if (field === 'cron') {
+                    job.sourceConfig.cron = val;
+                }
+
+                await GlobalIntegrationConfigService.setSchedulerConfig(cfg);
+                await this._postSchedules();
+                return { success: true };
+            }
+            case 'mcStartSchedule': {
+                if (!msg.scheduleId) return { success: false, error: 'scheduleId required' };
+                const cfg = await GlobalIntegrationConfigService.getSchedulerConfig();
+                const job = (cfg.jobs || []).find(j => j.id === msg.scheduleId);
+                if (!job) return { success: false, error: 'Schedule not found' };
+                job.enabled = true;
+                await GlobalIntegrationConfigService.setSchedulerConfig(cfg);
+                await this._postSchedules();
+                return { success: true };
+            }
+            case 'mcStopSchedule': {
+                if (!msg.scheduleId) return { success: false, error: 'scheduleId required' };
+                const cfg = await GlobalIntegrationConfigService.getSchedulerConfig();
+                const job = (cfg.jobs || []).find(j => j.id === msg.scheduleId);
+                if (!job) return { success: false, error: 'Schedule not found' };
+                job.enabled = false;
+                await GlobalIntegrationConfigService.setSchedulerConfig(cfg);
+                await this._postSchedules();
+                return { success: true };
+            }
+            case 'mcDeleteSchedule': {
+                if (!msg.scheduleId) return { success: false, error: 'scheduleId required' };
+                const cfg = await GlobalIntegrationConfigService.getSchedulerConfig();
+                cfg.jobs = (cfg.jobs || []).filter(j => j.id !== msg.scheduleId);
+                await GlobalIntegrationConfigService.setSchedulerConfig(cfg);
+                await this._postSchedules();
+                return { success: true };
+            }
+            case 'mcScheduleLoadLog': {
+                if (!msg.scheduleId) return { success: false, error: 'scheduleId required' };
+                const cfg = await GlobalIntegrationConfigService.getSchedulerConfig();
+                const job = (cfg.jobs || []).find(j => j.id === msg.scheduleId);
+                const content = job?.lastOutcome
+                    ? `Last run: ${new Date(job.lastRunAt || 0).toLocaleString()} — ${job.lastOutcome}${job.lastTarget ? ` (${job.lastTarget})` : ''}`
+                    : '(log file is empty or has not been written yet)';
+                this.postMessage({ type: 'mcScheduleLog', scheduleId: msg.scheduleId, content });
+                return { success: true, content };
+            }
+            case 'mcScheduleExternalCopy': {
                 return { success: true };
             }
 
@@ -10181,7 +10252,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             workspaceRoot: workspaceRoot || undefined,
                             targetTerminalOverride,
                             bypassTriggerGate: !!msg?.bypassTriggerGate,
-                            unattended: !!msg?.unattended
+                            unattended: !!msg?.unattended,
+                            originTerminal: msg?.originTerminal,
                         });
                         if (dispatched && plannerCursorLocationKey && tvp) {
                             await tvp.advancePlannerRotationCursor(plannerCursorLocationKey, 1);
@@ -10272,7 +10344,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                         // Trailing arg is the per-surface fleet discriminator — see the
                         // custom-user branch above and ConfiguredKanbanDispatchOptions.
-                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, undefined, !!msg?.bypassTriggerGate, !!msg?.unattended);
+                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, undefined, !!msg?.bypassTriggerGate, !!msg?.unattended, msg?.originTerminal);
                         if (dispatched && workspaceRoot) {
                             // Advance the rotation cursor AFTER successful dispatch so a failed dispatch
                             // doesn't skip a terminal (consistent with _distributePlannerDispatch).
@@ -14556,6 +14628,37 @@ ${FOCUS_DIRECTIVE}`;
     /** Broadcast the mission list to the Mission Control panel. */
     private async _postMissions(ctx: { db: KanbanDatabase; wsId: string }): Promise<void> {
         this.postMessage({ type: 'mcMissions', missions: await ctx.db.getMissions(ctx.wsId) });
+    }
+
+    /** Map ScheduledJob records to the shape expected by Mission Control Schedules tab. */
+    private _mapSchedulerConfigToMcSchedules(config: SchedulerConfig): any[] {
+        const jobs = Array.isArray(config?.jobs) ? config.jobs : [];
+        return jobs.map(job => {
+            const sc = (job.sourceConfig && typeof job.sourceConfig === 'object') ? job.sourceConfig : {};
+            return {
+                id: job.id,
+                name: job.label || job.id,
+                action: job.source,
+                type: (sc.type as string) || (job.target === 'cloud' ? 'external' : 'internal'),
+                active: !!job.enabled,
+                schedule: (sc.schedule as string) || (job.intervalMinutes ? `every ${job.intervalMinutes} min` : 'every 10 min'),
+                fromColumn: (sc.fromColumn as string) || '',
+                toColumn: (sc.toColumn as string) || '',
+                complexityFilter: (sc.complexityFilter as string) || '',
+                artifactsFolder: (sc.artifactsFolder as string) || '',
+                targetTerminal: (sc.targetTerminal as string) || (job.teamTarget?.role || '') || (job.lastTarget || ''),
+                prompt: (job.promptOverride || (sc.prompt as string) || ''),
+                logContent: job.lastOutcome ? `Last run: ${new Date(job.lastRunAt || 0).toLocaleString()} — ${job.lastOutcome}${job.lastTarget ? ` (${job.lastTarget})` : ''}` : ''
+            };
+        });
+    }
+
+    /** Broadcast the schedules list to the Mission Control panel. */
+    private async _postSchedules(): Promise<any[]> {
+        const config = await GlobalIntegrationConfigService.getSchedulerConfig();
+        const schedules = this._mapSchedulerConfigToMcSchedules(config);
+        this.postMessage({ type: 'mcSchedules', schedules });
+        return schedules;
     }
 
     public async getWorktreeMergePrompt(

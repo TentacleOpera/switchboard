@@ -477,12 +477,8 @@
                 document.body.classList.add('host-automation-false');
                 const style = document.createElement('style');
                 style.textContent = `
-.host-automation-false #btn-autoban,
 .host-automation-false #btn-cli-triggers,
 .host-automation-false #btn-remote-control,
-.host-automation-false .autoban-timers-inline,
-.host-automation-false #btn-pause-autoban-timer,
-.host-automation-false #btn-reset-autoban-timer,
 .host-automation-false button[data-action="julesSelected"],
 .host-automation-false #btn-build-via-planner,
 .host-automation-false #btn-update-via-planner,

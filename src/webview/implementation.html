@@ -1953,17 +1953,8 @@
         let lastJulesAutoSyncEnabled = undefined;
         // Autoban engine state (received from backend)
         let autobanState = {
-            enabled: false,
-            batchSize: 1,
-            complexityFilter: 'all',
-            routingMode: 'dynamic',
-            maxSendsPerTerminal: 10,
-            rules: {
-                CREATED: { enabled: true, intervalMinutes: 10 },
-                'PLAN REVIEWED': { enabled: true, intervalMinutes: 20 },
-                'LEAD CODED': { enabled: true, intervalMinutes: 15 },
-                'CODER CODED': { enabled: true, intervalMinutes: 15 }
-            }
+            missionControlArmed: false,
+            pairProgrammingMode: 'off'
         };
         let userInitiatedChange = false;
         let activeTab = 'agents';
@@ -2676,7 +2667,6 @@
         }
 
         let currentAgentTab = 'terminals';
-        let isAutobanPanelInteracting = false;
         let memoDirty = false;
         function switchAgentTab(tab, persist = true) {
             const isChanging = currentAgentTab !== tab;
@@ -3070,9 +3060,6 @@
         }
 
         function renderAgentList() {
-            // Skip re-render when user is interacting with autoban dropdowns
-            if (isAutobanPanelInteracting && currentAgentTab === 'autoban') return;
-
             // --- Onboarding Guard: show "Agents not connected" if no green agents for >5s ---
             if (_setupComplete) {
                 const va = lastVisibleAgents;

@@ -82,6 +82,41 @@ export function heldByTeam(p: any, teamSet: Set<string>): boolean {
 }
 
 /**
+ * Resolves whether a team is currently in flight.
+ * A team is in flight when any active card HELD by one of its seats has no
+ * completion fact (dispatched_terminal names a team member and completed_at is NULL).
+ */
+export async function resolveTeamInFlight(
+    db: any,
+    teamMemberNames: string[]
+): Promise<{ inFlight: boolean; planId?: string; kanbanColumn?: string; dispatchedTerminal?: string }> {
+    if (!db || !Array.isArray(teamMemberNames) || teamMemberNames.length === 0) {
+        return { inFlight: false };
+    }
+    const teamSet = new Set<string>(teamMemberNames);
+    const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+    const board: any[] = (await db.getBoard?.(wsId)) || [];
+    for (const candidate of board.filter(p => heldByTeam(p, teamSet))) {
+        let inFlightCard: any = candidate;
+        try {
+            const fresh: any = await db.getPlanByPlanId?.(candidate.planId);
+            if (fresh) {
+                inFlightCard = fresh;
+            }
+        } catch { /* fall back to candidate */ }
+        if (heldByTeam(inFlightCard, teamSet)) {
+            return {
+                inFlight: true,
+                planId: inFlightCard.planId,
+                kanbanColumn: inFlightCard.kanbanColumn,
+                dispatchedTerminal: inFlightCard.dispatchedTerminal,
+            };
+        }
+    }
+    return { inFlight: false };
+}
+
+/**
  * Capture cap for the git commands behind `GET /worktree/:id/diff`.
  *
  * Distinct from the 512KB response truncation: this is how much git output the
@@ -398,6 +433,11 @@ interface LocalApiServerOptions {
      * headless/test harnesses.
      */
     onTerminalContextCleared?: (terminalName: string) => void;
+    /**
+     * Fired when a team is released after a task completion post.
+     * Optional — absent in headless/test harnesses.
+     */
+    onTeamReleased?: (workspaceRoot: string, teamMemberNames: string[]) => Promise<void>;
     /**
      * Fired when a seat's working state is cleared (non-NULL→NULL transition) via
      * queue/done. Mirrors PlanIngestionEngine._onWorkingStateCleared →
@@ -1894,7 +1934,7 @@ export class LocalApiServer {
             // 4. Fire the exact arm a webview drag fires: it persists the move FIRST,
             //    then dispatches (the known move↔dispatch coupling order).
             const dispatchedAtBefore = record.dispatchedAt ?? null;
-            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride }, workspaceRoot);
+            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal }, workspaceRoot);
 
             // 5. Verify against the DB — report what happened, not what was requested.
             const after: any = await db.getPlanByPlanId(record.planId);
@@ -2137,28 +2177,15 @@ export class LocalApiServer {
             // The scan re-reads the canonical row before refusing to avoid
             // false 409s from race conditions between board load and completion post.
             if (isTeamDispatch) {
-                // EVERY candidate is re-read, not just the first. A stale board
-                // row whose fresh read shows a completion must not end the scan:
-                // the team can hold a second card, and skipping it would release
-                // the team on a card nobody posted — the fail-open this gate
-                // exists to close.
-                for (const candidate of board.filter(p => heldByTeam(p, teamSet))) {
-                    let inFlightCard: any = candidate;
-                    try {
-                        const fresh: any = await db.getPlanByPlanId?.(candidate.planId);
-                        if (fresh) {
-                            inFlightCard = fresh;
+                const inFlightCheck = await resolveTeamInFlight(db, Array.from(teamSet));
+                if (inFlightCheck.inFlight) {
+                    return fail(409, `Team already in flight: card '${inFlightCheck.planId}' is in '${inFlightCheck.kanbanColumn}' held by '${inFlightCheck.dispatchedTerminal}' with no completion post. Post /kanban/task/complete before asking for the next card.`, {
+                        inFlight: {
+                            planId: inFlightCheck.planId,
+                            kanbanColumn: inFlightCheck.kanbanColumn,
+                            dispatchedTerminal: inFlightCheck.dispatchedTerminal,
                         }
-                    } catch { /* fall back to candidate */ }
-                    if (heldByTeam(inFlightCard, teamSet)) {
-                        return fail(409, `Team already in flight: card '${inFlightCard.planId}' is in '${inFlightCard.kanbanColumn}' held by '${inFlightCard.dispatchedTerminal}' with no completion post. Post /kanban/task/complete before asking for the next card.`, {
-                            inFlight: {
-                                planId: inFlightCard.planId,
-                                kanbanColumn: inFlightCard.kanbanColumn,
-                                dispatchedTerminal: inFlightCard.dispatchedTerminal,
-                            }
-                        });
-                    }
+                    });
                 }
             }
 
@@ -2598,6 +2625,7 @@ export class LocalApiServer {
         cleared?: boolean;
         clearError?: string;
         acceptedCodingSeat?: string;
+        dispatchedTerminal?: string;
         idempotent?: boolean;
         notFound?: boolean;
         error?: string;
@@ -2692,7 +2720,8 @@ export class LocalApiServer {
             note,
             cleared,
             ...(clearError ? { clearError } : {}),
-            ...(acceptedCodingSeat ? { acceptedCodingSeat } : {})
+            ...(acceptedCodingSeat ? { acceptedCodingSeat } : {}),
+            ...(existing.dispatchedTerminal ? { dispatchedTerminal: existing.dispatchedTerminal } : {})
         };
     }
 
@@ -2713,7 +2742,12 @@ export class LocalApiServer {
      * Contract:
      * - Idempotent: a repeat call with the same `planId` returns the existing
      *   record without re-writing `completed_at` or re-recording the event.
-     * - No dispatch, no column move. Clear accepted work's recorded seat once.
+     * - No dispatch, no column move. When an advance-when-ready job targets the
+     *   released team, the completion triggers a scheduler fire by clearing the
+     *   job's lastRunAt — gated on the flag and the team match. This is the one
+     *   exception to "no dispatch": the scheduler fires on its own tick, not
+     *   inline from this handler.
+     * - Clear accepted work's recorded seat once.
      * - `queue/done` is untouched — it means "give me the next item", not "done".
      */
     private async _handleKanbanTaskComplete(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -2770,6 +2804,26 @@ export class LocalApiServer {
                 res.writeHead(status, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: result.error || 'Completion failed' }));
                 return;
+            }
+
+            // Trigger advance-when-ready hook if team is released
+            if (result.success && !result.idempotent && this._options.onTeamReleased) {
+                const terminal = result.dispatchedTerminal || from;
+                void (async () => {
+                    try {
+                        let roster: string[] | null = null;
+                        if (this._options.resolveTeamMembers && terminal) {
+                            roster = await this._options.resolveTeamMembers(workspaceRoot, terminal);
+                        }
+                        const teamMembers = (roster && roster.length > 0) ? roster : (terminal ? [terminal] : [from]);
+                        const inFlightCheck = await resolveTeamInFlight(db, teamMembers);
+                        if (!inFlightCheck.inFlight) {
+                            await this._options.onTeamReleased!(workspaceRoot, teamMembers);
+                        }
+                    } catch (releaseErr) {
+                        console.warn('[LocalApiServer] onTeamReleased hook error:', releaseErr);
+                    }
+                })();
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });

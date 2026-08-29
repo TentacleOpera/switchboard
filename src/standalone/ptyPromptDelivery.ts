@@ -1,6 +1,6 @@
 import type { ExtendedTerminalHandle } from './ptyFleetService';
 import type { CliFamily } from '../services/cliIdentity';
-import { createClearReadinessTracker, type ClearReadinessResult, type ClearReadinessMode } from './clearReadiness';
+import { createClearReadinessTracker, awaitFirstReadiness, type ClearReadinessResult, type ClearReadinessMode } from './clearReadiness';
 
 const CHUNK_SIZE = 256;
 // 30ms was inherited from the VS Code sendText path, where each chunk crosses an
@@ -126,9 +126,21 @@ export interface PromptDeliveryOptions {
 /**
  * Deliver a prompt to a directly-owned pty.
  *
- * Returns the clear-readiness result when a clear ran, so the caller can report
- * the REAL reason ('signal' | 'fallback' | 'manual' | 'exit') on the dispatch
- * lifecycle event. `undefined` means no clear was performed.
+ * Returns the readiness result — the clear-readiness result when a clear ran,
+ * or the first-readiness result when the cold-boot gate ran on a seat that has
+ * never been prompted (`handle.promptCount === 0`). The caller can report the
+ * REAL reason ('signal' | 'fallback' | 'manual' | 'exit' | 'timeout') on the
+ * dispatch lifecycle event. `undefined` means neither a clear nor a boot gate
+ * ran (a subsequent dispatch with `clearBeforePrompt: false`).
+ *
+ * On a seat with no prior delivery (`promptCount === 0`):
+ *   1. `clearBeforePrompt` is forced false — a seat the host has never
+ *      dispatched to has nothing to clear, and the `/clear` write is the one
+ *      that can merge with the prompt on a booting CLI.
+ *   2. The first-readiness gate (`awaitFirstReadiness`) waits for the CLI to
+ *      produce output before the prompt is written — a floor prevents resolving
+ *      inside the silent boot gap, a ceiling proceeds regardless (reason
+ *      `timeout`), and an exit arm aborts delivery.
  */
 export async function sendPromptToPty(
     handle: ExtendedTerminalHandle,
@@ -137,9 +149,35 @@ export async function sendPromptToPty(
 ): Promise<ClearReadinessResult | undefined> {
     return withTerminalLock(handle.name, async (): Promise<ClearReadinessResult | undefined> => {
         let readiness: ClearReadinessResult | undefined;
-        if (opts?.clearBeforePrompt) {
+        const isFirstDelivery = handle.promptCount === 0;
+
+        // Change 1: suppress clear on a seat with no prior delivery. A seat the
+        // host has never dispatched to has nothing to clear, and the /clear
+        // write is the one that can merge with the prompt on a booting CLI.
+        // The existing work-context map (lastWorkContextByTerminal) is NOT on
+        // the dispatchCards path — it lives only in the ptySendPrompt handler —
+        // so the suppression must live here in the shared delivery layer.
+        const effectiveClearBeforePrompt = isFirstDelivery ? false : (opts?.clearBeforePrompt === true);
+
+        // Change 3: first-readiness gate — wait for the cold-booting CLI to
+        // produce output before writing anything. This is the ONE location
+        // that covers both hosts: the standalone dispatchCards path and the
+        // extension host's ptySendPrompt path both flow through sendPromptToPty.
+        if (isFirstDelivery) {
             if (handle.status === 'exited') {
-                return undefined;
+                return { reason: 'exit', elapsedMs: 0 };
+            }
+            readiness = await awaitFirstReadiness(handle, {
+                cliFamily: opts?.cliFamily || handle.cliFamily,
+            });
+            if (readiness.reason === 'exit' || (handle.status as string) === 'exited') {
+                return readiness;
+            }
+        }
+
+        if (effectiveClearBeforePrompt) {
+            if (handle.status === 'exited') {
+                return readiness;
             }
             readiness = await clearAndAwaitReadinessLocked(handle, opts);
             if (readiness.reason === 'exit' || (handle.status as string) === 'exited') {
@@ -208,6 +246,12 @@ export async function sendPromptToPty(
         // Confirm Enter — see rule 2 above. Unconditional by design.
         await new Promise(r => setTimeout(r, CONFIRM_ENTER_DELAY_MS));
         handle.write('\r');
+        // Increment promptCount after the confirm CR — the first delivery is
+        // now complete. Subsequent dispatches will not suppress clear or run
+        // the first-readiness gate. Keys changes 1, 3, 5, and 6.
+        if (isFirstDelivery) {
+            handle.promptCount = 1;
+        }
         return readiness;
     });
 }

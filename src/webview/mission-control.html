@@ -241,10 +241,18 @@
         #mc-controller-frame { flex: 1; border: none; background: var(--panel-bg); width: 100%; min-height: 120px; }
         .mc-controller-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px; padding: 16px; text-align: center; }
 
-        /* ── Recurring jobs (re-homed survivors) ────────────────────────── */
+        /* ── Recurring jobs (re-homed survivors + custom) ───────────────── */
         .mc-recurring { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 6px 12px; border-bottom: 1px solid var(--border-color); font-size: 10px; color: var(--text-secondary); }
         .mc-recurring-label { letter-spacing: 0.08em; color: var(--text-secondary); opacity: 0.75; }
         .mc-recurring-item { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+        .mc-custom-jobs-list { width: 100%; display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+        .mc-custom-job-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 3px; box-sizing: border-box; }
+        .mc-custom-job-row input[type="text"] { background: var(--input-bg, #1e1e1e); color: var(--text-color, #ccc); border: 1px solid var(--border-color); padding: 3px 6px; font-size: 10px; border-radius: 2px; }
+        .mc-custom-job-row textarea { background: var(--input-bg, #1e1e1e); color: var(--text-color, #ccc); border: 1px solid var(--border-color); padding: 3px 6px; font-size: 10px; border-radius: 2px; resize: vertical; min-height: 22px; font-family: inherit; }
+        .mc-custom-job-label-input { width: 130px; flex-shrink: 0; }
+        .mc-custom-job-prompt-input { flex: 1; min-width: 160px; }
+        .mc-custom-job-delete-btn { background: transparent; border: 1px solid rgba(244, 71, 71, 0.4); color: var(--vscode-errorForeground, #f44747); cursor: pointer; padding: 2px 6px; font-size: 9px; border-radius: 2px; }
+        .mc-custom-job-delete-btn:hover { background: rgba(244, 71, 71, 0.2); }
 
 
         /* ── Scrollbars (ported) ────────────────────────────────────────── */
@@ -327,6 +335,8 @@
                         <input type="checkbox" id="mc-job-reconcile">
                         <span title="Advances cards whose work was completed off-machine. Runs on the schedule tick — with the schedule off, this does not run.">RECONCILE CLOUD WORK</span>
                     </label>
+                    <button class="strip-btn" id="mc-add-custom-job" style="margin-left: auto; padding: 2px 8px; font-size: 10px;" data-tooltip="Add a custom recurring prompt">+ ADD CUSTOM JOB</button>
+                    <div class="mc-custom-jobs-list" id="mc-custom-jobs-list"></div>
                 </div>
                 <div class="content-row" id="schedules-content-row">
                     <div class="mc-sidebar" id="schedules-sidebar">

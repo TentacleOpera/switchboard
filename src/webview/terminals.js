@@ -2657,7 +2657,14 @@
                     else if (fleetItem && fleetItem.cliFamily === 'claude') cliName = 'Claude';
                     else if (fleetItem && fleetItem.cliFamily === 'antigravity') cliName = 'Antigravity';
                 }
-                sublabel.textContent = `${cliName} is resetting context.`;
+                // Boot phase: a cold-booting CLI is starting up, not resetting
+                // context. The first-readiness gate is waiting for the CLI to
+                // produce output before the prompt is delivered.
+                if (latestOp.phase === 'booting') {
+                    sublabel.textContent = `${cliName} is starting up.`;
+                } else {
+                    sublabel.textContent = `${cliName} is resetting context.`;
+                }
             }
         }
     }
@@ -12196,16 +12203,12 @@
 
                 const intervalBadge = document.createElement('span');
                 intervalBadge.className = 'inherited-order-badge';
-                intervalBadge.textContent = `${job.intervalMinutes || 10}m`;
+                intervalBadge.textContent = `${job.intervalMinutes || 10}m${job.advanceWhenReady ? ' (ready)' : ''}`;
+                if (job.advanceWhenReady) {
+                    intervalBadge.title = 'Fires on completion; interval is the fallback';
+                }
                 leftInfo.appendChild(intervalBadge);
 
-                if (job.teamTarget?.canMoveCards) {
-                    const cardBadge = document.createElement('span');
-                    cardBadge.className = 'inherited-order-badge';
-                    cardBadge.style.color = 'var(--accent-violet, #c586c0)';
-                    cardBadge.textContent = 'MOVES CARDS';
-                    leftInfo.appendChild(cardBadge);
-                }
 
                 topRow.appendChild(leftInfo);
 
@@ -12323,9 +12326,9 @@
         const labelInput = document.getElementById('team-auto-label');
         const intervalInput = document.getElementById('team-auto-interval');
         const roleInput = document.getElementById('team-auto-role');
-        const canMoveCb = document.getElementById('team-auto-can-move-cards');
         const promptInput = document.getElementById('team-auto-prompt');
         const enabledCb = document.getElementById('team-auto-enabled');
+        const advanceReadyCb = document.getElementById('team-auto-advance-ready');
 
         if (!form) return;
 
@@ -12335,19 +12338,19 @@
             if (labelInput) labelInput.value = job.label || '';
             if (intervalInput) intervalInput.value = job.intervalMinutes || 10;
             if (roleInput) roleInput.value = job.teamTarget?.role || '';
-            if (canMoveCb) canMoveCb.checked = !!job.teamTarget?.canMoveCards;
             const customPrompt = typeof job.sourceConfig?.prompt === 'string' ? job.sourceConfig.prompt : '';
             if (promptInput) promptInput.value = job.promptOverride || customPrompt || '';
             if (enabledCb) enabledCb.checked = !!job.enabled;
+            if (advanceReadyCb) advanceReadyCb.checked = !!job.advanceWhenReady;
         } else {
             if (formTitle) formTitle.textContent = 'New Automation';
             if (idInput) idInput.value = '';
             if (labelInput) labelInput.value = '';
             if (intervalInput) intervalInput.value = '10';
             if (roleInput) roleInput.value = '';
-            if (canMoveCb) canMoveCb.checked = false;
             if (promptInput) promptInput.value = '';
             if (enabledCb) enabledCb.checked = true;
+            if (advanceReadyCb) advanceReadyCb.checked = false;
         }
 
         form.style.display = 'block';
@@ -12362,16 +12365,16 @@
         const labelInput = document.getElementById('team-auto-label');
         const intervalInput = document.getElementById('team-auto-interval');
         const roleInput = document.getElementById('team-auto-role');
-        const canMoveCb = document.getElementById('team-auto-can-move-cards');
         const promptInput = document.getElementById('team-auto-prompt');
         const enabledCb = document.getElementById('team-auto-enabled');
+        const advanceReadyCb = document.getElementById('team-auto-advance-ready');
 
         const label = (labelInput?.value || '').trim() || 'Team Automation';
         const intervalMinutes = Math.max(parseInt(intervalInput?.value || '10', 10) || 10, 1);
         const role = (roleInput?.value || '').trim() || undefined;
-        const canMoveCards = !!canMoveCb?.checked;
         const promptText = (promptInput?.value || '').trim();
         const enabled = enabledCb ? enabledCb.checked : true;
+        const advanceWhenReady = advanceReadyCb ? advanceReadyCb.checked : false;
         const existingId = idInput?.value || '';
 
         if (!cachedSchedulerConfig) {
@@ -12387,21 +12390,23 @@
                 existingJob.label = label;
                 existingJob.intervalMinutes = intervalMinutes;
                 existingJob.enabled = enabled;
+                existingJob.advanceWhenReady = advanceWhenReady;
                 existingJob.promptOverride = promptText || undefined;
                 existingJob.sourceConfig = { ...existingJob.sourceConfig, prompt: promptText };
-                existingJob.teamTarget = { groupId: teamId, role, canMoveCards };
+                existingJob.teamTarget = { groupId: teamId, role };
             }
         } else {
             const newJob = {
                 id: 'job_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
                 label,
                 enabled,
+                advanceWhenReady,
                 source: 'team-automation',
                 target: 'local-terminal',
                 intervalMinutes,
                 promptOverride: promptText || undefined,
                 sourceConfig: { prompt: promptText },
-                teamTarget: { groupId: teamId, role, canMoveCards }
+                teamTarget: { groupId: teamId, role }
             };
             cachedSchedulerConfig.jobs.push(newJob);
         }

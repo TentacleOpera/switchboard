@@ -415,31 +415,6 @@ test('the feature nudge sweep treats an empty liveness snapshot as no evidence',
     assert.ok(sweep.includes('recipientSeat: watch.headTerminal'), 'the head IS the recipient — parent resolution must be skipped');
     // Evidence, not a poke (the PRD "done" definition for this payload).
     assert.ok(sweep.includes('s.dispatchedTerminal') && sweep.includes('s.kanbanColumn') && sweep.includes('s.planFile'),
-        'the nudge body must name the remaining subtasks, their columns and their seats');
-});
-
-test("handleAutobanTurnEnd never advances the board — for any outcome", () => {
-    // This used to be an early return on `outcome === 'stalled'`, guarding a
-    // handler that DID dispatch on 'completed'. Completion-driven dispatch is
-    // deleted: the schedule pops the queue on a clock and a self-pacing lead
-    // pops by asking, so turn-end no longer triggers anything. The invariant is
-    // unchanged and now stronger — a turn-end notice of ANY outcome must not
-    // move a card or start an agent. Pinning the deleted `'stalled'` guard
-    // instead would demand the hybrid back; pinning "dispatches nothing" is the
-    // property that mattered all along.
-    const start = taskViewerTs.indexOf('public handleAutobanTurnEnd(');
-    assert.ok(start >= 0, 'handleAutobanTurnEnd must exist');
-    const arm = taskViewerTs.slice(start, taskViewerTs.indexOf('\n    }', start));
-    for (const forbidden of [
-        'performKanbanDispatch',
-        'dispatchNextFromQueue',
-        '_autobanTickColumn',
-        'moveCardToColumn',
-        '_isCompletionTriggered',
-    ]) {
-        assert.ok(!arm.includes(forbidden),
-            `handleAutobanTurnEnd must not call ${forbidden} — turn-end drives the activity light and the queue watch's silence signal, never a dispatch`);
-    }
 });
 
 test('watchFeature / unwatchFeature are catalogued, allowlisted, schema\'d and return their state', () => {

@@ -265,61 +265,6 @@ async function run() {
             'the feature sweep must treat a subtask as remaining only until its completion post');
     });
 
-    await check('stopReason field exists on AutobanConfigState and is normalised', async () => {
-        assert.ok(/stopReason\?:\s*string/.test(autobanStateSrc),
-            'AutobanConfigState must declare an optional stopReason field');
-        // The normaliser must carry stopReason forward (string or undefined),
-        // not rely solely on the unknown-keys spread.
-        assert.ok(/stopReason:\s*typeof\s+\(state as any\)\?\.stopReason\s*===\s*'string'/.test(autobanStateSrc),
-            'normalizeAutobanConfigState must explicitly normalise stopReason');
-    });
-
-    await check('every automation self-stop records a reason on _autobanState', async () => {
-        // _stopAutobanEngine must set _autobanState.stopReason when given a reason,
-        // regardless of whether a Mission Control exists.
-        assert.ok(/_stopAutobanEngine\(reason\?:\s*string\)/.test(providerSrc),
-            '_stopAutobanEngine must accept an optional reason argument');
-        assert.ok(/if \(reason\)\s*\{[\s\S]*?this\._autobanState\.stopReason\s*=\s*reason/.test(providerSrc),
-            '_stopAutobanEngine must record the reason on _autobanState when present');
-        // The no-valid-tickets self-stop must pass a reason through.
-        assert.ok(/_stopAutobanWithMessage\('Autoban stopped: no more valid tickets remain in enabled columns\.'/.test(providerSrc),
-            'the no-valid-tickets self-stop must pass its message as the stop reason');
-    });
-
-    await check('halt is relayed to Mission Control gated on _hasMissionControl with standingOrders: false', async () => {
-        // The relay must be gated on _hasMissionControl(), use the adopted seat
-        // name, and carry standingOrders: false so it never resets the
-        // controller's context (the established machine-origin relay shape).
-        assert.ok(/if \(reason && this\._hasMissionControl\(\)\)/.test(providerSrc),
-            'halt relay must be gated on `reason && this._hasMissionControl()`');
-        assert.ok(/this\._autobanState\?\.missionControlSeat\?\.terminalName/.test(providerSrc),
-            'halt relay must resolve the Mission Control recipient from the adopted seat');
-        assert.ok(/clearBeforePrompt:\s*false,\s*standingOrders:\s*false/.test(providerSrc),
-            'halt relay must use clearBeforePrompt: false AND standingOrders: false — never reset the controller');
-        // The reason is recorded BEFORE the relay gate, so an unattended halt
-        // (no Mission Control) still leaves a legible off state.
-        const reasonIdx = providerSrc.indexOf('this._autobanState.stopReason = reason');
-        const gateIdx = providerSrc.indexOf('if (reason && this._hasMissionControl())');
-        assert.ok(reasonIdx >= 0 && gateIdx >= 0 && reasonIdx < gateIdx,
-            'stopReason must be recorded before the Mission Control relay gate — the reason survives without a controller');
-    });
-
-    await check('stall classification routes through notifyTurnEnd stalled — no second detector', async () => {
-        // Every stall notification must flow through _turnEndNotifier with
-        // outcome: 'stalled' (which maps to notifyTurnEnd). There must be no
-        // second, parallel stall detector.
-        assert.ok(/outcome:\s*'stalled'/.test(planEngineSrc),
-            'PlanIngestionEngine must classify stalls via _turnEndNotifier with outcome: \'stalled\'');
-        // handleAutobanTurnEnd is the notifier hook — it must NOT build a
-        // second detector. It is a no-op for dispatch (completion-driven
-        // dispatch is deleted); the turn-end signal path stays intact.
-        const hIdx = providerSrc.indexOf('public handleAutobanTurnEnd(');
-        assert.ok(hIdx >= 0, 'handleAutobanTurnEnd must exist as the notifier hook');
-        const hBody = providerSrc.slice(hIdx, providerSrc.indexOf('\n    }', hIdx) + 1);
-        assert.ok(!/outcome === 'stalled'/.test(hBody) || /notifyTurnEnd/.test(hBody),
-            'handleAutobanTurnEnd must not re-classify stalls independently of notifyTurnEnd');
-    });
-
     await check('kanban.html + terminals.js mirrors retired the report-file completion channel', async () => {
         // The webview mirrors of NEW_CODING_HEAD_PROMPT must not instruct
         // writing a completion report file, and must instruct task/complete.

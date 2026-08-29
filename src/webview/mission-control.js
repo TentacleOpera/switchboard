@@ -304,6 +304,21 @@
         });
         const copyBtn = document.getElementById('mc-copy-prompt');
         if (copyBtn) copyBtn.addEventListener('click', () => copyExternalPrompt());
+
+        const timeEl = document.getElementById('mc-sched-time');
+        if (timeEl) timeEl.addEventListener('change', () => updateScheduleField('schedule', timeEl.value));
+        const fromEl = document.getElementById('mc-sched-from');
+        if (fromEl) fromEl.addEventListener('change', () => updateScheduleField('fromColumn', fromEl.value));
+        const toEl = document.getElementById('mc-sched-to');
+        if (toEl) toEl.addEventListener('change', () => updateScheduleField('toColumn', toEl.value));
+        const compEl = document.getElementById('mc-sched-complexity');
+        if (compEl) compEl.addEventListener('change', () => updateScheduleField('complexityFilter', compEl.value));
+        const artEl = document.getElementById('mc-sched-artifacts');
+        if (artEl) artEl.addEventListener('change', () => updateScheduleField('artifactsFolder', artEl.value));
+        const termEl = document.getElementById('mc-sched-terminal');
+        if (termEl) termEl.addEventListener('change', () => updateScheduleField('targetTerminal', termEl.value));
+        const promptEl = document.getElementById('mc-sched-prompt');
+        if (promptEl) promptEl.addEventListener('change', () => updateScheduleField('prompt', promptEl.value));
     }
 
     function _conditional(id, shown, inner) {
@@ -559,8 +574,8 @@
     let lastAutobanState = null;
     let lastTerminalStatuses = {};
 
-    /* ── Recurring jobs (survivors re-homed from the AUTOMATION tab) ──── */
-    /** The two surviving recurring jobs. They ride the SCHEDULE clock — no interval
+    /* ── Recurring jobs (survivors re-homed from the AUTOMATION tab + custom jobs) ──── */
+    /** The two surviving preset recurring jobs. They ride the SCHEDULE clock — no interval
      *  of their own, because a second interval is a second clock — so with the
      *  schedule off neither runs. */
     const SURVIVOR_JOBS = [
@@ -578,6 +593,102 @@
             const job = jobs.find(j => j && j.source === sv.source);
             el.checked = !!(job && job.enabled);
         }
+        renderCustomJobs(jobs.filter(j => j && j.source === 'custom'));
+    }
+
+    function renderCustomJobs(customJobs) {
+        const container = document.getElementById('mc-custom-jobs-list');
+        if (!container) return;
+        container.innerHTML = '';
+        if (customJobs.length === 0) return;
+
+        for (const job of customJobs) {
+            const row = document.createElement('div');
+            row.className = 'mc-custom-job-row';
+            row.dataset.jobId = job.id;
+
+            const enabledCheckbox = document.createElement('input');
+            enabledCheckbox.type = 'checkbox';
+            enabledCheckbox.checked = !!job.enabled;
+            enabledCheckbox.title = 'Enable or disable this custom recurring prompt';
+            enabledCheckbox.addEventListener('change', () => {
+                updateCustomJob(job.id, { enabled: enabledCheckbox.checked });
+            });
+
+            const labelInput = document.createElement('input');
+            labelInput.type = 'text';
+            labelInput.className = 'mc-custom-job-label-input';
+            labelInput.value = job.label || '';
+            labelInput.placeholder = 'Job label';
+            labelInput.addEventListener('change', () => {
+                updateCustomJob(job.id, { label: labelInput.value.trim() || 'Custom Job' });
+            });
+
+            const promptTextarea = document.createElement('textarea');
+            promptTextarea.className = 'mc-custom-job-prompt-input';
+            promptTextarea.value = job.promptOverride || '';
+            promptTextarea.placeholder = 'Prompt text (runs on schedule tick)...';
+            promptTextarea.rows = 1;
+            promptTextarea.addEventListener('change', () => {
+                updateCustomJob(job.id, { promptOverride: promptTextarea.value });
+            });
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'mc-custom-job-delete-btn';
+            deleteBtn.textContent = 'DELETE';
+            deleteBtn.title = 'Delete this custom job';
+            deleteBtn.addEventListener('click', () => {
+                deleteCustomJob(job.id);
+            });
+
+            row.appendChild(enabledCheckbox);
+            row.appendChild(labelInput);
+            row.appendChild(promptTextarea);
+            row.appendChild(deleteBtn);
+            container.appendChild(row);
+        }
+    }
+
+    function updateCustomJob(jobId, changes) {
+        const cfg = window.__schedulerConfig || { schemaVersion: 1, jobs: [] };
+        const jobs = Array.isArray(cfg.jobs) ? cfg.jobs : [];
+        const updated = jobs.map(j => {
+            if (j && j.id === jobId) {
+                return { ...j, ...changes };
+            }
+            return j;
+        });
+        window.__schedulerConfig = { schemaVersion: cfg.schemaVersion || 1, jobs: updated };
+        vscode.postMessage({ type: 'setSchedulerConfig', config: window.__schedulerConfig });
+    }
+
+    function deleteCustomJob(jobId) {
+        const cfg = window.__schedulerConfig || { schemaVersion: 1, jobs: [] };
+        const jobs = Array.isArray(cfg.jobs) ? cfg.jobs : [];
+        const updated = jobs.filter(j => j && j.id !== jobId);
+        window.__schedulerConfig = { schemaVersion: cfg.schemaVersion || 1, jobs: updated };
+        vscode.postMessage({ type: 'setSchedulerConfig', config: window.__schedulerConfig });
+        renderCustomJobs(updated.filter(j => j && j.source === 'custom'));
+    }
+
+    function addCustomJob() {
+        const cfg = window.__schedulerConfig || { schemaVersion: 1, jobs: [] };
+        const jobs = Array.isArray(cfg.jobs) ? [...cfg.jobs] : [];
+        const id = 'custom-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+        const newJob = {
+            id,
+            label: 'Custom Job',
+            enabled: true,
+            source: 'custom',
+            target: 'local-terminal',
+            intervalMinutes: 0,
+            promptOverride: '',
+            sourceConfig: {}
+        };
+        jobs.push(newJob);
+        window.__schedulerConfig = { schemaVersion: cfg.schemaVersion || 1, jobs };
+        vscode.postMessage({ type: 'setSchedulerConfig', config: window.__schedulerConfig });
+        renderCustomJobs(jobs.filter(j => j && j.source === 'custom'));
     }
 
     function wireSurvivorJobs() {
@@ -610,6 +721,13 @@
                     });
                 }
                 vscode.postMessage({ type: 'setSchedulerConfig', config: { schemaVersion: cfg.schemaVersion || 1, jobs: updated } });
+            });
+        }
+
+        const addCustomBtn = document.getElementById('mc-add-custom-job');
+        if (addCustomBtn) {
+            addCustomBtn.addEventListener('click', () => {
+                addCustomJob();
             });
         }
     }

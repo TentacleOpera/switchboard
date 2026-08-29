@@ -233,14 +233,6 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
-    // Read verb backing the browser Automation tab. The arm dereferences nothing off
-    // `msg`, so every field is optional — a stricter schema would reject valid
-    // webview payloads on shipped installs (PRD contract #5).
-    getAutobanConfig: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-        },
-    },
     // Dispatch hot path
     triggerAction: {
         fields: {
@@ -447,6 +439,51 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             missionId: { type: 'string', required: true },
             name: { type: 'string' },
             kind: { type: 'string' },
+        },
+    },
+    // Mission Control Schedules (V64)
+    mcNewSchedule: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    mcUpdateSchedule: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            scheduleId: { type: 'string', required: true },
+            field: { type: 'string', required: true },
+            value: { type: ['string', 'number', 'boolean'] },
+        },
+    },
+    mcStartSchedule: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            scheduleId: { type: 'string', required: true },
+        },
+    },
+    mcStopSchedule: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            scheduleId: { type: 'string', required: true },
+        },
+    },
+    mcDeleteSchedule: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            scheduleId: { type: 'string', required: true },
+        },
+    },
+    mcScheduleLoadLog: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            scheduleId: { type: 'string', required: true },
+        },
+    },
+    mcScheduleExternalCopy: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            scheduleId: { type: 'string' },
+            prompt: { type: 'string' },
         },
     },
     // V60 session queue. Permissive and field-accurate per PRD contract #5:
@@ -1686,11 +1723,6 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
     getNotionFetchState: {},
     getStartupCommands: {},
     getVisibleAgents: {},
-    setWhenSchedule: {
-        fields: {
-            schedule: { type: 'string' },
-        },
-    },
     getAccurateCodingSetting: {},
     getAdvancedReviewerSetting: {},
     getLeadChallengeSetting: {},
@@ -1740,24 +1772,6 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
         fields: {
             limit: { type: 'number' },
             before: { type: 'string' },
-        },
-    },
-    updateAutobanState: {
-        fields: {
-            state: { type: 'object' },
-        },
-    },
-    pipelineStart: {
-        fields: {
-            intervalSeconds: { type: 'number' },
-        },
-    },
-    pipelineStop: {},
-    pipelinePause: {},
-    pipelineUnpause: {},
-    pipelineSetInterval: {
-        fields: {
-            intervalSeconds: { type: 'number', required: true },
         },
     },
     airlock_sendToCoder: {

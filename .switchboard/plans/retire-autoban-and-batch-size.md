@@ -478,3 +478,7 @@ confirmed deleted.
   schedule toggle command registration is gone).
 - **Negative:** `grep -c 'setAutomationMode' src/generated/verbAllowlist.ts` returns 0 (the
   dead verb is gone from the allowlist).
+
+## Completion Summary
+Retired the legacy Autoban recurring scheduling engine, `batchSize` limits, and associated dead verb/command surfaces across both extension and standalone hosts. Preserved all survivor functionality including Mission Control config and seating, `MAX_TERMINALS_PER_ROLE`, survivor scheduler jobs (`fetch-plans`, `reconcile`, `team-automation`), and the queue pop dispatch primitive. Removed obsolete test suites and updated surviving regression tests and CI workflows to match the updated contract.
+

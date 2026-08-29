@@ -67,7 +67,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
 // only server-side reader of `terminals.standingOrders` in either host.
 import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
-import { resolveWorkContext, resolveTeamGroupForTerminal } from '../services/workContextResolver';
+import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets } from '../services/workContextResolver';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -269,6 +269,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const lastWorkContextByTerminal = new Map<string, string>();
     const lastWorkContextByTeam = new Map<string, string>();
     const teamPreparationChains = new Map<string, Promise<void>>();
+    // Per-team deferred-clear sets: seats that were mid-turn when the roster
+    // barrier fired and could not be cleared. The same-feature branch
+    // intercept checks this set before each dispatch and overrides
+    // clearBeforePrompt to true for a deferred seat, then removes it.
+    const deferredClearsByTeam = new Map<string, Set<string>>();
 
     /**
      * Sole standalone chokepoint for prompt delivery. Every `sendPromptToPty` call
@@ -296,7 +301,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         applyOrders = true,
         applySeatBlock = true,
         dispatch?: any
-    ): Promise<void> => {
+    ): Promise<ClearReadinessResult | undefined> => {
         // Prune cache against live active fleet
         try {
             const activeHandles = ptyFleetService.listActive();
@@ -443,16 +448,25 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             }
         }
         const isClearing = opts?.clearBeforePrompt === true;
-        const operationId = (opts as any)?.operationId || (isClearing ? `op-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` : undefined);
+        // Boot phase: a seat that has never been prompted (promptCount === 0)
+        // gets the first-readiness gate inside sendPromptToPty, which suppresses
+        // the clear and waits for the CLI to produce output. Change 1 kills the
+        // curtain's only trigger (isClearing) on new seats, so arm on boot phase
+        // too — with a distinct phase so the pane shows "starting up" rather than
+        // "resetting context" for a cold boot.
+        const isBooting = handle?.promptCount === 0;
+        const curtainPhase = isBooting ? 'booting' : 'clearing';
+        const operationId = (opts as any)?.operationId
+            || ((isClearing || isBooting) ? `op-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` : undefined);
         const startAt = Date.now();
-        if (isClearing && operationId) {
+        if ((isClearing || isBooting) && operationId) {
             try {
                 server?.broadcastWs('terminalDispatchPreparing', {
                     type: 'terminalDispatchPreparing',
                     operationId,
                     terminalName: handle.friendlyName,
                     cliFamily: handle.cliFamily || 'unknown',
-                    phase: 'clearing',
+                    phase: curtainPhase,
                 }, SURFACES.terminals);
             } catch { /* best effort broadcast */ }
         }
@@ -473,7 +487,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             sendErr = err;
             throw err;
         } finally {
-            if (isClearing && operationId) {
+            if ((isClearing || isBooting) && operationId) {
                 try {
                     server?.broadcastWs('terminalDispatchFinished', {
                         type: 'terminalDispatchFinished',
@@ -502,6 +516,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 dispatchedAt: parsedDispatchedAt
             }).catch(() => { /* a lost registration degrades a backstop, never a send */ });
         }
+        return readiness;
     };
 
     const secrets = createStandaloneHostSecrets(workspaceRoot);
@@ -1281,21 +1296,6 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     switchboardCommandRegistry.register('switchboard.pushTicketEditsWithSubtasks', async (data: any) =>
         taskViewerProvider.pushTicketEditsWithSubtasks(data.workspaceRoot || workspaceRoot, data));
 
-    // Autoban run-sheet controls. Registered ONLY in extension.ts before this change
-    // (extension.ts:1750/1755/1760), so the registry-first command seam fell through to
-    // vscodeShim's warn-once no-op: pressing the automation toggle in the browser cockpit
-    // updated KanbanProvider's display mirror, returned success, and never started the
-    // engine — contract #6 (faked success) on top of contract #7 (Layer 1 without Layer 2).
-    // The ENGINE was always host-agnostic; only the way the UI reached it was missing.
-    // The mode dropdown worked because `setAutomationMode` calls the provider directly
-    // rather than through a command, which is exactly why the gap stayed invisible.
-    switchboardCommandRegistry.register('switchboard.setAutobanEnabledFromKanban', async (enabled: boolean) =>
-        await taskViewerProvider.setAutobanEnabledFromKanban(!!enabled));
-    switchboardCommandRegistry.register('switchboard.resetAutobanTimersFromKanban', async () =>
-        await taskViewerProvider.resetAutobanTimersFromKanban());
-    switchboardCommandRegistry.register('switchboard.setAutobanPausedFromKanban', async (paused: boolean) =>
-        await taskViewerProvider.setAutobanPausedFromKanban(!!paused));
-
     // Transfer bundle — parity with the extension's export/import commands
     // (extension.ts). The shared API routes in LocalApiServer cover both hosts,
     // but the webview's executeCommand falls through to the registry, so the
@@ -1748,6 +1748,10 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         worktreePath: t.worktreePath,
                         cwd: t.cwd,
                         lastDataAt: t.lastDataAt,
+                        // First-delivery flag for boot-phase curtain detection.
+                        // The extension host's handlePtyVerb reads this in
+                        // headless mode to arm the boot-phase curtain.
+                        promptCount: t.promptCount,
                     }));
                     const liveTerminals = projectTerminals(visible);
                     // `terminals` stays EXACTLY the live-handle projection it has
@@ -1962,7 +1966,19 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             const lastTeamWorkKey = lastWorkContextByTeam.get(teamId);
 
                             if (lastTeamWorkKey === workContextKey) {
-                                payload.clearBeforePrompt = false;
+                                // Same feature/work context: preserve context across coder reports,
+                                // review, fixes, and handoffs. Intercept: if the destination is in
+                                // the team's deferred-clear set, override to clearBeforePrompt: true
+                                // and remove it from the set. The delivery path already does
+                                // readiness-gated clears — no sweep hook, no timer.
+                                const deferredSet = deferredClearsByTeam.get(teamId);
+                                if (deferredSet && deferredSet.has(payload.name) && clearEnabled) {
+                                    deferredSet.delete(payload.name);
+                                    if (deferredSet.size === 0) { deferredClearsByTeam.delete(teamId); }
+                                    payload.clearBeforePrompt = true;
+                                } else {
+                                    payload.clearBeforePrompt = false;
+                                }
                             } else {
                                 let prevChain = teamPreparationChains.get(teamId) || Promise.resolve();
                                 const prepPromise = prevChain.then(async () => {
@@ -1975,14 +1991,38 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     }
                                     const active = ptyFleetService.listActive();
                                     const activeNames = new Set(active.map(t => t.friendlyName));
-                                    // SIBLINGS ONLY. The destination is deliberately excluded: it is about
-                                    // to receive a prompt, so its clear belongs to sendPromptToPty, which
-                                    // is the one place a clear is followed by a write with no gap and
-                                    // therefore the one place readiness detection is worth paying for.
-                                    const activeMembers = roster.filter(name => activeNames.has(name) && name !== payload.name);
-                                    if (activeMembers.length > 0) {
+                                    // Build the busy set from lastDataAt: a seat is mid-turn when
+                                    // `now - lastDataAt < livenessWindowMs` (recently emitting) OR
+                                    // `lastDataAt === 0` (no heartbeat data — "no evidence" is not
+                                    // "at rest", matching the sweep's own `lastDataAt > 0` guard).
+                                    const livenessWindowMs = configProvider.getConfigNumber('activityLight.livenessWindowMs', 90000);
+                                    const nowMs = Date.now();
+                                    const busySet = new Set<string>(
+                                        active
+                                            .filter(t => typeof t.lastDataAt === 'number')
+                                            .filter(t => t.lastDataAt === 0 || (nowMs - t.lastDataAt) < livenessWindowMs)
+                                            .map(t => t.friendlyName)
+                                    );
+                                    // Shared pure helper: both hosts produce byte-identical target sets
+                                    // for identical inputs. Excludes the destination (delivery path owns
+                                    // its clear) and the origin (the caller must not be cleared by its
+                                    // own dispatch). Busy seats are deferred, not skipped.
+                                    const { toClear, deferred } = computeRosterClearTargets({
+                                        roster,
+                                        liveActive: activeNames,
+                                        destination: payload.name,
+                                        origin: payload.origin,
+                                        busySet,
+                                    });
+                                    // Record deferred seats for the same-feature branch intercept.
+                                    if (deferred.length > 0) {
+                                        const deferredSet = deferredClearsByTeam.get(teamId) || new Set<string>();
+                                        for (const name of deferred) { deferredSet.add(name); }
+                                        deferredClearsByTeam.set(teamId, deferredSet);
+                                    }
+                                    if (toClear.length > 0) {
                                         const teamOpId = `team-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-                                        const handles = activeMembers.map(name => ptyFleetService.get(name)).filter(Boolean);
+                                        const handles = toClear.map(name => ptyFleetService.get(name)).filter(Boolean);
                                         const startAt = Date.now();
                                         for (const h of handles) {
                                             try {
@@ -2021,7 +2061,42 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                             }
                                         }
                                     }
-                                    lastWorkContextByTeam.set(teamId, workContextKey);
+                                    // Report deferred seats on the same lifecycle event with a
+                                    // distinct reason so the pane shows "deferred" rather than a
+                                    // silent success.
+                                    if (deferred.length > 0) {
+                                        const deferOpId = `team-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                                        const deferStartAt = Date.now();
+                                        for (const name of deferred) {
+                                            const h = ptyFleetService.get(name);
+                                            try {
+                                                server.broadcastWs('terminalDispatchPreparing', {
+                                                    type: 'terminalDispatchPreparing',
+                                                    operationId: deferOpId,
+                                                    terminalName: name,
+                                                    cliFamily: h?.cliFamily || 'unknown',
+                                                    teamName: teamId,
+                                                    phase: 'clearing',
+                                                }, SURFACES.terminals);
+                                                server.broadcastWs('terminalDispatchFinished', {
+                                                    type: 'terminalDispatchFinished',
+                                                    operationId: deferOpId,
+                                                    terminalName: name,
+                                                    success: true,
+                                                    reason: 'deferred',
+                                                    elapsedMs: Math.max(0, Date.now() - deferStartAt),
+                                                }, SURFACES.terminals);
+                                            } catch { /* best effort */ }
+                                        }
+                                    }
+                                    // Record the work-context key only when the barrier actually
+                                    // cleared someone OR there was nobody to clear (roster already
+                                    // clean). When every active member was busy (toClear empty,
+                                    // deferred non-empty), the run is NOT prepared — leave the key
+                                    // unrecorded so the next dispatch can try again.
+                                    if (toClear.length > 0 || deferred.length === 0) {
+                                        lastWorkContextByTeam.set(teamId, workContextKey);
+                                    }
                                 });
                                 teamPreparationChains.set(teamId, prepPromise.catch(() => {}));
                                 try {
@@ -2059,7 +2134,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         const resolvedClear = typeof payload.clearBeforePrompt === 'boolean'
                             ? payload.clearBeforePrompt
                             : (payload.clearBeforePromptFromConfig === true ? deliveryDefaults.clearBeforePrompt : false);
-                        await deliverPrompt(
+                        const ptyReadiness = await deliverPrompt(
                             handle,
                             payload.data || '',
                             {
@@ -2073,9 +2148,23 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             true,
                             payload.dispatch
                         );
+                        // A CLI that exits during boot aborts delivery — the prompt
+                        // was never written. Report an error so the caller knows.
+                        if (ptyReadiness?.reason === 'exit') {
+                            return {
+                                success: false,
+                                error: `Terminal '${payload.name}' exited during boot — prompt was not delivered`,
+                                deliveryReason: 'exit',
+                                directivesAttached,
+                            };
+                        }
                         return {
                             success: true,
                             directivesAttached,
+                            // Change 6: thread the delivery reason so the caller
+                            // distinguishes delivered-and-confirmed from
+                            // delivered-on-a-timeout instead of a bare success.
+                            ...(ptyReadiness ? { deliveryReason: ptyReadiness.reason, readiness: ptyReadiness } : {}),
                             ...(foldedAttributionResult ? {
                                 attributed: foldedAttributionResult.attributed,
                                 skipped: foldedAttributionResult.skipped
@@ -2091,6 +2180,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     lastWorkContextByTerminal.clear();
                     lastWorkContextByTeam.clear();
                     teamPreparationChains.clear();
+                    deferredClearsByTeam.clear();
                     const active = ptyFleetService.listActive();
                     await Promise.all(active.map(t => clearPty(t)));
                     return { success: true, cleared: active.length };
@@ -2239,7 +2329,19 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         terminal = await ptyFleetService.create(targetRole, overrideName, matchedWtPath || root, matchedWtPath);
                     }
 
-                    await deliverPrompt(terminal, prompt, getPromptDeliveryOptions());
+                    const deliveryReadiness = await deliverPrompt(terminal, prompt, getPromptDeliveryOptions());
+
+                    // A CLI that exits during boot (auth failure, bad command) aborts
+                    // delivery — the prompt was never written. Report an error rather
+                    // than success:true so the caller knows the dispatch was lost.
+                    if (deliveryReadiness?.reason === 'exit') {
+                        return {
+                            success: false,
+                            error: `Terminal '${terminal.friendlyName}' exited during boot — prompt was not delivered`,
+                            terminalName: terminal.friendlyName,
+                            deliveryReason: 'exit',
+                        };
+                    }
 
                     for (const rec of records) {
                         if (!rec.planFile) { continue; }
@@ -2263,7 +2365,15 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         }
                     }
                     server.broadcastWs('showStatusMessage', { message: `Dispatched ${records.length} plan(s) to ${terminal.friendlyName}.`, isError: false }, SURFACES.common);
-                    return { success: true, targetColumn, terminalName: terminal.friendlyName };
+                    return {
+                        success: true,
+                        targetColumn,
+                        terminalName: terminal.friendlyName,
+                        // Change 6: thread the delivery reason so POST /kanban/dispatch
+                        // distinguishes delivered-and-confirmed ('signal') from
+                        // delivered-on-a-timeout ('timeout') instead of a bare success.
+                        ...(deliveryReadiness ? { deliveryReason: deliveryReadiness.reason } : {}),
+                    };
                 }
 
                 case 'sendToTerminal': {
@@ -2632,12 +2742,6 @@ Each plan file must include:
                 log(opts, `turn-end delivery to '${recipientName}' failed: ${err}`);
             }
         })().catch(e => console.error('[bootstrap] turn-end notify failed:', e));
-        // Second consumer: completion-driven autoban dispatch. Added INSIDE the
-        // existing closure — setTurnEndNotifier is a single-slot setter, so
-        // calling it again would silently replace this closure and kill the
-        // turn-end notification. handleAutobanTurnEnd guards on
-        // enabled/paused/single-column internally, so a no-op for other modes.
-        taskViewerProvider.handleAutobanTurnEnd(info);
     };
     ingestionEngine.setTurnEndNotifier(handleTurnEndNotify);
 
@@ -3138,6 +3242,9 @@ Each plan file must include:
             } catch (err) {
                 return { success: false, error: err instanceof Error ? err.message : String(err) };
             }
+        },
+        onTeamReleased: async (wsRoot: string, teamMemberNames: string[]) => {
+            await taskViewerProvider?.clearAdvanceWhenReadyJobs(wsRoot, teamMemberNames);
         },
         getFullState,
         consumeOneTimeToken,

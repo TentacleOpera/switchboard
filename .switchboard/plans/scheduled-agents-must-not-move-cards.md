@@ -325,3 +325,8 @@ correct all line numbers.
 ## Recommendation
 
 Complexity 4 → **Send to Coder**.
+
+## Completion Report
+
+Removed `canMoveCards` from `ScheduledJob.teamTarget` in `GlobalIntegrationConfigService.ts` and from `buildTeamAutomationPrompt` in `schedulerPresets.ts`. Deleted the `team-auto-can-move-cards` checkbox from `terminals.html` and removed all associated checkbox reads, writes, and the `MOVES CARDS` badge renderer in `terminals.js`. Added regression assertions in `autoban-state-regression.test.js` verifying scheduled prompts never emit `BOARD_DRIVING_CONTRACT`, `move-card.js`, or `/kanban/move` even if legacy configs supply `canMoveCards`. Scheduled automation prompts now carry no board movement instructions.
+

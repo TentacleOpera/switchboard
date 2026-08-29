@@ -1096,12 +1096,6 @@ export async function activate(context: vscode.ExtensionContext) {
     // silently — the classification still runs, nothing is delivered.
     globalPlanWatcher.getEngine().setTurnEndNotifier((info) => {
         taskViewerProvider.notifyTurnEnd(info);
-        // Second consumer: completion-driven autoban dispatch. Added INSIDE the
-        // existing closure — setTurnEndNotifier is a single-slot setter, so
-        // calling it again would silently replace this closure and kill the
-        // turn-end notification card. handleAutobanTurnEnd guards on
-        // enabled/paused/single-column internally, so a no-op for other modes.
-        taskViewerProvider.handleAutobanTurnEnd(info);
     });
     context.subscriptions.push(taskViewerProvider);
     if (workspaceRoot) {
@@ -1822,8 +1816,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // parameter without removing the argument at all ~16 KanbanProvider call sites
     // in the same edit silently slides `bypassTriggerGate` into slot 6 and compiles
     // clean. Keep the slot, or convert BOTH commands to a trailing options object.
-    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, _apiOriginated?: boolean, bypassTriggerGate?: boolean, unattended?: boolean) => {
-        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true, bypassTriggerGate: !!bypassTriggerGate, unattended: !!unattended } as any);
+    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, _apiOriginated?: boolean, bypassTriggerGate?: boolean, unattended?: boolean, originTerminal?: string) => {
+        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true, bypassTriggerGate: !!bypassTriggerGate, unattended: !!unattended, originTerminal } as any);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
 
@@ -1900,21 +1894,6 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     );
     context.subscriptions.push(moveKanbanCardByPlanFileWithReasonDisposable);
-
-    const setAutobanFromKanbanDisposable = registerSwitchboardCommand('switchboard.setAutobanEnabledFromKanban', async (enabled: boolean) => {
-        await taskViewerProvider.setAutobanEnabledFromKanban(!!enabled);
-    });
-    context.subscriptions.push(setAutobanFromKanbanDisposable);
-
-    const resetAutobanTimersDisposable = registerSwitchboardCommand('switchboard.resetAutobanTimersFromKanban', async () => {
-        await taskViewerProvider.resetAutobanTimersFromKanban();
-    });
-    context.subscriptions.push(resetAutobanTimersDisposable);
-
-    const setAutobanPausedDisposable = registerSwitchboardCommand('switchboard.setAutobanPausedFromKanban', async (paused: boolean) => {
-        await taskViewerProvider.setAutobanPausedFromKanban(!!paused);
-    });
-    context.subscriptions.push(setAutobanPausedDisposable);
 
     const setPairProgrammingModeDisposable = registerSwitchboardCommand('switchboard.setPairProgrammingModeFromKanban', async (mode: string) => {
         await taskViewerProvider.setPairProgrammingMode(mode);

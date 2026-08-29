@@ -46,13 +46,30 @@ export interface ScheduledJob {
     id: string;
     label: string;
     enabled: boolean;
-    source: 'reconcile' | 'custom' | 'fetch-plans' | 'team-automation';
+    source:
+        | 'reconcile'
+        | 'custom'
+        | 'fetch-plans'
+        | 'team-automation'
+        | 'advance-plan'
+        | 'phone-a-friend'
+        | 'advance-feature'
+        | 'batch-advance-planning'
+        | 'review-code-vs-intent'
+        | 'process-memo'
+        | 'improve-docs'
+        | 'update-readme'
+        | 'send-plans-to-jules'
+        | 'start-ready-mission'
+        | 'research'
+        | 'git-pull-push';
     target: 'local-terminal' | 'antigravity' | 'cloud';
     intervalMinutes: number;
     promptOverride?: string;
     startupCommand?: string;
     sourceConfig: Record<string, unknown>;
-    teamTarget?: { groupId: string; role?: string; canMoveCards?: boolean };
+    teamTarget?: { groupId: string; role?: string };
+    advanceWhenReady?: boolean;
     lastRunAt?: number;
     lastOutcome?: string;
     lastTarget?: string;
@@ -483,19 +500,19 @@ export class GlobalIntegrationConfigService {
 
     /** Sources that have been deleted. Jobs with these sources are dropped on read.
      * Do NOT add 'team-automation' — see scheduled-automation-targeted-at-a-team-lead.md. */
-    private static readonly DROPPED_SOURCES = new Set(['comms', 'board-batch', 'custom']);
+    private static readonly DROPPED_SOURCES = new Set(['comms', 'board-batch']);
 
-    /** Drop jobs whose source has been deleted (comms, board-batch, custom) on read. */
+    /** Drop jobs whose source has been deleted (comms, board-batch) on read. */
     private static _filterDroppedSources(jobs: ScheduledJob[]): ScheduledJob[] {
         return jobs.filter(j => !this.DROPPED_SOURCES.has(j.source as string));
     }
 
     /**
      * Resolve the persisted `SchedulerConfig`, dropping jobs whose source has
-     * been deleted (comms, board-batch, custom) on READ — never via a
+     * been deleted (comms, board-batch) on READ — never via a
      * destructive write. The dropped jobs stay inert in the file until the
-     * next legitimate `setSchedulerConfig` write, which reads through this
-     * filter and persists the list without them. Forward-compat: a `scheduler`
+     * next legitimate `setSchedulerConfig` write, which preserves them in storage
+     * while filtering from execution. Forward-compat: a `scheduler`
      * whose `schemaVersion` is newer than known is returned as-is (still
      * filtered).
      */
@@ -578,10 +595,17 @@ export class GlobalIntegrationConfigService {
 
     public static async setSchedulerConfig(config: Partial<SchedulerConfig>): Promise<void> {
         const globalConfig = await this.loadGlobal();
-        const current = this._ensureSchedulerMigration(globalConfig);
-        const nextSchema = config.schemaVersion ?? current.schemaVersion;
-        const nextJobs = config.jobs ?? current.jobs;
-        globalConfig.scheduler = { schemaVersion: nextSchema, jobs: nextJobs };
+        const rawJobs = Array.isArray(globalConfig.scheduler?.jobs) ? globalConfig.scheduler!.jobs! : [];
+        // Preserve execution-filtered sources in STORAGE (comms, board-batch).
+        // They are filtered from execution by _filterDroppedSources on read, but
+        // must survive a write so the next read-after-write doesn't destroy them.
+        const preserved = rawJobs.filter(j => this.DROPPED_SOURCES.has(j.source as string));
+        const nextSchema = config.schemaVersion ?? (globalConfig.scheduler?.schemaVersion ?? SCHEDULER_SCHEMA_VERSION);
+        const nextJobs = config.jobs ?? this._filterDroppedSources(rawJobs);
+        // Merge: incoming jobs (no dropped sources) + preserved dropped-source jobs.
+        const incomingIds = new Set(nextJobs.map(j => j.id));
+        const merged = [...nextJobs, ...preserved.filter(j => !incomingIds.has(j.id))];
+        globalConfig.scheduler = { schemaVersion: nextSchema, jobs: merged };
         await this.saveGlobal(globalConfig);
     }
 

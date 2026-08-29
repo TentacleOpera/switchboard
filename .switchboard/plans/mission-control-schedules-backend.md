@@ -210,3 +210,8 @@ Key risks: the survivor filter widening is the visible trap, but `runSchedulerJo
 10. External type: select it, copy the prompt, assert no config write and nothing scheduled.
 11. Team automations modal still lists, creates, enables and `RUN NOW`s its own jobs, and does not show or clobber schedules created in the new tab.
 12. Both hosts, with both composition roots read side by side.
+
+## Completion Report
+
+The Mission Control Schedules backend has been implemented end-to-end. Extracted `nextCronTime` and `WHEN_TIMER_CEILING_MS` into `src/services/cronUtils.ts` and widened `ScheduledJob.source` in `GlobalIntegrationConfigService.ts` to include all 13 schedule action IDs. Implemented the seven schedule verbs (`mcNewSchedule`, `mcUpdateSchedule`, `mcStartSchedule`, `mcStopSchedule`, `mcDeleteSchedule`, `mcScheduleLoadLog`, `mcScheduleExternalCopy`) and mapped `mcSchedules` in `KanbanProvider.ts` with schema registration in `verbSchemas.ts` and allowlist generation. Updated `TaskViewerProvider.ts`'s `_tickSurvivorSchedulerJobs` and `runSchedulerJob` to handle cron and interval ticks across host actions (via dispatch/launch) and agent actions (via terminal prompt delivery with unattended orders and zero board-moving authority), with all static parity, schema, and routing ratchet tests verified green.
+

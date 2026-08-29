@@ -183,6 +183,10 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                     // request payload — a caller-supplied family is not evidence.
                     // Omitting it left every curtain on the generic "CLI" label.
                     cliFamily: t.cliFamily,
+                    // First-delivery flag: 0 until the first prompt is delivered.
+                    // The extension host's curtain reads this to arm the boot-phase
+                    // curtain for a first dispatch to a fresh pool terminal.
+                    promptCount: t.promptCount,
                 }));
                 return {
                     success: true,
@@ -286,6 +290,10 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 const handle = fleet.get(payload.name);
                 if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
                 if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
+                // Capture first-delivery state BEFORE sendPromptToPty increments
+                // promptCount. The extension host's curtain reads this to
+                // distinguish a boot-phase dispatch from a clearing-phase one.
+                const bootPhase = handle.promptCount === 0;
                 try {
                     const readiness = await sendPromptToPty(handle, payload.data || '', {
                         clearBeforePrompt: payload.clearBeforePrompt === true,
@@ -299,10 +307,23 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                         // path, not the extension-only deliverPrompt wrapper.
                         onPromptDelivered: (terminalName, promptText) => terminalLogWriter.onPrompt(terminalName, promptText),
                     });
+                    // A CLI that exits during boot aborts delivery — the prompt
+                    // was never written. Report an error so the extension host
+                    // knows the dispatch was lost, not delivered.
+                    if (readiness?.reason === 'exit') {
+                        return {
+                            success: false,
+                            error: `Terminal '${payload.name}' exited during boot — prompt was not delivered`,
+                            readiness,
+                            bootPhase,
+                        };
+                    }
                     // Carry the readiness OUTCOME back over the wire. Without it the
                     // extension host has no way to tell a real ready signal from a
                     // 15s fallback, and its dispatch-lifecycle event has to invent one.
-                    return { success: true, readiness: readiness || undefined };
+                    // bootPhase lets the extension host's curtain report the correct
+                    // phase ('booting' vs 'clearing') for a first-delivery dispatch.
+                    return { success: true, readiness: readiness || undefined, bootPhase };
                 } catch (err) {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }

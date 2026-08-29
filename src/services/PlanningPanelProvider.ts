@@ -7666,7 +7666,6 @@ Please format the updated output document strictly as follows:
                 order: 5,
                 kind: 'created' as const,
                 source: 'built-in' as const,
-                autobanEnabled: false,
                 dragDropMode: 'cli'
             });
             allColumns.sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));

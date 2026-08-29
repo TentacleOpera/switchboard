@@ -997,7 +997,6 @@
     "test:contract:teams-tab-no-start": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/teams-tab-no-start-contract.test.js",
     "test:contract:standalone-agent-isolation": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-agent-team-isolation-contract.test.js",
     "test:contract:autoban-state": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-state-regression.test.js",
-    "test:contract:autoban-no-valid-tickets": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-no-valid-tickets-regression.test.js",
     "test:contract:completion-asserted-never-inferred": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/completion-asserted-never-inferred.test.js",
     "test:contract:terminal-plan-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-plan-attribution-contract.test.js",
     "test:contract:scheduled-jobs": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/scheduled-jobs-and-connections.test.js",
@@ -1041,7 +1040,8 @@
     "test:contract:queue-stall-watch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/queue-stall-watch-contract.test.js",
     "test:contract:agents-seed-deletion-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/agents-seed-deletion-guard-contract.test.js",
     "test:contract:review-column-persistence": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/review-column-persistence-regression.test.js",
-    "test:contract:team-release-control": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-release-control-contract.test.js"
+    "test:contract:team-release-control": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-release-control-contract.test.js",
+    "test:contract:roster-clear-mid-turn": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/roster-clear-mid-turn-deferral.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

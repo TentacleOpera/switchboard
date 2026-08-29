@@ -118,6 +118,38 @@ export interface CustomKanbanColumnConfig {
     dragDropMode: 'cli' | 'prompt' | 'disabled';
 }
 
+export const MAX_TERMINALS_PER_ROLE = 5;
+
+export function getNextTerminalName(
+    roleLabel: string,
+    usedNames: Iterable<string>,
+    requestedName?: string
+): string {
+    const normalizedUsedNames = new Set(
+        Array.from(usedNames)
+            .map(name => String(name || '').trim())
+            .filter(Boolean)
+    );
+    const trimmedRequestedName = typeof requestedName === 'string' ? requestedName.trim() : '';
+
+    if (trimmedRequestedName) {
+        let uniqueName = trimmedRequestedName;
+        let counter = 2;
+        while (normalizedUsedNames.has(uniqueName)) {
+            uniqueName = `${trimmedRequestedName} ${counter++}`;
+        }
+        return uniqueName;
+    }
+
+    let counter = 2;
+    let uniqueName = `${roleLabel} ${counter}`;
+    while (normalizedUsedNames.has(uniqueName)) {
+        counter += 1;
+        uniqueName = `${roleLabel} ${counter}`;
+    }
+    return uniqueName;
+}
+
 export interface KanbanColumnDefinition {
     id: string;
     label: string;
@@ -125,7 +157,6 @@ export interface KanbanColumnDefinition {
     order: number;
     kind: 'created' | 'review' | 'gather' | 'coded' | 'reviewed' | 'merge' | 'custom-agent' | 'custom-user' | 'completed' | 'staging';
     source: 'built-in' | 'custom-agent' | 'custom-user';
-    autobanEnabled: boolean;
     dragDropMode: 'cli' | 'prompt' | 'disabled';
     triggerPrompt?: string;
     featureOnly?: boolean;
@@ -148,17 +179,17 @@ export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
 };
 
 export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
-    { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 110, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt' },
-    { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'STAGING', label: 'Staging', order: 115, kind: 'staging', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
-    { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
-    { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'tester', order: 350, kind: 'reviewed', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'TICKET UPDATER', label: 'Ticket Updater', role: 'ticket_updater', order: 9000, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt' },
-    { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
+    { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', dragDropMode: 'cli' },
+    { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 110, kind: 'review', source: 'built-in', dragDropMode: 'prompt' },
+    { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', dragDropMode: 'cli' },
+    { id: 'STAGING', label: 'Staging', order: 115, kind: 'staging', source: 'built-in', dragDropMode: 'cli' },
+    { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', dragDropMode: 'cli' },
+    { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', dragDropMode: 'cli' },
+    { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', dragDropMode: 'cli' },
+    { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', source: 'built-in', dragDropMode: 'cli' },
+    { id: 'ACCEPTANCE TESTED', label: 'Completion Tested', role: 'tester', order: 350, kind: 'reviewed', source: 'built-in', dragDropMode: 'cli' },
+    { id: 'TICKET UPDATER', label: 'Ticket Updater', role: 'ticket_updater', order: 9000, kind: 'reviewed', source: 'built-in', dragDropMode: 'prompt' },
+    { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', source: 'built-in', dragDropMode: 'cli' },
 ];
 
 /** Display-mode columns: stored column IDs that are NOT peer columns and MUST NOT
@@ -502,7 +533,6 @@ export function buildKanbanColumns(
         order: column.order,
         kind: 'custom-user' as const,
         source: 'custom-user' as const,
-        autobanEnabled: false,
         dragDropMode: column.dragDropMode,
         triggerPrompt: column.triggerPrompt
     }));

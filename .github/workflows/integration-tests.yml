@@ -995,12 +995,6 @@ jobs:
       - name: Mission Control tick + reports channel contract
         run: npm run test:contract:mission-control-tick
 
-      # Autoban must stop for the reasons that survived the session-cap deletion —
-      # "no valid tickets remain" is now one of only two stop paths, so a regression
-      # here is an engine that never stops or one that stops with no reason shown.
-      - name: Autoban no-valid-tickets stop contract
-        run: npm run test:contract:autoban-no-valid-tickets
-
       # The lead-paced pipeline's behavioural contract: the pop's queue source and
       # in-flight predicate, the queue stall watch's bounds, remote queue intake, and
       # the schedule as one more caller of the pop. Every failure mode here is silent

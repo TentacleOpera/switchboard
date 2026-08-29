@@ -103,17 +103,17 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
 /**
  * The `team-automation` source preset: deliver a recurring or on-demand
  * automation prompt to a specific team lead (or named role).
- * Includes `BOARD_DRIVING_CONTRACT` when `canMoveCards` is true.
  */
 export function buildTeamAutomationPrompt(job: {
     promptOverride?: string;
-    teamTarget?: { groupId?: string; role?: string; canMoveCards?: boolean };
+    teamTarget?: { groupId?: string; role?: string };
     sourceConfig?: Record<string, unknown>;
 }): string {
+    // Scheduled prompts carry NO board authority. Board actions are host-executed
+    // (dispatch, advance-plan, advance-feature) — never agent-prompted. An agent with
+    // shell access can still run move-card.js, but the scheduling system gives it no
+    // reason and no instruction to. Do not re-add a canMoveCards gate here.
     const customPrompt = typeof job.sourceConfig?.prompt === 'string' ? job.sourceConfig.prompt.trim() : '';
     const basePrompt = (job.promptOverride || '').trim() || customPrompt || 'Execute scheduled team automation tasks.';
-    if (job.teamTarget?.canMoveCards) {
-        return `${basePrompt}\n\n${BOARD_DRIVING_CONTRACT}`;
-    }
     return basePrompt;
 }

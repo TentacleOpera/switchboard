@@ -2750,12 +2750,7 @@
                                 <input type="text" id="team-auto-role" class="link-select" placeholder="e.g. reviewer, coder" />
                             </div>
                         </div>
-                        <div>
-                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary); cursor: pointer;">
-                                <input type="checkbox" id="team-auto-can-move-cards" />
-                                Allow automation to move board cards (includes board driving contract)
-                            </label>
-                        </div>
+
                         <div>
                             <label class="link-field-label" for="team-auto-prompt">Prompt / Instructions</label>
                             <textarea id="team-auto-prompt" class="team-orders-textarea" placeholder="Prompt instruction delivered on each run..."></textarea>
@@ -2764,6 +2759,12 @@
                             <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary); cursor: pointer;">
                                 <input type="checkbox" id="team-auto-enabled" checked />
                                 Enabled
+                            </label>
+                        </div>
+                        <div>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary); cursor: pointer;">
+                                <input type="checkbox" id="team-auto-advance-ready" />
+                                Advance when ready <span style="font-size: 10px; color: var(--text-muted);">(fires on team completion; interval is fallback)</span>
                             </label>
                         </div>
                         <div style="display: flex; gap: 6px; justify-content: flex-end;">

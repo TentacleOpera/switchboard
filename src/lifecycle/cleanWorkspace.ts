@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { stateFs as fs, stateLockfile as lockfile } from '../services/stateConfigBridge';
+import { normalizeAutobanConfigState, AutobanConfigState } from '../services/autobanState';
 
 /** Transient directories that are safe to wipe on activation. */
 const TRANSIENT_DIRS = ['inbox', 'outbox', 'cooldowns', 'MCP', 'handoff'];
@@ -71,9 +72,9 @@ async function readPersistedFields(statePath: string): Promise<Record<string, un
             persisted.customAgents = state.customAgents;
         }
 
-        // Preserve autoban configuration
+        // Preserve autoban configuration (survivor state only)
         if (state.autoban && typeof state.autoban === 'object') {
-            persisted.autoban = state.autoban;
+            persisted.autoban = normalizeAutobanConfigState(state.autoban as AutobanConfigState);
         }
         
         // Preserve plan ingestion target
