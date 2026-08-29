@@ -213,7 +213,3 @@ Key risks: the `pipeline-orchestrator-regression.test.js` test file (7 tests) wi
 5. A schedule saved from the Mission Control tab with each action fires — specifically test an action whose id is not in the old survivor set, which is the silent-skip case.
 6. Plan Scanner is untouched — same interval control in Setup, same presets, destinations and custom sources, same cadence.
 7. Both hosts.
-
-## Completion Summary
-Consolidated all scheduling down to the two sanctioned surfaces (Terminals tab team automations and Mission Control Schedules tab) powered by the single `ScheduledJob` runner (`_survivorJobsTimer` -> `runSchedulerJob`). Deleted the dead `PipelineOrchestrator` dispatcher class, its regression test, and its associated verbs/schemas across the codebase. Documented the scheduling rule on the runner methods in `TaskViewerProvider.ts` and verified clean compilation across both extension and standalone targets.
-

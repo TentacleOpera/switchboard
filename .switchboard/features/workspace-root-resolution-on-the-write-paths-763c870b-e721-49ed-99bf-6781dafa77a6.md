@@ -13,8 +13,8 @@ Make every write path resolve a workspace root the same way the read paths alrea
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`POST /kanban/plans/import` Duplicates the Entire Board From One Mis-Cased Root, and Reports That Nothing Happened](../plans/feature_plan_20260814153000_import-endpoint-root-guard-and-honest-count.md) — **CODER CODED** — ID: 4acb5f84-e4e0-41dc-9235-6c025fe5ba81
-- [ ] [Fix Plan-Card Save Rejecting Every Plan That Lives Under A Mapped Parent Root](../plans/feature_plan_20260814161300_plan-card-save-rejects-mapped-parent-root.md) — **CODER CODED** — ID: 5abfd8f4-3148-4ece-8616-5eafd10ccf19
+- [ ] [`POST /kanban/plans/import` Duplicates the Entire Board From One Mis-Cased Root, and Reports That Nothing Happened](../plans/feature_plan_20260814153000_import-endpoint-root-guard-and-honest-count.md) — **PLAN REVIEWED** — ID: 4acb5f84-e4e0-41dc-9235-6c025fe5ba81
+- [ ] [Fix Plan-Card Save Rejecting Every Plan That Lives Under A Mapped Parent Root](../plans/feature_plan_20260814161300_plan-card-save-rejects-mapped-parent-root.md) — **PLAN REVIEWED** — ID: 5abfd8f4-3148-4ece-8616-5eafd10ccf19
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -24,8 +24,4 @@ Make every write path resolve a workspace root the same way the read paths alrea
 - **The import guard's valid-root set must be built from the unfiltered roots plus the mapping workspace folders, not from the server's `_allRoots`.** That filter exists to keep mapped children out of a display list, not to define who may import; using it would reject nine legitimate roots on this machine and break plan creation for all of them. Test a mapped child before landing.
 - The Save subtask needs its `verb-returns:check` baseline re-derived with `--write` in the same change. Planning sits at exactly 152 of 152, so any added `break` turns CI red, and hand-editing the ceiling is the documented way this has gone red before.
 - The import subtask records two follow-ups it deliberately does not fix — the fail-open branch in the path normalizer, and the un-canonicalised instance-cache key in `forWorkspace`. Both are small, both are the durable fix, and neither is in scope here.
-
-## Completion Summary
-
-Both subtasks implemented and committed (c0140527). The import endpoint and create-plan endpoint now share `_resolveKnownRoot`, which validates workspace roots by dev+inode on POSIX and case-folded native realpath on Windows against the full known-root set (unfiltered roots plus mapped workspace folders). `PlanFileImporter` returns honest `written` and `persisted` fields instead of a zero count on partial failure, un-breaking integration sync. Plan-card Save now resolves via `_resolveSaveTarget` mirroring the preview resolver, uses `_getAllowedRoots()` with a `path.sep` boundary, keys the rename DB update against the effective containing root, reports missing files as errors instead of conflicts, and converts all six arm exits to returns. Verb-return-contract baseline re-derived (149→143).
 

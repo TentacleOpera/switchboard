@@ -7,37 +7,6 @@ Tailscale material currently in `docs/REMOTE_ACCESS.md` — which promises a pro
 project's own reasoning argues against — with a verified path and an honest account of what it
 trades.
 
-> **Revision (2026-08-28) — the blocker this plan names is fixed, and the terminator is not the
-> route that was taken.** `remote-switchboard-is-tailscale-and-nothing-else.md` has shipped. The
-> unconditional `listen(this._port || 0, '127.0.0.1', …)` that this plan correctly identifies as
-> *the* blocker is now bind-policy driven, and `switchboard tailnet` opens a real listener on the
-> tailnet interface. **A phone on the tailnet now has something to connect to.** The Host guard
-> was widened in step (`isAllowedHostFor`), the WS upgrade guard with it, and the credential is
-> skipped on that listener rather than replaced by device identity.
->
-> That closes items 1-3 by a different route than the one proposed: Switchboard binds the tailnet
-> address directly, so no `tailscale serve` terminator, no operator-configured `allowedHost`, and
-> no route-scoping mechanism are needed. Item 4 (the `docs/REMOTE_ACCESS.md` rewrite) shipped in
-> the same commit — the pending-snippet promise is gone, `switchboard tailnet` is documented, and
-> Funnel is named out of scope. Item 7 was already done by that plan's own
-> *"Tunnel lifecycle is not this app's job"* section.
->
-> **What still stands, and is the reason not to close this plan outright:**
-> * **Item 5 — `README.md:31`** still reads *"The board is loopback-only by design"* and still
->   points at reverse-proxy setup. Both are now false.
-> * **Item 6** — closing the withdrawn verification steps of `standalone-remote-access-story.md`.
-> * **The secure-context argument, answered differently rather than resolved.** This plan's case
->   for `tailscale serve` was TLS with a real tailnet certificate, because a raw-IP `http://`
->   board is not a secure context and `navigator.clipboard` is `undefined` there. The shipped
->   route binds plain HTTP and works around it with `src/webview/clipboardFallback.js`
->   (`execCommand('copy')`). That fixes copy; it does not give a secure context, so anything else
->   gated on one is still unavailable over the tailnet.
-> * **The identity argument, now unanswered.** This plan wanted per-device SSO, ACL scoping and
->   per-device revocation to replace what the loopback peer check was standing in for. The
->   shipped route trusts every tailnet peer with no credential, which makes Tailscale ACLs the
->   only narrowing tool — and nothing in Switchboard surfaces or checks the ACL posture. That is
->   the live gap, and it is larger than anything else remaining here.
-
 ### Problem Analysis
 
 **The blocker is the bind, not the Host header.** This is worth stating plainly because the
@@ -232,12 +201,6 @@ explicitly and document the outcome either way; state the guard-2 consequence in
 body, not an appendix.
 
 ## Proposed Changes
-
-> **Items 1-4 and 7 are superseded (2026-08-28) — see the revision note under the Goal.** They are
-> kept below unedited because the measurement discipline in item 1 ("measured not assumed") is
-> still the right instinct for the ACL/secure-context questions that remain. Do not implement
-> items 1-3: `tailscale serve`, `allowedHost` and route-scoping were all answered by binding the
-> tailnet address directly. Items **5** and **6** are still open.
 
 1. **Verify `tailscale serve` end-to-end against a real tailnet**, before writing any code or
    any recipe. Establish: the `Host` header as received by the server; whether WebSocket

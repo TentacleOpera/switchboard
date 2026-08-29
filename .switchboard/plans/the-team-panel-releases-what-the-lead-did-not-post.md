@@ -355,8 +355,3 @@ and `:9046`.
 
 Send to Coder. The visibility rule is not separable from the button — shipping the control
 always-visible delivers the habit this plan exists to prevent.
-
-## Implementation Summary
-
-Extracted `completeCardInternal` in `src/services/LocalApiServer.ts` as a shared core for `POST /kanban/task/complete` and the new `POST /kanban/team/release` endpoint. Exposed module-level `heldByTeam(p, teamSet)` and augmented `ptyListTerminals` with a per-terminal `heldUnposted` map. Updated `src/webview/terminals.html` and `src/webview/terminals.js` to render the button visible only when the scoped team holds uncompleted cards, labelled with the count, and wired click action to release cards via API and clear badges only for released seats. Added `team-release-control-contract.test.js` and wired it into `package.json` and `.github/workflows/integration-tests.yml`.
-

@@ -21,12 +21,12 @@ Scheduling must also become safe to leave running overnight. Today a checkbox gr
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Custom Scheduler Jobs Exist Again, and a Job Never Fires Into a Busy Target](../plans/scheduler-custom-jobs-and-the-busy-target-rule.md) — **LEAD CODED** — ID: 4d307fa9-8bd6-4472-82b1-c83799af56a1
-- [ ] [Advance When Ready: A Schedule That Fires On Completion, Not On The Clock](../plans/advance-when-ready-on-a-scheduled-job.md) — **LEAD CODED** — ID: 813b3745-162f-4ce1-87fb-d4b171c48958
-- [ ] [Retire Autoban And Batch Size: Missions Are The Dispatch Primitive Now](../plans/retire-autoban-and-batch-size.md) — **LEAD CODED** — ID: 52b810eb-6209-45fa-9255-2cac8075c04c
-- [ ] [A Scheduled Agent Never Moves A Card](../plans/scheduled-agents-must-not-move-cards.md) — **LEAD CODED** — ID: a1bc7483-3d20-4302-bbd2-1db4f401abbc
-- [ ] [Scheduling Lives In Two Places Only: Team Automations And Mission Control](../plans/scheduling-lives-in-two-places-only.md) — **LEAD CODED** — ID: 5f06c80f-8632-422d-930e-cd41bc1085c0
-- [ ] [Wire The Mission Control Schedules Tab To The Runner That Already Exists](../plans/mission-control-schedules-backend.md) — **LEAD CODED** — ID: 05e81453-1e87-4c48-891c-880cba58a153
+- [ ] [Custom Scheduler Jobs Exist Again, and a Job Never Fires Into a Busy Target](../plans/scheduler-custom-jobs-and-the-busy-target-rule.md) — **PLAN REVIEWED** — ID: 4d307fa9-8bd6-4472-82b1-c83799af56a1
+- [ ] [Advance When Ready: A Schedule That Fires On Completion, Not On The Clock](../plans/advance-when-ready-on-a-scheduled-job.md) — **PLAN REVIEWED** — ID: 813b3745-162f-4ce1-87fb-d4b171c48958
+- [ ] [Retire Autoban And Batch Size: Missions Are The Dispatch Primitive Now](../plans/retire-autoban-and-batch-size.md) — **PLAN REVIEWED** — ID: 52b810eb-6209-45fa-9255-2cac8075c04c
+- [ ] [A Scheduled Agent Never Moves A Card](../plans/scheduled-agents-must-not-move-cards.md) — **PLAN REVIEWED** — ID: a1bc7483-3d20-4302-bbd2-1db4f401abbc
+- [ ] [Scheduling Lives In Two Places Only: Team Automations And Mission Control](../plans/scheduling-lives-in-two-places-only.md) — **PLAN REVIEWED** — ID: 5f06c80f-8632-422d-930e-cd41bc1085c0
+- [ ] [Wire The Mission Control Schedules Tab To The Runner That Already Exists](../plans/mission-control-schedules-backend.md) — **PLAN REVIEWED** — ID: 05e81453-1e87-4c48-891c-880cba58a153
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -38,7 +38,3 @@ Scheduling must also become safe to leave running overnight. Today a checkbox gr
 `scheduled-agents-must-not-move-cards` is independent and can run in parallel, with one caveat recorded in the plan: its test assertion must exclude `reconcile` until `reconcile-becomes-host-code.md` lands, since that is the one scheduled job still moving cards by prose.
 
 `scheduler-custom-jobs` is independent of the deletion order once its step 5 is dropped. Delete `pipeline-orchestrator-regression.test.js` with the class, and remove all five `_pipeline` touchpoints in `TaskViewerProvider.ts` or the file will not compile.
-
-## Completion Summary
-
-All six subtasks implemented and verified. The autoban clock, batchSize, complexity filtering, column rules, and pause/resume were deleted from `AutobanConfigState` (retire-autoban). `PipelineOrchestrator` and its regression test were deleted, leaving the survivor-jobs timer as the sole dispatcher (scheduling-lives-in-two-places-only). The Mission Control Schedules tab now has a backend on the existing `ScheduledJob` store with full CRUD verbs wired through `KanbanProvider` (mission-control-schedules-backend). The inverted `canMoveCards` checkbox was replaced with host-executed board actions — scheduled prompts carry no board authority (scheduled-agents-must-not-move-cards). The `custom` scheduler source was restored — legal on write, visible on read, no longer silently destroyed (scheduler-custom-jobs). Jobs now fire on team release via `resolveTeamInFlight` + `onTeamReleased` callback in the task-complete path, not on the clock (advance-when-ready). Compile and regression tests pass.

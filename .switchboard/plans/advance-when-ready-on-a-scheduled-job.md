@@ -247,7 +247,3 @@ Or, if the method is kept private, expose it via a public delegate or add it to 
 
 ## Outstanding Questions
 - **[user]** Is 60-second latency (survivor poll interval) acceptable as the default, or should the direct-poke variant (calling `runSchedulerJob` immediately from `onTeamReleased`) be the primary mechanism? — proceeding on the assumption that 60s is acceptable for batch advances and the direct-poke is the escape hatch.
-
-## Completion Summary
-Added `advanceWhenReady` support to scheduled jobs so team automations can advance upon lead completion instead of waiting for the full clock interval. Extracted and exported the `resolveTeamInFlight` predicate in `LocalApiServer.ts` and wired the `onTeamReleased` hook across both VS Code extension (`TaskViewerProvider.ts`) and standalone (`bootstrap.ts`) composition roots. Updated `terminals.html`/`terminals.js` with the "Advance when ready" UI and conditioned empty-run `lastRunAt` timestamp backoff to prevent fallback cadence drift.
-

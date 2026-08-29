@@ -204,7 +204,3 @@ Key risks: (1) the round-trip merge in `setSchedulerConfig` is the data-loss gat
 ## Outstanding Questions
 
 - **[user]** Should custom jobs support per-job intervals, or ride the shared survivor timer? The plan's original step 4 says "setting an interval," but the current architecture has no per-job timer — survivor jobs use `intervalMinutes: 0` (vestigial) on a single shared activation-scoped timer. — proceeding on the assumption that custom jobs ride the shared survivor timer (matching fetch-plans/reconcile), and the interval field is cosmetic/vestigial. If real per-job intervals are required, that is separate new scope (a new timer mechanism).
-
-## Implementation Summary
-
-Restored `custom` scheduler jobs across the backend and webview surfaces. Removed `'custom'` from `DROPPED_SOURCES` and ensured `GlobalIntegrationConfigService.setSchedulerConfig` preserves dropped-source jobs in storage during write operations. Added `custom` to survivor source execution in `TaskViewerProvider.ts`, reset the one-time dropped custom jobs notice, and restored custom job creation, editing, and deletion in the Mission Control recurring jobs interface.

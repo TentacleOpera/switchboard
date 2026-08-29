@@ -2,20 +2,9 @@
 
 ## Goal
 
-Ship Switchboard as something you launch rather than something you open an IDE to reach, and make joining a second machine a handshake instead of a networking exercise. The app's real job is **mode selection**: board here or there, agents here or there. ~~established over a tunnel to loopback — never by opening a port~~ *(superseded 2026-08-28 — the transport is the operator's tailnet or SSH, established by neither this app nor a tunnel it owns; see the revision note below)*.
+Ship Switchboard as something you launch rather than something you open an IDE to reach, and make joining a second machine a handshake instead of a networking exercise. The app's real job is **mode selection**: board here or there, agents here or there, established over a tunnel to loopback — never by opening a port.
 
-> **Correction (itself superseded 2026-08-28 — its conclusion "keep the loopback lockdown absolute and tunnel to it" no longer holds; kept for the reasoning, not the verdict) — this plan's first draft was wrong about the mechanism.** It proposed binding `LocalApiServer` off `127.0.0.1` behind mandatory auth. That is the wrong direction: `standalone-remote-access-story.md` documents loopback as enforced in four independent places plus WS-upgrade, CORS and cookie policy, backed by a documented DNS-rebinding threat model in `src/utils/loopbackHostname.ts` and a contract test forbidding a second copy of the predicate — and it establishes that **an SSH tunnel already passes every guard with no code change**. The correct design keeps the loopback lockdown absolute and tunnels to it. That also removes the reason the first draft deferred remote execution.
-
-> **Revision (2026-08-28) — the tunnel half is dead; the launcher and the mode picker are not.**
-> `remote-switchboard-is-tailscale-and-nothing-else.md` has shipped. It binds a second listener on
-> the machine's Tailscale address, so there is no longer anything to tunnel *to*: the two machines
-> this plan pairs are already mutually reachable on the tailnet, with no credential and no
-> terminator. What survives, and is the whole point of this plan, is **the launcher and the mode
-> picker** — Switchboard as something you start, and the two axes of *where the board lives* and
-> *where the agents run*, with **local/local as the default requiring no pairing, no tunnel and no
-> credential** (Proposed Changes item 4). What is struck through below is the tunnel-establishment
-> and loopback-invariance machinery. An earlier revision (see *"Tunnel lifecycle is not this app's
-> job"*) already removed tunnel *management*; this one removes the premise underneath it.
+> **Correction — this plan's first draft was wrong about the mechanism.** It proposed binding `LocalApiServer` off `127.0.0.1` behind mandatory auth. That is the wrong direction: `standalone-remote-access-story.md` documents loopback as enforced in four independent places plus WS-upgrade, CORS and cookie policy, backed by a documented DNS-rebinding threat model in `src/utils/loopbackHostname.ts` and a contract test forbidding a second copy of the predicate — and it establishes that **an SSH tunnel already passes every guard with no code change**. The correct design keeps the loopback lockdown absolute and tunnels to it. That also removes the reason the first draft deferred remote execution.
 
 ### Problem Analysis
 
@@ -40,23 +29,7 @@ Switchboard began as an extension, so its unit of distribution was an extension.
 
 ### Non-goals
 
-> **Superseded (2026-08-28):** "**Binding off loopback.** Explicitly out of scope, and the plan
-> should be read as forbidding it. All four guards stay; so do the WS-upgrade predicate, the
-> loopback-only CORS mirror and `SameSite=Strict`."
->
-> **Reason:** `remote-switchboard-is-tailscale-and-nothing-else.md` shipped, and it binds off
-> loopback deliberately. `switchboard tailnet` opens a SECOND listener on the machine's Tailscale
-> interface address while retaining the loopback listener; guards 2-5 are widened under a
-> `BindPolicy` rather than kept absolute, and a peer arriving on the tailnet listener is trusted
-> with no credential at all. That plan named this one in its Deliberate non-goals and rejected
-> this premise explicitly: *"Tunnelling to loopback to avoid binding to an interface that is
-> already private is machinery in place of a setting… keep the launcher idea, drop the tunnel
-> half. Do not implement both."*
->
-> **Replaced with:** binding off loopback is a supported, shipped posture, restricted to one
-> address the operator cannot choose. The non-goal that survives is the narrower one the tailnet
-> plan kept: **no arbitrary bind address** — no `--bind <ip>`, no `0.0.0.0`, no LAN binding.
-> The loopback listener is still always retained, so every local agent client is unaffected.
+- **Binding off loopback.** Explicitly out of scope, and the plan should be read as forbidding it. All four guards stay; so do the WS-upgrade predicate, the loopback-only CORS mirror and `SameSite=Strict`.
 - A Switchboard-hosted service. Every remote is the operator's own machine.
 - Replacing the VSIX. In-IDE stays a first-class client.
 - Rewriting the UI. The browser shell already is the app's UI.
@@ -144,18 +117,7 @@ Key risks: the first draft's proposal to unbind from loopback would have dismant
 6. **Mode-transition semantics**: a switch changes where new work starts, never moves running terminals; every terminal is labelled with its host.
 7. **A store ownership lock** with a discoverable "another Switchboard owns this store" state.
 8. **Version-skew refusal** between client and remote — refuse, never downgrade.
-9. ~~**A loopback-invariance contract test** asserting the bind address is unconditional and no
-   configuration path can alter it.~~
-   > **Superseded (2026-08-28):** this test would now fail by design. `bindPolicy`
-   > (`LocalApiServerOptions`, `loopbackHostname.ts`) is exactly the configuration path it
-   > forbids. A coder implementing item 9 as written would write a gate against a shipped
-   > feature.
-   >
-   > **Replaced with:** the invariants that actually hold, already asserted by
-   > `src/test/tailscale-bind-contract.test.js` — the loopback listener is always retained, the
-   > server never binds `0.0.0.0`, tailnet peers are identified by `socket.localAddress` rather
-   > than a remote-address allowlist, and the credential skip is scoped to that one listener.
-   > Do not add a second copy; extend that file.
+9. **A loopback-invariance contract test** asserting the bind address is unconditional and no configuration path can alter it.
 
 ### Distribution tiers — nothing persistent may leak into `npx`
 
@@ -188,13 +150,7 @@ No existing install affected; the VSIX is unchanged and stays a first-class clie
 
 ## Verification Plan
 
-- ~~**Loopback invariance:** assert the bind address is unconditional, that no flag, setting or
-  env var changes it, and that the four guards plus the WS-upgrade predicate are intact. This is
-  the regression test for this plan's own first draft.~~
-  > **Superseded (2026-08-28):** see Proposed Changes item 9. The bind address is conditional now,
-  > by design. The surviving assertion — that no path can widen the bind beyond the one tailnet
-  > address, and that loopback is always still served — lives in
-  > `src/test/tailscale-bind-contract.test.js`.
+- **Loopback invariance:** assert the bind address is unconditional, that no flag, setting or env var changes it, and that the four guards plus the WS-upgrade predicate are intact. This is the regression test for this plan's own first draft.
 - **Pairing:** from a clean pair of machines, complete pairing in the app and assert a working board over the tunnel — with no credential having crossed an unauthenticated channel.
 - **All three modes end-to-end:** local board + local agents on a machine that has never been paired, with no tunnel, no credential and no configuration — the regression test for this whole programme; remote board + remote agents (laptop as thin client, agents surviving laptop shutdown); remote board + local agents (PTYs local, board remote, zero remote writes for liveness).
 - **Agent parity across modes:** run the same agent board read and the same card move in all three modes; assert identical results in each.
@@ -277,9 +233,8 @@ mean shelling out to reconfigure a tool that is already managing itself.
 
 ### What is unaffected
 
-Everything else stands: ~~the loopback-invariance contract test (still the regression test for
-this plan's own first draft)~~ *(superseded 2026-08-28 — see Proposed Changes item 9)*,
-mode-transition semantics and per-terminal host labels, the store
+Everything else stands: the loopback-invariance contract test (still the regression test for this
+plan's own first draft), mode-transition semantics and per-terminal host labels, the store
 ownership lock, version-skew refusal, unattended legibility, capability gating, and the credential
 scoping and branch-protection guidance. Sequencing is unchanged — this revision reduces the
 plan's scope; it does not reorder it.

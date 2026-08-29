@@ -695,6 +695,3 @@ mapped to a parent whose folder is **not** open).
 ---
 
 **Recommendation:** Send to Coder (complexity 6).
-
-### Implementation Summary
-Implemented save-target resolution using `_resolveSaveTarget` mirroring `_handleFetchKanbanPlanPreview` and broadened allow-list validation to `_getAllowedRoots()` with `path.sep` boundary protection in `PlanningPanelProvider.ts`. Differentiated missing file errors from genuine edit conflicts, keyed plan renames against the effective workspace root, and converted all arm exits to return payload responses compliant with PRD return contracts. Wired caller-supplied `workspaceRoot` across all five save handlers in `project.js` and `planning.js`. Ratched CI verb return baseline down via `node scripts/check-verb-return-contract.js --write`.
