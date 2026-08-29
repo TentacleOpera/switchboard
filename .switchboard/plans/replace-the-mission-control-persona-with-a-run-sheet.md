@@ -58,6 +58,52 @@ every wake starts from a cleared terminal. On tick 40 there is no operator to as
 must be in the prompt. That is an argument for the *armed* branch carrying its protocol resident — not
 for every entry carrying it.
 
+### Two entities, and the launcher currently conflates them
+
+The **mission controller** and the **`/switchboard` agent** are separate, and only one of them is a
+seat:
+
+| | mission controller | `/switchboard` agent |
+| :--- | :--- | :--- |
+| what it is | a seated terminal supervising an attended mission | the conversational front door |
+| how it is woken | mission transition points (`supervised-missions-wake-the-controller-on-transitions.md`) | its own host scheduler, after it dispatches |
+| replaceable? | **no** — an attended mission requires the controller seated | n/a |
+| needs an interval tick? | no | yes, but not one Switchboard builds |
+
+**Step 2 inverts this today.** `.agents/workflows/switchboard.md` says *"**You are the orchestrator.
+Not a terminal you start — this one.** Adopt the seat and run the pre-flight here, in this
+conversation"*, and then forbids the alternative: *"Never call `POST /orchestration/start` from here —
+that door creates a separate Orchestrator terminal, which is the opposite of what `/switchboard` is
+for."* So the launcher makes the front-door conversation *become* the controller and rules out seating
+one. For an attended mission that is backwards: the controller must be a seated terminal, and the
+`/switchboard` agent is the thing that starts it.
+
+**Consequence: the run sheet does not adopt.** The step-2 rewrite drops the adopt call and the "you
+are the orchestrator" framing. Seating a controller becomes one of the menu's branches — something the
+agent *starts* when an attended mission needs one — not what the agent silently becomes on arrival.
+
+### The tick belongs to the agent's host, not to Switchboard
+
+The `/switchboard` agent does need periodic reminding — to read terminal statuses and the inbox after
+it dispatches. It does **not** need Switchboard to build that. Any host worth running `/switchboard`
+in has its own scheduling tool, so the run sheet's instruction is one line: *after dispatching,
+schedule a wake ~2 minutes out to check the progress of that dispatch.*
+
+That deletes an apparatus rather than relocating it. The `-external` runsheet (84 lines) exists almost
+entirely to make an agent self-wake — *"You MUST start the self-wake loop before your first tick, or
+the session dies on arrival"* — and the shared logic's tick, silent-when-idle and `progress.json`
+stall counters are the interval machinery around it. A host-scheduled check after a dispatch replaces
+the reason all of it exists.
+
+**Where the stall case lands.** A dispatch that goes quiet produces no mission transition, so nothing
+wakes on it. That is exactly what the agent's own scheduled check is for: it dispatched, so it is the
+one that should come back and look. Stall detection stops being a background counter and becomes a
+consequence of having dispatched.
+
+**Hosts without a scheduler.** This rests on the premise that the host has one. Where it does not, the
+correct behaviour is to say so and let the operator check back — not to reintroduce a self-wake loop.
+Recorded as a stated assumption rather than a silent one.
+
 ### Root Cause
 
 The document was written when the only job was an overnight batch run, and the entry point was a
@@ -112,7 +158,8 @@ prompt was never given a way to ask what the operator came for.
    | *(always)* | Role & Scope, Hard Rules, orientation call (Port Discovery, shrunk per change 4) | <57 |
    | What's ready / board state | `## What Is Ready To Go` | 72 |
    | Run a batch now | Pre-flight, Handoff-or-arm, The handoff sequence | 154 |
-   | Watch an armed run | The Tick, Signals, Context Is Cleared, Verify via Git, Messaging Leads | 228 |
+   | Check a dispatch (host-scheduled) | Signals, Verify via Git, Messaging Leads — **without** The Tick or Context Is Cleared, which exist for an interval loop that no longer runs | ~130 of 228 |
+   | Seat a controller | starting a controller terminal for an attended mission | new, small |
    | Merge a finished feature | Merge-Back | 22 |
    | Remote batch | Remote intake | 19 |
    | *(reference)* | Transitions You Own, What You Never Do, Session File/Log/Completion | 50 |
@@ -143,7 +190,7 @@ prompt was never given a way to ask what the operator came for.
    | :--- | :--- |
    | `interview` | runsheet (menu) + always-on preamble. **Not** the tick protocol. |
    | `stale-session` | the same, plus the existing stale-file instruction |
-   | `resume` (armed) | the *watch an armed run* protocol only — **no menu**, because context is cleared and nobody is there to answer |
+   | `resume` | the *check a dispatch* protocol — the agent woke itself on its own schedule to look at what it dispatched. No menu: it already knows why it is here |
 
    The three-way branch already exists at `:11769-11783`; this keys the document to it rather than
    only the closing instruction.
