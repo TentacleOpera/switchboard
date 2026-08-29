@@ -70,6 +70,25 @@ for shell access per invocation and for tool access per connection.
 **Complexity:** 6
 **Tags:** infrastructure, backend, ux, reliability
 
+### Dispatch is the board's motion, not a parallel mechanism
+
+`switchboard_dispatch` must mean **exactly what dragging a card into a column means** — the board is
+the reference implementation, and an agent surface that invents its own dispatch concept is a second
+mechanism to keep in sync. On a drop, `KanbanProvider.ts:11604` complexity-routes the dropped set,
+checks which coding agents are visible (refusing with *"No coding agent is currently enabled"* when
+none are), moves each card to its role's column, and fires. `performKanbanDispatch` is the same three
+steps behind the API door.
+
+Two consequences for this plan:
+
+- **The tool takes a column, not a queue operation.** An earlier revision framed `switchboard_dispatch`
+  as "stage the queue, then hand out the first card". That is one *use* of dispatch, not what dispatch
+  is. Staging (`STAGING` is *"a queue, not a coding seat"*, `KanbanProvider.ts:7182`) remains available
+  as a target column like any other.
+- **Whether the two doors should share an implementation is a real question**, deliberately left
+  open below. This plan aligns the tool's *semantics* to the board's; converging the code is a
+  separate change.
+
 ### The file/state line
 
 The tool surface follows one rule, and it is the rule that decides every future addition:
@@ -131,7 +150,7 @@ be redundant where it works and unreachable where it would help.
    | tool | covers | backing |
    | :--- | :--- | :--- |
    | `switchboard_status` | board state **and** the terminal roster in one call — what is ready, what is seated | `_resolveBoard(db)` filtered by column, features read (`:2397`), plus `/health`'s `terminals` / `roots` |
-   | `switchboard_dispatch` | hand work to a team: stage the queue, then hand out the first card | `stageForQueue`, then `performKanbanDispatch(workspaceRoot, ref, rawColumn)` — the documented in-process entry (`:1141-1180`) |
+   | `switchboard_dispatch` | move one or more cards to a column **with triggers on** — the board's drag semantics, not a separate mechanism | `performKanbanDispatch(workspaceRoot, ref, rawColumn)`, the documented in-process entry; `auto` column ⇒ complexity routing |
    | `mission_control` | the session lifecycle: `adopt`, `confirm`, `handoff` | the three `/mission-control/*` handlers |
    | `message_terminal` | talk to a lead | `_options.terminalVerb('ptySendPrompt', {name, data, clearBeforePrompt?})` — **never `ptyWrite`** |
 
@@ -142,10 +161,15 @@ be redundant where it works and unreachable where it would help.
 
    **What the parked twelve contained and this drops, with reasons:**
 
-   - `card_move` — `CLAUDE.md` is explicit that column transitions are automatic and *"Execution
-     agents must NEVER attempt to update kanban columns directly"*, with manual moves going through
-     the `kanban_operations` skill and the orchestrator as the sanctioned exception. A tool that
-     every connected agent can call is the wrong shape for a rule-bound, rare operation.
+   - `card_move` (plain reposition) — **not the same thing as dispatch, and that distinction is the
+     point.** Moving a card and dispatching are one motion with one flag: `_cliTriggersEnabled`
+     globally, `dragDropMode` (`'cli' | 'prompt' | 'disabled'`) per column
+     (`KanbanProvider.ts:120`, `:11280`, `:11424` — `if (dragDropMode === 'prompt' ||
+     this._cliTriggersEnabled)`). Triggers **on** ⇒ reposition *and* fire; triggers **off** ⇒
+     reposition only. `switchboard_dispatch` is the triggers-on case. The triggers-off case stays out
+     of the MCP: it is the rare manual op, `kanban_operations` owns it, and it is exactly what
+     `CLAUDE.md` restricts — an agent repositioning with triggers off makes the board claim work
+     started when nothing did.
    - `features_assign`, `features_reconcile`, `feature_split`, `feature_delete` — owned by the
      `manage-features` skill. Restructuring a feature is deliberate, infrequent work done with a
      skill's guidance, not a common call worth a permanent tool slot.
@@ -203,6 +227,12 @@ be redundant where it works and unreachable where it would help.
 
 ## Outstanding Questions
 
+- **[user] Should the two dispatch doors converge?** The board's drop path
+  (`KanbanProvider.ts:11604`) and `performKanbanDispatch` (`LocalApiServer.ts`) run the same three
+  steps — complexity-route, move, fire — in two files. This plan aligns the MCP tool's semantics to
+  the board's without merging them, because converging them is a refactor with its own risk and
+  belongs in its own plan. Worth deciding whether that plan should exist: two implementations of one
+  concept is how the agent-facing side drifted from the board's in the first place.
 - **Settled: four tools, use-case shaped.** An earlier revision of this plan recommended re-deriving
   the list from observed call frequency and adding the queue verbs, worktree reads and an orientation
   tool. **That recommendation is withdrawn.** Call frequency measures how repetitive the protocol is,
