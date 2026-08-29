@@ -775,6 +775,26 @@ export class LocalApiServer {
     // host and produces a false negative).
     private _isListening: boolean = false;
     private _wsHub: WsHub | null = null;
+    private _turnSizes = new Map<string, { size: number; at: number }>();
+
+    private _noteTurnClear(wsId: string, terminalName: string, remainingAfter: number, timeoutMs = 600000): void {
+        if (!terminalName) { return; }
+        const key = `${wsId}|${terminalName}`;
+        const prev = this._turnSizes.get(key);
+        const stale = !prev || (Date.now() - prev.at) > timeoutMs;
+        const observed = remainingAfter + 1;
+        if (stale || observed > prev!.size) {
+            this._turnSizes.set(key, { size: observed, at: Date.now() });
+        }
+    }
+
+    private _takeTurnSize(wsId: string, terminalName: string): number {
+        if (!terminalName) { return 1; }
+        const key = `${wsId}|${terminalName}`;
+        const entry = this._turnSizes.get(key);
+        this._turnSizes.delete(key);
+        return Math.max(1, entry?.size ?? 1);
+    }
 
     constructor(options: LocalApiServerOptions) {
         this._options = options;
@@ -3341,8 +3361,18 @@ export class LocalApiServer {
                     // gate, not a third outcome value.
                     if (outcome === 'finished') {
                         if (this._options.onWorkingStateCleared) {
-                            try { this._options.onWorkingStateCleared(held, workspaceRoot); } catch (e) {
-                                console.warn('[LocalApiServer] onWorkingStateCleared callback failed:', e);
+                            const terminalName = (held.dispatchedTerminal || from || '').trim();
+                            const remaining = terminalName && typeof (db as any).countActiveDispatchedByTerminal === 'function'
+                                ? await db.countActiveDispatchedByTerminal(held.workspaceId || wsId, terminalName)
+                                : 0;
+                            this._noteTurnClear(held.workspaceId || wsId, terminalName, remaining);
+                            if (remaining === 0) {
+                                const planCount = this._takeTurnSize(held.workspaceId || wsId, terminalName);
+                                try {
+                                    this._options.onWorkingStateCleared(held, workspaceRoot, { planCount });
+                                } catch (e) {
+                                    console.warn('[LocalApiServer] onWorkingStateCleared callback failed:', e);
+                                }
                             }
                         }
                         if (this._options.onTurnEndNotify) {

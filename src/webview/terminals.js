@@ -6433,12 +6433,14 @@
             titleEl.title = `${agentLabel ? agentLabel + ' — ' : ''}${handle}`;
             paneEl.setAttribute('aria-label', `Pane ${index + 1}: ${titleEl.title}`);
 
-            if (terminalBadges.has(assignedName)) {
-                const badgeSpan = document.createElement('span');
-                badgeSpan.className = 'pane-badge';
-                badgeSpan.textContent = terminalBadges.get(assignedName).label;
-                titleEl.appendChild(badgeSpan);
-            }
+            // No DONE badge here. One completion used to paint four surfaces at once —
+            // the shell rail pulse, the sidebar row chip, THIS chip, and a toast — three
+            // of them inside the same panel in the same glance. This one was the least
+            // useful of the four: it sits on the chrome of a terminal the operator is
+            // already watching, duplicates the sidebar row a few inches away, and
+            // competes for a header row where .pane-title-name is the only shrinkable
+            // child. terminalBadges is unchanged and still drives the sidebar chip and
+            // the rail; do not re-add a reader here.
             if (terminalReplayGaps.has(assignedName)) {
                 const gapBadge = document.createElement('span');
                 gapBadge.className = 'pane-badge is-gap';
@@ -10466,6 +10468,7 @@
     };
 
     function handleAgentCompleted(msg) {
+        if (soloTerminalName) { return; }
         const { planTitle, role, terminalName, worktreePath } = msg;
 
         // The host resolves terminalName from the plan's dispatched_terminal column and
@@ -10501,10 +10504,18 @@
         // firing immediately after this toast with the same role and the same
         // plan title — a duplicate of the notice the operator had already been
         // given. Do not reintroduce it.
-        showCompletionToast(planTitle || 'Agent Task', role || 'Agent', targetTerm);
+        showCompletionToast(planTitle || 'Agent Task', role || 'Agent', targetTerm, msg.planCount);
     }
 
-    function showCompletionToast(title, role, termName) {
+    /** Completion toasts do not stack: a rolling batch would otherwise fill the
+     *  container with identical notices, which is the same spam in different pixels.
+     *  Error toasts (.is-error) are a different signal and are never evicted here. */
+    function showCompletionToast(title, role, termName, planCount) {
+        if (!toastContainerEl) { return; }
+        toastContainerEl
+            .querySelectorAll('.completion-toast:not(.is-error)')
+            .forEach(el => el.remove());
+
         const toast = document.createElement('div');
         toast.className = 'completion-toast';
 
@@ -10517,7 +10528,12 @@
 
         const bodyEl = document.createElement('div');
         bodyEl.className = 'toast-body';
-        bodyEl.textContent = title + (termName ? ` (${termName})` : '');
+        // planCount is the size of the agent's whole TURN, supplied by the engine.
+        // Additive on the wire — an older host omits it, and a single-plan turn is the
+        // common case, so both fall through to the plain title.
+        const n = Number(planCount);
+        const scope = Number.isFinite(n) && n > 1 ? `${title} +${n - 1} more` : title;
+        bodyEl.textContent = scope + (termName ? ` (${termName})` : '');
 
         content.appendChild(titleEl);
         content.appendChild(bodyEl);
@@ -10533,9 +10549,11 @@
         toast.appendChild(closeBtn);
         toastContainerEl.appendChild(toast);
 
+        // 4s, not 8s. The sidebar chip is the durable record and the rail carries the
+        // cross-panel signal, so the toast only has to be SEEN, not read twice.
         setTimeout(() => {
             if (toast.parentNode) toast.parentNode.removeChild(toast);
-        }, 8000);
+        }, 4000);
     }
 
     /** Transient, dismissible terminal failure notice. Deliberately NOT a line in

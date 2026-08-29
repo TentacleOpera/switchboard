@@ -780,7 +780,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // Extracted so any future second completion signal reuses the SAME broadcast
     // path — the toast fires once from whichever clear wins the race, and the
     // non-null→null transition is idempotent at the DB seam.
-    const broadcastAgentCompletedForRecord = (record: any) => {
+    const broadcastAgentCompletedForRecord = (record: any, meta?: { planCount?: number }) => {
         void (async () => {
             if (!server) { return; }
             let terminalName = (record.dispatchedTerminal || '').trim();
@@ -811,11 +811,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 role: record.dispatchedAgent,
                 worktreePath: worktreePath || undefined,
                 terminalName: terminalName || undefined,
+                planCount: meta?.planCount,
             }, SURFACES.common);
         })().catch(e => console.error('[bootstrap] agentCompleted broadcast failed:', e));
     };
-    ingestionEngine.setOnWorkingStateCleared((record) => {
-        broadcastAgentCompletedForRecord(record);
+    ingestionEngine.setOnWorkingStateCleared((record, _wsRoot, meta) => {
+        broadcastAgentCompletedForRecord(record, meta);
     });
     // NOTE: the activity-light liveness seam is wired further down, immediately
     // after `const ptyFleetService` is constructed — NOT here. A closure written
@@ -2968,8 +2969,8 @@ Each plan file must include:
         // plan-file mtime advance. Reuses broadcastAgentCompletedForRecord
         // (defined above) and handleTurnEndNotify (extracted above) — ONE
         // delivery path shared with the engine's setTurnEndNotifier.
-        onWorkingStateCleared: (record: any, _wsRoot: string) => {
-            broadcastAgentCompletedForRecord(record);
+        onWorkingStateCleared: (record: any, _wsRoot: string, meta?: { planCount?: number }) => {
+            broadcastAgentCompletedForRecord(record, meta);
             // Refresh the headless board too — the extension host's twin calls
             // `refreshIfShowing` here for the same reason. On the retired
             // file-watcher path the clear and the `planDiscovered` push were the

@@ -766,3 +766,7 @@ COMPILATION. The coder runs them.)*
 ---
 
 **Recommendation:** Complexity 7 → **Send to Lead Coder.**
+
+## Implementation Summary
+
+Implemented batch-aware turn-end completion signals and falsifiable silence retention. Added `countActiveDispatchedByTerminal` and `getActiveDispatchedRowsByTerminal` queries in [`KanbanDatabase.ts`](file:///home/patrick/switchboard/src/services/KanbanDatabase.ts) to track outstanding active rows for a dispatched terminal. In [`LocalApiServer.ts`](file:///home/patrick/switchboard/src/services/LocalApiServer.ts) and [`PlanIngestionEngine.ts`](file:///home/patrick/switchboard/src/services/PlanIngestionEngine.ts), wired batch gating (`countActiveDispatchedByTerminal`, `_noteTurnClear`, `_takeTurnSize`) so completion broadcasts fire only on turn boundaries with populated `planCount`. Fixed silence sweep in `PlanIngestionEngine.ts` to iterate all rows via `getActiveDispatchedRowsByTerminal` and updated `blockedTimeoutMs` code fallback to 1800000ms. Updated [`bootstrap.ts`](file:///home/patrick/switchboard/src/standalone/bootstrap.ts), [`TaskViewerProvider.ts`](file:///home/patrick/switchboard/src/services/TaskViewerProvider.ts), and [`extension.ts`](file:///home/patrick/switchboard/src/extension.ts) to forward `planCount` and tag WS `agentCompleted` broadcasts with `SURFACES.common`. Adjusted `switchboard.activityLight.blockedTimeoutMs` default in `package.json` to 30 minutes.

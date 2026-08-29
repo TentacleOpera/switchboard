@@ -483,3 +483,7 @@ COMPILATION. The coder runs them.)*
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder.**
+
+## Implementation Summary
+
+Implemented completion notice consolidation across terminals webview and shell. Added a `soloTerminalName` guard to `handleAgentCompleted` in `src/webview/terminals.js` so solo pop-out windows do not duplicate badges, refetches, or toasts. Removed the redundant `terminalBadges` DONE chip rendering from `updatePaneElement` while preserving the `GAP` badge. Updated `showCompletionToast` to deduplicate active completion toasts, incorporate optional `planCount` turn-aware formatting, and reduce dwell time from 8s to 4s. Updated the rationale comment in `src/webview/shell.js` to match the two-surface model.

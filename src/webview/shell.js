@@ -1285,9 +1285,10 @@
         // The done ring is a one-shot ANIMATION, not a state class: it plays for
         // DONE_PULSE_MS from the push that carried a new completion stamp, and is
         // simply absent on every push after that window closes. A terminal that
-        // completed a minute ago wears no ring — the sidebar DONE chip and the
-        // pane badge in the Terminals panel remain the durable record of an
-        // unacknowledged completion.
+        // completed a minute ago wears no ring — the sidebar DONE chip in the
+        // Terminals panel is the durable record of an unacknowledged completion.
+        // (The pane-header badge that used to be the second durable surface was
+        // removed: three simultaneous DONE surfaces inside one panel is spam.)
         btn.className = 'strip-icon strip-term-btn strip-term-' + t.light
             + (pulseElapsed >= 0 ? ' is-pulsing' : '');
         btn.type = 'button';

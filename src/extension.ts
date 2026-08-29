@@ -1014,8 +1014,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // is retired. The live producer is POST /kanban/queue/done, wired as the
     // LocalApiServer `onWorkingStateCleared` option in TaskViewerProvider. Kept
     // registered for host parity and for any future engine-side completion clear.
-    globalPlanWatcher.getEngine().setOnWorkingStateCleared((record, wsRoot) => {
-        taskViewerProvider.broadcastAgentCompleted(record, wsRoot);
+    globalPlanWatcher.getEngine().setOnWorkingStateCleared((record, wsRoot, meta) => {
+        taskViewerProvider.broadcastAgentCompleted(record, wsRoot, meta);
     });
     // Activity-light liveness seam: the sweep (PlanIngestionEngine) consults this
     // synchronous getter to spare a card whose terminal is still producing output

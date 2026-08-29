@@ -10476,10 +10476,9 @@ FROM plans
      * reads `blocked_at` independently of the working age basis, so the two
      * states share one clock but separate triggers. Scoped by workspace_id.
      *
-     * CURRENTLY UNCALLED. Its only caller was the Claude-Code-only
-     * `POST /agent/event` hook route, removed as CLI-specific; this writer is
-     * retained as the seam a CLI-agnostic signal plugs into (see the
-     * `pty-turn-end-from-output-silence` plan).
+     * Called from the turn-end silence sweep in PlanIngestionEngine when an active
+     * dispatched seat goes quiet without a completion report. The verdict is
+     * silence-derived (output inactivity), not hook-derived.
      *
      * Deliberately does NOT touch `updated_at`. `updated_at` is the secondary
      * discriminator a turn-end decision uses to ask "did the plan file advance
@@ -10522,6 +10521,65 @@ FROM plans
         try {
             const rows = this._readRows(stmt);
             return rows[0] ?? null;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    /**
+     * How many plan rows are STILL live-dispatched to this terminal.
+     *
+     * The batch discriminator for the completion signal. One fan-out stamps every card
+     * with the same `dispatched_terminal` (see updateDispatchInfoByPlanFile's call site
+     * in the dispatchCards verb), so a per-row clear is a per-SUBTASK event, not a
+     * per-TURN one. Callers clear the row first, then ask this: zero remaining means the
+     * agent finished the turn.
+     *
+     * Empty `terminalName` returns 0 by design — an unattributed dispatch cannot be
+     * grouped, so its single clear must be allowed to broadcast immediately.
+     */
+    public async countActiveDispatchedByTerminal(workspaceId: string, terminalName: string): Promise<number> {
+        if (!(await this.ensureReady()) || !this._db || !workspaceId || !terminalName) return 0;
+        const stmt = this._db.prepare(
+            `SELECT COUNT(*) AS n FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+               AND dispatched_terminal = ? AND dispatched_at IS NOT NULL`,
+            [workspaceId, terminalName]
+        );
+        try {
+            if (stmt.step()) {
+                return Number((stmt.getAsObject() as any)?.n ?? 0);
+            }
+            return 0;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    /**
+     * Every live-dispatched plan row for a terminal, newest first.
+     *
+     * The plural of getActiveDispatchedByTerminal, which carries `LIMIT 1` and is
+     * correct only for a single-plan turn. The turn-end silence sweep must test EVERY
+     * plan the terminal is holding — with LIMIT 1 it stat'ed one file and left the rest
+     * of a batch to the stale-state abandonment timeout, which deliberately does not
+     * broadcast.
+     */
+    public async getActiveDispatchedRowsByTerminal(
+        workspaceId: string,
+        terminalName: string,
+        limit = 50
+    ): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db || !workspaceId || !terminalName) return [];
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+               AND dispatched_terminal = ? AND dispatched_at IS NOT NULL
+             ORDER BY dispatched_at DESC LIMIT ?`,
+            [workspaceId, terminalName, limit]
+        );
+        try {
+            return this._readRows(stmt);
         } finally {
             stmt.free();
         }

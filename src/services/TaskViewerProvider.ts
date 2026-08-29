@@ -1865,15 +1865,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     /**
      * Extension-host half of the `agentCompleted` push consumed by the browser Terminals
      * panel. Mirrors the standalone bootstrap wiring verbatim: fire-and-forget, gated on
-     * the plan-file-edit clear site only (never the stale-state timeout sweep — a timeout
-     * is an abandonment, not a completion), and additive on the wire, so webviews that do
-     * not listen for it are unaffected.
+     * the explicit completion clear site or plan-file mtime evidence (never the stale-state
+     * timeout sweep — a timeout is an abandonment, not a completion), tagged with
+     * SURFACES.common, and additive on the wire, so webviews that do not listen for it are
+     * unaffected.
      *
      * `terminalName` falls back to a role+worktree fleet match because extension-host
      * dispatch does not write `dispatched_terminal`; when nothing resolves the field is
      * omitted and the panel shows a toast without pane targeting.
      */
-    public broadcastAgentCompleted(record: KanbanPlanRecord, workspaceRoot: string): void {
+    public broadcastAgentCompleted(record: KanbanPlanRecord, workspaceRoot: string, meta?: { planCount?: number }): void {
         void (async () => {
             const server = this._apiServerForBroadcast ?? this._localApiServer;
             if (!server) { return; }
@@ -1905,7 +1906,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 role: record.dispatchedAgent,
                 worktreePath: worktreePath || undefined,
                 terminalName: terminalName || undefined,
-            });
+                planCount: meta?.planCount,
+            }, SURFACES.common);
         })().catch(e => console.error('[TaskViewerProvider] agentCompleted broadcast failed:', e));
     }
 
@@ -3824,8 +3826,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // setTurnEndNotifier). The API-based queue/done path fires these so a
             // seat reporting done via POST reaches the same broadcast + lead
             // notification + autoban dispatch as a plan-file mtime advance.
-            onWorkingStateCleared: (record, wsRoot) => {
-                this.broadcastAgentCompleted(record, wsRoot);
+            onWorkingStateCleared: (record, wsRoot, meta) => {
+                this.broadcastAgentCompleted(record, wsRoot, meta);
                 // Refresh the board too. On the retired file-watcher path the
                 // clear and the board refresh were the SAME tick — the watcher
                 // cleared working state and then fired `planDiscovered` for the

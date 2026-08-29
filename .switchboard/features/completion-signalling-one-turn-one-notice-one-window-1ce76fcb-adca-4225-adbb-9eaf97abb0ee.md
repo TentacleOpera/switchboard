@@ -21,8 +21,8 @@ This feature was reconciled from four subtasks to two. The set is now partitione
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [One Completion Signal Per Agent Turn — Batch-Aware "Done" and a Falsifiable Silence Verdict](../plans/feature_plan_20260813100400_done-fires-per-plan-file-not-per-agent-turn.md) — **PLAN REVIEWED** — ID: 6480bd50-bd74-4f48-a864-b12cee630181
-- [ ] [One Completion Notice, In One Window — Cut the Terminals Panel's Four DONE Surfaces to Two](../plans/feature_plan_20260813100500_one-completion-paints-four-done-surfaces.md) — **PLAN REVIEWED** — ID: 431ee1ab-caa6-4fee-8f81-09a6d32d6d93
+- [ ] [One Completion Signal Per Agent Turn — Batch-Aware "Done" and a Falsifiable Silence Verdict](../plans/feature_plan_20260813100400_done-fires-per-plan-file-not-per-agent-turn.md) — **LEAD CODED** — ID: 6480bd50-bd74-4f48-a864-b12cee630181
+- [ ] [One Completion Notice, In One Window — Cut the Terminals Panel's Four DONE Surfaces to Two](../plans/feature_plan_20260813100500_one-completion-paints-four-done-surfaces.md) — **LEAD CODED** — ID: 431ee1ab-caa6-4fee-8f81-09a6d32d6d93
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -32,3 +32,7 @@ This feature was reconciled from four subtasks to two. The set is now partitione
 - **If only one is dispatched, dispatch the engine subtask.** It fixes the reported bug (a six-subtask dispatch announcing done six times, the first within a minute); the rendering subtask reduces the noise of a notice that would still be wrong on its own.
 - **Cross-feature contention:** the rendering subtask deletes a block from `updatePaneElement`'s title row. The *Pane Fidelity* feature's **Pane Header No Longer Shows the Agent Role** subtask rewrites that same block. A textual conflict is near-certain — do not dispatch both features concurrently.
 - **One prerequisite fact for the coder:** commit `1bd39f4a` (2026-08-14) shipped the turn-end silence sweep, `switchboard.activityLight.turnEndSilenceMs` and the blocked/"Waiting on you" state. Both plans are written against that code, not against the pre-`1bd39f4a` engine. Re-read the sweep before editing it.
+
+## Completion Summary
+
+Both subtasks implemented and committed (494b44bc). The engine subtask gates the completion broadcast on the terminal's whole batch clearing via `countActiveDispatchedByTerminal` in `LocalApiServer`, carries `planCount` to both hosts through the `_onWorkingStateCleared` callback meta, fixes the silence sweep to iterate all rows via `getActiveDispatchedRowsByTerminal`, and cuts `blockedTimeoutMs` from 4h to 30min. The rendering subtask guards `handleAgentCompleted` on `!soloTerminalName`, deletes the pane-header DONE chip, coalesces completion toasts to one at a time, drops dwell to 4s, and renders `planCount` as "+N more". One fix round was required on the engine subtask to wire the batch-gating infrastructure into actual call sites.

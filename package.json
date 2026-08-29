@@ -642,10 +642,10 @@
         },
         "switchboard.activityLight.blockedTimeoutMs": {
           "type": "integer",
-          "default": 14400000,
+          "default": 1800000,
           "minimum": 600000,
           "maximum": 86400000,
-          "description": "How long (ms) a card stays visibly 'Waiting on you' after the agent goes quiet without reporting done. Default 4 hours. This is a wait on a human, not a machine, so it is deliberately much longer than timeoutMs. The card clears earlier if output resumes, the terminal exits, or the card is re-dispatched.",
+          "description": "How long (ms) a card stays visibly 'Waiting on you' after the agent goes quiet without a plan-file change. Default 30 minutes. The verdict is derived from output silence alone, which cannot tell 'the agent asked you a question' from 'the agent died' or 'the agent finished without writing its plan file' — so this is a bounded guess, not a confirmed wait on a human. A real human wait resolves itself long before this: answering the prompt produces output, and the next liveness tick (~10s) nulls the blocked stamp. Raise it toward the 24h maximum if you prefer the card to stay lit while you are away from the desk.",
           "scope": "resource"
         },
         "switchboard.boardStateExport": {
