@@ -24,6 +24,22 @@ host that gates Bash per command, N curls is N prompts, while N MCP tools is one
 bridge plan's own Goal already contained this — *"bypassing shell command policies and socket
 connection restrictions"* — and it was lost because the park was reasoned entirely about Gemini Spark.
 
+**But that argument is weaker than it first appears, and the plan should say so.** A prefix allowlist
+is also one grant: this repository's `.claude/settings.json` already carries `Bash(curl *)`, which is
+why board calls raise no prompt here today. So the honest claim is not "MCP removes prompts and curl
+cannot" — it is that the alternatives each cost something MCP does not:
+
+| approach | grants | cost |
+| :--- | :--- | :--- |
+| `Bash(curl *)` | one line | curl to **anywhere**, not just the board |
+| `Bash(switchboard:*)` (see `board-commands-in-the-switchboard-cli.md`) | one line | narrow and safe — but shell-only, and still string-assembled |
+| MCP tools | one connect-time grant | typed arguments, structured errors, no shell quoting, works where Bash is denied outright |
+
+The CLI plan closes much of this gap, and the two should be judged together rather than each against
+`curl` alone. What survives for MCP: typed parameters instead of hand-built JSON, errors an agent can
+branch on, and reachability in hosts that permit MCP but not shell. Those are real, and they are a
+smaller claim than the one this plan opened with.
+
 **The friction, measured.** Across `.agents/`: **70 `curl` lines** and **31 `node .agents/…` call
 sites**. Roughly 100 shell invocations in the agent-facing surface, each one a prompt. The four-line
 port-resolve preamble alone is pasted six times (four in

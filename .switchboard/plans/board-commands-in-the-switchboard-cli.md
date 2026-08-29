@@ -51,10 +51,10 @@ terminal, because until there was a phone in the loop the browser board was alwa
 
 ### Non-goals
 
-- **Not a replacement for the MCP surface.** A CLI command is still a shell invocation, so for an agent
-  it costs the same permission prompt `curl` does — which is the whole point of
-  `local-mcp-surface-so-agents-stop-paying-a-permission-prompt-per-curl.md`. This partitions by
-  consumer: the CLI is for a human at a terminal, MCP is for an agent. See *One implementation* below.
+- **Not a replacement for the MCP surface, but a partial substitute — see *Three consumers* below.**
+  An earlier revision of this plan said a CLI command "costs the same permission prompt `curl` does".
+  That is wrong in the way that matters: a stable command prefix is **safely allowlistable** where
+  `curl` is not, so the CLI narrows the gap MCP exists to close.
 - **Not a TUI.** A numbered list and a prompt, not a full-screen interface. It must work over a flaky
   phone connection and in a scrollback buffer.
 - **Not board mutation beyond dispatch.** No renaming, no feature editing, no column administration.
@@ -64,6 +64,42 @@ terminal, because until there was a phone in the loop the browser board was alwa
 
 **Complexity:** 4
 **Tags:** cli, ux, backend
+
+## Three consumers, one vocabulary
+
+The commands serve three callers, and the second and third were missing from an earlier revision:
+
+1. **A human at a terminal** — the case the plan opens with.
+2. **An agent, shelling out.** `Bash(switchboard:*)` is a **narrow** allowlist: it grants the board
+   verbs and nothing else. Compare this repository's own `.claude/settings.json`, which allowlists
+   `Bash(curl *)` — one line that also grants curl to anywhere on the internet. A user who wants an
+   agent to drive the board without a prompt per call currently has to choose between broad curl access
+   and answering prompts; a `switchboard` prefix is the narrow option that does not exist yet. The
+   agent also stops hand-assembling JSON, resolving a dynamic port, and parsing prose errors — it reads
+   exit codes (change 6).
+3. **An agent advising a human**, side by side. The agent prints `switchboard dispatch a1b2c3` and the
+   user pastes it. This needs no permissions, no auth on the agent's side, and no board reachability
+   from wherever the agent runs — which makes it the only one of the three that works from a cloud
+   session. It is also the house idiom already: `refine_ticket` and `refine_feature` are described in
+   `CLAUDE.md` as skills fired when the user clicks Refine *"to copy a prompt"*, and the retired
+   `external` automation mode was literally *"Copy a prompt for your external scheduler."*
+
+Consumer 3 is why the commands must be **short, memorable and stable**. A command a human retypes from
+a chat window is a different contract from one a script generates: renaming a verb breaks muscle memory
+and every transcript that ever suggested it.
+
+## Auth: nothing to do locally, one token remotely
+
+`_checkAuth` (`LocalApiServer.ts:881`) returns `true` when no token is configured — *"keep the
+historical loopback-trust behavior"* — so on the machine running the board the CLI needs no
+credentials at all. When a token **is** set, it accepts `Authorization: Bearer <token>` or the
+`sb_session` cookie, constant-time compared.
+
+`switchboard secrets set apiToken <value>` already exists, so the CLI can read the token from the
+secrets store and attach the header itself. The user authenticates once; every later command is a bare
+verb. That is what makes the over-Tailscale case (an iPad against a homelab board) as terse as the
+local one — and it means the token never appears in shell history or in a command an agent printed for
+someone to paste.
 
 ## One implementation, three doors
 
