@@ -10529,14 +10529,21 @@ FROM plans
     /**
      * How many plan rows are STILL live-dispatched to this terminal.
      *
-     * The batch discriminator for the completion signal. One fan-out stamps every card
-     * with the same `dispatched_terminal` (see updateDispatchInfoByPlanFile's call site
-     * in the dispatchCards verb), so a per-row clear is a per-SUBTASK event, not a
-     * per-TURN one. Callers clear the row first, then ask this: zero remaining means the
-     * agent finished the turn.
+     * The TURN-SIZE input for the completion notice, not a broadcast gate. One fan-out
+     * stamps every card with the same `dispatched_terminal` (see
+     * updateDispatchInfoByPlanFile's call site in the dispatchCards verb), so a seat
+     * handed six subtasks holds six live rows. POST /kanban/queue/done clears exactly
+     * ONE of them and is the seat's one report per turn, so `remaining + 1` after that
+     * clear is how many plans the turn covered — rendered as "+N more" in the toast.
+     *
+     * Do NOT use this to suppress the completion broadcast until it reaches zero. The
+     * sibling rows have no second clear to wait for: mtime completion is retired and
+     * PlanIngestionEngine's clear seam is dormant, so a batch would announce never
+     * rather than once — and the callback it would suppress also carries each host's
+     * board refresh.
      *
      * Empty `terminalName` returns 0 by design — an unattributed dispatch cannot be
-     * grouped, so its single clear must be allowed to broadcast immediately.
+     * grouped, so its clear reports a one-plan turn.
      */
     public async countActiveDispatchedByTerminal(workspaceId: string, terminalName: string): Promise<number> {
         if (!(await this.ensureReady()) || !this._db || !workspaceId || !terminalName) return 0;

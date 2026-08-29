@@ -21,8 +21,8 @@ This feature was reconciled from four subtasks to two. The set is now partitione
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [One Completion Signal Per Agent Turn — Batch-Aware "Done" and a Falsifiable Silence Verdict](../plans/feature_plan_20260813100400_done-fires-per-plan-file-not-per-agent-turn.md) — **LEAD CODED** — ID: 6480bd50-bd74-4f48-a864-b12cee630181
-- [ ] [One Completion Notice, In One Window — Cut the Terminals Panel's Four DONE Surfaces to Two](../plans/feature_plan_20260813100500_one-completion-paints-four-done-surfaces.md) — **LEAD CODED** — ID: 431ee1ab-caa6-4fee-8f81-09a6d32d6d93
+- [ ] [One Completion Signal Per Agent Turn — Batch-Aware "Done" and a Falsifiable Silence Verdict](../plans/feature_plan_20260813100400_done-fires-per-plan-file-not-per-agent-turn.md) — **CODE REVIEWED** — ID: 6480bd50-bd74-4f48-a864-b12cee630181
+- [ ] [One Completion Notice, In One Window — Cut the Terminals Panel's Four DONE Surfaces to Two](../plans/feature_plan_20260813100500_one-completion-paints-four-done-surfaces.md) — **CODE REVIEWED** — ID: 431ee1ab-caa6-4fee-8f81-09a6d32d6d93
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -176,3 +176,40 @@ every batch, which is a worse bug than the duplicate toast the feature removed. 
 and 3 are cheap and should land in the same pass. Finding 5 blocks any verification of the
 above and blocks a VSIX build; it is someone else's regression but it sits between this work
 and a green gate.
+
+## Review Findings (2026-08-30)
+
+Re-reviewed commit `592175ad` at HEAD; the 2026-08-29 pass recorded findings but landed no
+code, so all of them were still open. One CRITICAL defect on the live path: the batch gate in
+`LocalApiServer._runQueueDone` suppressed `onWorkingStateCleared` whenever the seat still held
+sibling rows, and since `POST /kanban/queue/done` clears exactly one row per turn while the
+shipped standing order is one POST per turn ("Do NOT post after finishing individual parts",
+`agentPromptBuilder.ts:1064`), a batch dispatch announced completion **never** — and because
+that same callback carries each host's board refresh, its cards kept a lit activity light.
+Replaced the gate with a turn-size computation (`planCount = remaining + 1`) so the callback
+always fires and the toast still renders "+N more"; also deleted the dead
+`_turnSizes`/`_noteTurnClear`/`_takeTurnSize` copy in `PlanIngestionEngine`, deduped the blocked
+digest by seat (it reported one batched seat as N seats), and added the `handleAgentCompleted`
+docblock the rendering plan supplied. Files changed: `src/services/LocalApiServer.ts`,
+`src/services/PlanIngestionEngine.ts`, `src/services/KanbanDatabase.ts`,
+`src/webview/terminals.js`. Verification: `tsc -p tsconfig.test.json` clean, `eslint` 0 errors,
+`node --check` clean on both webview files, six parity/catalog gates and eleven contract suites
+green — three CI-wired suites are red both before and after this work and are unrelated
+(`completion-asserted-never-inferred`, `queue-pipeline`, `terminal-replay-gap`).
+
+**Mechanism deviation, recorded for the author.** The plan's central mechanism — hold the
+broadcast until every row of the batch clears — was designed against the per-plan mtime
+producer. That producer is retired and `PlanIngestionEngine._onWorkingStateCleared` has zero
+invocations, so the gate had no true positive available to it and one severe false negative.
+The plan's *goal* (one accurate signal per agent turn, carrying the turn size) is achieved; the
+gate is not the thing that achieves it. Destination, files and payload are unchanged.
+
+## Deferred Findings
+
+- MAJOR — The engine subtask's `### Automated` steps 1–8 (eight named unit tests for the batch gate, the sweep, feature-row exclusion and turn-size staleness) were never written; no test file exists and nothing in CI exercises the new query or the new callback meta. `src/test/` (no such file)
+- MAJOR — A batch's sibling rows are never cleared by any completion path: `queue/done` clears one row and mtime completion is retired, so cards 2..N of a fan-out stay lit until `clearStaleWorkingState` retires them at `timeoutMs`. Pre-existing, outside this feature's diff. `src/services/LocalApiServer.ts:3381`
+- MAJOR — `completion-asserted-never-inferred.test.js` red at HEAD ("wireSpawnedTeam installs context-aware completion order at team and team-head scopes"); introduced by `c5590f06` (teamWiring), not by this feature. `src/test/completion-asserted-never-inferred.test.js`
+- MAJOR — `queue-pipeline-contract.test.js` has two red cases asserting `_scheduleQueuePop` and a `completedAt`/`heldByTeam` in-flight predicate; `_scheduleQueuePop` has never existed in `LocalApiServer.ts`. Pre-existing. `src/test/queue-pipeline-contract.test.js`
+- NIT — `terminal-replay-gap-contract.test.js` red on the `clearTeamBadges` arm: a `terminalBadges.delete(name)` site with no `terminalReplayGaps` counterpart within 400 chars. Predates `592175ad`. `src/webview/terminals.js:1225`
+- NIT — The one-tick grace `prior.cardKey !== cardKey` check is now unreachable: `_blockedCandidates`'s key contains `record.planFile`, which determines `cardKey`. `src/services/PlanIngestionEngine.ts:678`
+- NIT — `SWEEP_ROW_CAP` is declared inside the per-terminal loop rather than at module or method scope. `src/services/PlanIngestionEngine.ts:650`

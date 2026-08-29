@@ -775,26 +775,6 @@ export class LocalApiServer {
     // host and produces a false negative).
     private _isListening: boolean = false;
     private _wsHub: WsHub | null = null;
-    private _turnSizes = new Map<string, { size: number; at: number }>();
-
-    private _noteTurnClear(wsId: string, terminalName: string, remainingAfter: number, timeoutMs = 600000): void {
-        if (!terminalName) { return; }
-        const key = `${wsId}|${terminalName}`;
-        const prev = this._turnSizes.get(key);
-        const stale = !prev || (Date.now() - prev.at) > timeoutMs;
-        const observed = remainingAfter + 1;
-        if (stale || observed > prev!.size) {
-            this._turnSizes.set(key, { size: observed, at: Date.now() });
-        }
-    }
-
-    private _takeTurnSize(wsId: string, terminalName: string): number {
-        if (!terminalName) { return 1; }
-        const key = `${wsId}|${terminalName}`;
-        const entry = this._turnSizes.get(key);
-        this._turnSizes.delete(key);
-        return Math.max(1, entry?.size ?? 1);
-    }
 
     constructor(options: LocalApiServerOptions) {
         this._options = options;
@@ -3378,18 +3358,34 @@ export class LocalApiServer {
                     // gate, not a third outcome value.
                     if (outcome === 'finished') {
                         if (this._options.onWorkingStateCleared) {
+                            // ── Turn size, NOT a broadcast gate ─────────────────
+                            // One fan-out stamps every card of a batch with the same
+                            // `dispatched_terminal`, so a seat handed six subtasks holds
+                            // six live rows. This POST clears exactly ONE of them (the
+                            // `held` row found above), and the shipped standing order is
+                            // one POST per TURN — "Do NOT post after finishing individual
+                            // parts" (agentPromptBuilder.CODING_COMPLETION_REPORT_DIRECTIVE).
+                            // So this clear IS the turn boundary, and the count of rows
+                            // still stamped to the seat is the rest of the turn.
+                            //
+                            // Do NOT gate the callback on `remaining === 0`. Two things
+                            // break if you do: (a) a batch never announces at all, because
+                            // the sibling rows have no second POST to clear them — mtime
+                            // completion is retired and PlanIngestionEngine's clear seam is
+                            // dormant; and (b) this callback also carries the BOARD REFRESH
+                            // in both hosts (refreshIfShowing / pushFullState), so a held
+                            // row goes clean in the DB while its card keeps a lit activity
+                            // light — the exact stuck light this signalling work exists to
+                            // remove. The turn size is display-only: it renders as
+                            // "<title> +N more" in the completion toast.
                             const terminalName = (held.dispatchedTerminal || from || '').trim();
                             const remaining = terminalName && typeof (db as any).countActiveDispatchedByTerminal === 'function'
                                 ? await db.countActiveDispatchedByTerminal(held.workspaceId || wsId, terminalName)
                                 : 0;
-                            this._noteTurnClear(held.workspaceId || wsId, terminalName, remaining);
-                            if (remaining === 0) {
-                                const planCount = this._takeTurnSize(held.workspaceId || wsId, terminalName);
-                                try {
-                                    this._options.onWorkingStateCleared(held, workspaceRoot, { planCount });
-                                } catch (e) {
-                                    console.warn('[LocalApiServer] onWorkingStateCleared callback failed:', e);
-                                }
+                            try {
+                                this._options.onWorkingStateCleared(held, workspaceRoot, { planCount: remaining + 1 });
+                            } catch (e) {
+                                console.warn('[LocalApiServer] onWorkingStateCleared callback failed:', e);
                             }
                         }
                         if (this._options.onTurnEndNotify) {

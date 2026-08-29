@@ -260,44 +260,6 @@ export class PlanIngestionEngine {
     private _regenerateFeatureFile?: (workspaceRoot: string, featureId: string) => Promise<void>;
 
     /**
-     * Per-terminal turn size, for the completion notice's "+N more".
-     *
-     * Captured on the FIRST clear of a turn (remaining-after-clear + 1 == the full
-     * batch, because no sibling has cleared yet) and consumed by the broadcast that
-     * closes the turn. Display-only: a wrong value costs a wrong number in a toast.
-     *
-     * Deliberately NOT a SQL query. `clearWorkingState` nulls dispatched_at but leaves
-     * dispatched_terminal set, so there is no post-hoc SQL predicate that separates
-     * "rows from THIS turn" from "every row ever dispatched to a seat named coder-1",
-     * and `updated_at` is not a usable anchor either — the sweep's clear path never
-     * touches it.
-     *
-     * An abandoned turn never reaches the broadcast that deletes its entry, so entries
-     * carry a timestamp and an entry older than the activity-light timeout is treated
-     * as absent. Without that, one dead batch inflates every later turn on that seat.
-     */
-    private _turnSizes = new Map<string, { size: number; at: number }>();
-
-    private _noteTurnClear(wsId: string, terminalName: string, remainingAfter: number, timeoutMs: number): void {
-        if (!terminalName) { return; }
-        const key = `${wsId}|${terminalName}`;
-        const prev = this._turnSizes.get(key);
-        const stale = !prev || (Date.now() - prev.at) > timeoutMs;
-        const observed = remainingAfter + 1;
-        if (stale || observed > prev!.size) {
-            this._turnSizes.set(key, { size: observed, at: Date.now() });
-        }
-    }
-
-    private _takeTurnSize(wsId: string, terminalName: string): number {
-        if (!terminalName) { return 1; }
-        const key = `${wsId}|${terminalName}`;
-        const entry = this._turnSizes.get(key);
-        this._turnSizes.delete(key);
-        return Math.max(1, entry?.size ?? 1);
-    }
-
-    /**
      * Completion-broadcast seam. **DORMANT in this module**: the only producer
      * was the mtime-based clear (the plan-file watcher and the silence sweep),
      * retired when POST /kanban/queue/done became the explicit completion
@@ -1202,18 +1164,33 @@ export class PlanIngestionEngine {
         // Only seats outside their pace window, and only those STILL blocked at
         // compose time — a seat can have produced output between the stamp above
         // and here, which nulls blocked_at and makes the report a lie.
-        const due: Array<{ terminalName: string; planFile: string; silentFor: number }> = [];
-        const byName = new Map(liveness.map(e => [e.friendlyName, e]));
+        // Collapse to one entry per SEAT before anything else. The silence sweep
+        // tests every row a terminal is holding, and one fan-out stamps N cards with
+        // the same `dispatched_terminal`, so a single quiet seat contributes N
+        // entries to blockedThisTick. `pacing` is only written AFTER the loop below,
+        // so all N would clear the pace check on the same tick and the digest would
+        // open with "3 seat(s) have gone quiet" about one seat, listing it three
+        // times. The seat's plan files are carried onto its single line instead.
+        const bySeat = new Map<string, string[]>();
         for (const cand of blockedThisTick) {
-            const key = `${wsId}|${cand.terminalName}`;
+            const files = bySeat.get(cand.terminalName);
+            if (!files) { bySeat.set(cand.terminalName, [cand.planFile]); }
+            else if (!files.includes(cand.planFile)) { files.push(cand.planFile); }
+        }
+
+        const due: Array<{ terminalName: string; planFile: string; planFiles: string[]; silentFor: number }> = [];
+        const byName = new Map(liveness.map(e => [e.friendlyName, e]));
+        for (const [terminalName, planFiles] of bySeat) {
+            const key = `${wsId}|${terminalName}`;
             const last = pacing[key] || 0;
             if (last > 0 && nowMs - last < intervalMs) { continue; }
-            const rec = await db.getActiveDispatchedByTerminal(wsId, cand.terminalName);
+            const rec = await db.getActiveDispatchedByTerminal(wsId, terminalName);
             if (!rec || !rec.blockedAt) { continue; }
-            const lastDataAt = byName.get(cand.terminalName)?.lastDataAt || 0;
+            const lastDataAt = byName.get(terminalName)?.lastDataAt || 0;
             due.push({
-                terminalName: cand.terminalName,
-                planFile: cand.planFile,
+                terminalName,
+                planFile: planFiles[0],
+                planFiles,
                 silentFor: lastDataAt > 0 ? Math.round((nowMs - lastDataAt) / 1000) : 0,
             });
         }
@@ -1225,7 +1202,10 @@ export class PlanIngestionEngine {
         ];
         for (const d of due) {
             const silence = d.silentFor > 0 ? `, silent ${d.silentFor}s` : '';
-            lines.push(`  - ${d.terminalName} on ${d.planFile}${silence}`);
+            const held = d.planFiles.length > 1
+                ? `${d.planFiles.length} plans (${d.planFiles.join(', ')})`
+                : d.planFile;
+            lines.push(`  - ${d.terminalName} on ${held}${silence}`);
         }
         lines.push('Check each seat and unblock it, or re-dispatch its plan. No action is needed for a seat that is simply working.');
 

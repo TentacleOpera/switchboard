@@ -487,3 +487,23 @@ COMPILATION. The coder runs them.)*
 ## Implementation Summary
 
 Implemented completion notice consolidation across terminals webview and shell. Added a `soloTerminalName` guard to `handleAgentCompleted` in `src/webview/terminals.js` so solo pop-out windows do not duplicate badges, refetches, or toasts. Removed the redundant `terminalBadges` DONE chip rendering from `updatePaneElement` while preserving the `GAP` badge. Updated `showCompletionToast` to deduplicate active completion toasts, incorporate optional `planCount` turn-aware formatting, and reduce dwell time from 8s to 4s. Updated the rationale comment in `src/webview/shell.js` to match the two-surface model.
+
+## Review Findings
+
+Reviewed `592175ad`. This subtask is faithful and complete: the solo guard sits at the top of
+`handleAgentCompleted` (`terminals.js:10553`) and `soloTerminalName` is set only from the
+`?solo=` query param, so the cockpit is unaffected; the pane-header `terminalBadges` block is
+gone with the `GAP` block below it intact and `.pane-badge` still styling the sidebar chip; the
+toast sweep is scoped `:not(.is-error)` so `showTerminalErrorToast`'s error toast survives; the
+`toastContainerEl` guard, the 4 s dwell and the `Number.isFinite` `planCount` render into
+`textContent` all landed as specified; and the `shell.js` rationale comment was corrected. The
+one omission was the docblock the plan supplied for `handleAgentCompleted` — only the bare guard
+had landed, and the "why" is the part that stops a later reader deleting it — so the docblock was
+added. Files changed: `src/webview/terminals.js`. Verification: `node --check` clean on
+`terminals.js` and `shell.js`; zero `term.write` additions in the diff; `terminals.js` confirmed
+the only `agentCompleted` consumer under `src/webview/`; `terminal-solo-popout` (11/11),
+`shell-terminal-strip` (74/74) and `ws-popout-broadcast` (5/5) green.
+
+## Deferred Findings
+
+- NIT — `terminal-replay-gap-contract.test.js` is red on the `clearTeamBadges` arm: a `terminalBadges.delete(name)` site with no `terminalReplayGaps` counterpart within the assertion's 400-char window. Predates `592175ad`; unrelated to this subtask's edits. `src/webview/terminals.js:1225`

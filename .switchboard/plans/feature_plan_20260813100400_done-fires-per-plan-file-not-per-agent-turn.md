@@ -770,3 +770,30 @@ COMPILATION. The coder runs them.)*
 ## Implementation Summary
 
 Implemented batch-aware turn-end completion signals and falsifiable silence retention. Added `countActiveDispatchedByTerminal` and `getActiveDispatchedRowsByTerminal` queries in [`KanbanDatabase.ts`](file:///home/patrick/switchboard/src/services/KanbanDatabase.ts) to track outstanding active rows for a dispatched terminal. In [`LocalApiServer.ts`](file:///home/patrick/switchboard/src/services/LocalApiServer.ts) and [`PlanIngestionEngine.ts`](file:///home/patrick/switchboard/src/services/PlanIngestionEngine.ts), wired batch gating (`countActiveDispatchedByTerminal`, `_noteTurnClear`, `_takeTurnSize`) so completion broadcasts fire only on turn boundaries with populated `planCount`. Fixed silence sweep in `PlanIngestionEngine.ts` to iterate all rows via `getActiveDispatchedRowsByTerminal` and updated `blockedTimeoutMs` code fallback to 1800000ms. Updated [`bootstrap.ts`](file:///home/patrick/switchboard/src/standalone/bootstrap.ts), [`TaskViewerProvider.ts`](file:///home/patrick/switchboard/src/services/TaskViewerProvider.ts), and [`extension.ts`](file:///home/patrick/switchboard/src/extension.ts) to forward `planCount` and tag WS `agentCompleted` broadcasts with `SURFACES.common`. Adjusted `switchboard.activityLight.blockedTimeoutMs` default in `package.json` to 30 minutes.
+
+## Review Findings
+
+Reviewed `592175ad`. The batch gate as shipped suppressed the completion signal entirely on the
+live path: `POST /kanban/queue/done` clears exactly one plan row per call and the shipped
+standing order is one POST per turn, so a fan-out's remaining siblings never reach zero — and
+that same `onWorkingStateCleared` callback carries each host's board refresh, so held cards also
+kept a lit activity light. Replaced the gate with a turn-size computation
+(`planCount = remaining + 1`, `LocalApiServer.ts:3381`), deleted the dead
+`_turnSizes`/`_noteTurnClear`/`_takeTurnSize` triple in `PlanIngestionEngine` (zero callers; the
+live copy lived in `LocalApiServer`, and that copy is now unnecessary too), deduped the blocked
+digest by seat so one batched seat is no longer reported as N seats
+(`PlanIngestionEngine.ts:1195`), and refreshed the `countActiveDispatchedByTerminal` docblock to
+say what it is now for. Files changed: `src/services/LocalApiServer.ts`,
+`src/services/PlanIngestionEngine.ts`, `src/services/KanbanDatabase.ts`. Verification:
+`tsc -p tsconfig.test.json` clean, `eslint` 0 errors, and `host-seam-parity`,
+`standalone-parity`, `push-routing`, `parity`, `catalog` and `verb-returns` checks plus the
+`queue-done-relay`, `task-complete`, `queue-stall-watch`, `ws-surface-scoping`,
+`ws-popout-broadcast`, `terminal-plan-attribution` and `autoban-state` contract suites all green.
+
+## Deferred Findings
+
+- MAJOR — Automated verification steps 1–8 (eight named unit tests for the batch gate, the sweep, feature-row exclusion and turn-size staleness) were never written; no test file exists and no CI gate exercises the new query or the new callback meta. `src/test/` (no such file)
+- MAJOR — A batch's sibling rows are never cleared by any completion path: `queue/done` clears one row and mtime completion is retired, so cards 2..N of a fan-out stay lit until `clearStaleWorkingState` retires them at `timeoutMs`. Pre-existing, outside this diff. `src/services/PlanIngestionEngine.ts:724`
+- MAJOR — `queue-pipeline-contract.test.js` has two red cases asserting `_scheduleQueuePop` and a `completedAt`/`heldByTeam` in-flight predicate; `_scheduleQueuePop` has never existed in `LocalApiServer.ts`. Pre-existing. `src/test/queue-pipeline-contract.test.js`
+- NIT — The one-tick grace `prior.cardKey !== cardKey` check is now unreachable: the `_blockedCandidates` key contains `record.planFile`, which determines `cardKey`. `src/services/PlanIngestionEngine.ts:678`
+- NIT — `SWEEP_ROW_CAP` is declared inside the per-terminal loop rather than at method scope. `src/services/PlanIngestionEngine.ts:650`

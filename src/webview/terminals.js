@@ -10532,6 +10532,24 @@
         return stats;
     };
 
+    /**
+     * Workspace-wide completion push. Delivered to EVERY subscribed connection by
+     * design (SURFACES.common), which includes every `?solo=<name>` pop-out — each one
+     * is a full second copy of this document, not a lightweight view. Without the
+     * guard below, one completion produced one toast per open window, and each pop-out
+     * also ran a badge write, two re-renders and a ptyListTerminals refetch for a
+     * terminal it does not display.
+     *
+     * The COCKPIT owns this notice. It is the document that renders the sidebar DONE
+     * chip and relays the rail state, and it is guaranteed to exist whenever a pop-out
+     * does (shell.js opens pop-outs from it). A pop-out showing the completed terminal
+     * has that terminal's own output in front of the operator, which is a stronger
+     * signal than a toast summarising it.
+     *
+     * Deliberately NOT applied to showTerminalErrorToast: that fires from a specific
+     * terminal's own socket, so it only reaches documents attached to that terminal —
+     * already correctly scoped.
+     */
     function handleAgentCompleted(msg) {
         if (soloTerminalName) { return; }
         const { planTitle, role, terminalName, worktreePath } = msg;
