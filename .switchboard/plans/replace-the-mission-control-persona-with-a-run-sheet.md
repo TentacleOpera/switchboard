@@ -69,6 +69,7 @@ seat:
 | how it is woken | mission transition points (`supervised-missions-wake-the-controller-on-transitions.md`) | its own host scheduler, after it dispatches |
 | replaceable? | **no** — an attended mission requires the controller seated | n/a |
 | needs an interval tick? | no | yes, but not one Switchboard builds |
+| project management via | buttons in its dock strip | the run sheet's menu |
 
 **Step 2 inverts this today.** `.agents/workflows/switchboard.md` says *"**You are the orchestrator.
 Not a terminal you start — this one.** Adopt the seat and run the pre-flight here, in this
@@ -81,6 +82,41 @@ one. For an attended mission that is backwards: the controller must be a seated 
 **Consequence: the run sheet does not adopt.** The step-2 rewrite drops the adopt call and the "you
 are the orchestrator" framing. Seating a controller becomes one of the menu's branches — something the
 agent *starts* when an attended mission needs one — not what the agent silently becomes on arrival.
+
+### A menu is what you use when there is no UI
+
+The controller needs the same project-management reach as the `/switchboard` agent — grouping plans,
+improving a plan, arranging features, reading the board. But it should not get there through a menu
+prompt, because **the controller has a UI and the `/switchboard` agent does not.** That is the whole
+difference, and it decides the affordance:
+
+| | affordance | why |
+| :--- | :--- | :--- |
+| `/switchboard` agent | the run sheet's menu | a conversation with no surface to click |
+| mission controller | buttons in its dock strip | it is embedded in a panel that can render controls |
+
+A menu prompt is a **substitute for buttons**, not a superior form of them. Where a UI exists, buttons
+win on every axis that matters here: they cost no resident context, they need no parsing, they cannot
+be misread, and they can be stateful — disabled when the action does not apply, which a menu line
+cannot be.
+
+**The dock is already there.** `mission-control.js` renders `mc-controller-strip` above
+`mc-controller-frame`, which embeds the seated controller's terminal via `/terminals?solo=<seat>`
+(`:393-407`). The strip currently carries nothing; the panel's ten wired buttons are all mission and
+schedule operations (`mc-launch`, `mc-ready-mission`, `mc-new-schedule`, …). Project-management
+controls belong in that strip.
+
+**And the mechanism is the house pattern.** Switchboard already generates prompts from buttons —
+`refine_ticket` and `refine_feature` are described in `CLAUDE.md` as backend-consumed skills fired
+when *"User clicks Refine… to copy a prompt"*, and *Suggest Features* sources `group-into-features` the
+same way. The only change for the controller is the delivery: `ptySendPrompt` into the seated terminal
+rather than the clipboard. No new machinery, and no second definition of what each action means — the
+button and the menu entry name the same protocol.
+
+**Consequence for this plan.** The menu is scoped to the `/switchboard` agent. The controller's branch
+of the run sheet says what the controller *is* and how it is woken, and points at the dock for
+everything else; it does not restate the project-management actions as menu lines. Two surfaces, one
+set of protocols, each reached the way its host allows.
 
 ### The tick belongs to the agent's host, not to Switchboard
 
