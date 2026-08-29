@@ -6707,13 +6707,15 @@ export class KanbanDatabase {
         const workingStates = new Map<string, { working: boolean; blocked: boolean }>();
         if (!(await this.ensureReady()) || !this._db || !workspaceId) return workingStates;
         const cutoff = new Date(Date.now() - timeoutMs).toISOString();
-        const hardCapCutoff = new Date(Date.now() - 3 * timeoutMs).toISOString();
         const blockedCutoff = new Date(Date.now() - blockedTimeoutMs).toISOString();
+        // No `AND dispatched_at >= hardCapCutoff` term here — it was dropped from
+        // the per-card derive (KanbanProvider.isWorkingState) and from
+        // clearStaleWorkingState, and these three must agree or a feature light
+        // and its children disagree at the boundary.
         const stmt = this._db.prepare(
             `SELECT feature_id AS featureId,
                     MAX((dispatched_at IS NOT NULL
-                         AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?
-                         AND dispatched_at >= ?)
+                         AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?)
                          OR (blocked_at IS NOT NULL AND blocked_at >= ?)) AS anyWorking,
                     MAX(blocked_at IS NOT NULL
                          AND dispatched_at IS NOT NULL
@@ -6722,7 +6724,7 @@ export class KanbanDatabase {
              WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
                AND status = 'active' AND is_feature = 0
              GROUP BY feature_id`,
-            [cutoff, hardCapCutoff, blockedCutoff, blockedCutoff, workspaceId]
+            [cutoff, blockedCutoff, blockedCutoff, workspaceId]
         );
         try {
             while (stmt.step()) {
@@ -10719,12 +10721,14 @@ FROM plans
     /**
      * Activity-light timeout backstop. Widened (V58) to consult `last_liveness_at`
      * so a card whose agent is demonstrably still producing output is spared at the
-     * timeout, with a `3 × maxAgeMs`-from-`dispatched_at` hard cap so a wedged
-     * agent cannot stay lit forever. The age basis is
+     * timeout. The age basis is
      * `MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at))`: a row clears
-     * when its basis is older than `cutoff` OR when `dispatched_at` itself is past
-     * the hard cap (the force-clear branch — written as a second OR condition so a
-     * capped row is CLEARED by the sweep rather than excluded from it).
+     * when its basis is older than `cutoff`.
+     *
+     * There is deliberately NO hard cap on `dispatched_at` — see the comment on the
+     * UPDATE. A long turn is not an abandoned one, and this row is what
+     * `POST /kanban/queue/done` matches on, so retiring it under a live agent threw
+     * that agent's completion report away.
      *
      * `opts.forceTerminals` — names of terminals the fleet reports as exited —
      * triggers a second UPDATE that clears rows whose `dispatched_terminal` is in
@@ -10745,23 +10749,32 @@ FROM plans
     ): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
         const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
-        const hardCapCutoff = new Date(Date.now() - 3 * maxAgeMs).toISOString();
         const blockedTimeoutMs = opts?.blockedTimeoutMs ?? 4 * 60 * 60 * 1000;
         const blockedCutoff = new Date(Date.now() - blockedTimeoutMs).toISOString();
         const forceTerminals = opts?.forceTerminals?.filter(n => !!n) ?? [];
         try {
             this._db.run('BEGIN');
             // V59: blocked rows get their own retention. Clear non-blocked rows on
-            // the working age basis or hard cap; clear blocked rows only when
-            // blocked_at itself has aged out. With blocked_at NULL everywhere this
-            // reduces to the pre-V59 statement.
+            // the working age basis; clear blocked rows only when blocked_at itself
+            // has aged out. With blocked_at NULL everywhere this reduces to the
+            // pre-V59 statement.
+            //
+            // The non-blocked arm had a second disjunct — `OR dispatched_at < ?`
+            // against a 3× maxAgeMs cutoff — that ignored last_liveness_at entirely
+            // and so retired a seat that was visibly still producing output. Because
+            // this row IS how POST /kanban/queue/done locates the seat's work
+            // (LocalApiServer._runQueueDone matches on dispatched_at), clearing it
+            // mid-turn made the seat's own completion report a no-op: no broadcast,
+            // no board refresh, no lead relay, no queue pop. A long turn is not an
+            // abandoned one. Abandonment is evidenced by silence (the arm below),
+            // by the terminal exiting (forceTerminals), or by blockedTimeoutMs.
             this._db.run(
                 'UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL ' +
                 'WHERE workspace_id = ? AND dispatched_at IS NOT NULL AND (' +
-                '  (blocked_at IS NULL AND (MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ? OR dispatched_at < ?))' +
+                '  (blocked_at IS NULL AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ?)' +
                 '  OR (blocked_at IS NOT NULL AND blocked_at < ?)' +
                 ')',
-                [workspaceId, cutoff, hardCapCutoff, blockedCutoff]
+                [workspaceId, cutoff, blockedCutoff]
             );
             let modified = this._db.getRowsModified();
             // Exited-terminal force-clear: dead agents clear immediately rather than

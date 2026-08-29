@@ -208,8 +208,33 @@ gate is not the thing that achieves it. Destination, files and payload are uncha
 
 - MAJOR — The engine subtask's `### Automated` steps 1–8 (eight named unit tests for the batch gate, the sweep, feature-row exclusion and turn-size staleness) were never written; no test file exists and nothing in CI exercises the new query or the new callback meta. `src/test/` (no such file)
 - MAJOR — A batch's sibling rows are never cleared by any completion path: `queue/done` clears one row and mtime completion is retired, so cards 2..N of a fan-out stay lit until `clearStaleWorkingState` retires them at `timeoutMs`. Pre-existing, outside this feature's diff. `src/services/LocalApiServer.ts:3381`
-- MAJOR — `completion-asserted-never-inferred.test.js` red at HEAD ("wireSpawnedTeam installs context-aware completion order at team and team-head scopes"); introduced by `c5590f06` (teamWiring), not by this feature. `src/test/completion-asserted-never-inferred.test.js`
+- MAJOR — `completion-asserted-never-inferred.test.js` red at HEAD ("wireSpawnedTeam installs context-aware completion order at team and team-head scopes"). The defect is in the TEST, not in `teamWiring`: its stub `db` is key-blind (`getConfigJson: async () => stored`, `setConfigJson: async (_k, v) => { stored = v; }`), so the standing-order-definitions write clobbers the standing-orders array that the assertion then looks in. `src/test/completion-asserted-never-inferred.test.js:186`
 - MAJOR — `queue-pipeline-contract.test.js` has two red cases asserting `_scheduleQueuePop` and a `completedAt`/`heldByTeam` in-flight predicate; `_scheduleQueuePop` has never existed in `LocalApiServer.ts`. Pre-existing. `src/test/queue-pipeline-contract.test.js`
 - NIT — `terminal-replay-gap-contract.test.js` red on the `clearTeamBadges` arm: a `terminalBadges.delete(name)` site with no `terminalReplayGaps` counterpart within 400 chars. Predates `592175ad`. `src/webview/terminals.js:1225`
 - NIT — The one-tick grace `prior.cardKey !== cardKey` check is now unreachable: `_blockedCandidates`'s key contains `record.planFile`, which determines `cardKey`. `src/services/PlanIngestionEngine.ts:678`
 - NIT — `SWEEP_ROW_CAP` is declared inside the per-terminal loop rather than at module or method scope. `src/services/PlanIngestionEngine.ts:650`
+
+## Follow-up fix (2026-08-30) — the activity light was discarding completion reports
+
+Found while verifying this review's own completion POST, which returned
+`{"reason":"duplicate"}` against a card that had never been reported.
+
+`clearStaleWorkingState` ORed an unconditional hard cap — `dispatched_at < now - 3 ×
+timeoutMs`, i.e. 30 minutes from dispatch — with the liveness test, so a seat that was
+demonstrably alive and producing output still had its `dispatched_at` nulled mid-turn. That
+row is exactly what `LocalApiServer._runQueueDone` matches on (`dispatchedTerminal === from
+&& !!dispatchedAt`), so the seat's later completion POST found nothing held and fell into the
+duplicate arm — skipping `onWorkingStateCleared`, `onTurnEndNotify` **and the queue pop**. No
+completion broadcast, no board refresh, no team-lead relay, and an unattended seat left idle
+permanently. Any turn over 30 minutes hit this; a deep review is routinely longer.
+
+Removed the hard cap at all three copies, which had to move together or a feature light and
+its children disagree at the boundary: `KanbanDatabase.clearStaleWorkingState`,
+`KanbanDatabase.getFeatureWorkingStates`, and `KanbanProvider.isWorkingState`. Falsifiability
+now rests only on evidence — silence for `timeoutMs`, terminal exit via `forceTerminals`, or
+`blockedTimeoutMs` — never on elapsed time since dispatch. Validated with a differential
+sqlite3 probe: a row dispatched 2 h ago with a 30 s-old heartbeat is now spared where it was
+previously cleared, while a row silent 40 min and a row blocked past its retention both still
+clear.
+
+Not part of either subtask's scope; recorded here because this review is where it surfaced.

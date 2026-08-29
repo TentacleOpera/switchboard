@@ -189,10 +189,16 @@ function isWorkingState(
     const ts = Date.parse(dispatchedAt);
     if (!Number.isFinite(ts)) return { working: false, blocked: false };
     const now = Date.now();
-    // Hard cap: a turn older than 3× timeout from its own dispatched_at clears
-    // regardless of how live the heartbeat looks — the backstop that keeps a
-    // stuck light falsifiable.
-    const withinHardCap = now - ts <= 3 * timeoutMs;
+    // NO hard cap on dispatched_at. There was one — a turn older than 3× timeout
+    // cleared "regardless of how live the heartbeat looks" — and it could not tell
+    // a stuck light from an agent that is simply still working. It cut a live
+    // seat's card loose at 30 minutes mid-turn, and the card is how POST
+    // /kanban/queue/done finds the seat's work (LocalApiServer._runQueueDone), so
+    // the seat's completion report then landed on nothing: no broadcast, no board
+    // refresh, no lead relay, and no queue pop — an unattended seat went idle for
+    // good. Falsifiability comes from evidence, not elapsed time: the seat going
+    // quiet (the basis below), the terminal exiting (clearStaleWorkingState's
+    // forceTerminals arm), and blockedTimeoutMs.
     // Widened basis: take the more recent of dispatched_at and the heartbeat.
     const livenessTs = lastLivenessAt ? Date.parse(lastLivenessAt) : NaN;
     const basis = Number.isFinite(livenessTs) && (livenessTs as number) > ts ? (livenessTs as number) : ts;
@@ -202,7 +208,7 @@ function isWorkingState(
     // false and `working` reduces to the pre-V59 expression.
     const blockedTs = blockedAt ? Date.parse(blockedAt) : NaN;
     const blocked = Number.isFinite(blockedTs) && (now - (blockedTs as number)) < blockedTimeoutMs;
-    const working = blocked || (withinHardCap && (now - basis) < timeoutMs);
+    const working = blocked || (now - basis) < timeoutMs;
     return { working, blocked };
 }
 
