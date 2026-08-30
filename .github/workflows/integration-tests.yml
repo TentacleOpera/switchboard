@@ -337,6 +337,15 @@ jobs:
       - name: Stage marker commit contract (trailers are readable, dead controls are not shippable)
         run: npm run test:contract:stage-marker-commit
 
+      # The startup orientation relay is the only thing that tells a seat it has
+      # standing orders when nobody dispatches to it. It is four call sites across
+      # two hosts, and every one of them is fire-and-forget — a relay that never
+      # fires and a relay that works are the same observable value from outside.
+      # These are the source pins that catch a dropped call site, plus the
+      # drift pin holding the quiescence numbers equal to the webview curtain's.
+      - name: Startup orientation relay contract (both hosts relay after wiring, and never on a seat with no orders)
+        run: npm run test:contract:startup-orientation
+
       # The coding team's head prompt exists in THREE copies (teamWiring.ts, the
       # terminals.js mirror, and kanban.html's shipped preset). A one-sided edit
       # hands the extension and the browser different orders — silent, with every

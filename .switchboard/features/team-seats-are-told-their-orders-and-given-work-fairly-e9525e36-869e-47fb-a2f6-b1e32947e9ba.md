@@ -27,3 +27,15 @@ Two defects in how a team treats its seats, both reached through teamWiring.ts a
 
 Startup orientation now waits for seat quiescence and relays effective standing orders through the existing delivery chokepoint in both the extension and standalone hosts. The no-orders gate drops bare carrier prompts, and team creation paths relay only after wiring has installed their orders, including external-headed teams. Persisted V2 team-head orders now migrate to the fair idle-seat distribution text in both the host and client mirror. Contract coverage was added for relay behavior, host wiring, migration, and prompt parity; automated tests and compilation were not run under this run's explicit verification override.
 
+
+## Review Findings
+
+Reviewed commit `77c5ec65`; both halves achieve the feature goal. The relay fires once per seat across all four create paths in both hosts, always after `wireSpawnedTeam` resolves, and drops the send when the seat resolved no orders — verified against the writers: `ptyListTerminals` really does project `status` and `lastDataAt` in both hosts, `instantiateAgentGroupCore.created` really is a string array including the head, and `instantiateExternalHeadedTeam.workers` really are objects with `friendlyName`. The V2→V3 head-prompt migration rewrites persisted `team-head` rows on read in host and client mirror, and its recogniser fragment is absent from its own replacement. The implementation summary recorded that tests and compilation were skipped; I ran them. Files changed in review: `package.json` and `.github/workflows/integration-tests.yml`, to wire `startup-orientation-relay-contract.test.js` — 23 passing assertions that no gate invoked.
+
+## Deferred Findings
+
+- MAJOR — `src/services/teamWiring.ts:648` — `OLD_HEADPROMPT_V2_FRAGMENT` restores the frozen head-prompt-recogniser pattern that was deliberately abandoned for never-shipped team state; needs an author decision, not a reviewer edit.
+- MAJOR — `src/services/TaskViewerProvider.ts:1283` — the relay probe reads `hiddenTerminals`, which has no writer anywhere in the codebase.
+- NIT — `src/services/startupOrientation.ts:54` — the no-output `else` branch and `ORIENTATION_NO_OUTPUT_MS` are dead, and a drift pin now anchors a constant nothing reads.
+- NIT — both hosts suppress the seat block on the relay, contradicting the plan's edge-case table, which expected the relay to warm `_seatBlockCache`. Safe direction; worth recording.
+- MAJOR (pre-existing, not this commit) — `stage-marker-commit-contract.test.js:523,:614` and `team-scoped-role-routing.test.js:628,:923` are red at HEAD.
