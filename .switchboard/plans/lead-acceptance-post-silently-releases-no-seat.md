@@ -1,21 +1,46 @@
-# Team seats keep their context after a feature finishes: one clear, on one path, that silently no-ops
+# The lead's acceptance post is the only thing that releases a seat, and it silently releases nothing
 
 ## Goal
 
-Make context clearing on completion actually happen: wire the clear seam in the standalone
-composition root where it is currently absent, sweep every seat that worked a feature when the
-feature completes, and close the four paths in `completeCardInternal` that return
-`success: true` having cleared nothing. Stop the operator from clearing team terminals by hand.
+Make the acceptance post the lead already makes actually release the seat it is supposed to
+release. The clear contract is correct and does not need extending — `POST /kanban/task/complete`,
+per subtask, is the designed and only release. It fails to fire because the host seam it depends
+on is unwired in one of the two composition roots, and because the seat it resolves is missing in
+four cases that all report success. Stop the operator from clearing team terminals by hand.
 
 ### The problem
 
-Team terminals are not cleared proactively, and are not cleared when a lead reports a feature
-finished, so the operator clears them manually between runs.
+Team terminals are not cleared when a lead closes out a subtask, so the operator clears them
+manually between runs.
 
-### What already exists — deliberately, and correctly
+### The contract is already right — this plan does not change it
 
-This plan must not re-litigate the current design. Three pieces are already shipped and are
-right:
+Three surfaces state one contract, and they agree:
+
+- **The head's standing order** (`CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY`, `teamWiring.ts:207`):
+  *"CLOSE OUT EVERY SUBTASK… Post per subtask, with that subtask's planId — **never the
+  feature's**… Until you post, that seat is not cleared… **Your POST is the only fact that
+  releases a seat.**"*
+- **The relay to the lead on every coder completion** (`composeAcceptanceInstruction`,
+  `LocalApiServer.ts:742`, appended at `:3447` and `:5656`): *"Post every time — you reject by
+  sending a fix round first, not by withholding the post. Until you post, the seat is not cleared."*
+- **The coder's own order** (`CONTEXT_AWARE_COMPLETION_ORDER_BODY`, `teamWiring.ts:163`):
+  *"Handing a feature to review is your lead's call, not yours — the lead asserts completion with
+  POST /kanban/task/complete."*
+
+So the completion message is exactly what it appears to be: the lead posting to the complete
+endpoint, once per subtask, and the lead is re-prompted to do it on every single coder report.
+
+**There is deliberately no feature-level completion post, and this plan does not add one.** An
+earlier draft of this plan proposed a feature-completion sweep; that was wrong. The head order
+says "never the feature's" planId, and a feature-level sweep would be a second clear policy
+competing with the per-subtask contract — the same mistake
+`atomic-team-feature-run-context-lifecycle.md` was written to undo. If every subtask post
+releases its seat, there is nothing left dirty when the feature ends.
+
+### The code behind that contract — also already right
+
+This plan must not re-litigate any of it. Three pieces are shipped and correct:
 
 - **Roster clear on a new work context.** `TaskViewerProvider.ts:755-905` clears the whole
   active roster once when a new `featureId ?? planId` enters the team, deferring seats that are
@@ -57,18 +82,13 @@ unwired.
 **Verify which host the operator runs before concluding.** Under the extension host the seam is
 live and root causes 2 and 3 are the whole story; under standalone this one subsumes them.
 
-### Root cause 2 — no feature-completion sweep exists at all
+### Root cause 2 — a failed release is indistinguishable from a successful one
 
-Nothing clears seats when a *feature* finishes. Grep finds no feature-completion handling in
-`LocalApiServer`. Completion is per-subtask, and the only sweep in the system is the roster
-barrier, which fires when the *next* work context arrives. So between a feature finishing and
-the next feature being dispatched **to the same team**, every seat holds the finished feature's
-context. If the feature is handed to a review team, if the operator works manually, or if the
-team simply sits idle, that context persists — and the barrier defers any seat that is busy
-when it does eventually fire, so even then a seat can be skipped.
-
-This is the specific behaviour asked for: a lead reporting a feature complete should rest its
-team.
+`completeCardInternal` returns `cleared` and `clearError`, and **nothing reads either**. The lead
+is told "your POST is the only fact that releases a seat", posts, gets `success: true`, and moves
+on. Whether the seat was actually released is never checked by the caller, never surfaced on the
+board, and never logged as a warning. Every failure below is therefore silent by construction —
+which is why this is discovered by an operator clearing terminals by hand rather than by a gate.
 
 ### Root cause 3 — four silent no-ops in the accepted-seat clear
 
@@ -106,25 +126,16 @@ Then diff the two options objects by hand, field by field, and record any other 
 one root and absent in the other. The precedent in CLAUDE.md is four queue seams missing for a
 month; a seam audit here is cheap and is the only thing that catches the next one.
 
-### 2. Add a feature-completion sweep
+### 2. Do NOT add a feature-completion sweep
 
-When the last subtask of a feature completes, sweep the team's roster the same way the entry
-barrier does — clear seats at rest, defer seats mid-turn, and record deferrals so they clear when
-they next go quiet rather than being lost.
+Recorded here because the earlier draft of this plan proposed one and an implementer may still
+reach for it. The per-subtask acceptance post is the contract, stated identically on three
+surfaces; a feature-level sweep would be a second clear policy that can disagree with it, and the
+head order explicitly forbids posting the feature's planId. If steps 1 and 3 land, every seat is
+released as its subtask closes and there is nothing for a sweep to do.
 
-- Reuse `computeRosterClearTargets` and the `busySet`/`lastDataAt` logic rather than writing a
-  second clear policy. Two policies that can disagree is the failure mode to avoid.
-- Exclude the lead from the sweep, for the reason established in
-  `after-clear-standing-orders-block-is-a-taskless-prompt.md`: clearing a head triggers a
-  task-less orders delivery that costs it a turn. Ship that plan first, or exclude the head here
-  and revisit.
-- Determine feature completion from asserted completions, never from board position. The release
-  contract is explicit that a column advances when work *starts*, and
-  `LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2` in `teamWiring.ts` documents the removal of
-  exactly this inference ("all subtasks are in LEAD CODED") as a forbidden read. Use
-  `completedAt` on every subtask of the feature.
-- Make the sweep idempotent and safe to re-enter: a second call after a completed sweep clears
-  nothing and returns cleanly.
+The one gap a sweep would have covered legitimately — a seat that worked a subtask but was not the
+single "accepted" seat — is closed properly in step 3 instead, at the point the release happens.
 
 ### 3. Close the four silent no-ops
 
@@ -156,6 +167,7 @@ board so a silently-uncleared seat is visible rather than discovered by hand.
   `a-deferred-seat-is-curtained-for-a-clear-that-never-runs-and-the-head-is-never-excluded.md`.
 - Clearing the whole team on card move into a team: `clear-all-team-terminals-on-card-move.md`,
   largely superseded by the shipped atomic lifecycle barrier.
+- A feature-level completion sweep. Explicitly rejected — see Implementation step 2.
 
 ## Verification Plan
 
@@ -167,11 +179,12 @@ board so a silently-uncleared seat is visible rather than discovered by hand.
    accepted coder clears.
 3. Repeat 1 and 2 under the extension host — both must behave identically. Byte-compare the two
    options objects' seam lists and confirm no remaining asymmetry.
-4. Feature sweep: run a two-subtask feature to completion and confirm every non-lead seat that
-   worked it is cleared once, that a seat busy at sweep time is deferred and clears when it goes
-   quiet, and that the lead is untouched.
-5. Confirm the sweep never fires from board position alone: move every subtask to a coded column
-   *without* asserted completions and confirm no sweep runs.
+4. End-to-end contract: run a two-subtask feature and confirm each seat is released as its own
+   subtask is accepted, so that when the last subtask is accepted no seat is left holding context
+   and no manual clear is needed. This is the acceptance test for the whole plan.
+5. Confirm no clear is triggered by board position alone: move every subtask to a coded column
+   *without* the lead posting acceptance, and confirm nothing is cleared — the post remains the
+   only release.
 6. Idempotency: post `/kanban/task/complete` twice and confirm the seat clears once, with no
    error on the second post.
 7. Missing `dispatchedTerminal`: complete a subtask whose row has none and confirm attribution
@@ -187,5 +200,5 @@ board so a silently-uncleared seat is visible rather than discovered by hand.
 
 ## Metadata
 
-**Complexity:** 6
+**Complexity:** 5
 **Tags:** backend, reliability, bugfix
