@@ -139,7 +139,6 @@ export interface KanbanCard {
     featureId?: string;
     subtaskCount?: number;
     working?: boolean; // true while an agent is dispatched to this card and the 20-min window hasn't elapsed
-    blocked?: boolean; // V59: true while the agent reported itself blocked / waiting on the operator (hook-emitted)
     queuePosition?: number | null; // V60: 1-based STAGING session queue position; NULL = not staged (sorts last)
     columnEnteredAt?: string | null; // V61: when the card entered its current column (board sort key)
     priorityStarred?: number; // V63: 0/1 priority flag; starred cards sort first in every consumer
@@ -159,57 +158,22 @@ export interface KanbanCard {
 const DEFAULT_WORKING_STATE_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * Read-time activity-light derive (V58-widened, V59-extended to return
- * `{working, blocked}`). A card is `working` while its widened age basis —
- * `MAX(dispatchedAt, lastLivenessAt ?? dispatchedAt)` — is younger than
- * `timeoutMs`, with a `3 × timeoutMs`-from-`dispatchedAt` hard cap so a
- * wedged agent whose terminal keeps repainting cannot stay lit forever.
- *
- * `blocked` (V59) is true when `blockedAt` is non-NULL AND the card is still
- * within its working window (dispatchedAt live and within the age basis) — a
- * cleared card is not blocked, just done. The two states share one age
- * basis and one hard cap so they never disagree at the boundary; the
- * triggers are separate (working from dispatch, blocked from the agent's
- * own hook event). When `blockedAt` is absent (pre-V59 row, fleet-less host,
- * or no hook ever fired), `blocked` is false and the function is
- * byte-identical to its pre-V59 self for the working half.
- *
- * `timeoutMs` is passed in by the caller rather than read from
- * `vscode.workspace.getConfiguration` inline, matching the standalone host's
- * `bootstrap.isWorkingState` — PRD contract #3 (host-agnostic via seams).
+ * Read-time activity-light derive. A card is `working` while its widened age basis —
+ * `MAX(dispatchedAt, lastLivenessAt ?? dispatchedAt)` — is younger than `timeoutMs`.
  */
 function isWorkingState(
     dispatchedAt: string | null | undefined,
     timeoutMs: number,
-    lastLivenessAt?: string | null,
-    blockedAt?: string | null,
-    blockedTimeoutMs: number = 4 * 60 * 60 * 1000
-): { working: boolean; blocked: boolean } {
-    if (!dispatchedAt) return { working: false, blocked: false };
+    lastLivenessAt?: string | null
+): { working: boolean } {
+    if (!dispatchedAt) return { working: false };
     const ts = Date.parse(dispatchedAt);
-    if (!Number.isFinite(ts)) return { working: false, blocked: false };
+    if (!Number.isFinite(ts)) return { working: false };
     const now = Date.now();
-    // NO hard cap on dispatched_at. There was one — a turn older than 3× timeout
-    // cleared "regardless of how live the heartbeat looks" — and it could not tell
-    // a stuck light from an agent that is simply still working. It cut a live
-    // seat's card loose at 30 minutes mid-turn, and the card is how POST
-    // /kanban/queue/done finds the seat's work (LocalApiServer._runQueueDone), so
-    // the seat's completion report then landed on nothing: no broadcast, no board
-    // refresh, no lead relay, and no queue pop — an unattended seat went idle for
-    // good. Falsifiability comes from evidence, not elapsed time: the seat going
-    // quiet (the basis below), the terminal exiting (clearStaleWorkingState's
-    // forceTerminals arm), and blockedTimeoutMs.
-    // Widened basis: take the more recent of dispatched_at and the heartbeat.
     const livenessTs = lastLivenessAt ? Date.parse(lastLivenessAt) : NaN;
     const basis = Number.isFinite(livenessTs) && (livenessTs as number) > ts ? (livenessTs as number) : ts;
-    // Blocked is a wait on a human — it gets its own retention measured from
-    // blocked_at, not from the output-derived working basis (which freezes the
-    // moment the agent goes quiet). With blockedAt null the blocked term is
-    // false and `working` reduces to the pre-V59 expression.
-    const blockedTs = blockedAt ? Date.parse(blockedAt) : NaN;
-    const blocked = Number.isFinite(blockedTs) && (now - (blockedTs as number)) < blockedTimeoutMs;
-    const working = blocked || (now - basis) < timeoutMs;
-    return { working, blocked };
+    const working = (now - basis) < timeoutMs;
+    return { working };
 }
 
 /**
@@ -1354,8 +1318,7 @@ export class KanbanProvider implements vscode.Disposable {
                 ? await db.getCompletedPlansFilteredByProject(wsId, null, repoScope)
                 : await db.getCompletedPlans(wsId);
             const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
-            const blockedTimeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
-            const cards = await this._buildBoardCards(db, wsId, root, activeRows, completedRows, timeoutMs, blockedTimeoutMs);
+            const cards = await this._buildBoardCards(db, wsId, root, activeRows, completedRows, timeoutMs);
             // Columns must reflect the user's CONFIGURED + filtered set (mirror the editor
             // refresh path) — NOT the raw built-in DEFAULT_KANBAN_COLUMNS, which shows
             // columns for agents the user hasn't configured.
@@ -2127,7 +2090,6 @@ export class KanbanProvider implements vscode.Disposable {
         activeRows: KanbanPlanRecord[],
         completedRows: KanbanPlanRecord[],
         timeoutMs: number,
-        blockedTimeoutMs: number = 4 * 60 * 60 * 1000,
         existsCache?: Map<string, boolean>
     ): Promise<KanbanCard[]> {
         const activeRowsFiltered = this._filterGhostPlans(activeRows, workspaceRoot, existsCache);
@@ -2156,14 +2118,14 @@ export class KanbanProvider implements vscode.Disposable {
         } catch (missionErr) {
             console.warn('[KanbanProvider] _buildBoardCards: mission lookup failed:', missionErr);
         }
-        const featureWorkingMap = typeof db.getFeatureWorkingStates === 'function' ? await db.getFeatureWorkingStates(workspaceId, timeoutMs, blockedTimeoutMs) : new Map<string, { working: boolean; blocked: boolean }>();
+        const featureWorkingMap = typeof db.getFeatureWorkingStates === 'function' ? await db.getFeatureWorkingStates(workspaceId, timeoutMs) : new Map<string, { working: boolean }>();
 
         // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
         const cards: KanbanCard[] = activeRowsFiltered.map(row => {
             const featureState = row.isFeature ? featureWorkingMap.get(row.planId) : undefined;
             const cardState = row.isFeature
-                ? { working: featureState?.working ?? false, blocked: featureState?.blocked ?? false }
-                : isWorkingState(row.dispatchedAt, timeoutMs, row.lastLivenessAt, row.blockedAt, blockedTimeoutMs);
+                ? { working: featureState?.working ?? false }
+                : isWorkingState(row.dispatchedAt, timeoutMs, row.lastLivenessAt);
             return {
                 planId: row.planId,
                 sessionId: row.sessionId,
@@ -2179,7 +2141,6 @@ export class KanbanProvider implements vscode.Disposable {
                 featureId: row.featureId || undefined,
                 subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined,
                 working: cardState.working,
-                blocked: cardState.blocked,
                 queuePosition: row.queuePosition ?? null,
                 columnEnteredAt: row.columnEnteredAt ?? null,
                 priorityStarred: row.priorityStarred ?? 0,
@@ -2289,8 +2250,7 @@ export class KanbanProvider implements vscode.Disposable {
             // Build cards via the shared row→card pipeline (also used by the browser WS
             // resync in getFullStateMessages) so the editor and browser cannot drift.
             const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
-            const blockedTimeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
-            const cards = await this._buildBoardCards(db, workspaceId ?? '', resolvedWorkspaceRoot, activeRows, completedRows, timeoutMs, blockedTimeoutMs, ghostExistsCache);
+            const cards = await this._buildBoardCards(db, workspaceId ?? '', resolvedWorkspaceRoot, activeRows, completedRows, timeoutMs, ghostExistsCache);
 
             this._lastCards = cards;
 
@@ -4000,18 +3960,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 // project/repo filter. See getSubtaskCountsByFeature.
                 const subtaskCountMap2 = await db.getSubtaskCountsByFeature(workspaceId);
                 const timeoutMs2 = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
-                const blockedTimeoutMs2 = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
                 const featureWorkingMap2 = await db.getFeatureWorkingStates(
                     workspaceId,
-                    timeoutMs2,
-                    blockedTimeoutMs2
+                    timeoutMs2
                 );
 
                 cards = activeRows.map(row => {
                     const featureState2 = row.isFeature ? featureWorkingMap2.get(row.planId) : undefined;
                     const cardState2 = row.isFeature
-                        ? { working: featureState2?.working ?? false, blocked: featureState2?.blocked ?? false }
-                        : isWorkingState(row.dispatchedAt, timeoutMs2, row.lastLivenessAt, row.blockedAt, blockedTimeoutMs2);
+                        ? { working: featureState2?.working ?? false }
+                        : isWorkingState(row.dispatchedAt, timeoutMs2, row.lastLivenessAt);
                     return {
                         planId: row.planId,
                         sessionId: row.sessionId,
@@ -4028,7 +3986,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         featureId: row.featureId || undefined,
                         subtaskCount: row.isFeature ? (subtaskCountMap2.get(row.planId) || 0) : undefined,
                         working: cardState2.working,
-                        blocked: cardState2.blocked,
                         queuePosition: row.queuePosition ?? null,
                         columnEnteredAt: row.columnEnteredAt ?? null,
                         priorityStarred: row.priorityStarred ?? 0,
@@ -4234,9 +4191,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
             const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
-            let featureWorkingMap3 = new Map<string, { working: boolean; blocked: boolean }>();
+            let featureWorkingMap3 = new Map<string, { working: boolean }>();
             const timeoutMs3 = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
-            const blockedTimeoutMs3 = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
             try {
                 const db = KanbanDatabase.forWorkspace(resolvedWorkspaceRoot);
                 await db.ensureReady();
@@ -4244,8 +4200,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 if (wsId) {
                     featureWorkingMap3 = await db.getFeatureWorkingStates(
                         wsId,
-                        timeoutMs3,
-                        blockedTimeoutMs3
+                        timeoutMs3
                     );
                 }
             } catch (err) {
@@ -4255,8 +4210,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const cards: KanbanCard[] = activeRowsFiltered.map(row => {
                 const featureState3 = row.isFeature ? featureWorkingMap3.get(row.planId) : undefined;
                 const cardState3 = row.isFeature
-                    ? { working: featureState3?.working ?? false, blocked: featureState3?.blocked ?? false }
-                    : isWorkingState(row.dispatchedAt, timeoutMs3, row.lastLivenessAt, row.blockedAt, blockedTimeoutMs3);
+                    ? { working: featureState3?.working ?? false }
+                    : isWorkingState(row.dispatchedAt, timeoutMs3, row.lastLivenessAt);
                 return {
                     planId: row.planId,
                     sessionId: row.sessionId,
@@ -4269,7 +4224,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     workspaceRoot: resolvedWorkspaceRoot,
                     project: row.project || '',
                     working: cardState3.working,
-                    blocked: cardState3.blocked,
                     queuePosition: row.queuePosition ?? null,
                     columnEnteredAt: row.columnEnteredAt ?? null,
                     priorityStarred: row.priorityStarred ?? 0,
@@ -8665,8 +8619,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
     /**
      * V60 — clear a card's queue_position. Exported so subtask 1's
      * dispatchNextFromQueue pop path can call it when a card leaves the queue
-     * via the lead pull (the moveCardToColumnWithReason clear above covers the
-     * webview-driven moves; this covers the API-driven pop). Idempotent.
+     * via the lead pull (column updates cover webview-driven moves; this covers
+     * the API-driven pop). Idempotent.
      */
     public async clearQueuePosition(workspaceRoot: string, planId: string): Promise<boolean> {
         if (!workspaceRoot || !planId) return false;
@@ -9390,7 +9344,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // through vscode config here (matching the four board builders' callers);
         // this builder is extension-host-only (KanbanProvider is the VS Code host).
         const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
-        const blockedTimeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
         const cards: KanbanCard[] = [];
         for (const sid of sessionIds) {
             let plan = await db.getPlanBySessionId(sid);
@@ -9411,7 +9364,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     project: plan.project || '',
                     isFeature: !!plan.isFeature,
                     featureId: plan.featureId || undefined,
-                    ...isWorkingState(plan.dispatchedAt, timeoutMs, plan.lastLivenessAt, plan.blockedAt, blockedTimeoutMs),
+                    ...isWorkingState(plan.dispatchedAt, timeoutMs, plan.lastLivenessAt),
                     queuePosition: plan.queuePosition ?? null,
                     columnEnteredAt: plan.columnEnteredAt ?? null,
                     priorityStarred: plan.priorityStarred ?? 0,
@@ -13371,9 +13324,8 @@ ${FOCUS_DIRECTIVE}`;
                     ? await db.getCompletedPlansFilteredByProject(wsId, null, repoScope)
                     : await db.getCompletedPlans(wsId);
                 const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
-                const blockedTimeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
                 // Canonical pipeline — same as getFullStateMessages (line 1094).
-                const cards = await this._buildBoardCards(db, wsId, workspaceRoot, activeRows, completedRows, timeoutMs, blockedTimeoutMs);
+                const cards = await this._buildBoardCards(db, wsId, workspaceRoot, activeRows, completedRows, timeoutMs);
                 // Optional column filter (narrow to one column for the kanban-mode pane).
                 const column = typeof msg.column === 'string' ? msg.column : null;
                 let filtered = column ? cards.filter(c => c.column === column) : cards;

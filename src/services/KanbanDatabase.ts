@@ -83,29 +83,14 @@ export interface KanbanPlanRecord {
     /**
      * ISO timestamp of the most recent PTY-fleet output heartbeat persisted by the
      * activity-light sweep (V58). Widens the working-state age basis to
-     * `MAX(dispatchedAt, lastLivenessAt ?? dispatchedAt)` with a 3× hard cap from
-     * `dispatchedAt`. NULL on fleet-less hosts and on re-dispatch → the basis
-     * degenerates to `dispatchedAt` (today's behaviour). Never rewritten except
-     * by the sweep's `recordLiveness` and the `clearWorkingState` null.
+     * `MAX(dispatchedAt, lastLivenessAt ?? dispatchedAt)`. NULL on fleet-less hosts
+     * and on re-dispatch. Never rewritten except by `recordLiveness` and working-state clears.
      */
     lastLivenessAt?: string | null;
     /**
      * ISO timestamp the agent is blocked / waiting on the operator (V59).
      *
-     * NO WRITER CURRENTLY EXISTS. The original writer was a Claude-Code-only
-     * hook bridge (`POST /agent/event`), removed because hooks lit the board
-     * for one CLI and left every other agent on the timeout path. The column,
-     * `setBlockedState` and the board's blocked ring are retained as
-     * scaffolding for a CLI-agnostic writer — see the
-     * `pty-turn-end-from-output-silence` plan, where an ambiguous idle (PTY
-     * silence with no plan-file advance) is what sets it.
-     *
-     * Cleared alongside `dispatched_at` by `clearWorkingState` /
-     * `clearStaleWorkingState` so a re-dispatch and the timeout sweep both
-     * reset it. Read-time derive: a card is `blocked` while `blocked_at` is
-     * non-NULL AND `dispatched_at` is still live (a cleared card is not
-     * blocked, just done). NULL everywhere until a writer lands — the basis
-     * degenerates to the working-only derive (today's behaviour).
+     * Dead column — writer was removed. Retained for schema compatibility.
      */
     blockedAt?: string | null;
     clickupTaskId?: string;
@@ -546,26 +531,19 @@ const MIGRATION_V57_SQL = [
 // PlanIngestionEngine's stale-state sweep from the PTY fleet's `lastDataAt`.
 // Widens the activity-light age basis from `dispatched_at` to
 // `MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at))` so a card
-// whose agent is demonstrably still producing output stops being force-cleared
-// at the timeout, with a 3× hard cap from `dispatched_at`. NULL everywhere on
-// fleet-less hosts → the basis degenerates to `dispatched_at` (today's behaviour).
+// whose agent is demonstrably still producing output stays active. NULL on
+// fleet-less hosts leaves `dispatched_at` as the basis.
 // The column is also present in SCHEMA_TABLES_SQL, so fresh DBs get it from
 // creation and the migration ALTER is a no-op there.
 const MIGRATION_V58_SQL = [
     `ALTER TABLE plans ADD COLUMN last_liveness_at TEXT DEFAULT NULL`,
 ];
 
-// V59: plans.blocked_at — the "blocked / waiting on you" stamp.
-// NO WRITER CURRENTLY EXISTS: the original one was the Claude-Code-only
-// `POST /agent/event` hook bridge, removed as CLI-specific. Retained as
-// scaffolding for a CLI-agnostic writer (PTY output silence with no plan-file
-// advance ⇒ ambiguous ⇒ blocked). Cleared alongside `dispatched_at` by
-// `clearWorkingState` and `clearStaleWorkingState` so a re-dispatch and the
-// timeout sweep both reset it. The column is also present in
-// SCHEMA_TABLES_SQL, so fresh DBs get it from creation and the migration ALTER
-// is a no-op there. Idempotent under the version gate (try/catch covers a
-// stale restore where the column already exists but the version wasn't
-// stamped). Never edit a shipped V51–V58 body.
+// V59: plans.blocked_at. The writer and UI state were removed; the column remains
+// for schema compatibility. Working-state clears continue to null old values.
+// The column is also present in SCHEMA_TABLES_SQL, so fresh DBs get it from
+// creation and the migration ALTER is a no-op there. Idempotent under the version
+// gate. Never edit a shipped V51–V58 body.
 const MIGRATION_V59_SQL = [
     `ALTER TABLE plans ADD COLUMN blocked_at TEXT DEFAULT NULL`,
 ];
@@ -2677,7 +2655,7 @@ export class KanbanDatabase {
         try {
             const now = new Date().toISOString();
             this._db.run(
-                'UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                'UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ?, dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL WHERE plan_file = ? AND workspace_id = ?',
                 [newColumn, now, now, normalized, workspaceId]
             );
             affected = this._db.getRowsModified();   // NO await between run() and this line
@@ -6690,41 +6668,26 @@ export class KanbanDatabase {
     }
 
     /**
-     * Map of feature ID to its active subtasks' working/blocked rollup (V59
-     * widened from `Map<string, boolean>` to `Map<string, {working,blocked}>`).
+     * Map of feature ID to its active subtasks' working rollup.
      * A feature is `working` if any active subtask has a live `dispatched_at`
-     * inside the widened age basis; `blocked` if any active subtask has a
-     * non-NULL `blocked_at` AND a live `dispatched_at` (a cleared card is not
-     * blocked, just done). Both share the same age basis as the per-card
-     * derive so a feature light and its children never disagree at the
-     * boundary.
+     * inside the widened age basis.
      */
     public async getFeatureWorkingStates(
         workspaceId: string,
-        timeoutMs: number,
-        blockedTimeoutMs: number = 4 * 60 * 60 * 1000
-    ): Promise<Map<string, { working: boolean; blocked: boolean }>> {
-        const workingStates = new Map<string, { working: boolean; blocked: boolean }>();
+        timeoutMs: number
+    ): Promise<Map<string, { working: boolean }>> {
+        const workingStates = new Map<string, { working: boolean }>();
         if (!(await this.ensureReady()) || !this._db || !workspaceId) return workingStates;
         const cutoff = new Date(Date.now() - timeoutMs).toISOString();
-        const blockedCutoff = new Date(Date.now() - blockedTimeoutMs).toISOString();
-        // No `AND dispatched_at >= hardCapCutoff` term here — it was dropped from
-        // the per-card derive (KanbanProvider.isWorkingState) and from
-        // clearStaleWorkingState, and these three must agree or a feature light
-        // and its children disagree at the boundary.
         const stmt = this._db.prepare(
             `SELECT feature_id AS featureId,
-                    MAX((dispatched_at IS NOT NULL
-                         AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?)
-                         OR (blocked_at IS NOT NULL AND blocked_at >= ?)) AS anyWorking,
-                    MAX(blocked_at IS NOT NULL
-                         AND dispatched_at IS NOT NULL
-                         AND blocked_at >= ?) AS anyBlocked
+                    MAX(dispatched_at IS NOT NULL
+                        AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?) AS anyWorking
              FROM plans
              WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
                AND status = 'active' AND is_feature = 0
              GROUP BY feature_id`,
-            [cutoff, blockedCutoff, blockedCutoff, workspaceId]
+            [cutoff, workspaceId]
         );
         try {
             while (stmt.step()) {
@@ -6732,7 +6695,6 @@ export class KanbanDatabase {
                 const featureId = String(row.featureId ?? '');
                 if (featureId) workingStates.set(featureId, {
                     working: Boolean(row.anyWorking),
-                    blocked: Boolean(row.anyBlocked),
                 });
             }
         } finally {
@@ -6839,7 +6801,7 @@ export class KanbanDatabase {
                 ? [targetColumn, targetStatus, now, now, featurePlanId]
                 : [targetColumn, now, now, featurePlanId];
             this._db.run(
-                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ?, column_entered_at = ? WHERE plan_id = ?`,
+                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ?, column_entered_at = ?, dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL WHERE plan_id = ?`,
                 featureParams
             );
             // Cascade subtasks atomically (no read-then-write race)
@@ -6847,7 +6809,7 @@ export class KanbanDatabase {
                 ? [targetColumn, targetStatus, now, now, featurePlanId]
                 : [targetColumn, now, now, featurePlanId];
             this._db.run(
-                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ?, column_entered_at = ? WHERE feature_id = ?${subtaskStatusFilter}`,
+                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ?, column_entered_at = ?, dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL WHERE feature_id = ?${subtaskStatusFilter}`,
                 subtaskParams
             );
             this._db.run('COMMIT');
@@ -10472,32 +10434,6 @@ FROM plans
     }
 
     /**
-     * Blocked-state writer (V59). Sets `blocked_at` to the given ISO timestamp
-     * (or NULL to clear) WITHOUT touching `dispatched_at` — the card stays lit
-     * as working/blocked; only the blocked overlay flips. The derive layer
-     * reads `blocked_at` independently of the working age basis, so the two
-     * states share one clock but separate triggers. Scoped by workspace_id.
-     *
-     * Called from the turn-end silence sweep in PlanIngestionEngine when an active
-     * dispatched seat goes quiet without a completion report. The verdict is
-     * silence-derived (output inactivity), not hook-derived.
-     *
-     * Deliberately does NOT touch `updated_at`. `updated_at` is the secondary
-     * discriminator a turn-end decision uses to ask "did the plan file advance
-     * during this turn"; bumping it here would make a blocked →
-     * user-answers → turn-end sequence read its own side effect as evidence of
-     * work and fire a false completion. `blocked_at` is the only field this
-     * writer owns — preserve that when wiring a new caller.
-     */
-    public async setBlockedState(planFile: string, workspaceId: string, blockedAt: string | null): Promise<boolean> {
-        const normalized = this._ensureRelativePlanFile(planFile);
-        return this._persistedUpdate(
-            'UPDATE plans SET blocked_at = ? WHERE plan_file = ? AND workspace_id = ?',
-            [blockedAt, normalized, workspaceId]
-        );
-    }
-
-    /**
      * Resolve the live dispatched plan row for a terminal name (V59). Returns
      * the most-recently-dispatched active row whose `dispatched_terminal`
      * matches AND whose `dispatched_at` is still live, or null. This is the
@@ -10745,36 +10681,18 @@ FROM plans
     public async clearStaleWorkingState(
         workspaceId: string,
         maxAgeMs: number,
-        opts?: { forceTerminals?: string[]; blockedTimeoutMs?: number }
+        opts?: { forceTerminals?: string[] }
     ): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
         const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
-        const blockedTimeoutMs = opts?.blockedTimeoutMs ?? 4 * 60 * 60 * 1000;
-        const blockedCutoff = new Date(Date.now() - blockedTimeoutMs).toISOString();
         const forceTerminals = opts?.forceTerminals?.filter(n => !!n) ?? [];
         try {
             this._db.run('BEGIN');
-            // V59: blocked rows get their own retention. Clear non-blocked rows on
-            // the working age basis; clear blocked rows only when blocked_at itself
-            // has aged out. With blocked_at NULL everywhere this reduces to the
-            // pre-V59 statement.
-            //
-            // The non-blocked arm had a second disjunct — `OR dispatched_at < ?`
-            // against a 3× maxAgeMs cutoff — that ignored last_liveness_at entirely
-            // and so retired a seat that was visibly still producing output. Because
-            // this row IS how POST /kanban/queue/done locates the seat's work
-            // (LocalApiServer._runQueueDone matches on dispatched_at), clearing it
-            // mid-turn made the seat's own completion report a no-op: no broadcast,
-            // no board refresh, no lead relay, no queue pop. A long turn is not an
-            // abandoned one. Abandonment is evidenced by silence (the arm below),
-            // by the terminal exiting (forceTerminals), or by blockedTimeoutMs.
             this._db.run(
                 'UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL ' +
-                'WHERE workspace_id = ? AND dispatched_at IS NOT NULL AND (' +
-                '  (blocked_at IS NULL AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ?)' +
-                '  OR (blocked_at IS NOT NULL AND blocked_at < ?)' +
-                ')',
-                [workspaceId, cutoff, blockedCutoff]
+                'WHERE workspace_id = ? AND dispatched_at IS NOT NULL ' +
+                '  AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ?',
+                [workspaceId, cutoff]
             );
             let modified = this._db.getRowsModified();
             // Exited-terminal force-clear: dead agents clear immediately rather than

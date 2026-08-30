@@ -85,10 +85,9 @@ export interface TurnEndInfo {
     /** The plan file the seat was working on. */
     planFile: string;
     /** `completed` = the seat POSTed /kanban/queue/done (the seat finished);
-     *  `blocked` = silence without a report;
      *  `stalled` = the feature-level nudge — no dispatch is outstanding, the head went idle with
      *  un-accepted subtasks remaining, and the engine is waking it with evidence. */
-    outcome: 'completed' | 'blocked' | 'stalled';
+    outcome: 'completed' | 'stalled';
     /** The workspace root the swept card lives in. */
     workspaceRoot: string;
     /** Deliver directly to this terminal, skipping parent resolution. Used by the feature-level
@@ -98,21 +97,6 @@ export interface TurnEndInfo {
     /** Pre-composed evidence body for the nudge (remaining subtasks, their seats, silence, mtime).
      *  Hosts send this verbatim when set and fall back to their own one-line message when absent. */
     body?: string;
-    /** `false` = machine signal only. Consumers that DELIVER text (the pty send and the
-     *  Mission Control report mirror) must skip it; a STATE consumer — one that reacts to
-     *  the fact of a turn ending rather than to its message — must still run.
-     *  Used by the blocked arm, which fires per seat at the sweep's own cadence while its
-     *  lead-facing text is paced and aggregated into one digest by _runBlockedDigestSweep.
-     *
-     *  NOTE (verify before relying on this): there is NO state consumer at HEAD. The one
-     *  this split was designed around, `TaskViewerProvider.handleAutobanTurnEnd`, was
-     *  deleted in 25fdb6d9 when scheduling consolidated onto Mission Control, and both
-     *  hosts' notifier closures now call only their text-delivering path — which returns
-     *  immediately on this flag. So a `deliver: false` emission currently reaches nobody.
-     *  It is kept as the signal/delivery seam for the next state consumer (a Mission
-     *  Control lane halt is the obvious one), NOT because something is listening today.
-     *  Absent/true = deliver, today's behaviour. */
-    deliver?: boolean;
 }
 
 /**
@@ -197,36 +181,6 @@ export class PlanIngestionEngine {
     private _scanInterval?: NodeJS.Timeout;
     private _scanIntervalMs = 10000; // 10 seconds default
 
-    /**
-     * Seats observed silent-and-still-dispatched on the PREVIOUS sweep tick,
-     * keyed `${workspaceId}\0${terminalName}` → the card they held.
-     *
-     * The blocked arm needs one tick of grace. Silence is measured on PTY
-     * OUTPUT, not on progress, and completion is now an explicit POST
-     * /kanban/queue/done — so a seat that finished, wrote its report and spent
-     * >`turnEndSilenceMs` quiet before its POST lands (a long verification run,
-     * a slow turn, a retried POST) would be stamped blocked and its lead told it
-     * "has gone quiet ... without reporting done" for work that is finished. The
-     * mtime arm used to make that impossible: it classified the same seat
-     * `completed` and the two arms were mutually exclusive. Removing it removed
-     * the guarantee, not just the arm.
-     *
-     * So: the first silent tick only RECORDS the seat here; the second
-     * consecutive one stamps. A POST landing in the gap NULLs `dispatched_at`,
-     * the seat drops out of `getActiveDispatchedByTerminal`, and the candidate
-     * is never promoted. The cost is that a genuine block is reported one scan
-     * interval (~10s) later than before — negligible against a 90s silence
-     * threshold, and the safe direction: this can only delay a notice, never
-     * fabricate one.
-     *
-     * In-memory by design. A restart re-starts the two-tick observation, which
-     * delays a blocked notice rather than inventing one. Entries are matched on
-     * the card key so a NEW dispatch to the same seat re-arms instead of
-     * inheriting the previous turn's candidacy, and a stale entry (older than a
-     * few scan intervals — the seat produced output again in between) re-arms
-     * too, which is what prunes the map without a sweep of its own.
-     */
-    private _blockedCandidates = new Map<string, { cardKey: string; observedAtMs: number }>();
     private _lastScanTime = new Map<string, number>();
     private _scanInProgress = false;
     private _recentRenames = new Set<string>();
@@ -290,18 +244,11 @@ export class PlanIngestionEngine {
     }
 
     /**
-     * Turn-end notification seam. Fired once per turn boundary behind a
-     * single-fire gate — `!record.blockedAt` for the blocked arm, the per-watch
-     * nudge state for the stalled arm — so a host can tell the agent waiting on
-     * a seat that the seat has gone quiet. The `completed` arm does NOT fire
-     * from here any more: it moved to `LocalApiServer._runQueueDone` with the
-     * mtime-based clear's retirement, gated on the same `transitioned` boolean. The engine passes only what
-     * it knows — the seat name, the plan file, the outcome and the workspace
-     * root — and stays host-agnostic: recipient resolution (parentInstanceId →
-     * live terminal, Mission Control fallback) and delivery (ptySendPrompt) belong
-     * to the host, which has the fleet identity data this module deliberately
-     * does not import. A host that sets no notifier degrades silently — the
-     * classification still runs, nothing is delivered, no null-callback crash.
+     * Turn-end notification seam for explicit completion reports and stalled
+     * feature or queue watches. The engine passes only what it knows — the seat
+     * name, plan file, outcome, and workspace root — and stays host-agnostic:
+     * recipient resolution and delivery belong to the host. A host that sets no
+     * notifier degrades silently.
      */
     private _turnEndNotifier?: (info: TurnEndInfo) => void;
 
@@ -552,30 +499,16 @@ export class PlanIngestionEngine {
                 const activityCfg = this._host.getConfig('activityLight');
                 const timeoutMs = activityCfg.getNumber('timeoutMs', 10 * 60 * 1000);
                 // Liveness window: how recently a dispatched terminal must have
-                // produced output for the sweep to spare its card. Deliberately a
-                // separate knob from timeoutMs — one is "how long we believe a
-                // silent agent", the other is "how recently we must have heard".
-                // Default 90s; a silent-but-live terminal falls through to the
-                // blind timeout once its heartbeat is older than this.
+                // produced output for the sweep to refresh its activity heartbeat.
+                // Default 90s; older heartbeats fall through to the working-state
+                // timeout.
                 const livenessWindowMs = activityCfg.getNumber('livenessWindowMs', 90000);
-                // Turn-end silence: how long an active PTY seat must be quiet
-                // before the sweep treats the turn as ended. Kept separate from
-                // livenessWindowMs so a user can shrink the heartbeat window
-                // without arming a false completion trigger. Effective threshold
-                // is max(livenessWindowMs, turnEndSilenceMs) because the heartbeat
-                // branch runs first and spares any recently-active seat.
+                // Turn-end silence prevents a stall nudge from being injected into
+                // an active PTY turn. Completion remains an explicit API signal.
                 const turnEndSilenceMs = activityCfg.getNumber('turnEndSilenceMs', 90000);
-                // Nudge silence: how long a team lead must be silent with work
-                // pending before a stall nudge fires. Deliberately a separate knob
-                // from turnEndSilenceMs — 90s is right for turn-boundary detection
-                // (completed/blocked classification), but far too aggressive for
-                // nudge pacing: a lead processing a coder's report, composing a
-                // dispatch prompt, or thinking between cards is silent for 90s all
-                // the time. Default 10 min; the nudge is a backstop, not a
-                // turn-boundary probe. Only applies to the feature-level and
-                // queue-level stall nudges; turn-end classification is unaffected.
+                // Nudge silence paces feature- and queue-level stall reminders.
+                // Default 10 min; the nudge is a backstop, not a completion signal.
                 const nudgeSilenceMs = activityCfg.getNumber('nudgeSilenceMs', 600000);
-                const blockedTimeoutMs = activityCfg.getNumber('blockedTimeoutMs', 1800000);
                 // Partition the fleet ONCE per tick (not per folder) — the fleet
                 // is process-global and the snapshot is cheap. A miss on the
                 // provider (fleet-less host) yields empty arrays and the sweep
@@ -599,7 +532,6 @@ export class PlanIngestionEngine {
                 const nowMs = Date.now();
                 const liveNames: string[] = [];
                 const forceTerminals: string[] = [];
-                const silentTerminals: string[] = [];
                 for (const entry of liveness) {
                     if (!entry.friendlyName) continue;
                     if (entry.status === 'exited') {
@@ -611,18 +543,6 @@ export class PlanIngestionEngine {
                         // Active AND recently produced output → stamp its heartbeat
                         // so the widened age basis keeps its card lit past timeout.
                         liveNames.push(entry.friendlyName);
-                    } else if (entry.lastDataAt > 0 && nowMs - entry.lastDataAt >= turnEndSilenceMs) {
-                        // Active but quiet longer than the turn-end threshold: the
-                        // strongest CLI-agnostic signal that a turn boundary may
-                        // have been reached. The branch is terminal — no seat can
-                        // be both heartbeat-stamped and silence-tested on one tick.
-                        // `lastDataAt > 0` is load-bearing, not defensive: the
-                        // liveness read coerces a missing timestamp to 0 (a ptyHost
-                        // child predating the `liveness` key), and 0 reads as
-                        // "silent since the epoch" — which would blocked-stamp every
-                        // dispatched card on the first tick under version skew. No
-                        // timestamp is NO EVIDENCE, so it falls to the blind timer.
-                        silentTerminals.push(entry.friendlyName);
                     }
                 }
                 let recordedLiveness = 0;
@@ -633,13 +553,7 @@ export class PlanIngestionEngine {
                         await db.ensureReady();
                         const wsId = await db.getWorkspaceId();
                         if (!wsId) continue;
-                        // Seats that received a turn-end notice (completed or
-                        // blocked) on THIS tick. The feature nudge suppresses
-                        // itself while a notice for one of the feature's seats is
-                        // outstanding, so a stall does not double-wake a head that
-                        // the per-dispatch backstop already poked this tick.
                         const notifiedSeatsThisTick = new Set<string>();
-                        const blockedThisTick: Array<{ terminalName: string; planFile: string }> = [];
                         // Persist heartbeats for live active terminals BEFORE the
                         // sweep so the widened basis is in the row the sweep reads.
                         // ~1 write per live card per 10s — well within the sql.js
@@ -653,102 +567,15 @@ export class PlanIngestionEngine {
                                 );
                             }
                         }
-                        if (silentTerminals.length > 0) {
-                            try {
-                                for (const terminalName of silentTerminals) {
-                                    const SWEEP_ROW_CAP = 50;
-                                    const rows = await db.getActiveDispatchedRowsByTerminal(wsId, terminalName, SWEEP_ROW_CAP);
-                                    if (rows.length === SWEEP_ROW_CAP) {
-                                        this._host.logger.appendLine(
-                                            `[GlobalPlanWatcher] Silence sweep for ${terminalName} capped at ${SWEEP_ROW_CAP} rows`
-                                        );
-                                    }
-                                    for (const record of rows) {
-                                        if (!record || !record.planFile || !record.dispatchedAt) continue;
-                                        // mtime-based completion detection is retired — the API POST
-                                        // /kanban/queue/done is the sole completion trigger. The sweep
-                                        // now only marks silent seats blocked (the `!record.blockedAt`
-                                        // arm below) and the timeout fallback (clearStaleWorkingState).
-                                        if (!record.blockedAt) {
-                                            // ── One-tick grace ──────────────────
-                                            // See `_blockedCandidates`: the first
-                                            // silent tick only records the seat, so
-                                            // a POST landing in the gap (this card
-                                            // leaves the query the moment
-                                            // dispatched_at is NULLed) never draws a
-                                            // false "gone quiet" notice. A different
-                                            // card, or an entry stale enough that the
-                                            // seat must have produced output in
-                                            // between, re-arms rather than promotes.
-                                            const candidateKey = `${wsId}\0${terminalName}\0${record.planFile}`;
-                                            const cardKey = String(record.planId || record.planFile);
-                                            const prior = this._blockedCandidates.get(candidateKey);
-                                            const graceWindowMs = this._scanIntervalMs * 3;
-                                            if (!prior || prior.cardKey !== cardKey || nowMs - prior.observedAtMs > graceWindowMs) {
-                                                this._blockedCandidates.set(candidateKey, { cardKey, observedAtMs: nowMs });
-                                                this._host.logger.appendLine(
-                                                    `[GlobalPlanWatcher] Turn-end (silence) candidate for ${terminalName} — holding one tick for a late POST /kanban/queue/done: ${record.planFile}`
-                                                );
-                                                continue;
-                                            }
-                                            this._blockedCandidates.delete(candidateKey);
-                                            await db.setBlockedState(record.planFile, wsId, livenessIso);
-                                            this._host.logger.appendLine(
-                                                `[GlobalPlanWatcher] Turn-end (silence) marked blocked for ${terminalName}: ${record.planFile}`
-                                            );
-                                            // `blocked_at` is NOT a single-fire latch: recordLiveness
-                                            // (above, KanbanDatabase.recordLiveness) NULLs it on every
-                                            // burst of terminal output, so a seat that alternates
-                                            // read/think/act re-enters this branch every ~2 minutes.
-                                            // The notice therefore fires once per SILENCE EPISODE, not
-                                            // once per dispatch.
-                                            //
-                                            // The signal still fires per seat at this cadence, as the
-                                            // machine-readable half of the split (see TurnEndInfo
-                                            // .deliver — no state consumer is wired at HEAD, so this
-                                            // emission currently reaches nobody). It is NOT delivered
-                                            // as text and it does NOT count as a wake for
-                                            // notifiedSeatsThisTick. The lead-facing message is paced
-                                            // and aggregated in _runBlockedDigestSweep below.
-                                            if (this._turnEndNotifier) {
-                                                try {
-                                                    this._turnEndNotifier({
-                                                        seatName: terminalName,
-                                                        planFile: record.planFile,
-                                                        outcome: 'blocked',
-                                                        workspaceRoot: folder,
-                                                        deliver: false,
-                                                    });
-                                                } catch (cbErr) {
-                                                    this._host.logger.appendLine(`[GlobalPlanWatcher] turnEndNotifier callback failed: ${cbErr}`);
-                                                }
-                                            }
-                                            blockedThisTick.push({ terminalName, planFile: record.planFile });
-                                        }
-                                    }
-                                }
-                            } catch (silenceErr) {
-                                this._host.logger.appendLine(`[GlobalPlanWatcher] silence sweep failed for ${folder}: ${silenceErr}`);
-                            }
-                        }
-                        const cleared = await db.clearStaleWorkingState(wsId, timeoutMs, { forceTerminals, blockedTimeoutMs });
+                        const cleared = await db.clearStaleWorkingState(wsId, timeoutMs, { forceTerminals });
                         if (cleared > 0) {
                             this._host.logger.appendLine(
                                 `[GlobalPlanWatcher] Activity-light timeout sweep cleared ${cleared} stale working card(s) in ${folder}` +
-                                (recordedLiveness > 0 || forceTerminals.length > 0 || silentTerminals.length > 0
-                                    ? ` (liveness: recorded=${recordedLiveness}, forced=${forceTerminals.length}, silent=${silentTerminals.length})`
+                                (recordedLiveness > 0 || forceTerminals.length > 0
+                                    ? ` (liveness: recorded=${recordedLiveness}, forced=${forceTerminals.length})`
                                     : '')
                             );
                             this._firePlanDiscovered(folder);
-                        }
-                        const blockedNotifyIntervalMs = activityCfg.getNumber('blockedNotifyIntervalMs', turnEndSilenceMs);
-                        try {
-                            await this._runBlockedDigestSweep({
-                                db, folder, wsId, nowMs, intervalMs: blockedNotifyIntervalMs,
-                                liveness, blockedThisTick, notifiedSeatsThisTick,
-                            });
-                        } catch (digestErr) {
-                            this._host.logger.appendLine(`[GlobalPlanWatcher] blocked digest sweep failed for ${folder}: ${digestErr}`);
                         }
                         // ── Feature-level stall nudge ───────────────────────────────
                         // A head driving a feature can stall in the window where no
@@ -1143,117 +970,6 @@ export class PlanIngestionEngine {
     }
 
     /**
-     * Paced, aggregated "seat is stuck" wake — the blocked-arm counterpart to
-     * _runFeatureNudgeSweep. The per-seat notice it replaces fired once per
-     * SILENCE EPISODE, not once per dispatch, because recordLiveness nulls
-     * `blocked_at` on any output; a lead therefore received one interrupt per
-     * seat per ~2 minutes for seats that were merely reading.
-     *
-     * Pacing state lives in the DB config key `kanban.blockedNotifyPacing`
-     * ({ "<workspaceId>|<seat>": epochMs }), NOT in memory: each host builds its
-     * own engine and an extension reload would otherwise reset every window and
-     * produce a burst.
-     */
-    private async _runBlockedDigestSweep(args: {
-        db: KanbanDatabase;
-        folder: string;
-        wsId: string;
-        nowMs: number;
-        intervalMs: number;
-        liveness: Array<{ friendlyName: string; lastDataAt: number; status: string }>;
-        blockedThisTick: Array<{ terminalName: string; planFile: string }>;
-        notifiedSeatsThisTick: Set<string>;
-    }): Promise<void> {
-        const { db, folder, wsId, nowMs, intervalMs, liveness, blockedThisTick, notifiedSeatsThisTick } = args;
-        if (!this._turnEndNotifier || blockedThisTick.length === 0) { return; }
-
-        const KEY = 'kanban.blockedNotifyPacing';
-        let pacing: Record<string, number> = {};
-        try { pacing = await db.getConfigJson<Record<string, number>>(KEY, {}) || {}; } catch { return; }
-
-        // Only seats outside their pace window, and only those STILL blocked at
-        // compose time — a seat can have produced output between the stamp above
-        // and here, which nulls blocked_at and makes the report a lie.
-        // Collapse to one entry per SEAT before anything else. The silence sweep
-        // tests every row a terminal is holding, and one fan-out stamps N cards with
-        // the same `dispatched_terminal`, so a single quiet seat contributes N
-        // entries to blockedThisTick. `pacing` is only written AFTER the loop below,
-        // so all N would clear the pace check on the same tick and the digest would
-        // open with "3 seat(s) have gone quiet" about one seat, listing it three
-        // times. The seat's plan files are carried onto its single line instead.
-        const bySeat = new Map<string, string[]>();
-        for (const cand of blockedThisTick) {
-            const files = bySeat.get(cand.terminalName);
-            if (!files) { bySeat.set(cand.terminalName, [cand.planFile]); }
-            else if (!files.includes(cand.planFile)) { files.push(cand.planFile); }
-        }
-
-        const due: Array<{ terminalName: string; planFile: string; planFiles: string[]; silentFor: number }> = [];
-        const byName = new Map(liveness.map(e => [e.friendlyName, e]));
-        for (const [terminalName, planFiles] of bySeat) {
-            const key = `${wsId}|${terminalName}`;
-            const last = pacing[key] || 0;
-            if (last > 0 && nowMs - last < intervalMs) { continue; }
-            const rec = await db.getActiveDispatchedByTerminal(wsId, terminalName);
-            if (!rec || !rec.blockedAt) { continue; }
-            const lastDataAt = byName.get(terminalName)?.lastDataAt || 0;
-            due.push({
-                terminalName,
-                planFile: planFiles[0],
-                planFiles,
-                silentFor: lastDataAt > 0 ? Math.round((nowMs - lastDataAt) / 1000) : 0,
-            });
-        }
-        if (due.length === 0) { return; }
-
-        // Evidence, not a poke — same contract as the feature nudge.
-        const lines = [
-            `[switchboard:turn-end] ${due.length} seat(s) have gone quiet without writing a completion report — they may be waiting on input:`
-        ];
-        for (const d of due) {
-            const silence = d.silentFor > 0 ? `, silent ${d.silentFor}s` : '';
-            const held = d.planFiles.length > 1
-                ? `${d.planFiles.length} plans (${d.planFiles.join(', ')})`
-                : d.planFile;
-            lines.push(`  - ${d.terminalName} on ${held}${silence}`);
-        }
-        lines.push('Check each seat and unblock it, or re-dispatch its plan. No action is needed for a seat that is simply working.');
-
-        // Recipient is resolved by the HOST from the FIRST due seat's parent chain —
-        // the engine has no fleet identity data and must stay host-agnostic. Where a
-        // workspace runs two teams this addresses one lead; every seat is named in the
-        // body, and the log line below makes the under-notification visible.
-        try {
-            this._turnEndNotifier({
-                seatName: due[0].terminalName,
-                planFile: due[0].planFile,
-                outcome: 'blocked',
-                workspaceRoot: folder,
-                body: lines.join('\n'),
-            });
-        } catch (cbErr) {
-            this._host.logger.appendLine(`[GlobalPlanWatcher] blocked digest notifier failed: ${cbErr}`);
-        }
-        this._host.logger.appendLine(
-            `[GlobalPlanWatcher] Blocked digest fired for ${folder} → recipient resolved from '${due[0].terminalName}' (${due.map(d => d.terminalName).join(', ')}).`
-        );
-
-        for (const d of due) {
-            pacing[`${wsId}|${d.terminalName}`] = nowMs;
-            notifiedSeatsThisTick.add(d.terminalName);
-        }
-        // Prune seats no longer in the fleet. An EMPTY liveness snapshot is no
-        // evidence (same guard as _runFeatureNudgeSweep) — skip the prune then.
-        if (liveness.length > 0) {
-            for (const key of Object.keys(pacing)) {
-                const seat = key.slice(key.indexOf('|') + 1);
-                if (!byName.has(seat)) { delete pacing[key]; }
-            }
-        }
-        try { await db.setConfigJson(KEY, pacing); } catch { /* next tick retries */ }
-    }
-
-    /**
      * Feature-level stall nudge — one sweep tick's worth. For every armed watch
      * (config key `kanban.featureWatches`), wake the head ONLY when all five hold:
      *   1. the feature still has at least one un-accepted subtask;
@@ -1378,9 +1094,9 @@ export class PlanIngestionEngine {
                 continue;
             }
 
-            // (4b) No turn-end notice for one of the feature's seats fired this tick.
-            // A seat that just produced a completed/blocked notice already woke the
-            // head this tick — a nudge on top of it is a double-wake about the same stall.
+            // (4b) No completion notice for one of the feature's seats fired this tick.
+            // A seat that just reported completion already woke the head, so a nudge
+            // on top of it would be a double-wake about the same stall.
             const seatNotifiedThisTick = remaining.some(s => !!s.dispatchedTerminal && notifiedSeatsThisTick.has(s.dispatchedTerminal));
             if (seatNotifiedThisTick) {
                 kept.push(watch);
@@ -2530,7 +2246,6 @@ export class PlanIngestionEngine {
             clearInterval(this._scanInterval);
             this._scanInterval = undefined;
         }
-        this._blockedCandidates.clear();
 
         for (const watcher of this._watchers.values()) {
             try { watcher.dispose(); } catch {}

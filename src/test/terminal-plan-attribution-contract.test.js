@@ -281,57 +281,6 @@ test('terminals.js drop handler POSTs attributePastedPrompt', () => {
     assert.ok(wiring.includes('fetchTerminalList()'), 'drop attribution must refetch the terminal list');
 });
 
-test('the turn-end silence branch marks blocked only — mtime-based completion is retired', () => {
-    // mtime-based completion detection is GONE from both sweep and watcher: the
-    // agent edits its plan file mid-work (partial reports, notes), so a file-time
-    // advance can never distinguish finished from working, and the old
-    // discriminator fired turn-end on the first mid-work save. POST
-    // /kanban/queue/done is the explicit signal now. This test pins the removal:
-    // a re-added stat/worktree-root discriminator would silently restore the
-    // false positive, and no behavioural unit test covers the sweep's file I/O.
-    const branch = planIngestionTs.substring(
-        planIngestionTs.indexOf('if (silentTerminals.length > 0)'),
-        planIngestionTs.indexOf('const cleared = await db.clearStaleWorkingState(')
-    );
-    assert.ok(branch.length > 0, 'the silence branch must exist');
-    assert.ok(!branch.includes('fs.promises.stat('), 'the sweep must not stat plan files — mtime is not completion evidence');
-    assert.ok(!branch.includes('matchWorktreePath('), 'no worktree-root resolution remains: nothing in the sweep reads plan files');
-    assert.ok(!branch.includes('clearWorkingState('), 'the sweep must not clear working state — only clearStaleWorkingState (the timeout) may');
-    assert.ok(!branch.includes('updated_at') && !branch.includes('updatedAt'), 'updated_at advances AFTER this sweep — it can never detect a completion');
-    assert.ok(branch.includes('if (!record.blockedAt)'), 'setBlockedState must be gated once per turn, not re-stamped per tick');
-    assert.ok(branch.includes("outcome: 'blocked'"), 'blocked is the only outcome the sweep may report');
-});
-
-test('the blocked stamp holds one tick so a late completion POST is not reported as a stall', () => {
-    // Silence is measured on PTY OUTPUT, not progress, and completion is now an
-    // explicit POST. A seat that finished and went >turnEndSilenceMs quiet before
-    // its POST lands (long verification run, slow turn, retried POST) would
-    // otherwise be stamped blocked and its lead told it went quiet — for work
-    // that is done. The retired mtime arm made that impossible by classifying the
-    // same seat 'completed'; the one-tick grace is what replaces that guarantee.
-    const branch = planIngestionTs.substring(
-        planIngestionTs.indexOf('if (silentTerminals.length > 0)'),
-        planIngestionTs.indexOf('const cleared = await db.clearStaleWorkingState(')
-    );
-    assert.ok(branch.includes('this._blockedCandidates.get(candidateKey)'), 'the blocked arm must consult the previous tick before stamping');
-    assert.ok(/this\._blockedCandidates\.set\(candidateKey[\s\S]{0,500}?continue;/.test(branch),
-        'the FIRST silent tick must record the candidate and continue — stamping on first observation is the false-notice bug');
-    assert.ok(branch.includes('this._blockedCandidates.delete(candidateKey)'), 'a promoted candidate must be dropped so the map cannot grow or re-stamp');
-    assert.ok(branch.includes("prior.cardKey !== cardKey"), 'a NEW dispatch to the same seat must re-arm, not inherit the previous turn candidacy');
-    assert.ok(/private _blockedCandidates = new Map</.test(planIngestionTs), 'the candidate map must be in-memory state on the engine');
-});
-
-test('the silence branch cannot fire on a missing lastDataAt', () => {
-    const loop = planIngestionTs.substring(
-        planIngestionTs.indexOf('const silentTerminals: string[] = [];'),
-        planIngestionTs.indexOf('let recordedLiveness = 0;')
-    );
-    assert.ok(loop.includes('entry.lastDataAt > 0'), 'a zero/absent lastDataAt is no evidence, not evidence of silence');
-    const exitedAt = loop.indexOf("entry.status === 'exited'");
-    const silentAt = loop.indexOf('turnEndSilenceMs');
-    assert.ok(exitedAt >= 0 && silentAt > exitedAt, 'the exited branch must precede the silence branch — branch ORDER is what keeps dead seats out of it');
-});
-
 // ── Head-agent wake safeguard ───────────────────────────────────────────────
 // The 2026-08-16 failure: a head dispatched via ptySendPrompt, its coder wrote a
 // completion report, and NOTHING woke the head. Two independent gates had to fall

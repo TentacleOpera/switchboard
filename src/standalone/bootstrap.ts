@@ -2737,33 +2737,17 @@ Each plan file must include:
     // log, opts — all in scope here.
     const handleTurnEndNotify = (info: any) => {
         void (async () => {
-            // Machine-only signal (the blocked arm's per-seat emission). The lead-facing
-            // text for those seats arrives as one paced digest from
-            // PlanIngestionEngine._runBlockedDigestSweep, so this path must not also
-            // deliver it. The split was designed to keep feeding a STATE consumer on the
-            // same single-slot notifier; there is none at HEAD (handleAutobanTurnEnd went
-            // with the scheduling consolidation in 25fdb6d9), so a `deliver: false`
-            // emission stops here and reaches nobody — see TurnEndInfo.deliver before
-            // assuming otherwise. Deliberately unlogged: this fires per blocked seat per
-            // tick and the digest logs the seats it reported.
-            if (info.deliver === false) { return; }
-
             const seatName = info.seatName;
             const planFile = info.planFile;
             // `body` (pre-composed evidence) wins when set; otherwise compose the
             // host's own one-line message. `stalled` always carries a body.
-            // Note: `composeCompletedTurnEndBody` in PlanIngestionEngine is the real producer for completed;
-            // `_runBlockedDigestSweep` in PlanIngestionEngine is the real producer for blocked.
             const message = info.body ?? (info.outcome === 'completed'
                 ? `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${planFile}'.`
-                : info.outcome === 'stalled'
-                    ? `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`
-                    : `[switchboard:turn-end] Seat '${seatName}' has gone quiet on '${planFile}' without reporting done — it may be waiting on input.`);
+                : `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`);
             // Fire-and-forget mirror to the reports directory — a non-pty
             // Mission Control reads the same notice as a file. Never awaited
             // ahead of the pty send, never able to suppress it. `finished`
-            // for the seat-finished variant; `blocked` for both the gone-
-            // quiet and feature-stall variants. Same helper, same from:
+            // for the seat-finished variant; `blocked` for feature-stall variant. Same helper, same from:
             // system mapping as the extension host twin.
             void writeMissionControlReport(info.workspaceRoot, {
                 from: 'system',

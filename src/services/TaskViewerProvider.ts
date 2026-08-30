@@ -1937,13 +1937,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Turn-end notification — the safeguard for an agent that never reports back
-     * on its own. Called by `PlanIngestionEngine.setTurnEndNotifier` exactly once
-     * per turn boundary (the engine gates on the `transitioned` boolean / the
-     * `!record.blockedAt` guard). The engine passes the seat name, plan file,
-     * outcome, workspace root and — for `completed` and `stalled` — a composed
-     * `body`; THIS host resolves the recipient because
-     * the engine has no fleet identity data and must stay host-agnostic.
+     * Turn-end notification for explicit completion reports and stalled feature
+     * or queue watches. The engine passes the seat name, plan file, outcome,
+     * workspace root, and optional composed body; THIS host resolves the recipient
+     * because the engine has no fleet identity data and must stay host-agnostic.
      *
      * Recipient resolution: the seat's `parentInstanceId` → that terminal, if
      * live; otherwise a live Mission Control terminal; otherwise nobody (logged).
@@ -1961,36 +1958,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * malformed parent chain), skip. Derived entirely from the pty stream — no
      * hooks, no tokens, no agent-side obligation.
      */
-    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean; deliver?: boolean }): void {
+    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean }): void {
         void (async () => {
-            // Machine-only signal (the blocked arm's per-seat emission). The lead-facing
-            // text for those seats arrives as one paced digest from
-            // PlanIngestionEngine._runBlockedDigestSweep, so this path must not also
-            // deliver it. The split was designed to keep feeding a STATE consumer on the
-            // same single-slot notifier; there is none at HEAD (handleAutobanTurnEnd went
-            // with the scheduling consolidation in 25fdb6d9), so a `deliver: false`
-            // emission stops here and reaches nobody — see TurnEndInfo.deliver before
-            // assuming otherwise. Deliberately unlogged: this fires per blocked seat per
-            // tick and the digest logs the seats it reported.
-            if (info.deliver === false) { return; }
-
             const seatName = info.seatName;
             const planFile = info.planFile;
             // `body` (pre-composed evidence) wins when set; otherwise the host
             // composes its own one-line message. `stalled` always carries a body
             // from the engine, but the fallback keeps a malformed nudge honest.
-            // Note: `composeCompletedTurnEndBody` in PlanIngestionEngine is the real producer for completed;
-            // `_runBlockedDigestSweep` in PlanIngestionEngine is the real producer for blocked.
             const message = info.body ?? (info.outcome === 'completed'
                 ? `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${planFile}'.`
-                : info.outcome === 'stalled'
-                    ? `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`
-                    : `[switchboard:turn-end] Seat '${seatName}' has gone quiet on '${planFile}' without reporting done — it may be waiting on input.`);
+                : `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`);
             // Fire-and-forget mirror to the reports directory — a non-pty
             // Mission Control reads the same notice as a file. Never awaited
             // ahead of the pty send, never able to suppress it. `finished`
-            // for the seat-finished variant; `blocked` for both the gone-
-            // quiet and feature-stall variants.
+            // for the seat-finished variant; `blocked` for feature-stall variant.
             //
             // This mirror MUST run before the _ptyHostPort guard below: with no
             // pty host the file is the ONLY thing that survives — exactly the

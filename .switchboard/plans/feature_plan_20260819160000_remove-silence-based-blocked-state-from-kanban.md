@@ -368,3 +368,7 @@ Note: Users who have explicitly set this value in their `settings.json` will see
 9. **No `blockedTimeoutMs` in settings UI**: Open VS Code Settings, search for `blockedTimeoutMs` — no result. The config setting is gone.
 10. **TypeScript compiles**: Run `npx tsc --noEmit` — no type errors from the `isWorkingState` return type change or the `KanbanCard` interface change.
 11. **Hard cap removed**: Dispatch a plan to a coder terminal. Let the coder produce output continuously for 30+ minutes (or simulate by stamping `last_liveness_at` to recent timestamps while `dispatched_at` is old). Verify the card's working glow stays lit — it is NOT force-cleared by the 30-minute hard cap. The 10-minute silence timeout still clears a card whose terminal stops producing output for 10 minutes.
+
+## Implementation Summary
+
+Silence-based blocked state detection and decoration were completely removed from the codebase. The silence sweep, `_blockedCandidates`, and `setBlockedState` were removed from `PlanIngestionEngine.ts` and `KanbanDatabase.ts`, while `isWorkingState` and `getFeatureWorkingStates` were simplified to track only working state without a hard cap. In `kanban.html`, all `is-blocked` CSS rules, badges, and signature flags were stripped, and `moveCardToColumnWithReason` in `KanbanProvider.ts` now immediately clears working state on column transitions. The `switchboard.activityLight.blockedTimeoutMs` setting was removed from `package.json` and contract tests were updated accordingly.

@@ -171,3 +171,7 @@ Installed orders in `terminals.standingOrders` are rewritten by the read-path mi
 ## Outstanding Questions
 
 - **[user]** Are there other installed bodies naming `CODE REVIEWED` at a non-head scope? The two known are the `team`/`team-head` pair from one installer; a sweep of all order bodies would confirm the deletion is complete rather than just correct where it was found. — proceeding on the assumption that the `team-queue-done:` ID prefix is unique to `applyTeamQueueOrders` and no other installer emits a `CODE REVIEWED` instruction at `team` or `team-head` scope.
+
+## Implementation Summary
+
+The hand-to-review clause instructing seats to dispatch features to `CODE REVIEWED` based on board state has been removed across the codebase, subsumed by the unified `CONTEXT_AWARE_COMPLETION_ORDER_BODY` implementation under the principle that completion is asserted rather than inferred. Read-path migrations in `migrateCodingTeamOrders` recognize installed orders carrying the legacy clauses (`LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY` and `LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2`) and update them on load to the clean context-aware completion orders. Automated tests in `src/test/completion-asserted-never-inferred.test.js` verify that no standing order body instructs seats to move cards to `CODE REVIEWED` and that queue/done routing remains fully functional.

@@ -263,6 +263,7 @@ async function run() {
     const autobanStateSrc = readSrc('src/services/autobanState.ts');
     const providerSrc = readSrc('src/services/TaskViewerProvider.ts');
     const planEngineSrc = readSrc('src/services/PlanIngestionEngine.ts');
+    const kanbanDbSrc = readSrc('src/services/KanbanDatabase.ts');
     const kanbanHtmlSrc = readSrc('src/webview/kanban.html');
     const terminalsJsSrc = readSrc('src/webview/terminals.js');
 
@@ -277,6 +278,21 @@ async function run() {
             'the order body must not instruct a seat to dispatch a feature');
         assert.ok(!fnBody.includes('CODE REVIEWED'),
             'the order body must not instruct a seat to move work to CODE REVIEWED');
+    });
+
+    await check('column transitions clear dispatch state for cards and feature cascades', async () => {
+        const directStart = kanbanDbSrc.indexOf('public async updateColumnByPlanFileWithReason(');
+        const directEnd = kanbanDbSrc.indexOf('public async updateColumnByPlanFile(', directStart);
+        const directBody = kanbanDbSrc.slice(directStart, directEnd);
+        assert.ok(directBody.includes('dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL'),
+            'a direct column transition must clear dispatch state in the same update');
+
+        const cascadeStart = kanbanDbSrc.indexOf('public async cascadeFeatureByPlanId(');
+        const cascadeEnd = kanbanDbSrc.indexOf('public async isOwnedActive(', cascadeStart);
+        const cascadeBody = kanbanDbSrc.slice(cascadeStart, cascadeEnd);
+        const clears = cascadeBody.match(/dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL/g) || [];
+        assert.strictEqual(clears.length, 2,
+            'a feature cascade must clear dispatch state for both the feature and its subtasks');
     });
 
     await check('seat-pacing skip is gone — in-flight scan runs for both pacing modes and contains no column check', async () => {
