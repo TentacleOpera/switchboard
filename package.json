@@ -880,6 +880,7 @@
     "test:contract:reviewer-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/reviewer-prompt-anti-artifact-contract.test.js",
     "test:contract:reviewer-prompt-behaviour": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/services/__tests__/agentPromptBuilder.test.js",
     "test:contract:pty-host-gating": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-host-gating-contract.test.js",
+    "test:contract:standalone-fleet-seam": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-fleet-seam-contract.test.js",
     "test:contract:verb-engine": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-headless-seams.test.js",
     "test:contract:verb-engine-kanban": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-kanban-headless.test.js",
     "test:contract:verb-engine-planning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-planning-headless.test.js",

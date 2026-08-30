@@ -1928,10 +1928,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // an HTTP caller supplying them would opt a seat out of its
                     // own safety block. The board path does NOT bypass this
                     // strip: TaskViewerProvider._ptyHostVerb routes through
-                    // setHeadlessRuntime's ptyVerb into handlePtyVerb, so a
-                    // pre-composed relay loses its marker here and gets a second
-                    // seat block appended — the known, accepted consequence
-                    // recorded at the setHeadlessRuntime wiring below.
+                    // setFleetVerb into handlePtyVerb, so a pre-composed relay
+                    // loses its marker here and gets a second seat block appended —
+                    // the known, accepted consequence recorded at that wiring.
                     if (payload.addonsComposed !== undefined) { delete payload.addonsComposed; }
                     if (payload.seatBlock !== undefined) { delete payload.seatBlock; }
                     let foldedAttributionResult: { attributed: number; skipped: number } | null = null;
@@ -2986,6 +2985,11 @@ Each plan file must include:
         }
         return result;
     });
+    // `signal` is accepted by the seam signature but intentionally not forwarded:
+    // standalone's handlePtyVerb runs in-process and has no request to abort.
+    if (ptyReady) {
+        taskViewerProvider.setFleetVerb((verb, payload, _signal) => handlePtyVerb(verb, payload, workspaceRoot));
+    }
     // Live-terminals provider for the TEAMS-tab `startAgentGroup` arm.
     // `startAgentGroupById` takes `liveTerminals` as a parameter and uses it
     // for the double-start refusal check; without a real provider the check
@@ -3417,32 +3421,6 @@ Each plan file must include:
     taskViewerProvider.setHeadlessRuntime({
         getApiPort: () => server.getPort(),
         isApiListening: () => server.isListening(),
-        // Honest capability signal: with node-pty unavailable there is no fleet at
-        // all, and delivery must fall straight through to the clipboard branch.
-        hasFleet: () => ptyReady,
-        ptyVerb: async (verb: string, payload: any) => {
-            // Same guard `terminalVerb` carries — an unguarded call into the
-            // fleet with node-pty missing surfaces as an unhandled spawn
-            // exception instead of a readable error.
-            //
-            // KNOWN, ACCEPTED consequence of routing host-internal calls through
-            // handlePtyVerb: its ptySendPrompt case strips the host-only
-            // `addonsComposed` / `seatBlock` fields (the wire boundary, pinned by
-            // seat-safeguards-fleet-prompt-path.test.js). A pre-composed relay
-            // (TaskViewerProvider._handleTriggerAgentActionInternal passes
-            // promptComposed: true) therefore has its marker dropped here and
-            // deliverPrompt appends a second seat-directive block. That is a
-            // duplicated safety block, not a delivery failure — and before this
-            // injection those calls did not reach a terminal at ALL, because
-            // _ptyHostVerb short-circuited on the missing pty-host child. The fix
-            // would be an internal-caller escape on handlePtyVerb, which weakens
-            // a boundary that exists to stop the WIRE forging those fields. Not
-            // worth that trade; recorded so the next reader does not re-derive it.
-            if (!ptyReady) {
-                return { success: false, error: 'PTY terminals are unavailable: the optional node-pty module could not be loaded on this machine.' };
-            }
-            return handlePtyVerb(verb, payload, workspaceRoot);
-        },
     });
     planningProvider.setApiServer(server);
     kanbanProvider.setApiServer(server);

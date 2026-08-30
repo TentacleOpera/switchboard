@@ -74,15 +74,11 @@ function run() {
         const body = extractMethodBody(taskViewerSource, '_tryFleetDeliveryForRole');
         assert.match(body, /if\s*\(!this\._hasFleet\(\)\)\s*\{\s*return\s+false;\s*\}/,
             '_tryFleetDeliveryForRole must short-circuit when !this._hasFleet().');
-        // The guard moved one level down, so pin _hasFleet() itself: the
-        // extension host must still resolve to _ptyHostPort truthiness, and the
-        // standalone branch must delegate to the injected capability signal
-        // rather than assuming a fleet exists because a runtime was injected.
+        // The guard moved one level down, so pin _hasFleet() itself:
+        // returns true if either the child host port or the injected fleet verb is present.
         const hasFleet = extractMethodBody(taskViewerSource, '_hasFleet');
-        assert.match(hasFleet, /return\s+!!this\._ptyHostPort;/,
-            '_hasFleet() must fall back to !!this._ptyHostPort — the extension host\'s behaviour is unchanged.');
-        assert.match(hasFleet, /this\._headlessRuntime\.hasFleet\(\)/,
-            '_hasFleet() must delegate to the injected hasFleet() signal, never report a fleet merely because a runtime object was injected.');
+        assert.match(hasFleet, /return\s+!!this\._ptyHostPort\s*\|\|\s*!!this\._fleetVerb;/,
+            '_hasFleet() must return !!this._ptyHostPort || !!this._fleetVerb.');
         assert.match(body, /_ptyHostVerb\('ptyListTerminals'/,
             '_tryFleetDeliveryForRole must authoritatively ask the fleet via ptyListTerminals.');
         assert.match(body, /_dispatchExecuteMessage\(/,
@@ -95,28 +91,33 @@ function run() {
     });
 
     // 2. _sendPromptToTerminal and sendPromptToAgentTerminal return boolean and
-    //    guard terminal creation using host-derived policy (hasPtyHost).
-    test('_sendPromptToTerminal returns Promise<boolean> and refuses to create a terminal when fleet is available', () => {
+    //    delegate to createFleetTerminalAndDeliver when a fleet is available (hasPtyHost / _hasFleet).
+    test('_sendPromptToTerminal returns Promise<boolean> and delegates to fleet spawn when fleet is available', () => {
         const sigIdx = planningSource.search(/private\s+async\s+_sendPromptToTerminal\s*\(/);
         const sigRegion = planningSource.slice(sigIdx, sigIdx + 400);
         assert.match(sigRegion, /:\s*Promise<boolean>/,
             '_sendPromptToTerminal must return Promise<boolean>.');
         const body = extractMethodBody(planningSource, '_sendPromptToTerminal');
+        // hasPtyHost() is kept as the branch selector (retained literal from prior decline policy)
         assert.match(body, /hasPtyHost\(\)/,
             '_sendPromptToTerminal must check hasPtyHost() before creating a VS Code terminal.');
+        assert.match(body, /createFleetTerminalAndDeliver\(/,
+            '_sendPromptToTerminal must call createFleetTerminalAndDeliver when fleet is available.');
         // Tries fleet first.
         assert.match(body, /tryFleetDeliveryForRole\(/,
             '_sendPromptToTerminal must try the fleet first.');
     });
 
-    test('sendPromptToAgentTerminal returns Promise<boolean> and refuses to create a terminal when fleet is available', () => {
+    test('sendPromptToAgentTerminal returns Promise<boolean> and delegates to fleet spawn when fleet is available', () => {
         const sigIdx = taskViewerSource.search(/public\s+async\s+sendPromptToAgentTerminal\s*\(/);
         const sigRegion = taskViewerSource.slice(sigIdx, sigIdx + 400);
         assert.match(sigRegion, /:\s*Promise<boolean>/,
             'sendPromptToAgentTerminal must return Promise<boolean>.');
         const body = extractMethodBody(taskViewerSource, 'sendPromptToAgentTerminal');
-        assert.match(body, /if\s*\(\s*this\._ptyHostPort\s*\)\s*\{\s*return\s+false;\s*\}/,
-            'sendPromptToAgentTerminal must `if (this._ptyHostPort) { return false; }` before creating a VS Code terminal.');
+        assert.match(body, /if\s*\(\s*this\._hasFleet\(\)\s*\)/,
+            'sendPromptToAgentTerminal must check this._hasFleet() before creating a VS Code terminal.');
+        assert.match(body, /createFleetTerminalAndDeliver\(/,
+            'sendPromptToAgentTerminal must call createFleetTerminalAndDeliver when fleet is available.');
         assert.match(body, /_tryFleetDeliveryForRole\(/,
             'sendPromptToAgentTerminal must try the fleet first.');
         // The editor cold-terminal creation waits must survive (2000ms/3000ms).
@@ -124,6 +125,24 @@ function run() {
             'sendPromptToAgentTerminal must keep the 2000ms spawn settle for editor callers.');
         assert.match(body, /setTimeout\(r,\s*3000\)/,
             'sendPromptToAgentTerminal must keep the 3000ms startup-command settle for editor callers.');
+    });
+
+    test('createFleetTerminalAndDeliver public seam exists and conforms to startup-command contract', () => {
+        assert.match(taskViewerSource, /public\s+async\s+createFleetTerminalAndDeliver\(/,
+            'a public createFleetTerminalAndDeliver wrapper must exist for PlanningPanelProvider to reach.');
+        const body = extractMethodBody(taskViewerSource, 'createFleetTerminalAndDeliver');
+        assert.match(body, /_ptyHostVerb\('ptyCreateTerminal'/,
+            'createFleetTerminalAndDeliver must issue ptyCreateTerminal.');
+        assert.match(body, /_dispatchExecuteMessage\(/,
+            'createFleetTerminalAndDeliver must deliver prompt via _dispatchExecuteMessage.');
+        assert.match(body, /GlobalIntegrationConfigService\.getAgentStartupCommands\(\)/,
+            'createFleetTerminalAndDeliver must check GlobalIntegrationConfigService startup commands.');
+        assert.match(body, /getAgentStartupCommand\(/,
+            'createFleetTerminalAndDeliver must check getAgentStartupCommand.');
+        assert.match(body, /setTimeout\(r,\s*750\)/,
+            'createFleetTerminalAndDeliver must wait 750ms shell readiness delay before sending top-up command.');
+        assert.match(body, /setTimeout\(r,\s*3000\)/,
+            'createFleetTerminalAndDeliver must wait 3000ms settle after startup command.');
     });
 
     // 3. No DesignPanelProvider send arm returns a bare { success: true } after

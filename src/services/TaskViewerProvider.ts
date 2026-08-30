@@ -489,29 +489,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * p50 in-process vs 0.24 ms out).
      */
     private async _ptyHostVerb(verb: string, payload: any, signal?: AbortSignal): Promise<any> {
-        if (this._headlessRuntime) {
-            // Standalone: the fleet is in THIS process. Same verb names, same
-            // result shape — ptySendPrompt still owns bracketed-paste framing,
-            // chunking and the send lock on the other side (bootstrap.ts).
-            const result = await this._headlessRuntime.ptyVerb(verb, payload);
-            if (verb === 'ptyListTerminals' && result?.success && Array.isArray(result.terminals)) {
-                this._ptyTerminalNames = result.terminals
-                    .filter((t: any) => t.status === 'active')
-                    .map((t: any) => t.friendlyName);
-                const livenessSource: any[] = Array.isArray(result.liveness) ? result.liveness : result.terminals;
-                const rolesByName = new Map<string, string>(result.terminals
-                    .filter((t: any) => t?.friendlyName && t?.role)
-                    .map((t: any): [string, string] => [String(t.friendlyName), String(t.role)]));
-                this._ptyLiveness = livenessSource.map((t: any) => ({
-                    friendlyName: String(t.friendlyName ?? ''),
-                    lastDataAt: Number(t.lastDataAt ?? 0) || 0,
-                    status: String(t.status ?? 'active'),
-                    role: String(t.role ?? rolesByName.get(String(t.friendlyName ?? '')) ?? ''),
-                }));
-            }
-            return result;
-        }
-        if (!this._ptyHostChild || !this._ptyHostPort) {
+        if ((!this._ptyHostChild || !this._ptyHostPort) && !this._fleetVerb) {
             return { success: false, error: 'PTY host unavailable on this platform/installation' };
         }
 
@@ -1156,70 +1134,79 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        const http = require('http');
-        const port = this._ptyHostPort;
-        // An aborted join (the parent's curl died) must tear down the proxied
-        // request to the pty host so the held slot is freed and the child process
-        // is not pinned open by a dead forwarder. Wires up both the raw-binary
-        // and JSON branches; an already-aborted signal rejects synchronously.
-        const abortedError = (): { success: false; error: string } =>
-            ({ success: false, error: 'Client disconnected' });
-        if (signal?.aborted) { return abortedError(); }
         try {
-            // ptyPasteImage carries a raw Buffer that does not survive
-            // JSON.stringify/parse — forward it as application/octet-stream with
-            // name + mimeType in the query string, matching ptyHost's raw-binary
-            // branch. The standalone host (bootstrap.ts) receives the same verb
-            // via LocalApiServer's own raw-binary branch, so both hosts share the
-            // transport contract.
-            if (verb === 'ptyPasteImage' && payload && Buffer.isBuffer(payload.imageBuffer)) {
-                const qs = new URLSearchParams({
-                    name: payload.name || '',
-                    mimeType: payload.mimeType || 'image/png'
-                });
-                const result = await new Promise<string>((resolve, reject) => {
-                    const req = http.request({
-                        hostname: '127.0.0.1',
-                        port,
-                        path: `/api/pty/${encodeURIComponent(verb)}?${qs.toString()}`,
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/octet-stream' }
-                    }, (res: any) => {
-                        let body = '';
-                        res.on('data', (c: any) => { body += c; });
-                        res.on('end', () => resolve(body));
+            let result: any;
+            if (this._ptyHostChild && this._ptyHostPort) {
+                const http = require('http');
+                const port = this._ptyHostPort;
+                // An aborted join (the parent's curl died) must tear down the proxied
+                // request to the pty host so the held slot is freed and the child process
+                // is not pinned open by a dead forwarder. Wires up both the raw-binary
+                // and JSON branches; an already-aborted signal rejects synchronously.
+                const abortedError = (): { success: false; error: string } =>
+                    ({ success: false, error: 'Client disconnected' });
+                if (signal?.aborted) { return abortedError(); }
+
+                // ptyPasteImage carries a raw Buffer that does not survive
+                // JSON.stringify/parse — forward it as application/octet-stream with
+                // name + mimeType in the query string, matching ptyHost's raw-binary
+                // branch. The standalone host (bootstrap.ts) receives the same verb
+                // via LocalApiServer's own raw-binary branch, so both hosts share the
+                // transport contract.
+                if (verb === 'ptyPasteImage' && payload && Buffer.isBuffer(payload.imageBuffer)) {
+                    const qs = new URLSearchParams({
+                        name: payload.name || '',
+                        mimeType: payload.mimeType || 'image/png'
                     });
-                    req.on('error', reject);
-                    const onAbort = () => { try { req.destroy(); } catch { /* idempotent */ } reject(new Error('Client disconnected')); };
-                    if (signal) {
-                        if (signal.aborted) { onAbort(); }
-                        else { signal.addEventListener('abort', onAbort, { once: true }); }
-                    }
-                    req.end(payload.imageBuffer);
-                });
-                return JSON.parse(result);
-            }
-            const resData = await new Promise<string>((resolve, reject) => {
-                const req = http.request({
-                    hostname: '127.0.0.1',
-                    port,
-                    path: `/api/pty/${encodeURIComponent(verb)}`,
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                }, (res: any) => {
-                    let body = '';
-                    res.on('data', (c: any) => { body += c; });
-                    res.on('end', () => resolve(body));
-                });
-                req.on('error', reject);
-                const onAbort = () => { try { req.destroy(); } catch { /* idempotent */ } reject(new Error('Client disconnected')); };
-                if (signal) {
-                    if (signal.aborted) { onAbort(); }
-                    else { signal.addEventListener('abort', onAbort, { once: true }); }
+                    const resString = await new Promise<string>((resolve, reject) => {
+                        const req = http.request({
+                            hostname: '127.0.0.1',
+                            port,
+                            path: `/api/pty/${encodeURIComponent(verb)}?${qs.toString()}`,
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/octet-stream' }
+                        }, (res: any) => {
+                            let body = '';
+                            res.on('data', (c: any) => { body += c; });
+                            res.on('end', () => resolve(body));
+                        });
+                        req.on('error', reject);
+                        const onAbort = () => { try { req.destroy(); } catch { /* idempotent */ } reject(new Error('Client disconnected')); };
+                        if (signal) {
+                            if (signal.aborted) { onAbort(); }
+                            else { signal.addEventListener('abort', onAbort, { once: true }); }
+                        }
+                        req.end(payload.imageBuffer);
+                    });
+                    result = JSON.parse(resString);
+                } else {
+                    const resData = await new Promise<string>((resolve, reject) => {
+                        const req = http.request({
+                            hostname: '127.0.0.1',
+                            port,
+                            path: `/api/pty/${encodeURIComponent(verb)}`,
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' }
+                        }, (res: any) => {
+                            let body = '';
+                            res.on('data', (c: any) => { body += c; });
+                            res.on('end', () => resolve(body));
+                        });
+                        req.on('error', reject);
+                        const onAbort = () => { try { req.destroy(); } catch { /* idempotent */ } reject(new Error('Client disconnected')); };
+                        if (signal) {
+                            if (signal.aborted) { onAbort(); }
+                            else { signal.addEventListener('abort', onAbort, { once: true }); }
+                        }
+                        req.end(JSON.stringify(payload || {}));
+                    });
+                    result = JSON.parse(resData);
                 }
-                req.end(JSON.stringify(payload || {}));
-            });
-            const result = JSON.parse(resData);
+            } else if (this._fleetVerb) {
+                result = await this._fleetVerb(verb, payload, signal);
+            } else {
+                return { success: false, error: 'PTY host unavailable on this platform/installation' };
+            }
             if (verb === 'ptyListTerminals' && result?.success && Array.isArray(result.terminals)) {
                 this._ptyTerminalNames = result.terminals
                     .filter((t: any) => t.status === 'active')
@@ -1415,17 +1402,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _headlessRuntime?: {
         getApiPort: () => number;
         isApiListening: () => boolean;
-        hasFleet: () => boolean;
-        ptyVerb: (verb: string, payload: any) => Promise<any>;
     };
 
     public setHeadlessRuntime(runtime: {
         getApiPort: () => number;
         isApiListening: () => boolean;
-        hasFleet: () => boolean;
-        ptyVerb: (verb: string, payload: any) => Promise<any>;
     }): void {
         this._headlessRuntime = runtime;
+    }
+
+    private _fleetVerb?: (verb: string, payload: any, signal?: AbortSignal) => Promise<any>;
+    public setFleetVerb(fn: (verb: string, payload: any, signal?: AbortSignal) => Promise<any>): void {
+        this._fleetVerb = fn;
     }
 
     /** Real listening port in BOTH hosts. Never a placeholder — it is interpolated
@@ -1443,9 +1431,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     /** True when a fleet is reachable by SOME route: the out-of-process pty host
      *  (extension) or the injected in-process bridge (standalone). */
     private _hasFleet(): boolean {
-        if (this._fleetLivenessProvider) { return true; }
-        if (this._headlessRuntime) { return this._headlessRuntime.hasFleet(); }
-        return !!this._ptyHostPort;
+        return !!this._ptyHostPort || !!this._fleetVerb;
     }
 
     public initHeadlessVerbServing(seams: HostSeams, broadcaster: BroadcastHub): void {
@@ -1526,6 +1512,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _needsSetup: boolean = false;
     private _terminalSessionToken: string = '';
     private _ptyHostChild?: import('child_process').ChildProcess;
+    /** HTTP port of the out-of-process pty host child process. Set only in the extension host when _startLocalApiServer launches the child. Does NOT mean "a fleet exists" — check _hasFleet() instead. */
     private _ptyHostPort?: number;
     /**
      * The workspace root `_startLocalApiServer` handed to LocalApiServer as
@@ -4511,7 +4498,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     /** Whether a PTY host is connected — used by panel providers for host-derived creation policy. */
     public hasPtyHost(): boolean {
-        return !!this._ptyHostPort;
+        return this._hasFleet();
     }
 
     /**
@@ -6458,13 +6445,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         if (!terminal) {
-            // Host-derived creation policy (replaces the old apiOriginated gate):
-            // - Fleet available: do not spawn a vscode.Terminal; the fleet is the
-            //   authoritative terminal set. Return false — the caller surfaces a reason.
+            // Host-derived creation policy:
+            // - Fleet available: spawn in the fleet and deliver (visible to browser cockpit and IDE).
             // - No fleet: spawn a vscode.Terminal exactly as before (byte-compat for
             //   the ~4,000 shipped installs). In standalone (no vscode.window), this
             //   throws and is caught.
-            if (this._hasFleet()) { return false; }
+            if (this._hasFleet()) {
+                return await this.createFleetTerminalAndDeliver(role, text, resolvedWorkspaceRoot, {
+                    name: agentName,
+                    metadata: { source: 'designPanel' }
+                });
+            }
             try {
                 const startupCmd = await this.getAgentStartupCommand(role, resolvedWorkspaceRoot);
                 terminal = vscode.window.createTerminal({
@@ -11885,7 +11876,7 @@ Each plan file must include:
             // an unnamed one, because the turn-end path would address it and drop.
             // _hasFleet(), not _ptyHostPort: the latter is set only when the
             // EXTENSION host spawns the out-of-process pty child. In standalone the
-            // fleet is in-process behind _headlessRuntime, so a raw _ptyHostPort gate
+            // fleet is in-process behind _fleetVerb, so a raw _ptyHostPort gate
             // skips verification entirely there and every adopt records an UNNAMED
             // seat — no live turn-end delivery, and the external self-wake runsheet
             // handed to an agent the host does wake. _ptyHostVerb already routes to
@@ -21225,6 +21216,134 @@ Each plan file must include:
         metadata: Record<string, any> = {}
     ): Promise<boolean> {
         return this._tryFleetDeliveryForRole(role, prompt, workspaceRoot, metadata);
+    }
+
+    /**
+     * Create a terminal in the PTY fleet and deliver a prompt to it.
+     * Used when role resolution misses on both surfaces and a fleet is running.
+     * Applies conditional startup command top-up (for fallback roles / custom agents / legacy config)
+     * and post-startup settle before delivering.
+     */
+    public async createFleetTerminalAndDeliver(
+        role: string,
+        prompt: string,
+        workspaceRoot?: string,
+        opts?: { name?: string; metadata?: Record<string, any> }
+    ): Promise<boolean> {
+        if (!this._hasFleet()) { return false; }
+        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot || '');
+        if (!resolvedWorkspaceRoot) { return false; }
+
+        const agentName = opts?.name
+            || (await this._getAgentNameForRole(role, resolvedWorkspaceRoot))
+            || (role === 'claude_artifacts' ? 'Claude Artifacts' : role);
+
+        // Pre-spawn re-check: verify if an active terminal for this role exists
+        // to prevent duplicate spawns from near-simultaneous dispatches.
+        try {
+            const listRes = await this._ptyHostVerb('ptyListTerminals', {});
+            if (listRes?.success && Array.isArray(listRes.terminals)) {
+                const normalizedRole = this._normalizeAgentKey(role);
+                const match = listRes.terminals
+                    .filter((t: any) => t.status === 'active')
+                    .find((t: any) => this._normalizeAgentKey(t.role) === normalizedRole);
+                const target = match?.friendlyName;
+                if (target && this._isValidAgentName(target)) {
+                    return await this._dispatchExecuteMessage(
+                        resolvedWorkspaceRoot,
+                        target,
+                        prompt,
+                        opts?.metadata || {},
+                        'sidebar',
+                        false,
+                        undefined,
+                        true
+                    );
+                }
+            }
+        } catch { /* best effort */ }
+
+        let createdName = agentName;
+        try {
+            const createRes = await this._ptyHostVerb('ptyCreateTerminal', {
+                role,
+                name: agentName,
+                cwd: resolvedWorkspaceRoot,
+                claudeInlineRendering: vscode.workspace
+                    .getConfiguration('switchboard')
+                    .get<boolean>('terminal.claudeInlineRendering', true),
+            });
+            if (!createRes || createRes.success === false) {
+                return false;
+            }
+            if (createRes.terminal?.friendlyName) {
+                createdName = createRes.terminal.friendlyName;
+            }
+        } catch {
+            return false;
+        }
+
+        try {
+            const db = await this._getKanbanDb(resolvedWorkspaceRoot);
+            if (db) {
+                void this._updatePtyMirrorRegistry?.(db);
+            }
+        } catch { /* best effort */ }
+
+        let startupCommandSent = false;
+        try {
+            const globalCommands = (await GlobalIntegrationConfigService.getAgentStartupCommands()) || {};
+            const fleetWouldSend = (globalCommands[role] || '').trim();
+            const expected = (await this.getAgentStartupCommand(role, resolvedWorkspaceRoot) || '').trim();
+
+            if (fleetWouldSend) {
+                startupCommandSent = true;
+                if (expected && expected !== fleetWouldSend) {
+                    console.log(`[TaskViewerProvider] Startup command differs for role '${role}': fleet sent '${fleetWouldSend}', expected '${expected}'. Trusting fleet.`);
+                }
+            } else if (expected) {
+                // Top-up: the fleet didn't send anything (fallback role, custom agent, or legacy config).
+                // Wait for the shell readiness delay (750 ms) because PtyFleetService skips the delay when no command was injected.
+                await new Promise(r => setTimeout(r, 750));
+                // Send expected as a bare line via ptyWrite after the fleet's creation window.
+                const writeRes = await this._ptyHostVerb('ptyWrite', { name: createdName, data: expected + '\r' });
+                if (writeRes?.success !== false) {
+                    startupCommandSent = true;
+                }
+            }
+
+            const startupCmd = fleetWouldSend || expected;
+            if (startupCmd) {
+                const displayName = this.deriveAgentDisplayName(startupCmd);
+                this.setTerminalAgentInfo(createdName, role, displayName);
+            }
+        } catch (err) {
+            console.warn('[TaskViewerProvider] Startup command resolution/top-up failed:', err);
+        }
+
+        if (startupCommandSent) {
+            // Post-startup settle: wait for agent to complete initialization before delivering prompt
+            await new Promise(r => setTimeout(r, 3000));
+        }
+
+        const delivered = await this._dispatchExecuteMessage(
+            resolvedWorkspaceRoot,
+            createdName,
+            prompt,
+            opts?.metadata || {},
+            'sidebar',
+            false,
+            undefined,
+            true
+        );
+
+        if (delivered) {
+            this._seams().ui.showInformationMessage(
+                `Spawned '${createdName}' in the browser Terminals panel and delivered prompt.`
+            );
+        }
+
+        return delivered;
     }
 
     private async _dispatchExecuteMessage(

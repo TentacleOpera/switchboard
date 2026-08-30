@@ -1378,9 +1378,17 @@ export class PlanningPanelProvider {
             if (handle) { break; }
         }
         if (!handle) {
-            // Host-derived creation policy: if a PTY fleet is available, do not
-            // spawn a VS Code terminal. The fleet is the authoritative terminal set.
-            if (this._taskViewerProvider && this._taskViewerProvider.hasPtyHost()) { return false; }
+            // Fleet running → spawn there (visible to both surfaces). No fleet → spawn a
+            // VS Code terminal exactly as at HEAD. This call previously returned false here.
+            if (this._taskViewerProvider && this._taskViewerProvider.hasPtyHost()) {
+                const role = options?.role || searchSubstrings[0] || 'planner';
+                return await this._taskViewerProvider.createFleetTerminalAndDeliver(
+                    role,
+                    promptText,
+                    wsRoot,
+                    { name, metadata: { source: 'planningPanel', label: name } }
+                );
+            }
             try {
                 handle = this._seams().terminal.create(name, undefined, wsRoot);
             } catch {

@@ -13,8 +13,8 @@ Fix the two halves of the terminal-delivery seam that both hang off TaskViewerPr
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminal Creation Policy — Spawn in the Fleet Instead of Declining](../plans/terminal-creation-policy-spawn-in-the-fleet.md) — **PLAN REVIEWED** — ID: f880bd33-e127-4562-9959-cdca33cd318d
-- [ ] [One Fleet Seam: Stop `_ptyHostPort` Meaning "A Fleet Exists"](../plans/feature_plan_20260812150000_fleet-seam-standalone-terminal-parity.md) — **PLAN REVIEWED** — ID: fefc269b-df55-41d2-b774-b73ee6c5ebd7
+- [ ] [Terminal Creation Policy — Spawn in the Fleet Instead of Declining](../plans/terminal-creation-policy-spawn-in-the-fleet.md) — **CODER CODED** — ID: f880bd33-e127-4562-9959-cdca33cd318d
+- [ ] [One Fleet Seam: Stop `_ptyHostPort` Meaning "A Fleet Exists"](../plans/feature_plan_20260812150000_fleet-seam-standalone-terminal-parity.md) — **CODER CODED** — ID: fefc269b-df55-41d2-b774-b73ee6c5ebd7
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -42,3 +42,7 @@ The contradiction flagged earlier resolves cleanly: the creation-policy subtask 
 **Practical, non-blocking:** the fleet-seam plan registers its seam in the same `bootstrap.ts` block as the already-landed Agent Groups `setAgentGroupInstantiator`; land after it to avoid resolving that block twice.
 
 **Byte-compatibility is non-negotiable in both.** The no-fleet VS Code branch must stay identical for installs where node-pty does not load, and `_hasFleet()` must be exactly two ORed fields — a false positive stops delivery falling back to the VS Code terminal on roughly 4,000 installs that work today, which is strictly worse than the current false negative.
+
+## Implementation Summary
+
+Terminal delivery now uses one host-agnostic fleet predicate backed by either the extension child-host port or an injected standalone fleet verb. Standalone injects that verb only when `node-pty` is available, preserving honest no-fleet fallback behavior. Missing role terminals now spawn in the fleet from both TaskViewerProvider and PlanningPanelProvider, with conditional startup-command top-up and shell/agent settle delays. Contract coverage was added and wired into CI; automated tests and compilation were not run for this delivery by explicit instruction.

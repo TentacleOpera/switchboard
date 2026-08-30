@@ -219,6 +219,8 @@ jobs:
         run: npm run test:contract:browser-stray-dispatch-surface
       - name: Browser direct terminal helpers contract (fleet-aware, no conjured terminals)
         run: npm run test:contract:browser-direct-terminal-helpers
+      - name: Standalone fleet seam contract (host-agnostic fleet predicate + headless runtime bridge)
+        run: npm run test:contract:standalone-fleet-seam
       - name: Browser panel verb routing contract (every posted verb reachable on its route)
         run: npm run test:contract:browser-panel-verb-routing
 

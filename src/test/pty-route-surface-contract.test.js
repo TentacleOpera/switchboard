@@ -215,9 +215,11 @@ function post(port, pathname, body) {
     });
 
     await test('the extension host forwards pty verbs to the child process, never to an in-process fleet', () => {
-        // The whole point of the out-of-process host: terminal work leaves the
-        // extension's event loop (35.21 ms p50 in-process vs 0.24 ms out). A
-        // "convenience" re-introduction of an in-process PtyFleetService or a
+        // The extension host still always forwards to the child; the provider never
+        // constructs a fleet — it may hold a host-injected runtime which, on
+        // standalone only, serves verbs in-process.
+        // Terminal work leaves the extension's event loop (35.21 ms p50 in-process vs 0.24 ms out).
+        // A "convenience" re-introduction of an in-process PtyFleetService or a
         // TerminalWsGateway here puts every frame straight back on the contended loop.
         const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
         assert.ok(
