@@ -60,6 +60,14 @@ verify-before-trust instinct fired"), but the mechanism is different and that pl
 reach it: there the lead had a task and wasted a round-trip; here the lead has no task at all,
 so the verification *is* the whole turn.
 
+**Contrast — the verify instruction that works.** On a coder's completion relay the lead is sent
+`TURN_END_VERIFY_INSTRUCTION` (`PlanIngestionEngine.ts:2566`): *"Verify the diff (git diff) before
+you trust the report, **then advance the card or register the next subtask… and dispatch it**."*
+That one produces verify-then-act, because it carries an action tail. The after-clear block is the
+same verification impulse with no tail — which is why it ends in a stop. The fix in step 1 is
+therefore not "tell the lead not to verify"; it is to say plainly that this delivery asks for
+nothing at all.
+
 **Coders are hit too, less visibly.** A cleared coder receives the same task-less block. It
 has no roster to inspect, so it usually stops quietly — but it has also been prompted, which
 consumes a turn and can start it reasoning about work it no longer holds context for.
