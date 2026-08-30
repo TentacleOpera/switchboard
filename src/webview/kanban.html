@@ -865,6 +865,20 @@
             filter: brightness(1.2);
         }
 
+        .column-icon-btn-labeled {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 6px;
+        }
+
+        .column-icon-btn-labeled .cap-label {
+            font-size: 9px;
+            font-weight: 600;
+            color: var(--vscode-editorWarning-foreground, #cca700);
+            white-space: nowrap;
+        }
+
         .column-header-btn {
             display: flex;
             align-items: center;
@@ -8054,14 +8068,38 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // In backlog view, the CREATED column shows BACKLOG cards — a holding
                     // pen, not a pipeline stage. Suppress the four advance/prompt buttons
                     // so only the feature-group button remains.
+                    const isTeamHeadCol = (lastTeamHeadColumns || []).includes(def.id);
+                    const colCount = getAllInColumn(def.id).length;
+                    const cap = lastTeamBatchPlanCap ?? 5;
+                    const moveAllLabel = isTeamHeadCol && colCount > cap
+                        ? `SEND ${Math.min(cap, colCount)} OF ${colCount}`
+                        : '';
+                    const moveAllBtn = moveAllLabel
+                        ? `<button class="column-icon-btn column-icon-btn-labeled" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Move all plans in this column to next stage (cap: ${cap} for team head)">
+                            <img src="${ICON_MOVE_ALL}" alt="Move All">
+                            <span class="cap-label">${moveAllLabel}</span>
+                           </button>`
+                        : `<button class="column-icon-btn" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Move all plans in this column to next stage">
+                            <img src="${ICON_MOVE_ALL}" alt="Move All">
+                           </button>`;
+
+                    const selectedCount = getSelectedInColumn(def.id).length;
+                    const moveSelectedLabel = isTeamHeadCol && selectedCount > cap
+                        ? `SEND ${Math.min(cap, selectedCount)} OF ${selectedCount}`
+                        : '';
+                    const moveSelectedBtn = moveSelectedLabel
+                        ? `<button class="column-icon-btn column-icon-btn-labeled" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (cap: ${cap} for team head; triggers CLI if enabled)">
+                            <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
+                            <span class="cap-label">${moveSelectedLabel}</span>
+                           </button>`
+                        : `<button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (triggers CLI if enabled)">
+                            <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
+                           </button>`;
+
                     const suppressPipeline = (isCreated && showingBacklog);
                     const pipelineButtons = suppressPipeline ? '' : `
-                        <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (triggers CLI if enabled)">
-                            <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
-                        </button>
-                        <button class="column-icon-btn" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Move all plans in this column to next stage">
-                            <img src="${ICON_MOVE_ALL}" alt="Move All">
-                        </button>
+                        ${moveSelectedBtn}
+                        ${moveAllBtn}
                         <button class="column-icon-btn" data-action="promptSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Copy prompt for selected plans and advance to next stage">
                             <img src="${ICON_PROMPT_SELECTED}" alt="Prompt Selected">
                         </button>
@@ -8697,6 +8735,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
             updateStagingViewInfo();
             updateStarredCount();
+            updateCapLabels();
         }
 
         // V63: starred-count indicator. Surfaces the number of priority-starred
@@ -8712,7 +8751,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 return;
             }
             const eligible = cards.filter(c => c.column !== 'COMPLETED' && !c.featureId);
-            const starred = eligible.filter(c => c.priorityStarred).length;
+            const starred = eligible.filter(c => !!c.priorityStarred).length;
             const el = document.getElementById('starred-count');
             const textEl = document.getElementById('starred-count-text');
             if (!el || !textEl) return;
@@ -8755,6 +8794,63 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // lastAnyCodingTerminalLive is true (a standalone coder with no
             // team).
             if (runBtn) runBtn.disabled = !(n > 0 && dispatchAnalyzeAvailable && (lastCodingHeadLive || lastAnyCodingTerminalLive));
+        }
+
+        // Update pre-click batch cap labels on Move All and Move Selected buttons
+        function updateCapLabels() {
+            const cap = lastTeamBatchPlanCap ?? 5;
+            const teamHeadCols = lastTeamHeadColumns || [];
+            document.querySelectorAll('.kanban-column').forEach(colEl => {
+                const colId = colEl.dataset.column;
+                if (!colId) return;
+                const isTeamHeadCol = teamHeadCols.includes(colId);
+
+                const moveAllBtn = colEl.querySelector('.column-icon-btn[data-action="moveAll"]');
+                if (moveAllBtn) {
+                    const colCount = getAllInColumn(colId).length;
+                    const moveAllLabel = isTeamHeadCol && colCount > cap
+                        ? `SEND ${Math.min(cap, colCount)} OF ${colCount}`
+                        : '';
+                    let capSpan = moveAllBtn.querySelector('.cap-label');
+                    if (moveAllLabel) {
+                        moveAllBtn.classList.add('column-icon-btn-labeled');
+                        if (!capSpan) {
+                            capSpan = document.createElement('span');
+                            capSpan.className = 'cap-label';
+                            moveAllBtn.appendChild(capSpan);
+                        }
+                        capSpan.textContent = moveAllLabel;
+                        moveAllBtn.dataset.tooltip = `Move all plans in this column to next stage (cap: ${cap} for team head)`;
+                    } else {
+                        moveAllBtn.classList.remove('column-icon-btn-labeled');
+                        if (capSpan) capSpan.remove();
+                        moveAllBtn.dataset.tooltip = 'Move all plans in this column to next stage';
+                    }
+                }
+
+                const moveSelectedBtn = colEl.querySelector('.column-icon-btn[data-action="moveSelected"]');
+                if (moveSelectedBtn) {
+                    const selectedCount = getSelectedInColumn(colId).length;
+                    const moveSelectedLabel = isTeamHeadCol && selectedCount > cap
+                        ? `SEND ${Math.min(cap, selectedCount)} OF ${selectedCount}`
+                        : '';
+                    let capSpan = moveSelectedBtn.querySelector('.cap-label');
+                    if (moveSelectedLabel) {
+                        moveSelectedBtn.classList.add('column-icon-btn-labeled');
+                        if (!capSpan) {
+                            capSpan = document.createElement('span');
+                            capSpan.className = 'cap-label';
+                            moveSelectedBtn.appendChild(capSpan);
+                        }
+                        capSpan.textContent = moveSelectedLabel;
+                        moveSelectedBtn.dataset.tooltip = `Move selected plans to next stage (cap: ${cap} for team head; triggers CLI if enabled)`;
+                    } else {
+                        moveSelectedBtn.classList.remove('column-icon-btn-labeled');
+                        if (capSpan) capSpan.remove();
+                        moveSelectedBtn.dataset.tooltip = 'Move selected plans to next stage (triggers CLI if enabled)';
+                    }
+                }
+            });
         }
 
         function renderBoard(cards, justFinishedIds = new Set()) {
@@ -8994,6 +9090,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             updateStagingViewInfo();
             updateStarredCount();
+            updateCapLabels();
 
             // Attach card-level event listeners
             document.querySelectorAll('.kanban-card').forEach(el => {
@@ -9652,6 +9749,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // having done nothing. Defaults true — the extension host supports it and omits the
         // field; standalone sets it false explicitly.
         let terminalCreateAvailable = true;
+        // Team-headness and batch cap for pre-click cap disclosure.
+        let lastTeamHeadColumns = [];
+        let lastTeamBatchPlanCap = 5;
+        const boardState = {
+            get teamHeadColumns() { return lastTeamHeadColumns; },
+            set teamHeadColumns(val) { lastTeamHeadColumns = val; },
+            get teamBatchPlanCap() { return lastTeamBatchPlanCap; },
+            set teamBatchPlanCap(val) { lastTeamBatchPlanCap = val; }
+        };
 
         // Drag & Drop handlers
         let draggedSessionId = null;
@@ -10519,6 +10625,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (typeof msg.terminalCreateAvailable !== 'undefined') {
                         terminalCreateAvailable = msg.terminalCreateAvailable === true;
                     }
+                    if (Array.isArray(msg.teamHeadColumns)) {
+                        lastTeamHeadColumns = msg.teamHeadColumns;
+                    }
+                    if (typeof msg.teamBatchPlanCap === 'number') {
+                        lastTeamBatchPlanCap = msg.teamBatchPlanCap;
+                    }
                     if (msg.routingConfig) {
                         routingMapConfig = msg.routingConfig;
                         updateRoutingMapButtonIndicator();
@@ -10592,6 +10704,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // Edge-triggered, so the common (cards-changed) path does not repaint
                     // twice — renderBoard already called this.
                     if (coderTerminalCountChanged || codingHeadLiveChanged) updateStagingViewInfo();
+                    updateCapLabels();
                     break;
                 }
                 case 'settingResult': {
@@ -11374,6 +11487,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     btn.textContent = 'ASSIGN';
                 }
             }
+            updateCapLabels();
         }
 
         function updateFeatureActionButton() {

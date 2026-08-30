@@ -23,7 +23,7 @@ import {
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveAgentDisplayName } from './cliIdentity';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE, TEAM_BATCH_PLAN_CAP } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE, TEAM_BATCH_PLAN_CAP, applyBatchCap } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
 import { compareByPrecedence } from './kanbanOrdering';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
@@ -1405,6 +1405,7 @@ export class KanbanProvider implements vscode.Disposable {
             // Run-queue button in workspaces with no team — only standalone
             // coders.
             const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
+            const teamHeadColumns = await this.resolveTeamHeadColumns(root, filteredColumns);
 
             // Every entry carries its surface so wsHub can filter the connect-time
             // resync per connection (see SURFACES / PANEL_SURFACES). Tag AS BUILT, not
@@ -1432,7 +1433,7 @@ export class KanbanProvider implements vscode.Disposable {
                     projectContextEnabled,
                 },
                 { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, teamHeadColumns, teamBatchPlanCap: TEAM_BATCH_PLAN_CAP, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
@@ -2367,6 +2368,7 @@ export class KanbanProvider implements vscode.Disposable {
             const coderTerminalCount = _codingRoles2.coders.length;
             const codingHeadLive = _codingRoles2.leads.length > 0 || _codingRoles2.coders.length > 0;
             const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
+            const teamHeadColumns = await this.resolveTeamHeadColumns(resolvedWorkspaceRoot, columns);
             // coderTerminalCount is part of the snapshot, not just the payload. The Dispatch
             // view header renders it, and adding a coder terminal changes NO card — so a
             // cards-only hash would skip the push and freeze the header at its stale value
@@ -2377,7 +2379,7 @@ export class KanbanProvider implements vscode.Disposable {
             // coming online changes NO card and leaves coderTerminalCount at 0, but must
             // flip the Run-queue button enabled.
             const snapshotHash = crypto.createHash('sha256')
-                .update(JSON.stringify({ cards, featureWorktrees, coderTerminalCount, codingHeadLive, anyCodingTerminalLive }))
+                .update(JSON.stringify({ cards, featureWorktrees, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, teamHeadColumns }))
                 .digest('hex');
             const snapshotUnchanged = snapshotKey === this._lastBoardSnapshotKey
                 && snapshotHash === this._lastBoardSnapshotHash;
@@ -2394,7 +2396,9 @@ export class KanbanProvider implements vscode.Disposable {
                     codingHeadLive,
                     anyCodingTerminalLive,
                     routingConfig: this._routingMapForScope(scope),
-                    featureWorktrees
+                    featureWorktrees,
+                    teamHeadColumns,
+                    teamBatchPlanCap: TEAM_BATCH_PLAN_CAP
                 }));
             }
 
@@ -4123,6 +4127,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const coderTerminalCount = _codingRoles3.coders.length;
             const codingHeadLive = _codingRoles3.leads.length > 0 || _codingRoles3.coders.length > 0;
             const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
+            const teamHeadColumns = await this.resolveTeamHeadColumns(resolvedWorkspaceRoot, filteredColumns);
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -4133,7 +4138,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 codingHeadLive,
                 anyCodingTerminalLive,
                 routingConfig: this._routingMapForScope(scope),
-                featureWorktrees
+                featureWorktrees,
+                teamHeadColumns,
+                teamBatchPlanCap: TEAM_BATCH_PLAN_CAP
             }));
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'cliTriggersState',
@@ -4338,6 +4345,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const coderTerminalCount = _codingRoles4.coders.length;
             const codingHeadLive = _codingRoles4.leads.length > 0 || _codingRoles4.coders.length > 0;
             const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
+            const teamHeadColumns = await this.resolveTeamHeadColumns(resolvedWorkspaceRoot, columns);
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -4347,7 +4355,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 coderTerminalCount,
                 codingHeadLive,
                 anyCodingTerminalLive,
-                routingConfig: this._routingMapForScope(scope)
+                routingConfig: this._routingMapForScope(scope),
+                teamHeadColumns,
+                teamBatchPlanCap: TEAM_BATCH_PLAN_CAP
             }));
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'cliTriggersState',
@@ -5703,12 +5713,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * the companion plan (`drive-mode-addon-cleanup-auto-arm-watch.md`) moves that
      * to the extension's auto-arm path.
      */
-    private async _buildDrivePrefix(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<string | null> {
+    private async _resolveRosterAndPort(workspaceRoot: string): Promise<{
+        rosterLines: string[];
+        portLine: string;
+        portResolved: boolean;
+    } | null> {
         const roster = await this._resolveTeamRosterForPrompt(workspaceRoot);
         if (!roster || roster.length === 0) return null;
 
-        // Read the API port from .switchboard/api-server-port.txt (best-effort).
-        // Fall back to the instruction string if the file is unavailable.
         let portLine = 'read .switchboard/api-server-port.txt';
         try {
             const portFilePath = path.join(workspaceRoot, '.switchboard', 'api-server-port.txt');
@@ -5720,12 +5732,65 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }
         } catch { /* best-effort */ }
 
-        // Build the roster lines.
         const rosterLines = roster.map(m => {
             const roleLabel = m.role ? ` (${m.role})` : '';
             const statusLabel = m.active ? 'active' : 'exited';
             return `- ${m.name}${roleLabel} — ${statusLabel}`;
         });
+
+        return { rosterLines, portLine, portResolved: portLine.startsWith('Port is ') };
+    }
+
+    private async _buildBatchDrivePrefix(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<string | null> {
+        const resolved = await this._resolveRosterAndPort(workspaceRoot);
+        if (!resolved) return null;
+        const { rosterLines, portLine, portResolved } = resolved;
+
+        const closeOutTarget = portResolved
+            ? 'against $BASE'
+            : 'against the port in .switchboard/api-server-port.txt';
+        const skipPortDirective = portResolved
+            ? ' Do NOT read .switchboard/api-server-port.txt (the port is above).'
+            : '';
+
+        const block = [
+            `You are driving a batch of loose plans through your team seats. Everything you need is below — the port, your team roster, and the plan list are all in this prompt.${skipPortDirective} Do NOT check your own terminal name — you dispatch TO named seats (see YOUR TEAM below), and standing orders handle callbacks.`,
+            '',
+            'YOUR TEAM:',
+            ...rosterLines,
+            '',
+            `API: ${portLine}`,
+            'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
+            '',
+            'STAGING (one call per plan):',
+            'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
+            '  -d \'{"name":"<seat>","data":"Implement the plan at <path>. This plan only.","clearBeforePrompt":false,"dispatch":{"planId":"<id>","role":"coder"}}\'',
+            '',
+            'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same plan: intern → coder → lead.',
+            '',
+            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then POST /kanban/task/complete with {"from":"<your terminal name>","planId":"<that plan's planId>","workspaceRoot":"<your cwd>"} ${closeOutTarget}. Post per plan, with that plan's planId. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next plan.`,
+            '',
+            'BATCH RULES:',
+            '- The plans in this batch are independent and possibly unrelated.',
+            '- Read each individual plan file for requirements, seat assignments, and scope constraints.',
+            '- Sequence plans that collide; dispatch non-colliding plans in parallel.',
+            '- One plan per terminal at a time. Use a second terminal for concurrency.',
+            '- Do NOT rewrite or edit plan files. The plan is the source of truth for the coder that receives it.',
+            '- Do NOT query kanban.db directly. Use the API for anything else.',
+            '- Do NOT verify work before dispatching. The kanban column is the system\'s record, not a coder\'s claim.',
+            '- Never issue a git verb (commit, push, branch, merge) to a team seat. The head commits the team\'s work; coders never commit.',
+            '- You are unattended when no human is demonstrably reading. When you cannot tell, assume unattended.',
+            '- Unattended: never convert uncertainty into a stop. Record a question report and continue in the same turn.',
+            '- clearBeforePrompt stays false on every dispatch — the host overrides it to true automatically when the plan changes.',
+        ];
+
+        return block.join('\n');
+    }
+
+    private async _buildDrivePrefix(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<string | null> {
+        const resolved = await this._resolveRosterAndPort(workspaceRoot);
+        if (!resolved) return null;
+        const { rosterLines, portLine, portResolved } = resolved;
 
         // Extract the feature plan's file path from the plans array (the entry
         // with isFeature: true). The lead reads this file for plan IDs, file
@@ -5735,7 +5800,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             ? `FEATURE FILE: ${featurePlan.absolutePath}. Read it — its Subtasks section has plan IDs and file paths; its Team Dispatch Instructions section has seat assignments, acceptance criteria, and scope constraints for each subtask. This is your single source of truth for dispatch and review.`
             : 'FEATURE FILE: (not found in prompt). Read the feature plan file for plan IDs, seat assignments, and scope constraints.';
 
-        const portResolved = portLine.startsWith('Port is ');
         const skipPortDirective = portResolved
             ? ' Do NOT read .switchboard/api-server-port.txt (the port is above).'
             : '';
@@ -5914,6 +5978,22 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     /**
+     * Resolve which columns have a team-head dispatch target.
+     * isCodingTeamHead falls back to _getAgentNames for the agent name —
+     * same path as prompt previews. Called once per lead column (1-2 typically).
+     */
+    public async resolveTeamHeadColumns(workspaceRoot: string, columns: KanbanColumnDefinition[]): Promise<string[]> {
+        const teamHeadColumns: string[] = [];
+        for (const col of columns) {
+            if (col.role === 'lead') {
+                const isHead = await this.isCodingTeamHead(workspaceRoot, 'lead');
+                if (isHead) teamHeadColumns.push(col.id);
+            }
+        }
+        return teamHeadColumns;
+    }
+
+    /**
      * Split a batch bound for a team head into the plans that go and the plans that
      * stay, ordered by the shared V63 precedence comparator — `queue_position` in
      * STAGING, `column_order` everywhere else, starred-first, then column_entered_at /
@@ -5922,9 +6002,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * hand-arranged column is respected rather than overridden by age.
      */
     public selectTeamBatchPlans<T extends BatchPromptPlan>(plans: T[]): { sent: T[]; skipped: T[] } {
-        const sortColumn = plans[0]?.column || '';
-        const ordered = [...plans].sort((a, b) => compareByPrecedence(a, b, sortColumn));
-        return { sent: ordered.slice(0, TEAM_BATCH_PLAN_CAP), skipped: ordered.slice(TEAM_BATCH_PLAN_CAP) };
+        return applyBatchCap(plans, TEAM_BATCH_PLAN_CAP, true);
     }
 
     public async generateUnifiedPrompt(
@@ -6328,10 +6406,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // directive at position-zero of the final concatenated payload. The prefix is
         // generic, not feature-specific, so applying it once to the whole payload is
         // correct. Allowlisted to the execution roles only.
-        if (plans.some(p => p.isFeature) && ['lead', 'coder', 'intern'].includes(role)) {
+        const isRealFeature = plans.some(p => p.isFeature);
+        const isBatchTeamHead = batchOptions.batchMode === true && !isRealFeature;
+
+        if (isRealFeature && ['lead', 'coder', 'intern'].includes(role)) {
             const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive(), plans);
             if (prefix) {
                 return `${prefix}${built}`;
+            }
+        } else if (isBatchTeamHead && role === 'lead') {
+            const batchPrefix = await this._buildBatchDrivePrefix(workspaceRoot, orderedPlans);
+            if (batchPrefix) {
+                return `${batchPrefix}\n\n${built}`;
             }
         }
         return built;

@@ -190,3 +190,7 @@ case 'updateBoard':
 - **Positive:** Move All button HTML on a team-head column with count > cap contains a `<span class="cap-label">` element with text matching `SEND \d+ OF \d+`.
 - **Negative:** Move All button HTML on a non-team-head column does NOT contain a `cap-label` span.
 - **Positive:** `teamBatchPlanCap` in the `updateBoard` payload equals the exported `TEAM_BATCH_PLAN_CAP` constant from `agentPromptBuilder.ts`.
+
+## Implementation Summary
+
+Added `teamHeadColumns` and `teamBatchPlanCap` resolution and delivery across all board refresh paths in `KanbanProvider.ts` (`_refreshBoardImpl`, `refreshWithData`, `_refreshBoardWithData`, and `_buildResyncMessages`). In `kanban.html`, added styled `.column-icon-btn-labeled` UI support and dynamic `updateCapLabels()` logic to render pre-click "SEND N OF M" labels on Move All and Move Selected buttons whenever plans in a team-head column exceed the batch cap (`TEAM_BATCH_PLAN_CAP` = 5). Added contract tests covering team-head column resolution, non-team empty state, cap constant assertion, and webview HTML contract validation.

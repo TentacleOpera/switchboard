@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { DefaultPromptOverride, CustomAgentAddons, BUILT_IN_AGENT_LABELS } from './agentConfig';
 import { extractDesignSystemTokens, ExtractedDesignSystem } from './designSystemTokens';
+import { compareByPrecedence } from './kanbanOrdering';
 
 // One-time diagnostic for the ticket_updater mode collapse. Users who configured
 // 'refine-ticket' or 'research-and-refine' (modes that rewrote ticket descriptions)
@@ -77,6 +78,28 @@ export interface BatchPromptPlan {
  * model's rule schema admits no batch-size field, and a schema test guards that.
  */
 export const TEAM_BATCH_PLAN_CAP = 5;
+
+/**
+ * Apply the team-head batch cap to a set of plans. When the target is a team
+ * head and the set exceeds the cap, the first `cap` plans (by column precedence)
+ * are sent and the rest are skipped. Otherwise, all plans are sent.
+ *
+ * This is a pure function — no side effects, no DB access. It encapsulates the
+ * cap logic so it can be tested without mocking TaskViewerProvider.
+ */
+export function applyBatchCap<T extends BatchPromptPlan>(
+    plans: T[],
+    cap: number,
+    isTeamHead: boolean
+): { sent: T[]; skipped: T[] } {
+    if (!isTeamHead || plans.length <= cap) {
+        return { sent: plans, skipped: [] };
+    }
+    // Delegate to the existing sort-and-slice logic.
+    const sortColumn = plans[0]?.column || '';
+    const ordered = [...plans].sort((a, b) => compareByPrecedence(a, b, sortColumn));
+    return { sent: ordered.slice(0, cap), skipped: ordered.slice(cap) };
+}
 
 /**
  * Resolve a safe working directory from a repoScope value.

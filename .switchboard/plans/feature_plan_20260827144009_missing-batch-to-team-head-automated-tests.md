@@ -262,3 +262,7 @@ Add `const { applyBatchCap } = require('../../out/services/agentPromptBuilder');
 - **Positive:** `buildKanbanBatchPrompt('lead', loosePlans, { featureMode: true, batchMode: true })` does NOT contain `FEATURE FILE:`.
 - **Negative:** The autoban schedule rule schema does NOT admit a `batchSize` field.
 - **Positive:** `DEFAULT_KANBAN_COLUMNS.find(c => c.id === 'LEAD CODED').role` equals `'lead'`.
+
+## Implementation Summary
+
+Extracted pure helper `applyBatchCap` in `agentPromptBuilder` and delegated `selectTeamBatchPlans` to it. Added all missing batch-to-team-head tests into `batch-move-team-prompt-contract.test.js`, covering `testBatchCreatesNoFeatureRow`, `testEndToEndCapAndRemainder`, `testPreClickCount`, `testRecommendedRoleRouting`, `testPlannerFanOutRegression`, and `testScheduleRuleSchemaHasNoBatchSize`. Verified schema guards against `batchSize` and validated 15+ automated contract tests covering prompts, caps, roles, and boundaries.

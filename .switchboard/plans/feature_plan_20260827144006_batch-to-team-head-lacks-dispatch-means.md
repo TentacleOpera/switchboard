@@ -198,3 +198,7 @@ return built;
 - **Negative:** `generateUnifiedPrompt` with `role='lead'`, `batchMode=true`, and a team-headed lead does NOT return a string containing `FEATURE FILE:` or `single delivery unit` or `Team Dispatch Instructions`.
 - **Negative:** `generateUnifiedPrompt` with `role='coder'` and `batchMode=true` does NOT prepend a batch drive prefix (the gate is `role === 'lead'` only).
 - **Positive:** `_resolveRosterAndPort` returns identical `rosterLines` and `portLine` values to the original inline code in `_buildDrivePrefix` (refactor does not change behavior).
+
+## Implementation Summary
+
+Extracted shared helper `_resolveRosterAndPort` to consolidate team roster resolution, API port file reading, and roster line formatting across drive prefixes. Added `_buildBatchDrivePrefix` to generate a batch-specific drive prefix that instructs team leads to read individual plan files and dispatch per-plan without feature file constraints. Updated the directive gate in `generateUnifiedPrompt` so that batch dispatches to team head leads (`batchMode === true && !isRealFeature && role === 'lead'`) prepend `_buildBatchDrivePrefix`. Added automated contract tests in `batch-move-team-prompt-contract.test.js` validating the batch drive prefix, roster lines, staging recipe, negative assertions, and gate routing.

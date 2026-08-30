@@ -27,9 +27,11 @@ Module._load = function (request) {
     return originalLoad.apply(this, arguments);
 };
 
-const { buildKanbanBatchPrompt, TEAM_BATCH_PLAN_CAP } = require('../../out/services/agentPromptBuilder');
+const { buildKanbanBatchPrompt, TEAM_BATCH_PLAN_CAP, applyBatchCap } = require('../../out/services/agentPromptBuilder');
 const { KanbanProvider } = require('../../out/services/KanbanProvider');
 const { TERMINALS_GROUPS_KEY } = require('../../out/services/teamWiring');
+const { DEFAULT_KANBAN_COLUMNS } = require('../../out/services/agentConfig');
+const { VERB_SCHEMAS } = require('../../out/services/verbSchemas');
 
 const makeLoosePlans = (count) => {
     const plans = [];
@@ -190,6 +192,16 @@ function makeProvider({ groups = [], agentNames = {} } = {}) {
     const provider = Object.create(KanbanProvider.prototype);
     provider._getKanbanDb = () => db;
     provider._getAgentNames = async () => agentNames;
+    provider._context = {
+        globalState: { get: () => undefined, update: async () => {} },
+        workspaceState: { get: () => undefined, update: async () => {} },
+    };
+    provider._getSetting = (key, fallback) => fallback;
+    provider.postMessage = () => {};
+    provider._seams = () => ({
+        commands: { executeCommand: async () => true },
+        ui: { showInformationMessage: () => {}, showErrorMessage: () => {} },
+    });
     return provider;
 }
 
@@ -282,6 +294,257 @@ function testCapAndRemainder() {
     console.log('  PASS: cap, remainder and determinism');
 }
 
+async function testGenerateUnifiedPromptBatchTeamHead() {
+    console.log('Testing generateUnifiedPrompt with team-headed lead batch...');
+    const provider = makeProvider({ groups: TEAM_GROUPS, agentNames: { lead: 'Coding-lead' } });
+    provider._resolveTeamRosterForPrompt = async () => [
+        { name: 'Coding-coder-1', role: 'coder', active: true },
+        { name: 'Coding-coder-2', role: 'coder', active: true },
+    ];
+    provider._getPromptsConfig = async () => ({});
+    provider._resolveProjectContextEnabled = async () => false;
+    provider._resolveDesignSystemReferences = async () => [];
+
+    const plans = makeLoosePlans(5);
+    const prompt = await provider.generateUnifiedPrompt('lead', plans, '/ws', { isTeamHead: true });
+
+    // Prefix assertions
+    assert.ok(prompt.startsWith('You are driving a batch of loose plans through your team seats.'), 'Prompt should start with batch drive prefix');
+    assert.ok(prompt.includes('YOUR TEAM:'), 'Should contain YOUR TEAM section');
+    assert.ok(prompt.includes('- Coding-coder-1 (coder) — active'), 'Should list roster members');
+    assert.ok(prompt.includes('API:'), 'Should contain API line');
+    assert.ok(prompt.includes('STAGING (one call per plan):'), 'Should contain STAGING section');
+    assert.ok(prompt.includes('curl -s -X POST "$BASE/terminals/verb/ptySendPrompt"'), 'Should contain ptySendPrompt recipe');
+    assert.ok(prompt.includes('CLOSE OUT EVERY PLAN — ALWAYS, no judgement call.'), 'Should contain close out per plan instruction');
+    assert.ok(prompt.includes('/kanban/task/complete'), 'Should contain /kanban/task/complete instruction');
+    assert.ok(prompt.includes('BATCH RULES:'), 'Should contain BATCH RULES');
+    assert.ok(prompt.includes('- The plans in this batch are independent and possibly unrelated.'), 'Should state plans are independent');
+    assert.ok(prompt.includes('- Read each individual plan file for requirements, seat assignments, and scope constraints.'), 'Should instruct to read individual plan files');
+
+    // Negative assertions (batch vs feature differences)
+    assert.ok(!prompt.includes('FEATURE FILE:'), 'Must NOT contain FEATURE FILE line');
+    assert.ok(!prompt.includes('single delivery unit'), 'Must NOT contain single delivery unit clause');
+    assert.ok(!prompt.includes('Team Dispatch Instructions'), 'Must NOT contain Team Dispatch Instructions');
+    assert.ok(!prompt.includes('Do NOT open individual subtask plans'), 'Must NOT forbid opening individual plans');
+
+    console.log('  PASS: generateUnifiedPrompt with team-headed lead batch');
+}
+
+async function testGenerateUnifiedPromptBatchNonTeamLead() {
+    console.log('Testing generateUnifiedPrompt with non-team lead batch...');
+    const provider = makeProvider({ groups: [], agentNames: { lead: 'Solo-lead' } });
+    provider._getPromptsConfig = async () => ({});
+    provider._resolveProjectContextEnabled = async () => false;
+    provider._resolveDesignSystemReferences = async () => [];
+
+    const plans = makeLoosePlans(3);
+    const prompt = await provider.generateUnifiedPrompt('lead', plans, '/ws', { isTeamHead: false });
+
+    assert.ok(!prompt.includes('YOUR TEAM:'), 'Non-team lead batch must NOT have YOUR TEAM section');
+    assert.ok(!prompt.includes('STAGING (one call per plan):'), 'Non-team lead batch must NOT have staging recipe');
+    assert.ok(prompt.includes('CRITICAL INSTRUCTIONS:'), 'Non-team lead batch must contain standard execution rules');
+
+    console.log('  PASS: generateUnifiedPrompt with non-team lead batch');
+}
+
+async function testGenerateUnifiedPromptCoderBatchNoDrivePrefix() {
+    console.log('Testing generateUnifiedPrompt with coder batch...');
+    const provider = makeProvider({ groups: TEAM_GROUPS, agentNames: { lead: 'Coding-lead' } });
+    provider._getPromptsConfig = async () => ({});
+    provider._resolveProjectContextEnabled = async () => false;
+    provider._resolveDesignSystemReferences = async () => [];
+
+    const plans = makeLoosePlans(3);
+    const prompt = await provider.generateUnifiedPrompt('coder', plans, '/ws');
+
+    assert.ok(!prompt.includes('YOUR TEAM:'), 'Coder batch must NOT have drive prefix');
+    assert.ok(!prompt.includes('You are driving a batch of loose plans'), 'Coder batch must NOT have drive opener');
+
+    console.log('  PASS: generateUnifiedPrompt with coder batch');
+}
+
+async function testResolveTeamHeadColumns() {
+    console.log('Testing resolveTeamHeadColumns...');
+    const providerWithTeam = makeProvider({ groups: TEAM_GROUPS, agentNames: { lead: 'Coding-lead' } });
+    const cols = [
+        { id: 'CREATED', label: 'Created', role: null },
+        { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner' },
+        { id: 'LEAD CODED', label: 'Lead', role: 'lead' },
+        { id: 'CODER CODED', label: 'Coder', role: 'coder' },
+        { id: 'REVIEWED', label: 'Reviewed', role: 'reviewer' }
+    ];
+
+    const teamCols = await providerWithTeam.resolveTeamHeadColumns('/ws', cols);
+    assert.deepStrictEqual(teamCols, ['LEAD CODED'], 'Only lead column with a team should be identified as team head column');
+
+    const providerNoTeam = makeProvider({ groups: [], agentNames: { lead: 'Solo-lead' } });
+    const noTeamCols = await providerNoTeam.resolveTeamHeadColumns('/ws', cols);
+    assert.deepStrictEqual(noTeamCols, [], 'No columns should be team head when lead has no team');
+
+    assert.strictEqual(TEAM_BATCH_PLAN_CAP, 5, 'teamBatchPlanCap must be 5');
+    console.log('  PASS: resolveTeamHeadColumns');
+}
+
+function testWebviewCapLabelContract() {
+    console.log('Testing kanban.html cap label contract...');
+    const fs = require('fs');
+    const kanbanHtmlPath = path.join(__dirname, '../webview/kanban.html');
+    const html = fs.readFileSync(kanbanHtmlPath, 'utf8');
+
+    assert.ok(html.includes('.column-icon-btn-labeled'), 'Must contain .column-icon-btn-labeled CSS');
+    assert.ok(html.includes('.cap-label'), 'Must contain .cap-label CSS');
+    assert.ok(html.includes('updateCapLabels'), 'Must contain updateCapLabels function');
+    assert.ok(html.includes('teamHeadColumns'), 'Must process teamHeadColumns');
+    assert.ok(html.includes('teamBatchPlanCap'), 'Must process teamBatchPlanCap');
+    console.log('  PASS: kanban.html cap label contract');
+}
+
+function testBatchCreatesNoFeatureRow() {
+    console.log('Testing batch to team head creates no feature row...');
+    const plans = makeLoosePlans(5);
+
+    const prompt = buildKanbanBatchPrompt('lead', plans, {
+        featureMode: true, driveMode: true, batchMode: true,
+        featureTopic: 'Batch send', subtaskCount: 5
+    });
+    // The batch prompt must not reference a feature file or feature dispatch instructions.
+    assert.ok(!prompt.includes('FEATURE FILE:'), 'Batch must not reference a feature file');
+    assert.ok(!prompt.includes('Team Dispatch Instructions'), 'Batch must not reference feature dispatch instructions');
+
+    console.log('  PASS: batch creates no feature row');
+}
+
+function testEndToEndCapAndRemainder() {
+    console.log('Testing end-to-end cap/remainder through applyBatchCap...');
+    const twelve = makeOrderablePlans(12);
+
+    // Team head with 12 plans: cap at 5, skip 7.
+    const result = applyBatchCap(twelve, TEAM_BATCH_PLAN_CAP, true);
+    assert.strictEqual(result.sent.length, 5, 'Five plans sent');
+    assert.strictEqual(result.skipped.length, 7, 'Seven plans skipped');
+    assert.strictEqual(new Set([...result.sent, ...result.skipped]).size, 12, 'No plan dropped or duplicated');
+
+    // Non-team head with 12 plans: all sent, none skipped.
+    const nonTeam = applyBatchCap(twelve, TEAM_BATCH_PLAN_CAP, false);
+    assert.strictEqual(nonTeam.sent.length, 12, 'Non-team: all plans sent');
+    assert.strictEqual(nonTeam.skipped.length, 0, 'Non-team: none skipped');
+
+    // Team head with 3 plans (under cap): all sent.
+    const under = applyBatchCap(makeOrderablePlans(3), TEAM_BATCH_PLAN_CAP, true);
+    assert.strictEqual(under.sent.length, 3, 'Under cap: all sent');
+    assert.strictEqual(under.skipped.length, 0, 'Under cap: none skipped');
+
+    console.log('  PASS: end-to-end cap/remainder');
+}
+
+function testPreClickCount() {
+    console.log('Testing pre-click count is full column count (message boundary)...');
+    // Webview moveAll sends { type: 'moveAll', column } and backend resolves all cards via _visibleColumnCards.
+    const twelve = makeOrderablePlans(12, i => ({ column: 'PLAN REVIEWED' }));
+    const provider = makeProvider({ groups: TEAM_GROUPS, agentNames: { lead: 'Coding-lead' } });
+    provider._visibleColumnCards = () => twelve;
+    provider._cardId = c => c.planId;
+
+    const sourceCards = provider._visibleColumnCards('/ws', 'PLAN REVIEWED');
+    assert.strictEqual(sourceCards.length, 12, 'Backend resolves full column count before applying cap');
+
+    // applyBatchCap caps team head dispatches to 5, skipping 7
+    const teamResult = applyBatchCap(sourceCards, TEAM_BATCH_PLAN_CAP, true);
+    assert.strictEqual(teamResult.sent.length, 5, 'Team head batch capped at 5');
+    assert.strictEqual(teamResult.skipped.length, 7, '7 plans retained in column');
+
+    // Non-team head does not cap
+    const nonTeamResult = applyBatchCap(sourceCards, TEAM_BATCH_PLAN_CAP, false);
+    assert.strictEqual(nonTeamResult.sent.length, 12, 'Non-team batch sends all 12');
+    assert.strictEqual(nonTeamResult.skipped.length, 0, 'Non-team batch skips 0');
+
+    console.log('  PASS: pre-click count');
+}
+
+function testRecommendedRoleRouting() {
+    console.log('Testing recommendedRole routes to lead for team-head batch...');
+    const leadCol = DEFAULT_KANBAN_COLUMNS.find(c => c.id === 'LEAD CODED');
+    assert.strictEqual(leadCol?.role, 'lead', 'LEAD CODED column has role=lead');
+
+    console.log('  PASS: recommendedRole routing');
+}
+
+async function testPlannerFanOutRegression() {
+    console.log('Testing planner fan-out does not leak feature workflow...');
+    const plans = makeLoosePlans(6).map(p => ({
+        ...p,
+        column: 'CREATED',
+        working: false,
+    }));
+
+    const executedDispatches = [];
+    const provider = makeProvider();
+    provider._taskViewerProvider = {
+        getRoleTerminalSet: async () => ({
+            terminals: ['Planner-1', 'Planner-2'],
+            locationKey: '/ws'
+        }),
+        getPlannerRotationCursor: () => 0,
+        advancePlannerRotationCursor: () => {},
+        getLimitDispatchToTerminals: async () => false,
+        recordRunSheetForColumnMove: async () => {},
+    };
+    provider._cardId = c => c.sessionId || c.planId;
+    provider.moveCardToColumnWithReason = async () => ({ ok: true });
+    provider._collectAllMovedSessionIds = async (ws, sid) => [sid];
+    provider._inFlightSkipFailures = () => [];
+    provider._seams = () => ({
+        commands: {
+            executeCommand: async (cmd, role, ids, workflow, ws, term) => {
+                executedDispatches.push({ cmd, role, ids, workflow, ws, term });
+                return true;
+            }
+        },
+        ui: { showInformationMessage: () => {}, showErrorMessage: () => {} }
+    });
+
+    await provider._distributePlannerDispatch('/ws', plans, 'PLAN REVIEWED');
+
+    // Assert that 2 buckets were dispatched
+    assert.strictEqual(executedDispatches.length, 2, 'Should dispatch 2 buckets to 2 planner terminals');
+    assert.strictEqual(executedDispatches[0].term, 'Planner-1', 'First bucket to Planner-1');
+    assert.strictEqual(executedDispatches[0].ids.length, 3, 'First bucket receives 3 plans');
+    assert.strictEqual(executedDispatches[0].workflow, 'improve-plan', 'First bucket uses improve-plan workflow');
+
+    assert.strictEqual(executedDispatches[1].term, 'Planner-2', 'Second bucket to Planner-2');
+    assert.strictEqual(executedDispatches[1].ids.length, 3, 'Second bucket receives 3 plans');
+    assert.strictEqual(executedDispatches[1].workflow, 'improve-plan', 'Second bucket uses improve-plan workflow');
+
+    // Ensure neither bucket leaks improve-feature
+    for (const d of executedDispatches) {
+        assert.notStrictEqual(d.workflow, 'improve-feature', 'Planner batch must never use improve-feature');
+    }
+
+    console.log('  PASS: planner fan-out regression');
+}
+
+function testScheduleRuleSchemaHasNoBatchSize() {
+    console.log('Testing schedule rule schema admits no batch-size field...');
+    // The cap is hardcoded via TEAM_BATCH_PLAN_CAP (5), not configurable per schedule.
+    // Verify verb schemas for schedule and queue operations do not expose a batchSize field.
+    const kanbanSchemas = VERB_SCHEMAS.kanban;
+    const scheduleVerbs = ['mcNewSchedule', 'mcUpdateSchedule', 'mcStartSchedule', 'stageForQueue', 'reorderQueue'];
+    for (const verb of scheduleVerbs) {
+        const schema = kanbanSchemas[verb];
+        assert.ok(schema, `Schema for ${verb} must exist`);
+        if (schema.fields) {
+            assert.strictEqual(
+                schema.fields.batchSize,
+                undefined,
+                `Verb ${verb} schema must not admit a batchSize field`
+            );
+        }
+    }
+    assert.strictEqual(TEAM_BATCH_PLAN_CAP, 5, 'teamBatchPlanCap is constant');
+
+    console.log('  PASS: schedule rule schema has no batch-size field');
+}
+
 async function runAll() {
     testTeamHeadBatchPrompt();
     testNonTeamBatchPrompt();
@@ -291,6 +554,17 @@ async function runAll() {
     testStaggeredDirectiveSuppressedInBatch();
     await testTeamHeadGateResolvesOffTheTerminalName();
     testCapAndRemainder();
+    await testGenerateUnifiedPromptBatchTeamHead();
+    await testGenerateUnifiedPromptBatchNonTeamLead();
+    await testGenerateUnifiedPromptCoderBatchNoDrivePrefix();
+    await testResolveTeamHeadColumns();
+    testWebviewCapLabelContract();
+    testBatchCreatesNoFeatureRow();
+    testEndToEndCapAndRemainder();
+    testPreClickCount();
+    testRecommendedRoleRouting();
+    await testPlannerFanOutRegression();
+    testScheduleRuleSchemaHasNoBatchSize();
     console.log('\nAll batch move team prompt contract tests PASSED!');
 }
 

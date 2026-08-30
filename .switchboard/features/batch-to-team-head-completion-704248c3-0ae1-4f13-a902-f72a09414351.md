@@ -56,8 +56,12 @@ Complete the batch-to-team-head dispatch path in the extension host: add dispatc
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Batch-to-team-head allocate prompt lacks dispatch means (roster, API port, pty recipe)](../plans/feature_plan_20260827144006_batch-to-team-head-lacks-dispatch-means.md) — **PLAN REVIEWED** — ID: ac107ef4-82ff-487b-85f6-81fce0f7adc8
-- [ ] [Batch-to-team-head cap disclosed only after click — no pre-click "SEND N OF 12" label](../plans/feature_plan_20260827144007_batch-cap-not-shown-before-click.md) — **PLAN REVIEWED** — ID: 6458af6f-74fe-4b9b-a78b-e8472ee95057
-- [ ] [Eight of fifteen batch-to-team-head automated tests still absent](../plans/feature_plan_20260827144009_missing-batch-to-team-head-automated-tests.md) — **PLAN REVIEWED** — ID: 2aed6757-6cd4-4f37-abe2-9582d3dafa19
+- [ ] [Batch-to-team-head allocate prompt lacks dispatch means (roster, API port, pty recipe)](../plans/feature_plan_20260827144006_batch-to-team-head-lacks-dispatch-means.md) — **CODER CODED** — ID: ac107ef4-82ff-487b-85f6-81fce0f7adc8
+- [ ] [Batch-to-team-head cap disclosed only after click — no pre-click "SEND N OF 12" label](../plans/feature_plan_20260827144007_batch-cap-not-shown-before-click.md) — **CODER CODED** — ID: 6458af6f-74fe-4b9b-a78b-e8472ee95057
+- [ ] [Eight of fifteen batch-to-team-head automated tests still absent](../plans/feature_plan_20260827144009_missing-batch-to-team-head-automated-tests.md) — **CODER CODED** — ID: 2aed6757-6cd4-4f37-abe2-9582d3dafa19
 <!-- END SUBTASKS -->
+
+## Implementation Summary
+
+Batch-to-team-head prompts now include the team roster, local API details, dispatch recipe, and per-plan completion contract without feature-only wording. Board updates now disclose team-head columns and the shared batch cap so Move All and Move Selected can show pre-click `SEND N OF M` labels. The cap logic is available through the pure `applyBatchCap` helper, and the contract suite now covers prompt framing, cap boundaries, role routing, planner fan-out, and schedule-schema constraints. Head verification used static diff and syntax checks because compilation and automated tests were disabled for this run.
 
