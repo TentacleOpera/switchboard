@@ -11590,11 +11590,20 @@ Each plan file must include:
         } catch { /* best-effort */ }
         let missionInfo: string[] = [];
         try {
-            const db = this._kanbanProvider?.getKanbanDb(root);
+            const db = await this.getKanbanDbForRoot(root);
             if (db && (await db.ensureReady())) {
-                const mission = missionId
-                    ? await db.getMissionById(missionId)
-                    : await db.getOpenMission((await db.getWorkspaceId()) || '');
+                // No missionId supplied → the same "which mission is the operator
+                // overseeing?" derivation GET /kanban/mission/active uses: in-flight
+                // wins over open, newest open otherwise. One derivation, not two.
+                let mission: any = null;
+                if (missionId) {
+                    mission = await db.getMissionById(missionId);
+                } else {
+                    const list = await db.getMissions((await db.getWorkspaceId()) || '');
+                    mission = list.find((m: any) => m.runState === 'in-flight')
+                        || list.filter((m: any) => m.runState === 'not-started').pop()
+                        || null;
+                }
                 if (mission) {
                     missionInfo = [
                         `MISSION_ID=${mission.id}`,
@@ -11747,14 +11756,34 @@ Each plan file must include:
             void this._waitWithTimeout(terminal.processId, 10000, undefined)
                 .then(pid => {
                     if (pid) {
-                        void this._registerTerminalInState(suffixedForState, pid, {
-                            role: 'lead',
-                            pool: false,
-                            purpose: 'mission-control',
-                            team: 'Mission Control'
+                        void this.updateState(async (state) => {
+                            if (state.terminals?.[suffixedForState]) {
+                                state.terminals[suffixedForState].pid = pid;
+                                state.terminals[suffixedForState].childPid = pid;
+                            }
                         });
+                        this._refreshTerminalStatuses();
                     }
-                });
+                })
+                .catch(() => { /* PID resolution best-effort */ });
+
+            await this.updateState(async (state) => {
+                if (!state.terminals) state.terminals = {};
+                state.terminals[suffixedForState] = {
+                    purpose: 'mission-control',
+                    role: 'mission-control',
+                    pid: undefined,
+                    childPid: undefined,
+                    startTime: new Date().toISOString(),
+                    status: 'active',
+                    friendlyName: MISSION_CONTROL_TERMINAL_NAME,
+                    icon: 'terminal',
+                    color: 'cyan',
+                    lastSeen: new Date().toISOString(),
+                    ideName: vscode.env.appName,
+                    worktreePath: undefined
+                };
+            });
 
             // Boot the lead CLI (most capable configured CLI). Subtask 2's
             // persona is injected as the kickoff prompt below; the boot command

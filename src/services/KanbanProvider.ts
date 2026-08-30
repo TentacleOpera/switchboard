@@ -1422,6 +1422,7 @@ export class KanbanProvider implements vscode.Disposable {
                     ]
                     : []),
             ];
+            return snapshot;
         } catch (err) {
             console.error('[KanbanProvider] getFullStateMessages error:', err);
             return [];
@@ -3867,6 +3868,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
             let cards: KanbanCard[] = [];
             let dbUnavailable = false;
+            // Hoisted: the updateBoard broadcast below reads this OUTSIDE the
+            // dbReady branch that fills it. Declared in the branch it would be
+            // undefined at the post site.
+            let boardMissions: any[] = [];
 
             const db = this._getKanbanDb(resolvedWorkspaceRoot);
             const dbReady = await db.ensureReady();
@@ -3969,7 +3974,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 );
 
                 const missionByMember2 = new Map<string, { id: string; name: string }>();
-                let boardMissions: any[] = [];
                 try {
                     if (typeof db.getMissions === 'function') {
                         boardMissions = await db.getMissions(workspaceId);
@@ -8574,8 +8578,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
         let targetMission: any = null;
         try {
             if (explicitMissionId) {
+                // Workspace-scoped: a mission id is a bare string on the wire, and
+                // an id from another workspace must not receive this workspace's
+                // cards. `not-started` is the ONE derivation (`_deriveMissionRunState`)
+                // — a launched mission is sealed and falls through to a new/open one.
                 const cand = await db.getMissionById(explicitMissionId);
-                if (cand && cand.runState === 'not-started') {
+                if (cand && cand.workspaceId === workspaceId && cand.runState === 'not-started') {
                     targetMission = cand;
                 }
             }
@@ -14854,27 +14862,28 @@ ${FOCUS_DIRECTIVE}`;
             return { success: false, error: `Mission '${mission.name}' has already completed.` };
         }
 
-        // A mission carries `maxExtraWorktrees` — extra trees on top of the one it
-        // starts in, 0 by default and never above 1 for a mission. Provision 1 run-scoped
-        // worktree when requested.
-        const extraTrees = Math.min(mission.type === 'mission' ? 1 : 99, Math.max(0, mission.maxExtraWorktrees || 0));
-        if (extraTrees > 0) {
-            try {
-                const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
-                const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, mission.name, undefined, defaultBranch);
-                await db.addWorktree(branch, wtPath, undefined, undefined, undefined, defaultBranch);
-                await this._openWorktreeTerminalsBestEffort(workspaceRoot, wtPath);
-            } catch (wtErr: any) {
-                return { success: false, error: `Failed to provision run worktree: ${wtErr.message}` };
-            }
-        }
-
         const apiServer: any = this._apiServer;
         if (!apiServer || typeof apiServer.dispatchNextFromQueue !== 'function') {
             return { success: false, error: 'Queue dispatch is not available in this host.' };
         }
 
-        const streams = Math.max(1, confirmedStreamCount || 1);
+        // The confirmed stream count. Nothing in the model persists one, so an
+        // absent count is DERIVED from the dependency map — the same edges the
+        // pop-time gate reads, and the same fact the panel's Sequencing view
+        // renders. No edges at all is the "Sequential (default — no stream map
+        // exists)" case: exactly one stream, byte-for-byte today's behaviour.
+        // With edges, the roots (members waiting on nothing) are the chains that
+        // may start concurrently.
+        let streams = Math.max(0, confirmedStreamCount || 0);
+        if (streams === 0) {
+            let anyEdges = false;
+            let roots = 0;
+            for (const memberId of members) {
+                const deps = await db.getPlanDependencies(memberId);
+                if (deps.length > 0) { anyEdges = true; } else { roots += 1; }
+            }
+            streams = anyEdges ? Math.max(1, roots) : 1;
+        }
         const codingRoles = await this.resolveCodingRolesFromGroups(workspaceRoot);
         const candidateHeads: string[] = [];
         if (codingRoles.leads.length > 0) candidateHeads.push(...codingRoles.leads);
@@ -14891,13 +14900,26 @@ ${FOCUS_DIRECTIVE}`;
             return { success: false, error: 'No coding terminal is live — seat a team before launching.' };
         }
 
+        // A mission carries `maxExtraWorktrees` — extra trees on top of the one it
+        // starts in, 0 by default and never above 1 for a mission. One tree shared
+        // by the run, not one per member or per stream. Cut AFTER the head check:
+        // refusing for want of a team once the tree exists strands a branch nothing
+        // owns and nothing cleans up.
+        const extraTrees = Math.min(mission.type === 'mission' ? 1 : 99, Math.max(0, mission.maxExtraWorktrees || 0));
+        if (extraTrees > 0) {
+            try {
+                const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
+                const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, mission.name, undefined, defaultBranch);
+                await db.addWorktree(branch, wtPath, undefined, undefined, undefined, defaultBranch);
+                await this._openWorktreeTerminalsBestEffort(workspaceRoot, wtPath);
+            } catch (wtErr: any) {
+                return { success: false, error: `Failed to provision run worktree: ${wtErr.message}` };
+            }
+        }
+
         const dispatchedHeads: string[] = [];
         let firstDispatched: string | null = null;
-        let shortfall = 0;
         const toDispatch = Math.min(streams, candidateHeads.length);
-        if (candidateHeads.length < streams) {
-            shortfall = streams - candidateHeads.length;
-        }
 
         for (let i = 0; i < toDispatch; i++) {
             const head = candidateHeads[i];
@@ -14912,6 +14934,12 @@ ${FOCUS_DIRECTIVE}`;
         if (dispatchedHeads.length === 0) {
             return { success: false, error: 'Dispatch refused.' };
         }
+        // The shortfall is measured against what was actually SEATED, not against
+        // how many candidate terminals were listed. Several candidates can belong
+        // to one team, and the pop's in-flight refusal seats that team once — a
+        // shortfall derived from the candidate count would report success for
+        // three streams while one ran.
+        const shortfall = Math.max(0, streams - dispatchedHeads.length);
         return {
             success: true,
             dispatched: firstDispatched,

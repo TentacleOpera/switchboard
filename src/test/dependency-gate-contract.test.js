@@ -475,7 +475,11 @@ async function run() {
             ['no members', /has no members/],
             ['already in flight', /already in flight/],
             ['already completed', /already completed/],
-            ['worktrees requested but unbuilt', /provisioning is not built/],
+            // Run provisioning IS built now (item 7). The refusal it replaced —
+            // "provisioning is not built" — is retired; the durable contract is
+            // that a tree that cannot be cut still refuses rather than running in
+            // the wrong checkout.
+            ['the run worktree could not be cut', /Failed to provision run worktree/],
             ['no seated team', /No coding terminal is live/],
             ['dispatch refused', /Dispatch refused/],
         ]) {
@@ -585,12 +589,29 @@ async function run() {
             'cards must carry missionId and missionName');
     });
 
-    await check('STAGING renders members grouped under their mission', () => {
+    await check('STAGING renders the mission as a card, and its members nowhere', () => {
         const fs = require('fs');
         const html = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'kanban.html'), 'utf8');
-        assert.ok(/mission-group-label/.test(html), 'the STAGING column must label each mission group');
-        assert.ok(/\.mission-group-label\s*\{/.test(html),
+        // The interim grouping (a label above the member cards) is retired — item 1
+        // replaces it with a real card, so the drag has something to drop onto.
+        assert.ok(!/mission-group-label/.test(html),
+            'the mission group label is retired — STAGING renders one mission CARD, not a label '
+            + 'above loose member cards');
+        assert.ok(/function createMissionCardHtml\(/.test(html),
+            'a mission is not a plan (no complexity, no role routing, no advance) — it needs its '
+            + 'own renderer, not createCardHtml');
+        assert.ok(/\.kanban-card\.mission-card\s*\{/.test(html),
             'kanban.html is a self-contained webview — the rule belongs in its own inline style');
+        // The containment predicate must be applied at BOTH sites (computeColumnOccupancy
+        // and renderBoard) and must be SCOPED to STAGING: mission_members rows survive
+        // dispatch, so an unscoped predicate hides every in-flight card from the board.
+        const scoped = html.match(/!card\.featureId && !\(card\.missionId && [^;]*?'STAGING'\)/g) || [];
+        assert.strictEqual(scoped.length, 2,
+            'the mission containment filter must be applied at both renderBoard sites and scoped '
+            + `to STAGING (found ${scoped.length})`);
+        assert.ok(!/!card\.featureId && !card\.missionId/.test(html),
+            'an unscoped !card.missionId predicate hides launched members from every column — '
+            + 'the members move to a coding column and their membership row is never cleared');
     });
 
     await check('launch is idempotent and derived, never a stored flag', () => {

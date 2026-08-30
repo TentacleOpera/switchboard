@@ -1073,7 +1073,7 @@ export type ColumnUpdateOutcome =
     | { ok: true }
     | {
           ok: false;
-          reason: 'not_found' | 'invalid_column' | 'no_rows_matched' | 'cascade_failed' | 'not_ready' | 'error';
+          reason: 'not_found' | 'invalid_column' | 'no_rows_matched' | 'cascade_failed' | 'not_ready' | 'mission_staging_only' | 'error';
           detail: string;   // caller-safe sentence, no SQL, no paths beyond what the caller supplied
       };
 
@@ -10350,23 +10350,23 @@ FROM plans
         if (!workspaceId || !Array.isArray(orderedPlanIds) || orderedPlanIds.length === 0) return false;
         if (!(await this.ensureReady()) || !this._db) return false;
         try {
-            // Read the current max position across the workspace's staged set or mission's members.
+            // Read the current max position across the workspace's staged set.
             // NULL positions do not contribute to MAX — they sort last by design.
             let maxPos = 0;
-            let stmt: any;
-            if (missionId) {
-                stmt = this._db.prepare(
-                    'SELECT COALESCE(MAX(p.queue_position), 0) AS m FROM plans p ' +
-                    'JOIN mission_members mm ON mm.member_id = p.plan_id ' +
-                    'WHERE p.workspace_id = ? AND mm.mission_id = ? AND p.kanban_column = ?',
-                    [workspaceId, missionId, 'STAGING']
-                );
-            } else {
-                stmt = this._db.prepare(
-                    'SELECT COALESCE(MAX(queue_position), 0) AS m FROM plans WHERE workspace_id = ? AND kanban_column = ?',
-                    [workspaceId, 'STAGING']
-                );
-            }
+            // The workspace-wide STAGING max is the FLOOR, always. The queue pop
+            // (`_runQueuePop`) orders by queue_position across the whole STAGING
+            // column, not per mission — so a mission-scoped max alone would restart
+            // a new mission's numbering at 1 and make its cards sort ahead of an
+            // older mission's, i.e. launching mission A would pop mission B's card.
+            // Appending above the global max is also, and trivially, the end of the
+            // receiving mission's own queue (the global max is >= that mission's),
+            // so item 12's rule holds with global monotonicity intact. `missionId`
+            // is read so a caller's intent is explicit at the seam and the
+            // mission's own max can never exceed the floor.
+            const stmt = this._db.prepare(
+                'SELECT COALESCE(MAX(queue_position), 0) AS m FROM plans WHERE workspace_id = ? AND kanban_column = ?',
+                [workspaceId, 'STAGING']
+            );
             try {
                 if (stmt.step()) { maxPos = Number(stmt.getAsObject().m ?? 0); }
             } finally {

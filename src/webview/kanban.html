@@ -8876,7 +8876,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             } else {
                 displayCards = cards.filter(card => card.column !== 'CREATED');
             }
-            displayCards = displayCards.filter(card => !card.featureId && !card.missionId);
+            // Mission members are contained by their mission card, which lives in
+            // STAGING. Scope the containment to STAGING: a member that has been
+            // dispatched moves to a coding column and its mission_members row
+            // survives, so an unscoped predicate would hide every in-flight card
+            // from the board.
+            displayCards = displayCards.filter(card => !card.featureId && !(card.missionId && card.column === 'STAGING'));
             displayCards.forEach(card => {
                 let effectiveCol = card.column;
                 if (showingBacklog && card.column === 'BACKLOG') effectiveCol = 'CREATED';
@@ -9079,8 +9084,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     .map(card => card.column === 'BACKLOG' ? { ...card, _effectiveColumn: 'CREATED' } : card);
             }
 
-            // Subtasks and mission members roll up. Hide them from the main board.
-            displayCards = displayCards.filter(card => !card.featureId && !card.missionId);
+            // Subtasks roll up into their feature card. Mission members roll up into
+            // their mission card, which lives in STAGING — so the mission predicate is
+            // scoped to that column. Membership is not cleared on dispatch, so an
+            // unscoped predicate hides every launched card from the board.
+            displayCards = displayCards.filter(card => !card.featureId && !(card.missionId && (card._effectiveColumn || card.column) === 'STAGING'));
 
             displayCards.forEach(card => {
                 const effectiveCol = card._effectiveColumn || card.column;
@@ -9216,14 +9224,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 if (col === 'STAGING') {
                     const parts = [];
-                    if (currentMissions && currentMissions.length > 0) {
-                        parts.push(...currentMissions.map(m => createMissionCardHtml(m)));
+                    // A completed mission is history, not staged work — its card would
+                    // otherwise sit in STAGING forever. runState is derived, so this
+                    // needs no stored flag.
+                    const liveMissions = (currentMissions || []).filter(m => m && m.runState !== 'completed');
+                    if (liveMissions.length > 0) {
+                        parts.push(...liveMissions.map(m => createMissionCardHtml(m)));
                     }
                     if (sortedItems.length > 0) {
                         // Loose cards staged before missions or not part of a mission
                         parts.push(...sortedItems.map(card => createCardHtml(card)));
                     }
-                    countEl.textContent = String(currentMissions.length + sortedItems.length);
+                    countEl.textContent = String(liveMissions.length + sortedItems.length);
                     if (parts.length === 0) {
                         container.innerHTML = '<div class="empty-state">No missions</div>';
                     } else {
@@ -9254,7 +9266,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             postKanbanMessage({ type: 'mcLaunchMission', missionId: el.dataset.missionId, workspaceRoot: root });
                             return;
                         }
-                        postKanbanMessage({ type: 'openSetupPanel', subTab: 'mission-control', workspaceRoot: root });
+                        postKanbanMessage({ type: 'openSetupPanel', section: 'mission-control', workspaceRoot: root });
                         return;
                     }
                     if (e.target.closest('.card-btn') || e.target.closest('button')) return;
@@ -9596,7 +9608,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const statusLabel = runState === 'in-flight' ? 'IN FLIGHT' : (runState === 'completed' ? 'COMPLETED' : 'READY');
             const statusClass = runState === 'in-flight' ? ' is-working' : '';
             return `
-                <div class="kanban-card mission-card${statusClass}" draggable="true" data-mission-id="${escapeAttr(mission.id)}" data-mission-name="${escapeAttr(mission.name)}" data-run-state="${escapeAttr(runState)}" data-workspace-root="${escapeAttr(mission.workspaceId || currentWorkspaceRoot)}">
+                <div class="kanban-card mission-card${statusClass}" draggable="true" data-mission-id="${escapeAttr(mission.id)}" data-mission-name="${escapeAttr(mission.name)}" data-run-state="${escapeAttr(runState)}" data-workspace-root="${escapeAttr(currentWorkspaceRoot || '')}">
                     <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
                         <span class="card-topic" style="font-weight:600;">${name}</span>
                         <span class="mission-badge">${statusLabel}</span>
@@ -10014,7 +10026,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const missionDragId = e.dataTransfer.getData('application/switchboard-mission-id');
             if (missionDragId) {
                 // Moving a mission card is refused across columns; it opens Mission Control instead.
-                postKanbanMessage({ type: 'openSetupPanel', subTab: 'mission-control', workspaceRoot });
+                postKanbanMessage({ type: 'openSetupPanel', section: 'mission-control', workspaceRoot });
                 return;
             }
 
@@ -10187,8 +10199,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // Build the current rendered order of STAGING cards (excluding
                     // the dragged set), then splice the dragged block in at the
                     // insertion index derived from the pointer's clientY.
+                    // Mission cards share the .kanban-card class but carry no plan id,
+                    // so they drop out of `stationaryIds` below. Excluding them HERE too
+                    // keeps the pointer-derived insertIndex counted over the same list —
+                    // otherwise every mission card above the pointer skews the index.
                     const stationaryEls = Array.from(targetBody.querySelectorAll('.kanban-card'))
                         .filter(el => {
+                            if (el.classList.contains('mission-card')) { return false; }
                             const pid = el.dataset.planId || el.dataset.session || '';
                             return !draggedIds.includes(pid);
                         });
