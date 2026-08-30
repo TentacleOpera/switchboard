@@ -494,6 +494,7 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
         fields: {
             sessionIds: { type: 'array', required: true },
             workspaceRoot: { type: 'string' },
+            missionId: { type: 'string', required: false },
         },
     },
     reorderQueue: {

@@ -353,6 +353,7 @@ const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_plans_notion_page ON plans(workspace_id, notion_page_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_dependencies_depends ON plan_dependencies(depends_on_plan_id)`,
     `CREATE INDEX IF NOT EXISTS idx_mission_members_mission ON mission_members(mission_id)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_mission_members_member ON mission_members(member_id)`,
     `CREATE INDEX IF NOT EXISTS idx_missions_workspace ON missions(workspace_id)`,
 ];
 
@@ -617,6 +618,11 @@ const MIGRATION_V64_SQL = [
     `CREATE TABLE IF NOT EXISTS mission_members (mission_id TEXT NOT NULL, member_id TEXT NOT NULL, member_kind TEXT NOT NULL, PRIMARY KEY (mission_id, member_id))`,
     `CREATE INDEX IF NOT EXISTS idx_mission_members_mission ON mission_members(mission_id)`,
     `CREATE INDEX IF NOT EXISTS idx_missions_workspace ON missions(workspace_id)`,
+];
+
+// V65: UNIQUE(member_id) on mission_members + staged orphan backfill.
+const MIGRATION_V65_SQL = [
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_mission_members_member ON mission_members(member_id)`,
 ];
 
 
@@ -8747,6 +8753,63 @@ export class KanbanDatabase {
             await this.setMigrationVersion(64);
             console.log('[KanbanDatabase] V64 migration completed: plan_dependencies + map_fingerprint + missions added');
         }
+
+        // V65: UNIQUE(member_id) on mission_members + staged orphan backfill.
+        const v65 = await this.getMigrationVersion();
+        if (v65 < 65) {
+            try {
+                this._db.exec(`
+                    DELETE FROM mission_members
+                    WHERE rowid NOT IN (
+                        SELECT MIN(rowid) FROM mission_members GROUP BY member_id
+                    )
+                `);
+            } catch { /* ignore if table empty or no duplicates */ }
+            for (const sql of MIGRATION_V65_SQL) {
+                try { this._db.exec(sql); } catch { /* index already exists */ }
+            }
+            await this._backfillStagedCardsToMissions();
+            await this.setMigrationVersion(65);
+            console.log('[KanbanDatabase] V65 migration completed: UNIQUE index on mission_members + staged orphan backfill done');
+        }
+    }
+
+    private async _backfillStagedCardsToMissions(): Promise<void> {
+        if (!this._db) return;
+        try {
+            const stmt = this._db.prepare(
+                "SELECT plan_id, workspace_id, is_feature FROM plans WHERE kanban_column = 'STAGING' AND plan_id NOT IN (SELECT member_id FROM mission_members) ORDER BY queue_position ASC, column_entered_at ASC, created_at ASC"
+            );
+            const orphans: Array<{ planId: string; workspaceId: string; isFeature: boolean }> = [];
+            try {
+                while (stmt.step()) {
+                    const r = stmt.getAsObject();
+                    orphans.push({
+                        planId: String(r.plan_id),
+                        workspaceId: String(r.workspace_id),
+                        isFeature: Number(r.is_feature) === 1
+                    });
+                }
+            } finally {
+                stmt.free();
+            }
+            if (orphans.length === 0) return;
+            const byWorkspace = new Map<string, Array<{ planId: string; isFeature: boolean }>>();
+            for (const o of orphans) {
+                if (!byWorkspace.has(o.workspaceId)) byWorkspace.set(o.workspaceId, []);
+                byWorkspace.get(o.workspaceId)!.push({ planId: o.planId, isFeature: o.isFeature });
+            }
+            for (const [wsId, items] of byWorkspace) {
+                const mission = await this.resolveOrCreateOpenMission(wsId);
+                if (mission) {
+                    for (const item of items) {
+                        await this.addMissionMember(mission.id, item.planId, item.isFeature ? 'feature' : 'plan');
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn('[KanbanDatabase] _backfillStagedCardsToMissions failed:', err);
+        }
     }
 
     /**
@@ -10283,17 +10346,27 @@ FROM plans
      * than duplicated (its row is updated, not inserted). Callers MUST pass the
      * selection order, not board order, for the webview staging arm.
      */
-    public async appendQueuePositions(workspaceId: string, orderedPlanIds: string[]): Promise<boolean> {
+    public async appendQueuePositions(workspaceId: string, orderedPlanIds: string[], missionId?: string): Promise<boolean> {
         if (!workspaceId || !Array.isArray(orderedPlanIds) || orderedPlanIds.length === 0) return false;
         if (!(await this.ensureReady()) || !this._db) return false;
         try {
-            // Read the current max position across the workspace's staged set.
+            // Read the current max position across the workspace's staged set or mission's members.
             // NULL positions do not contribute to MAX — they sort last by design.
             let maxPos = 0;
-            const stmt = this._db.prepare(
-                'SELECT COALESCE(MAX(queue_position), 0) AS m FROM plans WHERE workspace_id = ? AND kanban_column = ?',
-                [workspaceId, 'STAGING']
-            );
+            let stmt: any;
+            if (missionId) {
+                stmt = this._db.prepare(
+                    'SELECT COALESCE(MAX(p.queue_position), 0) AS m FROM plans p ' +
+                    'JOIN mission_members mm ON mm.member_id = p.plan_id ' +
+                    'WHERE p.workspace_id = ? AND mm.mission_id = ? AND p.kanban_column = ?',
+                    [workspaceId, missionId, 'STAGING']
+                );
+            } else {
+                stmt = this._db.prepare(
+                    'SELECT COALESCE(MAX(queue_position), 0) AS m FROM plans WHERE workspace_id = ? AND kanban_column = ?',
+                    [workspaceId, 'STAGING']
+                );
+            }
             try {
                 if (stmt.step()) { maxPos = Number(stmt.getAsObject().m ?? 0); }
             } finally {

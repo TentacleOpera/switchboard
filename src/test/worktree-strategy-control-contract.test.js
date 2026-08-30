@@ -91,23 +91,6 @@ test('the stash key survives in exactly one place: the drain', () => {
     );
 });
 
-test('the setFeatureWorktreeMode arm writes the mode and nothing else', () => {
-    // Bounded by the NEXT case label rather than a named one — sibling arms move.
-    const armStart = kanbanProviderSource.indexOf("case 'setFeatureWorktreeMode': {");
-    assert.notStrictEqual(armStart, -1, 'the setFeatureWorktreeMode verb arm must still exist');
-    const armRest = kanbanProviderSource.slice(armStart);
-    const armEnd = armRest.slice(1).indexOf("\n            case '");
-    const arm = armEnd === -1 ? armRest : armRest.slice(0, armEnd + 1);
-    assert.ok(
-        !arm.includes('mission-control_prior_feature_worktree_mode'),
-        'the arm still clears the stashed prior — that clear defended against a restore that no longer exists, and clearing it here would consume the key before the drain can rescue a stranded install'
-    );
-    assert.ok(
-        arm.includes("db.setConfig('feature_worktree_mode'"),
-        'the arm no longer persists the mode'
-    );
-});
-
 // ── the drain ───────────────────────────────────────────────────────────────
 
 test('the drain restores, consumes the key, and re-broadcasts', () => {
@@ -173,60 +156,6 @@ test('every mode read routes through the normaliser', () => {
     );
 });
 
-// ── the control ─────────────────────────────────────────────────────────────
-
-const strategyBlock = (() => {
-    const start = kanbanHtml.indexOf('// ── Worktree strategy');
-    assert.notStrictEqual(start, -1, 'the Worktrees tab has no worktree-strategy block');
-    const end = kanbanHtml.indexOf('settingsSection.appendChild(modeRow);', start);
-    assert.notStrictEqual(end, -1, 'the worktree-strategy block is never appended to the settings section');
-    return kanbanHtml.slice(start, end);
-})();
-
-test('the control renders exactly the two modes the verb arm accepts', () => {
-    const values = [...strategyBlock.matchAll(/\{\s*value:\s*'([^']+)'/g)].map(m => m[1]);
-    assert.deepStrictEqual(
-        values, ['none', 'per-feature'],
-        `the radio offers ${JSON.stringify(values)} — setFeatureWorktreeMode accepts only ['none','per-feature'], so any extra option is a dead control that the arm rejects`
-    );
-});
-
-test('checked state derives from the broadcast, never from a click assumption', () => {
-    assert.ok(
-        /config\.featureWorktreeMode/.test(strategyBlock),
-        'the radio does not read featureWorktreeMode from the worktreeConfig broadcast'
-    );
-    assert.ok(
-        /radio\.checked\s*=\s*current === opt\.value/.test(strategyBlock),
-        'checked state must be recomputed from the broadcast on every render so a rejected write settles back to the true value'
-    );
-    assert.ok(
-        /=== 'per-feature' \? 'per-feature' : 'none'/.test(strategyBlock),
-        "the control must clamp on read too — a broadcast carrying a legacy value must check 'none' rather than checking nothing"
-    );
-});
-
-test('selecting a mode posts the verb with mode and workspaceRoot', () => {
-    assert.ok(
-        /type:\s*'setFeatureWorktreeMode'/.test(strategyBlock),
-        'the radio does not post setFeatureWorktreeMode'
-    );
-    assert.ok(
-        /mode:\s*opt\.value/.test(strategyBlock) && /workspaceRoot:\s*currentWorkspaceRoot/.test(strategyBlock),
-        'the posted payload must carry both mode and workspaceRoot — the arm resolves the DB from the root'
-    );
-});
-
-test('no confirm gate on the control', () => {
-    // Project rule, and confirm() is a silent no-op in a VS Code webview: a gate
-    // here would make the radio do literally nothing. Comments are stripped first —
-    // the block deliberately DOCUMENTS the prohibition, which must not trip it.
-    const code = strategyBlock.replace(/\/\/[^\n]*/g, '');
-    assert.ok(
-        !/\bconfirm\s*\(/.test(code),
-        'a confirm gate was added to the worktree-strategy control'
-    );
-});
-
 if (failures > 0) { console.error(`\n${failures} contract failure(s)`); process.exit(1); }
 console.log('\nAll worktree-strategy control contract assertions passed.');
+

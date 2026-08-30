@@ -2847,21 +2847,20 @@ body.theme-claudify .shared-tab-btn.active {
   background: var(--panel-bg);
   border-color: transparent;
   border-bottom-color: transparent;
+/* Mission card styling in STAGING column */
+.kanban-card.mission-card {
+    border-left: 3px solid var(--vscode-focusBorder, #4d9375);
+    background: var(--vscode-editorWidget-background, rgba(255,255,255,.04));
+    cursor: grab;
 }
-/* Mission group label — the STAGING column groups members under their
-   mission's codename, so which mission runs which cards is visible. */
-.mission-group-label {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 6px; margin: 6px 0 2px; padding: 2px 6px;
-    font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
-    color: var(--text-secondary, var(--vscode-descriptionForeground));
-    border-left: 2px solid var(--vscode-focusBorder, #4d9375);
-    background: var(--vscode-editorWidget-background, rgba(255,255,255,.03));
+.kanban-card.mission-card .mission-badge {
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(255,255,255,.1);
+    color: var(--text-secondary);
+    text-transform: uppercase;
 }
-.mission-group-label:first-child { margin-top: 0; }
-.mission-group-label.is-unassigned { border-left-color: var(--vscode-descriptionForeground, #888); opacity: .75; }
-.mission-group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mission-group-count { flex: 0 0 auto; opacity: .7; }
 
 body.theme-claudify .shared-tab-btn:hover:not(.active) {
   color: #c8c8c8;
@@ -3676,6 +3675,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           </div>
         </div>
 
+        <div class="db-subsection">
+          <div class="subsection-header" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <span>Library</span>
+            <button id="standing-orders-def-add-btn" class="action-btn" style="height:26px; line-height:24px; padding:0 12px; margin:0;">+ NEW ENTRY</button>
+          </div>
+          <div class="section-desc" style="margin:0 0 10px 0;">Reusable instructions. Editing one updates every order that follows it.</div>
+          <div id="standing-orders-def-add-form" style="display:none; border:1px solid var(--panel-border, #444); padding:10px; margin-bottom:12px; border-radius:4px;">
+            <label class="modal-label" for="standing-orders-def-add-name">Name <span style="font-weight:normal; color:var(--text-secondary, #999);">(optional)</span></label>
+            <input id="standing-orders-def-add-name" class="modal-input" type="text" placeholder="Short label">
+            <label class="modal-label" for="standing-orders-def-add-instruction">Instruction</label>
+            <textarea id="standing-orders-def-add-instruction" class="modal-textarea" rows="3" placeholder="Reusable instruction..."></textarea>
+            <div id="standing-orders-def-add-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 4px;"></div>
+            <div class="flex gap-2" style="margin-top: 8px;">
+              <button id="standing-orders-def-add-submit" class="action-btn">SAVE</button>
+              <button id="standing-orders-def-add-cancel" class="secondary-btn">CANCEL</button>
+            </div>
+          </div>
+          <div id="standing-orders-def-list"></div>
+          <div id="standing-orders-def-empty" style="display:none; color: var(--text-secondary, #999); font-size: 12px; padding: 12px 0;">No library entries yet.</div>
+        </div>
+
         <!-- Scope filter + Add button -->
         <div class="db-subsection">
           <div class="subsection-header"><span>Standing Orders</span></div>
@@ -3707,6 +3727,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <div id="standing-orders-add-team-row" style="display:none; margin-bottom:6px;">
               <label class="modal-label" for="standing-orders-add-team">Team</label>
               <select id="standing-orders-add-team" class="modal-input"></select>
+            </div>
+            <div id="standing-orders-add-def-row" style="display:none; margin-bottom:6px;">
+              <label class="modal-label" for="standing-orders-add-def">From library</label>
+              <select id="standing-orders-add-def" class="modal-input"></select>
             </div>
             <label class="modal-label" for="standing-orders-add-instruction">Instruction</label>
             <textarea id="standing-orders-add-instruction" class="modal-textarea" rows="3" placeholder="The instruction appended to every matching prompt..."></textarea>
@@ -6339,6 +6363,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         }
         let allCards = [];
+        let currentMissions = [];
         // Apply the local project filter to a card set. Unassigned cards have
         // project === '' (cards are built with `row.project || ''`).
         function applyBoardProjectFilter(cards) {
@@ -6621,7 +6646,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // HTTP fetches. `pair` orders are list + delete only (add/edit stays in
         // the Link-up modal, which has the terminal-pairing selectors this view
         // lacks). No confirm gate on delete (per CLAUDE.md).
-        const standingOrdersTabState = { available: false, orders: [] };
+        const standingOrdersTabState = { available: false, orders: [], definitions: [] };
+        const standingOrdersTabBuiltInRoles = ['planner', 'lead', 'coder', 'intern', 'reviewer', 'tester', 'analyst', 'researcher', 'ticket_updater', 'jules'];
 
         function standingOrdersTabEscapeHtml(s) {
             return String(s == null ? '' : s)
@@ -6640,10 +6666,30 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return g ? g.name : null;
         }
 
+        function standingOrdersTabCustomAgents() {
+            try {
+                return Array.isArray(lastCustomAgents) ? lastCustomAgents : [];
+            } catch (_) {
+                return [];
+            }
+        }
+
+        function standingOrdersTabRoleExists(role) {
+            if (standingOrdersTabBuiltInRoles.includes(role)) { return true; }
+            return standingOrdersTabCustomAgents().some(agent => agent && (agent.id === role || agent.name === role));
+        }
+
+        function standingOrdersTabDefinition(id) {
+            return (standingOrdersTabState.definitions || []).find(definition => definition && definition.id === id) || null;
+        }
+
         function standingOrdersTabScopeBadge(o) {
             const scope = o.scope || 'pair';
             if (scope === 'global') { return 'GLOBAL'; }
-            if (scope === 'role') { return 'ROLE: ' + standingOrdersTabEscapeHtml(o.role || '?'); }
+            if (scope === 'role') {
+                const role = o.role || '?';
+                return 'ROLE: ' + standingOrdersTabEscapeHtml(role) + (standingOrdersTabRoleExists(role) ? '' : ' (role not found)');
+            }
             if (scope === 'team' || scope === 'team-head') {
                 const name = standingOrdersTabTeamName(o.teamId);
                 const label = scope === 'team-head' ? 'TEAM-HEAD' : 'TEAM';
@@ -6658,10 +6704,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const sel = document.getElementById('standing-orders-add-role');
             if (!sel) { return; }
             // Reuse the Prompts tab's built-in role list + custom agents.
-            const builtins = ['planner', 'lead', 'coder', 'intern', 'reviewer', 'tester', 'analyst', 'researcher', 'ticket_updater', 'jules'];
-            const custom = (typeof lastCustomAgents !== 'undefined' && Array.isArray(lastCustomAgents)) ? lastCustomAgents : [];
+            const custom = standingOrdersTabCustomAgents();
             let html = '';
-            for (const r of builtins) {
+            for (const r of standingOrdersTabBuiltInRoles) {
                 html += '<option value="' + standingOrdersTabEscapeHtml(r) + '">' + standingOrdersTabEscapeHtml(r) + '</option>';
             }
             if (custom.length) {
@@ -6688,6 +6733,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         }
 
+        function standingOrdersTabPopulateDefinitionSelect() {
+            const row = document.getElementById('standing-orders-add-def-row');
+            const select = document.getElementById('standing-orders-add-def');
+            if (!row || !select) { return; }
+            const definitions = standingOrdersTabState.available
+                ? (standingOrdersTabState.definitions || []).filter(definition => definition && definition.id)
+                : [];
+            const selected = select.value;
+            row.style.display = definitions.length ? 'block' : 'none';
+            select.innerHTML = '<option value="">(none)</option>' + definitions.map(definition => {
+                const label = definition.name || String(definition.instruction || '').slice(0, 60) || 'Untitled';
+                return '<option value="' + standingOrdersTabEscapeHtml(definition.id) + '">' + standingOrdersTabEscapeHtml(label) + '</option>';
+            }).join('');
+            if (definitions.some(definition => definition.id === selected)) { select.value = selected; }
+        }
+
         function standingOrdersTabFilteredOrders() {
             const scope = standingOrdersTabCurrentScope();
             const orders = standingOrdersTabState.orders || [];
@@ -6700,15 +6761,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const emptyEl = document.getElementById('standing-orders-empty');
             const unavailEl = document.getElementById('standing-orders-unavailable');
             const addBtn = document.getElementById('standing-orders-add-btn');
-            if (!listEl) { return; }
+            const defListEl = document.getElementById('standing-orders-def-list');
+            const defEmptyEl = document.getElementById('standing-orders-def-empty');
+            const defAddBtn = document.getElementById('standing-orders-def-add-btn');
+            if (!listEl || !defListEl) { return; }
 
             // Availability gate
             if (unavailEl) { unavailEl.style.display = standingOrdersTabState.available ? 'none' : 'block'; }
             if (addBtn) { addBtn.disabled = !standingOrdersTabState.available; }
+            if (defAddBtn) { defAddBtn.disabled = !standingOrdersTabState.available; }
+
+            const definitions = standingOrdersTabState.available
+                ? (standingOrdersTabState.definitions || []).filter(definition => definition && definition.id)
+                : [];
+            defListEl.innerHTML = definitions.map(definition => standingOrdersTabRenderDefRow(definition)).join('');
+            if (defEmptyEl) { defEmptyEl.style.display = standingOrdersTabState.available && !definitions.length ? 'block' : 'none'; }
+            standingOrdersTabPopulateDefinitionSelect();
 
             const filtered = standingOrdersTabFilteredOrders();
             if (emptyEl) { emptyEl.style.display = filtered.length ? 'none' : 'block'; }
-
             listEl.innerHTML = filtered.map(o => standingOrdersTabRenderRow(o)).join('');
         }
 
@@ -6733,6 +6804,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 : '<button class="secondary-btn" style="height:22px; line-height:20px; padding:0 8px; margin:0;" data-so-action="toggle-edit" data-so-id="' + oid + '">EDIT</button>';
             const deleteBtn = '<button class="secondary-btn" style="height:22px; line-height:20px; padding:0 8px; margin:0; color: var(--accent-red, #f48771);" data-so-action="delete" data-so-id="' + oid + '">DELETE</button>';
             const effectiveLine = effective ? '<div style="font-size: 11px; color: var(--text-secondary, #999); margin-top: 4px;">Effective: ' + effective + '</div>' : '';
+            const definition = o.definitionId ? standingOrdersTabDefinition(o.definitionId) : null;
+            const definitionName = definition ? (definition.name || String(definition.instruction || '').slice(0, 60) || 'Untitled') : '';
+            const linkedLine = definition
+                ? '<div style="font-size:11px; color:var(--text-secondary, #999); margin-top:6px;">Follows library entry «' + standingOrdersTabEscapeHtml(definitionName) + '» — editing here detaches this order</div>'
+                : '';
             const editForm = isPair ? '' : standingOrdersTabRenderEditForm(o);
             return '<div style="border:1px solid var(--panel-border, #444); padding:10px; margin-bottom:8px; border-radius:4px;">'
                 + '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap; margin-bottom:6px;">'
@@ -6741,8 +6817,124 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 + '</div>'
                 + '<div style="font-size: 12px; white-space:pre-wrap; word-break:break-word;">' + instruction + '</div>'
                 + effectiveLine
+                + linkedLine
                 + editForm
                 + '</div>';
+        }
+
+        function standingOrdersTabRenderDefRow(definition) {
+            const id = standingOrdersTabEscapeHtml(definition.id);
+            const name = standingOrdersTabEscapeHtml(definition.name || String(definition.instruction || '').slice(0, 60) || 'Untitled');
+            const instruction = standingOrdersTabEscapeHtml(definition.instruction || '');
+            const usageCount = (standingOrdersTabState.orders || []).filter(order => order && order.definitionId === definition.id).length;
+            const usageLine = usageCount === 0
+                ? 'Used by no orders — safe to delete'
+                : 'Used by ' + usageCount + ' ' + (usageCount === 1 ? 'order' : 'orders');
+            const updateLine = usageCount > 0
+                ? '<div style="font-size:11px; color:var(--text-secondary, #999); margin-bottom:6px;">Saving updates the instruction on ' + usageCount + ' ' + (usageCount === 1 ? 'order' : 'orders') + '.</div>'
+                : '';
+            return '<div style="border:1px solid var(--panel-border, #444); padding:10px; margin-bottom:8px; border-radius:4px;">'
+                + '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap; margin-bottom:6px;">'
+                + '<strong style="font-size:12px;">' + name + '</strong>'
+                + '<div style="display:flex; gap:6px; align-items:center;">'
+                + '<button class="secondary-btn" style="height:22px; line-height:20px; padding:0 8px; margin:0;" data-so-def-action="toggle-edit" data-so-def-id="' + id + '">EDIT</button>'
+                + '<button class="secondary-btn" style="height:22px; line-height:20px; padding:0 8px; margin:0; color:var(--accent-red, #f48771);" data-so-def-action="delete" data-so-def-id="' + id + '">DELETE</button>'
+                + '</div></div>'
+                + '<div style="font-size:12px; white-space:pre-wrap; word-break:break-word;">' + instruction + '</div>'
+                + '<div style="font-size:11px; color:var(--text-secondary, #999); margin-top:6px;">' + usageLine + '</div>'
+                + '<div id="standing-orders-def-edit-' + id + '" style="display:none; margin-top:8px; border-top:1px solid var(--panel-border, #444); padding-top:8px;">'
+                + updateLine
+                + '<label class="modal-label" for="standing-orders-def-edit-name-' + id + '">Name</label>'
+                + '<input id="standing-orders-def-edit-name-' + id + '" class="modal-input" type="text" value="' + name + '">'
+                + '<label class="modal-label" for="standing-orders-def-edit-instruction-' + id + '">Instruction</label>'
+                + '<textarea id="standing-orders-def-edit-instruction-' + id + '" class="modal-textarea" rows="3">' + instruction + '</textarea>'
+                + '<div id="standing-orders-def-edit-error-' + id + '" style="min-height:16px; color:var(--accent-red); font-size:11px; margin-top:4px;"></div>'
+                + '<div class="flex gap-2" style="margin-top:6px;">'
+                + '<button class="action-btn" style="height:24px; line-height:22px; padding:0 10px;" data-so-def-action="save-edit" data-so-def-id="' + id + '">SAVE</button>'
+                + '<button class="secondary-btn" style="height:24px; line-height:22px; padding:0 10px;" data-so-def-action="toggle-edit" data-so-def-id="' + id + '">CANCEL</button>'
+                + '</div></div></div>';
+        }
+
+        function standingOrdersTabToggleDefEdit(id) {
+            const form = document.getElementById('standing-orders-def-edit-' + id);
+            if (form) { form.style.display = form.style.display === 'none' ? 'block' : 'none'; }
+        }
+
+        function standingOrdersTabSaveDefEdit(id) {
+            const nameInput = document.getElementById('standing-orders-def-edit-name-' + id);
+            const instructionInput = document.getElementById('standing-orders-def-edit-instruction-' + id);
+            const errorEl = document.getElementById('standing-orders-def-edit-error-' + id);
+            const instruction = instructionInput ? instructionInput.value : '';
+            if (!instruction.trim()) {
+                if (errorEl) { errorEl.textContent = 'Instruction is required'; }
+                return;
+            }
+            const enteredName = nameInput ? nameInput.value.trim() : '';
+            if (errorEl) { errorEl.textContent = ''; }
+            postKanbanMessage({
+                type: 'updateStandingOrderDefinition',
+                id: id,
+                name: enteredName || instruction.slice(0, 60),
+                instruction: instruction
+            });
+        }
+
+        function standingOrdersTabDeleteDef(id) {
+            postKanbanMessage({ type: 'deleteStandingOrderDefinition', id: id });
+        }
+
+        function standingOrdersTabShowDefAddForm() {
+            if (!standingOrdersTabState.available) { return; }
+            const form = document.getElementById('standing-orders-def-add-form');
+            const errorEl = document.getElementById('standing-orders-def-add-error');
+            if (errorEl) { errorEl.textContent = ''; }
+            if (form) { form.style.display = 'block'; }
+        }
+
+        function standingOrdersTabHideDefAddForm() {
+            const form = document.getElementById('standing-orders-def-add-form');
+            const nameInput = document.getElementById('standing-orders-def-add-name');
+            const instructionInput = document.getElementById('standing-orders-def-add-instruction');
+            const errorEl = document.getElementById('standing-orders-def-add-error');
+            if (form) { form.style.display = 'none'; }
+            if (nameInput) { nameInput.value = ''; }
+            if (instructionInput) { instructionInput.value = ''; }
+            if (errorEl) { errorEl.textContent = ''; }
+        }
+
+        function standingOrdersTabSubmitDefAdd() {
+            const nameInput = document.getElementById('standing-orders-def-add-name');
+            const instructionInput = document.getElementById('standing-orders-def-add-instruction');
+            const errorEl = document.getElementById('standing-orders-def-add-error');
+            const instruction = instructionInput ? instructionInput.value : '';
+            if (!instruction.trim()) {
+                if (errorEl) { errorEl.textContent = 'Instruction is required'; }
+                return;
+            }
+            const enteredName = nameInput ? nameInput.value.trim() : '';
+            if (errorEl) { errorEl.textContent = ''; }
+            postKanbanMessage({
+                type: 'addStandingOrderDefinition',
+                name: enteredName || instruction.slice(0, 60),
+                instruction: instruction
+            });
+        }
+
+        function standingOrdersTabUseDefinition() {
+            const form = document.getElementById('standing-orders-add-form');
+            const select = document.getElementById('standing-orders-add-def');
+            const instructionInput = document.getElementById('standing-orders-add-instruction');
+            if (!form || !select || !instructionInput) { return; }
+            const definition = standingOrdersTabDefinition(select.value);
+            form.dataset.definitionId = definition ? definition.id : '';
+            if (definition) { instructionInput.value = definition.instruction || ''; }
+        }
+
+        function standingOrdersTabDetachDefinition() {
+            const form = document.getElementById('standing-orders-add-form');
+            const select = document.getElementById('standing-orders-add-def');
+            if (form) { form.dataset.definitionId = ''; }
+            if (select) { select.value = ''; }
         }
 
         function standingOrdersTabRenderEditForm(o) {
@@ -6786,6 +6978,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const note = document.getElementById('standing-orders-add-scope-note');
             const roleRow = document.getElementById('standing-orders-add-role-row');
             const teamRow = document.getElementById('standing-orders-add-team-row');
+            const definitionRow = document.getElementById('standing-orders-add-def-row');
             const err = document.getElementById('standing-orders-add-error');
             if (!form) { return; }
 
@@ -6794,6 +6987,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (note) { note.textContent = 'Add pair orders via the Link-up modal.'; }
                 if (roleRow) { roleRow.style.display = 'none'; }
                 if (teamRow) { teamRow.style.display = 'none'; }
+                if (definitionRow) { definitionRow.style.display = 'none'; }
+                form.dataset.definitionId = '';
                 form.style.display = 'block';
                 const submit = document.getElementById('standing-orders-add-submit');
                 if (submit) { submit.disabled = true; }
@@ -6807,15 +7002,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (err) { err.textContent = ''; }
             const submit = document.getElementById('standing-orders-add-submit');
             if (submit) { submit.disabled = false; }
+            standingOrdersTabPopulateDefinitionSelect();
             form.style.display = 'block';
             form.dataset.scope = addScope;
         }
 
         function standingOrdersTabHideAddForm() {
             const form = document.getElementById('standing-orders-add-form');
-            if (form) { form.style.display = 'none'; }
+            if (form) {
+                form.style.display = 'none';
+                form.dataset.definitionId = '';
+            }
             const ta = document.getElementById('standing-orders-add-instruction');
             if (ta) { ta.value = ''; }
+            const definitionSelect = document.getElementById('standing-orders-add-def');
+            if (definitionSelect) { definitionSelect.value = ''; }
             const err = document.getElementById('standing-orders-add-error');
             if (err) { err.textContent = ''; }
         }
@@ -6833,6 +7034,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 return;
             }
             const payload = { type: 'addStandingOrder', scope: scope, instruction: instruction };
+            if (form.dataset.definitionId) { payload.definitionId = form.dataset.definitionId; }
             if (scope === 'role') {
                 const roleSel = document.getElementById('standing-orders-add-role');
                 payload.role = roleSel ? roleSel.value : '';
@@ -6859,6 +7061,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (cancelBtn) { cancelBtn.addEventListener('click', standingOrdersTabHideAddForm); }
             const submitBtn = document.getElementById('standing-orders-add-submit');
             if (submitBtn) { submitBtn.addEventListener('click', standingOrdersTabSubmitAdd); }
+            const definitionSelect = document.getElementById('standing-orders-add-def');
+            if (definitionSelect) { definitionSelect.addEventListener('change', standingOrdersTabUseDefinition); }
+            const addInstruction = document.getElementById('standing-orders-add-instruction');
+            if (addInstruction) { addInstruction.addEventListener('input', standingOrdersTabDetachDefinition); }
+            const defAddBtn = document.getElementById('standing-orders-def-add-btn');
+            if (defAddBtn) { defAddBtn.addEventListener('click', standingOrdersTabShowDefAddForm); }
+            const defCancelBtn = document.getElementById('standing-orders-def-add-cancel');
+            if (defCancelBtn) { defCancelBtn.addEventListener('click', standingOrdersTabHideDefAddForm); }
+            const defSubmitBtn = document.getElementById('standing-orders-def-add-submit');
+            if (defSubmitBtn) { defSubmitBtn.addEventListener('click', standingOrdersTabSubmitDefAdd); }
             // Row actions are delegated: the list is re-rendered wholesale on every
             // refresh, so per-button listeners would be re-attached (or lost) each
             // time, and inline onclick= is CSP-blocked in this webview.
@@ -6872,6 +7084,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         case 'toggle-edit': standingOrdersTabToggleEdit(soId); break;
                         case 'save-edit': standingOrdersTabSaveEdit(soId); break;
                         case 'delete': standingOrdersTabDelete(soId); break;
+                    }
+                });
+            }
+            const definitionListEl = document.getElementById('standing-orders-def-list');
+            if (definitionListEl) {
+                definitionListEl.addEventListener('click', function (ev) {
+                    const btn = ev.target && ev.target.closest ? ev.target.closest('[data-so-def-action]') : null;
+                    if (!btn || !definitionListEl.contains(btn)) { return; }
+                    const definitionId = btn.getAttribute('data-so-def-id') || '';
+                    switch (btn.getAttribute('data-so-def-action')) {
+                        case 'toggle-edit': standingOrdersTabToggleDefEdit(definitionId); break;
+                        case 'save-edit': standingOrdersTabSaveDefEdit(definitionId); break;
+                        case 'delete': standingOrdersTabDeleteDef(definitionId); break;
                     }
                 });
             }
@@ -8651,7 +8876,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             } else {
                 displayCards = cards.filter(card => card.column !== 'CREATED');
             }
-            displayCards = displayCards.filter(card => !card.featureId);
+            displayCards = displayCards.filter(card => !card.featureId && !card.missionId);
             displayCards.forEach(card => {
                 let effectiveCol = card.column;
                 if (showingBacklog && card.column === 'BACKLOG') effectiveCol = 'CREATED';
@@ -8854,8 +9079,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     .map(card => card.column === 'BACKLOG' ? { ...card, _effectiveColumn: 'CREATED' } : card);
             }
 
-            // Subtasks roll up into their feature card. Hide them from the main board.
-            displayCards = displayCards.filter(card => !card.featureId);
+            // Subtasks and mission members roll up. Hide them from the main board.
+            displayCards = displayCards.filter(card => !card.featureId && !card.missionId);
 
             displayCards.forEach(card => {
                 const effectiveCol = card._effectiveColumn || card.column;
@@ -8989,48 +9214,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
                 countEl.textContent = String(occupancyCounts[col] || 0);
 
-                if (items.length === 0) {
-                    container.innerHTML = '<div class="empty-state">No plans</div>';
-                } else if (col === 'STAGING') {
-                    // A staged card is always a member of a mission (item 10 — a drag
-                    // into STAGING always joins one, or creates one with a codename).
-                    // Members are rendered CONTAINED BY their mission: grouped under
-                    // its codename, in queue_position order, so which mission will run
-                    // which cards is visible on the board.
-                    //
-                    // The plan's wording is that a member "stops being a board card"
-                    // and the mission card shows its members instead. That swap is not
-                    // done here: every STAGING action (advance, Prompt all, Run queue,
-                    // reorder, star) targets card elements, so replacing them with a
-                    // single mission card without rebuilding those actions would leave
-                    // a column you cannot operate. Grouping gives the containment the
-                    // plan is for — you can see the mission and its membership —
-                    // without stranding the actions. The swap is a UI card of its own.
-                    const groups = new Map();
-                    sortedItems.forEach(card => {
-                        const key = card.missionId || '';
-                        if (!groups.has(key)) { groups.set(key, { name: card.missionName || '', cards: [] }); }
-                        groups.get(key).cards.push(card);
-                    });
+                if (col === 'STAGING') {
                     const parts = [];
-                    groups.forEach((group, key) => {
-                        if (key) {
-                            parts.push(
-                                '<div class="mission-group-label" data-mission-id="' + escapeAttr(key) + '">'
-                                + '<span class="mission-group-name">' + escapeHtml(group.name || 'mission') + '</span>'
-                                + '<span class="mission-group-count">' + group.cards.length + '</span>'
-                                + '</div>'
-                            );
-                        } else {
-                            // Staged before missions existed. Not an error state — it
-                            // runs exactly as it always did; it just has no mission to
-                            // be shown under.
-                            parts.push('<div class="mission-group-label is-unassigned"><span class="mission-group-name">no mission</span>'
-                                + '<span class="mission-group-count">' + group.cards.length + '</span></div>');
-                        }
-                        parts.push(...group.cards.map(card => createCardHtml(card)));
-                    });
-                    container.innerHTML = parts.join('');
+                    if (currentMissions && currentMissions.length > 0) {
+                        parts.push(...currentMissions.map(m => createMissionCardHtml(m)));
+                    }
+                    if (sortedItems.length > 0) {
+                        // Loose cards staged before missions or not part of a mission
+                        parts.push(...sortedItems.map(card => createCardHtml(card)));
+                    }
+                    countEl.textContent = String(currentMissions.length + sortedItems.length);
+                    if (parts.length === 0) {
+                        container.innerHTML = '<div class="empty-state">No missions</div>';
+                    } else {
+                        container.innerHTML = parts.join('');
+                    }
+                } else if (items.length === 0) {
+                    container.innerHTML = '<div class="empty-state">No plans</div>';
                 } else {
                     container.innerHTML = sortedItems.map(card => createCardHtml(card)).join('');
                 }
@@ -9047,6 +9247,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 // Card selection toggle (click on card body, not on buttons)
                 el.addEventListener('click', (e) => {
+                    if (el.classList.contains('mission-card')) {
+                        const root = el.dataset.workspaceRoot || currentWorkspaceRoot;
+                        const launchBtn = e.target.closest('.mission-launch-btn');
+                        if (launchBtn) {
+                            postKanbanMessage({ type: 'mcLaunchMission', missionId: el.dataset.missionId, workspaceRoot: root });
+                            return;
+                        }
+                        postKanbanMessage({ type: 'openSetupPanel', subTab: 'mission-control', workspaceRoot: root });
+                        return;
+                    }
                     if (e.target.closest('.card-btn') || e.target.closest('button')) return;
                     const pid = el.dataset.planId || el.dataset.session || '';
                     if (!pid) return; // Skip if no valid ID — also prevents empty selectPlan message
@@ -9376,6 +9586,30 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 cardEl.classList.remove('is-working');
                 cardEl.removeAttribute('title');
             }
+        }
+
+        function createMissionCardHtml(mission) {
+            const name = escapeHtml(mission.name || 'Mission');
+            const memberCount = (mission.plans?.length || 0) + (mission.features?.length || 0);
+            const runState = mission.runState || 'not-started';
+            const streamDepth = mission.sequencing?.length ? `${mission.sequencing.length} step(s)` : '';
+            const statusLabel = runState === 'in-flight' ? 'IN FLIGHT' : (runState === 'completed' ? 'COMPLETED' : 'READY');
+            const statusClass = runState === 'in-flight' ? ' is-working' : '';
+            return `
+                <div class="kanban-card mission-card${statusClass}" draggable="true" data-mission-id="${escapeAttr(mission.id)}" data-mission-name="${escapeAttr(mission.name)}" data-run-state="${escapeAttr(runState)}" data-workspace-root="${escapeAttr(mission.workspaceId || currentWorkspaceRoot)}">
+                    <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+                        <span class="card-topic" style="font-weight:600;">${name}</span>
+                        <span class="mission-badge">${statusLabel}</span>
+                    </div>
+                    <div class="card-meta" style="font-size:10px; color:var(--text-secondary); margin-top:4px; display:flex; justify-content:space-between;">
+                        <span>${memberCount} member(s)</span>
+                        ${streamDepth ? `<span>${streamDepth}</span>` : ''}
+                    </div>
+                    <div class="card-actions" style="margin-top:6px; display:flex; gap:4px;">
+                        <button class="card-btn mission-launch-btn" data-mission-id="${escapeAttr(mission.id)}" data-tooltip="Launch mission" ${runState === 'in-flight' ? 'disabled' : ''}>Launch</button>
+                    </div>
+                </div>
+            `;
         }
 
         function createCardHtml(card) {
@@ -9714,11 +9948,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 (e.currentTarget && e.currentTarget.classList && e.currentTarget.classList.contains('kanban-card'))
                     ? e.currentTarget
                     : e.target.closest('.kanban-card');
-            const draggedId = draggedCardEl?.dataset.planId || draggedCardEl?.dataset.session;
+            const draggedId = draggedCardEl?.dataset.planId || draggedCardEl?.dataset.session || draggedCardEl?.dataset.missionId;
             if (!draggedCardEl || !draggedId) return;
             draggedSessionId = draggedId;
             draggedCardEl.classList.add('dragging');
             e.dataTransfer.effectAllowed = 'move';
+
+            if (draggedCardEl.classList.contains('mission-card')) {
+                e.dataTransfer.setData('application/switchboard-mission-id', draggedCardEl.dataset.missionId || '');
+            }
 
             // Check if the dragged card is part of a multi-selection
             let idsToTransfer = [draggedId];
@@ -9731,7 +9969,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             // Add dragging class to all cards being transferred
             idsToTransfer.forEach(id => {
-                const el = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
+                const el = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-mission-id="${CSS.escape(id)}"]`);
                 if (el) el.classList.add('dragging');
             });
 
@@ -9772,6 +10010,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             e.preventDefault();
             e.currentTarget.classList.remove('drag-over');
             const workspaceRoot = e.dataTransfer.getData('application/switchboard-workspace-root') || getActiveWorkspaceRoot();
+
+            const missionDragId = e.dataTransfer.getData('application/switchboard-mission-id');
+            if (missionDragId) {
+                // Moving a mission card is refused across columns; it opens Mission Control instead.
+                postKanbanMessage({ type: 'openSetupPanel', subTab: 'mission-control', workspaceRoot });
+                return;
+            }
 
             const targetDef = columnDefinitions.find(c => c.id === targetColumn);
             if (targetDef && targetDef.featureOnly) {
@@ -9897,12 +10142,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // returns early WITHOUT posting a board refresh — so an ungated
                 // optimistic move would strand the card in STAGING visually until
                 // some unrelated push repaints the board.
+                const targetMissionEl = e.target.closest('.kanban-card.mission-card');
+                let targetMissionId = undefined;
+                if (targetMissionEl) {
+                    const rState = targetMissionEl.dataset.runState;
+                    if (rState === 'not-started') {
+                        targetMissionId = targetMissionEl.dataset.missionId;
+                    }
+                }
                 const stagedIds = sessionIds.filter(id => {
                     const card = currentCards.find(c => (c.planId || c.sessionId) === id);
                     return card && card.column !== 'STAGING' && STAGEABLE_COLUMNS.includes(card.column);
                 });
                 if (stagedIds.length > 0) {
-                    postKanbanMessage({ type: 'stageForQueue', sessionIds: stagedIds, workspaceRoot });
+                    postKanbanMessage({
+                        type: 'stageForQueue',
+                        sessionIds: stagedIds,
+                        missionId: targetMissionId,
+                        workspaceRoot
+                    });
                     // Optimistic DOM move for visual feedback
                     const targetBody = document.getElementById('col-' + targetColumn);
                     if (targetBody) {
@@ -10478,6 +10736,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // kanban tab. The backend now sends unfiltered cards; the board owns
                     // its view filter so browser and webview never reset each other.
                     allCards = applyPendingOptimisticMoves(Array.isArray(msg.cards) ? msg.cards : []);
+                    currentMissions = Array.isArray(msg.missions) ? msg.missions : [];
                     const nextCards = applyBoardProjectFilter(allCards);
                     const nextFeatureWorktrees = msg.featureWorktrees || {};
                     const featureWorktreesChanged = JSON.stringify(currentFeatureWorktrees) !== JSON.stringify(nextFeatureWorktrees);
@@ -11314,6 +11573,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'standingOrders': {
                   standingOrdersTabState.available = !!msg.available;
                   standingOrdersTabState.orders = Array.isArray(msg.orders) ? msg.orders : [];
+                  standingOrdersTabState.definitions = Array.isArray(msg.definitions) ? msg.definitions : [];
                   standingOrdersTabRender();
                   break;
                 }
@@ -11338,6 +11598,40 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'standingOrderDeleted': {
                   postKanbanMessage({ type: 'getStandingOrders' });
+                  break;
+                }
+                case 'standingOrderDefinitionAdded': {
+                  if (msg.success) {
+                    standingOrdersTabHideDefAddForm();
+                    postKanbanMessage({ type: 'getStandingOrders' });
+                  } else {
+                    const err = document.getElementById('standing-orders-def-add-error');
+                    if (err) { err.textContent = msg.error || 'Failed to add library entry'; }
+                  }
+                  break;
+                }
+                case 'standingOrderDefinitionUpdated': {
+                  if (msg.success) {
+                    const form = document.getElementById('standing-orders-def-edit-' + (msg.id || ''));
+                    if (form) { form.style.display = 'none'; }
+                    postKanbanMessage({ type: 'getStandingOrders' });
+                  } else {
+                    const form = document.getElementById('standing-orders-def-edit-' + (msg.id || ''));
+                    const err = document.getElementById('standing-orders-def-edit-error-' + (msg.id || ''));
+                    if (form) { form.style.display = 'block'; }
+                    if (err) { err.textContent = msg.error || 'Failed to update library entry'; }
+                  }
+                  break;
+                }
+                case 'standingOrderDefinitionDeleted': {
+                  if (msg.success) {
+                    postKanbanMessage({ type: 'getStandingOrders' });
+                  } else {
+                    const form = document.getElementById('standing-orders-def-edit-' + (msg.id || ''));
+                    const err = document.getElementById('standing-orders-def-edit-error-' + (msg.id || ''));
+                    if (form) { form.style.display = 'block'; }
+                    if (err) { err.textContent = msg.error || 'Failed to delete library entry'; }
+                  }
                   break;
                 }
                 case 'saveAgentGroupResult': {
@@ -12708,55 +13002,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             checkboxRow.appendChild(suppressLabel);
             settingsSection.appendChild(checkboxRow);
 
-            // ── Worktree strategy ────────────────────────────────────────────
-            // The user's choice, and the only writer of feature_worktree_mode. Checked
-            // state comes from the broadcast on every render — never from a local click
-            // assumption — so a rejected write settles back to the true value.
-            {
-                const modeRow = document.createElement('div');
-                modeRow.style.cssText = 'display:flex; flex-direction:column; gap:4px; margin-top:8px;';
-                const modeTitle = document.createElement('div');
-                modeTitle.textContent = 'Worktree strategy';
-                modeTitle.style.cssText = 'font-size:11px;';
-                modeRow.appendChild(modeTitle);
-
-                const current = (config && config.featureWorktreeMode) === 'per-feature' ? 'per-feature' : 'none';
-                const options = [
-                    { value: 'none', label: 'None — one checkout',
-                      help: 'Everyone works in the main checkout. No worktrees, no merge-back, no cleanup. One team codes at a time — a second team started in parallel would edit the same files.' },
-                    { value: 'per-feature', label: 'Per feature',
-                      help: 'One shared worktree per feature, provisioned when the feature is created. A plan that is not in a feature has no worktree and runs in the main checkout.' }
-                ];
-                for (const opt of options) {
-                    const row = document.createElement('div');
-                    row.style.cssText = 'display:flex; align-items:flex-start; gap:8px;';
-                    const radio = document.createElement('input');
-                    radio.type = 'radio';
-                    radio.name = 'feature-worktree-mode';
-                    radio.id = 'feature-worktree-mode-' + opt.value;
-                    radio.value = opt.value;
-                    radio.checked = current === opt.value;
-                    radio.style.cssText = 'width:auto; margin:2px 0 0 0; flex-shrink:0;';
-                    // No confirm dialog — project rule, and confirm() is a no-op in a webview.
-                    radio.addEventListener('change', () => {
-                        if (!radio.checked) return;
-                        postKanbanMessage({
-                            type: 'setFeatureWorktreeMode',
-                            mode: opt.value,
-                            workspaceRoot: currentWorkspaceRoot
-                        });
-                    });
-                    const label = document.createElement('label');
-                    label.htmlFor = radio.id;
-                    label.style.cssText = 'cursor:pointer; line-height:1.4;';
-                    label.innerHTML = '<span style="font-size:11px;">' + opt.label + '</span>' +
-                        '<br><span style="font-size:10px; color:var(--text-secondary);">' + opt.help + '</span>';
-                    row.appendChild(radio);
-                    row.appendChild(label);
-                    modeRow.appendChild(row);
-                }
-                settingsSection.appendChild(modeRow);
-            }
             container.appendChild(settingsSection);
 
             // Target Repo configuration (moved here to top of controls)

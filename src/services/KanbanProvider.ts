@@ -1376,7 +1376,8 @@ export class KanbanProvider implements vscode.Disposable {
             // spread in conditionally and a post-pass would ship them untagged, i.e.
             // to every panel. An untagged entry is delivered to everyone by design;
             // this whole array is board state, so nothing here is `common`.
-            return [
+            const boardMissions = typeof db.getMissions === 'function' ? await db.getMissions(wsId) : [];
+            const snapshot: Record<string, any>[] = [
                 { type: 'updateColumns', columns: filteredColumns, surface: SURFACES.kanban },
                 {
                     type: 'updateWorkspaceSelection',
@@ -1396,7 +1397,7 @@ export class KanbanProvider implements vscode.Disposable {
                     projectContextEnabled,
                 },
                 { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, teamHeadColumns, teamBatchPlanCap: TEAM_BATCH_PLAN_CAP, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, missions: boardMissions, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, teamHeadColumns, teamBatchPlanCap: TEAM_BATCH_PLAN_CAP, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
@@ -2345,10 +2346,12 @@ export class KanbanProvider implements vscode.Disposable {
                 && snapshotHash === this._lastBoardSnapshotHash;
             this._lastBoardSnapshotKey = snapshotKey;
             this._lastBoardSnapshotHash = snapshotHash;
+            const boardMissions = (typeof db.getMissions === 'function' && workspaceId) ? await db.getMissions(workspaceId) : [];
             if (!snapshotUnchanged) {
                 this.postMessage((scope: string | null | undefined) => ({
                     type: 'updateBoard',
                     cards,
+                    missions: boardMissions,
                     dbUnavailable: false,
                     showingBacklog: this._showingBacklog,
                     dispatchAnalyzeAvailable: true,
@@ -3965,6 +3968,21 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     timeoutMs2
                 );
 
+                const missionByMember2 = new Map<string, { id: string; name: string }>();
+                let boardMissions: any[] = [];
+                try {
+                    if (typeof db.getMissions === 'function') {
+                        boardMissions = await db.getMissions(workspaceId);
+                        for (const mission of boardMissions) {
+                            for (const memberId of [...(mission.plans || []), ...(mission.features || [])]) {
+                                missionByMember2.set(String(memberId), { id: mission.id, name: mission.name });
+                            }
+                        }
+                    }
+                } catch (missionErr) {
+                    console.warn('[KanbanProvider] _refreshBoardImpl: mission lookup failed:', missionErr);
+                }
+
                 cards = activeRows.map(row => {
                     const featureState2 = row.isFeature ? featureWorkingMap2.get(row.planId) : undefined;
                     const cardState2 = row.isFeature
@@ -3990,6 +4008,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         columnEnteredAt: row.columnEnteredAt ?? null,
                         priorityStarred: row.priorityStarred ?? 0,
                         columnOrder: row.columnOrder ?? null,
+                        missionId: missionByMember2.get(row.planId)?.id,
+                        missionName: missionByMember2.get(row.planId)?.name,
                     };
                 });
 
@@ -4012,6 +4032,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     columnEnteredAt: rec.columnEnteredAt ?? null,
                     priorityStarred: rec.priorityStarred ?? 0,
                     columnOrder: rec.columnOrder ?? null,
+                    missionId: missionByMember2.get(rec.planId)?.id,
+                    missionName: missionByMember2.get(rec.planId)?.name,
                 })));
             } else if (workspaceId) {
                 console.warn(`[KanbanProvider] Kanban DB unavailable: ${db.lastInitError || 'unknown error'}`);
@@ -4088,6 +4110,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
+                missions: boardMissions,
                 dbUnavailable,
                 showingBacklog: this._showingBacklog,
                 dispatchAnalyzeAvailable: true,
@@ -8368,6 +8391,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const db = this._getKanbanDb(workspaceRoot);
             if (!await db.ensureReady()) return { ok: false, reason: 'not_ready', detail: `Kanban database for workspace '${workspaceRoot}' is not ready.` };
 
+            if (typeof db.getMissionById === 'function') {
+                const mission = await db.getMissionById(sessionId);
+                if (mission) {
+                    return { ok: false, reason: 'mission_staging_only', detail: 'Missions exist only in STAGING and cannot be moved to other columns.' };
+                }
+            }
+
             const plan = await db.getPlanBySessionId(sessionId);
             let outcome: ColumnUpdateOutcome;
             let subtaskSessionIds: string[] = [];
@@ -8529,7 +8559,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
      */
     public async stageForQueue(
         workspaceRoot: string,
-        ids: string[]
+        ids: string[],
+        explicitMissionId?: string
     ): Promise<{ success: boolean; staged: number; refused: number; error?: string; missionId?: string }> {
         if (!workspaceRoot) return { success: false, staged: 0, refused: 0, error: 'No workspace root resolved' };
         if (!Array.isArray(ids) || ids.length === 0) return { success: false, staged: 0, refused: 0, error: 'No plans selected to stage' };
@@ -8539,7 +8570,23 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) return { success: false, staged: 0, refused, error: 'Kanban database not ready' };
-        const ok = await db.appendQueuePositions(workspaceId, planIds);
+
+        let targetMission: any = null;
+        try {
+            if (explicitMissionId) {
+                const cand = await db.getMissionById(explicitMissionId);
+                if (cand && cand.runState === 'not-started') {
+                    targetMission = cand;
+                }
+            }
+            if (!targetMission) {
+                targetMission = await db.resolveOrCreateOpenMission(workspaceId);
+            }
+        } catch (mErr) {
+            console.warn('[KanbanProvider] stageForQueue: target mission resolve failed:', mErr);
+        }
+
+        const ok = await db.appendQueuePositions(workspaceId, planIds, targetMission?.id);
         if (!ok) return { success: false, staged: 0, refused, error: 'Failed to write queue positions' };
 
         // Staging is always into a mission. There is no such thing as a card
@@ -8552,14 +8599,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // above) remains the intra-mission order: cards joining later take higher
         // positions, so a mission's sequence is the order it was assembled in, and
         // item 12 holds — the board's star does not reach inside.
-        let missionId: string | null = null;
+        let missionId: string | null = targetMission?.id || null;
         try {
-            const mission = await db.resolveOrCreateOpenMission(workspaceId);
-            if (mission) {
-                missionId = mission.id;
+            if (targetMission) {
                 for (const pid of planIds) {
                     const plan = await db.getPlanByPlanId(pid);
-                    await db.addMissionMember(mission.id, pid, plan?.isFeature ? 'feature' : 'plan');
+                    await db.addMissionMember(targetMission.id, pid, plan?.isFeature ? 'feature' : 'plan');
                 }
             }
         } catch (missionErr) {
@@ -12627,7 +12672,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     this.postMessage({ type: 'showStatusMessage', message: 'Select plans to stage first.', isError: true });
                     return { success: false, error: 'No plans selected to stage' };
                 }
-                const result = await this.stageForQueue(workspaceRoot, ids);
+                const result = await this.stageForQueue(workspaceRoot, ids, msg.missionId);
                 const refusedSuffix = result.refused > 0 ? ` (${result.refused} refused — subtasks or already-dispatched plans cannot be staged)` : '';
                 const message = result.success
                     ? `Staged ${result.staged} plan(s) into the Staging queue.${refusedSuffix}`
@@ -14161,28 +14206,6 @@ ${FOCUS_DIRECTIVE}`;
                 await this._sendWorktreeConfig(workspaceRoot);
                 return { success: true };
             }
-            case 'getFeatureWorktreeMode': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) return { success: false, error: 'No workspace root resolved' };
-                await this._sendWorktreeConfig(workspaceRoot);
-                return { success: true };
-            }
-            case 'setFeatureWorktreeMode': {
-                const { mode, workspaceRoot: msgRoot } = msg;
-                const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
-                if (!workspaceRoot) return { success: false, error: 'No workspace root resolved' };
-                const validModes = ['none', 'per-feature'];
-                if (!validModes.includes(mode)) {
-                    void this._seams().ui.showWarningMessage(`Invalid feature worktree mode: ${mode}`);
-                    return { success: false, error: `Invalid feature worktree mode: ${mode}` };
-                }
-                const db = this._getKanbanDb(workspaceRoot);
-                if (!db || !await db.ensureReady()) return { success: false, error: 'Database unavailable' };
-
-                await db.setConfig('feature_worktree_mode', mode);
-                await this._sendWorktreeConfig(workspaceRoot);
-                return { success: true, mode };
-            }
             case 'openWorktreeTerminals': {
                 const { worktreeId, workspaceRoot: msgRoot } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
@@ -14812,8 +14835,9 @@ ${FOCUS_DIRECTIVE}`;
      */
     public async launchMission(
         workspaceRoot: string,
-        missionId: string
-    ): Promise<{ success: boolean; error?: string; dispatched?: string | null }> {
+        missionId: string,
+        confirmedStreamCount?: number
+    ): Promise<{ success: boolean; error?: string; dispatched?: string | null; shortfall?: number; warning?: string }> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) return { success: false, error: 'Database unavailable' };
         const mission = await db.getMissionById(missionId);
@@ -14831,16 +14855,18 @@ ${FOCUS_DIRECTIVE}`;
         }
 
         // A mission carries `maxExtraWorktrees` — extra trees on top of the one it
-        // starts in, 0 by default and never above 1 for a mission. Provisioning is
-        // not built (per-feature provisioning was removed because it cut one branch
-        // per feature off the default branch and clashed). Refusing a launch that
-        // asks for a tree is better than silently ignoring the field and running
-        // somewhere the operator did not choose.
-        if ((mission.maxExtraWorktrees || 0) > 0) {
-            return {
-                success: false,
-                error: `Mission '${mission.name}' asks for ${mission.maxExtraWorktrees} extra worktree(s), and run provisioning is not built. Set Max extra worktrees to 0 to run in the current tree.`
-            };
+        // starts in, 0 by default and never above 1 for a mission. Provision 1 run-scoped
+        // worktree when requested.
+        const extraTrees = Math.min(mission.type === 'mission' ? 1 : 99, Math.max(0, mission.maxExtraWorktrees || 0));
+        if (extraTrees > 0) {
+            try {
+                const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
+                const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, mission.name, undefined, defaultBranch);
+                await db.addWorktree(branch, wtPath, undefined, undefined, undefined, defaultBranch);
+                await this._openWorktreeTerminalsBestEffort(workspaceRoot, wtPath);
+            } catch (wtErr: any) {
+                return { success: false, error: `Failed to provision run worktree: ${wtErr.message}` };
+            }
         }
 
         const apiServer: any = this._apiServer;
@@ -14848,21 +14874,49 @@ ${FOCUS_DIRECTIVE}`;
             return { success: false, error: 'Queue dispatch is not available in this host.' };
         }
 
-        let headTerminal = (await this.resolveCodingHeadFromGroups(workspaceRoot)) || '';
-        if (!headTerminal) {
-            const codingTerminals = this._taskViewerProvider?.getAliveCodingTerminalNames() ?? [];
-            if (codingTerminals.length > 0) { headTerminal = codingTerminals[0]; }
+        const streams = Math.max(1, confirmedStreamCount || 1);
+        const codingRoles = await this.resolveCodingRolesFromGroups(workspaceRoot);
+        const candidateHeads: string[] = [];
+        if (codingRoles.leads.length > 0) candidateHeads.push(...codingRoles.leads);
+        if (codingRoles.coders.length > 0) {
+            for (const c of codingRoles.coders) {
+                if (!candidateHeads.includes(c)) candidateHeads.push(c);
+            }
         }
-        if (!headTerminal) {
+        if (candidateHeads.length === 0) {
+            const alive = this._taskViewerProvider?.getAliveCodingTerminalNames() ?? [];
+            candidateHeads.push(...alive);
+        }
+        if (candidateHeads.length === 0) {
             return { success: false, error: 'No coding terminal is live — seat a team before launching.' };
         }
 
-        const pop = await apiServer.dispatchNextFromQueue({ workspaceRoot, from: headTerminal });
-        if (!pop || pop.status !== 200) {
-            return { success: false, error: pop?.payload?.error || 'Dispatch refused.' };
+        const dispatchedHeads: string[] = [];
+        let firstDispatched: string | null = null;
+        let shortfall = 0;
+        const toDispatch = Math.min(streams, candidateHeads.length);
+        if (candidateHeads.length < streams) {
+            shortfall = streams - candidateHeads.length;
         }
+
+        for (let i = 0; i < toDispatch; i++) {
+            const head = candidateHeads[i];
+            const pop = await apiServer.dispatchNextFromQueue({ workspaceRoot, from: head });
+            if (pop && pop.status === 200 && pop.payload?.dispatched) {
+                dispatchedHeads.push(head);
+                if (!firstDispatched) firstDispatched = pop.payload.dispatched;
+            }
+        }
+
         await this._refreshBoard(workspaceRoot);
-        return { success: true, dispatched: pop.payload?.dispatched ?? null };
+        if (dispatchedHeads.length === 0) {
+            return { success: false, error: 'Dispatch refused.' };
+        }
+        return {
+            success: true,
+            dispatched: firstDispatched,
+            ...(shortfall > 0 ? { shortfall, warning: `Seated ${dispatchedHeads.length} team(s); ${shortfall} stream(s) unseated due to team shortfall.` } : {})
+        };
     }
 
     /**

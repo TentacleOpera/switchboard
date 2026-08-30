@@ -624,7 +624,7 @@ interface LocalApiServerOptions {
      * Reached by `POST /mission-control/adopt` from the /switchboard launcher.
      * Optional — absent in headless/test harnesses (returns 503).
      */
-    missionControlAdopt?: (workspaceRoot?: string, terminalName?: string) => Promise<any>;
+    missionControlAdopt?: (workspaceRoot?: string, terminalName?: string, missionId?: string) => Promise<any>;
     /**
      * Arm the unattended Mission Control engine — the same path the AUTOMATION tab
      * "Start Mission Control" button takes (terminal + kickoff + Mission Control wake).
@@ -632,7 +632,7 @@ interface LocalApiServerOptions {
      * when the user explicitly asks to arm automation. Optional — absent in
      * headless/test harnesses (returns 503).
      */
-    missionControlStart?: (workspaceRoot?: string) => Promise<{ success: boolean; mode?: string; prompt?: string; error?: string }>;
+    missionControlStart?: (workspaceRoot?: string, missionId?: string) => Promise<{ success: boolean; mode?: string; prompt?: string; error?: string }>;
     /**
      * Disarm Mission Control — clears `missionControlArmed`, persists state,
      * and broadcasts. Does NOT stop the survivor scheduler timer (the one
@@ -6196,7 +6196,8 @@ export class LocalApiServer {
             const body = await this._parseJsonBody(req);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const terminalName = typeof body?.terminalName === 'string' ? body.terminalName.trim() : undefined;
-            const result = await missionControlAdopt(workspaceRoot, terminalName);
+            const missionId = typeof body?.missionId === 'string' ? body.missionId.trim() : undefined;
+            const result = await missionControlAdopt(workspaceRoot, terminalName, missionId);
             if (result && result.success !== false) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result));
@@ -6238,7 +6239,8 @@ export class LocalApiServer {
         try {
             const body = await this._parseJsonBody(req);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
-            const result = await missionControlStart(workspaceRoot);
+            const missionId = typeof body?.missionId === 'string' ? body.missionId.trim() : undefined;
+            const result = await missionControlStart(workspaceRoot, missionId);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             // The message is a script caller's only semantic signal, so it MUST
             // match what actually happened — not a fixed string. Three cases:

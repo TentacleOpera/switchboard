@@ -3209,28 +3209,12 @@ Each plan file must include:
         // adoptMissionControlSeat needs no VS Code API: _resolveWorkspaceRoot,
         // _hasFleet/_ptyHostVerb (headless-aware), the file-backed workspaceState
         // memento, and buildMissionControlKickoffPrompt all work in this host.
-        missionControlAdopt: async (workspaceRootArg?: string, terminalName?: string) => {
+        missionControlAdopt: async (workspaceRootArg?: string, terminalName?: string, missionId?: string) => {
             return await taskViewerProvider.adoptMissionControlSeat(
-                workspaceRootArg || workspaceRoot, terminalName, undefined
+                workspaceRootArg || workspaceRoot, terminalName, undefined, missionId
             );
         },
-        // POST /mission-control/start — the shell rail's dimmed UFO click. Two
-        // paths, decided by whether a lead/coder agent is configured:
-        //   - Terminal path: create a pty terminal named 'Mission Control', boot the
-        //     lead/coder CLI into it, wait for shell readiness, then deliver the
-        //     persona prompt (buildMissionControlKickoffPrompt). The agent in the
-        //     terminal reads switchboard-mission-control/SKILL.md, runs the
-        //     pre-flight, and adopts the seat itself via POST /mission-control/adopt.
-        //     The server does NOT seat Mission Control — the agent does, after
-        //     reading the prompt. Mirrors startMissionControlFromKanban's flow.
-        //   - Clipboard fallback (no agent configured, or pty unavailable): NO
-        //     terminal is created. Returns { mode:'clipboard', prompt } so the
-        //     shell copies the /switchboard launcher text. The agent that
-        //     receives it follows the chat-agent launcher flow.
-        // A seat guard mirrors the extension host: if a seat already exists with
-        // a live terminal, the persona prompt is redelivered to it instead of
-        // spawning a second terminal (double-click protection).
-        missionControlStart: async (workspaceRootArg?: string) => {
+        missionControlStart: async (workspaceRootArg?: string, missionId?: string) => {
             const root = workspaceRootArg || workspaceRoot;
             // 1. Seat guard: deliver to an already-seated, live terminal.
             const seat = (taskViewerProvider as any)?._autobanState?.missionControlSeat;
@@ -3238,7 +3222,7 @@ Each plan file must include:
                 const handle = ptyFleetService.get(seat.terminalName);
                 if (handle && handle.status === 'active') {
                     try {
-                        const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined);
+                        const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
                         await deliverPrompt(handle, prompt, getPromptDeliveryOptions());
                         return { success: true, mode: 'terminal' };
                     } catch (err: any) {
@@ -3268,7 +3252,7 @@ Each plan file must include:
                 const existing = ptyFleetService.get(MISSION_CONTROL_TERMINAL_NAME);
                 if (existing && existing.status === 'active') {
                     try {
-                        const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined);
+                        const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
                         await deliverPrompt(existing, prompt, getPromptDeliveryOptions());
                         return { success: true, mode: 'terminal' };
                     } catch (err: any) {
@@ -3284,7 +3268,7 @@ Each plan file must include:
                         'mission-control', MISSION_CONTROL_TERMINAL_NAME, root, undefined, undefined, startupCommand.trim()
                     );
                     await new Promise(r => setTimeout(r, 1500));
-                    const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined);
+                    const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
                     await deliverPrompt(handle, prompt, getPromptDeliveryOptions());
                     return { success: true, mode: 'terminal' };
                 } catch (err: any) {

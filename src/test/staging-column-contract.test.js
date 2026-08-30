@@ -218,18 +218,8 @@ function run() {
     });
 
     // ─── 8. Schedule run sheet ─────────────────────────────────────────────
+    // Retired: autoban schedule runSheet removed from kanban.html.
 
-    check('the autoban schedule run sheet pops STAGING and nothing else', () => {
-        const idx = kanbanHtml.indexOf('sourceColumn: \'STAGING\'');
-        assert.notStrictEqual(idx, -1, 'the run sheet must name STAGING as its source column');
-        // The old run sheet walked CREATED and PLAN REVIEWED. Those must not
-        // appear as sourceColumn entries in the run sheet.
-        const runSheetBody = kanbanHtml.slice(kanbanHtml.indexOf('const runSheet = ['), kanbanHtml.indexOf('];', kanbanHtml.indexOf('const runSheet = [')) + 2);
-        assert.ok(
-            !/sourceColumn:\s*'CREATED'/.test(runSheetBody) && !/sourceColumn:\s*'PLAN REVIEWED'/.test(runSheetBody),
-            'the run sheet must not walk CREATED or PLAN REVIEWED — the schedule pops STAGING only'
-        );
-    });
 
     // ─── 9. No DISPATCH column references remain in source ──────────────────
 

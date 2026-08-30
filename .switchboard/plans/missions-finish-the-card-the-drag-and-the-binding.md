@@ -637,3 +637,6 @@ the DB, unread.
 are one unit (the card and its drag are meaningless apart), 3–4 one unit
 (membership integrity and column scoping), 5–7 one unit (the run), 8–9 one unit
 (retirement and the red gates). Do not dispatch this as a single card.
+
+## Implementation Summary
+Implemented complete mission containment, drag-and-drop routing, and database schema updates. Migration V65 adds `idx_mission_members_member` unique constraint and backfills orphan staged cards to missions per workspace. STAGING renders distinct mission cards with `createMissionCardHtml`, intercepts cross-column moves, and handles targeted drops into open or sealed missions. Multi-stream launch dispatches to available live teams with shortfall reporting, provisions 1 run-scoped safety worktree when requested, and threads mission identity across both VS Code extension and standalone hosts. Dead `feature_worktree_mode` radio controls and retired verbs were cleaned up with full test contract updates.

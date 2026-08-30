@@ -4276,16 +4276,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // researcher is live so the planner falls back to emitting the prompt.
                 return await this._dispatchResearchToResearcher(workspaceRoot, prompt);
             },
-            missionControlAdopt: async (wsRoot, terminalName) => {
-                return await this.adoptMissionControlSeat(wsRoot, terminalName, undefined);
+            missionControlAdopt: async (wsRoot, terminalName, missionId) => {
+                return await this.adoptMissionControlSeat(wsRoot, terminalName, undefined, missionId);
             },
-            missionControlStart: async (wsRoot) => {
+            missionControlStart: async (wsRoot, missionId) => {
                 // POST /kanban/mission-control/start — an HTTP caller by definition, so the
                 // surface is known statically here. There is no body to stamp. Returns a
                 // result object so the shell rail can branch on `mode` (terminal vs
                 // clipboard fallback). The extension host always takes the terminal path
                 // (startMissionControlFromKanban creates/reuses the Mission Control terminal).
-                await this.startMissionControlFromKanban(wsRoot, undefined);
+                await this.startMissionControlFromKanban(wsRoot, undefined, missionId);
                 return { success: true, mode: 'terminal' };
             },
             missionControlStop: async () => {
@@ -11597,7 +11597,8 @@ Each plan file must include:
     public async buildMissionControlKickoffPrompt(
         root: string,
         initiatorProject?: string | null,
-        deliveryMode?: 'host' | 'self'
+        deliveryMode?: 'host' | 'self',
+        missionId?: string
     ): Promise<{ mode: 'interview' | 'resume' | 'stale-session' | 'no-persona'; prompt: string }> {
         const sharedLogicPath = path.join(root, '.agents', 'protocols', 'switchboard-mission-control', 'SKILL.md');
         const runsheetName = deliveryMode === 'self'
@@ -11607,6 +11608,23 @@ Each plan file must include:
         let projectFilter = '';
         try {
             projectFilter = (await this._kanbanProvider?.resolveAuthoringProject(root, initiatorProject)) || '';
+        } catch { /* best-effort */ }
+        let missionInfo: string[] = [];
+        try {
+            const db = this._kanbanProvider?.getKanbanDb(root);
+            if (db && (await db.ensureReady())) {
+                const mission = missionId
+                    ? await db.getMissionById(missionId)
+                    : await db.getOpenMission((await db.getWorkspaceId()) || '');
+                if (mission) {
+                    missionInfo = [
+                        `MISSION_ID=${mission.id}`,
+                        `MISSION_NAME=${mission.name}`,
+                        `MISSION_MEMBER_COUNT=${(mission.plans?.length || 0) + (mission.features?.length || 0)}`,
+                        `MISSION_RUN_STATE=${mission.runState || 'not-started'}`
+                    ];
+                }
+            }
         } catch { /* best-effort */ }
         const sessionPath = path.join(root, '.switchboard', 'mission-control', 'session.md');
         let sessionExists = false;
@@ -11630,6 +11648,7 @@ Each plan file must include:
                 `UNATTENDED=true`,
                 `WORKSPACE_ROOT=${root}`,
                 `ACTIVE_PROJECT_FILTER=${projectFilter || ''}`,
+                ...missionInfo,
                 ``
             ];
             // Three-way branch: pre-flight (no session), resume (session + armed),
@@ -11665,7 +11684,8 @@ Each plan file must include:
      */
     public async startMissionControlFromKanban(
         workspaceRoot?: string,
-        initiatorProject?: string | null
+        initiatorProject?: string | null,
+        missionId?: string
     ): Promise<void> {
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (!root) {
@@ -11683,7 +11703,7 @@ Each plan file must include:
         // seat when it is reachable, and say so when it is not.
         const adopted = this._autobanState.missionControlSeat;
         if (adopted?.terminalName) {
-            const { prompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, 'host');
+            const { prompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, 'host', missionId);
             const sent = await this._dispatchExecuteMessage(
                 root, adopted.terminalName, prompt, { missionControlKickoff: true }, 'sidebar'
             );
@@ -11748,34 +11768,14 @@ Each plan file must include:
             void this._waitWithTimeout(terminal.processId, 10000, undefined)
                 .then(pid => {
                     if (pid) {
-                        void this.updateState(async (state) => {
-                            if (state.terminals?.[suffixedForState]) {
-                                state.terminals[suffixedForState].pid = pid;
-                                state.terminals[suffixedForState].childPid = pid;
-                            }
+                        void this._registerTerminalInState(suffixedForState, pid, {
+                            role: 'lead',
+                            pool: false,
+                            purpose: 'mission-control',
+                            team: 'Mission Control'
                         });
-                        this._refreshTerminalStatuses();
                     }
-                })
-                .catch(() => { /* PID resolution best-effort */ });
-
-            await this.updateState(async (state) => {
-                if (!state.terminals) state.terminals = {};
-                state.terminals[suffixedForState] = {
-                    purpose: 'mission-control',
-                    role: 'mission-control',
-                    pid: undefined,
-                    childPid: undefined,
-                    startTime: new Date().toISOString(),
-                    status: 'active',
-                    friendlyName: MISSION_CONTROL_TERMINAL_NAME,
-                    icon: 'terminal',
-                    color: 'cyan',
-                    lastSeen: new Date().toISOString(),
-                    ideName: vscode.env.appName,
-                    worktreePath: undefined
-                };
-            });
+                });
 
             // Boot the lead CLI (most capable configured CLI). Subtask 2's
             // persona is injected as the kickoff prompt below; the boot command
@@ -11820,6 +11820,8 @@ Each plan file must include:
                 this.setTerminalAgentInfo(suffixedForState, 'mission-control', displayName);
             }
             this._refreshTerminalStatuses();
+        } else {
+            terminal.show();
         }
 
         // Inject the kickoff prompt. The persona workflow (.agents/protocols/switchboard-mission-control/SKILL.md)
@@ -11832,7 +11834,7 @@ Each plan file must include:
         // and is automation armed (autobanState.enabled)? The arming half moved to
         // confirmMissionControlSession (called by POST /mission-control/confirm after the
         // user answers the pre-flight). See the ## Pre-flight section of the persona skill.
-        const { prompt: kickoffPrompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, 'host');
+        const { prompt: kickoffPrompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, 'host', missionId);
         // Small delay so a freshly-created terminal's CLI is ready to receive.
         if (createdNew) { await new Promise(r => setTimeout(r, 1500)); }
         const kickoffSent = await this._dispatchExecuteMessage(
@@ -11868,7 +11870,8 @@ Each plan file must include:
     public async adoptMissionControlSeat(
         workspaceRoot?: string,
         terminalName?: string,
-        initiatorProject?: string | null
+        initiatorProject?: string | null,
+        missionId?: string
     ): Promise<{ success: boolean; mode?: string; prompt?: string; seat?: MissionControlSeat; liveDelivery?: boolean; note?: string; error?: string }> {
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (!root) { return { success: false, error: 'No workspace folder found.' }; }
@@ -11907,7 +11910,7 @@ Each plan file must include:
         this._pushControllerSeatToPtyHost();
 
         const liveDelivery = !!resolvedName;
-        const { mode, prompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, liveDelivery ? 'host' : 'self');
+        const { mode, prompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, liveDelivery ? 'host' : 'self', missionId);
         return { success: true, mode, prompt, seat, liveDelivery, ...(note ? { note } : {}) };
     }
 
