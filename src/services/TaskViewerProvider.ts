@@ -50,6 +50,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from './workContextResolver';
+import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from './startupOrientation';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -622,6 +623,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // second list call.
         let foldedAttributionResult: { attributed: number; skipped: number } | null = null;
         let directivesAttached: string[] = [];
+        let soBlockAdded = false;
         // Parse-based dispatch backstop: when the caller did NOT supply a
         // `dispatch` field, scrape plan identity straight off the prompt body so
         // registration is a property of the delivery layer, not a caller chore.
@@ -1134,14 +1136,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                     roleMap.set(row.friendlyName, row.role);
                                 }
                             }
+                            const beforeSO = data;
                             data = applyStandingOrders(data, payload.name, effectiveOrders, live, groups || [], roleMap);
+                            soBlockAdded = data !== beforeSO;
                         }
                     }
-
                     payload = { ...payload, data };
                 } catch (err) {
                     console.warn('[TaskViewerProvider] Standing-orders / seat-block append failed:', err);
                 }
+            }
+            // Orientation relay: a startup relay exists ONLY to carry the standing-orders
+            // block. When this seat resolved no orders, the carrier line is noise in a
+            // terminal nobody asked to be written to — drop the send entirely. Gated HERE,
+            // not in the caller, because the caller would have to resolve orders a second
+            // time and two resolutions can disagree about who is in a team (see :712-716).
+            if (payload.orientationOnly === true && !soBlockAdded) {
+                return { success: true, skipped: 'no-standing-orders' };
             }
         }
 
@@ -1267,6 +1278,34 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return result;
         } catch (err) {
             return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+    }
+
+    /**
+     * Relay standing orders to freshly created seats. Fire-and-forget: the
+     * terminal is the product, and a relay that fails must cost nothing.
+     * The no-orders decision is made inside _ptyHostVerb (orientationOnly), so
+     * this method never resolves standing orders itself.
+     */
+    private _relayStartupOrientation(names: string[]): void {
+        for (const name of names) {
+            if (!name) { continue; }
+            void (async () => {
+                const ok = await waitForSeatQuiescence(async () => {
+                    const listed = await this._ptyHostVerb('ptyListTerminals', {});
+                    const rows = [...(listed?.terminals || []), ...(listed?.hiddenTerminals || [])];
+                    const row = rows.find((t: any) => t?.friendlyName === name);
+                    return row ? { lastDataAt: row.lastDataAt || 0, status: row.status || '' } : null;
+                });
+                if (!ok) { return; }
+                await this._ptyHostVerb('ptySendPrompt', {
+                    name,
+                    data: ORIENTATION_PREAMBLE,
+                    clearBeforePrompt: false,
+                    seatBlock: false,
+                    orientationOnly: true,
+                });
+            })().catch(err => console.warn(`[TaskViewerProvider] Startup orientation relay for '${name}' failed:`, err));
         }
     }
 
@@ -3581,6 +3620,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // — which is the point: only the host sets them.
                 if (payload.addonsComposed !== undefined) { delete payload.addonsComposed; }
                 if (payload.seatBlock !== undefined) { delete payload.seatBlock; }
+                // Same reason as the two above: a caller that could set orientationOnly could
+                // make any dispatch silently not send.
+                if (payload.orientationOnly !== undefined) { delete payload.orientationOnly; }
+                if (payload.suppressStartupOrientation !== undefined) { delete payload.suppressStartupOrientation; }
             }
             // Detect boot phase: a first delivery (promptCount === 0) gets the
             // cold-boot first-readiness gate inside sendPromptToPty, which
@@ -3715,6 +3758,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                     }
                 }
+            }
+            if (verb === 'ptyCreateTerminal' && result && result.success !== false && result.terminal?.friendlyName
+                && payload?.suppressStartupOrientation !== true) {
+                this._relayStartupOrientation([
+                    result.terminal.friendlyName,
+                    ...(Array.isArray(result.delegates) ? result.delegates.map((d: any) => d?.friendlyName) : []),
+                ].filter(Boolean));
+            }
+            if (verb === 'ptyCreateBatch' && result && Array.isArray(result.created)) {
+                this._relayStartupOrientation(result.created.map((c: any) => c?.friendlyName).filter(Boolean));
             }
             if (verb === 'ptyListTerminals' && result && result.success !== false && Array.isArray(result.terminals)) {
                 this._ptyTerminalNames = (result.terminals || [])
@@ -13154,7 +13207,7 @@ Each plan file must include:
             }
             : undefined;
 
-        return instantiateExternalHeadedTeam({
+        const result = await instantiateExternalHeadedTeam({
             db: wiringDb,
             settings,
             group,
@@ -13184,6 +13237,7 @@ Each plan file must include:
                             cwd: spec.cwd,
                             startupCommand: d?.startupCommand,
                             claudeInlineRendering,
+                            suppressStartupOrientation: true,
                         });
                         if (!created?.success || !created.terminal) {
                             return {
@@ -13203,6 +13257,10 @@ Each plan file must include:
             },
             onCreated: () => { void this._updatePtyMirrorRegistry?.(db); },
         });
+        if (result.success && Array.isArray(result.workers)) {
+            this._relayStartupOrientation(result.workers.map((worker: any) => worker.friendlyName));
+        }
+        return result;
     }
 
     public async handleSaveDefaultPromptOverrides(data: any): Promise<void> {

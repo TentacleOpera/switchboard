@@ -337,3 +337,15 @@ and in the `ptyCreateBatch` arm over `result.created`.
 6. **UAT — first dispatch after a relay.** Drag a card to the relayed seat. The dispatch prompt still carries its standing-orders block exactly once, and the seat directive block is **not** repeated (it was memoised by the relay).
 7. **UAT — standalone.** Repeat steps 3–5 under `npx` against the standalone host; behaviour must be identical.
 8. **UAT — batch.** Use the batch create path (hidden improver fleet). Each created seat is oriented, or silently skipped if it has no orders.
+
+---
+
+## Implementation Summary
+
+Implemented by Coding-coder-1. The previous agent had completed plan sections 1-3 (startupOrientation.ts, TaskViewerProvider.ts gate/relay/strip/call-sites, bootstrap.ts deliverPrompt param/gate/relay/call-sites); this pass added the missing section 4 — the contract test `src/test/startup-orientation-relay-contract.test.js`. The test covers waitForSeatQuiescence behaviour with injected time (quiet settle at 1200 ms, hard cap at 15000 ms, false on exited/missing seat — the dead no-output else branch is deliberately not asserted), plus source-level pins: the orientationOnly gate sits after applyStandingOrders in both hosts and precedes sendPromptToPty in bootstrap; orientationOnly is stripped at the extension HTTP boundary beside addonsComposed/seatBlock; both hosts relay on ptyCreateTerminal (head + delegates) and ptyCreateBatch; every relay call site is void-ed and .catch-ed; and the three quiescence constants are drift-pinned to the webview's CURTAIN_* values read out of terminals.js. Sibling V2-migration work (teamWiring/terminals.js/stage-marker test) was already in the tree and left untouched. Compilation and tests skipped per run directives.
+
+---
+
+## Defect Round 1 Summary
+
+Defect: standalone team-start seats never received startup orientation. The `setAgentGroupInstantiator` callback in `bootstrap.ts` creates the team head and delegates directly via `ptyFleetService.create()` + `spawnDelegates()`, below `handlePtyVerb` — so the `ptyCreateTerminal` relay call site never fired for a TEAMS-tab team start. Fixed by adding a `relayStartupOrientation` call inside the `createHeadWithDelegates` callback, covering the head and every spawned delegate, after a successful create. The extension host was already covered (its `createHeadWithDelegates` routes through `_ptyHostVerb('ptyCreateTerminal')`, which hits the relay). Added a source-level contract test pinning the new call site so the gap cannot regress. Compile/tests skipped per run directives.

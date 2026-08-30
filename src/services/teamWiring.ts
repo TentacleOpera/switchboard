@@ -636,6 +636,18 @@ export const TEAM_HEAD_COMMIT_INSTRUCTION =
  * Byte-identical to the shipped `headPrompt` in `kanban.html`'s Coding entry
  * and `terminals.js`'s `NEW_CODING_HEAD_PROMPT_CLIENT`.
  */
+/**
+ * The V2 fragment — a substitution-independent clause unique to the
+ * feature-level head prompt that told the lead to hand the next subtask back to
+ * the coder that just reported. That sticky-assignment rule is the reason a lead
+ * ran one seat to its context limit while its siblings idled, so the clause is
+ * gone from the current text and this fragment is safe to match on.
+ *
+ * MUST NOT appear in NEW_CODING_HEAD_PROMPT — a recogniser that matches its own
+ * replacement rewrites forever (pinned by stage-marker-commit-contract).
+ */
+export const OLD_HEADPROMPT_V2_FRAGMENT = 'note it and give that coder the next subtask';
+
 export const NEW_CODING_HEAD_PROMPT =
     'You lead this team. Your coders work the subtasks of one feature. '
     + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
@@ -1870,6 +1882,19 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
                     rewrite.set(o.id, currentBody + '\n' + GIT_SAFETY_DIRECTIVE);
                     touched = true;
                 }
+            }
+        }
+
+        // Stale V2 team-head row: the feature-level headPrompt whose assignment rule
+        // was "give that coder the next subtask". Same indexOf-on-a-fragment
+        // recognition as the V1 branch (never a constructed RegExp — the
+        // substituted head name may carry regex metacharacters), same rewrite target.
+        if (scope === 'team-head' && typeof o.instruction === 'string') {
+            if (o.instruction.indexOf(OLD_HEADPROMPT_V2_FRAGMENT) !== -1) {
+                const newInstruction = NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, o.parent || '');
+                rewrite.set(o.id, newInstruction);
+                touched = true;
+                continue;
             }
         }
     }

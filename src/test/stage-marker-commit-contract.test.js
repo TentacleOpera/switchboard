@@ -51,7 +51,8 @@ const {
     PRE_REWRITE_CALLBACK_INSTRUCTION,
     STANDING_ORDERS_PREMIGRATION_BAK_KEY,
     TEAM_CODER_QUEUE_DONE_INSTRUCTION,
-    AGENT_GROUP_CALLBACK_INSTRUCTION
+    AGENT_GROUP_CALLBACK_INSTRUCTION,
+    OLD_HEADPROMPT_V2_FRAGMENT
 } = require('../../out/services/teamWiring');
 const { resolvePreset } = require('../../out/services/linkPresets');
 const { STANDING_ORDERS_CONFIG_KEY } = require('../../out/services/standingOrders');
@@ -387,11 +388,15 @@ test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal', () => {
     for (const lit of ['"from":"{head}"',
         'intern → coder → lead', 'seat fails review on the same subtask twice',
         'stop and report to the human instead of dispatching again', 'PLAN FILES ARE THE SOURCE OF TRUTH',
-        'Never move a card backwards', 'Never move a card to a new column yourself']) {
+        'Never move a card backwards', 'Never move a card to a new column yourself',
+        'ptyListTerminals', 'dispatch the next subtask to an idle seat',
+        'do not stack subtasks on the same coder', 'One subtask per cleared seat before rotation']) {
         assert.ok(NEW_CODING_HEAD_PROMPT.includes(lit), `missing load-bearing literal: ${lit}`);
     }
     assert.ok(!NEW_CODING_HEAD_PROMPT.includes('satisfied with it, hand it to review yourself'),
         'the new text must not contain the old fragment');
+    assert.ok(!NEW_CODING_HEAD_PROMPT.includes(OLD_HEADPROMPT_V2_FRAGMENT),
+        'the new text must not contain the V2 fragment the order converter matches on, or it re-converts forever');
     assert.ok(!NEW_CODING_HEAD_PROMPT.includes('Only advance the feature your team worked'),
         'the new text must not contain the card-movement-rule fragment');
     assert.ok(!/advanc/i.test(NEW_CODING_HEAD_PROMPT),
@@ -442,6 +447,34 @@ test('migrateCodingTeamOrders is idempotent and pure', () => {
     const once = migrateCodingTeamOrders(orders);
     assert.strictEqual(JSON.stringify(orders), snapshot, 'the converter must not mutate its input');
     assert.deepStrictEqual(migrateCodingTeamOrders(once), once, 'second pass must be a no-op');
+});
+
+test('migrateCodingTeamOrders rewrites stale V2 team-head orders to NEW_CODING_HEAD_PROMPT with {head} substituted', () => {
+    const v2Instruction = 'You lead this team. ' + OLD_HEADPROMPT_V2_FRAGMENT + '. When done, POST /kanban/task/complete with {"from":"lead(1)"}';
+    const orders = [
+        order({ id: 'h1', parent: 'lead(1)', child: '', instruction: v2Instruction, scope: 'team-head', teamId: 'team_lead_1' }),
+        order({ id: 'x1', parent: 'lead(1)', child: 'coder-1', instruction: 'operator custom order', scope: 'team-head', teamId: 'team_lead_1' })
+    ];
+    const out = migrateCodingTeamOrders(orders);
+    const h1 = out.find(o => o.id === 'h1');
+    assert.ok(h1, 'h1 should survive');
+    assert.strictEqual(h1.instruction, NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, 'lead(1)'),
+        'V2 team-head order must be rewritten to NEW_CODING_HEAD_PROMPT with {head} substituted');
+    const x1 = out.find(o => o.id === 'x1');
+    assert.ok(x1 && x1.instruction === 'operator custom order',
+        'operator custom order must not be modified');
+
+    // Idempotent: second pass returns the exact same array by reference
+    assert.strictEqual(migrateCodingTeamOrders(out), out, 'second pass must return input by reference');
+});
+
+test('OLD_HEADPROMPT_V2_FRAGMENT exists in exactly two files and is byte-identical', () => {
+    const files = walkSrc();
+    const matching = files.filter(f => f.body.includes(OLD_HEADPROMPT_V2_FRAGMENT));
+    assert.strictEqual(matching.length, 2,
+        `OLD_HEADPROMPT_V2_FRAGMENT must appear in exactly 2 files (services/teamWiring.ts and webview/terminals.js), found in: ${matching.map(f => f.rel).join(', ')}`);
+    const rels = matching.map(f => f.rel).sort();
+    assert.deepStrictEqual(rels, [path.normalize('services/teamWiring.ts'), path.normalize('webview/terminals.js')].sort());
 });
 
 test('every host read site uses loadEffectiveStandingOrders and client mirror composes converters', () => {

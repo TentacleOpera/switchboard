@@ -23,3 +23,7 @@ Two defects in how a team treats its seats, both reached through teamWiring.ts a
 - [ ] [A Team Lead Must Spread Subtasks Across Idle Seats, Not Burn One Coder to Its Context Limit](../plans/feature_plan_20260817101700_lead-spreads-subtasks-across-idle-seats.md) — **PLAN REVIEWED** — ID: b684296c-0a14-4271-aace-3dfc872c06ee
 <!-- END SUBTASKS -->
 
+## Implementation Summary
+
+Startup orientation now waits for seat quiescence and relays effective standing orders through the existing delivery chokepoint in both the extension and standalone hosts. The no-orders gate drops bare carrier prompts, and team creation paths relay only after wiring has installed their orders, including external-headed teams. Persisted V2 team-head orders now migrate to the fair idle-seat distribution text in both the host and client mirror. Contract coverage was added for relay behavior, host wiring, migration, and prompt parity; automated tests and compilation were not run under this run's explicit verification override.
+

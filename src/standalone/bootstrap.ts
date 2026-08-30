@@ -68,6 +68,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
 // only server-side reader of `terminals.standingOrders` in either host.
 import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
+import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from '../services/startupOrientation';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from '../services/workContextResolver';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
@@ -247,7 +248,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         applyOrders = true,
         applySeatBlock = true,
         dispatch?: any,
-        machineOrigin = false
+        machineOrigin = false,
+        orientationOnly = false
     ): Promise<ClearReadinessResult | undefined> => {
         // A machine-origin delivery (a queue/done relay, a coder's fallback
         // report) carries NONE of the three appends — not standing orders, not
@@ -384,9 +386,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 out = ensureDispatchProtocolDirectives(out, taskViewerProvider?.isOversightAgentRunning() ?? true);
             }
         }
+        let soBlockAdded = false;
         if (applyOrders) {
             try {
                 if (effectiveOrders.length > 0) {
+                    const beforeSO = out;
                     const activeHandles = ptyFleetService.listActive();
                     const live = new Set(activeHandles.map(t => t.friendlyName));
                     // Build a terminal-name → role map from the same active
@@ -399,9 +403,14 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         }
                     }
                     out = applyStandingOrders(out, handle.friendlyName, effectiveOrders, live, groups || [], roleMap);
+                    soBlockAdded = out !== beforeSO;
                 }
             } catch { /* a degraded prompt beats a lost dispatch */ }
         }
+        // See the extension host's twin: a carrier line with no block below it is
+        // noise. Returns BEFORE the dispatch-identity parse so a skipped relay
+        // registers nothing.
+        if (orientationOnly && !soBlockAdded) { return; }
         // Parse-based dispatch backstop: when the caller did NOT supply a
         // `dispatch` field, scrape plan identity off the ORIGINAL prompt text
         // (before any directive/seat-block/SO rewriting above) so registration
@@ -490,6 +499,22 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             }).catch(() => { /* a lost registration degrades a backstop, never a send */ });
         }
         return readiness;
+    };
+
+    const relayStartupOrientation = (names: string[]): void => {
+        for (const name of names) {
+            if (!name) { continue; }
+            void (async () => {
+                const ok = await waitForSeatQuiescence(async () => {
+                    const h = ptyFleetService.get(name);
+                    return h ? { lastDataAt: h.lastDataAt || 0, status: h.status || '' } : null;
+                });
+                if (!ok) { return; }
+                const handle = ptyFleetService.get(name);
+                if (!handle || handle.status !== 'active') { return; }
+                await deliverPrompt(handle, ORIENTATION_PREAMBLE, { clearBeforePrompt: false }, true, false, undefined, false, true);
+            })().catch(err => console.warn(`[bootstrap] Startup orientation relay for '${name}' failed:`, err));
+        }
     };
 
     const secrets = createStandaloneHostSecrets(workspaceRoot);
@@ -1721,6 +1746,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             try { server.broadcastWs('terminalsGroupsChanged', { type: 'terminalsGroupsChanged' }, SURFACES.terminals); } catch { /* broadcast failure must not fail the create */ }
                         }
                     }
+                    relayStartupOrientation([terminal.friendlyName, ...spawned.children.map(c => c.friendlyName)]);
                     return { success: true, terminal: { friendlyName: terminal.friendlyName, agentInstanceId: terminal.agentInstanceId, parentInstanceId: terminal.parentInstanceId, role: terminal.role, status: terminal.status }, delegates: spawned.children.map(t => ({ friendlyName: t.friendlyName, agentInstanceId: t.agentInstanceId, role: t.role, status: t.status })), ...(spawned.error ? { delegateError: spawned.error } : {}), ...(wiringError ? { wiringError } : {}), ...(teamGroupId ? { teamGroupId } : {}) };
                 }
 
@@ -1732,6 +1758,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // HOST-resolved, never from the wire — see CreateOptions.
                         configProvider.getConfigBoolean('terminal.claudeInlineRendering', true)
                     );
+                    if (result && Array.isArray(result.created)) {
+                        relayStartupOrientation(result.created.map((c: any) => c.friendlyName));
+                    }
                     return {
                         success: result.success,
                         created: result.created,
@@ -2917,7 +2946,7 @@ Each plan file must include:
             get: (k, d) => kanbanProvider._getScopedSetting(k, d),
             set: (k, v) => kanbanProvider._updateScopedSetting(k, v),
         };
-        return instantiateAgentGroupCore({
+        const result = await instantiateAgentGroupCore({
             db,
             settings,
             group,
@@ -2952,6 +2981,10 @@ Each plan file must include:
             // (The extension host's child fleet has no db, which is why that host
             // needs an explicit mirror write.)
         });
+        if (result.success && Array.isArray(result.created)) {
+            relayStartupOrientation(result.created);
+        }
+        return result;
     });
     // Live-terminals provider for the TEAMS-tab `startAgentGroup` arm.
     // `startAgentGroupById` takes `liveTerminals` as a parameter and uses it
@@ -3251,7 +3284,7 @@ Each plan file must include:
                 get: (k, d) => kanbanProvider._getScopedSetting(k, d),
                 set: (k, v) => kanbanProvider._updateScopedSetting(k, v),
             };
-            return instantiateExternalHeadedTeam({
+            const result = await instantiateExternalHeadedTeam({
                 db,
                 settings,
                 group: resolvedTemplate,
@@ -3293,6 +3326,10 @@ Each plan file must include:
                     return { success: true, delegates };
                 },
             });
+            if (result.success && Array.isArray(result.workers)) {
+                relayStartupOrientation(result.workers.map((worker: any) => worker.friendlyName));
+            }
+            return result;
         },
         createFeature: async (wsRoot: string, name: string, planIds: string[], description?: string) => {
             try {
