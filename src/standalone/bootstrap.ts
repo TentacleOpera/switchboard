@@ -4,6 +4,8 @@ import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import { URL } from 'url';
+import { JSDOM } from 'jsdom';
+import createDOMPurify = require('dompurify');
 import { LocalApiServer } from '../services/LocalApiServer';
 import { DEFAULT_KANBAN_COLUMNS } from '../services/agentConfig';
 import { KanbanDatabase } from '../services/KanbanDatabase';
@@ -100,6 +102,28 @@ import { createVscodeHostSeams, type HostSeams } from '../services/hostSeams';
 // is constructed.
 import { __setStandaloneWorkspaceRoot, createStandaloneSecretStorage } from './vscodeShim';
 import { isLoopbackHostname, resolveDisplayHostname, isAllowedHostFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
+
+// One JSDOM window for the whole process, reused by every `markdown.api.render`
+// call below. Building a window per render is ~100x slower and the expensive
+// mistake — see the plan's Verification Plan step 9.
+//
+// It is built on FIRST RENDER, not at module scope: evaluating the jsdom module
+// and constructing a window costs ~0.5s, and `npx switchboard` requires this
+// file on every start (cli.ts requires './bootstrap' on the run path). Today
+// jsdom is only pulled in lazily, inside TaskViewerProvider's clipboard
+// HTML->markdown path — paying that cost up front on every CLI start, for a
+// preview pane the user may never open, is a startup regression. The memo below
+// keeps "one window, reused" while keeping the cost on the path that needs it.
+// DOMPurify needs a DOM to operate on; in the standalone host (Node, no
+// browser) this window is that DOM.
+let _markdownPurifier: ReturnType<typeof createDOMPurify> | undefined;
+function getMarkdownPurifier(): ReturnType<typeof createDOMPurify> {
+    // `WindowLike` is dompurify's own structural window type; JSDOM's window is
+    // not assignable to lib.dom's `Window`, so widen through the parameter type.
+    return (_markdownPurifier ??= createDOMPurify(
+        new JSDOM('').window as unknown as Parameters<typeof createDOMPurify>[0]
+    ));
+}
 
 export interface HeadlessSwitchboardOptions {
     workspaceRoot: string;
@@ -1296,6 +1320,43 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     switchboardCommandRegistry.register('revealFileInOS', async () => undefined);
     switchboardCommandRegistry.register('revealInExplorer', async () => undefined);
     switchboardCommandRegistry.register('vscode.open', async () => undefined);
+
+    // markdown.api.render — VS Code built-in that renders markdown to sanitized
+    // HTML. Unbridged, every preview pane in the standalone host gets undefined
+    // and shows a blank pane (kanban plan preview, constitution, PRD, archived
+    // plan detail, insight, design live preview). Uses `marked` (GFM) as the
+    // standalone renderer. The headless seams are registry-first
+    // (hostSeams.ts:327-336), so this registration intercepts the call before
+    // vscodeShim's warn-and-return-undefined.
+    //
+    // DOMPurify is NOT optional here. VS Code's markdown.api.render sanitizes;
+    // `marked` does not (its `sanitize` option was removed in v0.8 — do not try
+    // to set it). Every consumer assigns this string to innerHTML, and the panel
+    // CSP carries `script-src-attr 'unsafe-inline'` with no nonce, so inline
+    // event handlers (`<img src=x onerror=...>`) would execute. The content is
+    // not fully trusted: ticket descriptions come from the integration sync
+    // APIs and plan files are imported from shared workspaces. See the plan's
+    // Security section. The purifier's JSDOM window is built once for the process
+    // (getMarkdownPurifier, above) — building one per render is the expensive
+    // mistake.
+    //
+    // `marked` v16 is ESM-only and this file compiles to CommonJS, so it is
+    // loaded through a dynamic import — a static `import { marked } from
+    // 'marked'` is a hard TS1479 compile error under module: Node16. The
+    // `webpackMode: "eager"` hint keeps the module inlined in the standalone
+    // bundle instead of emitting an async chunk, so the await resolves against
+    // an already-loaded module and the VSIX/npm payload gains no extra file.
+    switchboardCommandRegistry.register('markdown.api.render', async (content: string) => {
+        try {
+            const { marked } = await import(/* webpackMode: "eager" */ 'marked');
+            // `marked` is the parser (marked.parse === marked); calling it
+            // directly is the type-safe form — `marked.parse` is not declared
+            // on the `marked` function type. Default is sync (returns string).
+            return getMarkdownPurifier().sanitize(marked(content || '') as string);
+        } catch {
+            return '';
+        }
+    });
 
     // PlanningPanelProvider's createPlansPasteBack arm (Connections → Web Agents)
     // calls this command through the commands seam. It is registered in

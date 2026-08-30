@@ -498,6 +498,15 @@ jobs:
       - name: Shared renderMarkdown contract (block transitions, escaping)
         run: npm run test:contract:rendermarkdown
 
+      # The standalone host has no VS Code, so `markdown.api.render` is unbridged
+      # and every project-panel preview pane renders blank. bootstrap.ts registers
+      # a marked + DOMPurify handler for it. Sanitization is the load-bearing half:
+      # `marked` does not sanitize, every consumer assigns the result to innerHTML,
+      # and the panel CSP carries `script-src-attr 'unsafe-inline'` with no nonce —
+      # so an unsanitized regression is a live XSS, and it is silent.
+      - name: Standalone markdown.api.render contract (registration, sanitization, one JSDOM window)
+        run: npm run test:contract:markdown-render
+
       - name: Headless feature management contract (capability derivation, verb schemas, standalone wiring)
         run: npm run test:contract:headless-feature-mgmt
 
