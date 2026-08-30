@@ -76,24 +76,91 @@ a deliberately-induced busy loop before trusting it.
 
 This is what would have identified the 1d14h spin, and what will identify the next one.
 
-### 3. Output-volume instrumentation on the fan-out
+### 3. Output-volume instrumentation, with the log writer as the named prime suspect
 
 Count bytes and frames per terminal per second through the gateway, and record time spent in the
-flush path. This makes the per-byte cost measurable rather than argued about, and it will
-directly show whether a single misbehaving TUI (one seat redrawing at an absurd rate) accounts
-for a disproportionate share.
+flush path. This makes the per-byte cost measurable rather than argued about, and will show
+whether one misbehaving TUI accounts for a disproportionate share.
 
-Pair it with a per-terminal ceiling: a seat producing pathological output volume should be
-detectable, and ideally throttled with a visible notice, rather than being allowed to saturate
-the host silently.
+**Time the terminal log writer separately from the rest of the flush path.** It is the strongest
+hypothesis in this codebase for a real per-byte cost, and a generic "time the flush" measurement
+would bury it. `TerminalLogWriter.onOutput` (`terminalLogWriter.ts:278-279`) does two complete
+synchronous string passes over every chunk:
 
-### 4. Only then, fixes
+```js
+const stripped = stripAnsi(data);
+const { collapsed, carry } = collapseCarriageReturns(stripped, state.crCarry);
+```
 
-Do not pre-commit to optimisations in this plan. Candidates the instrumentation may or may not
-justify — coalescing more aggressively, capping scrollback retention, skipping the WS broadcast
-for panes not currently visible, moving the log tee off the hot path — are all plausible and all
-unfounded until step 1 and step 3 produce numbers. Write the fixes as a follow-up plan informed
-by the data.
+`stripAnsi` is `text.replace(ANSI_REGEX, '')` against a hand-rolled comprehensive regex covering
+CSI, OSC and charset sequences (`:75-98`). Four properties make it worth measuring on its own:
+
+- Two full passes over every byte the terminals emit, one of them a regex rebuild.
+- **Agent CLI output is close to worst-case input.** A TUI redraw stream is mostly escape
+  sequences and carriage returns, so the regex matches and rebuilds constantly rather than
+  scanning and passing.
+- It runs for **every terminal regardless of viewers** — it is a flush observer, so panes the
+  operator has closed still pay it in full.
+- It scales linearly with seat count.
+
+The disk write is **not** the suspect and should not be re-investigated: `:11-13` states the
+writes go through an async chain precisely *"so a slow disk never blocks the shared flush
+interval"*. The I/O is already off the hot path; only the transformation is on it.
+
+Record, per terminal per second: bytes in, time in `stripAnsi`, time in
+`collapseCarriageReturns`, time in the rest of the flush. That decomposition is what turns this
+hypothesis into a number.
+
+Note the scope: `terminalLogWriter.ts` is under `src/standalone/`, so this measures the
+standalone path.
+
+Pair the volume counters with a per-terminal ceiling: a seat producing pathological output should
+be detectable, and ideally throttled with a visible notice, rather than saturating the host
+silently.
+
+### 4. One fix that needs no measurement, and the rest that do
+
+**Hoist the client filter above the frame encode.** In `flushOutput`
+(`terminalWsGateway.ts:635-637`) the order is:
+
+```js
+const frame = encodeOutputFrame(seq, combined);
+const targetClients = Array.from(this.clients).filter(c => c.terminalName === terminalName);
+```
+
+so a frame is encoded for a terminal nobody is attached to, then discarded. Reordering is a pure
+no-behaviour-change win and is exempt from this plan's measure-first rule for that reason — it
+cannot be wrong, only small.
+
+**Everything else waits for the data.** Candidates the instrumentation may or may not justify —
+a no-ESC fast path in `stripAnsi`, fusing the two log passes into one, moving the transformation
+off the flush tick into the async chain that already carries the write, coalescing harder,
+capping scrollback retention — are all plausible and all unfounded until steps 1 and 3 produce
+numbers. Write them as a follow-up plan informed by the data.
+
+### What "unwatched" does and does not license
+
+The instrumentation should answer whether an unattached terminal can skip work, so record the
+definition it has to work with. Server-side, *unwatched* means exactly one thing: **zero
+WebSocket clients whose `client.terminalName` matches** — that filter is the only notion the
+board has. It is a weak licence, because three consumers on that path are not viewers and must
+keep running:
+
+- **The log writer** (`terminalWsGateway.ts:329`) — the session log is the record; never skip it.
+- **The scrollback ring** — the WS replays from `lastSeq` on connect, so the 256 KB ring exists
+  *for* a viewer who has not attached yet. Skipping its maintenance blanks a later attach.
+- **`scanTerminalModes`** — it tracks DEC mode state across the whole stream and runs before the
+  ring append specifically because *"the ring EVICTS, and the whole point of the recorded flag is
+  to outlive eviction."* Skipping it corrupts terminal mode state on reattach.
+
+So on the current path only the encode and the send are viewer-only — which is why step 4's hoist
+is the whole safely-skippable set today.
+
+**The larger lever is *unviewed*, which is not tracked at all.** A backgrounded tab or minimised
+window keeps its socket open and keeps rendering, and counts as watched; a solo popout
+(`&solo=1`) and the VS Code webview are separate clients again, so one terminal can have several.
+Capturing viewer visibility (rather than mere connection) is where the browser-side saving is.
+Treat it as a question for the instrumentation to size, not a change to make blind.
 
 ### Relationship to the wedged-board plan
 
@@ -115,7 +182,12 @@ Given the freeze, that half is worth pulling forward regardless of what this pla
 4. Confirm the dump path works when `/health` is already failing, since that is the real
    condition.
 5. Drive one seat to high output (a large `cat`, a fast-redrawing TUI) and confirm the volume
-   instrumentation attributes the spike to that seat.
+   instrumentation attributes the spike to that seat, and separates `stripAnsi` and
+   `collapseCarriageReturns` time from the rest of the flush.
+5a. Measure the log writer against ANSI-dense TUI traffic specifically, not plain text — plain
+   text is its best case and would understate it.
+5b. With the client filter hoisted, confirm a terminal with zero attached clients no longer
+   encodes a frame, and that a terminal with one or more clients is byte-identical to before.
 6. Baseline capture: record the attribution with 1, 4 and 8 seats idle, and again under load, so
    the follow-up plan has a before.
 7. Both hosts where applicable — the gateway and pty host are standalone; the extension host runs
