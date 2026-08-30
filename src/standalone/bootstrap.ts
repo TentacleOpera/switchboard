@@ -2129,13 +2129,17 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     );
                                     // Shared pure helper: both hosts produce byte-identical target sets
                                     // for identical inputs. Excludes the destination (delivery path owns
-                                    // its clear) and the origin (the caller must not be cleared by its
-                                    // own dispatch). Busy seats are deferred, not skipped.
+                                    // its clear), the origin (the caller must not be cleared by its
+                                    // own dispatch), and the head (the orchestration thread — clearing it
+                                    // costs a re-auth toll and the state it needs to manage the run; the
+                                    // origin guard is no substitute, being caller-supplied and routinely
+                                    // absent on machine dispatches). Busy seats are deferred, not skipped.
                                     const { toClear, deferred } = computeRosterClearTargets({
                                         roster,
                                         liveActive: activeNames,
                                         destination: payload.name,
                                         origin: payload.origin,
+                                        head: teamInfo.head,
                                         busySet,
                                     });
                                     // Record deferred seats for the same-feature branch intercept.
@@ -2185,34 +2189,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                             }
                                         }
                                     }
-                                    // Report deferred seats on the same lifecycle event with a
-                                    // distinct reason so the pane shows "deferred" rather than a
-                                    // silent success.
-                                    if (deferred.length > 0) {
-                                        const deferOpId = `team-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-                                        const deferStartAt = Date.now();
-                                        for (const name of deferred) {
-                                            const h = ptyFleetService.get(name);
-                                            try {
-                                                server.broadcastWs('terminalDispatchPreparing', {
-                                                    type: 'terminalDispatchPreparing',
-                                                    operationId: deferOpId,
-                                                    terminalName: name,
-                                                    cliFamily: h?.cliFamily || 'unknown',
-                                                    teamName: teamId,
-                                                    phase: 'clearing',
-                                                }, SURFACES.terminals);
-                                                server.broadcastWs('terminalDispatchFinished', {
-                                                    type: 'terminalDispatchFinished',
-                                                    operationId: deferOpId,
-                                                    terminalName: name,
-                                                    success: true,
-                                                    reason: 'deferred',
-                                                    elapsedMs: Math.max(0, Date.now() - deferStartAt),
-                                                }, SURFACES.terminals);
-                                            } catch { /* best effort */ }
-                                        }
-                                    }
+                                    // Deferred seats get NO curtain. A curtain exists to hide a
+                                    // context reset; a deferred seat is not reset, so covering it
+                                    // (then lifting with no startup text) is the cosmetic flicker
+                                    // this fix removes. The deferred set is still recorded above so
+                                    // the same-feature branch intercept clears the seat before its
+                                    // next delivery — the pane receives no terminal-level signal at
+                                    // all for a deferred seat.
                                     // Record the work-context key only when the barrier actually
                                     // cleared someone OR there was nobody to clear (roster already
                                     // clean). When every active member was busy (toClear empty,

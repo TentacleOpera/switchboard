@@ -232,6 +232,119 @@ test('whitespace-only origin is treated as no origin', () => {
     assert.deepStrictEqual(res.toClear.sort(), ['coder-2', 'head']);
 });
 
+// ── 1b. BEHAVIOURAL: head exclusion ───────────────────────────────────
+//
+// The head is the orchestration thread. Clearing it means a re-auth toll
+// and lost orchestration state, so it is excluded from BOTH toClear and
+// deferred — structurally, not incidentally (the origin guard is no
+// substitute: `origin` is caller-supplied and routinely absent on machine
+// dispatches, so an idle lead with no origin would otherwise be cleared
+// mid-feature). An absent head is a no-op exclusion (today's behaviour).
+
+test('head exclusion: head passed → head absent from toClear and deferred', () => {
+    const res = rosterHelper({
+        roster: ['lead', 'coder-1', 'coder-2', 'intern'],
+        liveActive: new Set(['lead', 'coder-1', 'coder-2', 'intern']),
+        destination: 'coder-1',
+        head: 'lead',
+        busySet: new Set(),
+    });
+    if (!res) return;
+    assert.ok(!res.toClear.includes('lead'), 'head must be absent from toClear');
+    assert.ok(!res.deferred.includes('lead'), 'head must be absent from deferred');
+    assert.deepStrictEqual(res.toClear.sort(), ['coder-2', 'intern']);
+    assert.deepStrictEqual(res.deferred, []);
+});
+
+test('head is busy and head passed → head absent from deferred (exclusion takes priority over busy)', () => {
+    const res = rosterHelper({
+        roster: ['lead', 'coder-1', 'coder-2'],
+        liveActive: new Set(['lead', 'coder-1', 'coder-2']),
+        destination: 'coder-1',
+        head: 'lead',
+        busySet: new Set(['lead', 'coder-2']),
+    });
+    if (!res) return;
+    assert.ok(!res.toClear.includes('lead'), 'head must be absent from toClear');
+    assert.ok(!res.deferred.includes('lead'), 'head must be absent from deferred (exclusion beats busy)');
+    assert.deepStrictEqual(res.toClear, []);
+    assert.deepStrictEqual(res.deferred, ['coder-2']);
+});
+
+test('head absent → no head exclusion (today\'s behaviour)', () => {
+    // No `head` field passed: a roster member named 'head' is still a
+    // candidate for the clear, exactly as before this fix.
+    const res = rosterHelper({
+        roster: ['head', 'coder-1', 'coder-2'],
+        liveActive: new Set(['head', 'coder-1', 'coder-2']),
+        destination: 'coder-1',
+        busySet: new Set(),
+    });
+    if (!res) return;
+    assert.ok(res.toClear.includes('head'), 'absent head must NOT exclude the member named "head"');
+    assert.deepStrictEqual(res.toClear.sort(), ['coder-2', 'head']);
+});
+
+test('head is also the destination → already excluded, no issue', () => {
+    const res = rosterHelper({
+        roster: ['lead', 'coder-1', 'coder-2'],
+        liveActive: new Set(['lead', 'coder-1', 'coder-2']),
+        destination: 'lead',
+        head: 'lead',
+        busySet: new Set(),
+    });
+    if (!res) return;
+    assert.ok(!res.toClear.includes('lead'), 'head/destination must be absent from toClear');
+    assert.ok(!res.deferred.includes('lead'), 'head/destination must be absent from deferred');
+    assert.deepStrictEqual(res.toClear.sort(), ['coder-1', 'coder-2']);
+});
+
+test('head is also the origin → already excluded, additive exclusion harmless', () => {
+    const res = rosterHelper({
+        roster: ['lead', 'coder-1', 'coder-2'],
+        liveActive: new Set(['lead', 'coder-1', 'coder-2']),
+        destination: 'coder-1',
+        origin: 'lead',
+        head: 'lead',
+        busySet: new Set(),
+    });
+    if (!res) return;
+    assert.ok(!res.toClear.includes('lead'), 'head/origin must be absent from toClear');
+    assert.ok(!res.deferred.includes('lead'), 'head/origin must be absent from deferred');
+    assert.deepStrictEqual(res.toClear, ['coder-2']);
+});
+
+test('empty/whitespace head is treated as no head', () => {
+    for (const headVal of ['', '   ']) {
+        const res = rosterHelper({
+            roster: ['lead', 'coder-1', 'coder-2'],
+            liveActive: new Set(['lead', 'coder-1', 'coder-2']),
+            destination: 'coder-1',
+            head: headVal,
+            busySet: new Set(),
+        });
+        if (!res) return;
+        assert.ok(res.toClear.includes('lead'), `head="${headVal}" must NOT exclude the member named "lead"`);
+    }
+});
+
+test('head exclusion: idle lead with no origin (the root-cause-2 scenario) → lead NOT cleared', () => {
+    // The serious half of the bug: an idle lead between subtasks is live,
+    // not the destination, not busy, and its origin is unset (machine
+    // dispatch). Without head exclusion it lands in toClear and is genuinely
+    // cleared mid-feature, losing the context it needs to manage the run.
+    const res = rosterHelper({
+        roster: ['lead', 'coder-1', 'coder-2'],
+        liveActive: new Set(['lead', 'coder-1', 'coder-2']),
+        destination: 'coder-1',
+        head: 'lead',
+        busySet: new Set(),
+    });
+    if (!res) return;
+    assert.ok(!res.toClear.includes('lead'), 'idle lead with no origin must NOT be cleared (head exclusion)');
+    assert.deepStrictEqual(res.toClear, ['coder-2']);
+});
+
 // ── 2. SOURCE-LEVEL: shared helper exists and is imported by both roots ─
 
 test('workContextResolver.ts exports computeRosterClearTargets', () => {
@@ -256,6 +369,14 @@ test('bootstrap.ts imports computeRosterClearTargets', () => {
 });
 
 // ── 3. SOURCE-LEVEL: both roots delegate to the helper (host parity) ───
+
+// Count curtain lifecycle emissions in a barrier slice. Matches the `type:`
+// FIELD, not the bare event name: bootstrap.ts names each event twice per
+// emission (the broadcastWs channel argument AND the payload's type field)
+// while TaskViewerProvider.ts names it once, so a bare-identifier count is not
+// comparable across the two roots. One emission == one `type:` literal in both.
+const countCurtainArms = (src) => (src.match(/type:\s*'terminalDispatchPreparing'/g) || []).length;
+const countCurtainFinishes = (src) => (src.match(/type:\s*'terminalDispatchFinished'/g) || []).length;
 
 test('TaskViewerProvider.ts calls computeRosterClearTargets inside the barrier', () => {
     // Slice the team-barrier region: from the teamInfo check to the
@@ -370,23 +491,57 @@ test('bootstrap.ts does NOT record work-context key when all active members are 
     );
 });
 
-test('TaskViewerProvider.ts reports deferred seats with reason "deferred"', () => {
+test('TaskViewerProvider.ts does NOT curtain deferred seats (no terminalDispatchPreparing for deferred)', () => {
+    // A curtain exists to hide a context reset; a deferred seat is not reset,
+    // so covering it (then lifting with no startup text) is the cosmetic
+    // flicker this fix removes. The deferred curtain block was the ONLY place
+    // `reason: 'deferred'` appeared in the barrier — its absence pins that the
+    // block is gone. (The deferred-set RECORDING block stays, and uses
+    // `for (const name of deferred) { deferredSet.add(name); }` — it has no
+    // `reason:` literal, so it does not match this assertion. The same-feature
+    // intercept continues to work.)
     const barrierStart = TVP.indexOf('if (teamInfo && teamInfo.id) {');
     const barrierEnd = TVP.indexOf('} else if (workContextKey && payload.name) {', barrierStart);
     const barrierSrc = TVP.slice(barrierStart, barrierEnd);
     assert.ok(
-        /reason:\s*['"]deferred['"]/.test(barrierSrc),
-        'TaskViewerProvider.ts must emit terminalDispatchFinished with reason "deferred"'
+        !/reason:\s*['"]deferred['"]/.test(barrierSrc),
+        'TaskViewerProvider.ts must NOT emit terminalDispatchFinished with reason "deferred" (deferred seats get no curtain)'
+    );
+    // The invariant itself, not a proxy: the barrier arms EXACTLY ONE curtain
+    // (the toClear path) and lifts exactly one. Counting is what discriminates —
+    // an absence test on `reason: 'deferred'` alone passes a re-introduced
+    // deferred curtain that arms `terminalDispatchPreparing` and omits the
+    // reason literal, which is the precise regression this gate exists to catch.
+    // Paired positive: the count is 1, never 0 — the toClear path still curtains.
+    assert.strictEqual(
+        countCurtainArms(barrierSrc), 1,
+        'TaskViewerProvider.ts barrier must arm exactly one curtain (toClear only, never deferred)'
+    );
+    assert.strictEqual(
+        countCurtainFinishes(barrierSrc), 1,
+        'TaskViewerProvider.ts barrier must lift exactly one curtain (toClear only, never deferred)'
     );
 });
 
-test('bootstrap.ts reports deferred seats with reason "deferred"', () => {
+test('bootstrap.ts does NOT curtain deferred seats (no terminalDispatchPreparing for deferred)', () => {
     const barrierStart = BOOT.indexOf('if (teamInfo && teamInfo.id) {');
     const barrierEnd = BOOT.indexOf('} else if (workContextKey && payload.name) {', barrierStart);
     const barrierSrc = BOOT.slice(barrierStart, barrierEnd);
     assert.ok(
-        /reason:\s*['"]deferred['"]/.test(barrierSrc),
-        'bootstrap.ts must emit terminalDispatchFinished with reason "deferred"'
+        !/reason:\s*['"]deferred['"]/.test(barrierSrc),
+        'bootstrap.ts must NOT emit terminalDispatchFinished with reason "deferred" (deferred seats get no curtain)'
+    );
+    // Same count pin as the extension host — the two roots must stay symmetric.
+    // Matching on the `type:` FIELD rather than the bare identifier is what makes
+    // the counts comparable: bootstrap names the event twice per emission
+    // (broadcastWs channel + type field), the extension host once.
+    assert.strictEqual(
+        countCurtainArms(barrierSrc), 1,
+        'bootstrap.ts barrier must arm exactly one curtain (toClear only, never deferred)'
+    );
+    assert.strictEqual(
+        countCurtainFinishes(barrierSrc), 1,
+        'bootstrap.ts barrier must lift exactly one curtain (toClear only, never deferred)'
     );
 });
 
@@ -407,6 +562,55 @@ test('bootstrap.ts passes payload.origin to the helper', () => {
     assert.ok(
         /origin:\s*payload\.origin/.test(barrierSrc),
         'bootstrap.ts must pass payload.origin to computeRosterClearTargets'
+    );
+});
+
+// ── 3b. SOURCE-LEVEL: head threading in both roots (host parity) ──────
+//
+// The `head:` parameter is optional. If a future refactor drops the
+// `head: teamInfo.head` line from one root, the head exclusion silently
+// vanishes and the bug returns. These tests pin `head:` being passed in
+// both roots, the same way `origin: payload.origin` is pinned above.
+
+test('TaskViewerProvider.ts passes teamInfo.head to the helper', () => {
+    const barrierStart = TVP.indexOf('if (teamInfo && teamInfo.id) {');
+    const barrierEnd = TVP.indexOf('} else if (workContextKey && payload.name) {', barrierStart);
+    const barrierSrc = TVP.slice(barrierStart, barrierEnd);
+    assert.ok(
+        /head:\s*teamInfo\.head/.test(barrierSrc),
+        'TaskViewerProvider.ts must pass teamInfo.head to computeRosterClearTargets'
+    );
+});
+
+test('bootstrap.ts passes teamInfo.head to the helper', () => {
+    const barrierStart = BOOT.indexOf('if (teamInfo && teamInfo.id) {');
+    const barrierEnd = BOOT.indexOf('} else if (workContextKey && payload.name) {', barrierStart);
+    const barrierSrc = BOOT.slice(barrierStart, barrierEnd);
+    assert.ok(
+        /head:\s*teamInfo\.head/.test(barrierSrc),
+        'bootstrap.ts must pass teamInfo.head to computeRosterClearTargets'
+    );
+});
+
+test('workContextResolver.ts RosterClearTargetInput has head field', () => {
+    assert.ok(
+        /head\?:\s*string/.test(WCR_SRC),
+        'RosterClearTargetInput must declare an optional head?: string field'
+    );
+});
+
+test('workContextResolver.ts excludes head in computeRosterClearTargets', () => {
+    const fnStart = WCR_SRC.indexOf('export function computeRosterClearTargets');
+    assert.ok(fnStart > 0, 'computeRosterClearTargets must exist');
+    const fnEnd = WCR_SRC.indexOf('\n}', fnStart);
+    const fnSrc = WCR_SRC.slice(fnStart, fnEnd);
+    assert.ok(
+        /headName\s*=\s*\(typeof head/.test(fnSrc),
+        'computeRosterClearTargets must derive a trimmed headName from the head field'
+    );
+    assert.ok(
+        /headName && name === headName/.test(fnSrc),
+        'computeRosterClearTargets must skip a name equal to headName'
     );
 });
 

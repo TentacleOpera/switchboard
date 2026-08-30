@@ -179,6 +179,18 @@ export async function resolveTeamGroupForTerminal(
  *   dispatches to its own coder must not be cleared by its own dispatch.
  *   An origin that names a terminal NOT on the roster is a no-op exclusion
  *   (never widen the roster from caller-supplied data).
+ * - `head` — the team head (from `resolveTeamGroupForTerminal`'s
+ *   `ResolvedTeamGroup.head`), or `undefined`/`''` for legacy rows written
+ *   before `head` was stamped. When present and on the roster, the head is
+ *   excluded from BOTH `toClear` and `deferred`: the head is the
+ *   orchestration thread, and clearing it means a re-auth toll and lost
+ *   orchestration state. The origin guard is NOT a substitute — `origin` is
+ *   caller-supplied and routinely absent on machine dispatches, so an idle
+ *   lead between subtasks (live, not the destination, not busy, no origin)
+ *   would otherwise land in `toClear` and be genuinely cleared mid-feature.
+ *   An absent head is a no-op exclusion (today's behaviour), never "clear
+ *   nothing". An operator who needs a clean head between features must clear
+ *   it explicitly.
  * - `busySet` — names of seats that are mid-turn (`now - lastDataAt <
  *   livenessWindowMs`, or `lastDataAt === 0` for no heartbeat data). Built
  *   host-side from each root's own `lastDataAt` source so the helper stays
@@ -190,6 +202,7 @@ export interface RosterClearTargetInput {
     liveActive: Set<string>;
     destination: string;
     origin?: string;
+    head?: string;
     busySet: Set<string>;
 }
 
@@ -220,24 +233,33 @@ export interface RosterClearTargetResult {
  *  2. Is the `destination` → skip (delivery path owns its clear).
  *  3. Is the `origin` (when present and on the roster) → skip (the caller
  *     must not be cleared by its own dispatch).
- *  4. In `busySet` → defer (mid-turn; cleared later via the same-feature
+ *  4. Is the `head` (when present and on the roster) → skip (the head is the
+ *     orchestration thread; clearing it means a re-auth toll and lost state.
+ *     `origin` is caller-supplied and routinely absent on machine dispatches,
+ *     so it is not a substitute — an idle lead with no origin would otherwise
+ *     be cleared mid-feature).
+ *  5. In `busySet` → defer (mid-turn; cleared later via the same-feature
  *     branch intercept).
- *  5. Otherwise → clear immediately.
+ *  6. Otherwise → clear immediately.
  *
  * Security: `origin` is caller-supplied and used only to REMOVE a name from
- * the target set, never to add one or widen scope. `resolveTeamGroupForTerminal`
- * stays the sole roster source.
+ * the target set, never to add one or widen scope. `head` is host-supplied
+ * from `resolveTeamGroupForTerminal`'s `ResolvedTeamGroup.head` (the sole
+ * roster source), so it is trusted the same way the roster itself is.
+ * `resolveTeamGroupForTerminal` stays the sole roster source.
  */
 export function computeRosterClearTargets(input: RosterClearTargetInput): RosterClearTargetResult {
-    const { roster, liveActive, destination, origin, busySet } = input;
+    const { roster, liveActive, destination, origin, head, busySet } = input;
     const toClear: string[] = [];
     const deferred: string[] = [];
     const originName = (typeof origin === 'string' && origin.trim()) ? origin.trim() : '';
+    const headName = (typeof head === 'string' && head.trim()) ? head.trim() : '';
 
     for (const name of roster) {
         if (!liveActive.has(name)) continue;
         if (name === destination) continue;
         if (originName && name === originName) continue;
+        if (headName && name === headName) continue;
         if (busySet.has(name)) {
             deferred.push(name);
         } else {
