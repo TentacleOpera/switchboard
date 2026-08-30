@@ -1093,7 +1093,11 @@ export const GATE_WIRING_AUDIT_STEP = `Gate-wiring audit: for every automated ch
    but not invoked by CI is a MAJOR finding: it is the exact "green while
    incomplete" hole. Name the check, where it is defined, and where (if anywhere)
    it is invoked. This step is static analysis — it applies even when
-   skip-tests/skip-compilation directives are active.`;
+   skip-tests/skip-compilation directives are active. Additionally: if the plan's
+   core mechanism has no automated check that could discriminate on its
+   correctness — only manual verification — and that manual verification was not
+   executed in this review pass, the verdict is provisional. State explicitly
+   that passing unrelated suites is not evidence the core mechanism works.`;
 
 export const SKIP_DISCLOSURE_STEP = `Skip-tests disclosure: if this prompt contains an explicit "SKIP TESTS:" or
    "SKIP COMPILATION:" line in the dispatch instructions above the plan content,
@@ -1540,6 +1544,7 @@ export const ADVANCED_REVIEWER_DIRECTIVE = `ADVANCED REGRESSION ANALYSIS (enable
 3. Check for race conditions: if the change involves async state (DB writes, file watchers, mtime checks), verify it doesn't conflict with concurrent systems (autoban polling, cross-IDE sync, write serialization chains).
 4. Check for orphaned references: if dead code was removed, grep for any remaining references to the removed identifiers.
 5. Audit the full execution path from UI entry point to final state change, not just the changed lines.
+6. Inbound field-existence check: for every persisted or external field the change reads or filters on, grep for the field name across the codebase to find its writer, then read the object literal that is persisted to disk. A docblock, a TypeScript type (especially any[]), a sibling reader, or the plan's citation of an existing function is a claim, not evidence — only the persisted literal proves the field exists. If the writer does not set the field, this is a CRITICAL finding.
 This analysis is token-intensive but catches regressions that plan-compliance-only reviews miss.`;
 
 export const AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE = `PAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.`;
@@ -2021,7 +2026,7 @@ UNATTENDED IMPROVER CONTRACT:
             ? `http://127.0.0.1:${options.apiPort}`
             : 'the port in .switchboard/api-server-port.txt';
         const fixStep = isDelegationActive
-            ? `For valid CRITICAL/MAJOR findings: if your diagnosed fix set totals under approximately 100 lines of change, apply the fixes directly yourself. If the set is larger, broad, or parallelisable, send fix instructions to your coder at ${reviewerCoderTerminal} via POST /terminals/verb/ptySendPrompt with {"name":"${reviewerCoderTerminal}","data":"<fix instructions>","clearBeforePrompt":false} against ${portRef}. For each delegated finding: name the file and the issue. For mechanical fixes (compile errors, type issues, missing imports), specify the exact fix — the compiler is a shared oracle. For judgment calls (design decisions, which artifact is wrong, test policy), describe the problem and your reasoning — let the coder choose the fix. You will re-review their diff regardless. Tell the coder to run verification checks (typecheck/tests as applicable) and include results in their report. If the fix set grows beyond ~100 lines during implementation, switch to delegating the remaining fixes to your coder.`
+            ? `For valid CRITICAL/MAJOR findings: if your diagnosed fix set totals under approximately 100 lines of change, apply the fixes directly yourself. If the set is larger, broad, or parallelisable, send fix instructions to your coder at ${reviewerCoderTerminal} via POST /terminals/verb/ptySendPrompt with {"name":"${reviewerCoderTerminal}","data":"<fix instructions>","clearBeforePrompt":false,"seatBlock":false} against ${portRef}. For each delegated finding: name the file and the issue. For mechanical fixes (compile errors, type issues, missing imports), specify the exact fix — the compiler is a shared oracle. For judgment calls (design decisions, which artifact is wrong, test policy), describe the problem and your reasoning — let the coder choose the fix. You will re-review their diff regardless. Tell the coder to run verification checks (typecheck/tests as applicable) and include results in their report. If the fix set grows beyond ~100 lines during implementation, switch to delegating the remaining fixes to your coder.`
             : `Apply code fixes for valid CRITICAL/MAJOR findings.`;
         const verifyStep = isDelegationActive
             ? `If you applied fixes directly, run verification checks (typecheck/tests as applicable) and include results. If you delegated to your coder, after the coder reports back, re-review ONLY the coder's git diff (git diff HEAD~<coder's commit count> or git log --oneline -5 to find the coder's commits). Do NOT re-review the entire codebase — scope your re-review to the changed lines only. The coder may have chosen a different fix direction than you would have for judgment calls — evaluate whether the chosen fix resolves the finding, not whether it matches what you would have done. If issues remain in the diff, send another round of fix instructions. Loop until satisfied. If after 5 rounds the same critical issues persist, stop — report to ${reviewerOriginLead} via ptySendPrompt that the plan is badly scoped and a new plan is needed for the remaining work. When review passes, report to ${reviewerOriginLead} via ptySendPrompt that the feature passed review, then update the plan file with your review summary.`
@@ -2031,7 +2036,8 @@ UNATTENDED IMPROVER CONTRACT:
             : ((skipTests || skipCompilation) ? SKIP_DISCLOSURE_STEP : '');
 
         const steps: string[] = [
-            `Use the plan file as the source of truth for the review criteria.`,
+            `Use the plan file as the source of truth for review scope — what to build and what's out of bounds. The plan is NOT authoritative on codebase facts: where it asserts a data shape, a function's behaviour, or a field's existence, verify against the code. A plan's confidence is not evidence.`,
+            `Inbound field-existence check: for every persisted or external field the change reads or filters on, open the writer and verify the field exists in the object literal that goes to disk — not in a type, docblock, or sibling reader.`,
             reviewerConciseModeEnabled
                 ? `Stage 1 (Grumpy): adversarial findings, severity-tagged (CRITICAL/MAJOR/NIT), in a dramatic "Grumpy Principal Engineer" voice — brief theatrical intro welcome, then keep each finding to one terse bullet with a one-sentence reason. Theatrical tone is welcome; verbosity is not.`
                 : `Stage 1 (Grumpy): adversarial findings, severity-tagged (CRITICAL/MAJOR/NIT), in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).`,

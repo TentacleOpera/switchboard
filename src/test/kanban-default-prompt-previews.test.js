@@ -128,6 +128,9 @@ async function run() {
     assert.ok(previews.planner.includes('Read .agents/protocols/improve-plan/SKILL.md and follow it step-by-step'), 'Planner preview should include default workflow path instructions');
     assert.ok(!previews.planner.includes('PAIR PROGRAMMING OPTIMISATION'), 'Planner preview should not include aggressive pair programming when disabled');
     assert.ok(!previews.reviewer.includes('ADVANCED REGRESSION ANALYSIS'), 'Reviewer preview should not include advanced regression block when disabled');
+    assert.ok(previews.reviewer.includes('NOT authoritative on codebase facts'), 'Reviewer preview should include plan-authority split when advanced regression is disabled');
+    assert.ok(previews.reviewer.includes('open the writer and verify the field exists'), 'Reviewer preview should include base inbound field-existence check when advanced regression is disabled');
+    assert.ok(!previews.reviewer.includes('grep for the field name'), 'Reviewer preview should not include advanced grep protocol when advanced regression is disabled');
     assert.ok(!previews.lead.includes('adversarial review'), 'Lead preview should not include inline challenge when disabled');
     assert.ok(!previews.lead.includes('concurrently handling the Routine tasks'), 'Lead preview should not include pair programming instructions when disabled');
     assert.ok(!previews.coder.includes('only do Routine (Band A) work'), 'Coder preview should not include pair programming instructions when disabled');
@@ -149,6 +152,9 @@ async function run() {
 
     // Check reviewer custom options are reflected
     assert.ok(previews.reviewer.includes('ADVANCED REGRESSION ANALYSIS'), 'Reviewer preview should reflect advanced regression option');
+    assert.ok(previews.reviewer.includes('Inbound field-existence check'), 'Reviewer preview should include inbound field-existence check when advanced regression is enabled');
+    assert.ok(previews.reviewer.includes('NOT authoritative on codebase facts'), 'Reviewer preview should include plan-authority split when advanced regression is enabled');
+    assert.ok(previews.reviewer.includes('open the writer and verify the field exists'), 'Reviewer preview should include base inbound field-existence check when advanced regression is enabled');
 
     // Check lead/coder custom options are reflected
     assert.ok(previews.lead.includes('adversarial review'), 'Lead preview should include inline challenge when enabled');

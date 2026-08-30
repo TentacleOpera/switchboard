@@ -677,7 +677,8 @@ export const NEW_REVIEW_TEAM_HEAD_PROMPT =
     + 'their findings to the plan files and report back. When all reviewers report, triage findings into four '
     + 'categories: (1) needs no fixing, (2) fixes needed, (3) follow-ups needed for deferred issues or remaining '
     + 'risks, (4) did not meet intent. Apportion categories 2 and 3 back to the reviewer that reviewed them '
-    + '(file-disjoint where possible). Do not fix categories 1 or 4. Write one markdown artifact to the plans '
+    + '(file-disjoint where possible) via POST /terminals/verb/ptySendPrompt with {"name":"{coder}","data":"<fix instructions — name each file, the issue, and the fix needed. Tell the coder to run verification checks (typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false} against the port in .switchboard/api-server-port.txt. '
+    + 'Do not fix categories 1 or 4. Write one markdown artifact to the plans '
     + 'folder (.switchboard/plans/) covering deferred items, remaining risks, and intent failures. '
     + 'When review and fixes are complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
@@ -2338,6 +2339,77 @@ export async function resolveTeamMembersForHead(opts: {
         if (roster.length) { return roster; }
     }
     return null;
+}
+
+/**
+ * Check whether two terminals share any registered team.
+ *
+ * Reads `terminals.groups` with the same bare-key merge as
+ * `resolveTeamMembersForHead`, extracts rosters consistently via the same
+ * `rosterOf` logic (prefers `order`, falls back to `members`), and returns
+ * true if ANY group contains both `a` and `b`.
+ *
+ * Returns `true` (do NOT drop) when data is unavailable, reads fail, or no
+ * groups exist — the conservative direction. The caller drops `originLead`
+ * only when this returns `false`, i.e. there IS team data and the two
+ * terminals are provably on no shared team.
+ *
+ * Use this instead of `resolveTeamMembersForHead` for cross-team membership
+ * predicates: `resolveTeamMembersForHead` returns only one roster (the group
+ * the origin heads, or the first containing it), which is insufficient for a
+ * shared reviewer on multiple teams.
+ */
+export async function terminalsShareTeam(opts: {
+    db?: any;
+    settings?: TerminalGroupsSettingsAccessor;
+    a: string;
+    b: string;
+}): Promise<boolean> {
+    const { db, settings, a, b } = opts;
+    if ((!db && !settings) || !a || !b || a === b) { return true; }
+
+    let groups: any[] = [];
+    try {
+        if (settings) {
+            const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
+            groups = Array.isArray(raw) ? [...raw] : [];
+        } else if (db) {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? [...raw] : [];
+        }
+        if (db) {
+            try {
+                const bare = await db.getConfigJson('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+        }
+    } catch { return true; }
+    if (!Array.isArray(groups) || groups.length === 0) { return true; }
+
+    const rosterOf = (g: any): string[] => {
+        const roster: any[] = Array.isArray(g?.order) && g.order.length
+            ? g.order
+            : (Array.isArray(g?.members) ? g.members : []);
+        const names: string[] = [];
+        for (const n of roster) {
+            if (typeof n === 'string' && n.length > 0) { names.push(n); }
+        }
+        return names;
+    };
+
+    for (const g of groups) {
+        const roster = new Set(rosterOf(g));
+        if (roster.has(a) && roster.has(b)) { return true; }
+    }
+    return false;
 }
 
 /**

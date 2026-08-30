@@ -192,3 +192,6 @@ Key risks: (1) prompt-text instructions rely on agent instruction-following — 
 ## Recommendation
 
 Complexity 3 → **Send to Intern**. Single-file prompt-text changes with clear, specific edits and well-defined test assertions. The highest-risk aspect (plan-authority posture change in Fix 2) is a text change, not an architectural one — the risk is in the wording, which is already specified verbatim in this plan.
+
+### Implementation Summary
+Implemented all three fixes in `src/services/agentPromptBuilder.ts` to close structural holes in reviewer prompts. Added unconditional inbound field-existence verification and split plan authority in the base reviewer steps, appended the full grep-protocol inbound check to `ADVANCED_REVIEWER_DIRECTIVE`, and appended the provisional verdict requirement for manual-only core mechanisms to `GATE_WIRING_AUDIT_STEP`. Updated `src/test/kanban-default-prompt-previews.test.js` and `src/test/reviewer-prompt-anti-artifact-contract.test.js` to assert presence of all new prompt directives across enabled and disabled configurations. All changes are prompt-text constants and test guards without modifying runtime logic.

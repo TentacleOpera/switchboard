@@ -97,6 +97,23 @@ async function run() {
         'Expected the directive to redirect findings to the existing plan file via the COMPLETION REPORT step.'
     );
 
+    assert.ok(
+        builderSource.includes('Inbound field-existence check'),
+        'Expected reviewer prompt to include inbound field-existence check.'
+    );
+    assert.ok(
+        builderSource.includes('NOT authoritative on codebase facts'),
+        'Expected reviewer prompt to include plan-authority split.'
+    );
+    assert.ok(
+        builderSource.includes('only the persisted literal proves the field exists'),
+        'Expected reviewer prompt to include advanced inbound field-existence check directive.'
+    );
+    assert.ok(
+        builderSource.includes('passing unrelated suites is not evidence'),
+        'Expected reviewer prompt to include provisional verdict on manual-only verification.'
+    );
+
     console.log('reviewer prompt anti-artifact contract passed');
 }
 

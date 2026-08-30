@@ -4,7 +4,7 @@
  * Verification tests for team-scoped reviewer routing on CODE REVIEWED.
  * Plan: feature_plan_20260816164109_team-scoped-reviewer-routing-on-code-reviewed.md
  *
- * Items 1–7 of the plan's Automated Tests section:
+ * Items 1–11:
  *  1. resolveTeamScopedRoleTerminal — the regression the plan exists for
  *  2. plausibleOriginTerminal — the origin filter
  *  3. Change 0 recording ownership — one writer per path, never 'unknown' on drag
@@ -12,6 +12,10 @@
  *  5. custom-user branch — honours caller targetTerminalOverride (Change 4)
  *  6. single-team / no-team — byte-identical to pre-change resolution
  *  7. planner rotation — cursor still advances (custom-user precedence edit)
+ *  8. teamName propagation in createHeadWithDelegates
+ *  9. Reviewer delegation mode
+ *  10. tiered review mechanical gate
+ *  11. terminalsShareTeam — cross-team originLead guard
  *
  * Run with: node src/test/team-scoped-role-routing.test.js
  * Requires `npm run compile-tests` (loads compiled output from out/).
@@ -27,6 +31,7 @@ const { execFileSync } = require('child_process');
 const {
     resolveTeamScopedRoleTerminal,
     plausibleOriginTerminal,
+    terminalsShareTeam,
     migrateAgentGroups,
     NEW_REVIEW_TEAM_HEAD_PROMPT,
 } = require('../../out/services/teamWiring');
@@ -808,6 +813,8 @@ async function item9() {
         // Delegation protocol language still present.
         assert.ok(prompt.includes('ptySendPrompt'),
             'delegation render must contain the ptySendPrompt protocol');
+        assert.ok(prompt.includes('"seatBlock":false'),
+            'delegation fixStep payload must include seatBlock:false to suppress the coder seat block');
         assert.ok(prompt.includes('coder-9'),
             'delegation render must contain the coder terminal name coder-9');
         assert.ok(prompt.includes('lead-9'),
@@ -862,6 +869,8 @@ async function item9() {
             'non-delegation render must contain the fix-itself step text');
         assert.ok(!prompt.includes('Send fix instructions'),
             'non-delegation render must NOT contain the delegation step text');
+        assert.ok(!prompt.includes('"seatBlock":false'),
+            'non-delegation reviewer prompt must not contain seatBlock:false (no ptySendPrompt payload)');
         assert.ok(prompt.includes('fix valid material issues, then verify.'),
             'non-delegation render must contain the inline-fix execution-block tail');
         assert.ok(prompt.includes('the code fixes, and the plan update'),
@@ -943,6 +952,10 @@ async function item9() {
             assert.ok(NEW_REVIEW_TEAM_HEAD_PROMPT.includes(phrase),
                 `NEW_REVIEW_TEAM_HEAD_PROMPT must contain "${phrase}"`);
         }
+        assert.ok(teamWiringTs.includes('"seatBlock":false'),
+            'NEW_REVIEW_TEAM_HEAD_PROMPT must include seatBlock:false in its ptySendPrompt payload');
+        assert.ok(kanbanHtml.includes('"seatBlock":false'),
+            'Review team preset headPrompt must include seatBlock:false in its ptySendPrompt payload');
     });
 
     await test('migrateAgentGroups repairs structure and never rewrites a persisted head prompt', () => {
@@ -1086,6 +1099,80 @@ async function item10() {
     ));
 }
 
+function mockDb(groups) {
+    return {
+        async getConfigJson(key, fallback) {
+            if (key === 'switchboard.prompts.terminals.groups' || key === 'terminals.groups') {
+                return groups;
+            }
+            return fallback;
+        }
+    };
+}
+
+// ── Item 11: Cross-team guard — terminalsShareTeam ─────────────────────────
+
+async function item11() {
+    console.log('\n── Item 11: Cross-team guard — terminalsShareTeam ──');
+
+    await test('terminalsShareTeam: cross-team originLead is dropped (no shared group)', async () => {
+        const groups = [
+            { id: 'team_lead-1', head: 'lead-1', members: ['lead-1', 'coder-1', 'Coding-reviewer'], order: ['lead-1', 'coder-1', 'Coding-reviewer'] },
+            { id: 'team_lead-2', head: 'lead-2', members: ['lead-2', 'coder-2', 'Backend-reviewer'], order: ['lead-2', 'coder-2', 'Backend-reviewer'] },
+        ];
+        const db = mockDb(groups);
+        // reviewer = Coding-reviewer (team 1), originLead = planner-1 (no team)
+        const shares = await terminalsShareTeam({ db, a: 'Coding-reviewer', b: 'planner-1' });
+        assert.strictEqual(shares, false, 'planner-1 is not on any team with Coding-reviewer');
+    });
+
+    await test('terminalsShareTeam: same-team originLead is kept', async () => {
+        const groups = [
+            { id: 'team_lead-1', head: 'lead-1', members: ['lead-1', 'coder-1', 'Coding-reviewer'], order: ['lead-1', 'coder-1', 'Coding-reviewer'] },
+        ];
+        const db = mockDb(groups);
+        const shares = await terminalsShareTeam({ db, a: 'Coding-reviewer', b: 'lead-1' });
+        assert.strictEqual(shares, true, 'lead-1 is on the same team as Coding-reviewer');
+    });
+
+    await test('terminalsShareTeam: shared reviewer across teams — originLead on a different shared team is kept', async () => {
+        const groups = [
+            { id: 'team_lead-1', head: 'lead-1', members: ['lead-1', 'coder-1', 'Shared-reviewer'], order: ['lead-1', 'coder-1', 'Shared-reviewer'] },
+            { id: 'team_lead-2', head: 'lead-2', members: ['lead-2', 'coder-2', 'Shared-reviewer'], order: ['lead-2', 'coder-2', 'Shared-reviewer'] },
+        ];
+        const db = mockDb(groups);
+        // Shared-reviewer is on both teams; originLead = lead-2 is on team 2.
+        // resolveTeamMembersForHead would return team 1's roster (first containing
+        // the reviewer), which doesn't include lead-2. terminalsShareTeam scans
+        // all groups and finds them together on team 2.
+        const shares = await terminalsShareTeam({ db, a: 'Shared-reviewer', b: 'lead-2' });
+        assert.strictEqual(shares, true, 'lead-2 shares team 2 with Shared-reviewer');
+    });
+
+    await test('terminalsShareTeam: null roster (no groups) — originLead is kept', async () => {
+        const db = mockDb([]);
+        const shares = await terminalsShareTeam({ db, a: 'Standalone-reviewer', b: 'planner-1' });
+        assert.strictEqual(shares, true, 'no groups registered — conservative keep');
+    });
+
+    await test('terminalsShareTeam: bare-key group merge — originLead on a bare-key group is kept', async () => {
+        // Group registered under bare key 'terminals.groups' only, not under
+        // TERMINALS_GROUPS_KEY. The helper must merge bare-key groups before
+        // checking (matching resolveTeamMembersForHead behavior).
+        const db = {
+            async getConfigJson(key, fallback) {
+                if (key === 'switchboard.prompts.terminals.groups') { return []; }
+                if (key === 'terminals.groups') {
+                    return [{ id: 'team_lead-1', head: 'lead-1', members: ['lead-1', 'coder-1', 'Coding-reviewer'], order: ['lead-1', 'coder-1', 'Coding-reviewer'] }];
+                }
+                return fallback;
+            }
+        };
+        const shares = await terminalsShareTeam({ db, a: 'Coding-reviewer', b: 'lead-1' });
+        assert.strictEqual(shares, true, 'bare-key group should be merged and found');
+    });
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -1101,6 +1188,7 @@ async function main() {
     await item8();
     await item9();
     await item10();
+    await item11();
 
     console.log(`\n${passed} passed, ${failed} failed`);
     process.exit(failed > 0 ? 1 : 0);

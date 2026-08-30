@@ -47,7 +47,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // read in this file goes through `loadEffectiveStandingOrders`, which composes
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from './workContextResolver';
 
@@ -7752,6 +7752,13 @@ Each plan file must include:
                     // fix-itself.
                     if (originLead && (originLead === group.targetAgent || originLead === coder)) {
                         originLead = undefined;
+                    }
+                    // Cross-team guard (new):
+                    if (originLead) {
+                        const sharesTeam = await terminalsShareTeam({ db, a: group.targetAgent, b: originLead });
+                        if (!sharesTeam) {
+                            originLead = undefined;
+                        }
                     }
                     if (coder && originLead) {
                         reviewerDelegationOpts = {
@@ -21714,7 +21721,36 @@ Each plan file must include:
                 const coder = (ownTeam && ownTeam.length > 0)
                     ? await this.resolveTeamRoleTerminal(resolvedWorkspaceRoot, targetAgent, 'coder')
                     : (originLead ? await this.resolveTeamRoleTerminal(resolvedWorkspaceRoot, originLead, 'coder') : null);
-                if (coder) {
+                // Self-target guard: dispatched_terminal (what
+                // plausibleOriginTerminal returns) is the terminal the card was
+                // last dispatched TO — the dispatch TARGET, not the sender. On a
+                // re-dispatch of a card already in CODE REVIEWED, that is the
+                // reviewer itself (or the coder we are delegating to), so
+                // reviewerOriginLead would name the reviewer/coder and the
+                // rendered prompt would tell the reviewer to ptySendPrompt its
+                // report to itself. Drop a self-or-coder-targeted lead; the
+                // three-way guard below then falls the reviewer back to
+                // fix-itself (the correct conservative outcome).
+                if (originLead && (originLead === targetAgent || originLead === coder)) {
+                    originLead = undefined;
+                }
+                // Cross-team guard (new): originLead is the last dispatch TARGET, not
+                // necessarily a member of the reviewer's team. A card that passed through
+                // planner-1 for plan improvement has dispatchedTerminal = 'planner-1';
+                // without this check the prompt would tell the reviewer to report to a
+                // terminal on another team. terminalsShareTeam reads all registered groups
+                // (with the same bare-key merge as resolveTeamMembersForHead) and checks
+                // whether the reviewer and originLead appear together in ANY group —
+                // handling shared reviewers on multiple teams. If they share no team, drop
+                // originLead; the coder && originLead gate below falls back to fix-itself
+                // (the conservative outcome).
+                if (originLead) {
+                    const sharesTeam = await terminalsShareTeam({ db: coderDb, a: targetAgent, b: originLead });
+                    if (!sharesTeam) {
+                        originLead = undefined;
+                    }
+                }
+                if (coder && originLead) {
                     reviewerDelegationMode = true;
                     reviewerCoderTerminal = coder;
                     // Install a pair-scoped callback override on the coder so
@@ -21727,19 +21763,6 @@ Each plan file must include:
                             await installReviewerCallbackOrder(swapDb, coder, targetAgent);
                         }
                     } catch { /* best-effort — coder falls back to lead callback */ }
-                }
-                // Self-target guard: dispatched_terminal (what
-                // plausibleOriginTerminal returns) is the terminal the card was
-                // last dispatched TO — the dispatch TARGET, not the sender. On a
-                // re-dispatch of a card already in CODE REVIEWED, that is the
-                // reviewer itself (or the coder we are delegating to), so
-                // reviewerOriginLead would name the reviewer/coder and the
-                // rendered prompt would tell the reviewer to ptySendPrompt its
-                // report to itself. Drop a self-or-coder-targeted lead; the
-                // three-way guard below then falls the reviewer back to
-                // fix-itself (the correct conservative outcome).
-                if (originLead && (originLead === targetAgent || originLead === reviewerCoderTerminal)) {
-                    originLead = undefined;
                 }
             } catch { /* best-effort — fall back to fix-itself */ }
         }

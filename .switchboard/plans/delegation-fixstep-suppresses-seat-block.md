@@ -157,3 +157,7 @@ to:
 ### Manual Verification
 
 5. **End-to-end (requires live extension)**: Start a Review team with a coder that has `skipTests` configured for the coder role. Dispatch a card to CODE REVIEWED. Verify the reviewer's fix instructions reach the coder without a `SKIP TESTS:` line and without a `Do NOT commit` line. Verify the coder runs verification and commits, as instructed by the reviewer's fixStep message body and the standing orders.
+
+## Completion Summary
+
+Added `"seatBlock":false` to the reviewer delegation `fixStep` template payload in `src/services/agentPromptBuilder.ts` so the pty delivery layer suppresses the coder seat directive block. Updated `src/test/team-scoped-role-routing.test.js` to assert the presence of `"seatBlock":false` in delegation mode and its absence in non-delegation mode. The standing orders and fix instructions now govern verification and git safety without seat block contradictions. Mirrored the `"seatBlock":false` payload in `NEW_REVIEW_TEAM_HEAD_PROMPT` in `src/services/teamWiring.ts` and the Review team preset `headPrompt` in `src/webview/kanban.html`, and added scoped source-text assertions for both in `src/test/team-scoped-role-routing.test.js`.

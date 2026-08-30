@@ -347,3 +347,7 @@ test('terminalsShareTeam: bare-key group merge — originLead on a bare-key grou
 
 ## Outstanding Questions
 - **[user]** Should a cross-team `originLead` be dropped entirely (conservative — kills delegation, reviewer fixes itself) or replaced with the reviewer's actual team lead (preserves delegation but adds resolution complexity)? — proceeding on the assumption that dropping is correct for this complexity tier (3), and resolving the actual lead is a follow-up enhancement.
+
+## Completion Summary
+
+Added the `terminalsShareTeam` helper to `src/services/teamWiring.ts`, which reads registered terminal groups (merging bare-key definitions) and extracts rosters consistently via `rosterOf` to verify whether two terminals share a registered team. Integrated the cross-team membership guard into `src/services/TaskViewerProvider.ts` across both single-card and batch reviewer dispatch paths, dropping `originLead` when it does not share a team with the reviewer so that delegation falls back safely to fix-itself mode. Added comprehensive unit tests in `src/test/team-scoped-role-routing.test.js` under Item 11 covering cross-team drops, same-team retention, multi-team shared reviewers, null rosters, and bare-key group merges. In fix round 1, moved single-card delegation flag setting, reviewerCoderTerminal assignment, and coder callback override installation to run after the self-target and cross-team guards under `if (coder && originLead)`, ensuring coder callback redirection is suppressed whenever a cross-team originLead is dropped.
