@@ -616,15 +616,22 @@ function post(port, pathname, body) {
         const childSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyHost.ts'), 'utf8');
         const bootSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
 
-        const childArmStart = childSrc.indexOf("case 'ptySendPrompt':");
-        const childArmEnd = childSrc.indexOf("case 'ptySetControllerSeat':", childArmStart);
-        assert.ok(childArmStart !== -1 && childArmEnd > childArmStart, 'could not locate ptyHost ptySendPrompt arm');
-        const childSlice = childSrc.slice(childArmStart, childArmEnd);
-
-        const bootArmStart = bootSrc.indexOf("case 'ptySendPrompt':");
-        const bootArmEnd = bootSrc.indexOf("case 'ptyRollLogSession':", bootArmStart);
-        assert.ok(bootArmStart !== -1 && bootArmEnd > bootArmStart, 'could not locate bootstrap ptySendPrompt arm');
-        const bootSlice = bootSrc.slice(bootArmStart, bootArmEnd);
+        // Slice each arm from `case 'ptySendPrompt':` to the NEXT `case '...':`.
+        // Anchoring on a named successor verb is what broke here once already:
+        // the successor is different in each host (ptyHost: ptySetControllerSeat,
+        // bootstrap: ptyClearAllTerminals) and a verb that exists in one host but
+        // not the other yields indexOf === -1 — a gate that can never pass.
+        // Neither arm contains a nested `case '...':`, so "next case" is exact.
+        const sliceArm = (src, label) => {
+            const start = src.indexOf("case 'ptySendPrompt':");
+            assert.ok(start !== -1, `could not locate ${label} ptySendPrompt arm`);
+            const rest = src.slice(start + 1);
+            const m = /\n\s*case '[A-Za-z]/.exec(rest);
+            assert.ok(m, `could not locate the case following ${label}'s ptySendPrompt arm`);
+            return rest.slice(0, m.index);
+        };
+        const childSlice = sliceArm(childSrc, 'ptyHost.ts');
+        const bootSlice = sliceArm(bootSrc, 'bootstrap.ts');
 
         const requiredKeys = ['bytesWritten', 'deliveredAt', 'promptSeq', 'bootPhase', 'deliveryReason', 'readiness'];
         for (const key of requiredKeys) {

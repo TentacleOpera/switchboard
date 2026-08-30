@@ -201,6 +201,11 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
     await test('clearBeforePrompt: true prepends /clear but markers stay whole', async () => {
         const text = 'x'.repeat(507); // a failing length
         const { handle, writes } = stubHandle();
+        // An ESTABLISHED seat. sendPromptToPty forces clearBeforePrompt false on a
+        // seat with no prior delivery (promptCount === 0) — a seat the host has
+        // never dispatched to has nothing to clear. This test is about the clear
+        // branch, so the seat must have been prompted before.
+        handle.promptCount = 1;
         await sendPromptToPty(handle, text, { clearBeforePrompt: true, clearBeforePromptDelayMs: 0 });
 
         assert.strictEqual(writes[0], '\x15', 'first write must reset the CLI input line (Ctrl+U)');
@@ -229,6 +234,7 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
     // --- behavioural: text and its submitting CR never share a write --------
     await test('no write carries printable text AND a trailing CR', async () => {
         const { handle, writes } = stubHandle();
+        handle.promptCount = 1; // established seat — see the clear-branch note above
         await sendPromptToPty(handle, 'y'.repeat(300), { clearBeforePrompt: true, clearBeforePromptDelayMs: 0 });
         for (const w of writes) {
             if (w === '\r') { continue; }
