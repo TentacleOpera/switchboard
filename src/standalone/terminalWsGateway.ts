@@ -103,6 +103,24 @@ export const MAX_FLUSH_BYTES = 128 * 1024;
 interface ScrollbackChunk {
     seq: number;
     data: string;
+    /**
+     * The seq this chunk's RUN began at. Equal to `seq` for a normally appended
+     * chunk; frozen at the original value when the content-free collapse
+     * replaces the chunk's data and seq, so it names the oldest frame this entry
+     * still stands in for.
+     *
+     * Load-bearing for gap detection ONLY. `attachClient` decides "did this
+     * client miss real output" by comparing its `lastSeq` against the ring
+     * head. Before the collapse, ring seqs were contiguous and `chunks[0].seq`
+     * answered that exactly. The collapse breaks contiguity — a run of
+     * heartbeats consumes seqs that never enter the ring — so `chunks[0].seq`
+     * alone reports a gap for a client whose disconnect point sits inside a
+     * collapsed run, even though everything it "missed" was a no-op the
+     * surviving chunk already carries. A false gap makes the client write RIS
+     * and wipe its screen on reattach: the exact reattach experience this plan
+     * exists to improve. `spanStart` restores the exact comparison.
+     */
+    spanStart: number;
 }
 
 interface PendingOutput {
@@ -253,30 +271,78 @@ const ESCAPE_SEQUENCE_RE =
     /\x1b\[[0-9;?<=>]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[P_^X][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[ -/][@-~]|\x1b[@-Z\\-_]|\x1b/g;
 
 /**
- * True when `text` carries ZERO printable glyphs after CSI/OSC/DCS escape
- * removal — the exact gate for the content-free chunk collapse in
- * `flushOutput`.
+ * Sequences that CHANGE THE SCREEN without painting a glyph, and therefore are
+ * NOT collapsible even though a zero-printable test alone would call them
+ * content-free.
  *
- * "Printable" is a glyph that xterm would render into a cell: a code point
- * `>= 0x20` other than DEL (0x7f). C0 controls (CR, LF, BS, TAB …) are NOT
- * printable — the devin heartbeat is `ESC[?2026h ESC[3B ESC[3A CR ESC[2C
- * ESC[?25h ESC[?2026l`, which after escape removal leaves a lone CR, so it is
- * content-free. A single space, any letter, or a coloured glyph is not.
+ * The collapse keeps the LAST member of a run and discards the earlier ones, so
+ * it is only sound for sequences whose effect is *idempotent state assignment* —
+ * set a colour, park the cursor, flip a DEC mode. The plan reasoned that through
+ * for SGR ("replaces the tail with the latest SGR — the correct current colour
+ * state") and it holds for cursor moves and mode sets too: replaying only the
+ * last one lands the terminal in exactly the same state.
  *
- * Conservative by construction for the collapse's purpose: an escape that this
- * regex fails to strip leaves bytes (`[`, `?`, digits …) that are `>= 0x20` and
- * so read as printable, which makes the chunk NOT content-free and the collapse
- * declines — the safe direction (keep real history). Over-stripping would be
- * unsafe, and the regex's family coverage mirrors the tested
- * `escapeSequenceEnd`, so the only un-stripped case is a malformed sequence the
- * parser itself cannot resolve.
+ * It does NOT hold for *actions*. Erase-in-display, erase-in-line, insert/delete
+ * line, insert/delete/erase character, scroll up/down and REP each mutate the
+ * buffer, and two of them in a row are not the same as the second one alone. A
+ * zero-printable test calls `ESC[2J` content-free; collapsing it away leaves a
+ * replayed pane still showing content the real terminal erased. Same for the C0
+ * movers below: LF/VT/FF scroll, BS and HT move the cursor by an amount that
+ * depends on where it already is. CR is the exception and is why the measured
+ * devin heartbeat still collapses — `CR` is absolute ("column 0"), so a run of
+ * them is indistinguishable from one.
+ *
+ * Tested against the RAW chunk, before escape stripping: a false positive
+ * (matching these bytes inside an OSC/DCS string body) only declines a collapse,
+ * which is the safe direction — keep real history.
+ *
+ * CSI finals: @ ICH, J ED, K EL, L IL, M DL, P DCH, S SU, T SD, X ECH, b REP.
+ * ESC-level: D IND, E NEL, M RI, c RIS, #8 DECALN, CSI !p DECSTR.
+ */
+const SCREEN_MUTATING_RE = /\x1b\[[0-9;?<=>]*[ -/]*[@JKLMPSTXb]|\x1b[DEMc]|\x1b#8|\x1b\[!p/;
+
+/**
+ * C0 controls that survive escape stripping and are safe to collapse: NUL (no
+ * effect) and CR (absolute column 0). DEL (0x7f) is likewise inert. Every other
+ * control moves or scrolls by a relative amount and is handled as content — see
+ * SCREEN_MUTATING_RE's docblock.
+ */
+function isInertControl(ch: number): boolean {
+    return ch === 0x00 || ch === 0x0d || ch === 0x7f;
+}
+
+/**
+ * True when `text` neither paints a glyph nor mutates the screen — the exact
+ * gate for the content-free chunk collapse in `flushOutput`.
+ *
+ * Two conditions, both required:
+ *   1. ZERO printable glyphs after CSI/OSC/DCS escape removal. "Printable" is a
+ *      code point `>= 0x20` other than DEL (0x7f) — a glyph xterm renders into a
+ *      cell. A single space, any letter, or a coloured glyph fails this.
+ *   2. No screen-MUTATING sequence or non-inert control (SCREEN_MUTATING_RE /
+ *      isInertControl). The collapse discards all but the last member of a run,
+ *      which is only sound for idempotent state assignment — see those
+ *      docblocks.
+ *
+ * The measured devin heartbeat is `ESC[?2026h ESC[3B ESC[3A CR ESC[2C ESC[?25h
+ * ESC[?2026l`: mode sets and relative cursor moves that strip away, leaving a
+ * lone CR, which is inert. So it is content-free and a run of them collapses.
+ *
+ * Conservative by construction: an escape this regex fails to strip leaves bytes
+ * (`[`, `?`, digits …) that are `>= 0x20` and so read as printable, which makes
+ * the chunk NOT content-free and the collapse declines — the safe direction
+ * (keep real history). Over-stripping would be unsafe, and the regex's family
+ * coverage mirrors the tested `escapeSequenceEnd`, so the only un-stripped case
+ * is a malformed sequence the parser itself cannot resolve.
  */
 export function isContentFree(text: string): boolean {
     if (text.length === 0) { return true; }
+    if (SCREEN_MUTATING_RE.test(text)) { return false; }
     const stripped = text.replace(ESCAPE_SEQUENCE_RE, '');
     for (let i = 0; i < stripped.length; i++) {
         const ch = stripped.charCodeAt(i);
         if (ch >= 0x20 && ch !== 0x7f) { return false; }
+        if (!isInertControl(ch)) { return false; }
     }
     return true;
 }
@@ -682,15 +748,25 @@ export class TerminalWsGateway {
             // the old tail's lastSeq finds seq > lastSeq and renders the latest
             // cursor state; the intermediate heartbeats it skips are no-ops by
             // construction.
+            //
+            // `spanStart` is preserved across the replacement so gap detection
+            // still knows the oldest frame the surviving chunk stands in for,
+            // and the collapse declines when the tail is ALSO the ring head and
+            // a trim offset is standing: `headSafeStart` was derived from the
+            // evicted predecessor against THAT head's bytes, and replacing the
+            // head's data behind it would slice the replacement at an offset
+            // computed for different bytes. (Reads `headSafeStart`; it never
+            // re-derives it — the eviction loop below remains its only writer.)
             const tail = buffer.chunks.length > 0 ? buffer.chunks[buffer.chunks.length - 1] : null;
-            if (tail && isContentFree(combined)
+            const headTrimStanding = buffer.chunks.length === 1 && buffer.headSafeStart > 0;
+            if (tail && !headTrimStanding && isContentFree(combined)
                     && (combined === tail.data || isContentFree(tail.data))) {
                 const oldLen = tail.data.length;
                 tail.data = combined;
                 tail.seq = seq;
                 buffer.totalBytes += combined.length - oldLen;
             } else {
-                buffer.chunks.push({ seq, data: combined });
+                buffer.chunks.push({ seq, data: combined, spanStart: seq });
                 buffer.totalBytes += combined.length;
             }
             while (buffer.totalBytes > MAX_SCROLLBACK_BYTES && buffer.chunks.length > 1) {
@@ -1100,13 +1176,20 @@ export class TerminalWsGateway {
         let replayChars = 0;
         let replayGap = false;
         if (buffer && buffer.chunks.length > 0) {
-            const oldestRetained = buffer.chunks[0].seq;
+            // spanStart, not seq: a collapsed head chunk carries the seq of the
+            // LAST frame in its run, and comparing that against lastSeq reports a
+            // gap for every client whose disconnect point fell inside the run —
+            // frames that were no-ops and whose state this very chunk replays.
+            const oldestRetained = buffer.chunks[0].spanStart;
             // The ring evicts at MAX_SCROLLBACK_BYTES, so a client that was away long
             // enough is asking for output that no longer exists. The filter alone
             // cannot tell that from "you missed nothing" — it returns the survivors
             // either way and the client seals the hole by advancing its lastSeq.
-            // Seqs are contiguous (one per flush, evicted only from the front), so this
-            // comparison is exact, not a heuristic.
+            // Seqs are assigned one per flush and evicted only from the front, so
+            // this comparison is exact, not a heuristic. The content-free collapse
+            // is the one thing that can consume a seq without leaving a chunk
+            // behind, and `spanStart` above is what keeps the comparison exact
+            // across it.
             replayGap = lastSeq > 0 && oldestRetained > lastSeq + 1;
             const missed = lastSeq > 0
                 ? buffer.chunks.filter(c => c.seq > lastSeq)

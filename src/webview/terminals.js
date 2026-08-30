@@ -264,25 +264,47 @@
         return Number.isFinite(n) && n > 0 ? n : 90000;
     })();
     const WORKING_LIVE_WINDOW_MS = 5000;
+    // Minimum gap between printable scans on the live-frame hot path. frameHasPrintable
+    // is O(frame length) with a regex allocation, and the hot path runs once per flush
+    // frame (up to ~166/s at the gateway's 6 ms window, frames up to MAX_FLUSH_BYTES) —
+    // an unconditional scan there is real main-thread work on the busiest terminals,
+    // which are precisely the ones that will never show this signal. Re-scanning at most
+    // every 250 ms leaves lastPrintableAt at most 250 ms stale against a 90 s threshold
+    // swept every 5 s, so the signal's behaviour is unchanged.
+    const PRINTABLE_SCAN_THROTTLE_MS = 250;
+    // Names whose "working, no output" affordance is currently in the DOM. The hot path
+    // consults this instead of running a querySelectorAll per printable frame; render and
+    // clear are its only writers.
+    const workingSilenceShown = new Set();
 
     /**
-     * True when `text` carries at least one printable glyph after stripping
-     * CSI/OSC/DCS escape sequences — the client-side mirror of
-     * `isContentFree` in terminalWsGateway.ts. Used to stamp `lastPrintableAt`
-     * only on frames that actually paint a character, so a 12 fps heartbeat
-     * (cursor wiggles, no glyph) never resets the silence timer.
+     * True when `text` paints a glyph OR mutates the screen — the exact inverse
+     * of `isContentFree` in terminalWsGateway.ts, and deliberately kept
+     * character-for-character equivalent to it: the two answer the same question
+     * ("did anything visible happen") for the ring collapse and for this signal.
+     * Used to stamp `lastPrintableAt` only on frames that actually change the
+     * pane, so a 12 fps heartbeat (cursor wiggles, no glyph) never resets the
+     * silence timer.
      *
-     * "Printable" = code point >= 0x20 other than DEL (0x7f); C0 controls
-     * (CR/LF/BS/TAB) are not printable, matching the gateway's definition.
+     * A frame counts as visible when it carries a printable glyph (code point
+     * >= 0x20 other than DEL) after escape stripping, OR carries a
+     * screen-mutating sequence (erase/insert/delete/scroll/REP, IND/NEL/RI,
+     * RIS/DECSTR/DECALN) or a non-inert C0 control (anything but NUL and CR —
+     * LF/VT/FF scroll, BS/HT move relative to where the cursor already is).
      */
     const PRINTABLE_ESCAPES_RE =
         /\x1b\[[0-9;?<=>]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[P_^X][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[ -/][@-~]|\x1b[@-Z\\-_]|\x1b/g;
+    const SCREEN_MUTATING_RE = /\x1b\[[0-9;?<=>]*[ -/]*[@JKLMPSTXb]|\x1b[DEMc]|\x1b#8|\x1b\[!p/;
     function frameHasPrintable(text) {
         if (!text) { return false; }
+        if (SCREEN_MUTATING_RE.test(text)) { return true; }
         const stripped = text.replace(PRINTABLE_ESCAPES_RE, '');
         for (let i = 0; i < stripped.length; i++) {
             const ch = stripped.charCodeAt(i);
             if (ch >= 0x20 && ch !== 0x7f) { return true; }
+            // Everything reaching here is < 0x20 or DEL. NUL, CR and DEL are
+            // inert (gateway isInertControl); every other control is visible.
+            if (ch !== 0x00 && ch !== 0x0d && ch !== 0x7f) { return true; }
         }
         return false;
     }
@@ -2602,7 +2624,7 @@
     }
 
     function renderWorkingSilence(contentEl, name) {
-        if (contentEl.querySelector('.working-silence')) { return; }
+        if (contentEl.querySelector('.working-silence')) { workingSilenceShown.add(name); return; }
         const fleetItem = fleetList.find(t => t.friendlyName === name);
         const agentLabel = agentLabelForRole(fleetItem && fleetItem.role);
         const overlay = document.createElement('div');
@@ -2617,9 +2639,11 @@
         sub.textContent = 'the pane is live; output will appear when the agent prints';
         overlay.appendChild(sub);
         contentEl.appendChild(overlay);
+        workingSilenceShown.add(name);
     }
 
     function clearWorkingSilence(name) {
+        workingSilenceShown.delete(name);
         if (!paneGridEl) { return; }
         const sel = `.working-silence[data-terminal="${cssAttrEscape(name)}"]`;
         paneGridEl.querySelectorAll(sel).forEach(el => el.remove());
@@ -2666,7 +2690,13 @@
         // Gate 3: no printable glyph for the silence threshold. lastPrintableAt
         // resets on every printable frame, so a seat interleaving real output
         // with heartbeats never trips this.
-        const since = entry.lastPrintableAt || entry.lastFrameAt;
+        //
+        // The fallback for a seat that has NEVER printed is firstFrameAt, NOT
+        // lastFrameAt. lastFrameAt is restamped by every heartbeat, so it would
+        // hold `now - since` at ~0 forever and the affordance could never appear
+        // for the measured seat (183 frames, 0 printable characters in 15s) —
+        // the exact case this signal exists to name.
+        const since = entry.lastPrintableAt || entry.firstFrameAt;
         if ((now - since) < WORKING_SILENCE_MS) {
             clearWorkingSilence(name);
             return;
@@ -9879,10 +9909,17 @@
             // lastPrintableAt: wall-clock of the last LIVE frame carrying a printable glyph.
             // lastFrameAt: wall-clock of the last LIVE frame of ANY kind (heartbeat included).
             // Both are stamped only on live (non-replay) frames, so a reattach's replay burst
+            // firstFrameAt: wall-clock of the FIRST live frame — the silence clock's origin
+            // for a seat that has never printed a glyph, which is exactly the measured devin
+            // lead. lastFrameAt cannot serve as that origin: the heartbeat restamps it 12x a
+            // second, so `now - lastFrameAt` is always ~0 and the signal could never fire for
+            // the one seat it exists to describe.
+            // Both are stamped only on live (non-replay) frames, so a reattach's replay burst
             // cannot arm the signal. 0 means "no live frame yet" — the signal cannot fire
             // until a live frame has established the pane is actually streaming.
             lastPrintableAt: 0,
-            lastFrameAt: 0
+            lastFrameAt: 0,
+            firstFrameAt: 0
         };
         terminalsMap.set(name, entry);
         whenRendered(entry, () => materializeTerminalView(entry));
@@ -10436,10 +10473,13 @@
                     // frame also clears any standing "working, no output"
                     // affordance immediately.
                     const now = Date.now();
+                    if (!entry.firstFrameAt) { entry.firstFrameAt = now; }
                     entry.lastFrameAt = now;
-                    if (frameHasPrintable(text)) {
-                        entry.lastPrintableAt = now;
-                        clearWorkingSilence(entry.name);
+                    if (now - entry.lastPrintableAt >= PRINTABLE_SCAN_THROTTLE_MS) {
+                        if (frameHasPrintable(text)) {
+                            entry.lastPrintableAt = now;
+                            if (workingSilenceShown.has(entry.name)) { clearWorkingSilence(entry.name); }
+                        }
                     }
                     scheduleBatchFlush(entry);
                     return;
@@ -10459,10 +10499,13 @@
                     entry.batchQueue.push(rawData);
                     // Same live-frame stamping as the binary path above.
                     const now = Date.now();
+                    if (!entry.firstFrameAt) { entry.firstFrameAt = now; }
                     entry.lastFrameAt = now;
-                    if (frameHasPrintable(rawData)) {
-                        entry.lastPrintableAt = now;
-                        clearWorkingSilence(entry.name);
+                    if (now - entry.lastPrintableAt >= PRINTABLE_SCAN_THROTTLE_MS) {
+                        if (frameHasPrintable(rawData)) {
+                            entry.lastPrintableAt = now;
+                            if (workingSilenceShown.has(entry.name)) { clearWorkingSilence(entry.name); }
+                        }
                     }
                     scheduleBatchFlush(entry);
                 } else if (frame.t === 'hello') {

@@ -178,7 +178,14 @@ function get(port, pathname, headers) {
         assert.ok(site > -1, 'the terminals panel HTML must be post-processed to carry the token');
         // Strip comments before scanning — the injection site legitimately DISCUSSES the
         // rejected inline-script approach, and matching prose would be a false positive.
-        const block = src.slice(site, site + 1600)
+        // Window sized for the whole post-processing arm, not just the first
+        // attribute. The arm accumulates attributes (token, pty-host origin,
+        // working-silence threshold) each with its own rationale comment, and a
+        // window tight enough to have fitted the ORIGINAL arm reports a missing
+        // data-attribute the moment a second one is added above it — a false
+        // regression that says "the token is gone" when the token is right there.
+        // Comments are stripped AFTER the slice, so prose counts against it.
+        const block = src.slice(site, site + 2600)
             .replace(/\/\*[\s\S]*?\*\//g, '')
             .replace(/^\s*\/\/.*$/gm, '');
 

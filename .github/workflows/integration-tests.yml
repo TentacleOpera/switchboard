@@ -952,6 +952,20 @@ jobs:
       - name: Terminal replay gap contract (gap detection, safe parse start)
         run: npm run test:contract:terminal-replay-gap
 
+      # Content-free chunk collapse + the "working, no output" signal. A devin
+      # coding lead emits ~12 no-op cursor-wiggle frames/sec with no glyph, eating
+      # ~65% of the 256 KB scrollback ring and evicting the real history the
+      # operator reattaches to read, while the pane's stillness reads as dead. Pins
+      # the collapse gate (content-free-ness of BOTH chunks, byte-identity only as
+      # the fast path), the screen-mutating exclusions that keep an erase or a line
+      # feed OUT of the collapse, spanStart-based gap detection, the untouched wire
+      # frame and seq consumption, and the client-side printable-aware timer with
+      # its firstFrameAt origin (lastFrameAt is restamped by the heartbeat, so it
+      # can never serve as one). Behavioural cases drive the real flushOutput ring
+      # when out/ is compiled.
+      - name: Terminal content-free collapse contract (heartbeat collapse, working-no-output signal)
+        run: npm run test:contract:terminal-content-free-collapse
+
       # NOT wired, deliberately — `test:contract:terminal-operations-no-periodic-reopen`
       # is now runnable (the script was missing entirely until the multi-parent review
       # pass) but it FAILS on main, and it fails STALE rather than catching a
