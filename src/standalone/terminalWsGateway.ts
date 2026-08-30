@@ -236,6 +236,51 @@ export function replaySafeStart(carry: string, head: string): number {
     return Math.max(0, Math.min(head.length, end - carry.length));
 }
 
+/**
+ * Regex matching the escape-sequence families `escapeSequenceEnd` walks: CSI,
+ * OSC, the DCS/APC/PM/SOS string families, intermediate+final two/three-byte
+ * ESC sequences, two-byte ESC, and a bare trailing ESC as a catch-all.
+ *
+ * Used by `isContentFree` to strip control sequences before testing for
+ * printable glyphs. Order matters: the multi-byte introducers (`[`, `]`,
+ * `P`, `_`, `^`, `X`) are matched by their own branches before the generic
+ * two-byte branch, so a CSI is never mis-read as `ESC` + `[` (a printable).
+ * The OSC/DCS string body stops at BEL or ESC; an ESC that is not followed by
+ * `\` aborts the string and the trailing ESC is left for the next match, so a
+ * malformed string cannot swallow a following real sequence.
+ */
+const ESCAPE_SEQUENCE_RE =
+    /\x1b\[[0-9;?<=>]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[P_^X][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[ -/][@-~]|\x1b[@-Z\\-_]|\x1b/g;
+
+/**
+ * True when `text` carries ZERO printable glyphs after CSI/OSC/DCS escape
+ * removal — the exact gate for the content-free chunk collapse in
+ * `flushOutput`.
+ *
+ * "Printable" is a glyph that xterm would render into a cell: a code point
+ * `>= 0x20` other than DEL (0x7f). C0 controls (CR, LF, BS, TAB …) are NOT
+ * printable — the devin heartbeat is `ESC[?2026h ESC[3B ESC[3A CR ESC[2C
+ * ESC[?25h ESC[?2026l`, which after escape removal leaves a lone CR, so it is
+ * content-free. A single space, any letter, or a coloured glyph is not.
+ *
+ * Conservative by construction for the collapse's purpose: an escape that this
+ * regex fails to strip leaves bytes (`[`, `?`, digits …) that are `>= 0x20` and
+ * so read as printable, which makes the chunk NOT content-free and the collapse
+ * declines — the safe direction (keep real history). Over-stripping would be
+ * unsafe, and the regex's family coverage mirrors the tested
+ * `escapeSequenceEnd`, so the only un-stripped case is a malformed sequence the
+ * parser itself cannot resolve.
+ */
+export function isContentFree(text: string): boolean {
+    if (text.length === 0) { return true; }
+    const stripped = text.replace(ESCAPE_SEQUENCE_RE, '');
+    for (let i = 0; i < stripped.length; i++) {
+        const ch = stripped.charCodeAt(i);
+        if (ch >= 0x20 && ch !== 0x7f) { return false; }
+    }
+    return true;
+}
+
 interface ScrollbackBuffer {
     chunks: ScrollbackChunk[];
     totalBytes: number;
@@ -619,8 +664,35 @@ export class TerminalWsGateway {
 
         if (buffer) {
             seq = buffer.nextSeq++;
-            buffer.chunks.push({ seq, data: combined });
-            buffer.totalBytes += combined.length;
+            // Content-free chunk collapse (ring only — the wire frame below is
+            // unchanged). A "content-free" chunk carries zero printable glyphs
+            // after CSI/OSC/DCS removal (isContentFree): the devin heartbeat is
+            // a 30-byte cursor wiggle with no glyph, and at ~12 fps it eats ~65%
+            // of the 256 KB ring with pure no-ops, evicting the real history the
+            // operator reattaches to read. When BOTH the incoming chunk and the
+            // ring's tail are content-free, the tail is REPLACED with the
+            // incoming chunk (data + the fresh seq) instead of appending a new
+            // entry — a run of heartbeats collapses to its last member, which
+            // carries the cursor's resting position and the ?25h cursor-visible
+            // state. Byte-identity is a cheap fast path that skips the tail scan
+            // in the steady state (one heartbeat per flush chunk); it is NOT the
+            // gate, so a coalesced 60-byte two-heartbeat chunk still collapses
+            // onto a 30-byte tail via the content-free test on both. The wire
+            // frame always consumes the fresh nextSeq, so a client resuming from
+            // the old tail's lastSeq finds seq > lastSeq and renders the latest
+            // cursor state; the intermediate heartbeats it skips are no-ops by
+            // construction.
+            const tail = buffer.chunks.length > 0 ? buffer.chunks[buffer.chunks.length - 1] : null;
+            if (tail && isContentFree(combined)
+                    && (combined === tail.data || isContentFree(tail.data))) {
+                const oldLen = tail.data.length;
+                tail.data = combined;
+                tail.seq = seq;
+                buffer.totalBytes += combined.length - oldLen;
+            } else {
+                buffer.chunks.push({ seq, data: combined });
+                buffer.totalBytes += combined.length;
+            }
             while (buffer.totalBytes > MAX_SCROLLBACK_BYTES && buffer.chunks.length > 1) {
                 const removed = buffer.chunks.shift()!;
                 buffer.totalBytes -= removed.data.length;

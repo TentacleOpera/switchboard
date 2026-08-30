@@ -248,6 +248,45 @@
     const CURTAIN_MAX_MS = 15000;       // hard cap: never strand a pane behind it
     const MIN_DISPATCH_CURTAIN_MS = 350;
     const MAX_DISPATCH_CURTAIN_MS = 16000;
+
+    // "Working, no output" signal. A dispatched seat that is pty-live (frames
+    // still arriving) but has produced no PRINTABLE glyph for this long shows a
+    // small affordance so a silent-but-working pane is not indistinguishable
+    // from a dead one. N mirrors the server-side `activityLight.turnEndSilenceMs`
+    // (default 90s) — injected as data-working-silence-ms by both hosts so the
+    // threshold stays a single knob, not a second one. The liveness window is
+    // how recently ANY frame must have arrived for the seat to count as
+    // pty-live: the devin heartbeat is ~12 fps, so 5s is generous jitter cover
+    // and short enough that a genuinely stopped pty drops the signal.
+    const WORKING_SILENCE_MS = (() => {
+        const ds = (document.body && document.body.dataset) || {};
+        const n = parseInt(ds.workingSilenceMs, 10);
+        return Number.isFinite(n) && n > 0 ? n : 90000;
+    })();
+    const WORKING_LIVE_WINDOW_MS = 5000;
+
+    /**
+     * True when `text` carries at least one printable glyph after stripping
+     * CSI/OSC/DCS escape sequences — the client-side mirror of
+     * `isContentFree` in terminalWsGateway.ts. Used to stamp `lastPrintableAt`
+     * only on frames that actually paint a character, so a 12 fps heartbeat
+     * (cursor wiggles, no glyph) never resets the silence timer.
+     *
+     * "Printable" = code point >= 0x20 other than DEL (0x7f); C0 controls
+     * (CR/LF/BS/TAB) are not printable, matching the gateway's definition.
+     */
+    const PRINTABLE_ESCAPES_RE =
+        /\x1b\[[0-9;?<=>]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[P_^X][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[ -/][@-~]|\x1b[@-Z\\-_]|\x1b/g;
+    function frameHasPrintable(text) {
+        if (!text) { return false; }
+        const stripped = text.replace(PRINTABLE_ESCAPES_RE, '');
+        for (let i = 0; i < stripped.length; i++) {
+            const ch = stripped.charCodeAt(i);
+            if (ch >= 0x20 && ch !== 0x7f) { return true; }
+        }
+        return false;
+    }
+
     // name -> { container, term, fitAddon, rendererAddon, isWebgl, ws, lastSeq, batchQueue,
     //           pendingAckChars, ackSuppressChars, reconnectTimer, reconnectDelay,
     //           resizeObserver, exited, disposed }
@@ -1566,6 +1605,9 @@
 
         startFleetPoll();
         updateTeamStartButtons();
+        // "Working, no output" signal sweep — see updateWorkingSilence. Started
+        // once here; the interval self-guards against double-start.
+        startWorkingSilenceSweep();
     }
 
     function postFleetStateToShell() {
@@ -2536,6 +2578,117 @@
      *  unescaped quote would throw out of querySelectorAll and abort the dismissal. */
     function cssAttrEscape(value) {
         return String(value).replace(/["\\]/g, '\\$&');
+    }
+
+    /**
+     * "Working, no output" affordance — the operator-facing signal that a
+     * silent-but-alive seat is still working. Distinct from the startup curtain:
+     * that covers boot output; this names a state the product can detect but
+     * today reads as a dead pane. Modeled on the bumpStartupCurtain /
+     * sawLiveOutput timer pattern but on a printable-aware predicate, not a
+     * any-bytes predicate (the 12 fps heartbeat keeps the latter fresh forever).
+     *
+     * Fires only when ALL hold: the seat holds a dispatched card (fleet item
+     * planTitle/planId non-null), the pty is live (a frame arrived within
+     * WORKING_LIVE_WINDOW_MS), and no printable glyph has arrived for
+     * WORKING_SILENCE_MS. A genuine-idle seat nobody dispatched to never lights
+     * (no card); a heartbeating seat that IS producing printables never lights
+     * (lastPrintableAt resets on every glyph); a dead pty never lights (no
+     * recent frame). Clears the instant a printable arrives.
+     */
+    function seatHoldsCard(name) {
+        const item = fleetList.find(t => t.friendlyName === name);
+        return !!(item && (item.planTitle || item.planId));
+    }
+
+    function renderWorkingSilence(contentEl, name) {
+        if (contentEl.querySelector('.working-silence')) { return; }
+        const fleetItem = fleetList.find(t => t.friendlyName === name);
+        const agentLabel = agentLabelForRole(fleetItem && fleetItem.role);
+        const overlay = document.createElement('div');
+        overlay.className = 'working-silence';
+        overlay.dataset.terminal = name;
+        const label = document.createElement('div');
+        label.className = 'working-silence-label';
+        label.textContent = agentLabel ? `${agentLabel} is working — no output yet` : 'Working — no output yet';
+        overlay.appendChild(label);
+        const sub = document.createElement('div');
+        sub.className = 'working-silence-sub';
+        sub.textContent = 'the pane is live; output will appear when the agent prints';
+        overlay.appendChild(sub);
+        contentEl.appendChild(overlay);
+    }
+
+    function clearWorkingSilence(name) {
+        if (!paneGridEl) { return; }
+        const sel = `.working-silence[data-terminal="${cssAttrEscape(name)}"]`;
+        paneGridEl.querySelectorAll(sel).forEach(el => el.remove());
+    }
+
+    /** Evaluate the signal for one pane and show/clear the affordance. Called
+     *  from the periodic sweep and after dispatch-state changes. Idempotent. */
+    function updateWorkingSilence(name) {
+        if (!paneGridEl) { return; }
+        const paneIndex = paneAssignments.indexOf(name);
+        if (paneIndex < 0 || paneIndex >= paneGridEl.children.length) {
+            clearWorkingSilence(name);
+            return;
+        }
+        // A pane flipped to kanban mode is showing a board column, not the
+        // terminal's output — the signal is meaningless there and would render
+        // over the card list.
+        if (paneModes[paneIndex] === 'kanban') {
+            clearWorkingSilence(name);
+            return;
+        }
+        const entry = terminalsMap.get(name);
+        if (!entry || entry.exited || entry.disposed) {
+            clearWorkingSilence(name);
+            return;
+        }
+        // Gate 1: the seat must hold a dispatched card. A plain shell that nobody
+        // dispatched to can be silent for legitimate reasons (waiting for input),
+        // and lighting it would cry wolf.
+        if (!seatHoldsCard(name)) {
+            clearWorkingSilence(name);
+            return;
+        }
+        // Gate 2: a live frame must have established the pane is streaming, and a
+        // frame must have arrived recently enough to call the pty live. Before the
+        // first live frame the signal cannot fire (nothing to distinguish from a
+        // pane that has not started); after the pty stops, lastFrameAt goes stale
+        // and the signal drops — a dead pty is a different problem.
+        const now = Date.now();
+        if (!entry.lastFrameAt || (now - entry.lastFrameAt) > WORKING_LIVE_WINDOW_MS) {
+            clearWorkingSilence(name);
+            return;
+        }
+        // Gate 3: no printable glyph for the silence threshold. lastPrintableAt
+        // resets on every printable frame, so a seat interleaving real output
+        // with heartbeats never trips this.
+        const since = entry.lastPrintableAt || entry.lastFrameAt;
+        if ((now - since) < WORKING_SILENCE_MS) {
+            clearWorkingSilence(name);
+            return;
+        }
+        const contentEl = paneGridEl.children[paneIndex].querySelector('.pane-content');
+        if (contentEl) { renderWorkingSilence(contentEl, name); }
+    }
+
+    /** Periodic sweep: re-evaluate every seated pane. Cheap (one Date.now + a
+     *  fleet lookup per pane) and the affordance clears immediately on a
+     *  printable frame via clearWorkingSilence, so the sweep only governs when
+     *  the signal APPEARS. 5s cadence means it surfaces within ~5s of the
+     *  threshold crossing — well under the 90s floor. */
+    let workingSilenceInterval = null;
+    function startWorkingSilenceSweep() {
+        if (workingSilenceInterval) { return; }
+        workingSilenceInterval = setInterval(() => {
+            if (!paneGridEl) { return; }
+            for (const name of Array.from(terminalsMap.keys())) {
+                updateWorkingSilence(name);
+            }
+        }, 5000);
     }
 
     /** Create (once) the curtain inside a pane's content. Called from
@@ -8871,6 +9024,10 @@
                     terminalsMap.delete(name);
                     entry.name = next;
                     terminalsMap.set(next, entry);
+                    // The affordance is stamped with the old name; clear it so it
+                    // does not linger on the pane under the new name (the sweep
+                    // re-evaluates under `next` on its next tick).
+                    clearWorkingSilence(name);
                     // The other name-keyed client collection. An in-flight ladder for
                     // the old name self-terminates (its terminalsMap lookup misses),
                     // but its generation counter is only ever cleaned by
@@ -9611,6 +9768,7 @@
     function destroyTerminalView(name) {
         cancelDetachTimer(name);
         fitLadderGen.delete(name);
+        clearWorkingSilence(name);
         const entry = terminalsMap.get(name);
         if (!entry) { return; }
         entry.disposed = true;
@@ -9716,7 +9874,15 @@
             pendingModes: null,
             inputThrottled: false,
             queuedBytes: 0,
-            replayGap: false
+            replayGap: false,
+            // "Working, no output" signal — see updateWorkingSilence / renderWorkingSilence.
+            // lastPrintableAt: wall-clock of the last LIVE frame carrying a printable glyph.
+            // lastFrameAt: wall-clock of the last LIVE frame of ANY kind (heartbeat included).
+            // Both are stamped only on live (non-replay) frames, so a reattach's replay burst
+            // cannot arm the signal. 0 means "no live frame yet" — the signal cannot fire
+            // until a live frame has established the pane is actually streaming.
+            lastPrintableAt: 0,
+            lastFrameAt: 0
         };
         terminalsMap.set(name, entry);
         whenRendered(entry, () => materializeTerminalView(entry));
@@ -10262,6 +10428,19 @@
                         return;
                     }
                     entry.batchQueue.push(text);
+                    // Live frame (not a replay — the awaitingReplayFrame branch
+                    // returned above). Stamp the silence-signal timers: lastFrameAt
+                    // on every live frame (heartbeats keep it fresh, proving the
+                    // pty is alive); lastPrintableAt only when a glyph is painted,
+                    // so a 12 fps no-op heartbeat never resets it. A printable
+                    // frame also clears any standing "working, no output"
+                    // affordance immediately.
+                    const now = Date.now();
+                    entry.lastFrameAt = now;
+                    if (frameHasPrintable(text)) {
+                        entry.lastPrintableAt = now;
+                        clearWorkingSilence(entry.name);
+                    }
                     scheduleBatchFlush(entry);
                     return;
                 }
@@ -10278,6 +10457,13 @@
                     }
                     const rawData = base64ToUtf8(frame.data);
                     entry.batchQueue.push(rawData);
+                    // Same live-frame stamping as the binary path above.
+                    const now = Date.now();
+                    entry.lastFrameAt = now;
+                    if (frameHasPrintable(rawData)) {
+                        entry.lastPrintableAt = now;
+                        clearWorkingSilence(entry.name);
+                    }
                     scheduleBatchFlush(entry);
                 } else if (frame.t === 'hello') {
                     // Chars the server replayed but did NOT bill to this connection's
@@ -10360,6 +10546,7 @@
                     // must not be able to leave a dead terminal accepting input — the
                     // onmessage catch swallows it into a console.warn.
                     dismissStartupCurtain(entry.name);
+                    clearWorkingSilence(entry.name);
                     entry.exited = true;
                     if (entry.term) { entry.term.options.disableStdin = true; }
                     refreshInputState(entry.name);
@@ -10375,6 +10562,7 @@
                     // socket came back.
                     if (frame.reason !== 'Lagging client evicted') {
                         dismissStartupCurtain(entry.name);
+                        clearWorkingSilence(entry.name);
                         const exitCode = typeof frame.code === 'number' ? frame.code : 0;
                         entry.exited = true;
                         entry.term.write(`\r\n\x1b[31m[Process Exited with code ${exitCode}]\x1b[0m\r\n`);

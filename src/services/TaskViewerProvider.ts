@@ -4223,9 +4223,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             // but it is escaped anyway to keep that a local property.
                             const attrSafeToken = this._terminalSessionToken.replace(/[^a-zA-Z0-9]/g, '');
                             const ptyOriginAttr = this._ptyHostPort ? ` data-pty-host-origin="ws://127.0.0.1:${this._ptyHostPort}"` : '';
+                            // The "working, no output" silence threshold mirrors the
+                            // server-side `activityLight.turnEndSilenceMs` (default 90s) so the
+                            // webview's printable-aware signal and the nudge sweeps share ONE
+                            // knob. CSP-safe body data-attribute, same pattern as the token.
+                            const silenceMs = vscode.workspace.getConfiguration('switchboard').get<number>('activityLight.turnEndSilenceMs', 90000);
                             return {
                                 ...result,
-                                html: injectBodyAttributes(result.html, `data-terminal-token="${attrSafeToken}"${ptyOriginAttr}`)
+                                html: injectBodyAttributes(result.html, `data-terminal-token="${attrSafeToken}"${ptyOriginAttr} data-working-silence-ms="${silenceMs}"`)
                             };
                         }
                         return result || null;

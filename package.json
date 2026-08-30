@@ -986,6 +986,7 @@
     "test:contract:terminal-scroll-affordance": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-scroll-affordance-contract.test.js",
     "test:contract:terminal-dec-mode-restore": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-dec-mode-restore-contract.test.js",
     "test:contract:terminal-replay-gap": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-replay-gap-contract.test.js",
+    "test:contract:terminal-content-free-collapse": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-content-free-collapse-contract.test.js",
     "test:contract:terminal-operations-no-periodic-reopen": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-operations-no-periodic-reopen.test.js",
     "test:contract:multi-parent-terminals": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/multi-parent-terminals-contract.test.js",
     "test:contract:team-autostart-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-autostart-workspace-scope.test.js",

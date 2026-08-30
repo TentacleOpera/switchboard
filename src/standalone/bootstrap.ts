@@ -1010,7 +1010,18 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             // escaping, but it is stripped to alphanumerics anyway to keep that a
             // local property.
             const attrSafeToken = terminalSessionToken.replace(/[^a-zA-Z0-9]/g, '');
-            return { ...result, html: injectBodyAttributes(result.html, `data-terminal-token="${attrSafeToken}"`) };
+            // The "working, no output" silence threshold mirrors the server-side
+            // `activityLight.turnEndSilenceMs` (default 90s) so the webview's
+            // printable-aware signal and the nudge sweeps share ONE knob. A body
+            // data-attribute, not an inline script — same CSP-safe pattern as the
+            // token above. terminals.js reads document.body.dataset.workingSilenceMs
+            // and falls back to 90000 when absent (older host / pre-injection).
+            const silenceMs = configProvider.getConfigNumber('activityLight.turnEndSilenceMs', 90000);
+            return {
+                ...result,
+                html: injectBodyAttributes(result.html,
+                    `data-terminal-token="${attrSafeToken}" data-working-silence-ms="${silenceMs}"`)
+            };
         }
         return result;
     };

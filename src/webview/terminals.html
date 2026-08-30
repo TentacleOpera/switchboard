@@ -1563,6 +1563,40 @@
             body:not(.cyber-animation-disabled) .terminal-curtain-badge::after { display: none; }
         }
 
+        /* "Working, no output" affordance — a NON-opaque bottom banner, the
+           opposite of the startup curtain's full cover. The pane is live
+           (heartbeats are arriving) and the point is to tell the operator that
+           while NOT hiding the cursor wiggles that prove it: a covered pane
+           would read as dead for the same reason an uncovered silent one does.
+           pointer-events:none so keystrokes still reach xterm's textarea. */
+        .working-silence {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 4;                     /* above .terminal-view-host, below the toast host (100) */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            padding: 6px 10px;
+            background: color-mix(in srgb, var(--panel-bg, #000) 72%, transparent);
+            backdrop-filter: blur(2px);
+            pointer-events: none;
+            border-top: 1px solid var(--border-color);
+        }
+        .working-silence-label {
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            color: var(--accent-teal);
+            text-transform: uppercase;
+        }
+        .working-silence-sub {
+            font-size: 10px;
+            letter-spacing: 0.3px;
+            color: var(--text-muted, var(--text-secondary));
+        }
+
         /* Kanban-mode pane — a live kanban column viewer in an empty grid slot.
            Styling mirrors the board's .kanban-card design language: gradient
            background, border-color hover, compact action buttons. */
