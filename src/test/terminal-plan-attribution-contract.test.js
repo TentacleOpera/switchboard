@@ -436,8 +436,24 @@ test('composeCompletedTurnEndBody renders all clauses when present', () => {
     );
     assert.strictEqual(
         lines[1],
-        'Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.'
+        'Verify the diff (git diff) before you trust the report, then close out that subtask, register the next one (attributePastedPrompt), and dispatch it. The system moves cards as work progresses — never move one yourself.'
     );
+});
+
+test('the turn-end verify instruction never tells a lead to move a card', () => {
+    // team-heads-must-not-move-cards removed "advance"/"moves the card" from
+    // NEW_CODING_HEAD_PROMPT because a lead read it as "move the card", but scoped
+    // itself to the prompt text — so the wording reappeared in this notice, which
+    // reaches the same lead on every coder completion. Guarded here the way
+    // stage-marker-commit-contract guards the head prompt.
+    const { TURN_END_VERIFY_INSTRUCTION } = require('../../out/services/PlanIngestionEngine');
+    assert.ok(!/advanc/i.test(TURN_END_VERIFY_INSTRUCTION),
+        'the turn-end instruction must not contain any form of "advance" — the word a lead reads as "move the card"');
+    assert.ok(!/move the card|moves the card/i.test(TURN_END_VERIFY_INSTRUCTION),
+        'the turn-end instruction must never describe the lead moving a card');
+    // The action tail is what stops a lead verifying and then stopping.
+    assert.ok(/dispatch it/.test(TURN_END_VERIFY_INSTRUCTION),
+        'the instruction must keep an action tail — "verify" alone makes verification the whole turn');
 });
 
 test('composeCompletedTurnEndBody drops missing clauses gracefully', () => {
@@ -456,7 +472,7 @@ test('composeCompletedTurnEndBody drops missing clauses gracefully', () => {
     );
     assert.strictEqual(
         lines[1],
-        'Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.'
+        'Verify the diff (git diff) before you trust the report, then close out that subtask, register the next one (attributePastedPrompt), and dispatch it. The system moves cards as work progresses — never move one yourself.'
     );
 });
 

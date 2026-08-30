@@ -2278,8 +2278,27 @@ export function expandHome(p: string): string {
 
 // ─── Turn-end notice composer for completed arm ─────────────────────────────
 
+/**
+ * The closing instruction on a `completed` turn-end notice: verify, then act.
+ *
+ * The action tail is load-bearing — a notice that only says "verify" produces a
+ * lead that verifies and stops, because verification is then the whole turn.
+ *
+ * CARD MOVEMENT IS NOT AN ACTION THIS MAY NAME. An earlier form read "…then
+ * advance the card or register the next subtask…", which contradicted the head's
+ * own standing orders ("Never move a card to a new column yourself — that is not
+ * your role") on the same lead, minutes apart. `team-heads-must-not-move-cards`
+ * removed that language from `NEW_CODING_HEAD_PROMPT` — where
+ * `stage-marker-commit-contract` now guards it with `!/advanc/i` — but scoped
+ * itself to the prompt text and left this notice alone, so the wording came back
+ * here. `terminal-plan-attribution-contract` guards this constant the same way.
+ *
+ * The endpoint for closing out is deliberately NOT restated: on the queue/done
+ * relay `composeAcceptanceInstruction` (LocalApiServer.ts:742) follows this
+ * sentence and spells out the POST. Naming it here would say it twice.
+ */
 export const TURN_END_VERIFY_INSTRUCTION =
-    'Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.';
+    'Verify the diff (git diff) before you trust the report, then close out that subtask, register the next one (attributePastedPrompt), and dispatch it. The system moves cards as work progresses — never move one yourself.';
 
 /**
  * The evidence fragment a completion notice carries after the seat/plan

@@ -135,7 +135,7 @@ Key risks: (1) the evidence clause originally specified — plan-file write age 
 
   ```
   [switchboard:turn-end] Seat '<seat>' finished its turn on '<planFile>' — "<topic>" (column <kanbanColumn>, feature <featureId>, worked <duration>).
-  Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.
+  Verify the diff (git diff) before you trust the report, then close out that subtask, register the next one (attributePastedPrompt), and dispatch it. The system moves cards as work progresses — never move one yourself.
   ```
 
   1. **Line 1 — header + inline evidence.** It opens with the `[switchboard:turn-end]` marker and is a strict superset of today's one-liner, so anything a human or agent recognises today still matches. The marker is not optional: `.agents/skills/terminal-coder-dispatch/SKILL.md` and `.agents/skills/switchboard-orchestration/SKILL.md` both teach agents to recognise it, and the report mirror is indexed by it.
@@ -147,7 +147,11 @@ Key risks: (1) the evidence clause originally specified — plan-file write age 
      - `— "<topic>"` is likewise dropped when `topic` is empty.
   3. **Line 2 — one closing instruction**, verbatim:
 
-     > `Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.`
+     > `Verify the diff (git diff) before you trust the report, then close out that subtask, register the next one (attributePastedPrompt), and dispatch it. The system moves cards as work progresses — never move one yourself.`
+
+  > **Superseded (2026-08-30, already applied in `src/`):** `Verify the diff (git diff) before you trust the report, then advance the card or register the next subtask (attributePastedPrompt) and dispatch it.`
+  > **Reason:** "advance the card" is the exact word `team-heads-must-not-move-cards` removed from `NEW_CODING_HEAD_PROMPT` because *"a team lead interpreted the word 'advance' … as a general instruction to move cards to new columns."* That plan scoped itself to the prompt text (its line 435: "Turn-end notification delivery — unchanged"), so the wording came back here — on a notice that reaches the same lead, on every coder completion, contradicting its own standing orders minutes apart.
+  > **Replaced with:** the line above. `TURN_END_VERIFY_INSTRUCTION` (`PlanIngestionEngine.ts`) already carries it, `terminal-plan-attribution-contract` now guards it with `!/advanc/i`, and the endpoint for closing out is deliberately not restated because `composeAcceptanceInstruction` follows this sentence on the relay path. **Do not re-introduce the old text when coding this plan.**
 
   > **Superseded:** `Verify the work against git — the diff and the tests, not the seat's own report — then advance the card or dispatch the next subtask. Rest the seat if you have no further work for it.`
   > **Reason:** Two defects. (a) **"Rest the seat" is not a thing.** `grep -rn "rest the seat\|restSeat\|ptyRest" src/ .agents/` returns zero hits — there is no verb, no endpoint and no UI control by that name, so the sentence instructs every lead to perform an action that does not exist. (b) The rest of it restates, in different words, doctrine that already has a canonical phrasing in `terminal-coder-dispatch/SKILL.md:280-284` ("review the actual diff, not the coder's account of it… the message is a claim; `git diff` is the evidence") and drops the one thing the stall arm gets right — naming the actual verb (`attributePastedPrompt`) the recipient must call. A two-sentence instruction is also boilerplate on a per-completion message.
