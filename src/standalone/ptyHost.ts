@@ -177,7 +177,7 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                     // request payload — a caller-supplied family is not evidence.
                     // Omitting it left every curtain on the generic "CLI" label.
                     cliFamily: t.cliFamily,
-                    // First-delivery flag: 0 until the first prompt is delivered.
+                    // Delivery count: 0 until the first prompt is delivered, increments on every send.
                     // The extension host's curtain reads this to arm the boot-phase
                     // curtain for a first dispatch to a fresh pool terminal.
                     promptCount: t.promptCount,
@@ -288,7 +288,7 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 // distinguish a boot-phase dispatch from a clearing-phase one.
                 const bootPhase = handle.promptCount === 0;
                 try {
-                    const readiness = await sendPromptToPty(handle, payload.data || '', {
+                    const receipt = await sendPromptToPty(handle, payload.data || '', {
                         clearBeforePrompt: payload.clearBeforePrompt === true,
                         clearBeforePromptDelayMs: typeof payload.clearBeforePromptDelayMs === 'number'
                             ? payload.clearBeforePromptDelayMs
@@ -303,20 +303,27 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                     // A CLI that exits during boot aborts delivery — the prompt
                     // was never written. Report an error so the extension host
                     // knows the dispatch was lost, not delivered.
-                    if (readiness?.reason === 'exit') {
+                    if (receipt.readiness?.reason === 'exit') {
                         return {
                             success: false,
                             error: `Terminal '${payload.name}' exited during boot — prompt was not delivered`,
-                            readiness,
+                            bytesWritten: receipt.bytesWritten,
+                            deliveredAt: receipt.deliveredAt,
                             bootPhase,
+                            ...(receipt.readiness ? { deliveryReason: receipt.readiness.reason, readiness: receipt.readiness } : {}),
                         };
                     }
-                    // Carry the readiness OUTCOME back over the wire. Without it the
-                    // extension host has no way to tell a real ready signal from a
-                    // 15s fallback, and its dispatch-lifecycle event has to invent one.
-                    // bootPhase lets the extension host's curtain report the correct
-                    // phase ('booting' vs 'clearing') for a first-delivery dispatch.
-                    return { success: true, readiness: readiness || undefined, bootPhase };
+                    // Carry the readiness OUTCOME and delivery evidence back over the wire.
+                    // bytesWritten, deliveredAt, and promptSeq provide concrete proof
+                    // of delivery to the caller.
+                    return {
+                        success: true,
+                        bytesWritten: receipt.bytesWritten,
+                        deliveredAt: receipt.deliveredAt,
+                        promptSeq: receipt.promptSeq,
+                        bootPhase,
+                        ...(receipt.readiness ? { deliveryReason: receipt.readiness.reason, readiness: receipt.readiness } : {}),
+                    };
                 } catch (err) {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }

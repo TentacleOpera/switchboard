@@ -49,7 +49,7 @@ import { SURFACES } from '../services/wsHub';
 import { MISSION_CONTROL_TERMINAL_NAME } from '../services/autobanState';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 import { TerminalWsGateway } from './terminalWsGateway';
-import { sendPromptToPty, clearPty, modelPty, writeSlashCommand } from './ptyPromptDelivery';
+import { sendPromptToPty, clearPty, modelPty, writeSlashCommand, type PromptDeliveryReceipt } from './ptyPromptDelivery';
 import { TerminalLogWriter } from './terminalLogWriter';
 import type { ClearReadinessResult } from './clearReadiness';
 import { extractDispatchIdentity } from '../services/dispatchIdentity';
@@ -250,7 +250,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         dispatch?: any,
         machineOrigin = false,
         orientationOnly = false
-    ): Promise<ClearReadinessResult | undefined> => {
+    ): Promise<PromptDeliveryReceipt | undefined> => {
         // A machine-origin delivery (a queue/done relay, a coder's fallback
         // report) carries NONE of the three appends — not standing orders, not
         // the seat directive block, not the dispatch-protocol directive. All
@@ -457,9 +457,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         // hardcoded 'signal' would make a 15s fallback and a genuine ready signal
         // indistinguishable on the wire — the curtain would claim the detector
         // worked on exactly the seats where it timed out.
-        let readiness: ClearReadinessResult | undefined;
+        let receipt: PromptDeliveryReceipt | undefined;
         try {
-            readiness = await sendPromptToPty(handle, out, {
+            receipt = await sendPromptToPty(handle, out, {
                 ...opts,
                 onPromptDelivered: terminalLogWriter
                     ? (terminalName, promptText) => terminalLogWriter.onPrompt(terminalName, promptText)
@@ -478,7 +478,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         success: !sendErr,
                         reason: sendErr
                             ? 'error'
-                            : (readiness?.reason || (handle.status === 'exited' ? 'exit' : 'signal')),
+                            : (receipt?.readiness?.reason || (handle.status === 'exited' ? 'exit' : 'signal')),
                         elapsedMs: Math.max(0, Date.now() - startAt),
                     }, SURFACES.terminals);
                 } catch { /* best effort broadcast */ }
@@ -498,7 +498,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 dispatchedAt: parsedDispatchedAt
             }).catch(() => { /* a lost registration degrades a backstop, never a send */ });
         }
-        return readiness;
+        return receipt;
     };
 
     const relayStartupOrientation = (names: string[]): void => {
@@ -1805,7 +1805,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         worktreePath: t.worktreePath,
                         cwd: t.cwd,
                         lastDataAt: t.lastDataAt,
-                        // First-delivery flag for boot-phase curtain detection.
+                        // Delivery count: 0 until the first prompt is delivered, increments on every send.
                         // The extension host's handlePtyVerb reads this in
                         // headless mode to arm the boot-phase curtain.
                         promptCount: t.promptCount,
@@ -2192,12 +2192,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             lastWorkContextByTerminal.set(payload.name, workContextKey);
                         }
                     }
+                    const bootPhase = handle.promptCount === 0;
                     try {
                         const deliveryDefaults = getPromptDeliveryOptions();
                         const resolvedClear = typeof payload.clearBeforePrompt === 'boolean'
                             ? payload.clearBeforePrompt
                             : (payload.clearBeforePromptFromConfig === true ? deliveryDefaults.clearBeforePrompt : false);
-                        const ptyReadiness = await deliverPrompt(
+                        const receipt = await deliverPrompt(
                             handle,
                             payload.data || '',
                             {
@@ -2214,21 +2215,28 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         );
                         // A CLI that exits during boot aborts delivery — the prompt
                         // was never written. Report an error so the caller knows.
-                        if (ptyReadiness?.reason === 'exit') {
+                        if (receipt?.readiness?.reason === 'exit') {
                             return {
                                 success: false,
                                 error: `Terminal '${payload.name}' exited during boot — prompt was not delivered`,
-                                deliveryReason: 'exit',
+                                bytesWritten: receipt?.bytesWritten ?? 0,
+                                deliveredAt: receipt?.deliveredAt ?? Date.now(),
+                                bootPhase,
                                 directivesAttached,
+                                ...(receipt?.readiness ? { deliveryReason: receipt.readiness.reason, readiness: receipt.readiness } : {}),
                             };
                         }
                         return {
                             success: true,
+                            bytesWritten: receipt?.bytesWritten ?? 0,
+                            deliveredAt: receipt?.deliveredAt ?? Date.now(),
+                            promptSeq: receipt?.promptSeq,
+                            bootPhase,
                             directivesAttached,
-                            // Change 6: thread the delivery reason so the caller
+                            // Thread the delivery reason and readiness so the caller
                             // distinguishes delivered-and-confirmed from
                             // delivered-on-a-timeout instead of a bare success.
-                            ...(ptyReadiness ? { deliveryReason: ptyReadiness.reason, readiness: ptyReadiness } : {}),
+                            ...(receipt?.readiness ? { deliveryReason: receipt.readiness.reason, readiness: receipt.readiness } : {}),
                             ...(foldedAttributionResult ? {
                                 attributed: foldedAttributionResult.attributed,
                                 skipped: foldedAttributionResult.skipped
@@ -2443,12 +2451,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // dispatch-protocol bundle, inside the prompt body. This is the
                     // positional twin of the extension's `addonsComposed: true`
                     // (TaskViewerProvider.ts:460).
-                    const deliveryReadiness = await deliverPrompt(terminal, prompt, getPromptDeliveryOptions(), true, false);
+                    const deliveryReceipt = await deliverPrompt(terminal, prompt, getPromptDeliveryOptions(), true, false);
 
                     // A CLI that exits during boot (auth failure, bad command) aborts
                     // delivery — the prompt was never written. Report an error rather
                     // than success:true so the caller knows the dispatch was lost.
-                    if (deliveryReadiness?.reason === 'exit') {
+                    if (deliveryReceipt?.readiness?.reason === 'exit') {
                         return {
                             success: false,
                             error: `Terminal '${terminal.friendlyName}' exited during boot — prompt was not delivered`,
@@ -2499,7 +2507,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // Change 6: thread the delivery reason so POST /kanban/dispatch
                         // distinguishes delivered-and-confirmed ('signal') from
                         // delivered-on-a-timeout ('timeout') instead of a bare success.
-                        ...(deliveryReadiness ? { deliveryReason: deliveryReadiness.reason } : {}),
+                        ...(deliveryReceipt?.readiness ? { deliveryReason: deliveryReceipt.readiness.reason } : {}),
                     };
                 }
 

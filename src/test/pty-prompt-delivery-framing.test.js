@@ -110,6 +110,8 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         handle: {
             name,
             role,
+            promptCount: 0,
+            status: 'active',
             write(chunk) { writes.push(chunk); times.push(Date.now()); },
         },
     };
@@ -277,6 +279,53 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         );
     });
 
+    // --- behavioural: delivery evidence & latch regression ------------------
+    await test('PromptDeliveryReceipt shape and UTF-8 byte counting for non-ASCII prompts', async () => {
+        const text = 'Hello — world ─ test 🚀';
+        const { handle } = stubHandle('Feature Implementation-coder-1', 'coder');
+        const t0 = Date.now();
+        const receipt = await sendPromptToPty(handle, text, { clearBeforePrompt: false });
+        const t1 = Date.now();
+
+        assert.strictEqual(
+            receipt.bytesWritten, Buffer.byteLength(text, 'utf8'),
+            `bytesWritten must equal UTF-8 byte length (${Buffer.byteLength(text, 'utf8')}), got ${receipt.bytesWritten}`
+        );
+        assert.ok(
+            receipt.bytesWritten > text.length,
+            'bytesWritten for non-ASCII text must exceed UTF-16 text.length'
+        );
+        assert.ok(
+            receipt.deliveredAt >= t0 && receipt.deliveredAt <= t1,
+            `deliveredAt (${receipt.deliveredAt}) must be captured inside call window [${t0}, ${t1}]`
+        );
+        assert.strictEqual(receipt.promptSeq, 1, 'first delivery must yield promptSeq === 1');
+        assert.strictEqual(handle.promptCount, 1, 'first delivery must set handle.promptCount === 1');
+    });
+
+    await test('the latch regression: promptCount increments monotonically on multiple sends', async () => {
+        const { handle } = stubHandle('Feature Implementation-coder-1', 'coder');
+        const receipt1 = await sendPromptToPty(handle, 'first prompt', { clearBeforePrompt: false });
+        assert.strictEqual(receipt1.promptSeq, 1, 'first promptSeq must be 1');
+        assert.strictEqual(handle.promptCount, 1, 'handle.promptCount must be 1 after first send');
+
+        const receipt2 = await sendPromptToPty(handle, 'second prompt', { clearBeforePrompt: false });
+        assert.strictEqual(receipt2.promptSeq, 2, 'second promptSeq must be 2');
+        assert.strictEqual(handle.promptCount, 2, 'handle.promptCount must be 2 after second send (not latched at 1)');
+    });
+
+    await test('boot-exit returns receipt with bytesWritten: 0, no promptSeq, promptCount unincremented', async () => {
+        const { handle } = stubHandle('Feature Implementation-coder-1', 'coder');
+        handle.status = 'exited';
+        handle.promptCount = 0;
+        const receipt = await sendPromptToPty(handle, 'prompt to exited seat', { clearBeforePrompt: false });
+
+        assert.strictEqual(receipt.bytesWritten, 0, 'boot exit must report bytesWritten === 0');
+        assert.strictEqual(receipt.promptSeq, undefined, 'boot exit must not allocate a promptSeq');
+        assert.strictEqual(receipt.readiness?.reason, 'exit', "boot exit must surface readiness.reason === 'exit'");
+        assert.strictEqual(handle.promptCount, 0, 'boot exit must not advance promptCount');
+    });
+
     // --- contract: source-text assertions (no compilation needed) ---------
     const src = fs.readFileSync(SOURCE_FILE, 'utf8');
     // Strip comments before asserting on identifiers. The file DELIBERATELY
@@ -284,6 +333,20 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
     // deleted, and a guard that fails on its own documentation teaches the next
     // reader to delete the documentation.
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+    await test('negative invariant: no literal handle.promptCount = 1 in ptyPromptDelivery.ts', () => {
+        assert.ok(
+            !/handle\.promptCount\s*=\s*1\b/.test(code),
+            'handle.promptCount = 1 must not appear in code — promptCount must increment monotonically via +='
+        );
+    });
+
+    await test('positive invariant: handle.promptCount += 1 present in ptyPromptDelivery.ts', () => {
+        assert.ok(
+            /handle\.promptCount\s*\+=\s*1\b/.test(code),
+            'handle.promptCount += 1 must be present in ptyPromptDelivery.ts'
+        );
+    });
 
     await test('no CLI_AGENT_REGEX in code (comments may discuss it)', () => {
         assert.ok(

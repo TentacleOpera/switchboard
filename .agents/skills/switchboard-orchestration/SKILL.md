@@ -215,6 +215,13 @@ drive prefix built by `_buildDrivePrefix` in KanbanProvider.ts; the endpoints ar
 | `POST /terminals/verb/ptyListTerminals` | `{}` | Enumerate live terminals: `{ terminals: [...] }` — one array, every live terminal. Copy `friendlyName` verbatim. |
 | `POST /terminals/verb/ptyClearTerminal` | `{ name }` | Reset a named terminal's context. Send it when you put a terminal **at rest** — a clear issued at rest is what resets a coder you always send with `clearBeforePrompt: false`, and it lands long before the next dispatch instead of racing it. Never send it to your own terminal, and never use `ptyClearAllTerminals` (it clears every active terminal, you included). |
 
+### `ptySendPrompt` delivery evidence & response fields
+
+- **`success: true`**: Bytes were written to the pty and the submit CR was sent. It is not an echo, not a round trip, and not a claim that the CLI parsed anything.
+- **`bytesWritten`**: UTF-8 byte length of text written to the terminal, including host-appended directive, seat, and standing-orders blocks. It is **expected** to exceed the length of your `data` field. A larger number is not evidence of corruption.
+- **`promptSeq`**: That seat's delivery ordinal (post-increment `promptCount`). Re-reading `promptCount` on `ptyListTerminals` and seeing it advance *past* your `promptSeq` means a **later** send landed, not that yours did — your own evidence is the `promptSeq` on your own response.
+- **`lastDataAt`**: The seat's **output** heartbeat from `ptyListTerminals`. It proves the CLI emitted something; it never proves the CLI received something.
+
 Clear a coder the moment you stand it down, not on the way back in — the
 precondition is completion received **and** next work assigned elsewhere, and
 never clear your own terminal (see the inlined "Clear a terminal only when at

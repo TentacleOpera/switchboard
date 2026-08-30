@@ -79,14 +79,45 @@ async function main() {
     ];
     const teamDb = makeDb({ groups });
     const teamProvider = makeProvider(teamDb, liveness, fleet);
-    assert.deepStrictEqual(await teamProvider._resolveTeamRosterForPrompt('/missing-workspace'), [
-        { name: 'Coding-coder-1', role: 'coder', active: true },
-        { name: 'Coding-intern', role: 'intern', active: false },
-    ]);
+    assert.deepStrictEqual(await teamProvider._resolveTeamRosterForPrompt('/missing-workspace'), {
+        head: 'Coding-lead',
+        members: [
+            { name: 'Coding-coder-1', role: 'coder', active: true },
+            { name: 'Coding-intern', role: 'intern', active: false },
+        ]
+    });
     const prefix = await teamProvider._buildDrivePrefix('/missing-workspace', [{ planId: 'feature-1', isFeature: true, absolutePath: '/ws/feature.md' }, { planId: 'subtask-1', isSubtask: true, absolutePath: '/ws/sub1.md' }]);
     for (const required of ['YOUR TEAM:', 'Coding-coder-1 (coder) — active', 'Coding-intern (intern) — exited', 'Do NOT query kanban.db directly', 'FEATURE WATCH: Armed by the system', 'FEATURE FILE:', 'Team Dispatch Instructions']) {
         assert.ok(prefix.includes(required), `enriched prefix must contain ${required}`);
     }
+    // Head identity and message recipe assertions on drive prefix
+    assert.ok(prefix.includes('YOUR SEAT: Coding-lead. Use this exact string wherever an instruction below says "your terminal name".'), 'drive prefix must contain YOUR SEAT');
+    assert.ok(prefix.includes('Your seat name is below — do not go looking it up.'), 'drive prefix must contain seat name pointer');
+    assert.ok(!prefix.includes('Do NOT check your own terminal name'), 'drive prefix must not contain deleted prohibition');
+    assert.ok(prefix.includes('"origin":"Coding-lead"'), 'drive prefix STAGING recipe must have origin');
+    assert.ok(prefix.includes('MESSAGE (fix rounds, questions, verdicts — anything that is not a new subtask):'), 'drive prefix must have MESSAGE section');
+    assert.ok(prefix.includes('No dispatch field on a message — it would make the recipient write a plan file and report a false completion.'), 'drive prefix must have message dispatch rationale');
+    assert.ok(prefix.includes('The response tells you it landed: promptSeq is that seat\'s delivery ordinal and bytesWritten is what was written to it. bytesWritten counts the host\'s appended directives too, so it is larger than your data — that is normal.'), 'drive prefix must describe response evidence');
+    assert.ok(prefix.includes('{"from":"Coding-lead"'), 'drive prefix CLOSE OUT must interpolate head name');
+    // Negative false mechanism assertions
+    for (const falseMech of ['hollow', 'not delivered', 'the send is lost']) {
+        assert.ok(!prefix.includes(falseMech), `drive prefix must not contain false mechanism "${falseMech}"`);
+    }
+
+    // Batch drive prefix assertions (both builders tested)
+    const batchPrefix = await teamProvider._buildBatchDrivePrefix('/missing-workspace', [{ planId: 'p1' }]);
+    assert.ok(batchPrefix.includes('YOUR SEAT: Coding-lead. Use this exact string wherever an instruction below says "your terminal name".'), 'batch prefix must contain YOUR SEAT');
+    assert.ok(batchPrefix.includes('Your seat name is below — do not go looking it up.'), 'batch prefix must contain seat name pointer');
+    assert.ok(!batchPrefix.includes('Do NOT check your own terminal name'), 'batch prefix must not contain deleted prohibition');
+    assert.ok(batchPrefix.includes('"origin":"Coding-lead"'), 'batch prefix STAGING recipe must have origin');
+    assert.ok(batchPrefix.includes('MESSAGE (fix rounds, questions, verdicts — anything that is not a new subtask):'), 'batch prefix must have MESSAGE section');
+    assert.ok(batchPrefix.includes('No dispatch field on a message — it would make the recipient write a plan file and report a false completion.'), 'batch prefix must have message dispatch rationale');
+    assert.ok(batchPrefix.includes('The response tells you it landed: promptSeq is that seat\'s delivery ordinal and bytesWritten is what was written to it. bytesWritten counts the host\'s appended directives too, so it is larger than your data — that is normal.'), 'batch prefix must describe response evidence');
+    assert.ok(batchPrefix.includes('{"from":"Coding-lead"'), 'batch prefix CLOSE OUT must interpolate head name');
+    for (const falseMech of ['hollow', 'not delivered', 'the send is lost']) {
+        assert.ok(!batchPrefix.includes(falseMech), `batch prefix must not contain false mechanism "${falseMech}"`);
+    }
+
     // Plan IDs are no longer in the prefix's SUBTASKS section — they're in the feature file.
     assert.ok(!prefix.includes('SUBTASKS:'), 'enriched prefix must not contain a SUBTASKS section');
     // The skill file pointer has been removed.
@@ -106,10 +137,57 @@ async function main() {
     fs.writeFileSync(path.join(tmpDir, '.switchboard', 'api-server-port.txt'), '58312');
     const resolvedPrefix = await teamProvider._buildDrivePrefix(tmpDir, [{ planId: 'feature-1', isFeature: true, absolutePath: '/ws/feature.md' }, { planId: 'subtask-1', isSubtask: true, absolutePath: '/ws/sub1.md' }]);
     assert.ok(resolvedPrefix.includes('Do NOT read .switchboard/api-server-port.txt'), 'prefix must tell the lead not to re-read the port file when port is resolved');
-    assert.ok(resolvedPrefix.includes('Do NOT check your own terminal name'), 'prefix must tell the lead not to check its terminal name');
+    assert.ok(resolvedPrefix.includes('Your seat name is below — do not go looking it up.'), 'prefix must tell the lead not to check its terminal name');
+    assert.ok(!resolvedPrefix.includes('Do NOT check your own terminal name'), 'prefix must not use old prohibition when seat is resolved');
     assert.ok(!resolvedPrefix.includes('Your terminal name is in $SWITCHBOARD_TERMINAL'), 'prefix must not surface the terminal-name line');
     assert.ok(!resolvedPrefix.includes('(also in .switchboard/api-server-port.txt)'), 'prefix must not point at the port file');
     fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    // --- External-head regression ---
+    const extGroups = [{
+        id: 'ext-coding-team',
+        name: 'External-lead',
+        headRole: 'lead',
+        teamGroup: true,
+        externalHead: true,
+        members: ['External-lead-coder-1', 'External-lead-intern'],
+    }];
+    const extLiveness = [
+        { friendlyName: 'External-lead-coder-1', status: 'active' },
+        { friendlyName: 'External-lead-intern', status: 'active' },
+    ];
+    const extFleet = [
+        { friendlyName: 'External-lead-coder-1', role: 'coder' },
+        { friendlyName: 'External-lead-intern', role: 'intern' },
+    ];
+    const extDb = makeDb({ groups: extGroups });
+    const extProvider = makeProvider(extDb, extLiveness, extFleet);
+    assert.deepStrictEqual(await extProvider._resolveTeamRosterForPrompt('/missing-workspace'), {
+        head: '',
+        members: [
+            { name: 'External-lead-coder-1', role: 'coder', active: true },
+            { name: 'External-lead-intern', role: 'intern', active: true },
+        ]
+    });
+    const extDrivePrefix = await extProvider._buildDrivePrefix('/missing-workspace', [{ planId: 'feature-1', isFeature: true, absolutePath: '/ws/feature.md' }]);
+    const extBatchPrefix = await extProvider._buildBatchDrivePrefix('/missing-workspace', [{ planId: 'p1' }]);
+    for (const p of [extDrivePrefix, extBatchPrefix]) {
+        assert.ok(!p.includes('YOUR SEAT:'), 'external head prefix must not have YOUR SEAT line');
+        assert.ok(p.includes('Do NOT check your own terminal name'), 'external head prefix must retain original prohibition');
+        assert.ok(!p.includes('Your seat name is below'), 'external head prefix must not have seat name below pointer');
+        assert.ok(p.includes('"origin":"<your terminal name>"'), 'external head recipes must have placeholder origin');
+        assert.ok(p.includes('{"from":"<your terminal name>"'), 'external head CLOSE OUT must have placeholder from');
+    }
+
+    // --- Standalone role resolution test ---
+    const standaloneProvider = makeProvider(makeDb({ groups }), liveness, []);
+    standaloneProvider._liveTerminalsProvider = async () => [
+        { friendlyName: 'Coding-coder-1', role: 'standalone-coder' },
+        { friendlyName: 'Coding-intern', role: 'standalone-intern' },
+    ];
+    const standaloneRoster = await standaloneProvider._resolveTeamRosterForPrompt('/missing-workspace');
+    assert.strictEqual(standaloneRoster.head, 'Coding-lead');
+    assert.deepStrictEqual(standaloneRoster.members.map(m => m.role), ['standalone-coder', 'standalone-intern']);
 
     // --- Fallback case: no port file (existing prefix from line 85 uses '/missing-workspace') ---
     // The existing `prefix` variable already has no port file, so the "Do NOT read"
@@ -117,7 +195,7 @@ async function main() {
     assert.ok(!prefix.includes('Do NOT read .switchboard/api-server-port.txt'), 'prefix must not prohibit port-file reads when the port was not resolved');
 
     const noRoleProvider = makeProvider(makeDb({ groups }), liveness, []);
-    assert.deepStrictEqual((await noRoleProvider._resolveTeamRosterForPrompt('/missing-workspace')).map(row => row.role), ['', '']);
+    assert.deepStrictEqual((await noRoleProvider._resolveTeamRosterForPrompt('/missing-workspace')).members.map(row => row.role), ['', '']);
 
     const card = { isFeature: true, planId: 'feature-1', sessionId: 'feature-session' };
     await Promise.all([

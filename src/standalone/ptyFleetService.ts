@@ -101,7 +101,7 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
     lastDataAt: number;
     /**
      * Number of prompts delivered to this seat via `sendPromptToPty`. Incremented
-     * to 1 after the confirm CR of the first delivery. Keys the first-readiness
+     * on every completed delivery (starts at 0). Keys the first-readiness
      * gate (cold-boot wait) and the `clearBeforePrompt` suppression on a seat
      * that has no prior work context to clear. `lastDataAt` cannot serve this
      * role — it is initialised to `Date.now()` and updates on every byte, so it
@@ -459,7 +459,7 @@ export class PtyFleetService {
             // Initialise the heartbeat to creation time so a freshly-spawned shell
             // that has not yet emitted its banner still reads as "just heard from".
             lastDataAt: Date.now(),
-            // First-delivery flag: 0 until the first prompt is delivered, then 1+.
+            // Delivery count: 0 until the first prompt is delivered, increments on every send.
             // Keys the cold-boot first-readiness gate and the clear-suppression
             // on a seat that has no prior work context to clear.
             promptCount: 0,

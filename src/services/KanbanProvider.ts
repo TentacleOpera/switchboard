@@ -36,7 +36,7 @@ import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveW
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent, resolveRoleWithDegradation } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead, resolveTeamById } from './teamWiring';
-import { mutateStandingOrders, makeStandingOrder, validateInstruction, STANDING_ORDERS_CONFIG_KEY, type StandingOrder, type StandingOrderScope } from './standingOrders';
+import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, STANDING_ORDERS_CONFIG_KEY, STANDING_ORDER_DEFINITIONS_CONFIG_KEY, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
 import { createVscodeHostSeams, type HostSeams } from './hostSeams';
@@ -5493,7 +5493,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * triggers the fallback to the static `DRIVE_FEATURE_PREFIX` in
      * `_buildFeatureDirectivePrefix`.
      */
-    private async _resolveTeamRosterForPrompt(workspaceRoot: string): Promise<Array<{ name: string; role: string; active: boolean }> | null> {
+    private async _resolveTeamRosterForPrompt(workspaceRoot: string): Promise<{
+        head: string;
+        members: Array<{ name: string; role: string; active: boolean }>;
+    } | null> {
         try {
             const db = this._getKanbanDb(workspaceRoot);
             if (!db || !(await db.ensureReady())) return null;
@@ -5589,7 +5592,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const role = roleByName.get(name) || '';
                 return { name, role, active };
             });
-            return roster;
+            const head = externalHead ? '' : String(targetGroup.name);
+            return { head, members: roster };
         } catch { return null; }
     }
 
@@ -5668,12 +5672,13 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * to the extension's auto-arm path.
      */
     private async _resolveRosterAndPort(workspaceRoot: string): Promise<{
+        head: string;
         rosterLines: string[];
         portLine: string;
         portResolved: boolean;
     } | null> {
-        const roster = await this._resolveTeamRosterForPrompt(workspaceRoot);
-        if (!roster || roster.length === 0) return null;
+        const resolved = await this._resolveTeamRosterForPrompt(workspaceRoot);
+        if (!resolved || resolved.members.length === 0) return null;
 
         let portLine = 'read .switchboard/api-server-port.txt';
         try {
@@ -5686,19 +5691,19 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }
         } catch { /* best-effort */ }
 
-        const rosterLines = roster.map(m => {
+        const rosterLines = resolved.members.map(m => {
             const roleLabel = m.role ? ` (${m.role})` : '';
             const statusLabel = m.active ? 'active' : 'exited';
             return `- ${m.name}${roleLabel} — ${statusLabel}`;
         });
 
-        return { rosterLines, portLine, portResolved: portLine.startsWith('Port is ') };
+        return { head: resolved.head, rosterLines, portLine, portResolved: portLine.startsWith('Port is ') };
     }
 
     private async _buildBatchDrivePrefix(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<string | null> {
         const resolved = await this._resolveRosterAndPort(workspaceRoot);
         if (!resolved) return null;
-        const { rosterLines, portLine, portResolved } = resolved;
+        const { head, rosterLines, portLine, portResolved } = resolved;
 
         const closeOutTarget = portResolved
             ? 'against $BASE'
@@ -5706,10 +5711,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const skipPortDirective = portResolved
             ? ' Do NOT read .switchboard/api-server-port.txt (the port is above).'
             : '';
+        const terminalDirective = head
+            ? ' Your seat name is below — do not go looking it up.'
+            : ' Do NOT check your own terminal name — you dispatch TO named seats (see YOUR TEAM below), and standing orders handle callbacks.';
+
+        const originVal = head ? JSON.stringify(head).slice(1, -1) : '<your terminal name>';
 
         const block = [
-            `You are driving a batch of loose plans through your team seats. Everything you need is below — the port, your team roster, and the plan list are all in this prompt.${skipPortDirective} Do NOT check your own terminal name — you dispatch TO named seats (see YOUR TEAM below), and standing orders handle callbacks.`,
+            `You are driving a batch of loose plans through your team seats. Everything you need is below — the port, your team roster, and the plan list are all in this prompt.${skipPortDirective}${terminalDirective}`,
             '',
+            ...(head ? [`YOUR SEAT: ${head}. Use this exact string wherever an instruction below says "your terminal name".`, ''] : []),
             'YOUR TEAM:',
             ...rosterLines,
             '',
@@ -5718,11 +5729,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'STAGING (one call per plan):',
             'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
-            '  -d \'{"name":"<seat>","data":"Implement the plan at <path>. This plan only.","clearBeforePrompt":false,"dispatch":{"planId":"<id>","role":"coder"}}\'',
+            `  -d '{"name":"<seat>","data":"Implement the plan at <path>. This plan only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
+            'origin is your own seat name — it keeps the team-wide context reset from clearing you.',
+            '',
+            'MESSAGE (fix rounds, questions, verdicts — anything that is not a new subtask):',
+            'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
+            `  -d '{"name":"<seat>","data":"<your message>","clearBeforePrompt":false,"origin":"${originVal}"}'`,
+            'No dispatch field on a message — it would make the recipient write a plan file and report a false completion.',
+            'The response tells you it landed: promptSeq is that seat\'s delivery ordinal and bytesWritten is what was written to it. bytesWritten counts the host\'s appended directives too, so it is larger than your data — that is normal.',
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same plan: intern → coder → lead.',
             '',
-            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then POST /kanban/task/complete with {"from":"<your terminal name>","planId":"<that plan's planId>","workspaceRoot":"<your cwd>"} ${closeOutTarget}. Post per plan, with that plan's planId. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next plan.`,
+            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that plan's planId>","workspaceRoot":"<your cwd>"} ${closeOutTarget}. Post per plan, with that plan's planId. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next plan.`,
             '',
             'BATCH RULES:',
             '- The plans in this batch are independent and possibly unrelated.',
@@ -5744,7 +5762,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     private async _buildDrivePrefix(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<string | null> {
         const resolved = await this._resolveRosterAndPort(workspaceRoot);
         if (!resolved) return null;
-        const { rosterLines, portLine, portResolved } = resolved;
+        const { head, rosterLines, portLine, portResolved } = resolved;
 
         // Extract the feature plan's file path from the plans array (the entry
         // with isFeature: true). The lead reads this file for plan IDs, file
@@ -5757,6 +5775,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const skipPortDirective = portResolved
             ? ' Do NOT read .switchboard/api-server-port.txt (the port is above).'
             : '';
+        const terminalDirective = head
+            ? ' Your seat name is below — do not go looking it up.'
+            : ' Do NOT check your own terminal name — you dispatch TO named seats (see YOUR TEAM below), and standing orders handle callbacks.';
+
+        const originVal = head ? JSON.stringify(head).slice(1, -1) : '<your terminal name>';
+
         // The close-out POST is the one instruction in this block that names an
         // endpoint, so it is where a "read the port file" reference would undo the
         // opener's prohibition. Point it at $BASE (set from the API line above) when
@@ -5765,11 +5789,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const closeOutTarget = portResolved
             ? 'against $BASE'
             : 'against the port in .switchboard/api-server-port.txt';
-        const opener = `You are driving this feature through your team seats. Everything you need is below — the port, your team roster, and the FEATURE FILE line are all in this prompt.${skipPortDirective} Do NOT check your own terminal name — you dispatch TO named seats (see YOUR TEAM below), and standing orders handle callbacks.`;
+        const opener = `You are driving this feature through your team seats. Everything you need is below — the port, your team roster, and the FEATURE FILE line are all in this prompt.${skipPortDirective}${terminalDirective}`;
 
         const block = [
             opener,
             '',
+            ...(head ? [`YOUR SEAT: ${head}. Use this exact string wherever an instruction below says "your terminal name".`, ''] : []),
             'YOUR TEAM:',
             ...rosterLines,
             '',
@@ -5778,11 +5803,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'STAGING (one call per subtask):',
             'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
-            '  -d \'{"name":"<seat>","data":"Implement the plan at <path>. This subtask only.","clearBeforePrompt":false,"dispatch":{"planId":"<id>","role":"coder"}}\'',
+            `  -d '{"name":"<seat>","data":"Implement the plan at <path>. This subtask only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
+            'origin is your own seat name — it keeps the team-wide context reset from clearing you.',
+            '',
+            'MESSAGE (fix rounds, questions, verdicts — anything that is not a new subtask):',
+            'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
+            `  -d '{"name":"<seat>","data":"<your message>","clearBeforePrompt":false,"origin":"${originVal}"}'`,
+            'No dispatch field on a message — it would make the recipient write a plan file and report a false completion.',
+            'The response tells you it landed: promptSeq is that seat\'s delivery ordinal and bytesWritten is what was written to it. bytesWritten counts the host\'s appended directives too, so it is larger than your data — that is normal.',
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead.',
             '',
-            `CLOSE OUT EVERY SUBTASK — ALWAYS, no judgement call. When you are finished with a subtask, commit, then POST /kanban/task/complete with {"from":"<your terminal name>","planId":"<that SUBTASK's planId>","workspaceRoot":"<your cwd>"} ${closeOutTarget}. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you post when the subtask is done. Post per subtask, with that subtask's planId — never the feature's. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next subtask.`,
+            `CLOSE OUT EVERY SUBTASK — ALWAYS, no judgement call. When you are finished with a subtask, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that SUBTASK's planId>","workspaceRoot":"<your cwd>"} ${closeOutTarget}. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you post when the subtask is done. Post per subtask, with that subtask's planId — never the feature's. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next subtask.`,
             '',
             'FEATURE WATCH: Armed by the system. You will be nudged if you go idle with subtasks you have not posted completion for. No action needed.',
             '',
@@ -13549,8 +13581,8 @@ ${FOCUS_DIRECTIVE}`;
                 // off. Applies to all four standing-orders verbs below.
                 const workspaceRoot = this._resolveStandingOrdersRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this.postMessage({ type: 'standingOrders', available: false, orders: [] });
-                    return { success: false, available: false, orders: [] };
+                    this.postMessage({ type: 'standingOrders', available: false, orders: [], definitions: [] });
+                    return { success: false, available: false, orders: [], definitions: [] };
                 }
                 try {
                     const db = this._getKanbanDb(workspaceRoot);
@@ -13567,11 +13599,13 @@ ${FOCUS_DIRECTIVE}`;
                         scope: (o.scope || 'pair') as StandingOrderScope,
                         ...(notes.get(o?.id) || {}),
                     }));
-                    this.postMessage({ type: 'standingOrders', available: true, orders });
-                    return { success: true, available: true, orders };
+                    const rawDefinitions = await db.getConfigJson<StandingOrderDefinition[]>(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
+                    const definitions = Array.isArray(rawDefinitions) ? rawDefinitions : [];
+                    this.postMessage({ type: 'standingOrders', available: true, orders, definitions });
+                    return { success: true, available: true, orders, definitions };
                 } catch (e: any) {
-                    this.postMessage({ type: 'standingOrders', available: false, orders: [] });
-                    return { success: false, available: false, orders: [], error: e?.message || 'Failed to read standing orders' };
+                    this.postMessage({ type: 'standingOrders', available: false, orders: [], definitions: [] });
+                    return { success: false, available: false, orders: [], definitions: [], error: e?.message || 'Failed to read standing orders' };
                 }
             }
             case 'addStandingOrder': {
@@ -13587,6 +13621,7 @@ ${FOCUS_DIRECTIVE}`;
                     const scope = (typeof msg.scope === 'string' ? msg.scope : 'pair') as StandingOrderScope;
                     const teamId = typeof msg.teamId === 'string' ? msg.teamId.trim() : '';
                     const role = typeof msg.role === 'string' ? msg.role.trim() : '';
+                    const definitionId = typeof msg.definitionId === 'string' ? msg.definitionId.trim() : '';
 
                     if (!['global', 'team', 'pair', 'team-head', 'role'].includes(scope)) {
                         this.postMessage({ type: 'standingOrderAdded', success: false, error: "scope must be 'global', 'team', 'pair', 'team-head', or 'role'" });
@@ -13620,7 +13655,7 @@ ${FOCUS_DIRECTIVE}`;
                     const db = this._getKanbanDb(workspaceRoot);
                     let added: StandingOrder | undefined;
                     await mutateStandingOrders(db, async (orders) => {
-                        added = makeStandingOrder(parent, child, instruction, scope, teamId || undefined, role || undefined);
+                        added = makeStandingOrder(parent, child, instruction, scope, teamId || undefined, role || undefined, definitionId || undefined);
                         return [...orders, added];
                     });
 
@@ -13708,6 +13743,133 @@ ${FOCUS_DIRECTIVE}`;
                 } catch (e: any) {
                     this.postMessage({ type: 'standingOrderDeleted', success: false, error: e?.message || 'Failed to delete standing order' });
                     return { success: false, error: e?.message || 'Failed to delete standing order' };
+                }
+            }
+            case 'addStandingOrderDefinition': {
+                const workspaceRoot = this._resolveStandingOrdersRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this.postMessage({ type: 'standingOrderDefinitionAdded', success: false, error: 'No workspace root resolved' });
+                    return { success: false, error: 'No workspace root resolved' };
+                }
+                try {
+                    const instruction = typeof msg.instruction === 'string' ? msg.instruction : '';
+                    const name = typeof msg.name === 'string' && msg.name.trim()
+                        ? msg.name.trim()
+                        : instruction.slice(0, 60);
+                    const instructionErr = validateInstruction(instruction);
+                    if (instructionErr) {
+                        this.postMessage({ type: 'standingOrderDefinitionAdded', success: false, error: instructionErr });
+                        return { success: false, error: instructionErr };
+                    }
+
+                    const db = this._getKanbanDb(workspaceRoot);
+                    let added: StandingOrderDefinition | undefined;
+                    await mutateStandingOrderDefinitions(db, async (definitions) => {
+                        added = makeStandingOrderDefinition(name, instruction);
+                        return [...definitions, added];
+                    });
+
+                    this.postMessage({ type: 'standingOrderDefinitionAdded', success: true, definition: added });
+                    return { success: true, definition: added };
+                } catch (e: any) {
+                    this.postMessage({ type: 'standingOrderDefinitionAdded', success: false, error: e?.message || 'Failed to add standing order definition' });
+                    return { success: false, error: e?.message || 'Failed to add standing order definition' };
+                }
+            }
+            case 'updateStandingOrderDefinition': {
+                const id = typeof msg.id === 'string' ? msg.id.trim() : '';
+                const workspaceRoot = this._resolveStandingOrdersRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this.postMessage({ type: 'standingOrderDefinitionUpdated', success: false, id, error: 'No workspace root resolved' });
+                    return { success: false, id, error: 'No workspace root resolved' };
+                }
+                if (!id) {
+                    this.postMessage({ type: 'standingOrderDefinitionUpdated', success: false, id, error: 'id is required for update' });
+                    return { success: false, id, error: 'id is required for update' };
+                }
+                try {
+                    const newName = typeof msg.name === 'string' ? msg.name.trim() : undefined;
+                    const newInstruction = typeof msg.instruction === 'string' ? msg.instruction : undefined;
+                    if (newInstruction !== undefined) {
+                        const instructionErr = validateInstruction(newInstruction);
+                        if (instructionErr) {
+                            this.postMessage({ type: 'standingOrderDefinitionUpdated', success: false, id, error: instructionErr });
+                            return { success: false, id, error: instructionErr };
+                        }
+                    }
+
+                    const db = this._getKanbanDb(workspaceRoot);
+                    let updated: StandingOrderDefinition | undefined;
+                    let found = false;
+                    let instructionChanged = false;
+                    let finalInstruction = '';
+                    await mutateStandingOrderDefinitions(db, async (definitions) => definitions.map(definition => {
+                        if (definition.id !== id) { return definition; }
+                        found = true;
+                        const nextInstruction = newInstruction !== undefined ? newInstruction : definition.instruction;
+                        if (nextInstruction !== definition.instruction) {
+                            instructionChanged = true;
+                            finalInstruction = nextInstruction;
+                        }
+                        updated = {
+                            ...definition,
+                            ...(newName !== undefined ? { name: newName } : {}),
+                            ...(newInstruction !== undefined ? { instruction: newInstruction } : {}),
+                        };
+                        return updated;
+                    }));
+
+                    if (!found) {
+                        const error = `Definition with id '${id}' not found`;
+                        this.postMessage({ type: 'standingOrderDefinitionUpdated', success: false, id, error });
+                        return { success: false, id, error };
+                    }
+                    if (instructionChanged) {
+                        try {
+                            await syncDefinitionToAssignments(db, id, finalInstruction);
+                        } catch (syncErr) {
+                            console.warn('[KanbanProvider] syncDefinitionToAssignments failed (lazy re-sync will recover):', syncErr);
+                        }
+                    }
+
+                    this.postMessage({ type: 'standingOrderDefinitionUpdated', success: true, id, definition: updated });
+                    return { success: true, id, definition: updated };
+                } catch (e: any) {
+                    this.postMessage({ type: 'standingOrderDefinitionUpdated', success: false, id, error: e?.message || 'Failed to update standing order definition' });
+                    return { success: false, id, error: e?.message || 'Failed to update standing order definition' };
+                }
+            }
+            case 'deleteStandingOrderDefinition': {
+                const id = typeof msg.id === 'string' ? msg.id.trim() : '';
+                const workspaceRoot = this._resolveStandingOrdersRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this.postMessage({ type: 'standingOrderDefinitionDeleted', success: false, id, error: 'No workspace root resolved' });
+                    return { success: false, id, error: 'No workspace root resolved' };
+                }
+                if (!id) {
+                    this.postMessage({ type: 'standingOrderDefinitionDeleted', success: false, id, error: 'id is required for delete' });
+                    return { success: false, id, error: 'id is required for delete' };
+                }
+                try {
+                    const db = this._getKanbanDb(workspaceRoot);
+                    await mutateStandingOrderDefinitions(db, async (definitions) => definitions.filter(definition => definition.id !== id));
+                    await mutateStandingOrders(db, async (orders) => {
+                        let changed = false;
+                        const next = orders.map(order => {
+                            if (!order || order.definitionId !== id) { return order; }
+                            changed = true;
+                            const { definitionId: _drop, ...rest } = order;
+                            void _drop;
+                            return rest as StandingOrder;
+                        });
+                        return changed ? next : orders;
+                    });
+
+                    this.postMessage({ type: 'standingOrderDefinitionDeleted', success: true, id });
+                    return { success: true, id };
+                } catch (e: any) {
+                    this.postMessage({ type: 'standingOrderDefinitionDeleted', success: false, id, error: e?.message || 'Failed to delete standing order definition' });
+                    return { success: false, id, error: e?.message || 'Failed to delete standing order definition' };
                 }
             }
             case 'saveAgentGroup': {

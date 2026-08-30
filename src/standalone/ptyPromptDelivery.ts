@@ -123,15 +123,26 @@ export interface PromptDeliveryOptions {
     onPromptDelivered?: (terminalName: string, promptText: string) => void;
 }
 
+export interface PromptDeliveryReceipt {
+    /** The clear/boot readiness result, when either gate ran. Undefined on the
+     *  established-seat, clearBeforePrompt:false path — unchanged semantics. */
+    readiness?: ClearReadinessResult;
+    /** UTF-8 byte length of the text WRITTEN TO THE PTY — the composed prompt,
+     *  including any host-appended directives, seat block and standing orders.
+     *  Not the length of the caller's `data` field. */
+    bytesWritten: number;
+    /** Date.now() captured immediately after the confirm CR. */
+    deliveredAt: number;
+    /** This seat's delivery ordinal, post-increment. Absent on an aborted send. */
+    promptSeq?: number;
+}
+
 /**
  * Deliver a prompt to a directly-owned pty.
  *
- * Returns the readiness result — the clear-readiness result when a clear ran,
- * or the first-readiness result when the cold-boot gate ran on a seat that has
- * never been prompted (`handle.promptCount === 0`). The caller can report the
- * REAL reason ('signal' | 'fallback' | 'manual' | 'exit' | 'timeout') on the
- * dispatch lifecycle event. `undefined` means neither a clear nor a boot gate
- * ran (a subsequent dispatch with `clearBeforePrompt: false`).
+ * Returns a PromptDeliveryReceipt carrying delivery evidence: bytesWritten,
+ * deliveredAt, promptSeq, and the readiness result (when either a clear or cold-boot
+ * gate ran).
  *
  * On a seat with no prior delivery (`promptCount === 0`):
  *   1. `clearBeforePrompt` is forced false — a seat the host has never
@@ -146,8 +157,8 @@ export async function sendPromptToPty(
     handle: ExtendedTerminalHandle,
     text: string,
     opts?: PromptDeliveryOptions
-): Promise<ClearReadinessResult | undefined> {
-    return withTerminalLock(handle.name, async (): Promise<ClearReadinessResult | undefined> => {
+): Promise<PromptDeliveryReceipt> {
+    return withTerminalLock(handle.name, async (): Promise<PromptDeliveryReceipt> => {
         let readiness: ClearReadinessResult | undefined;
         const isFirstDelivery = handle.promptCount === 0;
 
@@ -165,23 +176,23 @@ export async function sendPromptToPty(
         // extension host's ptySendPrompt path both flow through sendPromptToPty.
         if (isFirstDelivery) {
             if (handle.status === 'exited') {
-                return { reason: 'exit', elapsedMs: 0 };
+                return { readiness: { reason: 'exit', elapsedMs: 0 }, bytesWritten: 0, deliveredAt: Date.now() };
             }
             readiness = await awaitFirstReadiness(handle, {
                 cliFamily: opts?.cliFamily || handle.cliFamily,
             });
             if (readiness.reason === 'exit' || (handle.status as string) === 'exited') {
-                return readiness;
+                return { readiness, bytesWritten: 0, deliveredAt: Date.now() };
             }
         }
 
         if (effectiveClearBeforePrompt) {
             if (handle.status === 'exited') {
-                return readiness;
+                return { readiness, bytesWritten: 0, deliveredAt: Date.now() };
             }
             readiness = await clearAndAwaitReadinessLocked(handle, opts);
             if (readiness.reason === 'exit' || (handle.status as string) === 'exited') {
-                return readiness;
+                return { readiness, bytesWritten: 0, deliveredAt: Date.now() };
             }
         }
 
@@ -246,13 +257,19 @@ export async function sendPromptToPty(
         // Confirm Enter — see rule 2 above. Unconditional by design.
         await new Promise(r => setTimeout(r, CONFIRM_ENTER_DELAY_MS));
         handle.write('\r');
-        // Increment promptCount after the confirm CR — the first delivery is
-        // now complete. Subsequent dispatches will not suppress clear or run
+        const deliveredAt = Date.now();
+        // Increment promptCount after the confirm CR — the delivery is now
+        // complete. Subsequent dispatches will not suppress clear or run
         // the first-readiness gate. Keys changes 1, 3, 5, and 6.
-        if (isFirstDelivery) {
-            handle.promptCount = 1;
-        }
-        return readiness;
+        handle.promptCount += 1;
+        const promptSeq = handle.promptCount;
+        const bytesWritten = Buffer.byteLength(text, 'utf8');
+        return {
+            readiness,
+            bytesWritten,
+            deliveredAt,
+            promptSeq,
+        };
     });
 }
 

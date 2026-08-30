@@ -297,10 +297,13 @@ function testCapAndRemainder() {
 async function testGenerateUnifiedPromptBatchTeamHead() {
     console.log('Testing generateUnifiedPrompt with team-headed lead batch...');
     const provider = makeProvider({ groups: TEAM_GROUPS, agentNames: { lead: 'Coding-lead' } });
-    provider._resolveTeamRosterForPrompt = async () => [
-        { name: 'Coding-coder-1', role: 'coder', active: true },
-        { name: 'Coding-coder-2', role: 'coder', active: true },
-    ];
+    provider._resolveTeamRosterForPrompt = async () => ({
+        head: 'Coding-lead',
+        members: [
+            { name: 'Coding-coder-1', role: 'coder', active: true },
+            { name: 'Coding-coder-2', role: 'coder', active: true },
+        ],
+    });
     provider._getPromptsConfig = async () => ({});
     provider._resolveProjectContextEnabled = async () => false;
     provider._resolveDesignSystemReferences = async () => [];

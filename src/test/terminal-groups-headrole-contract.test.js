@@ -303,9 +303,10 @@ async function makeProvider(tmpRoot, fleetLiveness, db) {
             try {
                 // _resolveTeamRosterForPrompt is private — access via bracket notation.
                 const roster = await kp['_resolveTeamRosterForPrompt'](tmpRoot);
-                assert.ok(Array.isArray(roster) && roster.length > 0,
+                assert.ok(roster && Array.isArray(roster.members) && roster.members.length > 0,
                     `the roster must resolve when headRole is filled by cross-reference (got ${JSON.stringify(roster)})`);
-                const names = roster.map(r => r.name);
+                assert.strictEqual(roster.head, 'roster-lead', 'the head must match target group name');
+                const names = roster.members.map(r => r.name);
                 assert.ok(!names.includes('roster-lead'),
                     'the head must be excluded from the roster (members[0] skipped)');
                 assert.ok(names.includes('roster-lead-coder-1') && names.includes('roster-lead-coder-2'),

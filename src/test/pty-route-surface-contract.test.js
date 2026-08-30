@@ -611,6 +611,61 @@ function post(port, pathname, body) {
         );
     });
 
+    // --- ptySendPrompt delivery evidence convergence (both hosts) ----------
+    await test('both hosts return converged keys for ptySendPrompt', () => {
+        const childSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyHost.ts'), 'utf8');
+        const bootSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+
+        const childArmStart = childSrc.indexOf("case 'ptySendPrompt':");
+        const childArmEnd = childSrc.indexOf("case 'ptySetControllerSeat':", childArmStart);
+        assert.ok(childArmStart !== -1 && childArmEnd > childArmStart, 'could not locate ptyHost ptySendPrompt arm');
+        const childSlice = childSrc.slice(childArmStart, childArmEnd);
+
+        const bootArmStart = bootSrc.indexOf("case 'ptySendPrompt':");
+        const bootArmEnd = bootSrc.indexOf("case 'ptyRollLogSession':", bootArmStart);
+        assert.ok(bootArmStart !== -1 && bootArmEnd > bootArmStart, 'could not locate bootstrap ptySendPrompt arm');
+        const bootSlice = bootSrc.slice(bootArmStart, bootArmEnd);
+
+        const requiredKeys = ['bytesWritten', 'deliveredAt', 'promptSeq', 'bootPhase', 'deliveryReason', 'readiness'];
+        for (const key of requiredKeys) {
+            assert.ok(
+                new RegExp(`\\b${key}\\b`).test(childSlice),
+                `ptyHost.ts ptySendPrompt arm must contain '${key}'`
+            );
+            assert.ok(
+                new RegExp(`\\b${key}\\b`).test(bootSlice),
+                `bootstrap.ts ptySendPrompt arm must contain '${key}'`
+            );
+        }
+    });
+
+    await test('exit arms in ptySendPrompt and dispatchCards test nested receipt.readiness, not bare return', () => {
+        const childSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyHost.ts'), 'utf8');
+        const bootSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+
+        // Neither host may test a bare `?.reason === 'exit'` on a variable assigned the return of sendPromptToPty/deliverPrompt
+        assert.ok(
+            !/const\s+(\w+)\s*=\s*await\s+sendPromptToPty\([\s\S]{0,200}?\b\1\?\.reason\s*===\s*'exit'/.test(childSrc),
+            "ptyHost.ts must not test bare ?.reason === 'exit' on sendPromptToPty return; must test receipt.readiness?.reason"
+        );
+        assert.ok(
+            !/const\s+(\w+)\s*=\s*await\s+deliverPrompt\([\s\S]{0,200}?\b\1\?\.reason\s*===\s*'exit'/.test(bootSrc),
+            "bootstrap.ts must not test bare ?.reason === 'exit' on deliverPrompt return; must test receipt.readiness?.reason"
+        );
+    });
+
+    await test('response-only fields promptSeq and bytesWritten do not appear in verbSchemas.ts', () => {
+        const schemaSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'verbSchemas.ts'), 'utf8');
+        assert.ok(
+            !/\bpromptSeq\b/.test(schemaSrc),
+            'promptSeq is a response-only field and must not appear in request validation schemas in verbSchemas.ts'
+        );
+        assert.ok(
+            !/\bbytesWritten\b/.test(schemaSrc),
+            'bytesWritten is a response-only field and must not appear in request validation schemas in verbSchemas.ts'
+        );
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} contract check(s) failed.\n`);
         process.exit(1);
