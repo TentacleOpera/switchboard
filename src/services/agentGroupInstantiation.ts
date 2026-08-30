@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { MAX_DELEGATES_PER_PARENT, MAX_LIVE_DELEGATE_PTYS } from '../standalone/ptyFleetService';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { wireSpawnedTeam, AGENT_GROUP_CALLBACK_INSTRUCTION, SEEDED_AGENT_GROUP, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { bootstrapTeamReportsDirectory } from './ScheduledJobsService';
 
@@ -72,6 +73,11 @@ export interface InstantiateAgentGroupResult {
      * (member-less team) or when wiring failed.
      */
     teamGroupId?: string;
+    /**
+     * Advisory list of roles in the team that have no configured startup command.
+     * Non-fatal: seats still spawn as bare shells. Surface in startTeam toast.
+     */
+    commandlessRoles?: string[];
 }
 
 export async function instantiateAgentGroupCore(
@@ -104,6 +110,26 @@ export async function instantiateAgentGroupCore(
     if (liveDelegates + workerCount > MAX_LIVE_DELEGATE_PTYS) {
         return { success: false, error: `Delegate cap: ${liveDelegates} live, ${workerCount} requested, ${MAX_LIVE_DELEGATE_PTYS} allowed in total` };
     }
+
+    // Advisory pre-flight, NOT a gate. injectStartupCommand returns silently when a
+    // role resolves to nothing (ptyFleetService.ts:367), so the seat spawns as a bare
+    // shell and the operator is told nothing. Mirror that exact resolution rule here
+    // so the report cannot drift from the behaviour it describes.
+    //
+    // Read ONCE per start, not per seat: the map is a file read and a commandless
+    // seat is a report, not a spawn decision, so a stale read is harmless.
+    const startupCommands = (await GlobalIntegrationConfigService.getAgentStartupCommands()) || {};
+    const hasCommand = (role: string) => typeof startupCommands[role] === 'string'
+        && startupCommands[role].trim().length > 0;
+
+    const candidates = new Set<string>([group?.headRole || 'lead']);
+    for (const m of members) {
+        // A member with its own command never consults the role map; a shared member
+        // that reuses a live terminal is never re-injected at all.
+        if (m?.startupCommand || m?.scope === 'shared') { continue; }
+        if (typeof m?.role === 'string' && m.role) { candidates.add(m.role); }
+    }
+    const commandlessRoles = [...candidates].filter(r => !hasCommand(r));
 
     const result = await createHeadWithDelegates({
         role: group?.headRole || 'lead',
@@ -141,6 +167,7 @@ export async function instantiateAgentGroupCore(
             workers,
             delegateError: result.delegateError || undefined,
             error: `Terminals created but team wiring failed: ${wired.error}`,
+            ...(commandlessRoles.length ? { commandlessRoles } : {}),
         };
     }
 
@@ -150,6 +177,7 @@ export async function instantiateAgentGroupCore(
         workers,
         delegateError: result.delegateError || undefined,
         ...(wired.groupId ? { teamGroupId: wired.groupId } : {}),
+        ...(commandlessRoles.length ? { commandlessRoles } : {}),
     };
 }
 

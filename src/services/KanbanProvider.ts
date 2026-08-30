@@ -33,7 +33,7 @@ import { BOARD_DRIVING_CONTRACT as SHARED_BOARD_DRIVING_CONTRACT } from './sched
 import { KanbanMigration } from './KanbanMigration';
 import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
-import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
+import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent, resolveRoleWithDegradation } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead, resolveTeamById } from './teamWiring';
 import { mutateStandingOrders, makeStandingOrder, validateInstruction, STANDING_ORDERS_CONFIG_KEY, type StandingOrder, type StandingOrderScope } from './standingOrders';
@@ -1629,7 +1629,7 @@ export class KanbanProvider implements vscode.Disposable {
      * routing map (if configured) and the pair-programming intern→coder bypass.
      * This is the single source of truth for score→role resolution.
      */
-    public resolveRoutedRole(score: number, initiatorProject?: string | null): 'lead' | 'coder' | 'intern' {
+    public resolveRoutedRole(score: number, initiatorProject?: string | null, degradeLivePool: boolean = true): 'lead' | 'coder' | 'intern' {
         let role: 'lead' | 'coder' | 'intern';
 
         // No initiator → the cached singleton map, exactly as before C1 (also keeps
@@ -1655,6 +1655,21 @@ export class KanbanProvider implements vscode.Disposable {
         if (isPairMode && role === 'intern') {
             console.log(`[KanbanProvider] Pair programming bypass: score=${score} intern → coder`);
             role = 'coder';
+        }
+
+        // Live pool degradation: if a live pool is available and the preferred role is not alive,
+        // degrade across what is actually alive so plan reads and lead dispatches reflect reality.
+        const liveRolesMap = this._taskViewerProvider?.getAliveCodingRolesWithTerminals();
+        if (degradeLivePool && liveRolesMap && liveRolesMap.size > 0 && !liveRolesMap.has(role)) {
+            const available = new Set<'intern' | 'coder' | 'lead'>();
+            for (const r of liveRolesMap.keys()) {
+                if (r === 'intern' && isPairMode) continue;
+                available.add(r);
+            }
+            const degraded = resolveRoleWithDegradation(role, available);
+            if (degraded) {
+                role = degraded;
+            }
         }
 
         return role;
@@ -5373,10 +5388,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         }
     }
 
-    public async resolveCodingRolesFromGroups(workspaceRoot: string): Promise<{ leads: string[]; coders: string[] }> {
+    public async resolveCodingRolesFromGroups(workspaceRoot: string): Promise<{ leads: string[]; coders: string[]; interns: string[] }> {
         try {
             const db = this._getKanbanDb(workspaceRoot);
-            if (!db || !(await db.ensureReady())) return { leads: [], coders: [] };
+            if (!db || !(await db.ensureReady())) return { leads: [], coders: [], interns: [] };
             // Read terminals.groups — same key and bare-key fallback as
             // resolveTeamMembersForHead (teamWiring.ts ~1519-1541).
             let groups: any[] = [];
@@ -5398,7 +5413,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             } catch { /* best effort */ }
             // Fill in headRole for groups written without it (pre-fix installs).
             groups = await this._resolveHeadRoleForGroups(workspaceRoot, groups);
-            if (!Array.isArray(groups) || groups.length === 0) return { leads: [], coders: [] };
+            if (!Array.isArray(groups) || groups.length === 0) return { leads: [], coders: [], interns: [] };
 
             // Build a liveness set from getFleetLiveness() — the same _ptyLiveness
             // source the sweep's gate (4) uses for livenessByName.
@@ -5412,6 +5427,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
             const leads: string[] = [];
             const coders: string[] = [];
+            const interns: string[] = [];
             for (const g of groups) {
                 if (!g || !g.headRole || !g.name) continue;
                 // The head's terminal name is group.name (set by wireSpawnedTeam
@@ -5421,22 +5437,25 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const role = String(g.headRole).toLowerCase().replace(/[_-]+/g, ' ').trim();
                 if (role === 'lead') leads.push(headName);
                 else if (role === 'coder') coders.push(headName);
+                else if (role === 'intern') interns.push(headName);
             }
             leads.sort();
             coders.sort();
-            return { leads, coders };
-        } catch { return { leads: [], coders: [] }; }
+            interns.sort();
+            return { leads, coders, interns };
+        } catch { return { leads: [], coders: [], interns: [] }; }
     }
 
     /**
-     * Convenience: resolve the single coding head (lead first, then coder) from
+     * Convenience: resolve the single coding head (lead first, then coder, then intern) from
      * `terminals.groups`. Same order as subtask 2's plan specifies. Returns
      * null when no head is live.
      */
     public async resolveCodingHeadFromGroups(workspaceRoot: string): Promise<string | null> {
-        const { leads, coders } = await this.resolveCodingRolesFromGroups(workspaceRoot);
+        const { leads, coders, interns } = await this.resolveCodingRolesFromGroups(workspaceRoot);
         if (leads.length > 0) return leads[0];
         if (coders.length > 0) return coders[0];
+        if (interns && interns.length > 0) return interns[0];
         return null;
     }
 
@@ -9191,14 +9210,40 @@ This step is what moves the plan forward in the Switchboard pipeline.
             return { targetColumn, reason: 'dynamic complexity routing off' };
         }
         const score = parseComplexityScore(String(complexity ?? ''));
-        if (!(score >= 1 && score <= 10)) {
-            const targetColumn = this._validateOrDegradeCodingColumn('LEAD CODED', visibleAgents);
-            return { targetColumn, reason: 'complexity unknown' };
+        const isUnknown = !(score >= 1 && score <= 10);
+        const preferredRole = isUnknown ? 'lead' : this.resolveRoutedRole(score, undefined, false);
+        let effectiveRole: 'intern' | 'coder' | 'lead' = preferredRole;
+        let degraded = false;
+
+        const liveRolesMap = this._taskViewerProvider?.getAliveCodingRolesWithTerminals();
+        if (liveRolesMap && liveRolesMap.size > 0) {
+            const available = new Set<'intern' | 'coder' | 'lead'>();
+            const isPairMode = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
+            for (const r of liveRolesMap.keys()) {
+                if (visibleAgents && visibleAgents[r] === false) continue;
+                if (r === 'intern' && isPairMode) continue;
+                available.add(r);
+            }
+            if (available.size === 0) {
+                const err = new Error('No eligible coding agent is live and visible (live roles are hidden or ineligible). Enable a coding column in Setup or start a terminal.');
+                (err as any).name = 'KanbanDispatchError';
+                throw err;
+            }
+            if (!available.has(preferredRole)) {
+                const degradedRole = resolveRoleWithDegradation(preferredRole, available);
+                if (degradedRole && degradedRole !== preferredRole) {
+                    effectiveRole = degradedRole;
+                    degraded = true;
+                }
+            }
         }
-        const role = this.resolveRoutedRole(score);
-        const baseTarget = role === 'intern' ? 'INTERN CODED' : role === 'coder' ? 'CODER CODED' : 'LEAD CODED';
+
+        const baseTarget = effectiveRole === 'intern' ? 'INTERN CODED' : effectiveRole === 'coder' ? 'CODER CODED' : 'LEAD CODED';
         const targetColumn = this._validateOrDegradeCodingColumn(baseTarget, visibleAgents);
-        return { targetColumn, reason: `complexity ${score} → ${role} (degraded if hidden)` };
+        const reason = isUnknown
+            ? (degraded ? `complexity unknown → lead (degraded lead→${effectiveRole})` : 'complexity unknown')
+            : (degraded ? `complexity ${score} → ${preferredRole} (degraded ${preferredRole}→${effectiveRole})` : `complexity ${score} → ${preferredRole} (degraded if hidden)`);
+        return { targetColumn, reason };
     }
 
     public async handleServiceVerb(verb: string, payload: any): Promise<any> {

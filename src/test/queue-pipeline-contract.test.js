@@ -717,7 +717,7 @@ async function run() {
         const resolverStart = provider.indexOf('public getAliveCodingTerminalNames(): string[]');
         const resolver = provider.slice(resolverStart, provider.indexOf('\n    public ', resolverStart + 10));
         assert.ok(/entry\.role/.test(resolver), 'PTY roles must be read from fleet liveness rather than requiring a VS Code-only cache row');
-        assert.ok(/_terminalAgentInfo\.delete\(name\)/.test(resolver), 'stale cache rows must be pruned');
+        assert.ok(!/_terminalAgentInfo/.test(resolver), 'Teams are PTY-only — no VS Code terminal cache fallback');
         assert.ok(/\[\.\.\.leads\]\.sort\(\)\.concat\(\[\.\.\.coders\]\.sort\(\)\)/.test(resolver),
             'live coding terminals must remain deterministic with leads before coders');
         assert.ok(/role === 'lead'/.test(resolver) && /role === 'coder'/.test(resolver));

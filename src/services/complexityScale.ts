@@ -74,6 +74,38 @@ export function getFallbackRole(role: 'intern' | 'coder' | 'lead'): 'coder' | 'l
 }
 
 /**
+ * Resolve the preferred role against the live pool, degrading to the
+ * nearest available role if the preferred role has no live terminal.
+ * Search order: preferred → next-up (intern→coder→lead) → next-down
+ * (lead→coder→intern). Returns null when the pool is empty.
+ */
+export function resolveRoleWithDegradation(
+    preferred: 'intern' | 'coder' | 'lead',
+    available: Set<'intern' | 'coder' | 'lead'>
+): 'intern' | 'coder' | 'lead' | null {
+    if (!available || available.size === 0) return null;
+    if (available.has(preferred)) return preferred;
+
+    const ladder: Array<'intern' | 'coder' | 'lead'> = ['intern', 'coder', 'lead'];
+    const idx = ladder.indexOf(preferred);
+    if (idx === -1) return null;
+
+    // Search outward: upward first (distance 1 up, 1 down, 2 up, 2 down, ...)
+    for (let distance = 1; distance < ladder.length; distance++) {
+        const upIdx = idx + distance;
+        if (upIdx < ladder.length && available.has(ladder[upIdx])) {
+            return ladder[upIdx];
+        }
+        const downIdx = idx - distance;
+        if (downIdx >= 0 && available.has(ladder[downIdx])) {
+            return ladder[downIdx];
+        }
+    }
+
+    return null;
+}
+
+/**
  * Get CSS class for UI badge coloring.
  */
 export function categoryToCssClass(category: ComplexityCategory): string {

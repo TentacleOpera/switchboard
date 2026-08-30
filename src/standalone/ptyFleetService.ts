@@ -115,6 +115,7 @@ export interface FleetLivenessEntry {
     friendlyName: string;
     lastDataAt: number;
     status: 'active' | 'exited';
+    role?: string;
 }
 
 export interface CreateOptions {
@@ -546,6 +547,7 @@ export class PtyFleetService {
                 friendlyName: t.friendlyName,
                 lastDataAt: t.lastDataAt,
                 status: t.status,
+                role: t.role,
             });
         }
         // Tombstones for terminals no longer in the map (operator kill path).

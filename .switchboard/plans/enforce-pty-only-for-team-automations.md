@@ -245,3 +245,7 @@ When `_ptyHostPort` is not set (no fleet), the VS Code fallback remains for ALL 
 ## Recommendation
 
 Complexity 6 — **Send to Coder**.
+
+## Implementation Summary
+
+Gated all team automation terminal creation, selection, and dispatch on PTY fleet availability across both extension and standalone hosts via `_hasFleet()`. `_createAutobanTerminal` now creates PTY fleet terminals via `ptyCreateTerminal` without duplicate startup commands and refuses creation when no fleet is active. Terminal resolution paths (`_resolveAgentTerminalForPlan`, `resolveTeamRoleTerminal`, `_selectAutobanTerminal`, and scheduler queue pop) enforce strict PTY fleet selection and eliminate all fallbacks to VS Code window terminals or non-PTY registries. Live-seat validation (`_isTerminalLive`, `_isLikelyPtyDispatchTarget`) consults `getFleetLiveness()` (`_fleetLivenessProvider`) in addition to cached name snapshots, ensuring standalone in-process PTY fleets correctly report liveness during Mission Control handoff and worktree seat matching. Parity contract tests verify standalone and extension alignment.

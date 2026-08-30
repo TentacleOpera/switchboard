@@ -179,3 +179,6 @@ Mutation-verify each new assertion — remove the guard, confirm the test goes r
 ---
 
 **Recommendation:** Send to Coder (complexity 5).
+
+## Implementation Summary
+Added advisory pre-flight check in `instantiateAgentGroupCore` to inspect agent startup commands and populate `commandlessRoles` on `InstantiateAgentGroupResult`. The field is threaded across both normal and wiring-failure success returns while preserving existing delegate and seating logic. Updated `startTeam` in `terminals.js` to compose `commandlessNote` across all toast branches so operators receive notice when bare shells spawn without configured CLIs. Added contract tests in `standalone-agent-team-isolation-contract.test.js` validating command resolution, skipping of shared/commanded members, result threading, toast composition, and isolation from team store mutations.

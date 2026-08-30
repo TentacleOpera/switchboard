@@ -41,6 +41,10 @@ const assert = require('assert');
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const kanbanHtml = fs.readFileSync(path.join(REPO_ROOT, 'src/webview/kanban.html'), 'utf8');
 const taskViewerTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/TaskViewerProvider.ts'), 'utf8');
+const agentGroupInstantiationTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/agentGroupInstantiation.ts'), 'utf8');
+const ptyFleetServiceTs = fs.readFileSync(path.join(REPO_ROOT, 'src/standalone/ptyFleetService.ts'), 'utf8');
+const bootstrapTs = fs.readFileSync(path.join(REPO_ROOT, 'src/standalone/bootstrap.ts'), 'utf8');
+const terminalsJs = fs.readFileSync(path.join(REPO_ROOT, 'src/webview/terminals.js'), 'utf8');
 const sharedDefaults = require(path.join(REPO_ROOT, 'src/webview/sharedDefaults.js'));
 
 let passed = 0;
@@ -179,6 +183,125 @@ test('member rows are read by data-field, not by element index', () => {
             && /\[data-field="scope"\]/.test(body) && /\[data-field="relationship"\]/.test(body),
         'teamsTabSaveAgentGroup must address member controls by data-field — the role control is a <select> now, '
         + 'so an index-based read shifts both collections and drops every member'
+    );
+});
+
+console.log('\n--- Team start reports commandless seats ---');
+
+test('instantiateAgentGroupCore pre-flights startup commands and returns commandlessRoles', () => {
+    const body = functionBody(agentGroupInstantiationTs, 'export async function instantiateAgentGroupCore(');
+    assert.ok(
+        /GlobalIntegrationConfigService\.getAgentStartupCommands\(\)/.test(body),
+        'instantiateAgentGroupCore must read GlobalIntegrationConfigService.getAgentStartupCommands()'
+    );
+    assert.ok(
+        /commandlessRoles\s*=/.test(body),
+        'instantiateAgentGroupCore must compute commandlessRoles'
+    );
+    assert.ok(
+        /commandlessRoles\??:\s*string\[\]/.test(agentGroupInstantiationTs),
+        'InstantiateAgentGroupResult must declare commandlessRoles?: string[]'
+    );
+});
+
+test('instantiateAgentGroupCore pre-flight skips members with own command or shared scope', () => {
+    const body = functionBody(agentGroupInstantiationTs, 'export async function instantiateAgentGroupCore(');
+    assert.ok(
+        /m\?\.startupCommand\s*\|\|\s*m\?\.scope\s*===\s*'shared'/.test(body),
+        'the pre-flight must skip members carrying their own startupCommand and members with scope: "shared"'
+    );
+});
+
+test('commandlessRoles appears on both success returns of instantiateAgentGroupCore', () => {
+    const body = functionBody(agentGroupInstantiationTs, 'export async function instantiateAgentGroupCore(');
+    const occurrences = (body.match(/commandlessRoles/g) || []).length;
+    assert.ok(
+        occurrences >= 4,
+        'commandlessRoles must be populated and threaded onto both success returns (normal + wired.ok === false)'
+    );
+    assert.ok(
+        /if\s*\(!wired\.ok\)\s*\{[\s\S]*?commandlessRoles[\s\S]*?\}/.test(body),
+        'commandlessRoles must be attached to the !wired.ok return'
+    );
+});
+
+test('startTeam toast logic composes commandlessNote into every branch', () => {
+    const body = functionBody(terminalsJs, 'async function startTeam(');
+    assert.ok(
+        /commandlessNote\s*=/.test(body),
+        'startTeam must construct commandlessNote'
+    );
+    assert.ok(
+        /data\.delegateError[\s\S]*?commandlessNote/.test(body),
+        'startTeam must compose commandlessNote into the delegateError toast branch'
+    );
+    assert.ok(
+        /data\.error[\s\S]*?commandlessNote/.test(body),
+        'startTeam must compose commandlessNote into the error toast branch'
+    );
+    assert.ok(
+        /seatNote\s*\|\|\s*commandlessNote/.test(body),
+        'startTeam must show toast when seatNote or commandlessNote is non-empty'
+    );
+});
+
+test('instantiateAgentGroupCore pre-flight writes nothing to team stores', () => {
+    const body = functionBody(agentGroupInstantiationTs, 'export async function instantiateAgentGroupCore(');
+    assert.ok(
+        !/mutateTerminalGroups|saveTerminalGroupsGuarded|TERMINALS_GROUPS_KEY/.test(body),
+        'instantiateAgentGroupCore must not reference team-writing helpers'
+    );
+});
+
+console.log('\n--- Standalone role-bearing liveness ---');
+
+test('FleetLivenessEntry interface declares role?: string', () => {
+    assert.ok(
+        /interface\s+FleetLivenessEntry\s*\{[\s\S]*?role\??:\s*string;[\s\S]*?\}/.test(ptyFleetServiceTs),
+        'FleetLivenessEntry must declare role?: string'
+    );
+});
+
+test('PtyFleetService.getLiveness populates role on live entries', () => {
+    const body = functionBody(ptyFleetServiceTs, 'public getLiveness(): FleetLivenessEntry[]');
+    assert.ok(
+        /role:\s*t\.role/.test(body),
+        'PtyFleetService.getLiveness must populate role: t.role on live entries'
+    );
+});
+
+test('standalone bootstrap wires taskViewerProvider.setFleetLivenessProvider', () => {
+    assert.ok(
+        /taskViewerProvider\.setFleetLivenessProvider\(\(\)\s*=>\s*ptyFleetService\.getLiveness\(\)\)/.test(bootstrapTs),
+        'standalone bootstrap must wire taskViewerProvider.setFleetLivenessProvider'
+    );
+});
+
+test('_isTerminalLive consults getFleetLiveness for PTY liveness', () => {
+    const body = functionBody(taskViewerTs, 'private _isTerminalLive(terminalName: string, ptyOnly: boolean = false): boolean');
+    assert.ok(
+        /getFleetLiveness\(\)/.test(body),
+        '_isTerminalLive must consult getFleetLiveness() for PTY liveness'
+    );
+});
+
+test('_isLikelyPtyDispatchTarget consults getFleetLiveness', () => {
+    const body = functionBody(taskViewerTs, 'private _isLikelyPtyDispatchTarget(agentName: string): boolean');
+    assert.ok(
+        /getFleetLiveness\(\)/.test(body),
+        '_isLikelyPtyDispatchTarget must consult getFleetLiveness()'
+    );
+});
+
+test('TaskViewerProvider headlessRuntime verb handler populates _ptyTerminalNames and _ptyLiveness on ptyListTerminals', () => {
+    const body = functionBody(taskViewerTs, 'private async _ptyHostVerb(verb: string, payload: any, signal?: AbortSignal): Promise<any>');
+    assert.ok(
+        /this\._headlessRuntime[\s\S]*?this\._ptyTerminalNames\s*=\s*result\.terminals/.test(body),
+        '_ptyHostVerb must populate _ptyTerminalNames for headlessRuntime when ptyListTerminals succeeds'
+    );
+    assert.ok(
+        /this\._headlessRuntime[\s\S]*?this\._ptyLiveness\s*=/.test(body),
+        '_ptyHostVerb must populate _ptyLiveness for headlessRuntime when ptyListTerminals succeeds'
     );
 });
 

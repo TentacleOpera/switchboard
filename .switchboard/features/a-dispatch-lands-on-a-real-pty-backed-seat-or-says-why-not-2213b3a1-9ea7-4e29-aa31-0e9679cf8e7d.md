@@ -14,12 +14,16 @@ Make seat resolution honest. Teams are PTY-only, so no team automation may fall 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Team start silently spawns bare shells for roles with no startup command](../plans/feature_plan_20260819092741_team-start-reports-commandless-seats.md) — **PLAN REVIEWED** — ID: 4139b10e-8f84-40a7-8ace-3569062de542
-- [ ] [Enforce PTY-Only for Team Automations](../plans/enforce-pty-only-for-team-automations.md) — **PLAN REVIEWED** — ID: 83a75c14-b93a-499f-a49f-a7170a61e1db
-- [ ] [Complexity Routing Degrades to the Live Terminal Pool](../plans/complexity-routing-degrade-to-live-pool.md) — **PLAN REVIEWED** — ID: 8fee0dcb-b3b2-4af8-baa2-5321d26e0278
+- [ ] [Team start silently spawns bare shells for roles with no startup command](../plans/feature_plan_20260819092741_team-start-reports-commandless-seats.md) — **CODER CODED** — ID: 4139b10e-8f84-40a7-8ace-3569062de542
+- [ ] [Enforce PTY-Only for Team Automations](../plans/enforce-pty-only-for-team-automations.md) — **CODER CODED** — ID: 83a75c14-b93a-499f-a49f-a7170a61e1db
+- [ ] [Complexity Routing Degrades to the Live Terminal Pool](../plans/complexity-routing-degrade-to-live-pool.md) — **CODER CODED** — ID: 8fee0dcb-b3b2-4af8-baa2-5321d26e0278
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
 
 PTY-only lands first: it narrows the pool that complexity routing then degrades across, so routing built against the wider pool would need reworking. The commandless-seats report is independent of both.
+
+## Implementation Summary
+
+Team automation now resolves and delivers exclusively through live PTY seats across extension and standalone hosts, with explicit failure when no eligible seat exists. Complexity routing preserves the preferred tier but degrades bidirectionally through live, visible PTY roles, including `recommendedRole` and single-agent cases. Team startup now reports roles missing startup commands while preserving non-fatal spawn behavior. Verification for this run used full diff review and whitespace checks; automated tests and compilation were skipped by directive.
 

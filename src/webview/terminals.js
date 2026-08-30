@@ -8539,14 +8539,17 @@
                 const seatNote = seatFallbackReason
                     ? ` Team seated without its group — ${seatFallbackReason}.`
                     : '';
+                const commandlessNote = Array.isArray(data.commandlessRoles) && data.commandlessRoles.length
+                    ? ` No CLI configured for: ${data.commandlessRoles.join(', ')}. Those seats are bare shells; set a command in the AGENTS tab.`
+                    : '';
                 if (!silent) {
                     if (data.delegateError) {
-                        showPaneToast(`Team started with a delegate warning: ${data.delegateError}${seatNote}`);
+                        showPaneToast(`Team started with a delegate warning: ${data.delegateError}${seatNote}${commandlessNote}`);
                     } else if (data.error) {
                         // Terminals created but wiring failed — surface it.
-                        showPaneToast(`Team started with a warning: ${data.error}${seatNote}`);
-                    } else if (seatNote) {
-                        showPaneToast(seatNote.trim());
+                        showPaneToast(`Team started with a warning: ${data.error}${seatNote}${commandlessNote}`);
+                    } else if (seatNote || commandlessNote) {
+                        showPaneToast(`${seatNote}${commandlessNote}`.trim());
                     }
                 }
                 return data;

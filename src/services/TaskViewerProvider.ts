@@ -141,7 +141,7 @@ import {
     MISSION_CONTROL_TERMINAL_NAME,
     MissionControlSeat
 } from './autobanState';
-import { parseComplexityScore, scoreToRoutingRole, getFallbackRole, scoreToCategory } from './complexityScale';
+import { parseComplexityScore, scoreToRoutingRole, getFallbackRole, scoreToCategory, resolveRoleWithDegradation } from './complexityScale';
 const { syncMirrorToBrain } = require('./mirrorSync') as {
     syncMirrorToBrain: (options: {
         mirrorPath: string;
@@ -492,7 +492,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // Standalone: the fleet is in THIS process. Same verb names, same
             // result shape — ptySendPrompt still owns bracketed-paste framing,
             // chunking and the send lock on the other side (bootstrap.ts).
-            return await this._headlessRuntime.ptyVerb(verb, payload);
+            const result = await this._headlessRuntime.ptyVerb(verb, payload);
+            if (verb === 'ptyListTerminals' && result?.success && Array.isArray(result.terminals)) {
+                this._ptyTerminalNames = result.terminals
+                    .filter((t: any) => t.status === 'active')
+                    .map((t: any) => t.friendlyName);
+                const livenessSource: any[] = Array.isArray(result.liveness) ? result.liveness : result.terminals;
+                const rolesByName = new Map<string, string>(result.terminals
+                    .filter((t: any) => t?.friendlyName && t?.role)
+                    .map((t: any): [string, string] => [String(t.friendlyName), String(t.role)]));
+                this._ptyLiveness = livenessSource.map((t: any) => ({
+                    friendlyName: String(t.friendlyName ?? ''),
+                    lastDataAt: Number(t.lastDataAt ?? 0) || 0,
+                    status: String(t.status ?? 'active'),
+                    role: String(t.role ?? rolesByName.get(String(t.friendlyName ?? '')) ?? ''),
+                }));
+            }
+            return result;
         }
         if (!this._ptyHostChild || !this._ptyHostPort) {
             return { success: false, error: 'PTY host unavailable on this platform/installation' };
@@ -1388,6 +1404,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     /** True when a fleet is reachable by SOME route: the out-of-process pty host
      *  (extension) or the injected in-process bridge (standalone). */
     private _hasFleet(): boolean {
+        if (this._fleetLivenessProvider) { return true; }
         if (this._headlessRuntime) { return this._headlessRuntime.hasFleet(); }
         return !!this._ptyHostPort;
     }
@@ -1566,6 +1583,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * which is the safe direction.
      */
     private _ptyLiveness: Array<{ friendlyName: string; lastDataAt: number; status: string; role?: string }> = [];
+    private _fleetLivenessProvider?: () => Array<{ friendlyName: string; lastDataAt: number; status: string; role?: string }>;
+
+    public setFleetLivenessProvider(provider: () => Array<{ friendlyName: string; lastDataAt: number; status: string; role?: string }>): void {
+        this._fleetLivenessProvider = provider;
+    }
 
     /**
      * Synchronous reader for the cached fleet liveness snapshot. Returns the
@@ -1575,6 +1597,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * contract for fleet-less hosts).
      */
     public getFleetLiveness(): Array<{ friendlyName: string; lastDataAt: number; status: string; role?: string }> {
+        if (this._fleetLivenessProvider) {
+            return this._fleetLivenessProvider();
+        }
         return this._ptyLiveness;
     }
 
@@ -1588,7 +1613,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      */
     public async listFleetTerminals(): Promise<Array<{ friendlyName?: string; role?: string; status?: string; parentInstanceId?: any }>> {
         try {
-            if (!this._ptyHostChild || !this._ptyHostPort) return [];
+            if (!this._hasFleet()) return [];
             const res = await this._ptyHostVerb('ptyListTerminals', {});
             if (!res || !res.success) return [];
             const rows: any[] = [];
@@ -1886,7 +1911,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     worktreePath = matchWorktreePath(await db.getWorktrees(), record);
                 }
             } catch { /* best-effort — the toast still names plan and role */ }
-            if (!terminalName && this._ptyHostPort) {
+            if (!terminalName && this._hasFleet()) {
                 try {
                     const res = await this._ptyHostVerb('ptyListTerminals', {});
                     if (res?.success && Array.isArray(res.terminals)) {
@@ -1996,7 +2021,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 console.log(`[TaskViewerProvider] turn-end: live delivery suppressed for seat '${seatName}' (${info.outcome} on ${planFile}) — the queue/done relay owns the team lead's notification. Report mirror written.`);
                 return;
             }
-            if (!this._ptyHostPort) {
+            if (!this._hasFleet()) {
                 // Say so. Every other no-delivery path here logs; a silent return
                 // when the fleet host is absent is the same hollow success in a
                 // different costume — the notifier looks wired and never fires.
@@ -2401,30 +2426,35 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * pruned during iteration — same pattern as `getActualTerminalAgentNames`.
      */
     public getAliveCodingTerminalNames(): string[] {
-        const allTerminals = vscode.window.terminals;
-        const terminalNames = new Set(
-            allTerminals.filter(t => t.exitStatus === undefined).map(t => t.name)
-        );
         const fleetLiveness = this.getFleetLiveness();
         const leads = new Set<string>();
         const coders = new Set<string>();
+        const interns = new Set<string>();
         for (const entry of fleetLiveness) {
             if (!entry || entry.status === 'exited' || !entry.friendlyName) continue;
-            terminalNames.add(entry.friendlyName);
             const role = String(entry.role || '').toLowerCase();
             if (role === 'lead') leads.add(entry.friendlyName);
             else if (role === 'coder') coders.add(entry.friendlyName);
+            else if (role === 'intern') interns.add(entry.friendlyName);
         }
-        for (const [name, info] of this._terminalAgentInfo.entries()) {
-            if (!terminalNames.has(name)) {
-                this._terminalAgentInfo.delete(name);
-                continue;
+        return [...leads].sort().concat([...coders].sort()).concat([...interns].sort());
+    }
+
+    /**
+     * Returns the set of live coding roles and one terminal name per role.
+     * Reads from getFleetLiveness() (PTY fleet terminals only — teams are PTY-only).
+     */
+    public getAliveCodingRolesWithTerminals(): Map<'intern' | 'coder' | 'lead', string> {
+        const fleetLiveness = this.getFleetLiveness();
+        const roles = new Map<'intern' | 'coder' | 'lead', string>();
+        for (const entry of fleetLiveness) {
+            if (!entry || entry.status === 'exited' || !entry.friendlyName) continue;
+            const role = String(entry.role || '').toLowerCase();
+            if ((role === 'lead' || role === 'coder' || role === 'intern') && !roles.has(role)) {
+                roles.set(role, entry.friendlyName);
             }
-            const role = String(info.role || '').toLowerCase();
-            if (role === 'lead') leads.add(name);
-            else if (role === 'coder') coders.add(name);
         }
-        return [...leads].sort().concat([...coders].sort());
+        return roles;
     }
 
     public getSetting<T>(key: string, defaultValue: T): T {
@@ -6400,7 +6430,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // - No fleet: spawn a vscode.Terminal exactly as before (byte-compat for
             //   the ~4,000 shipped installs). In standalone (no vscode.window), this
             //   throws and is caught.
-            if (this._ptyHostPort) { return false; }
+            if (this._hasFleet()) { return false; }
             try {
                 const startupCmd = await this.getAgentStartupCommand(role, resolvedWorkspaceRoot);
                 terminal = vscode.window.createTerminal({
@@ -6948,7 +6978,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent, { silent: true });
         }
         const success = await this._dispatchExecuteMessage(
-            resolvedWorkspaceRoot, targetAgent, prompt, {}, 'sidebar'
+            resolvedWorkspaceRoot, targetAgent, prompt, {}, 'sidebar', false, undefined, true
         );
 
         // Advance the rotation cursor ONLY after successful dispatch
@@ -7794,7 +7824,7 @@ Each plan file must include:
                 const sent = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, group.targetAgent, finalPrompt, {
                     batch: true,
                     sessionIds: group.plans.map(p => p.sessionId || p.planId || '').filter(Boolean)
-                }, 'sidebar', true);
+                }, 'sidebar', true, undefined, true);
                 if (!sent) {
                     throw new Error(`Could not deliver prompt to '${group.targetAgent}'`);
                 }
@@ -10581,42 +10611,52 @@ Each plan file must include:
         await this._postRecentActivity(50, undefined, resolvedRoot);
     }
 
-    private _isTerminalLive(terminalName: string): boolean {
-        if (this._registeredTerminals) {
-            let terminal = this._registeredTerminals.get(terminalName);
-            if (!terminal) {
-                terminal = this._registeredTerminals.get(this._suffixedName(terminalName));
-            }
-            if (!terminal) {
-                const normalized = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
-                for (const [name, t] of this._registeredTerminals.entries()) {
-                    if (this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized) {
-                        terminal = t;
-                        break;
+    private _isTerminalLive(terminalName: string, ptyOnly: boolean = false): boolean {
+        if (!ptyOnly) {
+            if (this._registeredTerminals) {
+                let terminal = this._registeredTerminals.get(terminalName);
+                if (!terminal) {
+                    terminal = this._registeredTerminals.get(this._suffixedName(terminalName));
+                }
+                if (!terminal) {
+                    const normalized = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+                    for (const [name, t] of this._registeredTerminals.entries()) {
+                        if (this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized) {
+                            terminal = t;
+                            break;
+                        }
                     }
                 }
+                if (terminal && terminal.exitStatus === undefined) {
+                    return true;
+                }
             }
-            if (terminal && terminal.exitStatus === undefined) {
-                return true;
-            }
+            const openTerminals = vscode.window.terminals || [];
+            const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+            const found = openTerminals.find(t => {
+                if (t.exitStatus !== undefined) return false;
+                const tName = this._normalizeAgentKey(t.name);
+                const creationName = this._normalizeAgentKey((t.creationOptions as vscode.TerminalOptions | undefined)?.name || '');
+                return tName === strippedTarget || creationName === strippedTarget;
+            });
+            if (found) return true;
         }
-        const openTerminals = vscode.window.terminals || [];
-        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
-        const found = openTerminals.find(t => {
-            if (t.exitStatus !== undefined) return false;
-            const tName = this._normalizeAgentKey(t.name);
-            const creationName = this._normalizeAgentKey((t.creationOptions as vscode.TerminalOptions | undefined)?.name || '');
-            return tName === strippedTarget || creationName === strippedTarget;
-        });
-        if (found) return true;
-        // Fleet-aware: check the _ptyTerminalNames snapshot so fleet terminals
-        // report as live. The snapshot is advisory (refreshed on every ptyListTerminals
-        // forward); delivery uses a live round-trip, not this check.
-        if (this._ptyHostPort && this._ptyTerminalNames.length > 0) {
+        // Fleet-aware: check getFleetLiveness() or the _ptyTerminalNames snapshot so fleet terminals
+        // report as live in both extension and standalone hosts.
+        if (this._hasFleet()) {
             const normalized = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
-            if (normalized && this._ptyTerminalNames.some(n =>
-                this._normalizeAgentKey(this._stripIdeSuffix(n)) === normalized)) {
-                return true;
+            if (normalized) {
+                const liveness = this.getFleetLiveness();
+                if (Array.isArray(liveness) && liveness.length > 0) {
+                    if (liveness.some(entry => entry.status === 'active' &&
+                        this._normalizeAgentKey(this._stripIdeSuffix(entry.friendlyName)) === normalized)) {
+                        return true;
+                    }
+                }
+                if (this._ptyTerminalNames.length > 0 && this._ptyTerminalNames.some(n =>
+                    this._normalizeAgentKey(this._stripIdeSuffix(n)) === normalized)) {
+                    return true;
+                }
             }
         }
         return false;
@@ -10741,7 +10781,7 @@ Each plan file must include:
         return this._getAgentNameForRoleGlobal(role, statePath);
     }
 
-    private async _resolveAgentTerminalForPlan(
+    private async _resolveExactAgentTerminalForPlan(
         role: string,
         workspaceRoot: string,
         worktreePath?: string,
@@ -10749,7 +10789,13 @@ Each plan file must include:
     ): Promise<string | undefined> {
         if (worktreePath) {
             const wtTerminal = await this._findTerminalNameByWorktreePathAndRole(worktreePath, role, false);
-            if (wtTerminal) { return wtTerminal; }
+            if (wtTerminal) {
+                // When a fleet is active, only a live PTY terminal is a valid match.
+                // A non-PTY worktree match must not suppress live-pool degradation.
+                if (!this._hasFleet() || this._isTerminalLive(wtTerminal, true)) {
+                    return wtTerminal;
+                }
+            }
         }
         // Team-scoped resolution: when an origin terminal is known (the terminal that
         // produced the work), prefer a same-team member of the requested role over the
@@ -10764,7 +10810,7 @@ Each plan file must include:
         // `_getAliveAutobanTerminalRegistry` cannot supply one — it keeps a row only
         // on a VS Code pid/name match or a heartbeat, and PTY rows have none of
         // those — so the fleet is consulted directly here.
-        if (this._ptyHostPort) {
+        if (this._hasFleet()) {
             const normalizedRole = this._normalizeAgentKey(role);
             const res = await this._ptyHostVerb('ptyListTerminals', {});
             if (res?.success && Array.isArray(res.terminals)) {
@@ -10772,8 +10818,42 @@ Each plan file must include:
                     .find((t: any) => this._normalizeAgentKey(t.role) === normalizedRole);
                 if (match) { return match.friendlyName; }
             }
+            return undefined;
         }
         return this._getAgentNameForRole(role, workspaceRoot);
+    }
+
+    private async _resolveAgentTerminalForPlan(
+        role: string,
+        workspaceRoot: string,
+        worktreePath?: string,
+        originTerminal?: string
+    ): Promise<string | undefined> {
+        const exactMatch = await this._resolveExactAgentTerminalForPlan(role, workspaceRoot, worktreePath, originTerminal);
+        if (exactMatch) { return exactMatch; }
+
+        const normalized = this._normalizeAgentKey(role);
+        if (normalized === 'lead' || normalized === 'coder' || normalized === 'intern') {
+            const liveRolesMap = this.getAliveCodingRolesWithTerminals();
+            const visibleAgents = await this.getVisibleAgents(workspaceRoot);
+            const isPairMode = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
+            const available = new Set<'intern' | 'coder' | 'lead'>();
+            for (const r of liveRolesMap.keys()) {
+                if (visibleAgents && visibleAgents[r] === false) continue;
+                if (r === 'intern' && isPairMode) continue;
+                available.add(r);
+            }
+            if (available.size === 0) {
+                // If all live roles are hidden or ineligible, return undefined
+                // so the caller refuses honestly.
+                return undefined;
+            }
+            const degradedRole = resolveRoleWithDegradation(normalized as 'intern' | 'coder' | 'lead', available);
+            if (degradedRole && degradedRole !== normalized) {
+                return this._resolveExactAgentTerminalForPlan(degradedRole, workspaceRoot, worktreePath, originTerminal);
+            }
+        }
+        return undefined;
     }
 
     /**
@@ -10795,17 +10875,13 @@ Each plan file must include:
             const db = await this._getKanbanDb(workspaceRoot);
             if (!db || !await db.ensureReady()) { return null; }
             const live: Array<{ name: string; role?: string }> = [];
-            if (this._ptyHostPort) {
+            if (this._hasFleet()) {
                 const res = await this._ptyHostVerb('ptyListTerminals', {});
                 if (res?.success && Array.isArray(res.terminals)) {
                     for (const t of res.terminals) {
                         if (t?.status === 'active') { live.push({ name: t.friendlyName, role: t.role }); }
                     }
                 }
-            }
-            const registry = await this._getAliveAutobanTerminalRegistry(workspaceRoot);
-            for (const [name, info] of Object.entries(registry)) {
-                if (!live.some(l => l.name === name)) { live.push({ name, role: (info as any)?.role }); }
             }
             return await resolveTeamScopedRoleTerminal({
                 db, originName, role, liveTerminals: live,
@@ -10903,7 +10979,7 @@ Each plan file must include:
         // PTY clear goes through ptySendPrompt with an empty payload and
         // clearBeforePrompt: true, which the pty host turns into a clipboard
         // paste of /clear (the same path dispatch uses).
-        if (this._ptyHostPort) {
+        if (this._hasFleet()) {
             const normalizedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
             try {
                 const res = await this._ptyHostVerb('ptyListTerminals', {});
@@ -11016,7 +11092,7 @@ Each plan file must include:
         role: string,
         terminals?: any[]
     ): Promise<{ agentInstanceId: string; delegateChildren: string[] } | undefined> {
-        if (!displayName || !this._ptyHostPort) { return undefined; }
+        if (!displayName || !this._hasFleet()) { return undefined; }
         if (terminals) {
             const live = terminals.filter((t: any) => t && t.status === 'active');
             return resolveDelegateIdentityForTerminal(displayName, live);
@@ -11271,10 +11347,12 @@ Each plan file must include:
         // Get alive terminals for this role with full info so we can inspect
         // parentInstanceId — the field that distinguishes team heads (no parent)
         // from team members (parentInstanceId set to the head's agentInstanceId).
-        const aliveRegistry = await this._getAliveAutobanTerminalRegistry(workspaceRoot);
+        const aliveRegistry = await this._getAliveAutobanTerminalRegistry(workspaceRoot, { allowPtyFleet: true });
         const aliveEntries = Object.entries(aliveRegistry)
             .filter(([, info]) => this._normalizeAgentKey((info as any)?.role) === normalizedRole)
             .filter(([, info]) => !this._isAutobanBackupTerminalInfo(info))
+            .filter(([, info]) => !info?.hidden)
+            .filter(([, info]) => this._isFleetTerminalInfo(info))
             .sort(([a], [b]) => a.localeCompare(b));
 
         if (aliveEntries.length === 0) {
@@ -11309,7 +11387,12 @@ Each plan file must include:
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             this._seams().ui.showErrorMessage('No workspace folder found. Cannot create an autoban terminal.');
-            return;
+            return undefined;
+        }
+
+        if (!this._hasFleet()) {
+            this._seams().ui.showErrorMessage('Team automations require a PTY terminal fleet. Open the Terminals panel in the browser cockpit or start the standalone host.');
+            return undefined;
         }
 
         const normalizedRole = this._normalizeAutobanPoolRole(role);
@@ -11317,7 +11400,7 @@ Each plan file must include:
         const customAgentRoles = customAgents.map(a => a.role);
         if (!this._autobanPoolRoles(customAgentRoles).includes(normalizedRole)) {
             this._seams().ui.showErrorMessage(`Unsupported autoban pool role '${role}'.`);
-            return;
+            return undefined;
         }
 
         const resolvedRequestedName = typeof requestedName === 'string' ? requestedName.trim() : '';
@@ -11326,121 +11409,63 @@ Each plan file must include:
         const livePrimaryRoleTerminals = await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
         if (livePrimaryRoleTerminals.length >= MAX_TERMINALS_PER_ROLE) {
             this._seams().ui.showWarningMessage(`${roleLabel} already has ${MAX_TERMINALS_PER_ROLE} terminals.`);
-            return;
+            return undefined;
         }
 
         const terminalState = await this._readTerminalRegistryState(workspaceRoot);
+        const ptyNames: string[] = [];
+        try {
+            const listed = await this._ptyHostVerb('ptyListTerminals', {});
+            if (listed?.success && Array.isArray(listed.terminals)) {
+                for (const t of listed.terminals) {
+                    if (t.friendlyName) ptyNames.push(t.friendlyName);
+                    if (t.name) ptyNames.push(t.name);
+                }
+            }
+        } catch { /* best effort */ }
+
         const usedNames = new Set<string>([
             ...Object.keys(terminalState),
             // Include stripped names from state so collision detection works across suffixed keys
             ...Object.keys(terminalState).map(k => this._stripIdeSuffix(k)),
             ...vscode.window.terminals.map(terminal => terminal.name),
-            ...Array.from(this._registeredTerminals?.keys() || [])
+            ...Array.from(this._registeredTerminals?.keys() || []),
+            ...ptyNames
         ]);
         const uniqueName = getNextAutobanTerminalName(roleLabel, usedNames, resolvedRequestedName || undefined);
-        const suffixedUniqueName = this._suffixedName(uniqueName);
 
-        const terminal = vscode.window.createTerminal({
+        const ptyRes = await this._ptyHostVerb('ptyCreateTerminal', {
+            role: normalizedRole,
             name: uniqueName,
-            location: vscode.TerminalLocation.Panel,
-            cwd: cwd || workspaceRoot
+            cwd: cwd || workspaceRoot,
+            claudeInlineRendering: vscode.workspace
+                .getConfiguration('switchboard')
+                .get<boolean>('terminal.claudeInlineRendering', true),
         });
-        this._registeredTerminals?.set(suffixedUniqueName, terminal);
-        if (reveal) {
-            terminal.show();
+        if (!ptyRes?.success) {
+            this._seams().ui.showErrorMessage(
+                `Failed to create PTY terminal for role '${normalizedRole}': ${ptyRes?.error || 'unknown error'}`);
+            return undefined;
         }
 
-        // Resolve PID asynchronously in the background
-        const suffixedNameForPid = suffixedUniqueName;
-        void this._waitWithTimeout(terminal.processId, 10000, undefined)
-            .then(pid => {
-                if (pid) {
-                    void this.updateState(async (state) => {
-                        if (state.terminals?.[suffixedNameForPid]) {
-                            state.terminals[suffixedNameForPid].pid = pid;
-                            state.terminals[suffixedNameForPid].childPid = pid;
-                        }
-                    });
-                    this._refreshTerminalStatuses();
-                }
-            })
-            .catch(() => {
-                console.warn(`[TaskViewerProvider] PID resolution failed for terminal '${suffixedNameForPid}'.`);
-            });
-
-        await this.updateState(async (state) => {
-            if (!state.terminals) {
-                state.terminals = {};
-            }
-            state.terminals[suffixedUniqueName] = {
-                purpose: 'autoban-backup',
-                role: normalizedRole,
-                pid: undefined,
-                childPid: undefined,
-                startTime: new Date().toISOString(),
-                status: 'active',
-                friendlyName: uniqueName,
-                icon: 'terminal',
-                color: 'cyan',
-                lastSeen: new Date().toISOString(),
-                ideName: vscode.env.appName,
-                worktreePath: cwd || undefined
-            };
-        });
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (db) {
+            void this._updatePtyMirrorRegistry?.(db);
+        }
 
         const startupCommands = await this.getStartupCommands(workspaceRoot);
         const startupCommand = startupCommands[normalizedRole];
         if (startupCommand && startupCommand.trim()) {
-            await new Promise<void>((resolve) => {
-                let sent = false;
-                let disposed = false;
-                const cleanup = () => {
-                    if (disposed) return;
-                    disposed = true;
-                    shellExecDisposable.dispose();
-                    closeDisposable.dispose();
-                    clearTimeout(safetyTimer);
-                };
-                const sendOnce = () => {
-                    if (sent) return;
-                    sent = true;
-                    if (terminal.exitStatus === undefined) {
-                        terminal.sendText(startupCommand.trim(), true);
-                    }
-                };
-                const shellExecDisposable = vscode.window.onDidStartTerminalShellExecution((e) => {
-                    if (e.terminal === terminal) {
-                        sendOnce();
-                        cleanup();
-                        resolve();
-                    }
-                });
-                const closeDisposable = vscode.window.onDidCloseTerminal((closed) => {
-                    if (closed === terminal) {
-                        cleanup();
-                        resolve();
-                    }
-                });
-                const safetyTimer = setTimeout(() => {
-                    if (!disposed) {
-                        console.warn(`[TaskViewerProvider] Shell init timeout for worktree terminal '${uniqueName}', sending startup command via fallback`);
-                        sendOnce();
-                        cleanup();
-                        resolve();
-                    }
-                }, 5000);
-            });
-
             // Cache the brand-aware agent display name
             const displayName = this.deriveAgentDisplayName(startupCommand);
-            this.setTerminalAgentInfo(suffixedUniqueName, normalizedRole, displayName);
+            this.setTerminalAgentInfo(uniqueName, normalizedRole, displayName);
         }
 
         this._refreshTerminalStatuses();
         if (!skipStatePoolUpdate) {
             this._postAutobanState();
         }
-        return { role: normalizedRole, name: suffixedUniqueName };
+        return { role: normalizedRole, name: uniqueName };
     }
 
     private _getAutobanBroadcastState(): AutobanConfigState {
@@ -11927,7 +11952,7 @@ Each plan file must include:
 
         // 1. Refuse an unsafe handoff first.
         const headTerminal = String(args?.headTerminal || '').trim();
-        if (!headTerminal || !this._isTerminalLive(headTerminal)) {
+        if (!headTerminal || !this._isTerminalLive(headTerminal, true)) {
             return {
                 success: false,
                 status: 409,
@@ -12305,7 +12330,7 @@ Each plan file must include:
         return await this._dispatchExecuteMessage(workspaceRoot, coderAgent, prompt, {
             batch: true,
             pairProgramming: true
-        }, 'sidebar');
+        }, 'sidebar', false, undefined, true);
     }
 
     /** Public accessor for role resolution (used by command handlers) */
@@ -13033,7 +13058,7 @@ Each plan file must include:
         if (!resolvedRoot) {
             return { success: false, error: 'No workspace root resolved' };
         }
-        if (!this._ptyHostPort) {
+        if (!this._hasFleet()) {
             return { success: false, error: 'PTY host unavailable on this platform/installation' };
         }
         const db = await this._getKanbanDb(resolvedRoot);
@@ -13116,7 +13141,7 @@ Each plan file must include:
         if (!resolvedRoot) {
             return { success: false, error: 'No workspace root resolved' };
         }
-        if (!this._ptyHostPort) {
+        if (!this._hasFleet()) {
             return { success: false, error: 'PTY host unavailable on this platform/installation' };
         }
         const db = await this._getKanbanDb(resolvedRoot);
@@ -15149,7 +15174,7 @@ Each plan file must include:
                         // share the same decision.
                         const isControlString = !input.includes('\n') && input.trimStart().startsWith('/');
 
-                        if (this._ptyHostPort) {
+                        if (this._hasFleet()) {
                             const normalized = this._normalizeAgentKey(this._stripIdeSuffix(name));
                             const res = await this._ptyHostVerb('ptyListTerminals', {});
                             if (res?.success && Array.isArray(res.terminals)) {
@@ -21100,6 +21125,13 @@ Each plan file must include:
         if (!this._hasFleet()) { return false; }
         const normalized = this._normalizeAgentKey(this._stripIdeSuffix(agentName));
         if (!normalized) { return false; }
+        const liveness = this.getFleetLiveness();
+        if (Array.isArray(liveness) && liveness.length > 0) {
+            if (liveness.some(entry => entry.status === 'active' &&
+                this._normalizeAgentKey(this._stripIdeSuffix(entry.friendlyName)) === normalized)) {
+                return true;
+            }
+        }
         return this._ptyTerminalNames.some(name =>
             this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized);
     }
@@ -21137,7 +21169,7 @@ Each plan file must include:
             .find((t: any) => this._normalizeAgentKey(t.role) === normalizedRole);
         const target = match?.friendlyName;
         if (!target || !this._isValidAgentName(target)) { return false; }
-        return await this._dispatchExecuteMessage(workspaceRoot, target, prompt, metadata, 'sidebar');
+        return await this._dispatchExecuteMessage(workspaceRoot, target, prompt, metadata, 'sidebar', false, undefined, true);
     }
 
     public async tryFleetDeliveryForRole(
@@ -21156,7 +21188,8 @@ Each plan file must include:
         metadata: Record<string, any>,
         sender: string = 'sidebar',
         promptComposed: boolean = false,
-        delivery?: DirectPushDelivery
+        delivery?: DirectPushDelivery,
+        ptyOnly: boolean = false
     ): Promise<boolean> {
         // F-04 SECURITY: Validate agent name before using as path segment
         if (!this._isValidAgentName(targetAgent)) {
@@ -21172,7 +21205,7 @@ Each plan file must include:
             recipient: targetAgent,
             action: 'execute',
             metadata
-        }, promptComposed, delivery);
+        }, promptComposed, delivery, ptyOnly);
         if (pushed) return true;
 
         this._seams().ui.showWarningMessage(
@@ -21230,7 +21263,8 @@ Each plan file must include:
         messageId: string,
         meta: { sender: string; recipient: string; action: string; metadata: Record<string, any> },
         promptComposed: boolean = false,
-        delivery?: DirectPushDelivery
+        delivery?: DirectPushDelivery,
+        ptyOnly: boolean = false
     ): Promise<boolean> {
         // The PTY fleet is checked FIRST. Checking it first (rather than as a
         // not-found fallback) matters — a PTY and a VS Code terminal can normalize
@@ -21299,6 +21333,10 @@ Each plan file must include:
                 console.error(`[TaskViewerProvider] PTY prompt delivery to '${terminalName}' failed:`, err);
                 return false;
             }
+        }
+
+        if (ptyOnly) {
+            return false;
         }
 
         // Try registered terminals first, then fall back to open VS Code terminals
@@ -21771,7 +21809,7 @@ Each plan file must include:
                             ).join('\n') || '';
                             const coderReport = `MECHANICAL GATE FAILED — pre-check before reviewer dispatch found issues. Fix these and report back:\n\n${findingsText}\n\nCheck details:\n${checkDetails}`;
                             try {
-                                await this._dispatchExecuteMessage(resolvedWorkspaceRoot, reviewerCoderTerminal, coderReport, {}, 'sidebar', true);
+                                await this._dispatchExecuteMessage(resolvedWorkspaceRoot, reviewerCoderTerminal, coderReport, {}, 'sidebar', true, undefined, true);
                             } catch (sendErr) {
                                 console.error('[TaskViewerProvider] Failed to send mechanical findings to coder:', sendErr);
                             }
@@ -21823,7 +21861,7 @@ Each plan file must include:
                                     const preReviewResult = await gatePromise;
                                     if (preReviewResult.verdict === 'FAIL' && reviewerCoderTerminal) {
                                         const coderReport = `PHONE-A-FRIEND PRE-REVIEW FAILED — fix these gaps before reviewer dispatch:\n\n${preReviewResult.findings || 'The pre-review agent reported FAIL without details.'}`;
-                                        await this._dispatchExecuteMessage(resolvedWorkspaceRoot, reviewerCoderTerminal, coderReport, {}, 'sidebar', true);
+                                        await this._dispatchExecuteMessage(resolvedWorkspaceRoot, reviewerCoderTerminal, coderReport, {}, 'sidebar', true, undefined, true);
                                         clearDispatchLock();
                                         this._seams().ui.showInformationMessage(`Phone-a-Friend pre-review failed for ${sessionId}. Findings sent to ${reviewerCoderTerminal}.`);
                                         return false;
@@ -21947,7 +21985,8 @@ Each plan file must include:
                 // Thread the dispatch origin (the terminal that requested this
                 // send) into the ptySendPrompt payload so the roster barrier can
                 // exclude it. Absent on operator-driven (board drag) paths.
-                options?.originTerminal ? { originTerminal: options.originTerminal } : undefined
+                options?.originTerminal ? { originTerminal: options.originTerminal } : undefined,
+                true
             );
 
             if (success) {
@@ -27284,7 +27323,7 @@ Each plan file must include:
         });
         if (live) { return live; }
 
-        if (this._ptyHostPort) { return undefined; }
+        if (this._hasFleet()) { return undefined; }
         const cwd = this._resolveWorkspaceRoot();
         if (!cwd) { return undefined; }
 
@@ -27449,11 +27488,7 @@ Each plan file must include:
                         outcome = 'kanban provider unavailable';
                     }
                 } else if (apiServer && typeof apiServer.dispatchNextFromQueue === 'function') {
-                    let headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(wsRoot)) || '';
-                    if (!headTerminal) {
-                        const codingTerminals = this.getAliveCodingTerminalNames();
-                        if (codingTerminals.length > 0) headTerminal = codingTerminals[0];
-                    }
+                    const headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(wsRoot)) || '';
                     if (!headTerminal) {
                         outcome = 'no coding terminal live';
                     } else {
@@ -27667,7 +27702,7 @@ Each plan file must include:
 
         // 2. Query live terminals
         const live: Array<{ name: string; role?: string; isWorking?: boolean }> = [];
-        if (this._ptyHostPort) {
+        if (this._hasFleet()) {
             try {
                 const res = await this._ptyHostVerb('ptyListTerminals', {});
                 if (res?.success && Array.isArray(res.terminals)) {
@@ -27678,12 +27713,6 @@ Each plan file must include:
                     }
                 }
             } catch { /* best effort */ }
-        }
-        const registry = await this._getAliveAutobanTerminalRegistry(workspaceRoot);
-        for (const [name, info] of Object.entries(registry)) {
-            if (!live.some(l => l.name === name)) {
-                live.push({ name, role: (info as any)?.role });
-            }
         }
 
         // 3. Resolve target terminal
@@ -27744,7 +27773,10 @@ Each plan file must include:
             targetName,
             prompt,
             { source: 'teamAutomation', jobId: job.id },
-            'scheduler'
+            'scheduler',
+            false,
+            undefined,
+            true
         );
 
         if (delivered) {

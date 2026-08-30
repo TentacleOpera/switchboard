@@ -2715,6 +2715,7 @@ Each plan file must include:
     // engine treats an unset provider as "no evidence", so the window before this
     // line is the fleet-less contract, not a gap.
     ingestionEngine.setTerminalLivenessProvider(() => ptyFleetService.getLiveness());
+    taskViewerProvider.setFleetLivenessProvider(() => ptyFleetService.getLiveness());
     // Turn-end notification seam, wired HERE for the same TDZ reason as the
     // liveness provider above: the closure references `ptyFleetService`, which
     // was constructed just above. Standalone owns the fleet in-process, so
@@ -3111,6 +3112,9 @@ Each plan file must include:
         // `recommendedRole` on plan reads so a lead dispatches by the board's
         // policy rather than a split baked into its prompt. Both hosts wire it.
         resolveRoutedRole: (score: number) => kanbanProvider.resolveRoutedRole(score),
+        resolveAutoDispatchColumn: async (_wsRoot: string, complexity: string | null) => {
+            return kanbanProvider.resolveAutoDispatchColumn(_wsRoot, complexity);
+        },
         // Same `ptyReady` guard the kanbanVerb entry point carries: a page loaded
         // before a restart (or a direct API caller) can still reach these verbs, and
         // an unguarded call would surface as an unhandled spawn exception.

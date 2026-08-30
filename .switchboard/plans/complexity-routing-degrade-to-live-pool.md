@@ -254,3 +254,6 @@ The `anyCodingTerminalLive` computation (KanbanProvider lines 1295, 2299, 4021, 
 - [ ] **Integration test: degradation reason in dispatch string** — verify the dispatch reason includes "degraded {preferred}→{degraded}" when degradation fires.
 - [ ] **Run existing tests:** `npm test` — verify no regressions in `kanban-complexity.test.ts` and `pair-programming-comprehensive.test.ts`.
 - [ ] **Compile check:** `npm run compile` — verify no type errors.
+
+## Implementation Summary
+Implemented bidirectional complexity routing degradation across the live coding terminal pool. Added `resolveRoleWithDegradation` in `complexityScale.ts` to search outward (upward bias first) from the preferred role against live, visible roles. Updated `TaskViewerProvider.ts`, `KanbanProvider.ts`, and `PtyFleetService.ts` to enforce strictly PTY-only terminal collection with role-bearing liveness in both extension and standalone hosts, degrade `recommendedRole` on plan reads across the live pool, degrade unknown-complexity cards across the live pool, honestly refuse dispatch when all live roles are hidden or ineligible, and prevent non-PTY worktree matches from suppressing live-pool degradation. Added unit and contract tests in `kanban-complexity.test.ts`, `queue-pipeline-contract.test.js`, and `standalone-agent-team-isolation-contract.test.js`.
