@@ -14,8 +14,8 @@ command, and returns success. An agent relaying a short message to a lead sends 
 the lead's full standing orders and seat directive block, because the appends default to on
 and the flag that suppresses them is named for machine origin rather than for what it means.
 
-Each is instructional or default-level, not a missing capability: the wake fires, ptyClearTerminal
-works in both hosts, and the suppression flag exists. What is missing is the agent knowing it.
+Two are instructional or default-level — the wake fires and the append-suppression flag exists,
+the agent just does not know it. The clear is not: it needs a real endpoint.
 
 ## How the Subtasks Achieve This
 
@@ -23,10 +23,10 @@ works in both hosts, and the suppression flag exists. What is missing is the age
   sleeping/polling on both lead-facing surfaces — the head's standing order and the drive
   prefix — and says what to do with the turn instead, since the unanswered "then what?" is what
   produced the sleep.
-- **A clear is not a prompt**: makes the wrong call fail loudly instead of silently succeeding,
-  rejecting a bare slash command sent as prompt data with an error naming ptyClearTerminal, and
-  puts the clear verb in front of the /switchboard and Mission Control agents that reach for
-  ptySendPrompt by habit.
+- **Clearing a terminal needs a dedicated endpoint**: adds POST /terminals/clear as the
+  canonical, scope-aware clear (one seat or a whole team, never the caller, defers a busy seat,
+  reports what it did), reconciles the two divergent clear implementations behind it, and makes
+  a bare slash command sent as prompt data fail loudly instead of silently succeeding.
 - **An agent relaying a message is not a dispatch**: re-keys the append suppression from "who
   sent it" to "is this a dispatch", fixes the default for agent-initiated sends behind a caller
   audit, and documents the three payload kinds so an agent can say which it is sending.
@@ -43,7 +43,11 @@ in parallel.
 
 Two soft couplings worth knowing:
 
-- "A clear is not a prompt" and "An agent relaying a message is not a dispatch" both edit
+- The clear-endpoint plan depends on `lead-acceptance-post-silently-releases-no-seat.md` step 1
+  (wiring `clearTerminalContext` in the standalone composition root); without it the new endpoint
+  is inert in standalone. It also routes through the post-clear orders delivery owned by
+  `after-clear-standing-orders-block-is-a-taskless-prompt.md`.
+- The clear-endpoint plan and "An agent relaying a message is not a dispatch" both edit
   `.agents/workflows/switchboard.md` and the Mission Control persona's `## Messaging Leads`
   section. Landing them in either order is fine; landing them simultaneously will conflict in
   those two files.
