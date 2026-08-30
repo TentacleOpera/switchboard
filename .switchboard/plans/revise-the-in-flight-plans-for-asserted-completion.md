@@ -113,3 +113,11 @@ None.
 ## Completion Summary
 
 Amended the three in-flight plan files (`staging-streams-parallel-dispatch-and-worktrees.md`, `remove-the-seat-orders-code-reviewed-clause.md`, and `the-automation-model-four-things-not-a-mode-axis.md`) to align with the premise that completion is an asserted event and never inferred. Replaced precomputed stream/sequence schema with direct dependency edges evaluated at pop time against `completed_at`, while preserving parallel-consumer and discarded-edge findings verbatim and re-scoring complexity to 3. Framed the seat order clause deletion as the first application of the category rule landing alongside the anchor plan, and refined the automation schedule selector to admit queue-order evaluation for STAGING queues. Recorded the recommended plan split as an architectural recommendation without performing it.
+
+## Review Findings
+
+Second independent reviewer pass; the prose deliverable is complete and correct against every acceptance criterion. `staging-streams-parallel-dispatch-and-worktrees.md` carries no `stream_id`/`stream_seq` anywhere, is re-scored to Complexity 3, supersedes the `base_branch` argument with an explicit "Superseded / Reason" callout that says *why* the premise changed rather than only what changed, and preserves the parallel-consumer finding and the discarded-edges defect verbatim at lines 11 and 15-17. `remove-the-seat-orders-code-reviewed-clause.md` is framed as the first application of the category rule in its opening sentence and again in a dedicated "Why the premise changed" section that records the division of labour with the anchor. `the-automation-model-four-things-not-a-mode-axis.md` admits `queue-order` on the existing `selector` field and argues explicitly that this is a refinement rather than field regrowth, which is what keeps it clear of its own schema tripwire. No plan was rewritten under a coder — each amendment is an inline superseded callout appended beside the original reasoning, not a replacement of it, and the streams split is recorded as a recommendation without being performed. No code changed for this subtask and none was needed; its Verification Plan correctly declares automated tests not applicable, so there is no gate to audit.
+
+## Deferred Findings
+
+None.

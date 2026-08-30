@@ -3,10 +3,23 @@
 /**
  * Completion is asserted, never inferred — and silence halts.
  *
- * Tests the anchor plan's invariants: no consumer derives completion from
- * a kanban column, silence halts the pipeline, every automation self-stop
- * carries a reason, and a halt is visible without reading terminal scrollback.
- * See `completion-is-asserted-never-inferred.md`.
+ * Tests the anchor plan's surviving invariants: no consumer derives completion
+ * from a kanban column, and silence halts the pipeline (an un-posted card holds
+ * its team in every column and every pacing mode, so nothing advances on a
+ * guess). See `completion-is-asserted-never-inferred.md`.
+ *
+ * NOT covered here, deliberately: the plan's other two invariants — "every
+ * automation self-stop carries a reason" and "a halt is visible without reading
+ * terminal scrollback" — were asserted against `_autobanState.stopReason` and
+ * the `_stopAutobanEngine` Mission Control relay. 25fdb6d9 retired the autoban
+ * clock outright and deleted both, along with the assertions that pinned them;
+ * there is no automation self-stop left to carry a reason. Halt VISIBILITY did
+ * survive, on a different mechanism: a stall reaches the operator as a
+ * `notifyTurnEnd({ outcome: 'stalled' })` whose report mirror is written to
+ * `.switchboard/mission-control/reports/` before any pty guard, so the notice
+ * outlives scrollback. That path is owned by the queue-stall-watch contract
+ * (`test:contract:queue-stall-watch`), not by this file. Do not re-add
+ * stopReason assertions here without the state to back them.
  */
 
 const assert = require('assert');
@@ -305,6 +318,47 @@ async function run() {
         // The feature sweep's remaining-subtask filter must read it too.
         assert.ok(/kanbanColumn !== 'COMPLETED' && !s\.completedAt/.test(planEngineSrc),
             'the feature sweep must treat a subtask as remaining only until its completion post');
+    });
+
+    await check('queue/done is not completion — completed_at has exactly one writer', async () => {
+        // The anchor plan's named invariant: `queue/done` means "give me the next
+        // item", and completion is NOT a side effect of it. Asserting that by
+        // driving a queue/done and re-reading the row only proves today's handler;
+        // the durable form of the rule is that the completion fact has ONE writer
+        // and it is the asserted post. Conflating the two is the original defect
+        // — the release → clear → pop chain is a critical section that will be
+        // edited again, and a `setCompletedAt` added inside it would restore
+        // completion-by-queue-advance with every other gate still green.
+        const writers = (localApiSrc.match(/setCompletedAt\?\.\(|setCompletedAt\(/g) || []).length;
+        assert.strictEqual(writers, 1,
+            `completed_at must have exactly one writer in LocalApiServer.ts (found ${writers}) — `
+            + 'the asserted post, via completeCardInternal. A second call site means some other '
+            + 'operation records completion as a side effect, which is the inference this plan removed.');
+        // ...and that one writer must live in completeCardInternal, not in the
+        // queue/done chain or the pop.
+        const completeStart = localApiSrc.indexOf('public async completeCardInternal(');
+        assert.notStrictEqual(completeStart, -1, 'completeCardInternal must exist');
+        const completeBody = localApiSrc.slice(completeStart, localApiSrc.indexOf('\n    /**', completeStart + 10));
+        assert.ok(/setCompletedAt\?\.\(planId, timestamp\)/.test(completeBody),
+            'the single completed_at write must be completeCardInternal\'s');
+        // The queue/done path must not reach the fact at all. Every arm is
+        // asserted by NAME and each name is required to resolve — a soft
+        // `if (found)` skip here is the same green-while-incomplete hole this
+        // feature exists to close: a rename would silently retire the check.
+        for (const arm of [
+            'private async _handleKanbanQueueDone(',  // the HTTP route
+            'private _runQueueDone(',                 // the shared release -> clear -> pop body
+            'private _handleTeamQueueDone(',          // the file-based team queue
+        ]) {
+            const start = localApiSrc.indexOf(arm);
+            assert.notStrictEqual(start, -1,
+                `${arm} must exist — if it was renamed, repoint this assertion rather than dropping it`);
+            const body = localApiSrc.slice(start, localApiSrc.indexOf('\n    /**', start + 10));
+            assert.ok(!/setCompletedAt/.test(body),
+                `${arm} must never write completed_at — queue/done requests the next item, it does not assert completion`);
+            assert.ok(!/completeCardInternal/.test(body),
+                `${arm} must never call completeCardInternal — completion is the lead's separate, explicit post`);
+        }
     });
 
     await check('kanban.html + terminals.js mirrors retired the report-file completion channel', async () => {

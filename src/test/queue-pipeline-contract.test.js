@@ -848,14 +848,31 @@ async function run() {
     await check('the schedule pops the queue and owns no in-flight bookkeeping', () => {
         const fs = require('fs');
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
-        const i = src.indexOf('private async _scheduleQueuePop(): Promise<void>');
-        assert.notStrictEqual(i, -1, '_scheduleQueuePop must exist');
-        const body = src.slice(i, src.indexOf('\n    }', i));
+        // The clock-driven `_scheduleQueuePop` was deleted in 25fdb6d9 along with
+        // the autoban engine it hung on: scheduling consolidated onto team
+        // automations and Mission Control Schedules, and a job now fires on team
+        // RELEASE (LocalApiServer's onTeamReleased → clearAdvanceWhenReadyJobs
+        // zeroes lastRunAt) rather than on a tick. `runSchedulerJob` is the
+        // surviving caller. What this contract protects is unchanged and is the
+        // reason it is not simply deleted: whatever fires the schedule must reach
+        // the queue through the ONE pop, resolve its head the same way every other
+        // caller does, and own no in-flight bookkeeping of its own — the pop's 409
+        // is the only gate. Repoint this at the current entry point when the
+        // scheduling surface moves again; do not drop the assertions.
+        assert.ok(!src.includes('_scheduleQueuePop'),
+            'the clock-driven _scheduleQueuePop must stay deleted — a job fires on team release, not on a tick');
+        const i = src.indexOf('public async runSchedulerJob(');
+        assert.notStrictEqual(i, -1, 'runSchedulerJob must exist — it is the schedule\'s route to the pop');
+        const body = src.slice(i, src.indexOf('\n    /**', i + 10));
         assert.ok(/dispatchNextFromQueue\(/.test(body), 'the schedule must dispatch through the pop');
         assert.ok(!/_autobanLaneInFlight/.test(body) && !/whenSchedule.*suppress/i.test(body),
             "the pop's 409 replaces every suppression guard — no lane map, no mutual disabling");
         assert.ok(/resolveCodingHeadFromGroups/.test(body),
             'the schedule must resolve its head the same way Run queue, staging and the watch do — the state.json registry cannot see a pty-fleet team');
+        // The release-driven trigger is the other half of the retired clock: without
+        // it an advance-when-ready job never re-fires and the queue stops silently.
+        assert.ok(/onTeamReleased:[\s\S]{0,160}clearAdvanceWhenReadyJobs\(/.test(src),
+            'onTeamReleased must be wired to clearAdvanceWhenReadyJobs — team release is what re-arms an advance-when-ready job now that the clock is gone');
     });
 
     await check('the file-based team queue binds every operation and completion report to the URL group', () => {

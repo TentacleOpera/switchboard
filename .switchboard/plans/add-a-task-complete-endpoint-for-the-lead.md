@@ -115,3 +115,16 @@ Additive. The `completed_at` column is additive (NULL = not completed); no exist
 - Should completion also clear the finishing terminal, as `queue/done` does? Leaning no — clearing is a queue-rotation concern, and conflating them is how this got tangled — but a lead that completes and keeps its context may then act on stale state.
 
 **Routing: Complexity 4 → Send to Coder.**
+
+## Review Findings
+
+Second independent reviewer pass. The endpoint is sound: `setCompletedAt` has exactly one production caller (`completeCardInternal`, `LocalApiServer.ts:2700`), the V62 column is additive and present in `SCHEMA_TABLES_SQL` so fresh DBs get it at creation, idempotency short-circuits before both the write and the `plan_events` append, and the in-flight predicate is now a single shared `heldByTeam`/`resolveTeamInFlight` pair rather than a copied condition. No dispatch and no column move remain true — the one `onTeamReleased` hook fires the scheduler on its own tick, never inline. Every option seam this plan added (`terminalVerb`, `clearTerminalContext`, `onTerminalContextCleared`, `getKanbanDatabase`, `onTeamReleased`) is wired in the extension root (`TaskViewerProvider.ts:3751`) *and* `standalone/bootstrap.ts:3368`, so the composition-root divergence CLAUDE.md warns about does not apply here. Files changed by this pass: `src/test/completion-asserted-never-inferred.test.js` only — the plan's named "`queue/done` is not completion" test had never been written, and is now a mutation-tested single-writer pin. Validation: `compile-tests` exit 0; `task-complete` 14/14, `team-release-control`, `atomic-team-lifecycle` and `queue-pipeline` all green.
+
+## Deferred Findings
+
+- MAJOR — `workspaceRoot` is not validated against a registered-root set; `_getKanbanDb` opens or creates a kanban DB at any absolute path an authenticated caller supplies, so the "invalid `workspaceRoot` refused" criterion is unmet. No such registry exists for any `/kanban/*` route, so this route cannot be hardened alone without diverging from the rest. `src/services/LocalApiServer.ts:2805`
+- NIT — Idempotency is read-then-write and not serialized: two concurrent identical posts both pass the `existing.completedAt` check and each append a `completed` row to `plan_events`. `src/services/LocalApiServer.ts:2662`
+- NIT — A `clearTerminalContext` failure is unrecoverable: `completed_at` is already written, so the retry returns `idempotent: true` and the accepted coder seat keeps stale context permanently. `src/services/LocalApiServer.ts:2716`
+- NIT — `setCompletedAt` bumps `updated_at`, silently reordering the `updated_at DESC` board with no refresh broadcast. `src/services/KanbanDatabase.ts:3062`
+- NIT — The idempotent early-return omits `dispatchedTerminal` and `acceptedCodingSeat`, so a repeat call's response shape differs from the first call's. `src/services/LocalApiServer.ts:2662`
+- NIT — A `plan_events` completion row is lost permanently if `appendPlanEventByPlanId` throws after `completed_at` is written. `src/services/LocalApiServer.ts:2707`
