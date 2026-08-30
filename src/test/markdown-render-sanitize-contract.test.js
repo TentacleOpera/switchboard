@@ -49,6 +49,11 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const BOOTSTRAP_PATH = path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts');
 const bootstrapSource = fs.readFileSync(BOOTSTRAP_PATH, 'utf8');
 
+// The four panels whose preview panes consume markdown.api.render output.
+// headlessPanelHtml.ts serves these same files to the browser host, so one rule
+// covers both hosts.
+const PANEL_HTML = ['project', 'planning', 'tickets', 'design'];
+
 let passed = 0;
 let failed = 0;
 
@@ -245,6 +250,31 @@ async function run() {
     test('safe https:// link survives sanitization', () => {
         assert.ok(/href="https:\/\/example\.com"/i.test(rendered), `safe link lost: ${rendered}`);
     });
+
+    // --- Renderer-swap fallout: table scroll containment ---
+    //
+    // `.table-wrapper` is emitted ONLY by the hand-rolled renderMarkdown
+    // (sharedUtils.js:99). Registering markdown.api.render swaps the standalone
+    // ticket/live-preview paths onto `marked`, which emits a bare <table> — and
+    // VS Code's renderer always did too. So the `.table-wrapper { overflow-x:
+    // auto }` rule never applied to real markdown output in either host, and a
+    // wide table blew the preview pane out horizontally instead of scrolling.
+    // The overflow now lives on the table itself. Nothing else catches this:
+    // the sanitizer test passes, the panel renders, it just overflows.
+    for (const panel of PANEL_HTML) {
+        test(`${panel}.html: preview tables scroll instead of overflowing the pane`, () => {
+            const source = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', `${panel}.html`), 'utf8');
+            const at = source.indexOf('border-collapse: collapse;');
+            assert.ok(at > 0, `${panel}.html: no preview table rule found`);
+            const end = source.indexOf('}', at);
+            assert.ok(end > at, `${panel}.html: preview table rule is unterminated`);
+            const body = source.slice(at, end);
+            for (const decl of ['display: block;', 'max-width: 100%;', 'overflow-x: auto;']) {
+                assert.ok(body.includes(decl),
+                    `${panel}.html: preview table rule is missing \`${decl}\` — a wide GFM table will overflow the pane`);
+            }
+        });
+    }
 
     // --- Goal invariants ---
 

@@ -829,6 +829,20 @@
             border-collapse: collapse;
             margin-bottom: 0.7em;
             font-size: inherit; /* Inherits from container */
+            /* Wide tables scroll inside themselves instead of blowing the pane
+               out horizontally. The `.table-wrapper` rule below only ever
+               matched the hand-rolled renderMarkdown (sharedUtils.js), which is
+               the only producer that emits that div — VS Code's markdown
+               renderer and `marked` (the standalone markdown.api.render bridge)
+               both emit a bare <table>, so every preview pane fed by a real
+               markdown renderer had no scroll container at all. Scoping the
+               overflow to the table itself covers all three renderers and both
+               hosts; the wrapper rule stays as a harmless passthrough for the
+               renderMarkdown case. */
+            display: block;
+            width: max-content;
+            max-width: 100%;
+            overflow-x: auto;
         }#kanban-preview-content th, #features-preview-content th, #constitution-preview-content th, #system-preview-content th, #tuning-preview-content th, #projects-preview-content th {
             text-align: left;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
