@@ -14745,6 +14745,12 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
             const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, teamName, undefined, defaultBranch);
             await db.addWorktree(branch, wtPath, undefined, undefined, undefined, defaultBranch, 'team');
+            // Every other addWorktree caller re-broadcasts before returning; without
+            // it the WORKTREES tab renders from the stale cached config and the team's
+            // new worktree is invisible until some unrelated event refreshes it.
+            // Best-effort: a broadcast failure must not fail the team start.
+            try { await this._sendWorktreeConfig(workspaceRoot); }
+            catch (e) { console.warn('[KanbanProvider] provisionTeamWorktree: worktree config broadcast failed:', e); }
             return { branch, path: wtPath };
         } catch (err: any) {
             console.warn(`[KanbanProvider] provisionTeamWorktree failed for team '${teamName}' in '${workspaceRoot}':`, err);

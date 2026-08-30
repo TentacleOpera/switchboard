@@ -477,3 +477,13 @@ None.
 Condensed the WORKTREES tab from three separate filtered subsections into a single sorted list preceded by a unified creation row.
 The unified creation row houses the project `<select>` with its 'Create Project Worktree' button alongside the 'Create Worktree (Unbound)' button, preserving the explicit-mode empty-repo guard on both.
 The unified list stably sorts all worktrees by scope priority (feature → project → unbound) and branch name, while trimming verbose explanatory prose down to a single concise routing line and preserving the strategy radio, target repo selector, and status post.
+
+## Review Findings
+
+Reviewed commit `c5590f06`. No files changed by this review — the collapse matches the plan on every fenced invariant. `createWorktreesPanel` now makes exactly one `createSubsection` call, contains no "Manual Creation" string, posts `createWorktreeForProject` and `createWorktree` once each and `createWorktreeForFeature` never, carries the `controlPlaneMode === 'explicit' && repos.length === 0` gate with its `title` on both buttons, keeps the 5-second re-enable and the "select a project first" guard, and leaves `renderWorktreeRow`, `renderWorktreeList`'s `window._removingWorktreeIds` skip, the strategy radio, the suppress checkbox, the Target Repo block and the `getWorktreeStatuses` post untouched in place. The scope sort is priority-then-branch as specified and `Array.prototype.sort` is stable, so equal-scope rows do not reshuffle under the pointer. Validation: worktree-strategy-control passes unedited (the plan's own signal that the strategy markup survived), plus feature-worktree-guardrail, staging-column and the kanban render-guard contracts; eslint 0 errors.
+
+## Deferred Findings
+
+- MAJOR — Not one of this plan's fifteen named `### Automated` assertions was written; the plan called several of them out as the only thing that can see the regression they guard ("this is the test that catches a 'simplification' that quietly drops a button the user asked to keep"), and the collapse shipped with no test pinning the two surviving creators, the absent feature creator, the single list, the no-dead-click gate or the scope sort. `src/webview/kanban.html:12775`
+- NIT — The project select lost its "Project:" label in the move to the creation row; the `-- Choose a Project --` placeholder carries the meaning, so this is a wash rather than a loss. `src/webview/kanban.html:12784`
+- NIT — The creation row has no `flex-wrap`, so in a narrow sidebar the select and both buttons compress rather than wrapping; the select's `flex: 1` absorbs most of it, but the two button labels are long. `src/webview/kanban.html:12781`

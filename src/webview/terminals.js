@@ -922,6 +922,22 @@
             btnClearAll.addEventListener('click', () => withClearingFeedback(btnClearAll, clearAllTerminals));
         }
 
+        const btnOpenAll = document.getElementById('btn-open-all');
+        if (btnOpenAll) {
+            btnOpenAll.addEventListener('click', async () => {
+                if (btnOpenAll.disabled) { return; }
+                btnOpenAll.disabled = true;
+                const label = btnOpenAll.textContent;
+                btnOpenAll.textContent = 'OPENING…';
+                try {
+                    await openAllTerminals();
+                } finally {
+                    btnOpenAll.disabled = false;
+                    btnOpenAll.textContent = label;
+                }
+            });
+        }
+
         const btnStartAllTeams = document.getElementById('btn-start-all-teams');
         if (btnStartAllTeams) {
             btnStartAllTeams.addEventListener('click', async () => {
@@ -938,8 +954,13 @@
                 );
                 const toStart = teams.filter(team => {
                     if (!team || !team.id) { return false; }
-                    const headRole = team.headRole || 'lead';
-                    return !liveHeadRoles.has(headRole);
+                    // Mirror startTeamById's guard EXACTLY (teamWiring.ts): it compares
+                    // `t.role === team.headRole` with no default, so a team carrying no
+                    // headRole is never refused. Defaulting to 'lead' here would skip
+                    // such a team whenever any unparented lead is live — a start the
+                    // backend would have allowed.
+                    if (!team.headRole) { return true; }
+                    return !liveHeadRoles.has(team.headRole);
                 });
                 const skippedCount = teams.length - toStart.length;
                 if (toStart.length === 0) {
@@ -957,11 +978,13 @@
                         const data = await startTeam({ id: team.id }, targetSpec, { silent: true });
                         if (data && data.success) {
                             startedCount++;
-                        } else if (data && data.success === false && typeof data.error === 'string' && data.error.includes('already live')) {
+                        } else if (data && typeof data.error === 'string' && data.error.includes('already live')) {
+                            // The team started between the pre-filter read (up to one
+                            // poll stale) and this call — a benign skip, not an error.
                             finalSkippedCount++;
-                        } else if (data && data.success === false) {
+                        } else if (data) {
                             showPaneToast(`Could not start team '${team.name || team.id}': ${data.error || 'request failed'}`);
-                        } else if (data === null) {
+                        } else {
                             showPaneToast(`Could not start team '${team.name || team.id}' — network error.`);
                         }
                     }

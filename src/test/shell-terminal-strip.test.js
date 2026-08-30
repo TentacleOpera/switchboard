@@ -1043,7 +1043,7 @@ test('the team header is a context bar — the exit affordance lives in the tab 
 });
 
 test('team-scoped CSS hides general-purpose sidebar buttons', () => {
-    for (const id of ['#btn-start-all-teams', '#btn-fill-grid', '#fill-grid-form', '#btn-start-team', '#start-team-form', '#btn-clear-all', '#btn-save-group', '#btn-link-up']) {
+    for (const id of ['#btn-start-all-teams', '#btn-open-all', '#btn-fill-grid', '#fill-grid-form', '#btn-start-team', '#start-team-form', '#btn-clear-all', '#btn-save-group', '#btn-link-up']) {
         assert.ok(
             new RegExp(`body\\.is-team-scoped\\s+${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(terminalsHtml),
             `team-scoped CSS must hide ${id}`

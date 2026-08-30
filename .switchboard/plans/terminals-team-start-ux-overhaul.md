@@ -227,3 +227,13 @@ The `hidden` attribute is used (not `display:none` CSS) so the team-scoped / con
 
 The team-start UX overhaul has been implemented across `terminals.html` and `terminals.js`. The START TEAM form's target workspace dropdown now defaults to `initialWorkspaceRoot` when available. `startTeam()` was updated to return the response payload/null and accept an `opts.silent` flag to suppress individual toasts for batch operations. `OPEN AGENT TERMINALS` (`#btn-open-all`) was retired and replaced with the `START ALL TEAMS` button (`#btn-start-all-teams`) with scoped CSS hide rules, sequential spawning logic, and active head-role pre-filtering.
 
+
+## Review Findings
+
+Reviewed commit `c5590f06`. Files changed by this review: `src/webview/terminals.html` (restored `#btn-open-all` and re-added it to both scoped CSS hide lists), `src/webview/terminals.js` (restored the OPEN AGENT TERMINALS click handler, corrected the head-role pre-filter, widened the failure branch), `src/test/shell-terminal-strip.test.js` (assert both ids). The coder deleted `#btn-open-all` outright rather than implementing Change 5's toggle, so with zero teams defined the sidebar had no fleet-open control at all and `updateTeamStartButtons`'s `btnOpenAll` branch plus `openAllTerminals()` were both dead — restored to the plan's specified toggle. The pre-filter's `team.headRole || 'lead'` diverged from `startTeamById`'s guard, which compares against `team.headRole` with no default, so a headRole-less team was skipped on a start the backend would have allowed. Validation: `tsc -p tsconfig.test.json --noEmit` clean, eslint 0 errors, and shell-terminal-strip (74/74), terminal-open-all-seating, terminal-sidebar-groupings (53/53), team-scoped-routing (63/63), teams-tab-no-start (8/8) and goal-invariant-verification (19/19) all green.
+
+## Deferred Findings
+
+- MAJOR — None of this plan's Goal Invariants were written as automated assertions; no test covers `startTeam`'s return contract, the `opts.silent` flag, the `=== 'active'` pre-filter, or the button toggle. `src/webview/terminals.js:8449`
+- NIT — The START ALL TEAMS handler seats each team as it starts, so with several teams the last one wins the focused pane and the grid; the summary toast is the only trace of the earlier ones. `src/webview/terminals.js:966`
+- NIT — `fetchAgentGroups()` resolves teams from the first candidate root holding authored teams, which need not be `initialWorkspaceRoot`, while `targetSpec` pins the spawn to `initialWorkspaceRoot`. Consistent with the START TEAM form this plan fixes, but the button's "in the current workspace" title overstates it. `src/webview/terminals.js:944`

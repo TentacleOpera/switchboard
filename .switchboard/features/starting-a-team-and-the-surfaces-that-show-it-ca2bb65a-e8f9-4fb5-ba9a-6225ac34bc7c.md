@@ -19,10 +19,10 @@ Two surfaces also carry weight they have not earned: a hidden-terminal mechanism
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminals Sidebar: Team-Start UX Overhaul](../plans/terminals-team-start-ux-overhaul.md) — **CODER CODED** — ID: d7acd263-5a98-4bc4-b763-cf2ab89a4f5d
-- [ ] [Per-Team Worktree Provisioning for Explicit Starts](../plans/per-team-worktree-provisioning.md) — **CODER CODED** — ID: 7c65bdf1-ccb0-4e9b-98ec-f80d85635d09
-- [ ] [Remove Hidden Terminals](../plans/remove-hidden-terminals.md) — **CODER CODED** — ID: 8131f510-037f-4d47-a567-fe4575990e25
-- [ ] [The WORKTREES tab is a list, not a console](../plans/worktrees-tab-is-a-list-not-a-console.md) — **CODER CODED** — ID: 1b0e8808-6fbc-4752-8fd7-8de528f52cd2
+- [ ] [Terminals Sidebar: Team-Start UX Overhaul](../plans/terminals-team-start-ux-overhaul.md) — **CODE REVIEWED** — ID: d7acd263-5a98-4bc4-b763-cf2ab89a4f5d
+- [ ] [Per-Team Worktree Provisioning for Explicit Starts](../plans/per-team-worktree-provisioning.md) — **CODE REVIEWED** — ID: 7c65bdf1-ccb0-4e9b-98ec-f80d85635d09
+- [ ] [Remove Hidden Terminals](../plans/remove-hidden-terminals.md) — **CODE REVIEWED** — ID: 8131f510-037f-4d47-a567-fe4575990e25
+- [ ] [The WORKTREES tab is a list, not a console](../plans/worktrees-tab-is-a-list-not-a-console.md) — **CODE REVIEWED** — ID: 1b0e8808-6fbc-4752-8fd7-8de528f52cd2
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -38,3 +38,16 @@ Two constraints from the plans themselves. `per-team-worktree-provisioning` reus
 ## Implementation Summary
 
 All four subtasks implemented and committed. Start-team workspace selector now defaults to initialWorkspaceRoot like every other selector. OPEN AGENT TERMINALS fully retired — button, handler, and disconnected-fleet spawn path removed; START ALL TEAMS replaces it with sequential team spawning and active head-role pre-filtering. Per-team worktree provisioning extended from autostart-only to explicit START TEAM via a new optional `worktreeMode` field, with `provisionTeamWorktree` wired into both start paths. Hidden-terminal mechanism deleted across all three hosts (ptyFleetService, ptyHost, bootstrap), TaskViewerProvider, and LocalApiServer — `hidden` field, `hiddenTerminals` sibling array, and `ptyCreateBatch` hidden parameter all removed. WORKTREES tab collapsed from five sections (FEATURES/PROJECTS/UNBOUND each with header, form, prose) to one sorted list plus one creation row, with routing prose trimmed.
+
+## Review Findings
+
+Reviewed commit `c5590f06` across all four subtasks as one delivery unit. Files changed by this review: `src/webview/terminals.html`, `src/webview/terminals.js`, `src/services/KanbanProvider.ts`, `src/test/shell-terminal-strip.test.js`, `.agents/skills/switchboard-orchestration/SKILL.md`, `.agents/protocols/switchboard-mission-control-http/SKILL.md`. One CRITICAL and three MAJOR issues were fixed: OPEN AGENT TERMINALS was deleted outright instead of conditionally hidden, leaving no fleet-open control at all when no teams are defined; the START ALL TEAMS pre-filter invented a `'lead'` head-role default the backend guard does not have; `provisionTeamWorktree` never re-broadcast the worktree config, so a team worktree stayed invisible in the WORKTREES tab; and two agent-facing skill docs still advertised the deleted `hiddenTerminals` response key. Validation: `tsc -p tsconfig.test.json --noEmit` clean, eslint 0 errors, and catalog/parity/standalone-parity/host-seam-parity/push-routing/verb-returns plus ~20 contract suites green; four failures (multi-parent-terminals ×3, staging-column, external-headed-team, mirror:check) were confirmed pre-existing by diffing the failing assertions against the parent commit. Remaining risk is worktree proliferation on the autostart path and the absence of any automated test for three of the four subtasks' Goal Invariants.
+
+## Deferred Findings
+
+- MAJOR — Autostart teams with `worktreeMode: 'auto'` cut a fresh branch and worktree directory on every window open, with no reuse and no auto-cleanup; narrowing the flag to explicit starts reverses a deliberate plan decision, so it is the author's call. `src/services/TaskViewerProvider.ts:12884`
+- MAJOR — Three of the four subtasks shipped with none of their named `### Automated` assertions written; only a one-string edit to `shell-terminal-strip.test.js` landed. `src/webview/kanban.html:12775`
+- MAJOR — `.switchboard/plans/fix-agent-dock-mission-controller-terminal.md` is unlanded and specifies `hidden: true` / `hiddenTerminals`, a mechanism this feature deleted; it needs re-planning before it is coded. `.switchboard/plans/fix-agent-dock-mission-controller-terminal.md:137`
+- NIT — The START ALL TEAMS handler seats each team as it starts, so the last team wins the focused pane and grid. `src/webview/terminals.js:966`
+- NIT — Team worktree branch slugs truncate at 40 characters, so similarly-named teams collide into `<slug>` / `<slug>-2` with no team column in the WORKTREES tab to tell them apart. `src/services/KanbanProvider.ts:14740`
+- NIT — The WORKTREES creation row has no `flex-wrap`; in a narrow sidebar the select and two long button labels compress rather than wrap. `src/webview/kanban.html:12781`
