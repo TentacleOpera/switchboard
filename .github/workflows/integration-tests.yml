@@ -67,6 +67,19 @@ jobs:
       - name: Claude mirror drift check
         run: npm run mirror:check
 
+      # Both API write doors (POST /kanban/plans and /kanban/plans/import) walk the
+      # whole plans tree and write a row per file against a caller-supplied root.
+      # A root that differs from the canonical one only in spelling once inserted
+      # 1537 duplicate rows into a live board and answered {"success":true,"count":0}
+      # — every gate stayed green, because the guard is a boundary check no compile,
+      # lint or verb audit can see, and the count that would have made it visible
+      # within one response was thrown away by an all-or-nothing early return. This
+      # pins root matching by filesystem identity (not spelling), the fail-CLOSED
+      # empty-allowlist branch, and the written/persisted split. Runs against out/,
+      # so it must stay AFTER "Compile test outputs".
+      - name: Workspace-root write-path guard (root identity, fail-closed, honest count)
+        run: npm run test:contract:workspace-root-write-path
+
       # The `.agents/` seed loop's creation path treats "destination absent" as
       # "never seeded" unless the bundle ledger says otherwise. Every way that
       # guard can break is silent: inverting the condition freezes the control

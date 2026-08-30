@@ -695,3 +695,14 @@ mapped to a parent whose folder is **not** open).
 ---
 
 **Recommendation:** Send to Coder (complexity 6).
+
+## Review Findings
+
+All six proposed changes landed and are correct. `_resolveSaveTarget` (`PlanningPanelProvider.ts:2311`) is a faithful mirror of `_handleFetchKanbanPlanPreview`'s resolver — same allowed set, same probe order, same fallback — with strict `Set.has` membership for the caller-supplied root rather than `_resolveWorkspaceRoot`, so an unvalidated root becomes `undefined` instead of some other real root; the allow-check now uses `_getAllowedRoots()` with a `path.sep` boundary, the rename branch keys the DB against the longest containing root passed through `_resolveEffectiveWorkspaceRoot`, a missing file no longer takes the conflict branch, and all six exits return typed bodies (the arm has no path that falls out of the switch). The `verb-returns` baseline was re-derived with `--write` (149→143) and the ratchet is green. No code fix was needed here; the plan named fifteen automated cases and zero were written, so six were added to the CI-wired `src/test/verb-engine-planning-headless.test.js` — relative resolution against the owning root, missing-file error text, genuine conflict preserved, outside-every-root refusal in the *body*, the `Gitlab`/`Gitlab-private` prefix escape, and a hostile `workspaceRoot` being dropped rather than trusted — and the suite passes 32/32. `parity:check` and `push-routing:check` are unchanged as predicted.
+
+## Deferred Findings
+
+- MAJOR — Threading `workspaceRoot` into Save (change 6) without threading it into Preview breaks the plan's own "Save and Preview MUST agree" invariant: when two allowed roots hold the same relative plan path, Preview picks the first existing root while Save picks the stamped one. Save is the more correct of the two, so this is a read-path defect the plan explicitly scoped out, not a regression — but the invariant is no longer enforced by construction. `src/services/PlanningPanelProvider.ts:4923`
+- NIT — The `LocalFolderService` fallback allow-check keeps its bare `startsWith`, so a docs folder `…/notes` also authorises `…/notes-private/…`. The plan left this loop unchanged; it is now reached through a wider root set. `src/services/PlanningPanelProvider.ts:4944`
+- NIT — The `!isAllowed` fallback loop now constructs a `LocalFolderService` for every allowed root, including mapped parents, each of which does a `KanbanDatabase.forWorkspace` config read. It fires only on the refusal path and all mapped roots collapse to one effective root, so the cost is bounded — but it is strictly more work than the open-folder set it replaced. `src/services/PlanningPanelProvider.ts:4936`
+- NIT — `openKanbanPlan` still resolves a relative `planFile` against the extension host's CWD, the sibling defect the plan flagged under "Not in scope". Unchanged and still open. `src/services/PlanningPanelProvider.ts:3887`

@@ -441,6 +441,138 @@ async function main() {
         assert.ok(okRun.pushes.find(p => p.type === 'createPlansPasteBackResult'), 'webview push stays additive');
     });
 
+    // ── saveFileContent: workspace-root resolution on the write path ───────
+    //
+    // The board stores plan_file RELATIVE to the EFFECTIVE (mapped-parent) root and
+    // hands that string to the webview verbatim. The save arm used to resolve it
+    // against the panel's RAW ambient root, aimed the write at a path that does not
+    // exist, and then reported the miss through the CONFLICT branch — which carries
+    // no `error` string, so the UI rendered "Save failed: Unknown error". These
+    // guards pin the fix: resolve like the read path does, allow-check the widened
+    // set with a path.sep boundary, and return a typed body on every exit.
+    await test('saveFileContent resolves a relative plan path against the root that HOLDS the file', async () => {
+        const ambient = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-save-ambient-'));
+        const owner = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-save-owner-'));
+        const rel = path.join('.switchboard', 'plans', 'feature_plan_20260101_010101_owned.md');
+        fs.mkdirSync(path.join(owner, '.switchboard', 'plans'), { recursive: true });
+        fs.writeFileSync(path.join(owner, rel), '# Owned\n\nold body\n');
+
+        // Ambient root is `ambient` (the raw root the panel would have used); the
+        // file lives only under `owner`. Pre-fix this resolved to ambient/<rel>.
+        const { provider } = buildHeadlessPlanningProvider(ambient, { roots: [ambient, owner] });
+        const result = await provider.handleServiceVerb('saveFileContent', {
+            filePath: rel.split(path.sep).join('/'),
+            content: '# Owned\n\nnew body\n',
+            originalContent: '# Owned\n\nold body\n',
+            tab: 'kanban',
+        });
+
+        assert.strictEqual(result.success, true, `expected success, got ${JSON.stringify(result)}`);
+        assert.strictEqual(path.resolve(result.filePath), path.resolve(path.join(owner, rel)),
+            'save must land on the root that actually holds the file, not the ambient root');
+        assert.match(fs.readFileSync(path.join(owner, rel), 'utf8'), /new body/);
+        assert.ok(!fs.existsSync(path.join(ambient, rel)),
+            'the ambient root must not have had a phantom plan file created under it');
+        fs.rmSync(ambient, { recursive: true, force: true });
+        fs.rmSync(owner, { recursive: true, force: true });
+    });
+
+    await test('saveFileContent reports a missing file as a real error, never a bare conflict', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-save-missing-'));
+        const { provider } = buildHeadlessPlanningProvider(root, { roots: [root] });
+        const result = await provider.handleServiceVerb('saveFileContent', {
+            filePath: '.switchboard/plans/does-not-exist.md',
+            content: '# X\n',
+            originalContent: '# X\n\nsomething the user was editing\n',
+            tab: 'kanban',
+        });
+        assert.strictEqual(result.success, false);
+        assert.ok(!result.conflict, 'a path that does not exist is a resolution failure, not a concurrent edit');
+        assert.match(String(result.error || ''), /not found/i,
+            'the body must name the real problem — an empty error is what rendered "Unknown error"');
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    await test('saveFileContent still reports a GENUINE conflict with diskContent', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-save-conflict-'));
+        const rel = '.switchboard/plans/feature_plan_20260101_010101_c.md';
+        fs.mkdirSync(path.join(root, '.switchboard', 'plans'), { recursive: true });
+        fs.writeFileSync(path.join(root, rel), '# C\n\nchanged underneath\n');
+        const { provider } = buildHeadlessPlanningProvider(root, { roots: [root] });
+        const result = await provider.handleServiceVerb('saveFileContent', {
+            filePath: rel,
+            content: '# C\n\nmine\n',
+            originalContent: '# C\n\nwhat I loaded\n',
+            tab: 'kanban',
+        });
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.conflict, true, 'an existing file with different content is still a conflict');
+        assert.match(fs.readFileSync(path.join(root, rel), 'utf8'), /changed underneath/,
+            'a conflict must not overwrite the file');
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    await test('saveFileContent RETURNS Invalid file path in the body for a target outside every allowed root', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-save-outside-'));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-save-elsewhere-'));
+        const target = path.join(outside, 'stolen.md');
+        const { provider } = buildHeadlessPlanningProvider(root, { roots: [root] });
+        const result = await provider.handleServiceVerb('saveFileContent', {
+            filePath: target, content: 'x', originalContent: '', tab: 'kanban',
+        });
+        // The route layer's blanket {success:true} ack is what let this look like a
+        // successful save to an HTTP caller — the body must carry the refusal.
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.error, 'Invalid file path');
+        assert.ok(!fs.existsSync(target), 'nothing may be written outside the allowed roots');
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(outside, { recursive: true, force: true });
+    });
+
+    await test('saveFileContent rejects a sibling-prefix escape (path.sep boundary)', async () => {
+        const base = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-save-prefix-'));
+        const allowed = path.join(base, 'Gitlab');
+        const sibling = path.join(base, 'Gitlab-private');
+        fs.mkdirSync(allowed, { recursive: true });
+        fs.mkdirSync(sibling, { recursive: true });
+        const target = path.join(sibling, 'secret.md');
+        const { provider } = buildHeadlessPlanningProvider(allowed, { roots: [allowed] });
+        const result = await provider.handleServiceVerb('saveFileContent', {
+            filePath: target, content: 'x', originalContent: '', tab: 'kanban',
+        });
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.error, 'Invalid file path',
+            'a bare startsWith lets an allowed root named Gitlab authorise Gitlab-private');
+        assert.ok(!fs.existsSync(target));
+        fs.rmSync(base, { recursive: true, force: true });
+    });
+
+    await test('saveFileContent ignores a caller-supplied workspaceRoot outside the allowed set', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-save-hostile-'));
+        const hostile = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-save-hostile-target-'));
+        const rel = '.switchboard/plans/feature_plan_20260101_010101_h.md';
+        fs.mkdirSync(path.join(root, '.switchboard', 'plans'), { recursive: true });
+        fs.writeFileSync(path.join(root, rel), '# H\n\nbody\n');
+        fs.mkdirSync(path.join(hostile, '.switchboard', 'plans'), { recursive: true });
+        fs.writeFileSync(path.join(hostile, rel), '# H\n\nhostile copy\n');
+
+        const { provider } = buildHeadlessPlanningProvider(root, { roots: [root] });
+        const result = await provider.handleServiceVerb('saveFileContent', {
+            filePath: rel,
+            content: '# H\n\nnew\n',
+            originalContent: '# H\n\nbody\n',
+            workspaceRoot: hostile,   // strict Set membership, NOT _resolveWorkspaceRoot
+            tab: 'kanban',
+        });
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(path.resolve(result.filePath), path.resolve(path.join(root, rel)),
+            'an unvalidated root must be dropped, not converted into a real one');
+        assert.match(fs.readFileSync(path.join(hostile, rel), 'utf8'), /hostile copy/,
+            'the unallowed root must not be written to');
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(hostile, { recursive: true, force: true });
+    });
+
     // ── Cleanup ───────────────────────────────────────────────────────────
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
 

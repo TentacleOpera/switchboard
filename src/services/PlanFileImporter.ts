@@ -48,7 +48,13 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
     const db = KanbanDatabase.forWorkspace(effectiveRoot);
     const ready = await db.ensureReady();
     if (!ready) {
-        return { count: 0, written: [], persisted: true, planFiles: [], columns: {} };
+        // persisted:false, NOT true. This is the one zero-count branch that is a
+        // real failure: the database never opened, so the caller's plan files were
+        // neither written nor persisted. The other zero returns (no plans dir, no
+        // files, no records) are legitimate no-ops and stay persisted:true. Reporting
+        // a clean `{count:0, persisted:true}` here is exactly the false success this
+        // importer's honest-count contract exists to stop.
+        return { count: 0, written: [], persisted: false, planFiles: [], columns: {} };
     }
 
     const workspaceId = await ensureWorkspaceIdentity(effectiveRoot);
