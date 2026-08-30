@@ -593,8 +593,18 @@ test('bootstrap.ts passes teamInfo.head to the helper', () => {
 });
 
 test('workContextResolver.ts RosterClearTargetInput has head field', () => {
+    // Slice the INTERFACE BODY, not the whole file. `ResolvedTeamGroup` also
+    // declares `head?: string` in this same module, so a whole-file regex is
+    // satisfied by that unrelated declaration and would stay green after a
+    // refactor dropped `head` from RosterClearTargetInput — the exact seam
+    // this gate exists to hold.
+    const ifStart = WCR_SRC.indexOf('export interface RosterClearTargetInput {');
+    assert.ok(ifStart > 0, 'RosterClearTargetInput must exist');
+    const ifEnd = WCR_SRC.indexOf('\n}', ifStart);
+    assert.ok(ifEnd > ifStart, 'RosterClearTargetInput must be a closed interface body');
+    const ifSrc = WCR_SRC.slice(ifStart, ifEnd);
     assert.ok(
-        /head\?:\s*string/.test(WCR_SRC),
+        /head\?:\s*string/.test(ifSrc),
         'RosterClearTargetInput must declare an optional head?: string field'
     );
 });
