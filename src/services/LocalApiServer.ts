@@ -449,7 +449,9 @@ interface LocalApiServerOptions {
     onWorkingStateCleared?: (record: any, workspaceRoot: string, meta?: { planCount?: number }) => void;
     /**
      * Fired when a seat's turn ends via queue/done. Mirrors
-     * PlanIngestionEngine._turnEndNotifier → notifyTurnEnd + handleAutobanTurnEnd.
+     * PlanIngestionEngine._turnEndNotifier → notifyTurnEnd. (Its former second
+     * consumer, TaskViewerProvider.handleAutobanTurnEnd, went with the
+     * scheduling consolidation in 25fdb6d9 — completion-driven dispatch is gone.)
      * The host resolves the recipient and delivers the notification. Optional —
      * absent in headless/test harnesses (no notification, pop still proceeds).
      */
@@ -625,15 +627,16 @@ interface LocalApiServerOptions {
     missionControlAdopt?: (workspaceRoot?: string, terminalName?: string) => Promise<any>;
     /**
      * Arm the unattended Mission Control engine — the same path the AUTOMATION tab
-     * "Start Mission Control" button takes (terminal + kickoff + autoban clock).
+     * "Start Mission Control" button takes (terminal + kickoff + Mission Control wake).
      * Reached by `POST /mission-control/start` from the /switchboard-manage skill
      * when the user explicitly asks to arm automation. Optional — absent in
      * headless/test harnesses (returns 503).
      */
     missionControlStart?: (workspaceRoot?: string) => Promise<{ success: boolean; mode?: string; prompt?: string; error?: string }>;
     /**
-     * Disarm Mission Control — sets the automation enabled flag to false,
-     * persists state, and broadcasts. Does NOT stop the autoban engine.
+     * Disarm Mission Control — clears `missionControlArmed`, persists state,
+     * and broadcasts. Does NOT stop the survivor scheduler timer (the one
+     * recurring dispatcher) — scheduled jobs keep running.
      * Reached by `POST /mission-control/stop`.
      * Optional — absent in headless/test harnesses (returns 503).
      */
@@ -641,8 +644,8 @@ interface LocalApiServerOptions {
     /**
      * Confirm (arm) an Mission Control session after the pre-flight interview.
      * The arming half moved out of startMissionControlFromKanban: this verifies
-     * `.switchboard/mission-control/session.md` exists, then arms the single
-     * ON/OFF flag (`autobanState.enabled`) in `agent-managed` mode.
+     * `.switchboard/mission-control/session.md` exists, then arms the Mission
+     * Control switch (`missionControlArmed`).
      * Reached by `POST /mission-control/confirm` — the only path that arms.
      * Optional — absent in headless/test harnesses (returns 503).
      */
@@ -6273,7 +6276,7 @@ export class LocalApiServer {
      * POST /mission-control/confirm — arm an Mission Control session after the
      * pre-flight interview. The arming half moved out of startMissionControlFromKanban:
      * this verifies `.switchboard/mission-control/session.md` exists, then arms the
-     * single ON/OFF flag (`autobanState.enabled`) in `agent-managed` mode.
+     * Mission Control switch (`missionControlArmed`).
      * Body: { workspaceRoot? }. Mirrors _handleMissionControlStart line for line.
      */
     private async _handleMissionControlConfirm(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -6352,8 +6355,9 @@ export class LocalApiServer {
 
     /**
      * POST /mission-control/stop — disarm Mission Control.
-     * Calls stopMissionControlFromKanban (sets enabled=false,
-     * persists state, broadcasts). Does NOT stop the autoban engine. No body required.
+     * Calls stopMissionControlFromKanban (clears `missionControlArmed`,
+     * persists state, broadcasts). Does NOT stop the survivor scheduler timer —
+     * scheduled jobs keep running. No body required.
      */
     private async _handleMissionControlStop(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {

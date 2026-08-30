@@ -211,7 +211,7 @@ export class PtyFleetService {
      * consult the seat record so the guard sees the adopted session as the
      * controller.
      *
-     * The fact is sourced from the host's in-process state (the autoban
+     * The fact is sourced from the host's in-process state (the Mission Control
      * `missionControlSeat` record), which is global to the host by
      * construction — NOT from `workspaceState`, which is per-workspace and
      * cannot answer a global question. See the plan's User Review Required

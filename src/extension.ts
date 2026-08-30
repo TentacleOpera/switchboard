@@ -3473,11 +3473,11 @@ export async function activate(context: vscode.ExtensionContext) {
         // Open worktree terminals if configured
         for (const w of gridWorktrees) {
             if (w.path) {
-                // Note on dual subsystems: worktree terminals deliberately use the autoban registry
-                // and are matched for routing by worktreePath, not name.
+                // Note on dual subsystems: worktree terminals deliberately use the shared
+                // terminal registry and are matched for routing by worktreePath, not name.
                 const roles = agents.map(a => a.role);
                 // User-initiated (AGENTS button / "OPEN AGENT TERMINALS"): isManual=true so the
-                // autoban 5-per-role cap never blocks a human opening grid worktree terminals.
+                // MAX_TERMINALS_PER_ROLE 5-per-role cap never blocks a human opening grid worktree terminals.
                 await taskViewerProvider.ensureWorktreeTerminals(w.path, roles, true, true);
             }
         }

@@ -210,3 +210,30 @@ Key risks: the survivor filter widening is the visible trap, but `runSchedulerJo
 10. External type: select it, copy the prompt, assert no config write and nothing scheduled.
 11. Team automations modal still lists, creates, enables and `RUN NOW`s its own jobs, and does not show or clobber schedules created in the new tab.
 12. Both hosts, with both composition roots read side by side.
+
+## Review Findings
+
+The tab has a real backend: all seven verbs have handlers in `KanbanProvider.ts` and entries in
+both `verbSchemas.ts` and the generated allowlist, `cronUtils.ts` exists exporting
+`nextCronTime` with `TaskViewerProvider` importing it, and `mcInit` now posts `mcSchedules`. The
+two traps the plan named were both avoided and I verified them mechanically rather than by
+reading: the thirteen `SCHEDULE_ACTIONS` ids extracted from `mission-control.js` are a subset of
+`survivorSources` with zero missing, and `runSchedulerJob`'s branches cover all sixteen sources
+with no id reaching the `unsupported source` fallback — so no schedule saves, displays enabled
+and silently never runs. External records are refused twice (tick filter and runner guard). The
+material gap is that the per-action config fields are write-only: `fromColumn`, `toColumn`,
+`complexityFilter` and `artifactsFolder` are persisted by `mcUpdateSchedule` and read by nothing,
+because all four host actions collapse onto `dispatchNextFromQueue`, whose signature accepts only
+`workspaceRoot`/`from`/`pacing` — deferred rather than fixed, since scoping a queue pop by column
+or complexity is an API change the plan did not specify. No code changes were made for this
+subtask; `compile-tests` exit 0 and `test:contract:scheduled-jobs` passes 22/0.
+
+## Deferred Findings
+
+- MAJOR — `fromColumn`, `toColumn`, `complexityFilter` and `artifactsFolder` round-trip through storage but no execution path reads them; a user configuring "advance-plan from CREATED to PLAN REVIEWED, complexity ≤3" gets an unscoped generic queue pop. Wiring them requires extending `dispatchNextFromQueue`'s signature. `src/services/KanbanProvider.ts:10067`
+- MAJOR — the four host actions `advance-plan`, `advance-feature`, `batch-advance-planning` and `phone-a-friend` are indistinguishable at runtime: all four take the same `dispatchNextFromQueue` arm. The plan allowed "or the existing verb for batch/phone-a-friend"; that half was not done. `src/services/TaskViewerProvider.ts:27425`
+- MAJOR — no required-field validation at save. The plan asked to refuse a job whose action lacks its required field ("no target terminal, no from/to column") rather than store one that fails every interval; `mcUpdateSchedule` writes any field unvalidated. Execution is safe (bad jobs record a failing `lastOutcome`), only the feedback is missing. `src/services/KanbanProvider.ts:10038`
+- MAJOR — agent-executed schedules cannot run on the standalone host. `_ensureSurvivorTerminal` reaches `vscode.window.createTerminal`, which the headless shim throws from, so all ten agent actions end in `terminal creation failed`. A headless seam exists (`_headlessRuntime.ptyVerb`) and is unused here. Pre-existing for `fetch-plans`/`reconcile`; this feature widens it from three sources to ten plus a thirteen-action UI. `src/services/TaskViewerProvider.ts:27287`
+- MAJOR — two editors still write the whole `jobs` array. `mcUpdateSchedule` reads fresh then writes the entire config back, so a concurrent team-automations save can be clobbered; the plan asked for per-job merge over whole-array replace. `src/services/KanbanProvider.ts:10064`
+- NIT — a schedule created by `mcNewSchedule` defaults to `source: 'advance-plan'`, a board-advancing host action. Safe only because it also defaults to `enabled: false`. `src/services/KanbanProvider.ts:10035`
+- NIT — the cron path compares `nextCronTime(expr, new Date(job.lastRunAt || 0))` against the 60s poll, so a cron finer than one minute silently resolves to poll cadence. The plan asked for this limit to be documented in the comment; it is not. `src/services/TaskViewerProvider.ts:27380`

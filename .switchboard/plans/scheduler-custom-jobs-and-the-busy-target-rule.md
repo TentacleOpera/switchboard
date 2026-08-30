@@ -204,3 +204,35 @@ Key risks: (1) the round-trip merge in `setSchedulerConfig` is the data-loss gat
 ## Outstanding Questions
 
 - **[user]** Should custom jobs support per-job intervals, or ride the shared survivor timer? The plan's original step 4 says "setting an interval," but the current architecture has no per-job timer — survivor jobs use `intervalMinutes: 0` (vestigial) on a single shared activation-scoped timer. — proceeding on the assumption that custom jobs ride the shared survivor timer (matching fetch-plans/reconcile), and the interval field is cosmetic/vestigial. If real per-job intervals are required, that is separate new scope (a new timer mechanism).
+
+## Review Findings
+
+Defects 1 and 2 — this plan's whole surviving scope — are fixed correctly: `custom` is out of
+`DROPPED_SOURCES` (leaving `comms`/`board-batch`, which are genuinely gone), `custom` is in
+`survivorSources` with a matching execution arm, and `setSchedulerConfig` implements the
+round-trip preservation verbatim as specified, reading raw jobs, keeping dropped-source records
+by source match and merging them behind incoming ids — so the data-loss gate on the ~4,000
+install base is closed and a scheduler write no longer strips records it filters from execution.
+Retired step 5 was correctly left unimplemented. One fix applied: the `custom` arm supplied a
+placeholder prompt `'Execute scheduled custom task.'` when a job had no `promptOverride`,
+against the plan's explicit "a custom job with no `promptOverride` is a no-op skip (not an
+error)" — under unattended overnight running that pokes an agent with a meaningless instruction
+every interval forever, so I removed the default and let the job fall through to the existing
+`empty prompt` outcome, which is visible to the operator in `lastOutcome`. Files changed:
+`src/services/TaskViewerProvider.ts`; `compile-tests` exit 0 and `test:contract:scheduled-jobs`
+passes 22/0.
+
+**Destination note (not an escalation).** Step 8 asked for a custom-job create/edit/delete UI in
+`src/webview/kanban.html`. It was not built there, and should not be: this plan landed inside
+the feature whose central rule is that scheduling lives in exactly two places, and a third
+editor in the board's automation panel would violate it. Custom jobs are instead creatable
+through the Mission Control Schedules tab, which ships a `custom` action in the same feature.
+This plan's stated Goal names no destination and has no Goal Invariants section, so the goal —
+"restore custom scheduler jobs, stop silently destroying the ones users still have" — is met.
+
+## Deferred Findings
+
+- MAJOR — a custom job created via the Mission Control Schedules tab is delivered through `_ensureSurvivorTerminal`, which cannot obtain a terminal on the standalone host (the headless shim throws from `createTerminal`), so custom jobs are extension-only in practice. Shared with `mission-control-schedules-backend.md`. `src/services/TaskViewerProvider.ts:27287`
+- NIT — step 3 (clear the one-time `customJobs.dropped` notice) is moot rather than done: the notice strings were deleted outright by `retire-autoban-and-batch-size.md`, so nothing renders a stale "jobs stopped" message. No file.
+- NIT — `getDroppedCustomJobLabels()` survives with no consumer now that the notice is gone; it still reads raw config correctly for `comms`/`board-batch` but nothing calls it. `src/services/GlobalIntegrationConfigService.ts:637`
+- NIT — `intervalMinutes` remains cosmetic for jobs riding the shared survivor timer, per the plan's accepted assumption (a); the Schedules tab's time selector now writes a real `intervalMinutes` that the tick does honour, so the two surfaces differ in whether the field means anything. `src/services/TaskViewerProvider.ts:27385`

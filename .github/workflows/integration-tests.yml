@@ -569,6 +569,18 @@ jobs:
       - name: Reviewer prompt anti-artifact contract (directive presence, completion handshake co-existence)
         run: npm run test:contract:reviewer-prompt
 
+      # A scheduled agent never moves a card. The canMoveCards checkbox was
+      # deleted as inverted — unticked it restricted nothing, ticked it handed an
+      # unattended 03:00 job the sanctioned card-move route with none of the
+      # dispatch guards. Deleting the gate is not self-enforcing: nothing stops
+      # the next person re-adding the branch, and every other gate stays green.
+      # Asserts the contract's TEXT (not its identifier, which never appears in
+      # output) is absent from the team-automation and fetch-plans prompts, and
+      # that reconcile STILL carries it — so the documented exclusion fails loudly
+      # when reconcile-becomes-host-code.md lands instead of outliving its reason.
+      - name: Scheduled prompts carry no board authority
+        run: npm run test:contract:scheduled-no-board-authority
+
       # The source-presence gate above cannot see that a block is emitted twice,
       # emitted when its condition is false, or no longer emitted at all — only
       # that the literal still exists in the .ts file. This step runs the

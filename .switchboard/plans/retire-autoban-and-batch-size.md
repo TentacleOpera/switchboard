@@ -478,3 +478,31 @@ confirmed deleted.
   schedule toggle command registration is gone).
 - **Negative:** `grep -c 'setAutomationMode' src/generated/verbAllowlist.ts` returns 0 (the
   dead verb is gone from the allowlist).
+
+## Review Findings
+
+All 14 Goal Invariants pass at HEAD: the clock installer, tick key, `batchSize`,
+`_singleColumnAutobanState`, `setAutomationModeFromKanban`, `autobanEnabled` and the schedule
+verbs are gone, while `launchMission`, `missionControlArmed`, `dispatchNextFromQueue` and
+`_startSurvivorJobsTimer` survive. The state split was done correctly — the rewritten
+`normalizeAutobanConfigState` preserves the `orchestratorArmed`→`missionControlArmed`
+coalescing that keeps existing installs armed, `cleanWorkspace.ts` now normalises through it
+(stripping schedule keys rather than resurrecting them), and the terminal-management symbols
+moved to `agentConfig.ts` with compat aliases. Two defects were fixed: the commit deleted
+`autoban-reviewer-prompt-regression.test.js` on its filename prefix alone — it never tested the
+clock, it tests the reviewer prompt — leaving the CI-wired `test:contract:reviewer-prompt` gate
+RED on a missing module (restored as `reviewer-prompt-anti-artifact-contract.test.js`, mutation-
+tested); and the plan's comment-cleanup step was skipped wholesale, leaving twelve comments and
+one user-facing warning describing deleted subsystems as live, including three citing the
+removed `autobanState.enabled` field. Files changed: `package.json`,
+`.github/workflows/integration-tests.yml`, `src/test/reviewer-prompt-anti-artifact-contract.test.js`
+(new), `src/services/LocalApiServer.ts`, `src/services/TaskViewerProvider.ts`,
+`src/standalone/{bootstrap,ptyHost,ptyFleetService}.ts`, `src/extension.ts`; `compile-tests`
+exit 0 and 10 affected contract suites pass.
+
+## Deferred Findings
+
+- NIT — `restoreAutobanOnStartup` was not renamed to `restoreMissionControlOnStartup` as the plan suggested; it now only restores survivor state and the survivor timer. `src/services/TaskViewerProvider.ts:11515`
+- NIT — `autobanState.ts` was not renamed to `missionControlState.ts`; it still exports the `MAX_AUTOBAN_TERMINALS_PER_ROLE` / `getNextAutobanTerminalName` compat aliases, which `autoban-state-regression.test.js` pins. `src/services/autobanState.ts:4`
+- NIT — `stateConfigBridge.ts` still maps `autoban: 'runtime.autoban'`; correct, because the state key was never renamed, but the name now outlives the mechanism. `src/services/stateConfigBridge.ts:36`
+- NIT — `getDroppedCustomJobLabels()` has no remaining consumer now that the notice strings are deleted; it is dead but harmless raw-config read. `src/services/GlobalIntegrationConfigService.ts:637`

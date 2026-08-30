@@ -67,7 +67,7 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
     // name in the fleet). Without this, a role-only scan in the child
     // would mint a duplicate beside an adopted controller. The child is
     // a separate process and cannot read the extension host's in-process
-    // autoban state, so the seat is pushed over the verb boundary.
+    // Mission Control state, so the seat is pushed over the verb boundary.
     let controllerSeat: { terminalName?: string } | null | undefined = undefined;
     fleet.setControllerSeatResolver(() => controllerSeat);
 

@@ -325,3 +325,30 @@ correct all line numbers.
 ## Recommendation
 
 Complexity 4 → **Send to Coder**.
+
+## Review Findings
+
+The deletion is complete and correctly scoped: `canMoveCards` is gone from the `ScheduledJob`
+type, the `terminals.html` checkbox, the `MOVES CARDS` badge and every read/write in
+`terminals.js`, and `buildTeamAutomationPrompt` now returns `basePrompt` unconditionally with
+the "do not re-add" comment the plan asked for — the only surviving mention of the field in
+`src/` is that comment. The two out-of-scope consumers were correctly left intact:
+`BOARD_DRIVING_CONTRACT` is still exported, still emitted by `buildReconcilePrompt` (pending
+`reconcile-becomes-host-code.md`), and still carried by `_buildExternalAutomationPrompt`, the
+human-launched copyable prompt. The one real gap was that the plan's central guard was never
+written: both this plan's Goal Invariants and `mission-control-schedules-backend.md`'s
+verification step 3 required a test asserting no scheduled prompt builder emits board
+authority, and no such assertion existed anywhere — so deleting an inverted gate left nothing
+stopping the next person re-adding it, with every other gate staying green. I wrote
+`src/test/scheduled-prompts-carry-no-board-authority.test.js` (8 assertions), wired it as
+`test:contract:scheduled-no-board-authority` in `package.json` and as a CI step in
+`.github/workflows/integration-tests.yml`, and mutation-tested it by re-adding the exact
+deleted `canMoveCards` branch — two assertions go red, one on the runtime output and one on the
+source. It asserts the contract's *text*, not its identifier, which never appears in output and
+so could never fail; and it pins reconcile as a positive so the documented exclusion fails
+loudly when its dependency lands rather than outliving its reason. `compile-tests` exit 0.
+
+## Deferred Findings
+
+- NIT — the plan's honest limit still holds and is recorded only in a code comment, not enforced: an agent with shell access can run `move-card.js` whatever its prompt says. This change removes the reason and the instruction, not the capability. `src/services/schedulerPresets.ts:112`
+- NIT — `buildReconcilePrompt` remains the one scheduled prompt carrying board authority, as designed, until `reconcile-becomes-host-code.md` lands. The new contract pins this as a positive assertion so it cannot be silently forgotten. `src/services/schedulerPresets.ts:92`

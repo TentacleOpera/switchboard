@@ -247,3 +247,29 @@ Or, if the method is kept private, expose it via a public delegate or add it to 
 
 ## Outstanding Questions
 - **[user]** Is 60-second latency (survivor poll interval) acceptable as the default, or should the direct-poke variant (calling `runSchedulerJob` immediately from `onTeamReleased`) be the primary mechanism? — proceeding on the assumption that 60s is acceptable for batch advances and the direct-poke is the escape hatch.
+
+## Review Findings
+
+This is the strongest subtask in the feature, and it avoided the trap CLAUDE.md exists to
+record: `onTeamReleased` is wired in **both** composition roots — `TaskViewerProvider.ts:3829`
+and `bootstrap.ts:3351` — so the `Promise<void>` seam where "never wired" and "working" are the
+same value is genuinely closed, and I confirmed it by reading both roots rather than by verb
+reachability. `resolveTeamInFlight` was extracted and exported as specified and now has two
+consumers (the dispatch gate at `:2197` and this trigger at `:2836`), so in-flight has one
+definition rather than the second parallel implementation the dependency plan existed to
+prevent. The trigger itself is correct on every hazard the plan enumerated: gated on
+`result.success && !result.idempotent` so a repeat completion post cannot double-fire, fired
+after the write, wrapped so it can never throw into the handler, and dispatched fire-and-forget
+so the response does not wait. The empty-run stamping fix is better than the plan specified —
+it conditions on `!isSuccess`, which covers the `dispatched`/`launched` outcomes host actions
+return, where the plan's literal `outcome !== 'sent'` would have mis-stamped every host action.
+Note that plan-file line 225 records tests as skipped; per the review protocol that is a record
+of the coder's run, not a directive, so I ran them independently: `compile-tests` exit 0 and
+`team-release-control`, `queue-pipeline` and `completion-asserted-never-inferred` all pass. No
+code changes were required for this subtask.
+
+## Deferred Findings
+
+- MAJOR — `advanceWhenReady` is gated on `job.source === 'team-automation'`, so no Mission Control schedule action can use it, including `advance-plan` — the action the feature's own goal ("work advances at the pace agents actually finish") most describes. This matches plan 4's letter, which scoped the flag to team automations because only they carry a `teamTarget` to match; but both halves landed in the same feature, so the gap is now visible. Extending it needs a team-matching rule for jobs without `teamTarget` — the author's call. `src/services/TaskViewerProvider.ts:27608`
+- NIT — the UI checkbox is rendered unconditionally in the team-automations modal rather than hidden for non-`team-automation` sources; harmless there, since that modal only lists team-automation jobs. `src/webview/terminals.html:2776`
+- NIT — two jobs targeting the same released team both get `lastRunAt` cleared and both fire on the next poll. `_schedulerInFlight` is per-job, so they run in parallel and the second re-reads a queue the first may have drained. The plan called this safe but asked for confirmation rather than assumption; it is safe by `dispatchNextFromQueue`'s serialised critical section, not by the scheduler. `src/services/TaskViewerProvider.ts:27389`

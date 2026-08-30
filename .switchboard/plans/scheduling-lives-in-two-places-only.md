@@ -213,3 +213,24 @@ Key risks: the `pipeline-orchestrator-regression.test.js` test file (7 tests) wi
 5. A schedule saved from the Mission Control tab with each action fires — specifically test an action whose id is not in the old survivor set, which is the silent-skip case.
 6. Plan Scanner is untouched — same interval control in Setup, same presets, destinations and custom sources, same cadence.
 7. Both hosts.
+
+## Review Findings
+
+Every Goal Invariant passes: `PipelineOrchestrator.ts`, its `.js.map` and
+`pipeline-orchestrator-regression.test.js` are absent, and a tree-wide sweep for
+`PipelineOrchestrator`, the five pipeline verbs, `setRunSheetsCallback`, `_postPipelineState`,
+`_pipeline` and `pipelineState` returns zero live references in `src/` — all five
+`TaskViewerProvider` touchpoints and both the `verbSchemas.ts` entries and generated allowlist
+entries went with the class, so no orphan survives. The rule this plan exists to install is
+present as a header comment on `_tickSurvivorSchedulerJobs` and `runSchedulerJob`, naming the
+one runner, its two front ends, and the infrastructure-vs-dispatch test. The survivor timer is
+armed in both composition roots (extension via the sidebar `ready` path, standalone via
+`bootstrap.ts:3484`), so the sole surviving dispatcher actually runs on both hosts. No code
+changes were required for this subtask; the only edits touching it were the stale
+`bootstrap.ts` comments that still described the deleted run-sheet clock as something the boot
+restore could start, corrected under `retire-autoban-and-batch-size.md`. `compile-tests` exit 0.
+
+## Deferred Findings
+
+- NIT — the orphaned `pipeline.running` / `pipeline.paused` / `pipeline.intervalSeconds` / `pipeline.secondsRemaining` keys remain in `globalState` on installs that ran the dead dispatcher. The plan called this out and accepted it (clean break, nothing reads them). No file.
+- NIT — `_survivorJobsTimer`'s name still lies: "survivor" described a previous cull, and the set it filters is now sixteen sources spanning both sanctioned surfaces. `src/services/TaskViewerProvider.ts:27357`

@@ -3052,7 +3052,7 @@ Each plan file must include:
         kanbanVerb,
         // Completion-callback parity with the file-watcher path. The API-based
         // queue/done path fires these so a seat reporting done via POST reaches
-        // the same broadcast + lead notification + autoban dispatch as a
+        // the same broadcast + lead notification as a
         // plan-file mtime advance. Reuses broadcastAgentCompletedForRecord
         // (defined above) and handleTurnEndNotify (extracted above) — ONE
         // delivery path shared with the engine's setTurnEndNotifier.
@@ -3458,7 +3458,7 @@ Each plan file must include:
 
     // ── Delegate-children import at startup ──────────────────────────
     // Run importDelegatesIntoTeams once at boot, BEFORE any terminal can be
-    // spawned (autoban restore below can dispatch immediately). The import
+    // spawned (a survivor scheduler job can fire on the first tick below). The import
     // inside _loadAgentGroups is only reachable via the UI path
     // (ptyListAgentGroups), but auto-start resolves teams via
     // findTeamForHeadRole which does NOT run the import — so without this
@@ -3473,14 +3473,18 @@ Each plan file must include:
         log(opts, `delegate import at startup failed: ${e}`);
     }
 
-    // Resume a board that was left with autoban armed. Deliberately AFTER the server
-    // and the pty fleet are up: restoring can start the run-sheet clock, whose first
-    // pass dispatches immediately, and that needs terminals to resolve against.
+    // Restore Mission Control state and re-arm the survivor scheduler timer — the
+    // one recurring dispatcher, and the engine behind both sanctioned scheduling
+    // surfaces (team automations, Mission Control Schedules). Deliberately AFTER
+    // the server and the pty fleet are up: a scheduled job can fire on the first
+    // tick and needs terminals to resolve against. The autoban run-sheet clock
+    // this used to restart was deleted in 25fdb6d9 — the restore itself no longer
+    // dispatches anything.
     // Fire-and-forget — a restore failure must never take down the server.
     void taskViewerProvider.restoreAutobanOnStartup()
-        .catch(err => log(opts, `autoban restore failed: ${err}`));
+        .catch(err => log(opts, `Mission Control restore failed: ${err}`));
 
-    // Boot-time team autostart. Same fire-and-forget shape as the autoban
+    // Boot-time team autostart. Same fire-and-forget shape as the Mission Control
     // restore above. This host is single-root and runs with
     // suppressLocalApiServer, so startTeamsOnLoad routes through
     // kanbanProvider.startAgentGroupById (using the instantiator registered

@@ -134,7 +134,7 @@ import {
     AutobanConfigState,
     buildAutobanBroadcastState,
     getNextAutobanTerminalName,
-    MAX_AUTOBAN_TERMINALS_PER_ROLE,
+    MAX_TERMINALS_PER_ROLE,
     normalizeAutobanConfigState,
     MissionControlConfig,
     DEFAULT_MISSION_CONTROL_CONFIG,
@@ -11324,8 +11324,8 @@ Each plan file must include:
         const roleLabel = this._getAutobanRoleLabel(normalizedRole);
 
         const livePrimaryRoleTerminals = await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
-        if (livePrimaryRoleTerminals.length >= MAX_AUTOBAN_TERMINALS_PER_ROLE) {
-            this._seams().ui.showWarningMessage(`${roleLabel} already has ${MAX_AUTOBAN_TERMINALS_PER_ROLE} autoban terminals.`);
+        if (livePrimaryRoleTerminals.length >= MAX_TERMINALS_PER_ROLE) {
+            this._seams().ui.showWarningMessage(`${roleLabel} already has ${MAX_TERMINALS_PER_ROLE} terminals.`);
             return;
         }
 
@@ -12243,7 +12243,7 @@ Each plan file must include:
                     })
                     .map(([name]) => name);
 
-                if (!isManual && worktreeTerminalsForRole.length >= MAX_AUTOBAN_TERMINALS_PER_ROLE) {
+                if (!isManual && worktreeTerminalsForRole.length >= MAX_TERMINALS_PER_ROLE) {
                     this._seams().ui.showWarningMessage(`Could not open ${agentName} terminal for ${path.basename(resolvedPath)}: worktree role terminal limit reached`);
                     continue;
                 }
@@ -27494,7 +27494,11 @@ Each plan file must include:
                     else if (job.source === 'send-plans-to-jules') prompt = 'Send the selected plans to Jules for coding, respecting the complexity filters.';
                     else if (job.source === 'research') prompt = 'Research the open questions on the selected plans and write findings to the artifacts folder.\n\n' + UNATTENDED_ORDER;
                     else if (job.source === 'git-pull-push') prompt = 'Run git pull, then git push, resolving any conflicts.';
-                    else if (job.source === 'custom') prompt = 'Execute scheduled custom task.';
+                    // 'custom' deliberately has NO default prompt. The user's own text IS
+                    // the job; a placeholder would poke an agent with a meaningless
+                    // instruction on every tick, unattended, forever. With no prompt the
+                    // job falls through to the 'empty prompt' outcome below — a visible
+                    // no-op skip the operator can see in lastOutcome, not an error.
                 }
 
                 if (!prompt) {
