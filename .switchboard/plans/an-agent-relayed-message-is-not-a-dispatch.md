@@ -80,9 +80,11 @@ Introduce an explicit payload-kind field on `ptySendPrompt` — a dispatch/messa
 with `machineOrigin` retained as an accepted alias mapping to the message kind, so every current
 caller keeps working unchanged: the two relay sites, the coder's step-3 fallback standing-order
 text (which instructs `"machineOrigin":true` verbatim and is stored per install), and any agent
-that learned the flag from that text. Do not remove `machineOrigin` in this plan — it is live in
-migrated standing-order bodies on ~4,000 installs and removing it would silently restore the
-appends on the relay path.
+that learned the flag from that text. Keep `machineOrigin` as an alias rather than removing it — not for
+migration reasons (teams and their standing orders are unreleased dev work, so no install base
+is owed a compat shim), but because the flag is written verbatim into the coder's step-3
+standing-order text and into agent-facing skill docs. Retiring the name is a follow-up once
+those texts are reissued, not part of this change.
 
 The new field must be caller-settable and **not** in the HTTP boundary strip, for the same
 reason `machineOrigin` is not: the caller is the only party that knows what it is sending.
@@ -142,9 +144,8 @@ plan, not as collateral to update.
    `if (applySeatBlock) {`, so the refactor must preserve that source shape.
 4. Both relay sites still deliver bare relays — re-run the assertions from the
    four-prompts plan rather than writing new ones.
-5. A coder running the shipped step-3 fallback text (which sends `machineOrigin: true`) still
-   reports to its lead without appends, including on an install whose standing orders were
-   migrated to that body.
+5. A coder running the step-3 fallback text (which sends `machineOrigin: true`) still reports
+   to its lead without appends — the alias must keep working for as long as that text ships.
 6. Default-flip audit evidence: a list of every internal `ptySendPrompt` caller, what kind each
    sends, and which were changed to set it explicitly. `_attemptDirectTerminalPush` must appear
    on it.
@@ -156,5 +157,6 @@ plan, not as collateral to update.
 
 ## Metadata
 
+**Feature:** 25e6a03f-26a5-444d-8089-43368af27bcd
 **Complexity:** 6
 **Tags:** backend, refactor, reliability

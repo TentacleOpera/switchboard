@@ -4,8 +4,8 @@
 
 Replace the terminal branch in the coding-team head prompt's escalation clause with an
 ordered recovery ladder, so a lead stops reporting "blocked — no higher seat available"
-while cheap, obvious fixes remain untried. Ship it to existing installs via a surgical
-`migrateAgentGroups` clause replacement.
+while cheap, obvious fixes remain untried. Teams are unreleased dev work, so this is a clean
+text edit with no migration.
 
 ### The problem
 
@@ -54,7 +54,7 @@ Every recovery route is already reachable by a lead over HTTP, in both hosts:
 - `/terminals/verb/` has **no verb allowlist** (`LocalApiServer.ts:8099`) — any verb is
   reachable.
 
-The fix is therefore entirely instructional plus a migration. No new endpoints, no new
+The fix is therefore entirely instructional. No new endpoints, no new
 service seams, no host-parity work.
 
 ### Decisions taken (confirmed with the user)
@@ -120,31 +120,19 @@ rewording:
   yours to drive" is unchanged and still governs. Borrowing an out-of-team idle seat stays
   forbidden.
 
-### 2. Migrate stored head prompts (load-bearing — without this the fix reaches nobody)
+### 2. No migration — teams are unreleased dev work
 
-`headPrompt` is **stored per agent group in the DB**, not read from the constant at spawn
-time: `agentGroupInstantiation.ts:136` passes `group?.headPrompt` into `wireSpawnedTeam`.
-The kanban.html value is a *creation template*, and the Agent Groups UI
-(`kanban.html:5703,6035`) lets users edit the stored text. So editing the three source
-copies changes **newly created teams only**. Every existing install — ~4,000, many on older
-versions — keeps the dead-end clause forever.
+`headPrompt` is stored per agent group in the DB (`agentGroupInstantiation.ts:136` passes
+`group?.headPrompt`), and the kanban.html value is a creation template, so editing the three
+source copies governs **newly created teams only**. That would normally demand a
+`migrateAgentGroups` step under the repo's migration rule.
 
-Add a step to `migrateAgentGroups` (`src/services/teamWiring.ts`), which already runs on
-every read path that can trigger auto-start:
+It does not here: **the team/lead feature has only ever existed in unreleased dev work**, so it
+takes a clean break — no migration, no compat shim, no frozen snapshot constant, no recogniser.
+A group carrying the old clause is a dev-install artefact; recreate the team.
 
-- For each group with a string `headPrompt`, if it contains the **exact old clause
-  substring**, replace that substring with the new clause. Match on the old text, not on
-  the whole prompt.
-- If the old substring is absent (user rewrote it, or already migrated), leave the group
-  untouched. Never overwrite a whole stored `headPrompt` — that clobbers customization.
-- Set `changed = true` only when a replacement actually occurred, preserving the function's
-  existing "return `null` when nothing changed" contract so the caller does not write.
-- Keep the function pure (it does not touch the DB) and idempotent — a second pass finds no
-  old substring and is a no-op.
-- Export the old and new clause strings as named constants so the migration and the tests
-  reference one source of truth.
-
-Preserve every unknown key on each group, per the repo's migration rule.
+Do not add a migration step "just in case". A recogniser for text that never shipped is dead
+code that later migrations have to keep matching against.
 
 ### 3. Update the pinned-literal tests
 
@@ -165,20 +153,15 @@ unchanged — confirm rather than assume. Add assertions for the new guarantees:
    `teamWiring.ts`, `terminals.js` and `kanban.html`.
 2. Run `src/test/stage-marker-commit-contract.test.js` — the pinned load-bearing literals
    still resolve and the new assertions pass.
-3. New unit test for the migration, covering: a group carrying the exact old clause is
-   rewritten; a user-customized prompt without the old clause is left byte-identical; a
-   second pass over already-migrated groups returns `null` (no write); unknown keys on the
-   group survive.
-4. `npx tsc --noEmit -p tsconfig.json` — no type regressions.
-5. Manual, extension host: create a fresh Coding team, confirm the lead's standing orders
-   carry the ladder text. Then take an install whose stored group still has the old clause,
-   trigger a read path that runs `migrateAgentGroups`, and confirm the stored prompt now
-   carries the ladder while any user edits elsewhere in the prompt are intact.
-6. Manual, standalone host: same two checks via the standalone bootstrap. No composition-root
+3. `npx tsc --noEmit -p tsconfig.json` — no type regressions.
+4. Manual, extension host: create a fresh Coding team and confirm the lead's standing orders
+   carry the ladder text.
+5. Manual, standalone host: same check via the standalone bootstrap. No composition-root
    wiring changes here — `ptyClearTerminal` is already handled in both hosts
-   (`bootstrap.ts:1848`, `TaskViewerProvider.ts:532`) — but confirm the head prompt reaching
-   a standalone-spawned lead is the migrated text, since both hosts read the same stored
-   group.
+   (`bootstrap.ts:1848`, `TaskViewerProvider.ts:532`) — but confirm a standalone-spawned lead
+   receives the new text, since both hosts read the same stored group.
+6. Confirm a team created before this change still runs. It keeps the old clause (no migration
+   by design); it must not error, and recreating the team must pick up the new text.
 7. End-to-end: drive a subtask to two review failures on one seat and confirm the lead
    clears and re-prompts that seat rather than reporting blocked; then force rung 1 to fail
    and confirm it moves laterally to an idle team seat before escalating.

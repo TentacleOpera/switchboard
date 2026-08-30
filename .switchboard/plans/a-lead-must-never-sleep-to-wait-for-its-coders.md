@@ -79,20 +79,19 @@ Constraints:
   `coding-head-prompt-contract.test.js` reassembles all three and asserts byte-identity.
 - **Preserve every literal** pinned by `stage-marker-commit-contract.test.js:386-400`, and add
   no form of the word "advance" (`!/advanc/i`), no `targetColumn`, no `/kanban/dispatch`.
-- **Migrate stored prompts.** `headPrompt` is stored per agent group in the DB
-  (`agentGroupInstantiation.ts:136` passes `group?.headPrompt`); the source constants govern
-  newly created teams only. Add a surgical `migrateAgentGroups` step in the same shape as the
-  one in `team-lead-escalation-dead-end-recovery-ladder.md` — anchor on an existing unique
-  substring, insert the new text, leave a customised prompt alone, and stay idempotent. If both
-  plans are in flight, land one migration step that carries both edits rather than two passes
-  fighting over the same anchor.
+- **No migration.** `headPrompt` is stored per agent group in the DB
+  (`agentGroupInstantiation.ts:136`), so the source constants govern newly created teams only —
+  which would normally require a `migrateAgentGroups` step. It does not here: the team/lead
+  feature has only ever existed in unreleased dev work, so it takes a clean break. A dev team
+  carrying the old prompt is recreated, not migrated. Do not add a recogniser for text that
+  never shipped.
 
 ### 2. Say it in the drive prefix too
 
 `_buildDrivePrefix` already has a `RULES:` list. Add one rule there in the same voice as its
 neighbours, and extend the existing `FEATURE WATCH: … No action needed.` line so the "no action
-needed" explicitly includes not waiting for it. The drive prefix is not stored per install, so
-this half needs no migration and ships immediately.
+needed" explicitly includes not waiting for it. The drive prefix is composed per dispatch rather than
+stored, so this half needs no team recreation at all — it takes effect on the next run.
 
 ### 3. Say what to do with the turn instead
 
@@ -114,9 +113,9 @@ confused.
    against that baseline rather than expecting zero.
 3. New assertions: the head prompt states that a completion is delivered to the lead; the head
    prompt forbids sleeping/polling; the drive prefix carries the matching rule.
-4. Migration unit test: a group carrying the pre-edit prompt is rewritten; a customised prompt
-   is untouched; a second pass writes nothing; unknown keys survive.
-5. `npx tsc --noEmit -p tsconfig.json`.
+4. `npx tsc --noEmit -p tsconfig.json`.
+5. Confirm a team created before this change still runs — it keeps the old prompt (no migration
+   by design) and must not error; recreating the team picks up the new text.
 6. Manual, both hosts: run a feature with two subtasks and confirm the lead dispatches, ends its
    turn, is woken by the coder's completion, and at no point issues a sleep, a timer, or a poll
    loop. Check the terminal log for the absence of those calls rather than trusting the lead's
@@ -124,5 +123,6 @@ confused.
 
 ## Metadata
 
+**Feature:** 25e6a03f-26a5-444d-8089-43368af27bcd
 **Complexity:** 3
 **Tags:** backend, reliability, refactor
