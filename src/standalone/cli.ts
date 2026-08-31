@@ -1593,15 +1593,30 @@ async function cmdMainMenu(workspaceRoot: string): Promise<void> {
                 const start = await prompter.ask('  Server is offline. Start local server now? [Y/n] ');
                 if (start === null) { exitFlushed(0); }
                 if (start === '' || start.toLowerCase() === 'y') {
+                    // Close our readline BEFORE the child inherits stdin. The
+                    // child may run firstRunDatabaseMenu on the same TTY, and
+                    // two readline interfaces reading one tty split the
+                    // operator's keystrokes between them.
+                    prompter.close();
                     // Spawn `switchboard local --detach` — the intermediate
                     // process prints its startup messages, forks the actual
                     // detached server, and exits. We then poll for the server
                     // to be answering /health.
                     const child = spawn(process.execPath, [__filename, 'local', '--detach'], { stdio: 'inherit' });
-                    await new Promise<void>((resolve) => {
-                        child.on('exit', () => resolve());
-                        child.on('error', () => resolve());
+                    const startCode: number = await new Promise((resolve) => {
+                        child.on('exit', (c) => resolve(c ?? 1));
+                        child.on('error', (err) => {
+                            console.error(`[switchboard] Failed to start server: ${err instanceof Error ? err.message : String(err)}`);
+                            resolve(1);
+                        });
                     });
+                    if (startCode !== 0) {
+                        // The intermediate polls /health for 15s itself and
+                        // prints its own diagnosis before exiting non-zero.
+                        // Polling a second time would add 15 silent seconds and
+                        // a duplicate error to a failure already reported.
+                        exitFlushed(startCode);
+                    }
                     const AUTO_START_TIMEOUT_MS = 15000;
                     const autoStartBegin = Date.now();
                     let autoPort: number | null = null;
@@ -1626,8 +1641,25 @@ async function cmdMainMenu(workspaceRoot: string): Promise<void> {
 
             if (answer === '3') {
                 prompter.close();
-                await cmdSetup(workspaceRoot, []);
-                return;
+                // Re-spawn with the `setup` subcommand rather than calling
+                // cmdSetup() here. cmdSetup does NOT run the wizard's choice
+                // itself: it rewrites process.argv ('setup' -> 'init' /
+                // 'scaffold' / 'control-plane') and returns, relying on main()
+                // to fall through to those handlers. From the bare front door
+                // that fallthrough is impossible twice over — argv carries no
+                // 'setup' token to rewrite, and the init/scaffold/control-plane
+                // handlers sit ABOVE this routing point in main(). Calling it
+                // in-process makes every wizard choice a no-op that then falls
+                // through to the serve path and silently starts a board.
+                const child = spawn(process.execPath, [__filename, 'setup'], { stdio: 'inherit' });
+                const code: number = await new Promise((resolve) => {
+                    child.on('exit', (c) => resolve(c ?? 0));
+                    child.on('error', (err) => {
+                        console.error(`[switchboard] Failed to open the setup wizard: ${err instanceof Error ? err.message : String(err)}`);
+                        resolve(1);
+                    });
+                });
+                exitFlushed(code);
             }
 
             // Invalid input — re-prompt (loop continues).
@@ -1903,7 +1935,10 @@ async function main() {
     // `dispatch`, `clear`, `fleet`, `verb`, `help`, `about`, `version`, `setup`)
     // are read-only queries against an existing .switchboard/ — they must not
     // create one in a directory that has none. The bare `switchboard` (no
-    // subcommand) is also a read-only console: `!firstArg` covers it.
+    // subcommand) renders the front-door menu and writes nothing itself:
+    // `!firstArg` covers it. Every branch of that menu that DOES write
+    // re-spawns with a real subcommand (`local`/`tailnet`/`setup`), so the
+    // child re-enters here with `firstArg` set and scaffolds normally.
     // Every other path (server start, secrets, init) does use workspaceRoot.
     const subcommand = process.argv[2];
     const subcommandTargetsCwd = !!firstArg

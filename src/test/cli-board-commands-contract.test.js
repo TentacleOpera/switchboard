@@ -204,6 +204,100 @@ function run() {
         );
     }
 
+    // ── 10. The bare front door is a MENU, and every writing branch of it
+    //        re-spawns rather than calling an in-process handler. ───────────
+    // Plan: .switchboard/plans/fix-bare-switchboard-cli-front-door-menu-when-server-is-not-running.md
+    const menuStart = cli.indexOf('async function cmdMainMenu(');
+    assert.ok(menuStart > 0, 'cli.ts must define cmdMainMenu — the bare `switchboard` front door.');
+    const menu = cli.slice(menuStart, cli.indexOf('async function cmdBoardConsole('));
+    assert.ok(menu.length > 500, 'Could not locate the cmdMainMenu body in cli.ts.');
+
+    assert.match(
+        cli,
+        /if \(!firstArg\) \{\s*await cmdMainMenu\(workspaceRoot\);/,
+        'Bare `switchboard` must route to cmdMainMenu — routing it straight to cmdBoardConsole '
+        + 'reinstates the exit-1 dead end when no server is running.'
+    );
+    assert.ok(
+        !menu.includes('No running Switchboard instance for this workspace.'),
+        'cmdMainMenu must never emit the old no-server error — the menu renders regardless of server status.'
+    );
+    assert.match(
+        menu,
+        /if \(!process\.stdin\.isTTY\)[\s\S]{0,600}?exitFlushed\(0\)/,
+        'cmdMainMenu must exit 0 on a non-TTY — a piped or cron bare invocation must not block on a prompt.'
+    );
+    // The board console keeps its own no-server backstop for the probe→select race.
+    const console_ = cli.slice(cli.indexOf('async function cmdBoardConsole('), cli.indexOf('async function main()'));
+    assert.match(
+        console_,
+        /const port = await findRunningInstance\(workspaceRoot\);\s*if \(port === null\) \{[\s\S]{0,400}?exitFlushed\(1\);/,
+        'cmdBoardConsole must keep its findRunningInstance + exitFlushed(1) backstop.'
+    );
+
+    // Every branch that starts something re-spawns this file with a real
+    // subcommand. `setup` is the one that MUST NOT be called in-process:
+    // cmdSetup does not execute the wizard's choice, it rewrites process.argv
+    // and returns, expecting main() to fall through to the init / scaffold /
+    // control-plane handlers. Those handlers sit ABOVE the bare-routing point,
+    // and a bare argv has no 'setup' token to rewrite — so an in-process call
+    // makes every wizard choice a no-op that then falls through to the serve
+    // path and silently starts a board instead.
+    const respawns = [...menu.matchAll(/spawn\(process\.execPath, \[__filename, ([^\]]*)\]/g)].map(m => m[1]);
+    assert.ok(
+        respawns.length >= 3,
+        `cmdMainMenu must re-spawn itself for GUI serve, CLI auto-start and Setup; found ${respawns.length}.`
+    );
+    assert.ok(
+        respawns.some(a => /^serveSub$/.test(a.trim())),
+        'GUI mode must re-spawn [__filename, serveSub] — the whole serve path lives inline in main(), '
+        + 'there is no cmdLocal/cmdTailnet to call.'
+    );
+    assert.match(
+        menu,
+        /serveSub = sub === '1' \? 'local' : 'tailnet'/,
+        "GUI mode must map its two choices onto the 'local' and 'tailnet' subcommands."
+    );
+    assert.ok(
+        respawns.some(a => a.includes("'local'") && a.includes("'--detach'")),
+        "CLI mode's offline auto-start must re-spawn [__filename, 'local', '--detach'] — a foreground "
+        + 'spawn would turn the menu process into the server and the board console would never appear.'
+    );
+    assert.ok(
+        respawns.some(a => a.trim() === "'setup'"),
+        "Setup must re-spawn [__filename, 'setup'] rather than calling cmdSetup() in-process."
+    );
+    // The auto-start child inherits stdin (stdio: 'inherit') and may render
+    // firstRunDatabaseMenu on the same TTY, so the menu's own readline must be
+    // closed before the spawn — two interfaces on one tty split the keystrokes.
+    const autoStart = menu.slice(menu.indexOf('Server is offline.'), menu.indexOf("'--detach'"));
+    assert.match(
+        autoStart,
+        /prompter\.close\(\);/,
+        'cmdMainMenu must close its prompter BEFORE spawning the auto-start child that inherits stdin.'
+    );
+    assert.ok(
+        !/\bawait cmdSetup\(/.test(menu),
+        'cmdMainMenu must NOT call cmdSetup() in-process: cmdSetup returns after an argv rewrite that '
+        + 'only main()\'s earlier init/scaffold/control-plane handlers can consume, and they are already '
+        + 'behind us. Re-spawn [__filename, \'setup\'] instead.'
+    );
+    // The structural fact the check above rests on: the handlers cmdSetup hands
+    // off to are declared BEFORE the bare-command routing point. If a refactor
+    // ever moves them below it, this fails loudly instead of quietly making the
+    // in-process call legal again.
+    const bareRouting = cli.indexOf('if (!firstArg) {\n        await cmdMainMenu(');
+    assert.ok(bareRouting > 0, 'Could not locate the bare-command routing block in main().');
+    for (const handler of ['init', 'scaffold', 'control-plane']) {
+        const at = cli.indexOf(`if (process.argv[2] === '${handler}')`);
+        assert.ok(at > 0, `main() must dispatch the '${handler}' handler.`);
+        assert.ok(
+            at < bareRouting,
+            `The '${handler}' handler must stay above the bare-command routing point — cmdSetup's `
+            + 'argv-rewrite handoff depends on it, and the front door re-spawns precisely because it does.'
+        );
+    }
+
     console.log('cli board commands contract test passed');
 }
 
