@@ -338,6 +338,29 @@ space.
     ```
     Under `--json`, outputs `{ version: "1.7.13", service: "switchboard", host: "standalone", ... }`.
 
+12. **`switchboard setup [init|scaffold|control-plane] [options]` (Unified Setup Menu)** — consolidates the
+    previously scattered repository initialization, multi-repo scaffolding, and control-plane commands
+    into a single interactive setup hub.
+    - When run bare (`switchboard setup`) on a TTY, renders the UFO header and presents a numbered setup wizard:
+      ```text
+             .---.
+       _...-'     '-..._       SWITCHBOARD SETUP
+      .-~  ●   ●   ●   ●  ~-.   Workspace & Scaffolding Wizard
+     (________________________)
+
+      [1] Initialize Switchboard in this repository (rules, skills, constitution, workflows)
+      [2] Scaffold Multi-Repo Control Plane (link & group multiple repos)
+      [3] Detect & Migrate Existing Sub-Repos
+      [4] Configure API Tokens & Secrets (ClickUp, Linear, Notion, Stitch)
+
+      Select an option [1-4] (or Enter to exit):
+      ```
+    - Subcommands remain callable directly for non-interactive scripts and automation:
+      - `switchboard setup init [--target <agents|claude|both>]`
+      - `switchboard setup scaffold --parent-dir <dir> --workspace-name <name> --repo <url>...`
+      - `switchboard setup control-plane <detect|preview|migrate>`
+    - Legacy top-level `switchboard init` and `switchboard scaffold` are retained as transparent aliases.
+
     > **Superseded:** the original six-code table that left `400` (bad column), `404` (plan not found),
    > `502` (move persisted, no dispatch), and `503` (dispatch unavailable) unmapped.
    > **Reason:** An agent reading exit `3` could not distinguish "no terminal live" from "you typed the
@@ -401,17 +424,20 @@ space.
 15. **Help subcommand.** Assert `switchboard help` and `switchboard --help` produce identical help output.
 16. **About & version display.** Assert `switchboard about`, `switchboard version`, and `switchboard --version`
     render the UFO ANSI art banner, version number, host environment, and active server/fleet connection details.
+17. **Setup menu.** Assert `switchboard setup` on a TTY renders the interactive setup menu. Assert `switchboard setup init`
+    and `switchboard setup scaffold` execute single-repo initialization and multi-repo scaffolding respectively.
 
 *(Compilation and automated tests skipped this run per dispatch directive — the checks remain written
 for the implementing coder.)*
 
 ### Goal Invariants
 
-- `src/standalone/cli.ts` dispatches `process.argv[2] === 'ready'`, `process.argv[2] === 'dispatch'`, `process.argv[2] === 'clear'`, `process.argv[2] === 'fleet'`, `process.argv[2] === 'verb'`, `process.argv[2] === 'help'`, and `process.argv[2] === 'about'`, and all are present in the `subcommandTargetsCwd` exclusion condition (`cli.ts:679`) so none create a `.switchboard/` in a directory that has none.
+- `src/standalone/cli.ts` dispatches `process.argv[2] === 'ready'`, `process.argv[2] === 'dispatch'`, `process.argv[2] === 'clear'`, `process.argv[2] === 'fleet'`, `process.argv[2] === 'verb'`, `process.argv[2] === 'help'`, `process.argv[2] === 'about'`, and `process.argv[2] === 'setup'`, and all are present in the `subcommandTargetsCwd` exclusion condition (`cli.ts:679`) so none create a `.switchboard/` in a directory that has none.
 - `switchboard ready` calls `GET /kanban/plans` (not the kanban DB directly) and filters `featureId === ''` and the `--project` value client-side — it does not open `kanban.db`.
 - `switchboard dispatch` calls `POST /kanban/dispatch` with `{ plan, targetColumn }` — it does not call `move-card.js`, does not write `kanban.db`, and does not reimplement complexity routing, the visible-agent check, or the column move.
 - `switchboard clear` calls `POST /terminals/verb/ptyClearTerminal` or `POST /terminals/clear` — never `ptySendPrompt` with bracketed paste.
 - `switchboard fleet` calls `POST /terminals/verb/ptyListTerminals` or `GET /health` and prints compact output.
+- `switchboard setup` provides the unified interactive wizard for repository setup and multi-repo scaffolding.
 - `switchboard verb <name> <payload>` tunnels directly to the verb router on `LocalApiServer`.
 - `switchboard help` aliases to `--help`.
 - `switchboard about` aliases to `version`, `--version`, and `-v`.
