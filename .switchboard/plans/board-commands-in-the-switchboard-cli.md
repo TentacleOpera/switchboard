@@ -203,14 +203,16 @@ space.
 
 ## Proposed Changes
 
-1. **`switchboard ready [column] [--project <name>] [--json]`** — the primary command. With no
-   argument it lists the dispatchable set: `PLAN REVIEWED` (coding) and `CREATED` (planning), subtasks
-   excluded (`featureId === ''`), honouring the `--project` filter — the same definition the Mission
-   Control protocol's `## What Is Ready To Go` already uses, so there is one answer to "what is ready"
-   rather than two. Output is a numbered list of `type · title · short id`.
-
-   Then it **prompts for a number and dispatches that card.** Enter alone exits without acting — one
-   command, one keystroke, on any device.
+1. **`switchboard` (bare command) / `switchboard ready [column] [--project <name>] [--json]`** — the primary interactive terminal interface.
+   - **`switchboard`** with no subcommand is the front door: it connects to the running Switchboard server and presents the interactive board console (ready cards in `PLAN REVIEWED` / `CREATED`, short IDs, titles, and an interactive prompt to pick and dispatch).
+   - If no server is running, it exits cleanly (code 1) with:
+     ```text
+     No running Switchboard server for this workspace.
+       Start local server:   switchboard local
+       Start remote tailnet: switchboard tailnet
+     ```
+   - **Server startup separation:** `switchboard local` and `switchboard tailnet` are the explicit server start commands (local loopback vs tailnet remote access). Bare `switchboard` never silently launches a server in the background; it drives the board.
+   - Output is a numbered list of `type · title · short id`. Then it **prompts for a number and dispatches that card.** Enter alone exits without acting — one command, one keystroke, on any device.
 
    **1a. `--project <name>` (the filter-discovery fix).** `GET /kanban/plans` accepts `column` and
    `featureId` but **not** `project` (`LocalApiServer.ts:6428-6445`), and no endpoint exposes
@@ -222,9 +224,6 @@ space.
    everything). A future `GET` endpoint exposing `kanban.activeProjectFilter` would let the CLI default
    to the board's active filter; until then the flag is the explicit mechanism and the parity claim
    holds only when the user passes it.
-
-   **Naming is the user's call** — `ready` matches the existing protocol vocabulary, but the request was
-   phrased as `switchboard planned`. Pick one name and use it in both the CLI and the MCP tool.
 
 2. **`switchboard dispatch <planId|prefix> [column] [--project <name>] [--json]`** — the direct form,
    for when the card is already known. Accepts a unique short id prefix as well as a full planId; an
