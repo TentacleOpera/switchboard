@@ -1501,6 +1501,144 @@ async function cmdSetup(workspaceRoot: string, argv: string[]): Promise<void> {
 }
 
 /**
+ * `switchboard` (bare, interactive TTY) — top-level front-door menu.
+ *
+ * Always presents the Main Menu (GUI / CLI / Setup / Exit) regardless of
+ * whether a server is running. GUI mode re-spawns the process with the
+ * `local`/`tailnet` subcommand (reusing the entire existing serve path);
+ * CLI mode launches the board console when a server is online, or offers to
+ * boot a detached local server on demand. Non-TTY invocations exit 0 with
+ * usage so a piped/cron bare call never hangs.
+ */
+async function cmdMainMenu(workspaceRoot: string): Promise<void> {
+    // Non-TTY guard: a piped/cron bare invocation has no menu to show.
+    if (!process.stdin.isTTY) {
+        console.error('[switchboard] No subcommand given and stdin is not a TTY.');
+        console.error('[switchboard] Run `switchboard` in an interactive terminal, or use a subcommand:');
+        console.error('  switchboard local | tailnet | plans | ready | dispatch | fleet | setup | stop | status | logs');
+        exitFlushed(0);
+    }
+
+    const version = readVersion();
+
+    for (;;) {
+        // Probe server status once per loop iteration so a server that
+        // started/stopped between renders is reflected.
+        const port = await findRunningInstance(workspaceRoot);
+
+        console.log(banner(version));
+        console.log(`  Active Server:    ${port !== null ? `Online: http://127.0.0.1:${port}` : 'Offline'}`);
+        console.log(`  Workspace:        ${workspaceRoot}`);
+        console.log('');
+        console.log('MAIN MENU:');
+        console.log('  [1] GUI Mode  — Start Local (127.0.0.1) or Remote Tailnet Board');
+        console.log('  [2] CLI Mode  — Interactive Terminal Board Navigator (Plans, Fleet, Dispatch)');
+        console.log('  [3] Setup     — Workspace & Multi-Repo Scaffolding Wizard');
+        console.log('  [q] Exit (or Enter)');
+        console.log('');
+
+        const prompter = openPrompter();
+        try {
+            const onSigInt = (): void => { prompter.close(); exitFlushed(0); };
+            process.once('SIGINT', onSigInt);
+            const answer = await prompter.ask('Select an option [1-3/q]: ');
+            process.removeListener('SIGINT', onSigInt);
+
+            if (answer === null || answer === '' || answer === 'q') {
+                exitFlushed(0);
+            }
+
+            if (answer === '1') {
+                // GUI Mode — sub-prompt for local or tailnet, then re-spawn.
+                for (;;) {
+                    console.log('');
+                    console.log('  GUI Mode:');
+                    console.log('    [1] switchboard local   (serve the loopback board)');
+                    console.log('    [2] switchboard tailnet  (serve loopback AND your tailnet)');
+                    console.log('    [q] Back to Main Menu');
+                    const sub = await prompter.ask('  Select [1-2/q]: ');
+                    if (sub === null || sub === '' || sub === 'q') { break; }
+                    if (sub === '1' || sub === '2') {
+                        const serveSub = sub === '1' ? 'local' : 'tailnet';
+                        prompter.close();
+                        // Re-spawn the process with the serve subcommand. The
+                        // child inherits the TTY and runs the full existing
+                        // serve path (first-run DB menu, port fallback, browser
+                        // open, detach). The menu process is replaced.
+                        const child = spawn(process.execPath, [__filename, serveSub], { stdio: 'inherit' });
+                        const code: number = await new Promise((resolve) => {
+                            child.on('exit', (c) => resolve(c ?? 0));
+                            child.on('error', (err) => {
+                                console.error(`[switchboard] Failed to start server: ${err instanceof Error ? err.message : String(err)}`);
+                                resolve(1);
+                            });
+                        });
+                        exitFlushed(code);
+                    }
+                    // Invalid sub-choice — re-prompt.
+                }
+                // Back to main menu (q/empty on sub-prompt).
+                prompter.close();
+                continue;
+            }
+
+            if (answer === '2') {
+                if (port !== null) {
+                    // Server online — hand off to the board console.
+                    prompter.close();
+                    await cmdBoardConsole(workspaceRoot);
+                    return;
+                }
+                // Offline — offer to boot a detached local server.
+                const start = await prompter.ask('  Server is offline. Start local server now? [Y/n] ');
+                if (start === null) { exitFlushed(0); }
+                if (start === '' || start.toLowerCase() === 'y') {
+                    // Spawn `switchboard local --detach` — the intermediate
+                    // process prints its startup messages, forks the actual
+                    // detached server, and exits. We then poll for the server
+                    // to be answering /health.
+                    const child = spawn(process.execPath, [__filename, 'local', '--detach'], { stdio: 'inherit' });
+                    await new Promise<void>((resolve) => {
+                        child.on('exit', () => resolve());
+                        child.on('error', () => resolve());
+                    });
+                    const AUTO_START_TIMEOUT_MS = 15000;
+                    const autoStartBegin = Date.now();
+                    let autoPort: number | null = null;
+                    while (Date.now() - autoStartBegin < AUTO_START_TIMEOUT_MS) {
+                        autoPort = await findRunningInstance(workspaceRoot);
+                        if (autoPort !== null) break;
+                        await new Promise(r => setTimeout(r, 250));
+                    }
+                    if (autoPort === null) {
+                        console.error(`[switchboard] Detached server failed to start within ${AUTO_START_TIMEOUT_MS / 1000}s.`);
+                        console.error('[switchboard] Check the log file: .switchboard/logs/server.log');
+                        exitFlushed(1);
+                    }
+                    prompter.close();
+                    await cmdBoardConsole(workspaceRoot);
+                    return;
+                }
+                // Declined — loop back to the main menu.
+                prompter.close();
+                continue;
+            }
+
+            if (answer === '3') {
+                prompter.close();
+                await cmdSetup(workspaceRoot, []);
+                return;
+            }
+
+            // Invalid input — re-prompt (loop continues).
+            prompter.close();
+        } finally {
+            prompter.close();
+        }
+    }
+}
+
+/**
  * `switchboard` (bare) — interactive board console.
  *
  * Connects to the running server and presents a menu: browse by column, search,
@@ -2450,17 +2588,16 @@ async function main() {
         await cmdVerb(workspaceRoot, process.argv.slice(3));
     }
 
-    // ── Bare `switchboard`: interactive board console ─────────────
+    // ── Bare `switchboard`: interactive front-door menu ───────────
     //
-    // No subcommand (truly bare `npx switchboard`) connects to a running
-    // server and presents the interactive board navigator. This is the
-    // primary terminal interface — the default front door when a server is
-    // already running. If no server is running, exit 1 with advice to start
-    // one. `switchboard local` and `switchboard tailnet` are the serve
-    // commands; flags without a subcommand (e.g. `--hostname foo`) still
-    // fall through to the serve path below for backward compatibility.
+    // No subcommand (truly bare `npx switchboard`) presents the top-level
+    // Main Menu (GUI / CLI / Setup / Exit) regardless of whether a server
+    // is running. This is the primary terminal interface — the default
+    // front door. `switchboard local` and `switchboard tailnet` are the
+    // serve commands; flags without a subcommand (e.g. `--hostname foo`)
+    // still fall through to the serve path below for backward compatibility.
     if (!firstArg) {
-        await cmdBoardConsole(workspaceRoot);
+        await cmdMainMenu(workspaceRoot);
     }
 
     // ── Server start path (local / tailnet / serve flags) ─────────
