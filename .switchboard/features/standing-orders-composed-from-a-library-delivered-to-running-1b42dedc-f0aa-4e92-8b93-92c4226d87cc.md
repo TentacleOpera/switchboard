@@ -21,8 +21,8 @@ The build running at the time was current and contained the fix. Every gate was 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Compose standing orders from a library instead of installing monoliths](../plans/compose-standing-orders-from-a-library.md) — **PLAN REVIEWED** — ID: bf4bb2af-bc64-4329-9be9-1fc975c440d0
-- [ ] [Standing Orders Library Section in the Tab](../plans/standing-orders-library-section-in-the-tab.md) — **PLAN REVIEWED** — ID: cb9b253a-3348-464b-8c76-0061917c7ada
+- [ ] [Compose standing orders from a library instead of installing monoliths](../plans/compose-standing-orders-from-a-library.md) — **LEAD CODED** — ID: bf4bb2af-bc64-4329-9be9-1fc975c440d0
+- [ ] [Standing Orders Library Section in the Tab](../plans/standing-orders-library-section-in-the-tab.md) — **LEAD CODED** — ID: cb9b253a-3348-464b-8c76-0061917c7ada
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

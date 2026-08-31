@@ -1,4 +1,9 @@
 import * as crypto from 'crypto';
+import {
+    composeStandingOrderFragments,
+    getStandingOrderFragment,
+    StandingOrderCompositionContext,
+} from './standingOrderFragments';
 
 export type StandingOrderScope = 'global' | 'team' | 'pair' | 'team-head' | 'role';
 
@@ -6,7 +11,8 @@ export interface StandingOrder {
     id: string;
     parent: string;
     child?: string;
-    instruction: string;
+    instruction?: string;
+    fragments?: string[];
     createdAt: number;
     scope?: StandingOrderScope;
     teamId?: string;
@@ -35,6 +41,7 @@ export interface StandingOrderDefinition {
     name: string;
     instruction: string;
     createdAt: number;
+    fragmentId?: string;
 }
 
 export const STANDING_ORDERS_CONFIG_KEY = 'terminals.standingOrders';
@@ -100,7 +107,9 @@ export async function mutateStandingOrderDefinitions(
     const p = _writeChain.then(async () => {
         const defs = await db.getConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
         const next = await mutator(defs);
-        await db.setConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, next);
+        if (next !== defs) {
+            await db.setConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, next);
+        }
     });
     _writeChain = p.catch(() => {});
     await p;
@@ -172,14 +181,24 @@ export function reSyncAssignmentsToDefinitions(
 export function makeStandingOrderDefinition(
     name: string,
     instruction: string,
-    createdAt?: number
+    createdAt?: number,
+    fragmentId?: string
 ): StandingOrderDefinition {
     return {
         id: crypto.randomUUID(),
         name,
         instruction,
         createdAt: createdAt || Date.now(),
+        ...(fragmentId ? { fragmentId } : {}),
     };
+}
+
+export function resolveStandingOrderDefinitionInstruction(
+    definition: StandingOrderDefinition,
+    ctx: StandingOrderCompositionContext
+): string {
+    if (!definition.fragmentId) { return definition.instruction; }
+    return composeStandingOrderFragments([definition.fragmentId], ctx).text;
 }
 
 /**
@@ -346,12 +365,12 @@ function selectOrders(
     liveNames: Set<string>,
     groups: TerminalGroup[],
     roleMap?: Map<string, string>
-): StandingOrder[] {
+): { orders: StandingOrder[]; standing: ReturnType<typeof resolveTeamStanding> } {
     // Resolve the target's team standing once via the shared predicate, so
     // the delivery layer and this selector cannot diverge on what "is a
     // non-head team member" means.
     const standing = resolveTeamStanding(targetName, orders, groups);
-    return orders.filter(o => {
+    const selected = orders.filter(o => {
         const scope = scopeOf(o);
         if (scope === 'global') {
             return true;
@@ -392,6 +411,49 @@ function selectOrders(
         // pair (default)
         return o.parent === targetName && o.child !== undefined && liveNames.has(o.child);
     });
+    return { orders: selected, standing };
+}
+
+export interface StandingOrderRenderOptions {
+    orchestratorPresent?: boolean;
+    attended?: boolean;
+}
+
+function compositionContext(
+    targetName: string,
+    standing: ReturnType<typeof resolveTeamStanding>,
+    groups: TerminalGroup[],
+    roleMap?: Map<string, string>,
+    options: StandingOrderRenderOptions = {}
+): StandingOrderCompositionContext {
+    const group = standing.teamId ? groups.find(g => g && g.id === standing.teamId) : undefined;
+    const headName = standing.headName || (typeof group?.head === 'string' ? group.head : '') || (typeof group?.name === 'string' ? group.name : '');
+    const headRole = (typeof group?.headRole === 'string' && group.headRole) || (headName ? roleMap?.get(headName) : '') || '';
+    return {
+        targetName,
+        inTeam: standing.inTeam,
+        isHead: standing.isHead,
+        teamId: standing.teamId || '',
+        headName,
+        headRole,
+        members: standing.members,
+        reviewerSeat: standing.members.some(name => roleMap?.get(name) === 'reviewer'),
+        workKind: headRole === 'planner' ? 'plan' : 'feature',
+        pacing: group?.pacing === 'seat' ? 'seat' : 'head',
+        orchestratorPresent: options.orchestratorPresent === true,
+        attended: options.attended !== false,
+        externalHead: group?.externalHead === true,
+    };
+}
+
+export function resolveStandingOrderInstruction(o: StandingOrder, ctx: StandingOrderCompositionContext): string {
+    if (typeof o.instruction === 'string') { return o.instruction; }
+    if (!Array.isArray(o.fragments) || o.fragments.length === 0) { return ''; }
+    const composed = composeStandingOrderFragments(o.fragments, ctx);
+    if (composed.unknown.length) {
+        console.warn(`[standingOrders] Unknown fragment id(s) on order '${o.id}': ${composed.unknown.join(', ')}`);
+    }
+    return composed.text;
 }
 
 /**
@@ -400,15 +462,16 @@ function selectOrders(
  * this wrong produces the incoherent "Regarding terminal undefined" line this
  * refactor exists to remove.
  */
-function renderOrder(o: StandingOrder): string {
+function renderOrder(o: StandingOrder, ctx: StandingOrderCompositionContext): string {
+    const instruction = resolveStandingOrderInstruction(o, ctx);
+    if (!instruction) { return ''; }
     const scope = scopeOf(o);
     if (scope === 'pair') {
         const child = o.child;
         if (!child) { return ''; }
-        return `- Regarding terminal "${child}": ${o.instruction}\n`;
+        return `- Regarding terminal "${child}": ${instruction}\n`;
     }
-    // global and team: plain rule, no "regarding" framing
-    return `- ${o.instruction}\n`;
+    return `- ${instruction}\n`;
 }
 
 /** Strip a pre-existing standing-orders block from `prompt`. */
@@ -435,12 +498,14 @@ export function renderStandaloneOrdersBlock(
     targetName: string,
     liveNames: Set<string>,
     groups: TerminalGroup[],
-    roleMap?: Map<string, string>
+    roleMap?: Map<string, string>,
+    options: StandingOrderRenderOptions = {}
 ): string | null {
-    const mine = selectOrders(orders, targetName, liveNames, groups, roleMap);
-    if (mine.length === 0) {
+    const selected = selectOrders(orders, targetName, liveNames, groups, roleMap);
+    if (selected.orders.length === 0) {
         return null;
     }
+    const ctx = compositionContext(targetName, selected.standing, groups, roleMap, options);
 
     // Render safeguard-bearing scopes (global, role, team) before pair so that
     // whatever renders last is the least safety-critical. Truncation is gone,
@@ -452,13 +517,15 @@ export function renderStandaloneOrdersBlock(
     // team-specific prompt — a role order is broader than a team order but
     // narrower than a global one.
     const scopeRank: Record<StandingOrderScope, number> = { global: 0, role: 1, 'team-head': 2, team: 2, pair: 3 };
-    const sorted = [...mine].sort(
+    const sorted = [...selected.orders].sort(
         (a, b) => scopeRank[scopeOf(a)] - scopeRank[scopeOf(b)]
     );
+    const rendered = sorted.map(o => renderOrder(o, ctx)).filter(Boolean);
+    if (rendered.length === 0) { return null; }
 
     let block = `\n\n${STANDING_ORDERS_MARKER}\n`;
-    for (const o of sorted) {
-        block += renderOrder(o);
+    for (const line of rendered) {
+        block += line;
     }
     block += `These apply to everything you do in this terminal until told otherwise.\n`;
     return block;
@@ -482,7 +549,8 @@ export function applyStandingOrders(
     orders: StandingOrder[],
     liveNames: Set<string>,
     groups: TerminalGroup[] = [],
-    roleMap?: Map<string, string>
+    roleMap?: Map<string, string>,
+    options: StandingOrderRenderOptions = {}
 ): string {
     if (!prompt) { return prompt; }
 
@@ -496,7 +564,7 @@ export function applyStandingOrders(
     // contain the marker.
     const cleanPrompt = stripStandingOrdersBlock(prompt);
 
-    const block = renderStandaloneOrdersBlock(orders, targetName, liveNames, groups, roleMap);
+    const block = renderStandaloneOrdersBlock(orders, targetName, liveNames, groups, roleMap, options);
     if (block === null) {
         if (groups.some(g => Array.isArray(g?.members) && g.members.includes(targetName))) {
             const rejected = orders.map(o => ({
@@ -542,6 +610,46 @@ export function makeStandingOrder(
         ...(role ? { role } : {}),
         ...(definitionId ? { definitionId } : {}),
     };
+}
+
+export function makeFragmentStandingOrder(
+    parent: string,
+    child: string,
+    fragments: string[],
+    scope: StandingOrderScope,
+    teamId?: string,
+    role?: string
+): StandingOrder {
+    const unknown = fragments.filter(id => !getStandingOrderFragment(id));
+    if (unknown.length) { throw new Error(`Unknown standing-order fragment id(s): ${unknown.join(', ')}`); }
+    return {
+        id: crypto.randomUUID(),
+        parent,
+        child,
+        fragments: [...fragments],
+        createdAt: Date.now(),
+        scope,
+        ...(teamId ? { teamId } : {}),
+        ...(role ? { role } : {}),
+    };
+}
+
+export function materializeStandingOrderForInspection(
+    order: StandingOrder,
+    groups: TerminalGroup[],
+    roleMap?: Map<string, string>,
+    options: StandingOrderRenderOptions = {}
+): StandingOrder {
+    if (typeof order.instruction === 'string' || !order.fragments?.length) { return order; }
+    const group = order.teamId ? groups.find(g => g && g.id === order.teamId) : undefined;
+    const targetName = scopeOf(order) === 'team-head'
+        ? order.parent
+        : (scopeOf(order) === 'team'
+            ? (group?.members || []).find((name: string) => name !== order.parent) || order.parent
+            : order.parent);
+    const standing = resolveTeamStanding(targetName, [order], groups);
+    const ctx = compositionContext(targetName, standing, groups, roleMap, options);
+    return { ...order, instruction: resolveStandingOrderInstruction(order, ctx) };
 }
 
 /**

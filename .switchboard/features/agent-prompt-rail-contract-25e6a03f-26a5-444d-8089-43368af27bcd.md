@@ -4,6 +4,8 @@ description: 'Agent Prompt Rail Contract'
 
 # Agent Prompt Rail Contract
 
+**Complexity:** 6
+
 ## Goal
 
 Fix three defects in the contract between agents and the prompt rail, all of the same shape:
@@ -33,7 +35,9 @@ the agent just does not know it. The clear is not: it needs a real endpoint.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] (no subtasks)
+- [ ] [Clearing a terminal needs a dedicated endpoint: today it is a verb-tunnel call, a lesser clear, and a silent failure when done wrong](../plans/a-clear-is-not-a-prompt-agents-send-slash-clear-as-text.md) — **CREATED** — ID: 6fe201b3-d4a4-4d30-b605-b738b8bb4262
+- [ ] [A lead must never sleep to wait for its coders — it is woken, and nothing tells it so](../plans/a-lead-must-never-sleep-to-wait-for-its-coders.md) — **CREATED** — ID: 776e83c9-ae52-462c-a715-d7ffd3f1e771
+- [ ] [An agent relaying a message to a lead sends a dispatch-sized payload, because the appends default to on](../plans/an-agent-relayed-message-is-not-a-dispatch.md) — **CREATED** — ID: 4b8c7dc0-d02a-4ee5-9722-a92902c94ee9
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

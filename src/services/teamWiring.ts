@@ -2,14 +2,22 @@ import {
     mutateStandingOrders,
     mutateStandingOrderDefinitions,
     makeStandingOrder,
+    makeFragmentStandingOrder,
     makeStandingOrderDefinition,
-    ensureStandingOrderDefinition,
     reSyncAssignmentsToDefinitions,
     StandingOrder,
     StandingOrderDefinition,
     STANDING_ORDERS_CONFIG_KEY,
     STANDING_ORDER_DEFINITIONS_CONFIG_KEY,
 } from './standingOrders';
+import {
+    buildHeadCompletionFragment,
+    buildHeadNextFragment,
+    buildMemberCompletionFragment,
+    GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY,
+    STANDING_ORDER_FRAGMENT_IDS,
+    TEAM_HEAD_COMMIT_FRAGMENT_BODY,
+} from './standingOrderFragments';
 import { resolvePreset, resolvePresetMeta, DEFAULT_MEMBER_RELATIONSHIP } from './linkPresets';
 import { GIT_SAFETY_DIRECTIVE } from './agentPromptBuilder';
 
@@ -161,31 +169,7 @@ export function readTeamPacing(group: any): 'head' | 'seat' {
  * the head as the recipient, which for the head is itself.
  */
 export function CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId: string, headName: string): string {
-    return 'When you finish a task, route your completion report based on where the work came from.\n'
-        + 'These routes are EXCLUSIVE: the first one that succeeds ends your report. Do NOT also take\n'
-        + 'the other routes — reporting twice sends duplicate prompts to your lead.\n\n'
-        + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
-        + '   against the port in .switchboard/api-server-port.txt.\n'
-        + '   - If the response shows kanbanColumn is "LEAD CODED", "CODER CODED", or "INTERN CODED",\n'
-        + '     POST /kanban/queue/done with {"from":"<your terminal name>"}.\n'
-        + '     The system will clear your terminal and dispatch the next staged card.\n'
-        + '     A response of {"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
-        + '     If you cannot complete it, POST /kanban/queue/done with\n'
-        + '     {"from":"<your terminal name>","outcome":"failed"} and a one-line reason.\n'
-        + '   - If the response shows any other column, report to your head (step 3).\n\n'
-        + '2. If you do not have a PLAN_ID (ad-hoc prompt, file-based queue item),\n'
-        + '   POST /terminals/teams/' + groupId + '/queue/done with {"from":"<your terminal name>"}.\n'
-        + '   The system will relay your report to your team lead, clear your terminal,\n'
-        + '   and dispatch the next queued item.\n'
-        + '   If the POST fails, report to your head directly (step 3).\n\n'
-        + '3. Fallback (only when steps 1 and 2 did not apply or failed): report to your head ' + headName + '\n'
-        + '   via POST /terminals/verb/ptySendPrompt with\n'
-        + '   {"name":"' + headName + '","data":"<your report>","clearBeforePrompt":false,"machineOrigin":true} —\n'
-        + '   naming what you changed and what to review. Do not wait to be asked.\n\n'
-        + 'Report YOUR task, and only yours. Do not infer that a feature is finished from board\n'
-        + 'position: a column advances when work STARTS, not when it finishes, so "every subtask is\n'
-        + 'in a coding column" is not evidence of anything. Handing a feature to review is your\n'
-        + 'lead\'s call, not yours — the lead asserts completion with POST /kanban/task/complete.';
+    return buildMemberCompletionFragment({ teamId: groupId, headName });
 }
 
 /**
@@ -205,23 +189,7 @@ export function CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId: string, headName: s
  * contradict "a team commits once, as its head".
  */
 export function CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(groupId: string): string {
-    return 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
-        + 'with it, POST /kanban/task/complete with {"from":"<your terminal name>","planId":'
-        + '"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"} against the port in '
-        + '.switchboard/api-server-port.txt. Post per subtask, with that subtask\'s planId — never '
-        + 'the feature\'s. Accepting and rejecting are not two different endings: you reject by '
-        + 'sending a fix round first, then you post when the subtask is done. Until you post, that '
-        + 'seat is not cleared and you cannot be handed the next subtask.\n\n'
-        + 'Then take the next item, routed by where your own work came from:\n'
-        + '- If you hold a card dispatched from the board, POST /kanban/queue/done with '
-        + '{"from":"<your terminal name>"} against the same port. A response of '
-        + '{"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
-        + '- Otherwise POST /terminals/teams/' + groupId + '/queue/done with '
-        + '{"from":"<your terminal name>"} to take the next queued item. If there are no more '
-        + 'items, the team is done with queued work.\n\n'
-        + 'You are the lead — there is nobody to relay your report to, so do not prompt yourself. '
-        + 'Do not infer completion from board position: a column advances when work STARTS, not '
-        + 'when it finishes. Your POST is the only fact that releases a seat.';
+    return `${buildHeadCompletionFragment()}\n\n${buildHeadNextFragment({ teamId: groupId })}`;
 }
 
 /**
@@ -327,15 +295,7 @@ export const TEAM_CODER_QUEUE_DONE_INSTRUCTION =
  * complete) and redundant — not conflicting — for team agents who already have
  * a team-scoped order with the same instruction.
  */
-export const GLOBAL_QUEUE_DONE_ORDER_BODY =
-    'When you finish the card you were dispatched, POST /kanban/queue/done with '
-    + '{"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. '
-    + 'Do not wait to be asked; there is no head to report to. '
-    + 'If you cannot complete it, call the same endpoint with {"from":"<your terminal name>",'
-    + '"outcome":"failed"} and a one-line reason. Do not attempt work above your tier and '
-    + 'do not report success you cannot evidence. '
-    + 'A response of {"dispatched":null,"reason":"queue empty"} means the run is over — '
-    + 'say so and stop. Do not call POST /kanban/queue/next, and do not move cards.';
+export const GLOBAL_QUEUE_DONE_ORDER_BODY = GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY;
 
 /**
  * Deterministic id for the global queue/done standing order, so it can be
@@ -360,8 +320,8 @@ export async function installGlobalQueueDoneOrder(db: any): Promise<void> {
         if (orders.some(o => o.id === GLOBAL_QUEUE_ORDER_ID)) {
             return orders;
         }
-        const order = makeStandingOrder(
-            '', '', GLOBAL_QUEUE_DONE_ORDER_BODY, 'global',
+        const order = makeFragmentStandingOrder(
+            '', '', [STANDING_ORDER_FRAGMENT_IDS.globalCompletion], 'global',
         );
         // makeStandingOrder mints a random id; overwrite with the deterministic
         // one so a re-run finds it rather than duplicating.
@@ -610,10 +570,7 @@ const OLD_SEEDED_AGENT_GROUP: any = {
  * it on every message that carries standing orders — including turn-end
  * notifications, which do not carry the per-dispatch GIT POLICY block.
  */
-export const TEAM_HEAD_COMMIT_INSTRUCTION =
-    ' When the work is complete, stage the files you changed by explicit path '
-    + '— never `git add -A` or `git add .`. Then create a single commit with a '
-    + 'descriptive message.';
+export const TEAM_HEAD_COMMIT_INSTRUCTION = ` ${TEAM_HEAD_COMMIT_FRAGMENT_BODY}`;
 
 /**
  * The POST-rewrite Coding team `headPrompt` — subtask-level, single-action.
@@ -1419,15 +1376,12 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     // interpolated to the head name and {teamId} interpolated to the groupId.
     // Otherwise build a default from the callback instruction (or external head callback)
     // + GIT_SAFETY_DIRECTIVE (imported, not copied).
-    const callbackTemplate = opts.externalHead
-        ? EXTERNAL_HEAD_CALLBACK_INSTRUCTION.replace(/\{teamId\}/g, groupId)
-        : CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId, headName);
-
     const teamPromptInstruction = prompt
         ? prompt.replace(/\{child\}/g, headName).replace(/\{teamId\}/g, groupId)
-        : (opts.externalHead
-            ? `${callbackTemplate.replace(/\{child\}/g, headName)}\n${GIT_SAFETY_DIRECTIVE}\n${TEAM_CODER_QUEUE_DONE_INSTRUCTION}`
-            : `${callbackTemplate}\n${GIT_SAFETY_DIRECTIVE}`);
+        : undefined;
+    const teamFragments = opts.externalHead
+        ? [STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback, STANDING_ORDER_FRAGMENT_IDS.gitSafety]
+        : [STANDING_ORDER_FRAGMENT_IDS.memberCompletion, STANDING_ORDER_FRAGMENT_IDS.memberWork, STANDING_ORDER_FRAGMENT_IDS.gitSafety];
 
     // ── Resolve pair-scoped relationships per child ───────────────────
     // Walk the member definitions and children together — children are in the
@@ -1519,21 +1473,6 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
         }
     }
 
-    // Create definitions for the team prompt and head prompt (idempotent by
-    // instruction text — a re-spawn finds the existing definition and reuses
-    // its id). Failures here are non-fatal: the assignment is still written
-    // with the instruction copy; it just lacks a definitionId link.
-    let teamDefId: string | undefined;
-    let headDefId: string | undefined;
-    try {
-        teamDefId = await ensureStandingOrderDefinition(db, teamPromptInstruction);
-        if (headInstruction) {
-            headDefId = await ensureStandingOrderDefinition(db, headInstruction);
-        }
-    } catch (defErr: any) {
-        console.warn(`[teamWiring] ensureStandingOrderDefinition failed for team ${groupId}:`, defErr?.message || defErr);
-    }
-
     try {
         await mutateStandingOrders(db, async (orders) => {
             const next = [...orders];
@@ -1545,15 +1484,9 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
             const teamExists = next.some((o: StandingOrder) =>
                 o.scope === 'team' && o.teamId === groupId);
             if (!teamExists) {
-                const teamOrder = makeStandingOrder(
-                    headName,           // parent = head (for exclusion)
-                    '',                 // child = empty (team-scoped, no child)
-                    teamPromptInstruction,
-                    'team',
-                    groupId,
-                    undefined,          // role
-                    teamDefId,          // definitionId
-                );
+                const teamOrder = teamPromptInstruction
+                    ? makeStandingOrder(headName, '', teamPromptInstruction, 'team', groupId)
+                    : makeFragmentStandingOrder(headName, '', teamFragments, 'team', groupId);
                 next.push({ ...teamOrder, id: `context-aware-completion:${groupId}:team` });
             }
 
@@ -1562,19 +1495,22 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
             // of wireSpawnedTeam skips it rather than duplicating.
             // Same mutator as the team order above — do not split this into a second
             // mutateStandingOrders call; that reopens a read-modify-write window.
-            if (!opts.externalHead && headInstruction) {
+            const useDefaultHeadFragments = !headInstruction && (opts.headRole === 'lead' || opts.headRole === 'reviewer' || !opts.headRole);
+            if (!opts.externalHead && (headInstruction || useDefaultHeadFragments)) {
                 const headExists = next.some((o: StandingOrder) =>
                     o.scope === 'team-head' && o.teamId === groupId);
                 if (!headExists) {
-                    next.push(makeStandingOrder(
-                        headName,   // parent = head (the delivery target for this scope)
-                        '',         // child = '' — old-build safety, see selectOrders
-                        headInstruction,
-                        'team-head',
-                        groupId,
-                        undefined,  // role
-                        headDefId,  // definitionId
-                    ));
+                    const headOrder = headInstruction
+                        ? makeStandingOrder(headName, '', headInstruction, 'team-head', groupId)
+                        : makeFragmentStandingOrder(headName, '', [
+                            STANDING_ORDER_FRAGMENT_IDS.codingHead,
+                            STANDING_ORDER_FRAGMENT_IDS.reviewHead,
+                            STANDING_ORDER_FRAGMENT_IDS.headCommit,
+                            STANDING_ORDER_FRAGMENT_IDS.headCompletion,
+                            STANDING_ORDER_FRAGMENT_IDS.headNext,
+                            STANDING_ORDER_FRAGMENT_IDS.orchestratorReport,
+                        ], 'team-head', groupId);
+                    next.push({ ...headOrder, id: `composed-head:${groupId}` });
                 }
             }
 
@@ -1682,35 +1618,6 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     } catch (err: any) {
         // A failed group write must not undo a successful order install.
         return { ok: false, error: `Group registration failed: ${err?.message || err}` };
-    }
-
-    // ── Context-aware completion order for head seat (team-head scope) ─────
-    // Replaces applySeatPacingOrders/applyTeamQueueOrders. Installed in a separate
-    // mutation so it does not conflict with the head prompt's (scope, teamId)
-    // check in the main mutation. Skipped for external heads.
-    if (!opts.externalHead) {
-        try {
-            const headCompletionOrderId = `context-aware-completion:${groupId}:team-head`;
-            // The HEAD body, not the member body: the member fallback names the
-            // head as the recipient, so installing it here tells the lead to
-            // ptySendPrompt itself and never names the lead's own task/complete.
-            const headCompletionOrderText = CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(groupId);
-            await mutateStandingOrders(db, async (orders) => {
-                if (orders.some(o => o.id === headCompletionOrderId)) {
-                    return orders;
-                }
-                const headOrder = makeStandingOrder(
-                    headName,
-                    '',
-                    headCompletionOrderText,
-                    'team-head',
-                    groupId,
-                );
-                return [...orders, { ...headOrder, id: headCompletionOrderId }];
-            });
-        } catch (orderErr: any) {
-            console.warn(`[teamWiring] context-aware completion order install failed for team-head ${groupId}: ${orderErr?.message || orderErr}`);
-        }
     }
 
     // Head-prompt regeneration (external heads only). Runs AFTER the group write
@@ -1872,7 +1779,7 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
                 // The current member body is stale here too, for the same reason —
                 // its fallback tells the head to prompt itself.
                 const memberBodies = [...staleBodies, CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head)];
-                if (memberBodies.includes(o.instruction)) {
+                if (typeof o.instruction === 'string' && memberBodies.includes(o.instruction)) {
                     rewrite.set(o.id, CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(gid));
                     touched = true;
                 }
@@ -1910,6 +1817,55 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
 }
 
 /** Additive per-row migration verdict for a persisted standing order. */
+export function migrateSystemOrdersToFragments(orders: StandingOrder[]): StandingOrder[] {
+    if (!Array.isArray(orders) || orders.length === 0) { return orders; }
+    const memberFragments = [
+        STANDING_ORDER_FRAGMENT_IDS.memberCompletion,
+        STANDING_ORDER_FRAGMENT_IDS.memberWork,
+        STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback,
+        STANDING_ORDER_FRAGMENT_IDS.gitSafety,
+    ];
+    const headFragments = [
+        STANDING_ORDER_FRAGMENT_IDS.codingHead,
+        STANDING_ORDER_FRAGMENT_IDS.reviewHead,
+        STANDING_ORDER_FRAGMENT_IDS.headCommit,
+        STANDING_ORDER_FRAGMENT_IDS.headCompletion,
+        STANDING_ORDER_FRAGMENT_IDS.headNext,
+        STANDING_ORDER_FRAGMENT_IDS.orchestratorReport,
+    ];
+    const seen = new Set<string>();
+    const next: StandingOrder[] = [];
+    let changed = false;
+    for (const order of orders) {
+        if (!order || typeof order !== 'object') { next.push(order); continue; }
+        const scope = order.scope || 'pair';
+        let fragments: string[] | undefined;
+        let key = '';
+        if ((scope === 'team' || scope === 'team-head') && order.teamId) {
+            key = `${scope}:${order.teamId}`;
+            if (seen.has(key)) { changed = true; continue; }
+            seen.add(key);
+            fragments = scope === 'team' ? memberFragments : headFragments;
+        } else if (scope === 'global' && order.id === GLOBAL_QUEUE_ORDER_ID) {
+            fragments = [STANDING_ORDER_FRAGMENT_IDS.globalCompletion];
+        }
+        if (!fragments) { next.push(order); continue; }
+        const sameFragments = Array.isArray(order.fragments)
+            && order.fragments.length === fragments.length
+            && order.fragments.every((id, index) => id === fragments![index]);
+        if (sameFragments && order.instruction === undefined && order.definitionId === undefined) {
+            next.push(order);
+            continue;
+        }
+        const { instruction: _instruction, definitionId: _definitionId, ...rest } = order;
+        void _instruction;
+        void _definitionId;
+        next.push({ ...rest, fragments: [...fragments] });
+        changed = true;
+    }
+    return changed ? next : orders;
+}
+
 export interface StandingOrderMigrationNote {
     /** A recogniser fired on this row: what is on disk is not what is delivered. */
     stale?: true;
