@@ -266,3 +266,13 @@ Add `const { applyBatchCap } = require('../../out/services/agentPromptBuilder');
 ## Implementation Summary
 
 Extracted pure helper `applyBatchCap` in `agentPromptBuilder` and delegated `selectTeamBatchPlans` to it. Added all missing batch-to-team-head tests into `batch-move-team-prompt-contract.test.js`, covering `testBatchCreatesNoFeatureRow`, `testEndToEndCapAndRemainder`, `testPreClickCount`, `testRecommendedRoleRouting`, `testPlannerFanOutRegression`, and `testScheduleRuleSchemaHasNoBatchSize`. Verified schema guards against `batchSize` and validated 15+ automated contract tests covering prompts, caps, roles, and boundaries.
+
+## Review Findings
+
+Reviewed commit `4c11b342`. All eight tests landed and the suite is CI-wired (`test:contract:batch-move-team-prompt`, package.json:922 → .github/workflows/integration-tests.yml:205). One MAJOR fixed: `applyBatchCap`'s `plans.length <= cap` short-circuit dropped the precedence sort that `selectTeamBatchPlans` had always applied, so batches of five or fewer — every prompt preview and most real dispatches — lost `queue_position` ordering in the prompt's PLANS TO PROCESS list; the short-circuit is now `!isTeamHead` only, restoring the prior behaviour exactly. `testResolveTeamHeadColumns` was updated because it asserted the wrong column set (see the cap-label subtask). Files changed: `src/services/agentPromptBuilder.ts`, `src/test/batch-move-team-prompt-contract.test.js` (added an under-cap ordering regression assertion). Validation: 19/19 contract tests pass.
+
+## Deferred Findings
+
+- NIT — `testRecommendedRoleRouting` asserts a constant (`DEFAULT_KANBAN_COLUMNS` role) rather than any routing behaviour, and `testPreClickCount` re-asserts `applyBatchCap` rather than the pre-click label; both are exactly what the plan's Goal Invariants specify, so they were left as written. src/test/batch-move-team-prompt-contract.test.js:509
+- NIT — `testScheduleRuleSchemaHasNoBatchSize` guards its assertion behind `if (schema.fields)`, so a schema with no `fields` key passes vacuously. src/test/batch-move-team-prompt-contract.test.js:540
+- NIT — the plan's step 3 (mutation-test each new assertion) was not performed; only pass/fail was verified. src/test/batch-move-team-prompt-contract.test.js:554

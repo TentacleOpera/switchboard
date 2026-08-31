@@ -194,3 +194,14 @@ case 'updateBoard':
 ## Implementation Summary
 
 Added `teamHeadColumns` and `teamBatchPlanCap` resolution and delivery across all board refresh paths in `KanbanProvider.ts` (`_refreshBoardImpl`, `refreshWithData`, `_refreshBoardWithData`, and `_buildResyncMessages`). In `kanban.html`, added styled `.column-icon-btn-labeled` UI support and dynamic `updateCapLabels()` logic to render pre-click "SEND N OF M" labels on Move All and Move Selected buttons whenever plans in a team-head column exceed the batch cap (`TEAM_BATCH_PLAN_CAP` = 5). Added contract tests covering team-head column resolution, non-team empty state, cap constant assertion, and webview HTML contract validation.
+
+## Review Findings
+
+Reviewed commit `4c11b342` and fixed two defects that left the goal unmet. CRITICAL: `resolveTeamHeadColumns` flagged columns whose own `role === 'lead'` — that is `LEAD CODED`, the column a lead batch *lands in*; advancing out of it dispatches the reviewer, so the label appeared on the one button the cap can never reach and never on `PLAN REVIEWED` / `STAGING` / `RESEARCHER`, which are the columns that actually dispatch to the lead. MAJOR: the label counted the whole column, but `PLAN REVIEWED` and `STAGING` fan out across lead/coder/intern by complexity, so a column of twelve with three high-complexity cards advertised "SEND 5 OF 12" for a batch that is never capped. Files changed: `src/services/KanbanProvider.ts` (`resolveTeamHeadColumns` rewritten to source columns, `isCodingTeamHead` now resolved once instead of once per lead column), `src/webview/kanban.html` (new `leadBoundCount` mirrors the backend complexity route; the duplicated inline button template removed so `updateCapLabels()` is the single writer), `src/test/batch-move-team-prompt-contract.test.js`. Validation: contract suite 19/19 pass, webview script parses under `node --check`, `standalone-parity:check` passes, eslint 0 errors.
+
+## Deferred Findings
+
+- MAJOR — the webview half of the label (`leadBoundCount`, the DOM write in `updateCapLabels`) has no executable coverage; `testWebviewCapLabelContract` is a string grep and cannot discriminate which column is labelled — the exact bug that shipped. Not exercised in a live board during this pass. src/test/batch-move-team-prompt-contract.test.js:404
+- MAJOR — `leadBoundCount` duplicates the backend's complexity route client-side (as the optimistic-move prediction already does) and cannot see `resolveRoutedRole`'s live-pool degradation, so the count can disagree with the backend when a role's pool is empty. src/webview/kanban.html:8965
+- NIT — the label does not refresh during optimistic drag-and-drop moves; it settles on the next `updateBoard`. Accepted by the plan as advisory. src/webview/kanban.html:8978
+- NIT — `updateStarredCount` was changed from `c.priorityStarred` to `!!c.priorityStarred`, an out-of-scope drive-by with no behavioural effect. src/webview/kanban.html:8790

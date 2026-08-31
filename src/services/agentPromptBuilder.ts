@@ -92,10 +92,14 @@ export function applyBatchCap<T extends BatchPromptPlan>(
     cap: number,
     isTeamHead: boolean
 ): { sent: T[]; skipped: T[] } {
-    if (!isTeamHead || plans.length <= cap) {
+    if (!isTeamHead) {
         return { sent: plans, skipped: [] };
     }
-    // Delegate to the existing sort-and-slice logic.
+    // The sort is NOT conditional on exceeding the cap. `selectTeamBatchPlans` — the
+    // only production caller — ordered every set it was handed, and its result becomes
+    // the prompt's PLANS TO PROCESS list. Short-circuiting an under-cap set back to
+    // caller order would silently drop queue_position precedence for batches of five
+    // or fewer, which is every preview and most real dispatches.
     const sortColumn = plans[0]?.column || '';
     const ordered = [...plans].sort((a, b) => compareByPrecedence(a, b, sortColumn));
     return { sent: ordered.slice(0, cap), skipped: ordered.slice(cap) };

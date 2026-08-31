@@ -5991,17 +5991,47 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     /**
-     * Resolve which columns have a team-head dispatch target.
-     * isCodingTeamHead falls back to _getAgentNames for the agent name —
-     * same path as prompt previews. Called once per lead column (1-2 typically).
+     * Resolve the columns whose Move All / Move Selected can dispatch a batch to a
+     * team-headed lead — the SOURCE columns, never the lead column itself.
+     *
+     * The cap keys off the DISPATCH TARGET, not the column the cards sit in.
+     * `LEAD CODED` is the only `role: 'lead'` column, and advancing FROM it lands on
+     * the reviewer — no lead dispatch, so no cap. Marking it would put the label on
+     * the one button the cap can never reach while leaving the buttons that do reach
+     * it unlabelled. Two shapes qualify:
+     *   - the complexity-routed sources (`PLAN REVIEWED`, `STAGING`): their advance
+     *     fans out across lead/coder/intern, and the lead group is capped. With
+     *     dynamic routing off, `_resolveComplexityRoutedRole` sends the whole column
+     *     to the lead, so they qualify either way.
+     *   - any column whose next column is the lead column: the whole set advances
+     *     there in one batch.
+     *
+     * `isCodingTeamHead` resolves once, not once per column — it takes no column
+     * argument, so the per-column call it replaced returned the same answer N times.
+     * A team-less lead (the common case) short-circuits before any column work.
+     * Next-column resolution mirrors the webview's `getNextColumn` (skip role-less
+     * non-terminal columns) rather than calling `_getNextColumnId`, which rebuilds
+     * the whole column set per call and would run once per column per board refresh.
      */
     public async resolveTeamHeadColumns(workspaceRoot: string, columns: KanbanColumnDefinition[]): Promise<string[]> {
-        const teamHeadColumns: string[] = [];
-        for (const col of columns) {
-            if (col.role === 'lead') {
-                const isHead = await this.isCodingTeamHead(workspaceRoot, 'lead');
-                if (isHead) teamHeadColumns.push(col.id);
+        if (!(await this.isCodingTeamHead(workspaceRoot, 'lead'))) { return []; }
+        const ordered = [...columns].sort((a, b) => a.order - b.order);
+        const nextAfter = (idx: number): KanbanColumnDefinition | undefined => {
+            for (let i = idx + 1; i < ordered.length; i++) {
+                const def = ordered[i];
+                if (!def.role && def.kind !== 'completed') { continue; }
+                return def;
             }
+            return undefined;
+        };
+        const teamHeadColumns: string[] = [];
+        for (let i = 0; i < ordered.length; i++) {
+            const col = ordered[i];
+            if (col.id === 'PLAN REVIEWED' || col.id === 'STAGING') {
+                teamHeadColumns.push(col.id);
+                continue;
+            }
+            if (nextAfter(i)?.role === 'lead') { teamHeadColumns.push(col.id); }
         }
         return teamHeadColumns;
     }

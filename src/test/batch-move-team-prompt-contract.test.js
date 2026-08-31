@@ -369,16 +369,28 @@ async function testGenerateUnifiedPromptCoderBatchNoDrivePrefix() {
 async function testResolveTeamHeadColumns() {
     console.log('Testing resolveTeamHeadColumns...');
     const providerWithTeam = makeProvider({ groups: TEAM_GROUPS, agentNames: { lead: 'Coding-lead' } });
+    // The cap keys off the DISPATCH TARGET. LEAD CODED is where a lead batch LANDS —
+    // advancing out of it goes to the reviewer, so it is never capped and must never
+    // carry the label. The columns that reach the lead are the complexity-routed
+    // sources and any column whose next column is the lead column.
     const cols = [
-        { id: 'CREATED', label: 'Created', role: null },
-        { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner' },
-        { id: 'LEAD CODED', label: 'Lead', role: 'lead' },
-        { id: 'CODER CODED', label: 'Coder', role: 'coder' },
-        { id: 'REVIEWED', label: 'Reviewed', role: 'reviewer' }
+        { id: 'CREATED', label: 'Created', role: null, order: 0, kind: 'created' },
+        { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review' },
+        { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 110, kind: 'review' },
+        { id: 'STAGING', label: 'Staging', role: undefined, order: 115, kind: 'staging' },
+        { id: 'LEAD CODED', label: 'Lead', role: 'lead', order: 180, kind: 'coded' },
+        { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded' },
+        { id: 'REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed' }
     ];
 
     const teamCols = await providerWithTeam.resolveTeamHeadColumns('/ws', cols);
-    assert.deepStrictEqual(teamCols, ['LEAD CODED'], 'Only lead column with a team should be identified as team head column');
+    assert.deepStrictEqual(
+        teamCols,
+        ['PLAN REVIEWED', 'RESEARCHER', 'STAGING'],
+        'Team-head columns are the sources that dispatch to the lead, not the lead column'
+    );
+    assert.ok(!teamCols.includes('LEAD CODED'), 'LEAD CODED must never be flagged — advancing out of it dispatches the reviewer');
+    assert.ok(!teamCols.includes('CREATED'), 'CREATED advances to the planner, not the lead');
 
     const providerNoTeam = makeProvider({ groups: [], agentNames: { lead: 'Solo-lead' } });
     const noTeamCols = await providerNoTeam.resolveTeamHeadColumns('/ws', cols);
@@ -436,6 +448,15 @@ function testEndToEndCapAndRemainder() {
     const under = applyBatchCap(makeOrderablePlans(3), TEAM_BATCH_PLAN_CAP, true);
     assert.strictEqual(under.sent.length, 3, 'Under cap: all sent');
     assert.strictEqual(under.skipped.length, 0, 'Under cap: none skipped');
+
+    // Under cap still ORDERS. The sent set becomes the prompt's PLANS TO PROCESS
+    // list, so a short batch must carry the same precedence order a long one does.
+    const scrambled = applyBatchCap(twelve.slice(0, 4).reverse(), TEAM_BATCH_PLAN_CAP, true);
+    assert.deepStrictEqual(
+        scrambled.sent.map(p => p.planId),
+        applyBatchCap(twelve.slice(0, 4), TEAM_BATCH_PLAN_CAP, true).sent.map(p => p.planId),
+        'Under-cap sets are sorted by precedence, not left in caller order'
+    );
 
     console.log('  PASS: end-to-end cap/remainder');
 }

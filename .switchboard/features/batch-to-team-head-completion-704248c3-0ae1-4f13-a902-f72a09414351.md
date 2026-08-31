@@ -65,3 +65,16 @@ Complete the batch-to-team-head dispatch path in the extension host: add dispatc
 
 Batch-to-team-head prompts now include the team roster, local API details, dispatch recipe, and per-plan completion contract without feature-only wording. Board updates now disclose team-head columns and the shared batch cap so Move All and Move Selected can show pre-click `SEND N OF M` labels. The cap logic is available through the pure `applyBatchCap` helper, and the contract suite now covers prompt framing, cap boundaries, role routing, planner fan-out, and schedule-schema constraints. Head verification used static diff and syntax checks because compilation and automated tests were disabled for this run.
 
+
+## Review Findings
+
+Reviewed commit `4c11b342` as one delivery unit. Subtask 1 (dispatch means) is correct as shipped — the gate, the batch prefix and the `_resolveRosterAndPort` extraction all hold. Subtask 2 (cap label) did not meet its goal and was fixed: `resolveTeamHeadColumns` keyed off the column's own `role === 'lead'`, which is `LEAD CODED` — the column a lead batch lands in, not one it dispatches from — so the label rendered where the cap can never apply and nowhere it can; the count also ignored complexity fan-out on `PLAN REVIEWED` / `STAGING`. Subtask 3 (tests) landed all eight and is CI-wired, but its `applyBatchCap` extraction silently dropped the precedence sort for under-cap sets; restored. Files changed: `src/services/KanbanProvider.ts`, `src/services/agentPromptBuilder.ts`, `src/webview/kanban.html`, `src/test/batch-move-team-prompt-contract.test.js`. Validation: `test:contract:batch-move-team-prompt` 19/19, plus render-guard, dispatch-view, ws-surface-scoping, broadcast-hub-headless and standalone-fleet-seam suites green; `standalone-parity:check` passes; eslint 0 errors; the kanban.html inline script parses under `node --check`.
+
+## Deferred Findings
+
+- MAJOR — no automated check can discriminate on the cap label's core mechanism in the webview (which column is labelled, and the count it shows); `testWebviewCapLabelContract` is a string grep. The backend half is now covered by `testResolveTeamHeadColumns`; the DOM half is unverified and no live board was exercised in this pass. src/test/batch-move-team-prompt-contract.test.js:404
+- MAJOR — `leadBoundCount` re-implements the backend complexity route in the webview and cannot see live-pool degradation in `resolveRoutedRole`, so the label can disagree with the backend when a role's terminal pool is empty. src/webview/kanban.html:8965
+- NIT — `_buildBatchDrivePrefix` takes a `plans` parameter it never reads. src/services/KanbanProvider.ts:5771
+- NIT — the label is stale during optimistic drag-and-drop until the next `updateBoard`. src/webview/kanban.html:8978
+- NIT — `testRecommendedRoleRouting` and `testPreClickCount` assert constants rather than the behaviour their names claim; both match the plan's stated Goal Invariants and were left alone. src/test/batch-move-team-prompt-contract.test.js:509
+- NIT — the plan's mutation-testing step (verify each new test fails when the behaviour breaks) was not performed. src/test/batch-move-team-prompt-contract.test.js:554

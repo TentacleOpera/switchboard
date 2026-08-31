@@ -202,3 +202,12 @@ return built;
 ## Implementation Summary
 
 Extracted shared helper `_resolveRosterAndPort` to consolidate team roster resolution, API port file reading, and roster line formatting across drive prefixes. Added `_buildBatchDrivePrefix` to generate a batch-specific drive prefix that instructs team leads to read individual plan files and dispatch per-plan without feature file constraints. Updated the directive gate in `generateUnifiedPrompt` so that batch dispatches to team head leads (`batchMode === true && !isRealFeature && role === 'lead'`) prepend `_buildBatchDrivePrefix`. Added automated contract tests in `batch-move-team-prompt-contract.test.js` validating the batch drive prefix, roster lines, staging recipe, negative assertions, and gate routing.
+
+## Review Findings
+
+Reviewed commit `4c11b342`. The gate fix and `_buildBatchDrivePrefix` are correct and land the goal: `batchMode` is set only inside the `isTeamHead` branch (KanbanProvider.ts:6390), so `isBatchTeamHead` cannot fire for a non-team lead, and a null roster falls through to the bare batch prompt exactly as the plan's edge-case audit specified. `_resolveRosterAndPort` preserves `_buildDrivePrefix`'s behaviour byte-for-byte (the extracted `portResolved` derivation is the same `startsWith('Port is ')` test). No files changed for this subtask. Verified by `npm run test:contract:batch-move-team-prompt` (19/19 pass), which exercises the full `generateUnifiedPrompt` path for team-head, non-team and coder batches.
+
+## Deferred Findings
+
+- NIT — `_buildBatchDrivePrefix(workspaceRoot, plans)` never reads `plans`; the signature is plan-specified and `noUnusedParameters` is off, so it compiles clean. src/services/KanbanProvider.ts:5771
+- NIT — the batch branch prepends the drive prefix without consulting `resolveDrive()`, unlike the feature branch; `batchOptions.driveMode` is set unconditionally in the team-head arm, so this is pre-existing behaviour, not new. src/services/KanbanProvider.ts:6390

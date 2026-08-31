@@ -8241,38 +8241,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // In backlog view, the CREATED column shows BACKLOG cards — a holding
                     // pen, not a pipeline stage. Suppress the four advance/prompt buttons
                     // so only the feature-group button remains.
-                    const isTeamHeadCol = (lastTeamHeadColumns || []).includes(def.id);
-                    const colCount = getAllInColumn(def.id).length;
-                    const cap = lastTeamBatchPlanCap ?? 5;
-                    const moveAllLabel = isTeamHeadCol && colCount > cap
-                        ? `SEND ${Math.min(cap, colCount)} OF ${colCount}`
-                        : '';
-                    const moveAllBtn = moveAllLabel
-                        ? `<button class="column-icon-btn column-icon-btn-labeled" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Move all plans in this column to next stage (cap: ${cap} for team head)">
-                            <img src="${ICON_MOVE_ALL}" alt="Move All">
-                            <span class="cap-label">${moveAllLabel}</span>
-                           </button>`
-                        : `<button class="column-icon-btn" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Move all plans in this column to next stage">
-                            <img src="${ICON_MOVE_ALL}" alt="Move All">
-                           </button>`;
-
-                    const selectedCount = getSelectedInColumn(def.id).length;
-                    const moveSelectedLabel = isTeamHeadCol && selectedCount > cap
-                        ? `SEND ${Math.min(cap, selectedCount)} OF ${selectedCount}`
-                        : '';
-                    const moveSelectedBtn = moveSelectedLabel
-                        ? `<button class="column-icon-btn column-icon-btn-labeled" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (cap: ${cap} for team head; triggers CLI if enabled)">
-                            <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
-                            <span class="cap-label">${moveSelectedLabel}</span>
-                           </button>`
-                        : `<button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (triggers CLI if enabled)">
-                            <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
-                           </button>`;
-
+                    // The SEND N OF M cap labels are NOT built here. updateCapLabels()
+                    // runs at the end of every render and owns them — one writer, and
+                    // the only one that can read a live selection (getSelectedInColumn
+                    // queries the column container this markup is about to replace, so
+                    // at render time it always reports zero).
                     const suppressPipeline = (isCreated && showingBacklog);
                     const pipelineButtons = suppressPipeline ? '' : `
-                        ${moveSelectedBtn}
-                        ${moveAllBtn}
+                        <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (triggers CLI if enabled)">
+                            <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
+                        </button>
+                        <button class="column-icon-btn" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Move all plans in this column to next stage">
+                            <img src="${ICON_MOVE_ALL}" alt="Move All">
+                        </button>
                         <button class="column-icon-btn" data-action="promptSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Copy prompt for selected plans and advance to next stage">
                             <img src="${ICON_PROMPT_SELECTED}" alt="Prompt Selected">
                         </button>
@@ -8974,6 +8955,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (runBtn) runBtn.disabled = !(n > 0 && dispatchAnalyzeAvailable && (lastCodingHeadLive || lastAnyCodingTerminalLive));
         }
 
+        // How many of these cards actually reach the team-headed lead — the only ones
+        // the cap counts. PLAN REVIEWED and STAGING fan out across lead/coder/intern
+        // by complexity (backend: _partitionByComplexityRoute), so their column total
+        // overstates the lead's share and would raise a SEND label for a batch that is
+        // never capped. Mirrors the same routingMapConfig lookup the optimistic-move
+        // prediction uses. With routing off the backend sends the whole column to the
+        // lead, so the total is the right number.
+        function leadBoundCount(colId, ids) {
+            if ((colId === 'PLAN REVIEWED' || colId === 'STAGING') && dynamicComplexityRoutingEnabled) {
+                const leadScores = Array.isArray(routingMapConfig?.lead) ? routingMapConfig.lead : [];
+                return ids.filter(id => {
+                    const card = currentCards.find(c => (c.planId || c.sessionId) === id);
+                    const score = parseInt(card?.complexity, 10);
+                    return !isNaN(score) && leadScores.includes(score);
+                }).length;
+            }
+            return ids.length;
+        }
+
         // Update pre-click batch cap labels on Move All and Move Selected buttons
         function updateCapLabels() {
             const cap = lastTeamBatchPlanCap ?? 5;
@@ -8985,7 +8985,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const moveAllBtn = colEl.querySelector('.column-icon-btn[data-action="moveAll"]');
                 if (moveAllBtn) {
-                    const colCount = getAllInColumn(colId).length;
+                    const colCount = leadBoundCount(colId, getAllInColumn(colId));
                     const moveAllLabel = isTeamHeadCol && colCount > cap
                         ? `SEND ${Math.min(cap, colCount)} OF ${colCount}`
                         : '';
@@ -9008,7 +9008,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const moveSelectedBtn = colEl.querySelector('.column-icon-btn[data-action="moveSelected"]');
                 if (moveSelectedBtn) {
-                    const selectedCount = getSelectedInColumn(colId).length;
+                    const selectedCount = leadBoundCount(colId, getSelectedInColumn(colId));
                     const moveSelectedLabel = isTeamHeadCol && selectedCount > cap
                         ? `SEND ${Math.min(cap, selectedCount)} OF ${selectedCount}`
                         : '';
@@ -9924,12 +9924,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // Team-headness and batch cap for pre-click cap disclosure.
         let lastTeamHeadColumns = [];
         let lastTeamBatchPlanCap = 5;
-        const boardState = {
-            get teamHeadColumns() { return lastTeamHeadColumns; },
-            set teamHeadColumns(val) { lastTeamHeadColumns = val; },
-            get teamBatchPlanCap() { return lastTeamBatchPlanCap; },
-            set teamBatchPlanCap(val) { lastTeamBatchPlanCap = val; }
-        };
 
         // Drag & Drop handlers
         let draggedSessionId = null;
