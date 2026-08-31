@@ -220,3 +220,17 @@ silently vanishes in one host. Diff the two calls by hand; no gate catches this.
 - Assert `.strip-icon.is-dormant` class exists in `src/webview/shell.html` (promoted from UFO's dimmed treatment).
 - Assert `defaultPanelId` resolves to `'board'` regardless of manifest order.
 - Assert count of rail buttons equals 5 primary + 3 team slots + 4 cold = 12, independent of fleet size.
+
+## Implementation Summary
+
+Rebuilt the shell rail around primary and cold declared manifest groups with `railHidden` support for modal/auxiliary panels. Removed the theme toggle, dock toggle, per-terminal ungrouped buttons, and the UFO Mission Control icon/relay while preserving controller seat caching and the `/mission-control/start` API. Promoted `.is-dormant` class in shell CSS and anchored bottom alignment to the first cold group icon. Updated composition roots (`TaskViewerProvider.ts` and `bootstrap.ts`) and strip contract tests in `shell-terminal-strip.test.js` to ensure complete parity.
+
+
+## Review Findings
+
+Reviewed against commit 8a77aa1f. `PanelManifestEntry` carries a required `group` and a `railHidden` marker, `defaultPanelId` is declared `board`, and `buildThemeToggle`, `buildDockToggle`, `createMissionControlIcon`, `ensureMissionControlIcon`, `buildTerminalButton`, `DOCK_SYSTEM_ROLES` and the `missionControlState` relay all have zero live references in either host; `POST /mission-control/start` and its `missionControlStart` option survive in both composition roots. Two MAJOR defects fixed: the cold-group divider was keyed on `.strip-group-cold:first-of-type`, which can never match — every rail icon is a `<button>` and the first one is Board — so the group had no separator (now an `.is-cold-first` class applied beside the anchor in `applyBottomAnchor`); and `renderTopRightCluster` synthesised an *enabled* button for any manifest id it could not find, producing a `selectPanel()` into a frame `renderManifest` never built, which is precisely the dead control the rail's own omission rule exists to prevent. Files changed: `src/webview/shell.html`, `src/webview/shell.js`. Validation: `test:contract:shell-terminal-strip` 66/66, `npm test` green, typecheck clean.
+
+## Deferred Findings
+
+- NIT `src/webview/shell.html:249` — the `#strip-terminals:empty` fallback comment still described the UFO's persistence; reworded, not removed (the rule is still reachable).
+- NIT `.switchboard/plans/shell-rail-restructure-primary-and-cold-groups.md` — the "rail button count equals 12" invariant holds only when every cold panel is enabled; `planning`, `tickets` and `design` are host-gated, so the count is 12 in both shipped hosts but is not structurally constant.

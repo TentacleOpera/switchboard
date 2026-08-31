@@ -183,3 +183,18 @@ indistinguishable from one that works.
 - Assert nothing in the UI uses the `inFlight` flag to gate a dispatch — the 409 remains the only authority.
 - Assert `resolveTeamInFlight` supports a short-circuit mode (stops at first held card) for the rail path.
 - Assert the 409 error message still names the held card after extraction (gate behaviour unchanged).
+
+## Implementation Summary
+
+Exposed the server-side in-flight predicate via the exported helper `resolveTeamInFlight` in `LocalApiServer.ts` and wired it into `GET /terminals/teams/<groupId>/queue` to return `inFlight: boolean`. Cached this state in `_teamInFlight` map and emitted `dispatched` flags across `buildTeamsForShell` in `terminals.js`. Added a shape-based indicator `.strip-team-btn.is-dispatched::after` in `shell.html` and applied it in `renderTerminalSection` in `shell.js` while maintaining that UI indicators never gate dispatches (409 remains the authority). Added contract tests in `shell-terminal-strip.test.js`.
+
+
+## Review Findings
+
+Reviewed against commit 8a77aa1f. `resolveTeamInFlight` and `heldByTeam` are exported from `src/services/LocalApiServer.ts` and are the single definition consumed by the team-dispatch 409 gate (`:2200`), the queue-done path (`:2839`), team/release and now `GET /terminals/teams/<groupId>/queue`; the fresh-read re-check is preserved verbatim, the 409 message still names the held card, and nothing client-side gates a dispatch on the flag. Inbound field-existence check passed: the handler's roster read (`group.order` then `group.members`) matches the persisted literal in `wireSpawnedTeam`, which writes both as `[headName, ...childNames]`. `_teamInFlight` is stored beside `_teamQueueDepths` with the same stale-beats-absent behaviour, and `dispatched` is rendered as a shape (a 5px corner dot) distinct from the selection bar. No code changes were needed for this subtask. Validation: `test:contract:shell-terminal-strip` 66/66, `test:contract:team-release-control` green, typecheck clean.
+
+## Deferred Findings
+
+- MAJOR `src/webview/terminals.js:1787` — `refreshTeamQueueDepths` polls only spawned team groups, and a member-less team registers no group row, so `dispatched` can never become true for any of the three default rail slots even while their head holds a card. Not fixed here: the fix is either registering a group row for head-only teams (changes the team-registration contract in `wireSpawnedTeam`) or polling the queue by head name (a second roster derivation), and both are the author's call.
+- NIT `src/services/LocalApiServer.ts:89` — `resolveTeamInFlight` is short-circuit-ONLY; the plan asked for short-circuit as a *mode* alongside an all-candidates scan. Both current callers want the first held card, so behaviour is correct today, but the parameter the plan specified does not exist.
+- NIT `src/services/LocalApiServer.ts:5466` — the queue GET now performs a board read plus a per-candidate `getPlanByPlanId` on every poll cycle, per team. Bounded by the short-circuit, but it is a new per-poll DB cost the plan flagged and did not measure.

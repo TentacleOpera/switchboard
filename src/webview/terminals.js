@@ -1371,6 +1371,21 @@
             } else if ((message.type === 'autobanStateSync' || message.type === 'updateAutobanConfig') && message.state) {
                 const seat = message.state.missionControlSeat || null;
                 lastMissionControlSeatName = (seat && seat.terminalName) || null;
+                // Relay the ARMED flag (and only that) up to the shell for the agent
+                // dock's title. This is NOT a return of the deleted UFO state relay —
+                // that carried active/armed/seat to paint a rail icon that no longer
+                // exists. The shell document has no WebSocket and no
+                // transport shim, so autobanStateSync cannot reach it directly; this
+                // panel is the only surface that hears it. Mirrors
+                // postFleetStateToShell's embedded + dock guards for the same reasons.
+                if (window.parent !== window && !isDockFrame) {
+                    try {
+                        window.parent.postMessage({
+                            type: 'missionControlArmed',
+                            armed: message.state.missionControlArmed === true
+                        }, location.origin);
+                    } catch { /* ignore */ }
+                }
             } else if (message.type === 'panelVisibility' && typeof message.visible === 'boolean') {
                 if (event.origin !== location.origin) { return; }
                 // The shell hides a panel by setting display:none on its IFRAME. This
@@ -1661,22 +1676,17 @@
         });
 
         // Build a `teams` array beside `terminals` so the shell rail can render
-        // one button per team (wearing the team's icon) instead of one per
-        // terminal. Only spawned team groups (team_ prefix + teamGroup flag OR
-        // teamKind: 'spawned') become team buttons — derived role/worktree
-        // groups and hand-saved selections do not. The shell decides what to
-        // draw; a shell that has not been updated must keep working against a
-        // new panel, and vice versa, so `terminals` stays unchanged + complete.
+        // three FIXED slots — one per DEFAULT_TEAM_DEFINITIONS entry, in array
+        // order, present whether or not the team is running. Operator-created
+        // teams beyond the three defaults are not rail slots; they live in the
+        // Agent Control and Terminals panels. Order is definition order and is
+        // decided here: the shell cannot sort by an order it does not have.
         //
-        // Sort by definition order (the order the operator authored teams in
-        // the TEAMS tab), then name — never fleet-poll order, which would make
-        // icons jump between polls. The shell cannot sort by definition order
-        // it does not have, so this MUST be panel-side.
-        //
-        // Aggregate light per team: 'done' if ANY member has an unacknowledged
-        // completion badge, else 'active' if any member is active, else
-        // 'exited'. doneStamp = max over member stamps — a second member
-        // finishing raises the stamp and re-pulses exactly once.
+        // No completion state is relayed. The rail is a navigation surface, so
+        // `light`/`doneStamp` were dropped from this payload; the durable
+        // completion record is the panel's own sidebar DONE chip and pane badge.
+        // `terminals` stays unchanged + complete so a shell and a panel of
+        // different vintages keep working against each other.
         const teams = buildTeamsForShell();
 
         window.parent.postMessage({
@@ -1870,6 +1880,25 @@
                 headName = (typeof liveGroup.head === 'string' && liveGroup.head) ? liveGroup.head
                     : (members.length > 0 ? members[0] : '');
                 running = activeCount > 0;
+            } else {
+                // All three default definitions are member-less, and a member-less
+                // team registers NO `terminals.groups` row: wireSpawnedTeam returns
+                // early when `children` is empty, so the group lookup above can never
+                // find it. The head is the whole team, and the only evidence it is
+                // running is a live, unparented terminal on the head role — the exact
+                // predicate startTeamById's double-start guard uses. Without this arm
+                // the three fixed slots render dormant forever and clicking a running
+                // one re-attempts a start the server refuses.
+                const headOnly = fleetList.find(t => t
+                    && t.status === 'active'
+                    && !t.parentInstanceId
+                    && t.role === headRole);
+                if (headOnly) {
+                    running = true;
+                    activeCount = 1;
+                    headName = headOnly.friendlyName;
+                    liveMembers = [headOnly.friendlyName];
+                }
             }
 
             teamEntries.push({
@@ -1880,6 +1909,8 @@
                 iconUri: iconUri || '',
                 running,
                 dispatched: (running && liveGroup) ? Boolean(_teamInFlight.get(liveGroup.id)) : false,
+                // null for a head-only team: there is no registered group to scope
+                // the Terminals panel to. The shell focuses `head` instead.
                 groupId: (running && liveGroup) ? liveGroup.id : null,
                 memberNames: running ? liveMembers : [],
                 activeCount,

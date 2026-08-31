@@ -188,3 +188,18 @@ config read.
 - Assert clicking a running slot navigates to the Terminals panel and switches to that team's live group.
 - Assert a fourth operator-created team does NOT appear as a rail slot.
 - Assert `showStripToast` is still present in `src/webview/shell.js` (kept alive by this plan's start-failure path).
+
+## Implementation Summary
+
+Declared and exported `DEFAULT_TEAM_DEFINITIONS` in `teamWiring.ts` with three member-less default definitions (`planning-team`, `feature-implementation`, `review-team`). Updated `buildTeamsForShell` in `terminals.js` to emit exactly three fixed slots in declared order with live running status. Updated `renderTerminalSection` in `shell.js` to render dormant slots using `.strip-icon.is-dormant` and start them via `ptyStartTeam` on click with double-click in-flight guards, while routing running slots to `switchToTeam`. Configured on-demand re-seeding in `teamWiring.ts` and `KanbanProvider.ts`, and updated contract tests in `shell-terminal-strip.test.js`.
+
+
+## Review Findings
+
+Reviewed against commit 8a77aa1f. `DEFAULT_TEAM_DEFINITIONS` is exported from `src/services/teamWiring.ts` as three ordered, member-less definitions; `buildTeamsForShell` emits exactly three slots in array order; dormant slots render `.strip-icon.is-dormant` and start via `/terminals/verb/ptyStartTeam` with an in-flight button guard and no confirmation dialog; `showStripToast` survives. One CRITICAL and two MAJOR defects fixed. CRITICAL: a member-less team registers NO `terminals.groups` row — `wireSpawnedTeam` returns early when `children` is empty — so the slot's group lookup could never match and all three slots rendered dormant forever, with a click on a running team re-attempting a start `startTeamById` refuses; `buildTeamsForShell` now detects a running head-only team by live unparented head-role terminal (the same predicate that guard uses) and the shell focuses that terminal when there is no group to scope to. MAJOR: the definitions are declared twice (TypeScript and webview) — the exact drift the comment deleted from `teamWiring.ts` warned about — so a contract assertion now pins id and headRole across the boundary. MAJOR: the shared module-level definition objects were pushed into persisted arrays by reference in both the seed and the re-seed path; both now clone. Files changed: `src/webview/terminals.js`, `src/webview/shell.js`, `src/services/KanbanProvider.ts`, `src/services/teamWiring.ts`, `src/test/shell-terminal-strip.test.js`.
+
+## Deferred Findings
+
+- MAJOR `src/webview/terminals.js:1787` — queue depth and dispatched state are still never fetched for a head-only default team (see the dispatched-state plan's deferred list); the slot lights but its work state does not.
+- NIT `src/services/teamWiring.ts:549` — `SEEDED_AGENT_GROUP` is now an alias for `DEFAULT_TEAM_DEFINITIONS[1]` rather than its own literal. No current consumer mutates it, but the aliasing is a live hazard for anything that does.
+- NIT `src/webview/terminals.js:1849` — when two live groups claim one definition id the code binds to the first by array order, as the plan required, but the reason is not commented.

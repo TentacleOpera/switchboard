@@ -170,3 +170,17 @@ assumption the whole placement rests on, and a future panel without a tab bar br
 - Assert `--dock-width` CSS variable is written by both `setDockOpen` and the splitter drag handler in `src/webview/shell.js`.
 - Assert `#top-right-cluster` is absent from any pop-out window (pop-out windows have no shell chrome).
 - Assert no panel control in the top-right band is occluded by the cluster at 1280px or 1920px width.
+
+## Implementation Summary
+
+Added a floating fixed control cluster `#top-right-cluster` at the top right of the shell containing the Agent Dock toggle, Setup, Memo, and Connections controls. The right offset tracks the `--dock-width` CSS custom property, updated dynamically on dock toggle, resize, and splitter drag. Setup and Connections are registered in the `icons` map for active state highlights, while tooltips on cluster buttons flip to the left to avoid viewport overflow. Memo overlays elevate stacking context to cover the cluster cleanly when active.
+
+
+## Review Findings
+
+Reviewed against commit 8a77aa1f. `#top-right-cluster` is a body-level `position: fixed` region at `top: 6px; right: calc(var(--dock-width, 0px) + 6px)` with `z-index: 40`; `--dock-width` is written by `setDockOpen`, the resize handler and the splitter drag's `onMove`, so the offset tracks continuously. `.dock-toggle-btn` is preserved verbatim for `setDockOpen` and `updateDockViableGating`, Setup and Connections are registered in the `icons` map for `.is-active`, tooltips use `data-tooltip` with a real left-anchor branch for cluster buttons (`showStripTooltip`, `el.closest('#top-right-cluster')`), and only the dock button gates off below `DOCK_VIABLE_MIN`. One MAJOR defect fixed: the cluster fabricated an enabled button for any panel missing from the manifest, so a host that disabled Setup would render a control that selects a frame that was never built. Files changed: `src/webview/shell.js`. Validation: `test:contract:shell-terminal-strip` 66/66, typecheck clean.
+
+## Deferred Findings
+
+- NIT `src/webview/shell.html:44` — the reserved-band assumption is documented in a comment as the plan required, but nothing enforces it; a future panel with a top-right control will sit under the cluster and be unclickable with every gate green.
+- NIT `src/webview/shell.js` — cluster buttons are appended after the rail in DOM order, which gives the intended tab order, but no test pins it.

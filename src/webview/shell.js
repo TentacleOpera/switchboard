@@ -741,10 +741,15 @@
         const coldIcons = strip.querySelectorAll('.strip-group-cold');
         for (const el of coldIcons) {
             el.style.marginTop = '';
+            el.classList.remove('is-cold-first');
         }
         if (coldIcons.length > 0) {
             if (container) { container.style.marginTop = '0'; }
             coldIcons[0].style.marginTop = 'auto';
+            // The divider above the cold group. CSS cannot select "first cold
+            // icon" — :first-of-type is per element TYPE, and every rail icon is
+            // a <button> — so the class is applied here, beside the anchor.
+            coldIcons[0].classList.add('is-cold-first');
         } else if (container) {
             container.style.marginTop = '';
         }
@@ -822,7 +827,21 @@
             }
 
             btn.addEventListener('click', async () => {
-                if (team.running && team.groupId) {
+                if (team.running && !team.groupId && team.head) {
+                    // A member-less team registers no terminals.groups row
+                    // (wireSpawnedTeam returns early with no children), so there is
+                    // no team scope to switch into — the head IS the team. Focus it.
+                    selectPanel('terminals');
+                    const termFrame = frames.get('terminals');
+                    if (termFrame && termFrame.contentWindow) {
+                        try {
+                            termFrame.contentWindow.postMessage({
+                                type: 'focusTerminal',
+                                name: team.head
+                            }, location.origin);
+                        } catch { /* ignore */ }
+                    }
+                } else if (team.running && team.groupId) {
                     // Switch the main terminals panel to team-scoped mode in-place.
                     // No pop-out window — the team view replaces the fleet view
                     // inside the existing panel, with a back button to return.
@@ -895,14 +914,12 @@
         // 2. Setup, 3. Memo, 4. Connections
         const clusterIds = ['setup', 'memo', 'connections'];
         for (const id of clusterIds) {
-            const panel = manifest.find(p => p.id === id) || {
-                id,
-                label: id.charAt(0).toUpperCase() + id.slice(1),
-                icon: `/static/icons/nav-${id}.svg`,
-                route: `/${id}`,
-                enabled: true,
-                presentation: id === 'memo' ? 'modal' : undefined
-            };
+            const panel = manifest.find(p => p.id === id);
+            // Same rule as the rail: a panel this host did not enable is OMITTED,
+            // not synthesised. renderManifest builds no frame for it, so a
+            // fabricated cluster button would selectPanel() into nothing — the
+            // dead control the rail's own omission exists to prevent.
+            if (!panel || panel.enabled === false) { continue; }
             const btn = buildIcon(panel);
             btn.className = 'strip-icon';
             icons.set(id, btn);
@@ -1027,8 +1044,13 @@
             }
         } else if (data.type === 'switchboardThemeChanged') {
             applyThemeToAll(data.theme);
-        } else if ((data.type === 'autobanStateSync' || data.type === 'updateAutobanConfig') && data.state) {
-            lastAutobanArmed = data.state.missionControlArmed === true;
+        } else if (data.type === 'missionControlArmed' && typeof data.armed === 'boolean') {
+            // Relayed by the Terminals panel: the shell has no WebSocket, so the
+            // autoban broadcast rail (autobanStateSync / updateAutobanConfig) is
+            // not audible here. Without the relay this stayed false forever and the
+            // dock title read "Awaiting confirmation" for an armed session.
+            if (event.origin !== location.origin) { return; }
+            lastAutobanArmed = data.armed;
             const saved = readDockState();
             if (saved.seat && saved.activeTab === 'agent' && dockFrame.classList.contains('is-visible')) {
                 updateDockTitle(saved.seat);

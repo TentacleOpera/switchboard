@@ -1006,11 +1006,15 @@ export async function resolveTeamById(db: any, teamId: string): Promise<any | nu
         if (found) { return found; }
         const defaultDef = DEFAULT_TEAM_DEFINITIONS.find(d => d && d.id === teamId);
         if (defaultDef) {
+            // Re-seed on demand: the operator deleted a default definition, so the
+            // rail slot would otherwise be a permanent dead button. Cloned, never the
+            // shared literal — see the seed comment in KanbanProvider.
+            const reseeded = { ...defaultDef, members: Array.isArray(defaultDef.members) ? [...defaultDef.members] : [] };
             try {
-                const next = [...converted, defaultDef];
+                const next = [...converted, reseeded];
                 await db.setConfig(AGENT_GROUPS_CONFIG_KEY, JSON.stringify(next));
             } catch { /* ignore re-seed persist failure */ }
-            return defaultDef;
+            return reseeded;
         }
         return null;
     } catch (err) {

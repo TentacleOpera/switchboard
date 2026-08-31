@@ -192,3 +192,17 @@ not add compat shims. CLAUDE.md's migration rule is waived for this release.
 - Assert `btn-kanban-toolbar` in the Terminals panel still works (in-grid kanban pane not retired).
 - Assert kanban mode does NOT inherit solo-specific suppressions (e.g. `saveSetting` suppression).
 - Assert kanban mode suppresses `startFleetPoll`, `refreshTeamQueueDepths`, and `refreshAgentGroupsForShell` (no doubled background polling).
+
+## Implementation Summary
+
+Turned the right-hand agent dock into a tabbed occupant host in `shell.html` and `shell.js`, adding a tab strip for Agent and Kanban tabs ahead of the dock title and close button. Mounted two independent iframes (`#dock-frame` and `#dock-kanban-frame`) toggled via `.is-visible` classes so switching tabs preserves scrollback, WebSockets, and scroll positions without reloads. Added kanban dock mode (`/terminals?kanban=1&dock=1`) in `terminals.html` and `terminals.js` that renders a single full-height kanban pane while hiding the sidebar and toolbars, and suppressed background fleet polling and team queue refreshes in kanban mode. Persisted `activeTab` in `sb.agentDock`, updated theme fan-out to cover both dock frames, and added contract tests in `shell-agent-dock.test.js`.
+
+
+## Review Findings
+
+Reviewed against commit 8a77aa1f. Both dock frames are mounted up-front and toggled by `.is-visible`, so tab switches reload neither; `applyThemeToAll` fans out to both, `body.dock-dragging` covers both, `activeTab` persists in `sb.agentDock`, and `/terminals?kanban=1&dock=1` suppresses `startFleetPoll`, `refreshTeamQueueDepths`, `refreshAgentGroupsForShell` and `saveLayoutSettings` while hiding the sidebar, toolbar and grid. One MAJOR gate defect fixed: `src/test/shell-agent-dock.test.js` asserted `#dock-frame { display:none }` with a single-selector regex, which the new grouped `#dock-frame, #dock-kanban-frame` rule fails — the invariant holds, the assertion could not see it, and this is a CI-wired gate (`integration-tests.yml:903`). Files changed: `src/test/shell-agent-dock.test.js`. Validation: `test:contract:shell-agent-dock` 29/29, `test:contract:browser-kanban-pane-order` 18/18, typecheck clean.
+
+## Deferred Findings
+
+- NIT `src/webview/terminals.js:2205` — `saveLayoutSettings` is now suppressed for solo mode as well as kanban mode. That is a correct suppression but a behaviour change this plan did not ask for; it is unpinned by any test.
+- NIT `src/webview/terminals.js` — card-to-pane drag started in the dock's kanban tab crosses an iframe boundary and still fails silently rather than visibly, per the plan's own edge case. No affordance was added.

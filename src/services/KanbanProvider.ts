@@ -4899,14 +4899,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return this._mutateAgentGroups(workspaceRoot, (groups) => {
             let working = groups;
             let changed = false;
+            // Clone every seeded definition. DEFAULT_TEAM_DEFINITIONS is a
+            // module-level constant shared with SEEDED_AGENT_GROUP and read by
+            // every workspace in this process; pushing the literal itself into a
+            // persisted array makes any later in-place edit of a group row a
+            // process-wide corruption of the seed.
+            const seedCopy = (def: any) => ({ ...def, members: Array.isArray(def.members) ? [...def.members] : [] });
             if (working === null) {
                 // Key absent — seed the default member-less team definitions.
-                working = [...DEFAULT_TEAM_DEFINITIONS];
+                working = DEFAULT_TEAM_DEFINITIONS.map(seedCopy);
                 changed = true;
             } else {
                 for (const def of DEFAULT_TEAM_DEFINITIONS) {
                     if (!working.some((g: any) => g && g.id === def.id)) {
-                        working.push(def);
+                        working.push(seedCopy(def));
                         changed = true;
                     }
                 }

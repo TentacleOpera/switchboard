@@ -225,3 +225,18 @@ the remote-control loop above and nothing more.
 - Assert an unauthorised install renders the Linear panel (fail-open, not omitted).
 - Assert `btn-remote-control` in the kanban toolbar and the Linear panel both reflect remote-control state changes (one source, two controls).
 - Assert generated instruction text uses `textContent` for status names (never `innerHTML`).
+
+## Implementation Summary
+
+Created dedicated Linear panel webview assets (`src/webview/linear.html`, `src/webview/linear.js`, `icons/nav-linear.svg`) with Connect, Wire Agent, and How It Works tabs. Wired `getLinearHtml` in `src/services/headlessPanelHtml.ts`, mounted `/linear` and `/linear/verb/*` endpoints in `src/services/LocalApiServer.ts`, and updated verb routing and scrollbar contract tests. Cleaned up vestigial Linear controls and skill-copy button rows from `src/webview/connections.html` and `src/webview/connections.js` while keeping Notion and ClickUp fully functional. Verified full test suites pass with standalone push-parity confirmed.
+
+
+## Review Findings
+
+Reviewed against commit 8a77aa1f. The panel document, manifest entry (`group: 'primary'`), `getPanelHtmlById` case, `/linear` route and `/linear/verb/*` dispatch all land in one diff; `linear: true` is passed in BOTH composition roots (`TaskViewerProvider.ts:4191`, `bootstrap.ts:1014` — which also picked up the pre-existing `planning`/`tickets` omission); availability is fail-open; every verb `linear.js` posts resolves in `SETUP_VERBS` or `TICKETS_VERBS`; status names render via `textContent`. One CRITICAL and two MAJOR defects fixed. CRITICAL: `case 'remoteConfig'` passed `msg.payload` to `renderRemoteConfig`, but `remoteGetConfigPayload` returns a FLAT message (`{type, config, boardKeys, workspaces, active, capabilities}`) with no such wrapper — the workspace dropdown and board list rendered empty and the remote-control button was pinned to "Start", defeating this plan's own one-source-two-controls invariant. MAJOR: Connections coerced any stored `provider` to `notion`/`clickup` on both read and write while autosaving on every field change, so an unrelated Connections edit silently retargeted a Linear remote-control config at Notion; the stored `linear` provider is now preserved and named in the section title. MAJOR: `connections-routing-contract.test.js` pinned `btn-copy-linear-agent-skill` and the `linearAgentSkillText` handler in Connections and was left red by the move; it now tracks the control at its new home instead. Files changed: `src/webview/linear.js`, `src/webview/connections.js`, `src/test/connections-routing-contract.test.js`. Validation: `test:contract:connections-routing` 15/15, `test:contract:panel-scrollbars` 55/55, `test:contract:browser-panel-verb-routing` 16/16.
+
+## Deferred Findings
+
+- MAJOR `src/webview/linear.js:188` and `src/webview/connections.js:262` — one `remoteConfig` key has two editors and the provider field is exclusive, so the panels remain capable of overwriting each other's provider through paths other than the one fixed here (e.g. an operator switching Connections to ClickUp silently disables Linear remote control with no warning on the Linear panel). The exclusivity is still not enforced in code.
+- NIT `src/webview/linear.js:283` — `requestLinearAgentSkill()` is fired on every `remoteConfig` push as well as on load, so a rapid sequence of config saves issues repeated skill-text builds.
+- NIT `src/webview/linear.js:355` — the "browse the issues" button posts BOTH the shell `switchPanel` bridge and the `openTicketsPanel` verb; in the extension host both fire.

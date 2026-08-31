@@ -268,3 +268,17 @@ Consequences elsewhere:
 - Assert a persisted non-controller seat is discarded and the empty state appears (not adopted as Mission Control).
 - Assert `POST /mission-control/start` endpoint is still present in `src/services/LocalApiServer.ts` (shared with the `/switchboard-manage` skill).
 - Assert `missionControlStart` is wired in both `src/services/TaskViewerProvider.ts` and `src/standalone/bootstrap.ts`.
+
+## Implementation Summary
+
+The agent dock is now the dedicated Mission Control surface and routes startup exclusively through `POST /mission-control/start`. Role picker markup, styles, and state functions have been completely retired from `shell.html` and `shell.js`. Seat synchronization adopts existing live controller terminals while discarding non-controller seats from legacy profiles, and clipboard fallback is rendered in-dock without spawning dead shell processes. Both VS Code extension and standalone bootstrap composition roots wire `missionControlStart` returning the canonical controller seat identity.
+
+
+## Review Findings
+
+Reviewed against commit 8a77aa1f. The role picker is fully retired and `startDockTerminal()` routes through `POST /mission-control/start`, handling both `terminal` and `clipboard` modes, the 503 host gap, and adopt-before-start with a role check; the dock never calls `/mission-control/confirm`. One MAJOR defect fixed: `#dock-title`'s armed state read `lastAutobanArmed`, fed from `autobanStateSync`/`updateAutobanConfig` — messages the shell document can never receive, because it has no WebSocket and no transport shim, so an armed session displayed "Awaiting confirmation" forever; the Terminals panel now relays a single `missionControlArmed` boolean to the shell behind its existing embedded/dock guards (`src/webview/terminals.js`, `src/webview/shell.js`). Files changed: `src/webview/terminals.js`, `src/webview/shell.js`, `src/test/shell-agent-dock.test.js`. Validation: `tsc -p tsconfig.test.json --noEmit` clean, `npm test` (standalone-parity + catalog + icons) green, `test:contract:shell-agent-dock` 29/29, `test:contract:shell-terminal-strip` 66/66.
+
+## Deferred Findings
+
+- NIT `src/generated/verbAllowlist.ts:17` — `getAgentDockRole` / `setAgentDockRole` are now consumer-less SETUP verbs. The plan asked for an explicit delete-or-keep decision; they were kept and are still gate-pinned by `src/test/browser-panel-verb-routing.test.js`, so removing them is a two-file change nobody has been asked to make.
+- NIT `src/webview/shell.js:449` — `dockSeatName()` survives as `dock-${dockRole}` but has no caller now that the seat name always comes from the server's `friendlyName`.

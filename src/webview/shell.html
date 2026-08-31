@@ -240,12 +240,10 @@
             padding-top: 6px;
             margin-top: auto;
         }
-        /* No fleet yet: the separator would be a hairline pinned above the theme
-           toggle with nothing under it. Retained as a defensive fallback even
-           though #strip-terminals now always holds the Mission Control icon
-           (ensureMissionControlIcon keeps it present) — :only-child rule below
-           covers the persistent-icon case; this covers the theoretical empty
-           container should that ensure ever be bypassed. */
+        /* No fleet yet: the separator would be a hairline pinned above the cold
+           group with nothing under it. Still reachable — the section is removed
+           entirely when the host has no Terminals panel, and the team slots are
+           only appended once a fleet push arrives. */
         #strip-terminals:empty {
             border-top: none;
             padding-top: 0;
@@ -255,8 +253,13 @@
             filter: grayscale(0.8);
         }
 
-        .strip-icon.strip-group-cold:first-of-type,
-        .strip-group-cold:first-of-type {
+        /* The cold group's separator. Keyed on a class applied by
+           applyBottomAnchor, NOT on :first-of-type — every rail icon is a
+           <button>, so `.strip-group-cold:first-of-type` matches the FIRST
+           button in #strip (a primary icon) and therefore never matches a cold
+           one. The bottom anchor is applied inline by the same function; this
+           rule declares only the divider. */
+        .strip-icon.is-cold-first {
             border-top: 1px solid var(--border);
             padding-top: 6px;
         }

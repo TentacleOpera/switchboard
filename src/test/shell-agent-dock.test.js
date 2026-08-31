@@ -81,9 +81,11 @@ test('#dock-empty uses .is-visible, not [hidden] alone', () => {
 });
 
 test('#dock-frame uses .is-visible, not [hidden] alone', () => {
-    assert.ok(/#dock-frame\s*\{[^}]*display:\s*none/.test(shellHtml),
+    // Both dock frames share one rule, so the selector may be grouped:
+    //   #dock-frame,\n#dock-kanban-frame { display: none; ... }
+    assert.ok(/#dock-frame\s*(?:,\s*#[a-z-]+\s*)*\{[^}]*display:\s*none/.test(shellHtml),
         '#dock-frame must declare a base display:none');
-    assert.ok(/#dock-frame\.is-visible\s*\{[^}]*display:\s*block/.test(shellHtml),
+    assert.ok(/#dock-frame\.is-visible\s*(?:,\s*#[a-z-]+\.is-visible\s*)*\{[^}]*display:\s*block/.test(shellHtml),
         '#dock-frame.is-visible must declare display:block');
 });
 

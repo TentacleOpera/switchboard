@@ -134,7 +134,10 @@
 
         const title = document.getElementById('remote-subsection-title');
         if (title) {
-            title.textContent = provider === 'clickup' ? 'Remote Control (ClickUp)' : 'Remote Control (Notion)';
+            const stored = (_lastRemoteConfig && _lastRemoteConfig.provider) || '';
+            title.textContent = stored === 'linear'
+                ? 'Remote Control (Linear — configured in the Linear panel)'
+                : provider === 'clickup' ? 'Remote Control (ClickUp)' : 'Remote Control (Notion)';
         }
 
         // Capability gating: a provider that cannot push must not offer a push
@@ -207,6 +210,10 @@
         if (config) {
             _lastRemoteConfig = Object.assign({}, config);
             const providerEl = document.getElementById('remote-provider');
+            // Linear's remote-control rows moved to the Linear panel, so this select
+            // no longer offers a Linear option. A stored `linear` provider is still
+            // real config — show the nearest representable value but never let this
+            // form OWN the field (see remoteCollectConfig, which preserves it).
             if (providerEl) providerEl.value = (config.provider === 'clickup') ? 'clickup' : 'notion';
             const silent = document.getElementById('remote-silent-sync');
             if (silent) silent.checked = config.silentSync === true;
@@ -241,6 +248,11 @@
         ).map(cb => cb.value);
         const providerEl = document.getElementById('remote-provider');
         const providerVal = providerEl ? providerEl.value : 'notion';
+        // A stored `linear` provider is configured in the Linear panel and cannot be
+        // represented by this select. Preserving it is not a nicety: this form
+        // autosaves on every change, so coercing would silently retarget an
+        // operator's Linear remote control at Notion on an unrelated edit.
+        const storedProvider = (_lastRemoteConfig && _lastRemoteConfig.provider) || '';
         const modeFull = document.getElementById('remote-mode-full');
         const modeQueue = document.getElementById('remote-mode-queue');
         // Three-way mode: queue is checked → 'queue'; full is checked → 'full';
@@ -251,7 +263,9 @@
         // Merge over the host-supplied config so any field this form does not render
         // survives the replace performed by setRemoteConfig.
         return Object.assign({}, _lastRemoteConfig || {}, {
-            provider: (providerVal === 'clickup') ? 'clickup' : 'notion',
+            provider: storedProvider === 'linear'
+                ? 'linear'
+                : ((providerVal === 'clickup') ? 'clickup' : 'notion'),
             boards,
             silentSync: document.getElementById('remote-silent-sync')?.checked === true,
             pingFrequencySeconds: Math.min(120, Math.max(30,

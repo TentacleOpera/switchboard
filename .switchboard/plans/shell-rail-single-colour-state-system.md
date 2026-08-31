@@ -211,3 +211,17 @@ it. If they land together, the interceptor plan's `fill="currentColor"` +
 - Assert `.strip-team-icon` uses `var(--accent)` for fill only — no accent border or background.
 - Assert `--accent-dim` is not reintroduced anywhere by this plan.
 - Assert the Terminals panel sidebar DONE chip and pane badge still render (durable completion record survives).
+
+## Implementation Summary
+
+Unified the shell rail's state system into a single-colour model where only team icons receive the theme accent fill. Replaced `.strip-icon.is-active` accent text and border styling with a 2px left-edge bar shape indicator. Deleted completion ring keyframes, pulse animation logic, the `pulsedDoneStamps` ledger, queue-depth badges, exited styles, and the `clearTeamBadges` relay across shell and terminals components while preserving the durable completion records in the Terminals panel. Removed `light` and `doneStamp` fields from the team fleet state payload and updated contract tests in `shell-terminal-strip.test.js`.
+
+
+## Review Findings
+
+Reviewed against commit 8a77aa1f. `.strip-icon.is-active` is a 2px `var(--text)` left bar with no `--accent` text and no `--accent-dim` border; `@keyframes strip-term-done-pulse` (and `-reduced`), `pulsedDoneStamps`, `DONE_PULSE_MS`, `.strip-team-queue-depth`, both `.strip-term-exited` rules and the `clearTeamBadges` shell relay are gone, and `light`/`doneStamp` no longer appear in the relayed `teams` payload. The durable completion record survives: `terminalBadges` and its seven panel-side clear sites are untouched, and `test:contract:terminal-replay-gap` is 17/17, so the replay-gap invariant still holds against the new channel. `.strip-team-icon` takes the accent as fill/colour only, with no accent border or background. No code changes were needed for this subtask. Validation: `test:contract:shell-terminal-strip` 66/66, `test:contract:terminal-replay-gap` 17/17, `test:contract:team-release-control` green.
+
+## Deferred Findings
+
+- NIT `src/webview/terminals.js:1205` — the per-terminal `doneStamp` field is still computed and relayed in `postFleetStateToShell`, but the shell no longer reads it (the per-terminal buttons that consumed it are deleted). The sibling `light` field IS still read, as the dock's liveness oracle, so the pair cannot be dropped wholesale.
+- NIT `src/webview/terminals.js:9560` — `clearTeamBadges()` now has zero callers, but `src/test/team-release-control-contract.test.js:372` asserts it is present "for bulk callers". Removing it means changing a gate owned by another feature.

@@ -136,14 +136,34 @@ const REMOTE_CONTROL_IDS = [
     'remote-provider', 'remote-workspace', 'remote-boards-list', 'remote-silent-sync',
     'remote-mode-ingest', 'remote-mode-full', 'remote-comments', 'remote-content',
     'remote-push', 'remote-ping-frequency', 'btn-remote-control-toggle',
-    'remote-health-poll', 'btn-copy-linear-agent-skill', 'btn-notion-remote-setup',
+    'remote-health-poll', 'btn-notion-remote-setup',
     'board-state-export-select', 'board-state-export-remote-url'
 ];
+
+// Moved OUT of Connections, into the Linear panel. Tracked here rather than
+// dropped: the control still has to exist somewhere, and "deleted from
+// Connections" alone would pass even if it had been deleted outright.
+const MOVED_TO_LINEAR_PANEL = ['btn-copy-linear-agent-skill'];
 
 test('the Remote form lives in connections.html, in full', () => {
     const missing = REMOTE_CONTROL_IDS.filter(id => !CNX_HTML.includes(`id="${id}"`));
     assert.deepStrictEqual(missing, [],
         'connections.html is missing controls the Remote form needs — a partial form cannot replace the Setup tab');
+});
+
+test('the Linear rows moved to the Linear panel, not into the void', () => {
+    const LINEAR_HTML = fs.readFileSync(path.join(__dirname, '..', 'webview', 'linear.html'), 'utf8');
+    const LINEAR_JS = fs.readFileSync(path.join(__dirname, '..', 'webview', 'linear.js'), 'utf8');
+    for (const id of MOVED_TO_LINEAR_PANEL) {
+        assert.ok(LINEAR_HTML.includes(`id="${id}"`), `linear.html is missing '${id}' — the control was deleted, not moved`);
+        assert.ok(!CNX_HTML.includes(`id="${id}"`), `connections.html still renders '${id}' — two live copies of one control`);
+    }
+    assert.ok(LINEAR_JS.includes("case 'linearAgentSkillText'"),
+        'linear.js must handle linearAgentSkillText — the host still pushes it');
+    // The remoteConfig push is FLAT (no `payload` wrapper). Reading msg.payload
+    // silently empties the board list and pins the toggle to "Start".
+    assert.ok(LINEAR_JS.includes('renderRemoteConfig(msg.config, msg)'),
+        'linear.js must pass the whole remoteConfig message — the host sends no `payload` wrapper');
 });
 
 test('setup.html no longer renders a second copy of it', () => {
@@ -177,7 +197,7 @@ test('no orphaned Remote handler survives in setup.html', () => {
 
 test('connections.js handles every Remote push the host actually sends', () => {
     for (const msg of ['remoteConfig', 'remoteControlState', 'remoteSyncHealth',
-        'boardStateExportSetting', 'notionRemoteSetupResult', 'linearAgentSkillText',
+        'boardStateExportSetting', 'notionRemoteSetupResult',
         'integrationSetupStates']) {
         assert.ok(CNX.includes(`case '${msg}'`),
             `connections.js does not handle '${msg}' — that state renders as a default over the user's real setting`);

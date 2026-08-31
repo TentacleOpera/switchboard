@@ -346,13 +346,17 @@ test('the section is created eagerly in renderManifest between primary and cold 
     assert.ok(sectionAt !== -1 && coldAt < sectionAt, 'renderTerminalSection must be called after cold group is mounted');
 });
 
-test('the light state is in the accessible name, not only the dot', () => {
+test('the per-terminal light labelling is gone and the section is still named', () => {
+    // Was: "the light state is in the accessible name, not only the dot".
+    // Per-terminal rail buttons and their light states are deleted (rail
+    // restructure + colour plans), so the subject of that assertion no longer
+    // exists — it is rewritten to assert absence, per the plan. The team slot's
+    // own name/tooltip contract is pinned separately by 'the team button tooltip
+    // is just the team name'; do not re-add state to it here without changing
+    // that decision first.
     const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
-    assert.ok(
-        /labelText = `[^`]*\$\{t\.light\}/.test(fn),
-        "the button's aria-label must spell out the light state — the dot is decorative markup"
-    );
-    assert.ok(fn.includes("btn.setAttribute('aria-label', labelText)"), 'the label text must be applied as aria-label');
+    assert.ok(!/\$\{t\.light\}/.test(fn), 'no per-terminal light may reach an accessible name — those buttons are deleted');
+    assert.ok(!/labelText/.test(fn), 'the per-terminal labelText construction must not survive');
     assert.ok(fn.includes("'Fleet terminals'"), 'the section needs an aria-label so entries are not announced loose');
     assert.ok(
         /container\.(role = 'group'|setAttribute\('role', 'group'\))/.test(fn),
@@ -434,8 +438,15 @@ test('the tooltip overlay is a direct child of body, outside the strip clip box'
         ? block(shellHtml, '<aside id="agent-dock"', '</aside>')
         : '';
     assert.ok(!dockAside.includes('tooltip-overlay'), 'the overlay must NOT live inside #agent-dock');
+    // #top-right-cluster is a fourth body-level element between the dock and the
+    // overlay. What must hold is that the overlay is a body-level sibling, not
+    // that it is any particular one's immediate next sibling.
+    const cluster = shellHtml.includes('<div id="top-right-cluster"')
+        ? block(shellHtml, '<div id="top-right-cluster"', '</div>')
+        : '';
+    assert.ok(!cluster.includes('tooltip-overlay'), 'the overlay must NOT live inside #top-right-cluster');
     assert.ok(
-        /(?:<div id="content"><\/div>|<\/aside>)\s*<div id="tooltip-overlay"><\/div>/.test(body),
+        /(?:<div id="content"><\/div>|<\/aside>|<div id="top-right-cluster"[^>]*><\/div>)[\s\S]{0,200}?<div id="tooltip-overlay"><\/div>/.test(body),
         'the overlay must be a body-level sibling of #strip, #content and #agent-dock'
     );
     const css = block(shellHtml, '#tooltip-overlay {', '}');
@@ -603,7 +614,7 @@ test('the team icon fallback skips the head brand mark', () => {
     const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     // When team.iconUri is empty, the shell must go straight to the role letter
     // glyph — the headTerm.iconUri arm (brand mark) must be gone.
-    const iconBlock = block(fn, 'if (team.iconUri) {', 'Queue-depth badge');
+    const iconBlock = block(fn, 'if (team.iconUri) {', "btn.addEventListener('click'");
     assert.ok(
         !/headTerm\.iconUri/.test(iconBlock),
         'the head brand-mark fallback arm must not survive — a team with no icon shows the role letter'
@@ -1132,7 +1143,12 @@ test('three fixed team slots in the rail and showStripToast kept alive', () => {
     // 2. buildTeamsForShell emits 3 fixed slots in definition order
     const fn = block(terminalsJs, 'function buildTeamsForShell() {', 'const LAYOUTS = {');
     assert.ok(fn.includes('DEFAULT_TEAM_DEFINITIONS'), 'buildTeamsForShell must iterate DEFAULT_TEAM_DEFINITIONS');
-    assert.ok(fn.includes('running:'), 'buildTeamsForShell must emit running boolean');
+    assert.ok(/\n\s*running,/.test(fn) || fn.includes('running:'),
+        'buildTeamsForShell must emit a running boolean on every slot');
+    // A member-less default team registers no terminals.groups row, so the slot's
+    // running state cannot come from the group lookup alone.
+    assert.ok(/t\.role === headRole/.test(fn),
+        'buildTeamsForShell must detect a running member-less team by its live head role');
 
     // 3. renderTerminalSection renders dormant slots with .is-dormant
     const renderFn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function requestFleetState(');
@@ -1144,6 +1160,22 @@ test('three fixed team slots in the rail and showStripToast kept alive', () => {
     // 4. showStripToast survival
     assert.ok(shellJs.includes('function showStripToast(text) {'),
         'showStripToast must be present in shell.js for start-failure feedback');
+
+    // 5. The webview carries its own copy of the definitions (it cannot import
+    //    TypeScript). Two declarations of one team is the drift shape teamWiring
+    //    already carries scars from, so pin id + headRole across the boundary.
+    const idsAndRoles = (src) => {
+        const out = [];
+        const re = /id:\s*'([a-z-]+)',\s*\n\s*name:\s*'[^']*',\s*\n\s*headRole:\s*'([a-z_]+)'/g;
+        let m;
+        while ((m = re.exec(src)) !== null) { out.push(m[1] + ':' + m[2]); }
+        return out;
+    };
+    const tsDefs = idsAndRoles(block(teamWiringTs, 'export const DEFAULT_TEAM_DEFINITIONS: any[] = [', '];'));
+    const jsDefs = idsAndRoles(block(terminalsJs, 'const DEFAULT_TEAM_DEFINITIONS = [', '];'));
+    assert.strictEqual(tsDefs.length, 3, 'teamWiring.ts must declare exactly three default team definitions');
+    assert.deepStrictEqual(jsDefs, tsDefs,
+        'terminals.js DEFAULT_TEAM_DEFINITIONS has drifted from teamWiring.ts — id and headRole must match, in order');
 });
 
 test('dispatched state reaches the rail and is rendered as a shape indicator', () => {

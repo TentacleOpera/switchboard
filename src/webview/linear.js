@@ -386,7 +386,12 @@
 
         switch (msg.type) {
             case 'remoteConfig':
-                renderRemoteConfig(msg.config, msg.payload);
+                // The host's remoteConfig message is FLAT — remoteGetConfigPayload
+                // returns { type, config, boardKeys, workspaces, active, capabilities }
+                // with no `payload` wrapper. Passing msg.payload here read undefined,
+                // which silently emptied the workspace dropdown and the board list and
+                // pinned the remote-control button to "Start" forever.
+                renderRemoteConfig(msg.config, msg);
                 break;
             case 'remoteControlState':
                 remoteControlActive = msg.active === true;
