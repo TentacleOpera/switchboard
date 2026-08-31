@@ -295,10 +295,22 @@ space.
    Coding-intern   intern    idle      -
    reviewer-1      reviewer  active    Reviewing 2213b3a1
    ```
-   Under `--json`, outputs `{ success: true, terminals: [...] }` on stdout for agent consumption,
-   preventing the need to parse megabytes of raw session markdown logs.
+9. **`switchboard verb <verbName> [jsonPayload]` (Universal Verb Dispatcher)** — direct CLI access to the
+   entire Switchboard protocol catalog (550+ verbs). Reaches `POST /terminals/verb/<verbName>` or `POST /kanban/verb/<verbName>`:
+   ```bash
+   # Call any protocol verb directly with JSON payload or args
+   switchboard verb ptyClearTerminal '{"name":"Coding"}'
+   switchboard verb moveCard '{"planId":"5589139b...","column":"CODER CODED"}'
+   switchboard verb addStandingOrder '{"parent":"Coding","instruction":"..."}'
+   ```
+   - Automatically handles local authentication headers, port discovery, and response error formatting.
+   - Emits clean JSON on stdout with `--json` or human-readable status on stdout.
+   - This ensures **100% of Switchboard's verbs** are instantly callable from the CLI without needing specialized subcommands written for each one.
 
-   > **Superseded:** the original six-code table that left `400` (bad column), `404` (plan not found),
+10. **`switchboard help [command]`** — top-level help command. Aliased to `--help` and `-h`, displaying the
+    full command list, serve modes, verb runner syntax, and exit-code semantics.
+
+    > **Superseded:** the original six-code table that left `400` (bad column), `404` (plan not found),
    > `502` (move persisted, no dispatch), and `503` (dispatch unavailable) unmapped.
    > **Reason:** An agent reading exit `3` could not distinguish "no terminal live" from "you typed the
    > column wrong" from "that prefix matches nothing." The principle "exit codes that mean something"
@@ -356,17 +368,22 @@ space.
     and reports success. Assert `switchboard clear --all` iterates all active fleet seats.
 13. **Fleet inspection.** Assert `switchboard fleet` outputs a clean status table of all active terminals,
     roles, liveness, and assigned plan IDs without downloading raw log files. Assert `--json` outputs parseable JSON.
+14. **Universal verb runner.** Assert `switchboard verb <verbName> <jsonPayload>` invokes `POST /terminals/verb/<verbName>`
+    or `POST /kanban/verb/<verbName>` and routes responses cleanly with auth and error mapping.
+15. **Help subcommand.** Assert `switchboard help` and `switchboard --help` produce identical help output.
 
 *(Compilation and automated tests skipped this run per dispatch directive — the checks remain written
 for the implementing coder.)*
 
 ### Goal Invariants
 
-- `src/standalone/cli.ts` dispatches `process.argv[2] === 'ready'`, `process.argv[2] === 'dispatch'`, `process.argv[2] === 'clear'`, and `process.argv[2] === 'fleet'`, and all are present in the `subcommandTargetsCwd` exclusion condition (`cli.ts:679`) so none create a `.switchboard/` in a directory that has none.
+- `src/standalone/cli.ts` dispatches `process.argv[2] === 'ready'`, `process.argv[2] === 'dispatch'`, `process.argv[2] === 'clear'`, `process.argv[2] === 'fleet'`, `process.argv[2] === 'verb'`, and `process.argv[2] === 'help'`, and all are present in the `subcommandTargetsCwd` exclusion condition (`cli.ts:679`) so none create a `.switchboard/` in a directory that has none.
 - `switchboard ready` calls `GET /kanban/plans` (not the kanban DB directly) and filters `featureId === ''` and the `--project` value client-side — it does not open `kanban.db`.
 - `switchboard dispatch` calls `POST /kanban/dispatch` with `{ plan, targetColumn }` — it does not call `move-card.js`, does not write `kanban.db`, and does not reimplement complexity routing, the visible-agent check, or the column move.
 - `switchboard clear` calls `POST /terminals/verb/ptyClearTerminal` or `POST /terminals/clear` — never `ptySendPrompt` with bracketed paste.
 - `switchboard fleet` calls `POST /terminals/verb/ptyListTerminals` or `GET /health` and prints compact output.
+- `switchboard verb <name> <payload>` tunnels directly to the verb router on `LocalApiServer`.
+- `switchboard help` aliases to `--help`.
 - The exit-code mapping covers every status `performKanbanDispatch` can return: 200→0, 401→4, 409/502→3, 400/404→5, 503→6, 500→1; an ambiguous prefix→5.
 - An EOF or SIGINT delivered to the `ready` interactive prompt exits 0 and dispatches no card (assertable via the API: no card's `dispatchedAt` changes).
 - `switchboard ready --json` produces JSON on stdout with logs on stderr and exits without dispatching (no selection path under `--json`).
