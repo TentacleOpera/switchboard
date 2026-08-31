@@ -377,6 +377,39 @@ async function run() {
         }
     });
 
+    await check('silence never infers a blocked seat — no writer, no sweep, no board decoration', async () => {
+        // The silence arm stamped `blocked_at` after ~90s of PTY quiet and lit a
+        // yellow "Waiting on you" ring. Silence cannot tell thinking from crashed,
+        // so the arm was removed as an instance of the same inference the file's
+        // other checks forbid. Its own tests went with it (they were anchored on
+        // `if (silentTerminals.length > 0)`), which left the removal with nothing
+        // in CI discriminating on it. These are that discriminator: each one is a
+        // distinct re-entry point for the mechanism.
+        assert.ok(!/setBlockedState/.test(kanbanDbSrc),
+            'setBlockedState must stay deleted — it is the only writer the blocked stamp ever had');
+        // `blocked_at = NULL` clears are fine (the column is dead and clears keep
+        // legacy rows honest); a parameterised write is the writer coming back.
+        for (const [name, src] of [['KanbanDatabase.ts', kanbanDbSrc], ['PlanIngestionEngine.ts', planEngineSrc], ['TaskViewerProvider.ts', providerSrc]]) {
+            assert.ok(!/blocked_at\s*=\s*\?/.test(src),
+                `${name} must not write blocked_at — the column is dead and has no writer`);
+        }
+        assert.ok(!/_blockedCandidates|_runBlockedDigestSweep|blockedNotifyPacing/.test(planEngineSrc),
+            'the silence sweep and its paced digest must stay deleted, along with their pacing state');
+        assert.ok(!/outcome:\s*'blocked'/.test(planEngineSrc),
+            "the engine must never emit outcome: 'blocked' — its only producer was the silence arm");
+        assert.ok(!/turnEndSilenceMs/.test(planEngineSrc.slice(planEngineSrc.indexOf('const liveNames'), planEngineSrc.indexOf('let recordedLiveness'))),
+            'the liveness partition must not re-classify a quiet seat — silence is not a turn boundary');
+        for (const marker of ['is-blocked', 'blocked-badge', 'Waiting on you', 'Agent waiting on you']) {
+            assert.ok(!kanbanHtmlSrc.includes(marker),
+                `kanban.html must carry no '${marker}' decoration — the board must not render a guessed wait`);
+        }
+        const pkg = readSrc('package.json');
+        for (const setting of ['blockedTimeoutMs', 'blockedNotifyIntervalMs']) {
+            assert.ok(!pkg.includes(setting),
+                `package.json must not contribute switchboard.activityLight.${setting} — nothing reads it, so the settings UI would offer a dead knob`);
+        }
+    });
+
     await check('kanban.html + terminals.js mirrors retired the report-file completion channel', async () => {
         // The webview mirrors of NEW_CODING_HEAD_PROMPT must not instruct
         // writing a completion report file, and must instruct task/complete.

@@ -2858,13 +2858,20 @@ Each plan file must include:
             const planFile = info.planFile;
             // `body` (pre-composed evidence) wins when set; otherwise compose the
             // host's own one-line message. `stalled` always carries a body.
+            // `blocked` is not reachable from the engine (the silence arm is gone);
+            // the arm is kept byte-aligned with the extension host twin so a future
+            // Phone-a-Friend wiring here cannot silently label a dispatch drop a
+            // feature stall.
             const message = info.body ?? (info.outcome === 'completed'
                 ? `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${planFile}'.`
-                : `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`);
+                : info.outcome === 'blocked'
+                    ? `[switchboard:turn-end] Seat '${seatName}' could not be reached for '${planFile}'.`
+                    : `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`);
             // Fire-and-forget mirror to the reports directory — a non-pty
             // Mission Control reads the same notice as a file. Never awaited
             // ahead of the pty send, never able to suppress it. `finished`
-            // for the seat-finished variant; `blocked` for feature-stall variant. Same helper, same from:
+            // for the seat-finished variant; `blocked` for the feature-stall and
+            // Phone-a-Friend dispatch-drop variants. Same helper, same from:
             // system mapping as the extension host twin.
             void writeMissionControlReport(info.workspaceRoot, {
                 from: 'system',

@@ -23,3 +23,15 @@ Both subtasks are removals and are independent of each other.
 
 **Blocked on another feature.** Both are instances of the category defined by **Completion Is Asserted, Never Inferred**, and the seat-order clause is one of the three plans that feature's revision subtask amends in place. Do not code this feature until the anchor is accepted and that revision has landed — otherwise the scaffolding these removals target is rebuilt underneath them.
 
+
+## Review Findings
+
+Reviewed `c173d912` as one unit. Both removals are done; per-subtask detail lives in the two subtask files. One CRITICAL — the commit did not compile: narrowing `notifyTurnEnd`'s outcome union orphaned the Phone-a-Friend dispatch-drop call (`TaskViewerProvider.ts:6926`), which this feature's own plan had explicitly ruled out of scope; fixed on the host seam and mirrored into `bootstrap.ts`. One MAJOR — the blocked-state removal deleted the three tests that pinned it and added no replacement, leaving the feature's headline deliverable with nothing in CI discriminating on it; added `silence never infers a blocked seat` to the CI-wired `completion-asserted-never-inferred.test.js`, confirmed red at `c173d912^` and green at HEAD. Files changed by this review: `src/services/TaskViewerProvider.ts`, `src/standalone/bootstrap.ts`, `src/test/completion-asserted-never-inferred.test.js`. Validation: webpack `npm run compile` clean apart from an unrelated `teamWiring.ts:1782` break from another agent's uncommitted work; the full 146-suite CI contract sweep shows 25 failures, 22 of them already red at `c173d912^` and the remaining 3 caused by that same uncommitted work — none attributable to this commit.
+
+**Goal verdict — achieved.** Both board-state inferences are gone: no standing order a seat receives instructs a `CODE REVIEWED` move (the clause survives only as legacy migration-recogniser text in `teamWiring.ts:238,271`), and no code writes `blocked_at` or renders a silence-derived wait. The second subtask also lands the column-transition clear, though one layer lower than its plan specified — see that plan's deferred findings for the consequence.
+
+## Deferred Findings
+
+- MAJOR — `src/services/KanbanDatabase.ts:6818` — the feature cascade clears `dispatched_at` for every subtask, and `_runQueueDone` matches a seat's work on `!!p.dispatchedAt`; moving a feature card mid-run orphans every held seat's completion post and stalls the team queue. Narrowing this is an author decision.
+- MAJOR — `src/services/teamWiring.ts:1782` — an uncommitted third-party change in the working tree breaks the build and reddens three contract suites. Outside this review unit; belongs to whoever is mid-edit there.
+- NIT — the remaining dead-code and stale-comment items are listed in `../plans/feature_plan_20260819160000_remove-silence-based-blocked-state-from-kanban.md` under its own `## Deferred Findings`.

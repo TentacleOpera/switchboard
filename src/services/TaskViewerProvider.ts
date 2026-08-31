@@ -1963,20 +1963,27 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * malformed parent chain), skip. Derived entirely from the pty stream — no
      * hooks, no tokens, no agent-side obligation.
      */
-    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean }): void {
+    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean }): void {
         void (async () => {
             const seatName = info.seatName;
             const planFile = info.planFile;
             // `body` (pre-composed evidence) wins when set; otherwise the host
             // composes its own one-line message. `stalled` always carries a body
             // from the engine, but the fallback keeps a malformed nudge honest.
+            // `blocked` is NOT reachable from the engine — the silence arm that
+            // produced it is gone. It survives here for `_emitPhoneAFriendNotice`,
+            // whose dispatch-drop signal is evidence (no terminal took the send),
+            // not an inference from silence, and which always supplies a `body`.
             const message = info.body ?? (info.outcome === 'completed'
                 ? `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${planFile}'.`
-                : `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`);
+                : info.outcome === 'blocked'
+                    ? `[switchboard:turn-end] Seat '${seatName}' could not be reached for '${planFile}'.`
+                    : `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`);
             // Fire-and-forget mirror to the reports directory — a non-pty
             // Mission Control reads the same notice as a file. Never awaited
             // ahead of the pty send, never able to suppress it. `finished`
-            // for the seat-finished variant; `blocked` for feature-stall variant.
+            // for the seat-finished variant; `blocked` for the feature-stall and
+            // Phone-a-Friend dispatch-drop variants.
             //
             // This mirror MUST run before the _ptyHostPort guard below: with no
             // pty host the file is the ONLY thing that survives — exactly the
