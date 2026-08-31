@@ -75,14 +75,28 @@ test reads the markdown for transport choice.
 
 ## User Review Required
 
-- **`.agents/protocols/` is not in the bundled manifest.** `.agents/.switchboard-bundled.json` lists
-  `skills/`, `workflows/` and `_lib/` — twenty-two files — and no `protocols/` entry. The protocol
-  directory ships by a different path (or does not ship). **Confirm how `.agents/protocols/`
-  reaches a user's workspace before relying on edits there taking effect.** If protocols are seeded
-  from the DB or another source, this plan's protocol edits are cosmetic and the real target moves.
 - **Confirm the two mirrored trees stay mirrored.** `.claude/skills/` carries copies
   (`manage-features`, `worktree-cleanup`, `switchboard`, `kanban-operations`). They must be migrated
   in the same change or the two trees teach different transports.
+
+### How protocols reach a workspace (settled — no action needed for this plan)
+
+Protocol edits in this repo **do** reach users, by two hops:
+
+1. **Into the VSIX.** `.vscodeignore:56-57` — *"Keep `.agents/` — workflow assets are shipped with
+   the extension"* — negates the whole tree, `protocols/` included.
+2. **Into each workspace.** `ControlPlaneMigrationService.ts:704` calls
+   `_copyDirectoryRecursive(bundledAgentDir, <workspace>/.agents, { overwrite: false,
+   overwriteIfDiffers: true })` — the entire tree, recursively. The only exclusions are the
+   two-entry `AGENT_COPY_BLOCKLIST` (`:1042-1048`): `personas/switchboard_operator.md` and the
+   ledger file. Protocols are in neither.
+
+`.agents/.switchboard-bundled.json` is **not a copy list** — it is the retirement prune ledger
+(`:1050-1053`: *"On-disk ledger of which files the bundle last shipped into `.agents/`. Drives the
+`.agents` retirement prune"*), generated at runtime into each workspace and blocklisted from
+shipping. Its absence of a `protocols/` entry says nothing about copying.
+
+**But it does say something about deletion — see the note below.**
 
 ## Complexity Audit
 
@@ -121,6 +135,12 @@ test reads the markdown for transport choice.
   Deleting the file without removing the manifest entry leaves the copier looking for a file that
   does not exist. `ControlPlaneMigrationService.ts:1210` has a *"creation-path guard: when a bundled
   file is absent from the workspace"* — read it before deleting to see which way it fails.
+- **Protocols are copied but never pruned.** The prune ledger's `currentBundlePaths` are documented
+  as *"skills + workflows"* (`ControlPlaneMigrationService.ts:1305-1307`), so no protocol file is
+  ever tracked for retirement. This plan only rewrites protocol *content* — an overwrite, which
+  `overwriteIfDiffers: true` handles — so it is unaffected. It is called out here because the same
+  gap blocks `protocols-as-db-rows-not-scaffolded-files.md`, and is planned separately in
+  `retired-protocol-files-are-never-pruned-from-a-workspace.md`.
 - **Existing installs carry the old file.** Per `CLAUDE.md`'s migration rule, `sb_api_call.sh`
   shipped in a released version, so workspaces have it on disk. It is archived as
   `sb_api_call.sh.migrated.bak` rather than unlinked, and unknown sibling files under `_lib/` are
