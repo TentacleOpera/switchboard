@@ -35,7 +35,7 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent, resolveRoleWithDegradation } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead, resolveTeamById } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead, resolveTeamById } from './teamWiring';
 import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, STANDING_ORDERS_CONFIG_KEY, STANDING_ORDER_DEFINITIONS_CONFIG_KEY, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
@@ -4900,9 +4900,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             let working = groups;
             let changed = false;
             if (working === null) {
-                // Key absent — seed the new member-less starter.
-                working = [SEEDED_AGENT_GROUP];
+                // Key absent — seed the default member-less team definitions.
+                working = [...DEFAULT_TEAM_DEFINITIONS];
                 changed = true;
+            } else {
+                for (const def of DEFAULT_TEAM_DEFINITIONS) {
+                    if (!working.some((g: any) => g && g.id === def.id)) {
+                        working.push(def);
+                        changed = true;
+                    }
+                }
             }
             // Import addons.delegates from role config into teams BEFORE the
             // migration converter, so the converter's member-shape defaults

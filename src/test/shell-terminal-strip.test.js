@@ -193,38 +193,11 @@ test('assignToFocusedPane re-relays on BOTH of its badge-clear paths', () => {
     assert.strictEqual(relays, 2, 'each badge-clear path must relay, or the strip light outlives the panel badge');
 });
 
-test('the strip click peeks in-cockpit and acknowledges the badge on every branch', () => {
-    // The per-terminal click handler lives in buildTerminalButton (extracted
-    // from renderTerminalSection so teams mode and terminals mode share it).
-    // Scope the block to that function so the team button's window.open does
-    // not false-trigger the "no single-terminal window" assertion.
-    const fn = block(shellJs, 'function buildTerminalButton(t, seenKeys) {', 'function requestFleetState(');
-    const handler = block(fn, "btn.addEventListener('click', () => {", 'return btn;');
-    // Peek replaced the pop-out: instant AND non-destructive, which is the third
-    // option the old acknowledge-only comment was working around the absence of.
-    assert.ok(!handler.includes('window.open('), 'the strip click must no longer open a single-terminal window');
-    assert.ok(!/setTimeout\(/.test(handler), 'the 100ms failed-pop-out focus re-check must be gone');
-    assert.ok(
-        handler.includes("type: 'peekTerminal'"),
-        'the strip click must post peekTerminal into the terminals panel'
-    );
-    // Panel activation is required, not optional: the strip is visible while other
-    // panels are active, so a peek alone reads as a dead click.
-    assert.ok(
-        handler.indexOf("selectPanel('terminals')") < handler.indexOf("type: 'peekTerminal'"),
-        'the panel must be switched BEFORE the peek is posted'
-    );
-    // An already-open solo window wins over a peek — but that branch reaches no peek
-    // arm, so it must clear the badge itself or the DONE light burns forever.
-    const existingBranch = block(handler, 'if (existing) {', 'selectPanel(');
-    assert.ok(
-        existingBranch.includes("type: 'clearTerminalBadge'"),
-        'the already-open-pop-out branch must clear the badge before it returns'
-    );
-    assert.ok(
-        existingBranch.indexOf("type: 'clearTerminalBadge'") < existingBranch.indexOf('existing.focus()'),
-        'the badge clear must precede the early return, matching the focusTerminal arm ordering'
-    );
+test('per-terminal rail buttons are absent and ungrouped terminals have no strip buttons', () => {
+    assert.ok(!shellJs.includes('buildTerminalButton'), 'buildTerminalButton must not exist in shell.js');
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function requestFleetState(');
+    assert.ok(!fn.includes('buildTerminalButton'), 'renderTerminalSection must not call buildTerminalButton');
+    assert.ok(!fn.includes('term:'), 'pulsedDoneStamps term: branch must be removed');
 });
 
 test('the panel clears the badge on peek before any early-return', () => {
@@ -345,39 +318,32 @@ test('the terminal section is gated on the terminals panel actually being mounte
     assert.ok(fn.includes('container.remove()'), 'a gated-off section must be removed, not left as a dead control');
 });
 
-test('the bottom anchor MOVES to the section rather than being duplicated', () => {
-    // buildThemeToggle owns the anchor inline; two auto margins in one column flex
-    // container split the free space and park the list mid-strip.
-    const toggle = block(shellJs, 'function buildThemeToggle() {', 'const popoutWindows');
-    assert.ok(toggle.includes("btn.style.marginTop = 'auto'"), 'the toggle keeps the inline anchor as its default');
+test('the bottom anchor moves to the first cold group icon and theme toggle is removed', () => {
+    assert.ok(!shellJs.includes('buildThemeToggle'), 'buildThemeToggle must be removed from shell.js');
+    assert.ok(!shellJs.includes('buildDockToggle'), 'buildDockToggle must be removed from shell.js');
+    assert.ok(!shellHtml.includes('theme-toggle-btn'), 'theme-toggle-btn CSS must not exist');
+    assert.ok(!shellHtml.includes('dock-toggle-btn'), 'dock-toggle-btn CSS must not exist');
 
-    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
+    const fn = block(shellJs, 'function applyBottomAnchor() {', 'function renderTerminalSection(terminals, teams) {');
     assert.ok(
-        fn.includes("themeBtn.style.marginTop = 'auto'"),
-        'the gated-off branch must restore the inline anchor to the toggle'
+        fn.includes(".strip-group-cold'"),
+        'applyBottomAnchor must query for .strip-group-cold icons'
     );
     assert.ok(
-        fn.includes("themeBtn.style.marginTop = ''"),
-        'creating the section must clear the inline anchor from the toggle'
+        fn.includes("coldIcons[0].style.marginTop = 'auto'"),
+        'applyBottomAnchor must hand margin-top: auto to the first cold-group icon'
     );
-    assert.ok(
-        fn.includes('strip.insertBefore(container, themeBtn)'),
-        'the section must be inserted BEFORE the toggle — appendChild would land below it'
-    );
-    assert.ok(
-        /#strip-terminals\s*\{[^}]*margin-top:\s*auto/.test(shellHtml),
-        '#strip-terminals must carry the anchor in CSS'
-    );
-    const anchors = (shellHtml.match(/margin-top:\s*auto/g) || []).length;
-    assert.strictEqual(anchors, 1, 'exactly one CSS rule may declare margin-top: auto in the strip');
 });
 
-test('the section is created eagerly in renderManifest, after the panel loop', () => {
+test('the section is created eagerly in renderManifest between primary and cold groups', () => {
     const fn = block(shellJs, 'function renderManifest(manifest) {', 'function loadManifest() {');
-    const themeAt = fn.indexOf('strip.appendChild(themeBtn)');
+    const primaryAt = fn.indexOf('for (const icon of primaryIcons) { strip.appendChild(icon); }');
+    const containerAt = fn.indexOf('strip.appendChild(container);');
+    const coldAt = fn.indexOf('for (const icon of coldIcons) { strip.appendChild(icon); }');
     const sectionAt = fn.indexOf('renderTerminalSection([])');
-    assert.ok(sectionAt !== -1, 'renderManifest must create the section eagerly');
-    assert.ok(themeAt !== -1 && themeAt < sectionAt, 'the toggle is appended first; the section then inserts before it');
+    assert.ok(primaryAt !== -1 && containerAt !== -1 && coldAt !== -1, 'manifest must partition into primary, container, and cold');
+    assert.ok(primaryAt < containerAt && containerAt < coldAt, 'order in DOM must be primary -> strip-terminals -> cold');
+    assert.ok(sectionAt !== -1 && coldAt < sectionAt, 'renderTerminalSection must be called after cold group is mounted');
 });
 
 test('the light state is in the accessible name, not only the dot', () => {
@@ -394,57 +360,27 @@ test('the light state is in the accessible name, not only the dot', () => {
     );
 });
 
-test('terminal state is encoded without a separate dot — exited fades, done rings, active is bare', () => {
-    const exited = shellHtml.match(/\.strip-term-btn\.strip-term-exited\s+\.strip-term-icon\s*\{([^}]*)\}/);
-    assert.ok(exited, '.strip-term-exited .strip-term-icon rule is missing');
-    assert.ok(/grayscale\(1\)/.test(exited[1]), 'exited must desaturate the icon — the monochrome-survivable signal');
-    assert.ok(/brightness\(/.test(exited[1]), 'exited must lift brightness — grayscale alone sinks the dark-fill brands into the rail');
-    assert.ok(/opacity:\s*0\./.test(exited[1]), 'exited must fade the icon');
+test('selection is expressed as a left-edge bar shape and team icons are accent', () => {
+    const activeRule = shellHtml.match(/\.strip-icon\.is-active\s*\{([^}]*)\}/);
+    assert.ok(activeRule, '.strip-icon.is-active rule must exist');
+    assert.ok(/border-left:\s*2px\s+solid\s+var\(--text\)/.test(activeRule[1]),
+        'active panel selection must be indicated by a 2px var(--text) left border bar');
+    assert.ok(!/color:\s*var\(--accent\)/.test(activeRule[1]),
+        'active panel icon must NOT use var(--accent) text colour');
+    assert.ok(!/border-color:\s*var\(--accent-dim\)/.test(activeRule[1]),
+        'active panel icon must NOT use var(--accent-dim) border colour');
 
-    // done is now a one-shot PULSE, not a permanent state class. The permanence
-    // being removed is the whole point of the change: no bare .strip-term-done rule
-    // may survive (it would ring the icon for as long as the badge holds).
-    assert.ok(!/\.strip-term-btn\.strip-term-done\s*\{/.test(shellHtml),
-        'no bare .strip-term-done rule may survive — the ring is now a transient notification, not a permanent state');
+    const teamIconRule = shellHtml.match(/\.strip-team-icon\s*\{([^}]*)\}/);
+    assert.ok(teamIconRule, '.strip-team-icon rule must exist');
+    assert.ok(/color:\s*var\(--accent\)/.test(teamIconRule[1]) || /fill:\s*var\(--accent\)/.test(teamIconRule[1]),
+        '.strip-team-icon must carry var(--accent)');
 
-    const pulseKeyframes = shellHtml.match(/@keyframes strip-term-done-pulse\s*\{([\s\S]*?)\n        \}/);
-    assert.ok(pulseKeyframes, '@keyframes strip-term-done-pulse must exist — the ring is a CSS animation now');
-    assert.ok(/border-color:/.test(pulseKeyframes[1]) && /box-shadow:/.test(pulseKeyframes[1]),
-        'the pulse keyframes must animate both border-color and box-shadow — ring AND glow, shape plus salience');
-    assert.ok(/#22c55e/.test(pulseKeyframes[1]),
-        'the pulse must use the hardcoded #22c55e green — the shape-not-hue rationale the old rule carried');
-    assert.ok(!/var\(--accent/.test(pulseKeyframes[1]),
-        'done must not borrow the accent — that is the panel-SELECTION colour in this rail, and --accent-dim is near-invisible under theme-claudify');
-
-    const pulsingRule = shellHtml.match(/\.strip-term-btn\.strip-term-done\.is-pulsing\s*\{([^}]*)\}/);
-    assert.ok(pulsingRule, '.strip-term-done.is-pulsing rule is missing — the pulse is gated on a live window class');
-    assert.ok(/\b1\b/.test(pulsingRule[1]) && /both/.test(pulsingRule[1]),
-        'the pulse must be a ONE-SHOT animation (iteration count 1, fill-mode both) — not an infinite loop');
-
-    // active is the null state: no rule may fade or ring it, or it collapses into exited/done.
-    assert.ok(!/\.strip-term-btn\.strip-term-active\b/.test(shellHtml),
-        'active must stay unmodified — the absence of a ring/fade IS the live signal');
-
-    // The old dot rules must be fully removed.
-    assert.ok(!/\.strip-term-dot/.test(shellHtml), 'no .strip-term-dot CSS may survive — the dot is replaced by the brand icon');
-    assert.ok(!/dot-active|dot-done|dot-exited/.test(shellHtml), 'no dot-* state classes may survive in shell.html');
-});
-
-test('the strip renders a coloured brand-icon img from the relayed iconUri', () => {
-    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
-    assert.ok(
-        /createElement\('img'\)[\s\S]*strip-term-icon[\s\S]*icon\.src = t\.iconUri/.test(fn),
-        'the strip must render an <img class="strip-term-icon"> whose src is the relayed t.iconUri'
-    );
-    assert.ok(
-        /strip-term-' \+ t\.light/.test(fn),
-        'the button must carry a strip-term-<light> state class so CSS can encode exited/done'
-    );
-    assert.ok(!/strip-term-dot/.test(fn), 'the strip must no longer create a .strip-term-dot element');
-    assert.ok(
-        /icon\.alt = ''/.test(fn),
-        "alt must be empty — the button's aria-label already carries the identity; a brand name here double-announces"
-    );
+    assert.ok(!/@keyframes strip-term-done-pulse\b/.test(shellHtml),
+        'no @keyframes strip-term-done-pulse may exist');
+    assert.ok(!/\.strip-team-queue-depth\b/.test(shellHtml),
+        'no .strip-team-queue-depth CSS may exist');
+    assert.ok(!/\.strip-term-exited\b/.test(shellHtml),
+        'no .strip-term-exited CSS may exist');
 });
 
 test('the section scrolls inside itself and adds no second scrollbar block', () => {
@@ -464,17 +400,15 @@ test('the section scrolls inside itself and adds no second scrollbar block', () 
 // ------------------------------------------------------------------ strip tooltips
 
 test('every strip button builder sets a non-empty data-tooltip', () => {
-    const icon = block(shellJs, 'function buildIcon(panel) {', 'function buildThemeToggle() {');
+    const icon = block(shellJs, 'function buildIcon(panel) {', 'const popoutWindows');
     assert.ok(
         icon.includes('btn.dataset.tooltip = panel.label || panel.id'),
         'panel icons must tooltips from the manifest label, falling back to the id (never silently none)'
     );
-    const toggle = block(shellJs, 'function buildThemeToggle() {', 'const popoutWindows');
-    assert.ok(toggle.includes("btn.dataset.tooltip = 'Toggle Theme'"), 'the theme toggle must carry a tooltip');
-    const section = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
+    const section = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function requestFleetState(');
     assert.ok(
-        /btn\.dataset\.tooltip = t\.worktreePath \? `[^`]*labelText[^`]*\\n[^`]*` : labelText/.test(section),
-        'terminal buttons must tooltip the aria text (light state included) plus the full worktreePath on a second line'
+        section.includes('btn.dataset.tooltip = team.name'),
+        'team buttons must set data-tooltip to team.name'
     );
 });
 
@@ -539,46 +473,34 @@ test('the overlay hides on rail scroll, click, and terminal-section rebuild', ()
         'the section must hide the tooltip BEFORE removing the fleet buttons, or a mid-hover fleet update strands it');
 });
 
-test('the Setup icon is placed in the bottom rail cluster', () => {
+test('manifest entries use group: primary | cold and setup is railHidden', () => {
     const manifestSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'headlessPanelHtml.ts'), 'utf8');
-    // Line-scoped, not `[^}]*`: the entry interpolates `${iconDir}`, so a brace-
-    // excluding class can never reach the end of the row it is meant to match.
-    assert.ok(/\{\s*id:\s*'setup',[^\n]*placement:\s*'bottom'/.test(manifestSrc),
-        "the setup manifest entry must carry placement: 'bottom'");
+    assert.ok(!manifestSrc.includes("placement?: 'bottom'"), 'placement must be removed from PanelManifestEntry');
+    assert.ok(manifestSrc.includes("group: 'primary' | 'cold'"), 'group must be required on PanelManifestEntry');
+    assert.ok(/\{\s*id:\s*'setup',[^\n]*railHidden:\s*true/.test(manifestSrc),
+        'the setup manifest entry must carry railHidden: true');
+    assert.ok(/\{\s*id:\s*'memo',[^\n]*railHidden:\s*true/.test(manifestSrc),
+        'the memo manifest entry must carry railHidden: true');
+    assert.ok(/\{\s*id:\s*'connections',[^\n]*railHidden:\s*true/.test(manifestSrc),
+        'the connections manifest entry must carry railHidden: true');
+
     const shellSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'shell.js'), 'utf8');
-    // Ordering is the whole point: bottom icons must be appended after the top
-    // group and BEFORE the theme toggle, so the whole cluster sits at the foot of
-    // the rail.
-    assert.ok(shellSrc.indexOf('bottomPanels.push(icon)') !== -1, 'placement must be honoured in renderManifest');
-    assert.ok(shellSrc.indexOf('for (const icon of bottomPanels)') < shellSrc.indexOf('const themeBtn = buildThemeToggle()'),
-        'bottom icons must be appended before the theme toggle');
+    assert.ok(shellSrc.includes('panel.railHidden'), 'renderManifest must skip railHidden panels from rail icon creation');
 });
 
-test('the bottom anchor is reconciled onto the FIRST cluster member, not just the toggle', () => {
-    // DOM order alone does not move an icon to the bottom: the free space collapses
-    // into whichever child holds the auto top margin, and everything before that
-    // child stays packed with the top group. So appending Setup ahead of
-    // #strip-terminals / the toggle leaves it under the workspace panels with the
-    // gap BELOW it — the exact defect this cluster exists to avoid.
+test('the bottom anchor is applied to the first cold group icon', () => {
     const fn = block(shellJs, 'function applyBottomAnchor() {', 'function renderTerminalSection(terminals, teams) {');
     assert.ok(
-        fn.includes(".strip-placement-bottom'"),
-        'the reconciler must consider placement icons as cluster members'
+        fn.includes(".strip-group-cold'"),
+        'the reconciler must target cold group icons'
     );
     assert.ok(
-        /const first = members\[0\]/.test(fn),
-        'the anchor belongs to the FIRST member — anything earlier is not "at the bottom"'
+        /coldIcons\[0\]\.style\.marginTop = 'auto'/.test(fn),
+        'the anchor belongs to the first cold group icon'
     );
     assert.ok(
         /container\.style\.marginTop = '0'/.test(fn),
-        "#strip-terminals owns the anchor in CSS; it must be neutralised inline when something precedes it, or the free space splits"
-    );
-    // Both composition changes must reconcile: Terminals present (container created)
-    // and Terminals absent (container removed, toggle takes the inline default).
-    const section = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
-    assert.strictEqual(
-        (section.match(/applyBottomAnchor\(\)/g) || []).length, 2,
-        'both branches of renderTerminalSection must reconcile the anchor'
+        'container top margin is neutralized when cold group is present'
     );
 });
 
@@ -616,233 +538,32 @@ test('the shell can request fleet state instead of only waiting to be pushed', (
     );
 });
 
-// -------------------------------------------------- completion ring pulse lifecycle
+// -------------------------------------------------- completion ring pulse lifecycle deleted
 
-test('the relay sources doneStamp from the badge value, not a parallel Map', () => {
-    // A parallel stamp Map would have seven delete sites to keep in sync with
-    // terminalBadges; folding the stamp into the value makes it impossible to leak.
-    const relay = block(terminalsJs, 'function postFleetStateToShell() {', 'const LAYOUTS = {');
-    assert.ok(
-        /doneStamp = terminalBadges\.get\(t\.friendlyName\)\.stamp/.test(relay),
-        'doneStamp must be read from the badge value (.stamp), so a badge delete cannot leave a stamp behind'
-    );
+test('pulse ledger, DONE_PULSE_MS, and pulse keyframes are deleted', () => {
+    assert.ok(!shellJs.includes('pulsedDoneStamps'), 'pulsedDoneStamps must be absent from shell.js');
+    assert.ok(!shellJs.includes('DONE_PULSE_MS'), 'DONE_PULSE_MS must be absent from shell.js');
+    assert.ok(!shellHtml.includes('strip-term-done-pulse'), 'strip-term-done-pulse must be absent from shell.html');
+    assert.ok(!shellHtml.includes('strip-term-done-pulse-reduced'), 'strip-term-done-pulse-reduced must be absent from shell.html');
 });
 
-test('handleAgentCompleted writes a strictly increasing stamp inside the badge set', () => {
-    const handler = block(terminalsJs, 'function handleAgentCompleted(msg) {', 'function showCompletionToast(');
-    assert.ok(
-        /terminalBadges\.set\([^,]+,\s*\{\s*label:\s*'DONE',\s*stamp:\s*\+\+badgeStampSeq\s*\}\)/.test(handler),
-        'handleAgentCompleted must write { label: \'DONE\', stamp: ++badgeStampSeq } — a second completion of an already-badged terminal re-pulses'
-    );
-    assert.ok(
-        terminalsJs.includes('let badgeStampSeq = 0;'),
-        'badgeStampSeq must be declared as a module-level counter so ++ is monotonic across completions'
-    );
+test('buildTeamsForShell does not relay light or doneStamp', () => {
+    const fn = block(terminalsJs, 'function buildTeamsForShell() {', 'const LAYOUTS = {');
+    assert.ok(!/light\s*:\s*light/.test(fn), 'buildTeamsForShell must not include light in teams entries');
+    assert.ok(!/doneStamp\s*:\s*doneStamp/.test(fn), 'buildTeamsForShell must not include doneStamp in teams entries');
 });
 
-test('renderTerminalSection pulses once per stamp and resumes across rebuilds', () => {
-    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
-    // The stamp gate: a new stamp arms the pulse; a repeated stamp does not re-arm.
-    assert.ok(
-        /prev\.stamp !== t\.doneStamp/.test(fn),
-        'the pulse must be armed only when the incoming doneStamp differs from the last recorded one — a stamp gate, not a boolean'
-    );
-    // The elapsed guard: STRICTLY less than. An offset that reaches the duration
-    // lands the element on its 100% keyframe under fill-mode both, flashing green
-    // on an already-expired completion.
-    assert.ok(
-        /elapsed < DONE_PULSE_MS/.test(fn),
-        'the elapsed guard must be STRICTLY less than DONE_PULSE_MS — never <=, or an expired completion flashes its end keyframe'
-    );
-    // The resume: a negative animation-delay picks up where the destroyed predecessor
-    // was killed. Without this the pulse is truncated by the next rebuild.
-    assert.ok(
-        /animationDelay\s*=\s*'-' \+ Math\.floor\(pulseElapsed\)/.test(fn),
-        'a rebuilt element must carry a negative animation-delay equal to the elapsed time — resume, do not restart'
-    );
-    // FLOOR, not round. The elapsed guard admits values strictly below DONE_PULSE_MS,
-    // but Math.round(2199.6) === 2200 hands the animation a delay whose magnitude
-    // EQUALS the duration — the post-active phase, where fill-mode `both` paints the
-    // 100% keyframe for a frame. Rounding silently defeats the strict comparison above.
-    assert.ok(
-        !/Math\.round\(pulseElapsed\)/.test(fn),
-        'the resume offset must be floored, never rounded — rounding can reach DONE_PULSE_MS and flash the end keyframe'
-    );
-});
+// ---------------------------------------------- Mission Control rail icon (UFO) deleted
 
-test('both early-return branches of renderTerminalSection clear the pulse ledger', () => {
-    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
-    const clears = (fn.match(/pulsedDoneStamps\.clear\(\)/g) || []).length;
-    assert.ok(clears >= 2,
-        'both early-return branches (no terminals frame, empty fleet) must clear the ledger, or it retains entries for a fleet that went to zero');
-});
-
-test('a visibilitychange to visible clears the pulse ledger', () => {
-    assert.ok(
-        /document\.addEventListener\('visibilitychange'[\s\S]*visibilityState === 'visible'[\s\S]*pulsedDoneStamps\.clear\(\)/.test(shellJs),
-        'returning to a visible tab must clear the ledger so a completion missed in a background tab is re-announced exactly once'
-    );
-});
-
-test('DONE_PULSE_MS equals the CSS animation duration', () => {
-    const msMatch = shellJs.match(/const DONE_PULSE_MS = (\d+)/);
-    assert.ok(msMatch, 'DONE_PULSE_MS must be declared in shell.js');
-    const ms = parseInt(msMatch[1], 10);
-    const durMatch = shellHtml.match(/animation:\s*strip-term-done-pulse\s+([\d.]+)s/);
-    assert.ok(durMatch, 'the pulse animation duration must be declared in shell.html');
-    const seconds = parseFloat(durMatch[1]);
-    assert.strictEqual(
-        seconds * 1000, ms,
-        `DONE_PULSE_MS (${ms}) must equal the CSS duration (${seconds * 1000}) — two files, one number, nothing else keeps them honest`
-    );
-});
-
-test('the reduced-motion variant overrides animation-name only, with a distinct keyframes name', () => {
-    assert.ok(
-        /@keyframes strip-term-done-pulse-reduced\s*\{/.test(shellHtml),
-        '@keyframes strip-term-done-pulse-reduced must exist — a distinct name, not a second same-named declaration'
-    );
-    // Select the reduced-motion block by CONTENT, not by position. A bare
-    // `.match` (no /g) returns the FIRST @media block in the file, which is a
-    // silent-wrong-assertion hazard: a second reduced-motion block added
-    // elsewhere (e.g. the Mission Control icon's own guard) would either break
-    // this test for an unrelated reason or — worse — pass while checking the
-    // wrong block. Collect ALL reduced-motion blocks and select the one whose
-    // body contains `strip-term-done-pulse-reduced` — that is the block this
-    // test means. A second reduced-motion block elsewhere is harmless.
-    const allMedia = [...shellHtml.matchAll(/@media \(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\}\s*\}/g)];
-    assert.ok(allMedia.length > 0, 'at least one prefers-reduced-motion media block must exist');
-    const media = allMedia.find(m => /strip-term-done-pulse-reduced/.test(m[1]));
-    assert.ok(media, 'a prefers-reduced-motion media block containing strip-term-done-pulse-reduced must exist');
-    assert.ok(/animation-name:\s*strip-term-done-pulse-reduced/.test(media[1]),
-        'the reduced-motion variant must override animation-name only — duration, iteration count and fill-mode are inherited');
-    // No second same-named @keyframes inside the media query (the rejected approach).
-    const reducedBlock = media[1];
-    // `\s*\{`, not `\b`: a word boundary sits between "pulse" and "-reduced", so `\b`
-    // would also flag the legitimate case of the -reduced track being moved inside the
-    // media query. Only a same-NAMED re-declaration is the hazard.
-    assert.ok(!/@keyframes strip-term-done-pulse\s*\{/.test(reducedBlock),
-        'the media query must NOT re-declare @keyframes strip-term-done-pulse — a second same-named block is invisible to this test and reorder-unsafe');
-});
-
-// ---------------------------------------------- Mission Control rail icon (UFO)
-
-test('the Mission Control icon is created and inserted as the first child of #strip-terminals', () => {
-    // The UFO button must sit at the top of the fleet container, above the
-    // terminal buttons, and carry the id the rest of the file keys off.
-    const fn = block(shellJs, 'function createMissionControlIcon() {', 'function ensureMissionControlIcon() {');
-    assert.ok(/btn\.id\s*=\s*'strip-mission-control'/.test(fn),
-        'createMissionControlIcon must stamp id="strip-mission-control" on the button');
-    assert.ok(/container\.insertBefore\(btn,\s*container\.firstChild\)/.test(fn),
-        'the Mission Control button must be inserted as the FIRST child of #strip-terminals, not appended');
-});
-
-test('the Mission Control icon is an inline <svg>, not an <img> with a /static/icons/ src', () => {
-    // The SVG is inlined into the shell document so shell.html's CSS can select
-    // into its sub-elements (.light-a/.light-b for the dimmed freeze and the
-    // reduced-motion guard). An <img src="/static/icons/mission-control-ufo.svg">
-    // would be a separate document and those rules would be inert.
-    const fn = block(shellJs, 'function createMissionControlIcon() {', 'function ensureMissionControlIcon() {');
-    assert.ok(/<svg[^>]*aria-hidden="true"/.test(fn),
-        'the icon must be an inline <svg> with aria-hidden="true" (no double-announce beside the button aria-label)');
-    assert.ok(/class="strip-mc-icon"/.test(fn),
-        'the inline <svg> must carry the .strip-mc-icon class (sizing + pointer-events:none)');
-    assert.ok(!/mission-control-ufo\.svg/.test(fn),
-        'the icon must NOT reference /static/icons/mission-control-ufo.svg — the SVG is inlined, the file is deleted');
-    assert.ok(!/createElement\('img'\)/.test(fn),
-        'createMissionControlIcon must not create an <img> — the SVG is inlined via innerHTML');
-    // ids must be prefixed to avoid document-wide collisions now that they are global.
-    assert.ok(/sb-mc-cyan-glow/.test(fn) && /sb-mc-beam/.test(fn),
-        'inlined SVG ids must be prefixed (sb-mc-*) to avoid collisions in the shell document');
-    assert.ok(/url\(#sb-mc-cyan-glow\)/.test(fn) && /url\(#sb-mc-beam\)/.test(fn),
-        'url(#...) references must match the prefixed ids');
-    // Class names on sub-elements must be kept — shell.html selectors depend on them.
-    assert.ok(/class="light-a"/.test(fn) && /class="light-b"/.test(fn),
-        'the inlined SVG must keep .light-a/.light-b class names — shell.html animation rules depend on them');
-});
-
-test('lit-click navigates (no /mission-control/stop) and dimmed-click posts /mission-control/start', () => {
-    // The rail button is navigational — every other button in #strip-terminals
-    // navigates (team → selectPanel + switchToTeam, ungrouped → focus/peek), so
-    // the lit Mission Control click reveals the controller terminal rather than
-    // ending the session. The end-session control moved to the controller's
-    // own scoped ops block (#btn-controller-stop in terminals.html), where it
-    // can carry a label — the rail icon cannot. The singleton guard in
-    // ptyFleetService.create() is the duplicate-controller protection now, not
-    // a client flag or a stop-on-lit-click.
-    const fn = block(shellJs, 'function createMissionControlIcon() {', 'function ensureMissionControlIcon() {');
-    assert.ok(/missionControlActive\)/.test(fn),
-        'the click handler must branch on missionControlActive (lit vs dimmed)');
-    // Lit path must NOT post /mission-control/stop — it navigates instead.
-    assert.ok(!/fetch\('\/mission-control\/stop'/.test(fn),
-        'the lit-click path must NOT POST /mission-control/stop — the rail button is navigational');
-    assert.ok(/selectPanel\('terminals'\)/.test(fn),
-        "the lit-click path must navigate via selectPanel('terminals')");
-    assert.ok(/switchToController/.test(fn),
-        'the lit-click path must post switchToController to the terminals panel');
-    assert.ok(/fetch\('\/mission-control\/start'/.test(fn),
-        'the dimmed-click path must POST /mission-control/start');
-});
-
-test('the dimmed-click response branches on result.mode (terminal vs clipboard)', () => {
-    // The server decides the path; the shell must branch on `mode` so a
-    // clipboard result (no agent configured) does not toast "check the
-    // Mission Control terminal" for a terminal that was never created.
-    const fn = block(shellJs, 'function createMissionControlIcon() {', 'function ensureMissionControlIcon() {');
-    assert.ok(/result\.success\s*&&\s*result\.mode\s*===\s*'terminal'/.test(fn),
-        "the dimmed-click handler must branch on result.mode === 'terminal'");
-    assert.ok(/result\.success\s*&&\s*result\.mode\s*===\s*'clipboard'/.test(fn),
-        "the dimmed-click handler must branch on result.mode === 'clipboard'");
-});
-
-test('the dimmed-click in-flight flag is a UI affordance, not the duplicate guard', () => {
-    // The duplicate-controller guard now lives in ptyFleetService.create(),
-    // which consults the singleton identity before the collision loop and
-    // returns the existing live handle rather than minting mission-control-2.
-    // The client-side missionControlStartInFlight flag is demoted to a UI
-    // affordance: it disables the button while a start fetch is pending so a
-    // double-click does not fire two fetches — a UX nicety, not a correctness
-    // gate. The old comment said "the server seat guard cannot help here";
-    // the service guard CAN help now, which is why the flag is no longer the
-    // protection.
-    const fn = block(shellJs, 'function createMissionControlIcon() {', 'function ensureMissionControlIcon() {');
-    assert.ok(/missionControlStartInFlight/.test(fn),
-        'the dimmed-click handler must still check the missionControlStartInFlight flag (UI affordance)');
-    assert.ok(/if\s*\(missionControlStartInFlight\)\s*\{\s*return;\s*\}/.test(fn),
-        'a second click while a start fetch is pending must be a silent no-op (UI disable)');
-    assert.ok(/btn\.disabled\s*=\s*true/.test(fn),
-        'the button must be disabled while a start fetch is pending (UI affordance, not just a guard)');
-    assert.ok(/\.finally\(/.test(fn),
-        'the in-flight flag and disabled state must be cleared in both success and failure paths (via .finally)');
-});
-
-test('the Mission Control icon is ensured to exist independently of an missionControlState message', () => {
-    // CRITICAL 1 regression guard: renderMissionControlIcon is the only OTHER
-    // creator and it only runs when an 'missionControlState' postMessage arrives.
-    // On a cold load with no autoban state change, NO icon would exist and the
-    // start control would be unreachable. ensureMissionControlIcon() must be
-    // called (a) once during shell init after the rail/manifest is built, and
-    // (b) at the END of renderTerminalSection in BOTH branches — including the
-    // early-return !frames.has('terminals') branch, which removes the container
-    // (and the icon with it). renderMissionControlIcon itself must NOT create —
-    // it only updates classes/tooltip on an icon that already exists.
-    assert.ok(/function ensureMissionControlIcon\(\)\s*\{/.test(shellJs),
-        'ensureMissionControlIcon() must be declared');
-    assert.ok(/getElementById\('strip-mission-control'\)\)\s*\{\s*return;\s*\}/.test(shellJs),
-        'ensureMissionControlIcon() must be a no-op when the icon already exists (idempotent)');
-    // renderMissionControlIcon must NOT call createMissionControlIcon — it only updates.
-    const render = block(shellJs, 'function renderMissionControlIcon(state) {', "// Delegation via mouseover/mouseout");
-    assert.ok(!/createMissionControlIcon\(\)/.test(render),
-        'renderMissionControlIcon must NOT create the icon — ensureMissionControlIcon() owns creation, or the cold-load gap returns');
-    // Init call: after renderTerminalSection([]) in renderManifest.
-    const manifest = block(shellJs, 'function renderManifest(manifest) {', 'function loadManifest() {');
-    assert.ok(/renderTerminalSection\(\[\]\);[\s\S]*?ensureMissionControlIcon\(\)/.test(manifest),
-        'renderManifest must call ensureMissionControlIcon() after the initial renderTerminalSection([])');
-    // Both branches of renderTerminalSection must call ensureMissionControlIcon().
-    const section = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
-    const ensures = (section.match(/ensureMissionControlIcon\(\)/g) || []).length;
-    assert.strictEqual(ensures, 2,
-        'renderTerminalSection must call ensureMissionControlIcon() in BOTH branches (early-return and normal exit) — the early-return removes the container and takes the icon with it');
+test('the UFO Mission Control button and relay are fully deleted and .is-dormant is promoted', () => {
+    assert.ok(!shellJs.includes('createMissionControlIcon'), 'createMissionControlIcon must be absent from shell.js');
+    assert.ok(!shellJs.includes('ensureMissionControlIcon'), 'ensureMissionControlIcon must be absent from shell.js');
+    assert.ok(!shellJs.includes('renderMissionControlIcon'), 'renderMissionControlIcon must be absent from shell.js');
+    assert.ok(!shellJs.includes('strip-mission-control'), 'strip-mission-control must be absent from shell.js');
+    assert.ok(!shellHtml.includes('#strip-mission-control'), '#strip-mission-control CSS must be absent from shell.html');
+    assert.ok(!terminalsJs.includes('missionControlState'), 'missionControlState relay must be absent from terminals.js');
+    assert.ok(!shellJs.includes('missionControlState'), 'missionControlState handler must be absent from shell.js');
+    assert.ok(shellHtml.includes('.strip-icon.is-dormant'), '.strip-icon.is-dormant CSS class must exist in shell.html');
 });
 
 // ---------------------------------------------- UAT: shell strip team icons
@@ -894,7 +615,7 @@ test('the team icon fallback skips the head brand mark', () => {
 });
 
 test('buildTeamsForShell does not fall back to the head brand mark', () => {
-    const fn = block(terminalsJs, 'function buildTeamsForShell() {', 'function relayMissionControlStateToShell');
+    const fn = block(terminalsJs, 'function buildTeamsForShell() {', 'const LAYOUTS = {');
     // The brand-mark fallback block must be gone — the relay sends iconUri or
     // empty string, and the shell handles the empty case with the role letter.
     assert.ok(
@@ -907,14 +628,18 @@ test('buildTeamsForShell does not fall back to the head brand mark', () => {
     );
 });
 
-test('the team button click posts switchToTeam, not window.open', () => {
+test('the team button click posts switchToTeam when running and ptyStartTeam when dormant', () => {
     const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
     // Scope to the team button click handler — the btn.addEventListener inside
-    // the team loop, before the ungrouped-terminals loop.
-    const teamHandler = block(fn, "btn.addEventListener('click', () => {", 'container.appendChild(btn);');
+    // the team loop.
+    const teamHandler = block(fn, "btn.addEventListener('click', async () => {", 'container.appendChild(btn);');
     assert.ok(
         teamHandler.includes("type: 'switchToTeam'"),
-        'the team button click must post a switchToTeam message to the terminals panel'
+        'the team button click must post a switchToTeam message to the terminals panel when running'
+    );
+    assert.ok(
+        teamHandler.includes("ptyStartTeam"),
+        'the team button click must call ptyStartTeam when dormant'
     );
     assert.ok(
         !teamHandler.includes('window.open('),
@@ -924,12 +649,11 @@ test('the team button click posts switchToTeam, not window.open', () => {
         teamHandler.includes("selectPanel('terminals')"),
         'the team button click must switch to the terminals panel before posting switchToTeam'
     );
-    // The clearTeamBadges relay must survive — clicking a done team still
-    // acknowledges the completion.
     assert.ok(
-        teamHandler.includes("type: 'clearTeamBadges'"),
-        'the clearTeamBadges relay must survive the click handler rewrite'
+        !teamHandler.includes("type: 'clearTeamBadges'"),
+        'the clearTeamBadges relay must be deleted'
     );
+    assert.ok(!shellJs.includes('clearTeamBadges'), 'clearTeamBadges must be absent from shell.js');
 });
 
 test('the popoutTeam message handler is removed from the shell', () => {
@@ -939,21 +663,10 @@ test('the popoutTeam message handler is removed from the shell', () => {
     );
 });
 
-test('ungrouped terminals render as .strip-term-btn via buildTerminalButton', () => {
-    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
-    // The ungrouped-terminal loop must call buildTerminalButton (which stamps
-    // .strip-term-btn), not create a .strip-team-btn. A terminal not claimed
-    // by any team is a per-terminal button, not a team button.
-    assert.ok(
-        /for \(const t of terminals\) \{[\s\S]*claimedNames\.has\(t\.name\)[\s\S]*buildTerminalButton\(t, seenKeys\)/.test(fn),
-        'ungrouped terminals must be rendered via buildTerminalButton, not as team buttons'
-    );
-    // The legacy terminals-mode else branch must be gone — teams mode is the
-    // only mode.
-    assert.ok(
-        !/Terminals mode \(legacy\)/.test(fn),
-        'the legacy terminals-mode else branch must not survive — teams mode is the only mode'
-    );
+test('ungrouped terminals do not render rail buttons and teams mode is the only mode', () => {
+    const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function requestFleetState(');
+    assert.ok(!fn.includes('buildTerminalButton'), 'buildTerminalButton must not be called');
+    assert.ok(!fn.includes('term:'), 'no per-terminal key pulse tracking in renderTerminalSection');
 });
 
 test('terminals.js has a switchToTeam message handler with an origin guard', () => {
@@ -1387,6 +1100,76 @@ test('the CSS that hid the tab row in team-scoped mode is gone', () => {
         /body\.is-solo \.group-tab-strip \{/.test(terminalsHtml),
         'solo mode must still hide the whole strip'
     );
+});
+
+test('top-right cluster exists and satisfies invariants', () => {
+    assert.ok(shellHtml.includes('id="top-right-cluster"'), '#top-right-cluster must exist in shell.html');
+    assert.ok(/#top-right-cluster\s*\{[^}]*position:\s*fixed/.test(shellHtml), '#top-right-cluster must have position: fixed');
+    assert.ok(/#top-right-cluster\s*\{[^}]*z-index:\s*40/.test(shellHtml), '#top-right-cluster must have z-index: 40');
+    assert.ok(/#top-right-cluster\s*\{[^}]*calc\(var\(--dock-width,\s*0px\)\s*\+\s*6px\)/.test(shellHtml),
+        '#top-right-cluster right offset must track --dock-width');
+
+    const fn = block(shellJs, 'function renderTopRightCluster(manifest) {', 'function renderManifest(manifest) {');
+    assert.ok(fn.includes('dock-toggle-btn'), 'cluster must create dock button with .dock-toggle-btn');
+    assert.ok(fn.includes("'setup'"), 'cluster must create setup button');
+    assert.ok(fn.includes("'memo'"), 'cluster must create memo button');
+    assert.ok(fn.includes("'connections'"), 'cluster must create connections button');
+
+    assert.ok(!shellJs.includes('buildDockToggle'), 'buildDockToggle must be removed from shell.js');
+    assert.ok(/document\.documentElement\.style\.setProperty\('--dock-width'/.test(shellJs),
+        '--dock-width must be written to documentElement');
+});
+
+test('three fixed team slots in the rail and showStripToast kept alive', () => {
+    // 1. DEFAULT_TEAM_DEFINITIONS in teamWiring
+    const teamWiringTs = fs.readFileSync(path.join(__dirname, '../services/teamWiring.ts'), 'utf8');
+    assert.ok(teamWiringTs.includes('export const DEFAULT_TEAM_DEFINITIONS: any[] = ['),
+        'DEFAULT_TEAM_DEFINITIONS must be exported from teamWiring.ts');
+    assert.ok(teamWiringTs.includes("id: 'planning-team'"), 'planning-team must be declared');
+    assert.ok(teamWiringTs.includes("id: 'feature-implementation'"), 'feature-implementation must be declared');
+    assert.ok(teamWiringTs.includes("id: 'review-team'"), 'review-team must be declared');
+
+    // 2. buildTeamsForShell emits 3 fixed slots in definition order
+    const fn = block(terminalsJs, 'function buildTeamsForShell() {', 'const LAYOUTS = {');
+    assert.ok(fn.includes('DEFAULT_TEAM_DEFINITIONS'), 'buildTeamsForShell must iterate DEFAULT_TEAM_DEFINITIONS');
+    assert.ok(fn.includes('running:'), 'buildTeamsForShell must emit running boolean');
+
+    // 3. renderTerminalSection renders dormant slots with .is-dormant
+    const renderFn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function requestFleetState(');
+    assert.ok(renderFn.includes("team.running ? '' : ' is-dormant'"),
+        'renderTerminalSection must mark non-running slots as is-dormant');
+    assert.ok(renderFn.includes('/terminals/verb/ptyStartTeam'),
+        'clicking a dormant slot must call ptyStartTeam');
+
+    // 4. showStripToast survival
+    assert.ok(shellJs.includes('function showStripToast(text) {'),
+        'showStripToast must be present in shell.js for start-failure feedback');
+});
+
+test('dispatched state reaches the rail and is rendered as a shape indicator', () => {
+    // 1. resolveTeamInFlight exported from LocalApiServer.ts
+    const localApiServerTs = fs.readFileSync(path.join(__dirname, '../services/LocalApiServer.ts'), 'utf8');
+    assert.ok(localApiServerTs.includes('export async function resolveTeamInFlight('),
+        'resolveTeamInFlight must be exported from LocalApiServer.ts');
+
+    // 2. GET /terminals/teams/<groupId>/queue includes inFlight
+    assert.ok(localApiServerTs.includes('const check = await resolveTeamInFlight(db, roster);'),
+        'GET /terminals/teams/<groupId>/queue must check resolveTeamInFlight');
+    assert.ok(localApiServerTs.includes('res.end(JSON.stringify({ ...result, inFlight }));'),
+        'GET /terminals/teams/<groupId>/queue must include inFlight in response');
+
+    // 3. terminals.js stores and relays dispatched
+    assert.ok(terminalsJs.includes('const _teamInFlight = new Map();'),
+        '_teamInFlight map must be present in terminals.js');
+    const buildFn = block(terminalsJs, 'function buildTeamsForShell() {', 'const LAYOUTS = {');
+    assert.ok(buildFn.includes('dispatched:'), 'buildTeamsForShell must emit dispatched boolean');
+
+    // 4. shell.html and shell.js render .is-dispatched
+    assert.ok(shellHtml.includes('.strip-team-btn.is-dispatched::after'),
+        '.strip-team-btn.is-dispatched::after CSS must be declared in shell.html');
+    const renderFn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function requestFleetState(');
+    assert.ok(renderFn.includes("isDispatched ? ' is-dispatched' : ''"),
+        'renderTerminalSection must apply is-dispatched class');
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);

@@ -40,7 +40,7 @@ import {
     CustomKanbanColumnConfig
 } from './agentConfig';
 import { WsHub } from './wsHub';
-import { PLANNING_VERBS, SETUP_VERBS, TASKVIEWER_VERBS } from '../generated/verbAllowlist';
+import { PLANNING_VERBS, SETUP_VERBS, TASKVIEWER_VERBS, TICKETS_VERBS } from '../generated/verbAllowlist';
 import { validateVerbPayload } from './verbSchemas';
 import { isAllowedHostFor, isAllowedOriginFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
 import { listIconPalette } from './iconPalette';
@@ -5459,8 +5459,17 @@ export class LocalApiServer {
         if (req.method === 'GET' && !itemId) {
             try {
                 const result = await listQueue(workspaceRoot, groupId);
+                let inFlight = false;
+                const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+                if (db) {
+                    const roster: string[] = Array.isArray(group.order) && group.order.length
+                        ? group.order
+                        : (Array.isArray(group.members) ? group.members : []);
+                    const check = await resolveTeamInFlight(db, roster);
+                    inFlight = !!check.inFlight;
+                }
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(result));
+                res.end(JSON.stringify({ ...result, inFlight }));
             } catch (err) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'list failed' }));
@@ -8177,6 +8186,21 @@ export class LocalApiServer {
                         error: `Unknown connections verb '${verb}' — it is in neither SETUP_VERBS, PLANNING_VERBS nor TASKVIEWER_VERBS. Add the arm to its provider and run \`npm run catalog:generate\`.`
                     }));
                 }
+            } else if (pathname.startsWith('/linear/verb/') && req.method === 'POST') {
+                const verb = decodeURIComponent(pathname.slice('/linear/verb/'.length));
+                if (SETUP_VERBS.has(verb)) {
+                    await this._handleSetupVerb(verb, req, res);
+                } else if (TICKETS_VERBS.has(verb)) {
+                    await this._handleTicketsVerb(verb, req, res);
+                } else if (TASKVIEWER_VERBS.has(verb)) {
+                    await this._handleTaskViewerVerb(verb, req, res);
+                } else {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: false,
+                        error: `Unknown linear verb '${verb}'.`
+                    }));
+                }
             } else if (pathname.startsWith('/taskViewer/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/taskViewer/verb/'.length));
                 await this._handleTaskViewerVerb(verb, req, res);
@@ -8297,6 +8321,8 @@ export class LocalApiServer {
                 await this._handleServePanelById('agent-control', req, res);
             } else if ((pathname === '/mission-control' || pathname === '/mission-control.html') && req.method === 'GET') {
                 await this._handleServePanelById('mission-control', req, res);
+            } else if ((pathname === '/linear' || pathname === '/linear.html') && req.method === 'GET') {
+                await this._handleServePanelById('linear', req, res);
             } else if (pathname === '/design/asset' && req.method === 'GET') {
                 await this._handleDesignAsset(req, res);
             } else if (pathname.startsWith('/static/') && req.method === 'GET') {

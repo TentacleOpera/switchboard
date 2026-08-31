@@ -170,6 +170,7 @@ function run() {
         // set was not widened with it, so the panel's own resolver said reachable
         // while this gate said dead.
         { file: 'connections.js', reachable: new Set([...SETUP_VERBS, ...PLANNING_VERBS, ...TASKVIEWER_VERBS]) },
+        { file: 'linear.js', reachable: new Set([...SETUP_VERBS, ...TICKETS_VERBS, ...TASKVIEWER_VERBS]) },
     ];
 
     for (const p of panels) {

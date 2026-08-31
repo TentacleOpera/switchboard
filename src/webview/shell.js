@@ -25,9 +25,10 @@
     const dockEl = document.getElementById('agent-dock');
     const splitterEl = document.getElementById('dock-splitter');
     const dockFrame = document.getElementById('dock-frame');
+    const dockKanbanFrame = document.getElementById('dock-kanban-frame');
+    const dockTabAgentBtn = document.getElementById('dock-tab-agent');
+    const dockTabKanbanBtn = document.getElementById('dock-tab-kanban');
     const dockTitleEl = document.getElementById('dock-title');
-    const dockRoleBtn = document.getElementById('dock-role-btn');
-    const dockRoleMenu = document.getElementById('dock-role-menu');
     const dockCloseBtn = document.getElementById('dock-close');
     const emptyEl = document.getElementById('dock-empty');
     const startBtn = document.getElementById('dock-start');
@@ -43,9 +44,8 @@
     let modalHost = null, modalDialog = null;
 
     // ── Agent dock state + persistence (browser-local UI chrome) ──────
-    // The role is NOT stored here — it is a workspace-level setting (change 4),
-    // so it follows the workspace across browsers. `seat` holds the friendlyName
-    // the server returned and is treated as an opaque string (edge case 4).
+    // The dock hosts the controller singleton occupant. `seat` holds the
+    // friendlyName the server returned and is treated as an opaque string.
     const DOCK_STATE_KEY = 'sb.agentDock';
     // 648 = 80 cols × 7.80px worst-case advance + 24px chrome. Default IS the
     // floor: this is a board-first cockpit, and 804px (100 cols) would leave a
@@ -57,11 +57,9 @@
     const DOCK_VIABLE_MIN = 48 + 4 + DOCK_MIN + DOCK_MIN_CONTENT; // 980
 
     let dockOpen = false;
-    let dockRole = 'project_manager';   // replaced by the boot fetch in loadDockRole
+    const dockRole = 'mission-control';
     let lastFleet = [];
-    // Cached ptyVisibleRoles response {visibleAgents, hasCommand} — fetched once
-    // when the dock first opens, used to label the role picker and the empty state.
-    let dockRolesCache = null;
+    let lastAutobanArmed = false;
 
     function readDockState() {
         try {
@@ -71,8 +69,9 @@
                 open: s.open === true,
                 width: clampDockWidth(Number(s.width) || DOCK_DEFAULT),
                 seat: typeof s.seat === 'string' ? s.seat : null,
+                activeTab: s.activeTab === 'kanban' ? 'kanban' : 'agent',
             };
-        } catch { return { open: false, width: DOCK_DEFAULT, seat: null }; }
+        } catch { return { open: false, width: DOCK_DEFAULT, seat: null, activeTab: 'agent' }; }
     }
     function writeDockState(patch) {
         const next = { ...readDockState(), ...patch };
@@ -176,13 +175,7 @@
     }
 
     function defaultPanelId(manifest) {
-        // First enabled, non-modal panel in manifest order; Board is conventionally first.
-        for (const p of manifest) {
-            if (p.enabled === false) { continue; }
-            if (p.presentation === 'modal') { continue; }
-            return p.id;
-        }
-        return null;
+        return 'board';
     }
 
     function selectPanel(id) {
@@ -255,10 +248,16 @@
 
         // Horizontal: right of the icon; flip left when that would overflow the
         // viewport (in a 48px rail the flip lands over the icon itself — a
-        // degenerate-window cosmetic case, accepted).
-        let left = rect.right + GAP;
-        if (left + tipRect.width > viewportW - 4) {
+        // degenerate-window cosmetic case, accepted). Cluster buttons on the
+        // right edge position to the left.
+        let left;
+        if (el.closest('#top-right-cluster')) {
             left = rect.left - tipRect.width - GAP;
+        } else {
+            left = rect.right + GAP;
+            if (left + tipRect.width > viewportW - 4) {
+                left = rect.left - tipRect.width - GAP;
+            }
         }
         if (left < 4) { left = 4; }
 
@@ -286,34 +285,6 @@
        A UFO button at the top of #strip-terminals that lights (animated cyan
        lights) when a Mission Control session is active and dims when inactive.
        Lit click → REVEAL (navigate to the terminals panel and focus the
-       controller terminal), matching every other button in the rail — team
-       buttons switch the panel to team scope, ungrouped terminal buttons
-       focus/peek. The rail is a row of navigational icons, and this one is no
-       longer the exception: the destructive end-session control lives in the
-       controller's own scoped ops block inside the terminals panel (see
-       btn-controller-stop), where it can carry a label — the rail icon cannot.
-       Dimmed click → POST /mission-control/start: the server decides — if a
-       lead/coder agent is configured it creates a pty terminal and delivers
-       the persona prompt (mode 'terminal'); otherwise it returns the
-       /switchboard launcher text (mode 'clipboard') for the shell to copy.
-       State arrives via `missionControlState` postMessages relayed from
-       terminals.js (which gets autobanStateSync / updateAutobanConfig over the
-       WS broadcast rail). */
-    let missionControlActive = false;
-    let missionControlSeat = null;
-    // UI affordance for the dimmed-click /mission-control/start fetch. This is
-    // NO LONGER THE GUARD against duplicate controllers — that guard now lives
-    // in ptyFleetService.create(), which consults the singleton identity
-    // before the collision loop and returns the existing live handle rather
-    // than minting mission-control-2. The service guard is the one chokepoint
-    // every path goes through (rail, panel, dock, standalone host), so a
-    // client flag cannot be the protection and was never sufficient: two shell
-    // tabs, a shell tab plus the extension panel, or a reload mid-flight all
-    // defeated it. This flag now only disables the button while a start fetch
-    // is pending, so a double-click does not fire two fetches — a UX nicety,
-    // not a correctness gate. No confirmation dialog (CLAUDE.md).
-    let missionControlStartInFlight = false;
-
     /* Minimal transient message near the rail. Reuses the body-level
        tooltip-overlay positioning pattern but auto-dismisses. textContent
        only — never innerHTML. Declared as a function declaration so the
@@ -333,212 +304,6 @@
         toast.style.opacity = '1';
         clearTimeout(toast._dismissTimer);
         toast._dismissTimer = setTimeout(() => { toast.style.opacity = '0'; }, 3000);
-    }
-
-    function createMissionControlIcon() {
-        const btn = document.createElement('button');
-        btn.id = 'strip-mission-control';
-        btn.type = 'button';
-        btn.className = 'mission-control-dimmed';
-        btn.setAttribute('aria-label', 'Mission Control session');
-        btn.dataset.tooltip = 'Mission Control: inactive — click to start';
-
-        // Inline SVG (not an <img src>) so shell.html's CSS can select into the
-        // icon's sub-elements — the dimmed freeze and reduced-motion rules are
-        // inert when the SVG is a separate document. The SVG's internal <style>
-        // block is dropped; all animation rules live in shell.html. ids are
-        // prefixed (sb-mc-*) to avoid document-wide collisions now that they
-        // are global. aria-hidden="true" + no role/aria-labelledby so the icon
-        // does not double-announce beside the button's aria-label. Class names
-        // on sub-elements (.ufo, .beam, .light-a, .light-b, .star-a, .star-b)
-        // are kept — shell.html's selectors depend on them.
-        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" aria-hidden="true" shape-rendering="crispEdges" class="strip-mc-icon">'
-            + '<defs>'
-            + '<filter id="sb-mc-cyan-glow" x="-100%" y="-100%" width="300%" height="300%">'
-            + '<feGaussianBlur stdDeviation="3" result="blur"/>'
-            + '<feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>'
-            + '</filter>'
-            + '<linearGradient id="sb-mc-beam" x1="0" y1="0" x2="0" y2="1">'
-            + '<stop offset="0" stop-color="#00e5ff" stop-opacity=".22"/>'
-            + '<stop offset="1" stop-color="#00e5ff" stop-opacity="0"/>'
-            + '</linearGradient>'
-            + '</defs>'
-            + '<g fill="#00e5ff" filter="url(#sb-mc-cyan-glow)">'
-            + '<rect class="star-a" x="40" y="36" width="4" height="4"/>'
-            + '<rect class="star-b" x="268" y="54" width="4" height="4"/>'
-            + '<rect class="star-b" x="74" y="126" width="3" height="3"/>'
-            + '<rect class="star-a" x="248" y="132" width="3" height="3"/>'
-            + '</g>'
-            + '<g class="beam">'
-            + '<path d="M128 104h64l32 68H96z" fill="url(#sb-mc-beam)"/>'
-            + '<rect x="112" y="168" width="96" height="4" fill="#00e5ff" opacity=".16"/>'
-            + '</g>'
-            + '<g class="ufo">'
-            + '<g filter="url(#sb-mc-cyan-glow)" opacity=".35" fill="#00e5ff">'
-            + '<rect x="112" y="50" width="96" height="4"/>'
-            + '<rect x="88" y="70" width="144" height="20"/>'
-            + '<rect x="104" y="90" width="112" height="12"/>'
-            + '</g>'
-            + '<path d="M136 42h48v4h12v8h8v16h-88V54h8v-8h12z" fill="#1d2323"/>'
-            + '<rect x="136" y="46" width="48" height="4" fill="#5e6666"/>'
-            + '<rect x="124" y="54" width="72" height="16" fill="#363a3a"/>'
-            + '<rect x="132" y="50" width="56" height="4" fill="#a0a6a6"/>'
-            + '<rect x="136" y="54" width="48" height="12" fill="#0b0f0f"/>'
-            + '<rect x="144" y="54" width="32" height="4" fill="#00363a"/>'
-            + '<rect x="152" y="58" width="24" height="4" fill="#00e5ff" opacity=".55"/>'
-            + '<rect x="104" y="66" width="112" height="4" fill="#5e6666"/>'
-            + '<rect x="88" y="70" width="144" height="8" fill="#363a3a"/>'
-            + '<rect x="72" y="78" width="176" height="12" fill="#1d2323"/>'
-            + '<rect x="88" y="90" width="144" height="8" fill="#0b0f0f"/>'
-            + '<rect x="104" y="98" width="112" height="4" fill="#363a3a"/>'
-            + '<rect x="120" y="102" width="80" height="4" fill="#1d2323"/>'
-            + '<rect x="72" y="82" width="16" height="4" fill="#5e6666"/>'
-            + '<rect x="232" y="82" width="16" height="4" fill="#5e6666"/>'
-            + '<g fill="#00e5ff" filter="url(#sb-mc-cyan-glow)">'
-            + '<rect class="light-a" x="96" y="82" width="12" height="8"/>'
-            + '<rect class="light-b" x="120" y="86" width="12" height="8"/>'
-            + '<rect class="light-a" x="144" y="88" width="12" height="8"/>'
-            + '<rect class="light-b" x="168" y="88" width="12" height="8"/>'
-            + '<rect class="light-a" x="192" y="86" width="12" height="8"/>'
-            + '<rect class="light-b" x="216" y="82" width="12" height="8"/>'
-            + '</g>'
-            + '<rect x="156" y="98" width="8" height="8" fill="#00e5ff" filter="url(#sb-mc-cyan-glow)"/>'
-            + '</g>'
-            + '</svg>';
-
-        btn.addEventListener('click', () => {
-            if (missionControlActive) {
-                // Lit click → REVEAL, matching every other button in the rail.
-                // Team buttons switch the panel to team scope; ungrouped
-                // terminal buttons focus/peek. This one navigates to the
-                // terminals panel and asks it to focus the controller terminal
-                // (or enter controller scope). Purely navigational — no
-                // /mission-control/stop is posted from any rail path. The
-                // destructive end-session control lives in the controller's
-                // own scoped ops block inside the terminals panel
-                // (btn-controller-stop), where it can carry a label.
-                selectPanel('terminals');
-                const termFrame = frames.get('terminals');
-                if (termFrame && termFrame.contentWindow) {
-                    try {
-                        termFrame.contentWindow.postMessage({
-                            type: 'switchToController'
-                        }, location.origin);
-                    } catch { /* ignore */ }
-                }
-            } else {
-                // Dimmed click: start Mission Control. The server decides the path
-                // — terminal (agent configured) or clipboard fallback (no agent).
-                // UI affordance only: disable the button while a start fetch is
-                // pending so a double-click does not fire two fetches. This is
-                // NOT the duplicate-controller guard — that lives in
-                // ptyFleetService.create() now (see the flag's comment above).
-                if (missionControlStartInFlight) { return; }
-                missionControlStartInFlight = true;
-                btn.disabled = true;
-                btn.dataset.tooltip = 'Mission Control: starting…';
-                fetch('/mission-control/start', { method: 'POST', credentials: 'same-origin' })
-                    .then(res => res.json())
-                    .then(result => {
-                        if (result.success && result.mode === 'terminal') {
-                            showStripToast('Mission Control started — check Mission Control terminal');
-                        } else if (result.success && result.mode === 'clipboard') {
-                            // No agent configured — copy the prompt to clipboard.
-                            const text = result.prompt || 'Run /switchboard workflow to start Mission Control';
-                            if (window.sbCopyToClipboard) {
-                                window.sbCopyToClipboard(text).then(() => {
-                                    showStripToast('Copied: ' + text);
-                                }).catch(() => {
-                                    showStripToast(text);
-                                });
-                            } else {
-                                showStripToast(text);
-                            }
-                        } else {
-                            showStripToast('Failed to start Mission Control: ' + (result.error || 'unknown'));
-                        }
-                        // Restore the inactive tooltip after the attempt resolves
-                        // so a later hover is not stuck on 'starting…'.
-                        btn.dataset.tooltip = 'Mission Control: inactive — click to start';
-                    })
-                    .catch(err => {
-                        showStripToast('Failed to start Mission Control: ' + err.message);
-                        btn.dataset.tooltip = 'Mission Control: inactive — click to start';
-                    })
-                    .finally(() => {
-                        missionControlStartInFlight = false;
-                        btn.disabled = false;
-                    });
-            }
-        });
-
-        // Insert as the first child of #strip-terminals. If the fleet container
-        // does not exist yet, create it and position it before the bottom
-        // cluster (settings/theme toggle) — mirroring renderTerminalSection's
-        // container-creation logic so a later fleet push reuses the same
-        // container instead of creating a second one.
-        let container = document.getElementById('strip-terminals');
-        if (!container) {
-            container = document.createElement('div');
-            container.id = 'strip-terminals';
-            container.role = 'group';
-            container.setAttribute('aria-label', 'Fleet terminals');
-            const firstBottom = strip.querySelector('.strip-placement-bottom');
-            const themeBtn = strip.querySelector('.theme-toggle-btn');
-            if (firstBottom) {
-                strip.insertBefore(container, firstBottom);
-            } else if (themeBtn) {
-                strip.insertBefore(container, themeBtn);
-            } else {
-                strip.appendChild(container);
-            }
-        }
-        container.insertBefore(btn, container.firstChild);
-        // The fleet container owns the bottom anchor in CSS; Mission Control
-        // icon rides above it. Reconcile so the anchor stays on the container.
-        applyBottomAnchor();
-        return btn;
-    }
-
-    /* Ensure the Mission Control rail icon exists independently of any
-       `missionControlState` postMessage. renderMissionControlIcon is the ONLY
-       other creator and it only runs when a state message arrives — on a cold
-       shell load with no autoban state change, NO icon would exist at all and
-       the start control would be unreachable. This is called (a) once during
-       shell init after the rail/manifest is built, and (b) at the END of
-       renderTerminalSection in BOTH branches — including the early-return
-       `!frames.has('terminals')` branch, which removes the container (and the
-       icon with it). Idempotent: a no-op when the icon already exists. */
-    function ensureMissionControlIcon() {
-        if (document.getElementById('strip-mission-control')) { return; }
-        createMissionControlIcon();
-    }
-
-    function renderMissionControlIcon(state) {
-        missionControlActive = !!state.active;
-        missionControlSeat = state.seat || null;
-        // Only update classes/tooltip on an icon that already exists —
-        // ensureMissionControlIcon() owns creation (init + renderTerminalSection).
-        // Creating here would re-introduce the cold-load gap this function
-        // cannot close: it only runs when a state message arrives.
-        const icon = document.getElementById('strip-mission-control');
-        if (!icon) { return; }
-        if (!missionControlActive) {
-            icon.classList.remove('mission-control-active');
-            icon.classList.add('mission-control-dimmed');
-            icon.dataset.tooltip = 'Mission Control: inactive — click to start';
-            return;
-        }
-        icon.classList.remove('mission-control-dimmed');
-        icon.classList.add('mission-control-active');
-        const since = missionControlSeat && missionControlSeat.adoptedAt
-            ? new Date(missionControlSeat.adoptedAt).toLocaleTimeString()
-            : '';
-        const where = missionControlSeat && missionControlSeat.terminalName
-            ? ' on ' + missionControlSeat.terminalName : '';
-        icon.dataset.tooltip = since
-            ? 'Mission Control: active' + where + ' since ' + since + ' — click to reveal'
-            : 'Mission Control: active — click to reveal';
     }
 
     // Delegation via mouseover/mouseout (these bubble; mouseenter/mouseleave do
@@ -574,7 +339,7 @@
 
     function buildIcon(panel) {
         const btn = document.createElement('button');
-        btn.className = 'strip-icon' + (panel.placement === 'bottom' ? ' strip-placement-bottom' : '');
+        btn.className = 'strip-icon strip-group-' + (panel.group || 'primary');
         btn.type = 'button';
         if (panel.presentation === 'modal') {
             btn.role = 'button';
@@ -618,76 +383,7 @@
         return btn;
     }
 
-    function buildThemeToggle() {
-        const btn = document.createElement('button');
-        btn.className = 'strip-icon theme-toggle-btn';
-        btn.type = 'button';
-        btn.setAttribute('aria-label', 'Toggle Theme');
-        btn.dataset.tooltip = 'Toggle Theme';
-        btn.style.marginTop = 'auto';
-        btn.appendChild(buildMaskedGlyph('/static/icons/nav-theme.svg'));
-
-        btn.addEventListener('click', async () => {
-            const isClaudify = document.body.classList.contains('theme-claudify');
-            const newTheme = isClaudify ? 'afterburner' : 'claudify';
-            try {
-                await fetch('/setup/verb/setThemeSetting', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ theme: newTheme })
-                });
-            } catch (err) {
-                console.warn('[shell] Failed to persist theme change:', err);
-            }
-            applyThemeToAll(newTheme);
-        });
-        return btn;
-    }
-
-    /* ── Agent dock: rail toggle ──────────────────────────────────────
-       Carries `strip-placement-bottom`, so applyBottomAnchor() already
-       treats it as a cluster member — strip.querySelectorAll('.strip-
-       placement-bottom') picks it up with NO change to that function.
-       Inserted in renderManifest BEFORE the Setup icon so the cluster
-       reads Dock | Setup | Toggle Theme. The glyph is nav-dock.svg, NOT
-       nav-terminals.svg — the Terminals panel already uses that glyph in
-       the top group, and two identical icons with different actions is an
-       unresolvable affordance (edge case 17). */
-    function buildDockToggle() {
-        const btn = document.createElement('button');
-        btn.className = 'strip-icon strip-placement-bottom dock-toggle-btn';
-        btn.type = 'button';
-        btn.setAttribute('aria-label', 'Agent Dock');
-        btn.dataset.tooltip = 'Agent Dock';
-        btn.setAttribute('aria-expanded', 'false');
-        btn.appendChild(buildMaskedGlyph('/static/icons/nav-dock.svg'));
-        btn.addEventListener('click', () => setDockOpen(!dockOpen));
-        return btn;
-    }
-
     const popoutWindows = new Set();
-
-    // name -> { stamp, startedAt }. renderTerminalSection rebuilds EVERY button from
-    // scratch on every fleet push (5s poll + terminalsChanged + the completion push
-    // itself), so a bare CSS animation on `.strip-term-done` would restart every few
-    // seconds and blink forever. A plain "already pulsed" boolean is not enough
-    // either: the rebuild destroys the animating element mid-pulse and its
-    // replacement, marked pulsed, wears no ring — the pulse is silently truncated,
-    // often to nothing (handleAgentCompleted relays, then fetchTerminalList relays
-    // again ~200ms later).
-    //
-    // So record WHEN the pulse started and keep re-applying the class with a negative
-    // animation-delay equal to the elapsed time: a negative delay starts a CSS
-    // animation already that far into its timeline, so each rebuilt element picks up
-    // exactly where its predecessor was killed. Once elapsed >= DONE_PULSE_MS the
-    // class stops being applied and the ring is gone for good.
-    //
-    // performance.now(), not document.timeline.currentTime: they share the same
-    // monotonic clock and both keep advancing while the tab is hidden, so the two are
-    // interchangeable for this arithmetic — and document.timeline can be null on a
-    // freshly attached document, which performance.now() never is.
-    const pulsedDoneStamps = new Map();
-    const DONE_PULSE_MS = 2200; // MUST equal the animation duration in shell.html
 
     function applyThemeToAll(themeName) {
         const isClaudify = themeName === 'claudify';
@@ -701,12 +397,16 @@
                 frame.contentWindow?.postMessage({ type: 'switchboardThemeChanged', theme: themeName }, '*');
             } catch { /* ignore */ }
         }
-        // The dock frame is NOT in `frames` (it is a /terminals?solo=&dock=1
-        // iframe, not a manifest panel), so applyThemeToAll's loop above misses
-        // it — a live theme toggle would leave the dock in the old palette
-        // until reload. Fan out explicitly (edge case 10).
+        // The dock frames are NOT in `frames` (they are /terminals?solo=&dock=1
+        // and /terminals?kanban=1&dock=1 iframes, not manifest panels), so
+        // applyThemeToAll's loop above misses them — a live theme toggle would
+        // leave the dock in the old palette until reload. Fan out explicitly.
         try {
-            dockFrame.contentWindow?.postMessage(
+            dockFrame?.contentWindow?.postMessage(
+                { type: 'switchboardThemeChanged', theme: themeName }, '*');
+        } catch { /* ignore */ }
+        try {
+            dockKanbanFrame?.contentWindow?.postMessage(
                 { type: 'switchboardThemeChanged', theme: themeName }, '*');
         } catch { /* ignore */ }
         for (const win of Array.from(popoutWindows)) {
@@ -738,18 +438,52 @@
        dock seat name; the friendlyName the server actually returned is
        persisted and treated as opaque (edge case 4). */
 
-    // Roles that operate via skills/addons, not as dockable agent CLIs —
-    // same exclusion onNewTerminalClicked applies (terminals.js:3605-3607).
-    const DOCK_SYSTEM_ROLES = new Set(['mission-control', 'mcp_monitor']);
-
-    function labelForRole(role) {
-        const meta = (typeof BUILT_IN_AGENT_LABELS !== 'undefined')
-            ? BUILT_IN_AGENT_LABELS.find(r => r.key === role)
-            : null;
-        return meta ? meta.label : role;
+    const CONTROLLER_ROLES = new Set(['mission-control', 'project_manager']);
+    function isControllerTerminal(t) {
+        if (!t) { return false; }
+        if (t.role && CONTROLLER_ROLES.has(t.role)) { return true; }
+        if (t.name === 'Mission Control') { return true; }
+        return false;
     }
 
-    function dockSeatName(role) { return `dock-${role}`; }
+    function dockSeatName() { return `dock-${dockRole}`; }
+
+    function setDockActiveTab(tab) {
+        const activeTab = tab === 'kanban' ? 'kanban' : 'agent';
+        writeDockState({ activeTab });
+        if (dockTabAgentBtn) {
+            dockTabAgentBtn.classList.toggle('is-active', activeTab === 'agent');
+            dockTabAgentBtn.setAttribute('aria-selected', String(activeTab === 'agent'));
+        }
+        if (dockTabKanbanBtn) {
+            dockTabKanbanBtn.classList.toggle('is-active', activeTab === 'kanban');
+            dockTabKanbanBtn.setAttribute('aria-selected', String(activeTab === 'kanban'));
+        }
+        if (activeTab === 'kanban') {
+            dockFrame.classList.remove('is-visible');
+            dockFrame.hidden = true;
+            emptyEl.classList.remove('is-visible');
+            emptyEl.hidden = true;
+            mountDockKanbanFrame();
+        } else {
+            if (dockKanbanFrame) {
+                dockKanbanFrame.classList.remove('is-visible');
+                dockKanbanFrame.hidden = true;
+            }
+            syncDockSeat();
+        }
+    }
+
+    function mountDockKanbanFrame() {
+        if (!dockKanbanFrame) { return; }
+        const url = '/terminals?kanban=1&dock=1';
+        if (dockKanbanFrame.getAttribute('src') !== url) {
+            dockKanbanFrame.src = url;
+        }
+        dockKanbanFrame.hidden = false;
+        dockKanbanFrame.classList.add('is-visible');
+        dockTitleEl.textContent = 'Kanban';
+    }
 
     function setDockOpen(open) {
         dockOpen = !!open;
@@ -757,7 +491,7 @@
         splitterEl.classList.toggle('is-open', dockOpen);
         dockEl.hidden = !dockOpen;
         splitterEl.hidden = !dockOpen;
-        const toggle = strip.querySelector('.dock-toggle-btn');
+        const toggle = document.querySelector('.dock-toggle-btn');
         if (toggle) {
             toggle.classList.toggle('is-active', dockOpen);
             toggle.setAttribute('aria-expanded', String(dockOpen));
@@ -767,11 +501,13 @@
             // Apply the persisted width BEFORE the frame gets a box, so the pty
             // is sized once. Without this the dock always reopens at the CSS
             // default and the saved width is write-only.
-            dockEl.style.width = clampDockWidth(readDockState().width) + 'px';
-            syncDockSeat();
-            // Fetch the role list once on first open — needed to label the
-            // picker and the empty-state hint. Cached for the session.
-            if (!dockRolesCache) { fetchDockRoles(); }
+            const w = clampDockWidth(readDockState().width);
+            dockEl.style.width = w + 'px';
+            document.documentElement.style.setProperty('--dock-width', w + 'px');
+            const state = readDockState();
+            setDockActiveTab(state.activeTab);
+        } else {
+            document.documentElement.style.setProperty('--dock-width', '0px');
         }
     }
 
@@ -782,13 +518,35 @@
     // `<role>-N` series, so nothing may key on the `dock-` prefix.
     function syncDockSeat() {
         const saved = readDockState();
-        const wanted = saved.seat || dockSeatName(dockRole);
-        const live = lastFleet.find(t => t.name === wanted && t.light !== 'exited');
-        if (live) {
-            mountDockFrame(wanted);
+        if (saved.activeTab !== 'agent') { return; }
+        if (saved.seat) {
+            const liveSaved = lastFleet.find(t => t.name === saved.seat && t.light !== 'exited');
+            if (liveSaved) {
+                if (isControllerTerminal(liveSaved)) {
+                    mountDockFrame(liveSaved.name);
+                    return;
+                } else {
+                    // Non-controller persisted seat from picker era — discard it.
+                    writeDockState({ seat: null });
+                }
+            }
+        }
+        const liveController = lastFleet.find(t => isControllerTerminal(t) && t.light !== 'exited');
+        if (liveController) {
+            mountDockFrame(liveController.name);
         } else {
             showDockEmptyState();
         }
+    }
+
+    function updateDockTitle(name) {
+        if (readDockState().activeTab === 'kanban') {
+            dockTitleEl.textContent = 'Kanban';
+            return;
+        }
+        if (!name) { dockTitleEl.textContent = ''; return; }
+        const status = lastAutobanArmed ? 'Armed' : 'Awaiting confirmation';
+        dockTitleEl.textContent = `${name} — ${status}`;
     }
 
     function mountDockFrame(name) {
@@ -798,7 +556,7 @@
         dockFrame.classList.add('is-visible');
         emptyEl.hidden = true;
         emptyEl.classList.remove('is-visible');
-        dockTitleEl.textContent = name;
+        updateDockTitle(name);
         writeDockState({ seat: name });
     }
 
@@ -807,126 +565,78 @@
         dockFrame.classList.remove('is-visible');
         emptyEl.hidden = false;
         emptyEl.classList.add('is-visible');
-        // Label the start button from BUILT_IN_AGENT_LABELS (now reachable via
-        // sharedDefaults.js — edge case 15). When the role has no CLI configured,
-        // show the same honest hint onNewTerminalClicked gives.
-        const label = labelForRole(dockRole);
-        startBtn.textContent = `Start ${label}`;
-        const hasCmd = dockRolesCache && dockRolesCache.hasCommand
-            ? dockRolesCache.hasCommand[dockRole] === true
-            : true;   // optimistic until the first fetch resolves
-        dockEmptyHint.textContent = hasCmd
-            ? ''
-            : 'No agent CLI configured — this opens a plain shell.';
+        startBtn.style.display = '';
+        startBtn.textContent = 'Start Mission Control';
+        dockEmptyHint.innerHTML = '';
         dockTitleEl.textContent = '';
     }
 
+    function renderDockClipboardPrompt(promptText) {
+        dockFrame.hidden = true;
+        dockFrame.classList.remove('is-visible');
+        emptyEl.hidden = false;
+        emptyEl.classList.add('is-visible');
+        startBtn.style.display = 'none';
+        dockTitleEl.textContent = 'Mission Control (Clipboard)';
+        dockEmptyHint.innerHTML = '';
+
+        const msg = document.createElement('p');
+        msg.textContent = 'No agent CLI configured. Copy the prompt below to run Mission Control:';
+        msg.style.marginBottom = '8px';
+
+        const box = document.createElement('div');
+        box.style.cssText = 'background: var(--bg-elev); border: 1px solid var(--border); border-radius: 4px; padding: 8px; font-family: monospace; font-size: 11px; word-break: break-all; margin-bottom: 8px; text-align: left; max-height: 120px; overflow-y: auto; user-select: all;';
+        box.textContent = promptText;
+
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'dock-start-btn';
+        copyBtn.textContent = 'Copy Prompt';
+        copyBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(promptText);
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => { copyBtn.textContent = 'Copy Prompt'; }, 2000);
+            } catch {
+                copyBtn.textContent = 'Failed to copy';
+            }
+        });
+
+        dockEmptyHint.appendChild(msg);
+        dockEmptyHint.appendChild(box);
+        dockEmptyHint.appendChild(copyBtn);
+    }
+
     // Create on explicit click only — never implicitly on shell load (edge
-    // case 4). data.terminal.friendlyName — NOT the requested name — is what
-    // gets mounted and persisted. On a collision the server returns something
-    // from the `<role>-N` series instead, and the dock must follow it.
+    // case 4). Routes through /mission-control/start.
     async function startDockTerminal() {
         startBtn.disabled = true;
         try {
-            const res = await fetch('/terminals/verb/ptyCreateTerminal', {
+            const res = await fetch('/mission-control/start', {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ role: dockRole, name: dockSeatName(dockRole) })
+                body: '{}'
             });
+            if (res.status === 503) {
+                dockEmptyHint.textContent = 'Mission Control is not available in this host.';
+                return;
+            }
             const data = await res.json();
-            if (data && data.success && data.terminal) {
-                mountDockFrame(data.terminal.friendlyName);
+            if (data && data.success !== false) {
+                if (data.mode === 'clipboard') {
+                    renderDockClipboardPrompt(data.prompt || data.message || 'Run /switchboard workflow to start Mission Control');
+                } else {
+                    const name = data.friendlyName || data.name || (data.terminal && data.terminal.friendlyName) || 'Mission Control';
+                    mountDockFrame(name);
+                }
             } else {
-                dockEmptyHint.textContent = (data && data.error) || 'Could not start the terminal.';
+                dockEmptyHint.textContent = (data && data.error) || 'Could not start Mission Control.';
             }
         } catch (err) {
-            dockEmptyHint.textContent = 'Could not reach the terminal service.';
+            dockEmptyHint.textContent = 'Could not reach the server.';
         } finally {
             startBtn.disabled = false;
-        }
-    }
-
-    // Fetch the role list once when the dock first opens. ptyVisibleRoles
-    // returns {visibleAgents, hasCommand} and is the one pty verb served even
-    // when the fleet is unavailable. Cached for the session.
-    async function fetchDockRoles() {
-        try {
-            const res = await fetch('/terminals/verb/ptyVisibleRoles', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: '{}'
-            });
-            const data = await res.json();
-            if (data && Array.isArray(data.visibleAgents)) {
-                dockRolesCache = { visibleAgents: data.visibleAgents, hasCommand: data.hasCommand || {} };
-                buildDockRoleMenu();
-                // Re-paint the empty state now that the hasCommand hint is known.
-                if (dockOpen && emptyEl.classList.contains('is-visible')) { showDockEmptyState(); }
-            }
-        } catch { /* keep the optimistic default */ }
-    }
-
-    // Build the role picker menu from the cached ptyVisibleRoles response.
-    // Same SYSTEM_ROLES exclusion onNewTerminalClicked applies, labels from
-    // BUILT_IN_AGENT_LABELS. Selecting a role persists it (change 4), updates
-    // dockRole, and re-runs syncDockSeat() — which lands on the empty state
-    // for the new role's seat: changing the agent means starting that agent.
-    // The previously running seat is NOT killed; it stays in the fleet strip.
-    function buildDockRoleMenu() {
-        if (!dockRolesCache) { return; }
-        dockRoleMenu.innerHTML = '';
-        const roles = dockRolesCache.visibleAgents.filter(r => !DOCK_SYSTEM_ROLES.has(r));
-        for (const role of roles) {
-            const item = document.createElement('button');
-            item.type = 'button';
-            item.className = 'dock-role-item' + (role === dockRole ? ' is-selected' : '');
-            item.textContent = labelForRole(role);
-            item.addEventListener('click', () => {
-                dockRole = role;
-                writeDockState({ seat: null });   // new role → new seat
-                // Persist the role choice server-side (workspace-level setting).
-                fetch('/setup/verb/setAgentDockRole', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ role })
-                }).catch(() => { /* non-fatal — the local dockRole is already set */ });
-                dockRoleMenu.classList.remove('is-visible');
-                dockRoleBtn.textContent = labelForRole(dockRole);
-                buildDockRoleMenu();   // refresh selected highlight
-                syncDockSeat();
-            });
-            dockRoleMenu.appendChild(item);
-        }
-    }
-
-    // Boot: fetch the persisted role before first paint of the dock. The role
-    // is a workspace-level setting (change 4), so it follows the workspace
-    // across browsers. This read is the shell's second-ever server call and
-    // follows the same read-the-HTTP-body pattern as the theme write.
-    async function loadDockRole() {
-        try {
-            const res = await fetch('/setup/verb/getAgentDockRole', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: '{}'
-            });
-            const data = await res.json();
-            if (data && data.success && typeof data.role === 'string' && data.role) {
-                dockRole = data.role;
-            }
-        } catch { /* keep the built-in default */ }
-        dockRoleBtn.textContent = labelForRole(dockRole);
-        // After the role resolves, restore the dock if it was left open — but
-        // only if the window is wide enough. On a narrow window the viability
-        // gate (updateDockViableGating, already called synchronously in
-        // renderManifest) has disabled the toggle; opening the dock here would
-        // bypass that gate and squeeze the board (edge case 7).
-        if (readDockState().open && window.innerWidth >= DOCK_VIABLE_MIN) {
-            setDockOpen(true);
         }
     }
 
@@ -936,7 +646,7 @@
     // never squeezed to 200px. The dock does NOT reopen by itself (closing was
     // a forced action, not a user preference — leave open:false written).
     function updateDockViableGating() {
-        const toggle = strip.querySelector('.dock-toggle-btn');
+        const toggle = document.querySelector('.dock-toggle-btn');
         if (!toggle) { return; }
         const viable = window.innerWidth >= DOCK_VIABLE_MIN;
         toggle.disabled = !viable;
@@ -959,7 +669,9 @@
             document.body.classList.add('dock-dragging');
             const startX = e.clientX, startW = dockEl.getBoundingClientRect().width;
             const onMove = (ev) => {
-                dockEl.style.width = clampDockWidth(startW + (startX - ev.clientX)) + 'px';
+                const w = clampDockWidth(startW + (startX - ev.clientX));
+                dockEl.style.width = w + 'px';
+                document.documentElement.style.setProperty('--dock-width', w + 'px');
             };
             const onUp = (ev) => {
                 splitterEl.releasePointerCapture(ev.pointerId);
@@ -982,7 +694,9 @@
     window.addEventListener('resize', () => {
         updateDockViableGating();
         if (!dockOpen) { return; }
-        dockEl.style.width = clampDockWidth(dockEl.getBoundingClientRect().width) + 'px';
+        const w = clampDockWidth(dockEl.getBoundingClientRect().width);
+        dockEl.style.width = w + 'px';
+        document.documentElement.style.setProperty('--dock-width', w + 'px');
     });
 
     // Dock close button.
@@ -995,31 +709,15 @@
         startBtn.addEventListener('click', startDockTerminal);
     }
 
-    // Role picker: toggle the menu, dismiss on outside click / Escape.
-    if (dockRoleBtn) {
-        dockRoleBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (!dockRolesCache) { fetchDockRoles(); }
-            dockRoleMenu.classList.toggle('is-visible');
-            if (dockRoleMenu.classList.contains('is-visible')) {
-                const rect = dockRoleBtn.getBoundingClientRect();
-                dockRoleMenu.style.left = rect.left + 'px';
-                dockRoleMenu.style.top = (rect.bottom + 4) + 'px';
-            }
-        });
+    // Dock tab buttons.
+    if (dockTabAgentBtn) {
+        dockTabAgentBtn.addEventListener('click', () => setDockActiveTab('agent'));
     }
-    document.addEventListener('click', (e) => {
-        if (dockRoleMenu && dockRoleMenu.classList.contains('is-visible')) {
-            if (!dockRoleMenu.contains(e.target) && e.target !== dockRoleBtn) {
-                dockRoleMenu.classList.remove('is-visible');
-            }
-        }
-    });
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && dockRoleMenu && dockRoleMenu.classList.contains('is-visible')) {
-            dockRoleMenu.classList.remove('is-visible');
-        }
-    });
+    if (dockTabKanbanBtn) {
+        dockTabKanbanBtn.addEventListener('click', () => setDockActiveTab('kanban'));
+    }
+
+
 
     /**
      * Hand the rail's bottom anchor to the FIRST member of the bottom cluster.
@@ -1040,21 +738,16 @@
      */
     function applyBottomAnchor() {
         const container = document.getElementById('strip-terminals');
-        const themeBtn = strip.querySelector('.theme-toggle-btn');
-        const members = [
-            ...strip.querySelectorAll('.strip-placement-bottom'),
-            container,
-            themeBtn
-        ].filter(Boolean);
-        if (members.length === 0) { return; }
-        for (const el of members) {
-            // '' restores the stylesheet value: 6px for a placement icon, auto for
-            // #strip-terminals, nothing for the toggle (which owns its anchor inline).
+        const coldIcons = strip.querySelectorAll('.strip-group-cold');
+        for (const el of coldIcons) {
             el.style.marginTop = '';
         }
-        const first = members[0];
-        if (container && container !== first) { container.style.marginTop = '0'; }
-        if (first !== container) { first.style.marginTop = 'auto'; }
+        if (coldIcons.length > 0) {
+            if (container) { container.style.marginTop = '0'; }
+            coldIcons[0].style.marginTop = 'auto';
+        } else if (container) {
+            container.style.marginTop = '';
+        }
     }
 
     function renderTerminalSection(terminals, teams) {
@@ -1063,25 +756,12 @@
         // fires and the overlay strands beside empty space — hide it first.
         hideStripTooltip();
         let container = document.getElementById('strip-terminals');
-        const themeBtn = document.querySelector('.theme-toggle-btn');
 
         if (!frames.has('terminals')) {
-            pulsedDoneStamps.clear();
             if (container) {
                 container.remove();
             }
-            if (themeBtn) {
-                themeBtn.style.marginTop = 'auto';
-            }
-            // The line above is the no-bottom-icons default; applyBottomAnchor then
-            // moves the anchor onto the Setup icon when one is present, so the
-            // cluster reads `Setup | Toggle Theme` at the foot of the rail.
             applyBottomAnchor();
-            // The container.remove() above took Mission Control icon with it.
-            // Re-create it so the rail control survives a terminals-panel-less
-            // rebuild — the start control must stay reachable without a state
-            // message (CRITICAL 1 regression guard).
-            ensureMissionControlIcon();
             return;
         }
 
@@ -1090,85 +770,34 @@
             container.id = 'strip-terminals';
             container.role = 'group';
             container.setAttribute('aria-label', 'Fleet terminals');
-
-            if (themeBtn) {
-                // Insert BEFORE the first bottom-placement icon (settings) when
-                // one exists, so the DOM order is: top group → terminals →
-                // settings → theme toggle. applyBottomAnchor then hands
-                // margin-top:auto to the settings icon, pinning settings +
-                // theme toggle together at the foot of the rail with the
-                // fleet list above them. Inserting before themeBtn instead
-                // would sandwich the fleet list between settings and the
-                // toggle, separating the two controls the user asked to keep
-                // adjacent.
-                const firstBottom = strip.querySelector('.strip-placement-bottom');
-                if (firstBottom) {
-                    strip.insertBefore(container, firstBottom);
-                } else {
-                    strip.insertBefore(container, themeBtn);
-                }
-                themeBtn.style.marginTop = '';
+            const firstCold = strip.querySelector('.strip-group-cold');
+            if (firstCold) {
+                strip.insertBefore(container, firstCold);
             } else {
                 strip.appendChild(container);
             }
         }
         applyBottomAnchor();
 
-        // Rebuild only the fleet terminal buttons. #strip-mission-control (managed
-        // by renderMissionControlIcon) is a first child of this container and
-        // MUST survive the rebuild — a plain innerHTML='' would wipe it every
-        // 5s poll and leave the rail dark until the next autoban state push.
-        // Mission Control button carries no .strip-term-btn / .strip-team-btn
-        // class, so removing those children is equivalent to the old wipe minus
-        // Mission Control.
+        // Rebuild only the fleet team buttons.
         for (const child of Array.from(container.querySelectorAll(':scope > .strip-term-btn, :scope > .strip-team-btn'))) {
             child.remove();
         }
-        if (!Array.isArray(terminals) || terminals.length === 0) {
-            pulsedDoneStamps.clear();
-            return;
-        }
-
-        const seenKeys = new Set();
 
         // ── Teams mode (the only mode) ───────────────────────────────
-        // One button per team (in stable order from the panel), then one
-        // button per ungrouped terminal. A terminal claimed by a team
-        // does NOT also render as ungrouped — first-by-stable-order wins.
+        // Exactly three fixed slots (in stable definition order from the panel).
         const teamsArr = Array.isArray(teams) ? teams : [];
-        const claimedNames = new Set();
-        for (const team of teamsArr) {
-            for (const name of (team.memberNames || [])) {
-                claimedNames.add(name);
-            }
-        }
 
         for (const team of teamsArr) {
-            const key = 'team:' + team.groupId;
-            seenKeys.add(key);
-
-            // Pulse ledger keyed on groupId — same machinery, same guards.
-            let pulseElapsed = -1;
-            if (team.light === 'done') {
-                const prev = pulsedDoneStamps.get(key);
-                if (!prev || prev.stamp !== team.doneStamp) {
-                    pulsedDoneStamps.set(key, { stamp: team.doneStamp, startedAt: performance.now() });
-                    pulseElapsed = 0;
-                } else {
-                    const elapsed = performance.now() - prev.startedAt;
-                    if (elapsed < DONE_PULSE_MS) { pulseElapsed = elapsed; }
-                }
-            } else {
-                pulsedDoneStamps.delete(key);
-            }
-
             const btn = document.createElement('button');
-            btn.className = 'strip-icon strip-team-btn strip-term-' + team.light
-                + (pulseElapsed >= 0 ? ' is-pulsing' : '');
+            // The dispatched indicator is an informational UI signal only.
+            // Nothing in the client may use it to gate dispatches; the server's 409
+            // remains the sole authority.
+            const isDispatched = Boolean(team.running && team.dispatched);
+            btn.className = 'strip-icon strip-team-btn'
+                + (team.running ? '' : ' is-dormant')
+                + (isDispatched ? ' is-dispatched' : '');
             btn.type = 'button';
-            if (pulseElapsed > 0) {
-                btn.style.animationDelay = '-' + Math.floor(pulseElapsed) + 'ms';
-            }
 
             btn.setAttribute('aria-label', team.name);
             btn.dataset.tooltip = team.name;
@@ -1184,209 +813,55 @@
                 icon.alt = '';
                 btn.appendChild(icon);
             } else {
-                const headTerm = terminals.find(t => t.name === team.head);
+                const headTerm = (Array.isArray(terminals) ? terminals : []).find(t => t.name === team.head);
                 const roleChar = (team.headRole || (headTerm && headTerm.role) || 'T').charAt(0).toUpperCase();
                 const glyph = document.createElement('span');
+                glyph.className = 'strip-team-icon';
                 glyph.textContent = roleChar;
                 btn.appendChild(glyph);
             }
 
-            // Queue-depth badge — shows pending work count on the rail
-            // icon so depth is visible without opening the cockpit.
-            // Only shown when there are queued items.
-            const qDepth = team.queueDepth || 0;
-            if (qDepth > 0) {
-                const qBadge = document.createElement('span');
-                qBadge.className = 'strip-team-queue-depth';
-                qBadge.textContent = String(qDepth);
-                btn.appendChild(qBadge);
-            }
-
-            btn.addEventListener('click', () => {
-                const termFrame = frames.get('terminals');
-                // Clicking a team with an unacknowledged completion IS the
-                // acknowledgement — relay clearTeamBadges carrying
-                // memberNames so the panel clears every member's badge.
-                // Otherwise the aggregate light burns forever.
-                if (team.light === 'done' && termFrame && termFrame.contentWindow) {
+            btn.addEventListener('click', async () => {
+                if (team.running && team.groupId) {
+                    // Switch the main terminals panel to team-scoped mode in-place.
+                    // No pop-out window — the team view replaces the fleet view
+                    // inside the existing panel, with a back button to return.
+                    selectPanel('terminals');
+                    const termFrame = frames.get('terminals');
+                    if (termFrame && termFrame.contentWindow) {
+                        try {
+                            termFrame.contentWindow.postMessage({
+                                type: 'switchToTeam',
+                                groupId: team.groupId
+                            }, location.origin);
+                        } catch { /* ignore */ }
+                    }
+                } else {
+                    // Absent slot: start that team. Reuses the Agent Control
+                    // panel's ptyStartTeam path. Disable the button while pending.
+                    btn.disabled = true;
                     try {
-                        termFrame.contentWindow.postMessage({
-                            type: 'clearTeamBadges',
-                            memberNames: team.memberNames || []
-                        }, location.origin);
-                    } catch { /* ignore */ }
-                }
-                // Switch the main terminals panel to team-scoped mode in-place.
-                // No pop-out window — the team view replaces the fleet view
-                // inside the existing panel, with a back button to return.
-                selectPanel('terminals');
-                if (termFrame && termFrame.contentWindow) {
-                    try {
-                        termFrame.contentWindow.postMessage({
-                            type: 'switchToTeam',
-                            groupId: team.groupId
-                        }, location.origin);
-                    } catch { /* ignore */ }
+                        const res = await fetch('/terminals/verb/ptyStartTeam', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ teamId: team.definitionId })
+                        });
+                        let data = null;
+                        try { data = await res.json(); } catch { /* ignore */ }
+                        if (!data || data.success === false) {
+                            const msg = (data && data.error) || 'Failed to start team';
+                            showStripToast(msg);
+                        }
+                    } catch (err) {
+                        showStripToast('Failed to start team: ' + (err?.message || err));
+                    } finally {
+                        btn.disabled = false;
+                    }
                 }
             });
 
             container.appendChild(btn);
         }
-
-        // Ungrouped terminals — one per-terminal button for any terminal
-        // not claimed by a team.
-        for (const t of terminals) {
-            if (claimedNames.has(t.name)) { continue; }
-            seenKeys.add('term:' + t.name);
-            container.appendChild(buildTerminalButton(t, seenKeys));
-        }
-
-        // Prune pulse ledger entries that no longer have a button.
-        for (const key of Array.from(pulsedDoneStamps.keys())) {
-            if (!seenKeys.has(key)) { pulsedDoneStamps.delete(key); }
-        }
-        // The selective button removal above preserves #strip-mission-control, but a
-        // future edit to this rebuild could still drop it. Ensure it exists at the
-        // end of every fleet rebuild so the rail control never vanishes without a
-        // state message (CRITICAL 1 regression guard).
-        ensureMissionControlIcon();
-    }
-
-    /**
-     * Build a single per-terminal button. Extracted from renderTerminalSection
-     * so both teams mode (ungrouped terminals) and terminals mode (all
-     * terminals) share the exact same rendering + click behaviour. The pulse
-     * ledger is keyed on 'term:<name>' so it never collides with 'team:<id>'.
-     */
-    function buildTerminalButton(t, seenKeys) {
-        let pulseElapsed = -1;
-        const key = 'term:' + t.name;
-        if (t.light === 'done') {
-            const prev = pulsedDoneStamps.get(key);
-            if (!prev || prev.stamp !== t.doneStamp) {
-                pulsedDoneStamps.set(key, { stamp: t.doneStamp, startedAt: performance.now() });
-                pulseElapsed = 0;
-            } else {
-                // STRICTLY less than. A delay whose magnitude reaches the duration
-                // puts the animation straight into its post-active phase, and with
-                // fill-mode `both` the element paints the 100% keyframe for one
-                // frame — a green flash on an expired completion. This comparison
-                // is the guard against that, not a rounding nicety.
-                const elapsed = performance.now() - prev.startedAt;
-                if (elapsed < DONE_PULSE_MS) { pulseElapsed = elapsed; }
-            }
-        } else {
-            // Not done any more (acknowledged, or exited): forget it, so a LATER
-            // completion of the same terminal pulses again from the top.
-            pulsedDoneStamps.delete(key);
-        }
-
-        const btn = document.createElement('button');
-        // The done ring is a one-shot ANIMATION, not a state class: it plays for
-        // DONE_PULSE_MS from the push that carried a new completion stamp, and is
-        // simply absent on every push after that window closes. A terminal that
-        // completed a minute ago wears no ring — the sidebar DONE chip in the
-        // Terminals panel is the durable record of an unacknowledged completion.
-        // (The pane-header badge that used to be the second durable surface was
-        // removed: three simultaneous DONE surfaces inside one panel is spam.)
-        btn.className = 'strip-icon strip-term-btn strip-term-' + t.light
-            + (pulseElapsed >= 0 ? ' is-pulsing' : '');
-        btn.type = 'button';
-        if (pulseElapsed > 0) {
-            // Resume, do not restart — the previous element was destroyed mid-pulse.
-            // FLOOR, never round: the guard above admits pulseElapsed strictly below
-            // DONE_PULSE_MS, but rounding 2199.6 up to 2200 hands the animation a
-            // delay whose magnitude EQUALS the duration — straight into the
-            // post-active phase, where fill-mode `both` paints the 100% keyframe for
-            // one frame. That is the green flash on an expired completion the strict
-            // comparison exists to prevent; rounding would reintroduce it.
-            btn.style.animationDelay = '-' + Math.floor(pulseElapsed) + 'ms';
-        }
-
-        const roleChar = (t.role || 'T').charAt(0).toUpperCase();
-        let wtBase = 'Workspace Root';
-        if (t.worktreePath) {
-            const parts = t.worktreePath.replace(/\\/g, '/').split('/').filter(Boolean);
-            wtBase = parts.length > 0 ? parts[parts.length - 1] : t.worktreePath;
-        }
-
-        const labelText = `${t.name} · ${t.role || 'Terminal'} · ${wtBase} [${t.light}]`;
-        btn.setAttribute('aria-label', labelText);
-        // Tooltip mirrors the accessible name (light state included) plus the
-        // full worktree path on a second line — what the removed native
-        // btn.title used to show, minus the double-tooltip asymmetry.
-        btn.dataset.tooltip = t.worktreePath ? `${labelText}\n${t.worktreePath}` : labelText;
-
-        // Coloured brand icon replaces the old role-letter glyph + status dot. The
-        // URI is resolved panel-side (terminals.js postFleetStateToShell) from the
-        // same brandIconForCliLabel/brandIconUri helpers the Terminals sidebar uses,
-        // so the two surfaces show the same icon for the same terminal. An <img> (not
-        // the strip's CSS-mask/currentColor path) is deliberate: these are multi-hue
-        // brand marks whose baked-in fill IS the identity. Fall back to the role
-        // letter only if the relay sent no URI (defensive — the relay always sends at
-        // least the default icon unless the dataset attrs are missing entirely).
-        if (t.iconUri) {
-            const icon = document.createElement('img');
-            icon.className = 'strip-term-icon';
-            icon.src = t.iconUri;
-            // alt='' is correct: the button's aria-label already carries name, role,
-            // worktree and light state. A brand name here would double-announce.
-            icon.alt = '';
-            btn.appendChild(icon);
-        } else {
-            const glyph = document.createElement('span');
-            glyph.textContent = roleChar;
-            btn.appendChild(glyph);
-        }
-
-        btn.addEventListener('click', () => {
-            const slug = t.name.replace(/[^A-Za-z0-9_-]/g, '_');
-            const popoutName = `sb-term-${slug}`;
-
-            // If a solo pop-out for this terminal is already open, focus it — the
-            // open window is the stronger signal of intent than a peek.
-            let existing = null;
-            for (const win of Array.from(popoutWindows)) {
-                if (win.closed) {
-                    popoutWindows.delete(win);
-                } else if (win.name === popoutName) {
-                    existing = win;
-                }
-            }
-
-            const termFrame = frames.get('terminals');
-            if (existing) {
-                // Clicking a lit entry IS the acknowledgement. This branch never
-                // reaches the panel's peek arm, so without an explicit clear the
-                // DONE light burns forever — the exact regression the old
-                // clearTerminalBadge relay existed to prevent.
-                if (termFrame && termFrame.contentWindow) {
-                    try {
-                        termFrame.contentWindow.postMessage({
-                            type: 'clearTerminalBadge',
-                            name: t.name
-                        }, location.origin);
-                    } catch { /* ignore */ }
-                }
-                try { existing.focus(); } catch { /* ignore */ }
-                return;
-            }
-
-            // Otherwise peek it in the cockpit. Switch the panel FIRST — the strip
-            // is visible while other panels are active, so a peek alone would
-            // change a panel the user cannot see. The peek arm clears the badge.
-            selectPanel('terminals');
-            if (termFrame && termFrame.contentWindow) {
-                try {
-                    termFrame.contentWindow.postMessage({
-                        type: 'peekTerminal',
-                        name: t.name
-                    }, location.origin);
-                } catch { /* ignore */ }
-            }
-        });
-
-        return btn;
     }
 
     function requestFleetState() {
@@ -1395,6 +870,43 @@
             try {
                 termFrame.contentWindow.postMessage({ type: 'requestFleetState' }, location.origin);
             } catch { /* ignore */ }
+        }
+    }
+
+    function renderTopRightCluster(manifest) {
+        const cluster = document.getElementById('top-right-cluster');
+        if (!cluster) { return; }
+        cluster.innerHTML = '';
+
+        // 1. Agent Dock toggle button
+        const dockBtn = document.createElement('button');
+        dockBtn.className = 'strip-icon dock-toggle-btn';
+        dockBtn.type = 'button';
+        dockBtn.setAttribute('aria-label', 'Agent Dock');
+        dockBtn.dataset.tooltip = 'Agent Dock';
+        dockBtn.setAttribute('aria-expanded', 'false');
+        dockBtn.appendChild(buildMaskedGlyph('/static/icons/nav-dock.svg'));
+        dockBtn.addEventListener('click', () => setDockOpen(!dockOpen));
+        if (!frames.has('terminals')) {
+            dockBtn.disabled = true;
+        }
+        cluster.appendChild(dockBtn);
+
+        // 2. Setup, 3. Memo, 4. Connections
+        const clusterIds = ['setup', 'memo', 'connections'];
+        for (const id of clusterIds) {
+            const panel = manifest.find(p => p.id === id) || {
+                id,
+                label: id.charAt(0).toUpperCase() + id.slice(1),
+                icon: `/static/icons/nav-${id}.svg`,
+                route: `/${id}`,
+                enabled: true,
+                presentation: id === 'memo' ? 'modal' : undefined
+            };
+            const btn = buildIcon(panel);
+            btn.className = 'strip-icon';
+            icons.set(id, btn);
+            cluster.appendChild(btn);
         }
     }
 
@@ -1407,7 +919,8 @@
             return;
         }
 
-        const bottomPanels = [];
+        const primaryIcons = [];
+        const coldIcons = [];
         for (const panel of manifest) {
             // A panel the host did not enable is OMITTED, not greyed out. `enabled`
             // reflects a capability this host does not have at all (e.g. Terminals
@@ -1415,9 +928,7 @@
             // disabled icon is a dead control the user can never turn on — it just
             // reads as "broken". Panels that are merely empty stay enabled.
             if (panel.enabled === false) { continue; }
-            const icon = buildIcon(panel);
             const frame = buildFrame(panel);
-            icons.set(panel.id, icon);
             frames.set(panel.id, frame);
             if (panel.presentation === 'modal') {
                 modalPanels.add(panel.id);
@@ -1428,43 +939,43 @@
             } else {
                 content.appendChild(frame);
             }
-            // Frames are position-independent (display-toggled, keyed by id); only the
-            // ICON's rail position depends on placement.
-            if (panel.placement === 'bottom') { bottomPanels.push(icon); } else { strip.appendChild(icon); }
+
+            if (panel.railHidden) { continue; }
+
+            const icon = buildIcon(panel);
+            icons.set(panel.id, icon);
+            if (panel.group === 'cold') {
+                coldIcons.push(icon);
+            } else {
+                primaryIcons.push(icon);
+            }
         }
 
-        // Bottom cluster, in rail order: dock toggle → settings panels → theme
-        // toggle. Only added when the host actually has a Terminals panel —
-        // `enabled:false` panels are omitted from `frames` entirely (see the
-        // comment at the top of the loop), so this is the same test the fleet
-        // strip makes, and it fails closed on a node-pty-less install (edge
-        // case 3). The dock toggle carries strip-placement-bottom, so
-        // applyBottomAnchor() picks it up as a cluster member with no change
-        // to that function.
-        if (frames.has('terminals')) { strip.appendChild(buildDockToggle()); }
-        for (const icon of bottomPanels) { strip.appendChild(icon); }
+        for (const icon of primaryIcons) { strip.appendChild(icon); }
 
-        const themeBtn = buildThemeToggle();
-        strip.appendChild(themeBtn);
+        let container = document.getElementById('strip-terminals');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'strip-terminals';
+            container.role = 'group';
+            container.setAttribute('aria-label', 'Fleet terminals');
+        }
+        strip.appendChild(container);
+
+        for (const icon of coldIcons) { strip.appendChild(icon); }
 
         renderTerminalSection([]);
+        renderTopRightCluster(manifest);
 
-        // Dock boot: fetch the persisted role, then restore the dock if it
-        // was left open across a reload. Only when the host has a Terminals
-        // panel — the same gate the toggle itself makes. Also apply the
-        // narrow-window viability gate on first paint.
+        // Dock boot: restore the dock if it was left open across a reload.
+        // Only when the host has a Terminals panel — the same gate the toggle
+        // itself makes. Also apply the narrow-window viability gate on first paint.
         if (frames.has('terminals')) {
             updateDockViableGating();
-            loadDockRole();
+            if (readDockState().open && window.innerWidth >= DOCK_VIABLE_MIN) {
+                setDockOpen(true);
+            }
         }
-
-        // The Mission Control rail icon must exist on a cold load with no
-        // missionControlState message — without this the start control is
-        // unreachable until a seat changes. renderTerminalSection's own
-        // ensureMissionControlIcon() call covers its branches, but the very first
-        // build goes through renderManifest before any fleet push, so ensure
-        // here too (idempotent).
-        ensureMissionControlIcon();
 
         // Ask the terminals iframe for its fleet state once it's loaded. The iframe's
         // own postFleetStateToShell runs on init and on a 5s poll, but a transient
@@ -1516,6 +1027,12 @@
             }
         } else if (data.type === 'switchboardThemeChanged') {
             applyThemeToAll(data.theme);
+        } else if ((data.type === 'autobanStateSync' || data.type === 'updateAutobanConfig') && data.state) {
+            lastAutobanArmed = data.state.missionControlArmed === true;
+            const saved = readDockState();
+            if (saved.seat && saved.activeTab === 'agent' && dockFrame.classList.contains('is-visible')) {
+                updateDockTitle(saved.seat);
+            }
         } else if (data.type === 'terminalFleetState' && Array.isArray(data.terminals)) {
             if (event.origin !== location.origin) { return; }
             // Cache the fleet snapshot as the dock's liveness oracle. The dock
@@ -1523,16 +1040,10 @@
             // cache to decide adopt-vs-empty-state on every push.
             lastFleet = data.terminals;
             renderTerminalSection(data.terminals, Array.isArray(data.teams) ? data.teams : []);
-            // If the dock is open, re-sync the seat — a fleet push may report
+            // If the dock is open and active on the agent tab, re-sync the seat — a fleet push may report
             // the seat we just created, or report that a previously-live seat
             // has exited.
-            if (dockOpen) { syncDockSeat(); }
-        } else if (data.type === 'missionControlState') {
-            // Relayed from terminals.js (autobanStateSync / updateAutobanConfig
-            // over the WS broadcast rail). Origin-guarded: the relay targets
-            // location.origin, so a foreign framer cannot light the icon.
-            if (event.origin !== location.origin) { return; }
-            renderMissionControlIcon(data);
+            if (dockOpen && readDockState().activeTab === 'agent') { syncDockSeat(); }
         } else if (data.type === 'popoutTerminal' && typeof data.name === 'string') {
             if (event.origin !== location.origin) { return; }
             const slug = data.name.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -1566,18 +1077,6 @@
         if (hash && frames.has(hash) && hash !== activePanel) {
             selectPanel(hash);
         }
-    });
-
-    // A completion that lands while the cockpit tab is hidden burns its whole 2.2s
-    // window unwatched — the fleet poll is suspended (terminals.js skips it on
-    // visibilityState === 'hidden'), background tabs throttle animation frames, and
-    // even if neither were true the pulse is over before the operator looks. Dropping
-    // the ledger on return re-arms every STILL-OUTSTANDING completion so the next push
-    // re-announces it exactly once. Identical semantics to a shell reload, which this
-    // design already treats as correct. A terminal whose badge was acknowledged is not
-    // `done` any more, so it is not re-announced.
-    document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') { pulsedDoneStamps.clear(); }
     });
 
     if (document.readyState === 'loading') {

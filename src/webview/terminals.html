@@ -2140,6 +2140,23 @@
         body.is-solo .group-tab-strip {
             display: none !important;
         }
+        body.is-kanban .terminals-sidebar,
+        body.is-kanban .layout-toolbar,
+        body.is-kanban .layout-fallback-banner,
+        body.is-kanban .group-tab-strip,
+        body.is-kanban #empty-state {
+            display: none !important;
+        }
+        body.is-kanban #pane-grid {
+            grid-template-columns: 1fr !important;
+            grid-template-rows: 1fr !important;
+            height: 100% !important;
+            width: 100% !important;
+        }
+        body.is-kanban .terminal-pane {
+            height: 100% !important;
+            width: 100% !important;
+        }
         /* #empty-state is a full-height flex SIBLING of #pane-grid, and
            renderSidebarList() shows it inline whenever the fleet list is empty. In
            solo mode the pane is pinned, so an empty fleet (operator close, rename)

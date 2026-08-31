@@ -194,6 +194,8 @@
     // when this flag is set (edge case 2). Everything else in solo mode is
     // unchanged; the dock is an ordinary solo page.
     let isDockFrame = false;
+    // Mode precedence: solo > kanban > team (narrower scope wins).
+    let isKanbanDock = false;
     /** Team-scoped mode: when set, the sidebar and grid show only this team's
      *  members. Parsed from `?team=<groupId>`. Solo wins over team if both are
      *  present (solo is the narrower scope). */
@@ -203,7 +205,10 @@
         if (urlParams.has('solo')) {
             soloTerminalName = urlParams.get('solo');
         }
-        if (urlParams.has('team') && !soloTerminalName) {
+        if (urlParams.has('kanban') && !soloTerminalName) {
+            isKanbanDock = urlParams.get('kanban') === '1';
+        }
+        if (urlParams.has('team') && !soloTerminalName && !isKanbanDock) {
             teamScopeId = urlParams.get('team');
         }
         isDockFrame = urlParams.get('dock') === '1';
@@ -841,6 +846,14 @@
             effectiveLayout = '1';
             paneAssignments = [soloTerminalName];
             initialAssignmentDone = true;
+        } else if (isKanbanDock) {
+            document.body.classList.add('is-kanban');
+            document.title = 'Kanban';
+            currentLayout = '1';
+            effectiveLayout = '1';
+            paneModes[0] = 'kanban';
+            paneAssignments = [null];
+            initialAssignmentDone = true;
         } else if (teamScopeId) {
             // Team-scoped mode: the sidebar and grid show only this team's
             // members. Unlike solo, the sidebar stays visible and the layout
@@ -1297,24 +1310,6 @@
                     postFleetStateToShell();
                 }
                 terminalReplayGaps.delete(message.name);
-            } else if (message.type === 'clearTeamBadges' && Array.isArray(message.memberNames)) {
-                // Acknowledge every member's completion badge at once — the
-                // team button's click IS the acknowledgement for the whole
-                // team, same as clearTerminalBadge is for a single terminal.
-                // Without this the aggregate 'done' light burns forever.
-                if (event.origin !== location.origin) { return; }
-                let changed = false;
-                for (const name of message.memberNames) {
-                    if (typeof name === 'string' && terminalBadges.has(name)) {
-                        terminalBadges.delete(name);
-                        changed = true;
-                    }
-                }
-                if (changed) {
-                    renderSidebarList();
-                    renderPaneGrid();
-                    postFleetStateToShell();
-                }
             } else if (message.type === 'switchToTeam' && typeof message.groupId === 'string') {
                 // In-place team navigation: the shell rail's team button click
                 // posts this to switch the main panel into team-scoped mode
@@ -1374,17 +1369,8 @@
                     disarmDispatchCurtain(message.terminalName, message.operationId, message.reason, message.elapsedMs);
                 }
             } else if ((message.type === 'autobanStateSync' || message.type === 'updateAutobanConfig') && message.state) {
-                // Mission Control seat/armed state, relayed to the shell rail so
-                // its Mission Control icon can light/dim. Two carriers, same payload shape:
-                // `autobanStateSync` is the live push-on-change (fired by
-                // _postAutobanStateNow in TaskViewerProvider); `updateAutobanConfig`
-                // is the WS resync-on-connect twin (kanbanProvider.getFullState
-                // → updateAutobanConfig with the current _autobanState), so a
-                // shell opened AFTER a seat was adopted receives the state on
-                // connect without any extra endpoint. No origin guard: both
-                // arrive via the wsHub broadcast rail (transport.js unwraps wsHub
-                // frames as MessageEvents with origin ''), like terminalsChanged.
-                relayMissionControlStateToShell(message.state);
+                const seat = message.state.missionControlSeat || null;
+                lastMissionControlSeatName = (seat && seat.terminalName) || null;
             } else if (message.type === 'panelVisibility' && typeof message.visible === 'boolean') {
                 if (event.origin !== location.origin) { return; }
                 // The shell hides a panel by setting display:none on its IFRAME. This
@@ -1768,7 +1754,7 @@
      *  the relay. The definitions carry the `icon` field the team icon picker
      *  wrote — the shell rail's team buttons read it through resolveArtForShell. */
     function refreshAgentGroupsForShell() {
-        if (_agentGroupsFetchInFlight) { return; }
+        if (_agentGroupsFetchInFlight || isKanbanDock) { return; }
         _agentGroupsFetchInFlight = true;
         fetchAgentGroups().then(groups => {
             _agentGroupsCache = Array.isArray(groups) ? groups : [];
@@ -1783,7 +1769,7 @@
      *  blocking the relay. Fetches each team's queue list and stores the
      *  count in _teamQueueDepths. Non-blocking — stale depth beats no depth. */
     function refreshTeamQueueDepths() {
-        if (_queueDepthFetchInFlight) { return; }
+        if (_queueDepthFetchInFlight || isKanbanDock) { return; }
         // Only fetch for spawned team groups.
         const teamIds = terminalGroups
             .filter(g => isSpawnedTeamGroup(g))
@@ -1801,6 +1787,9 @@
                     if (data && data.success && Array.isArray(data.items)) {
                         _teamQueueDepths.set(id, data.items.length);
                     }
+                    if (data && typeof data.inFlight === 'boolean') {
+                        _teamInFlight.set(id, data.inFlight);
+                    }
                 }
             } catch { /* keep stale */ }
         })).catch(() => { /* ignore */ }).finally(() => {
@@ -1808,9 +1797,32 @@
         });
     }
 
-    /** Build the `teams` array for the shell rail. One entry per spawned team
-     *  group, sorted by definition order then name. Each entry aggregates the
-     *  light and doneStamp of its live members. */
+    const DEFAULT_TEAM_DEFINITIONS = [
+        {
+            id: 'planning-team',
+            name: 'Planning team',
+            headRole: 'planner',
+            members: [],
+        },
+        {
+            id: 'feature-implementation',
+            name: 'Lead team',
+            headRole: 'lead',
+            members: [],
+        },
+        {
+            id: 'review-team',
+            name: 'Review team',
+            headRole: 'reviewer',
+            members: [],
+        },
+    ];
+
+    /** Build the `teams` array for the shell rail. Always emits exactly three
+     *  fixed slots, one per default team definition, in fixed array order.
+     *  Running slots carry groupId and live member info; dormant slots carry
+     *  running: false. Operator-created fourth+ teams do not appear in the
+     *  rail — they live in the Agent Control and Terminals panels. */
     function buildTeamsForShell() {
         // Kick off a background refresh of the definition cache so the next
         // push carries current icons. Non-blocking — the current push uses
@@ -1822,107 +1834,61 @@
         const fleetByFriendly = new Map(fleetList.map(t => [t.friendlyName, t]));
         const defMap = new Map((_agentGroupsCache || []).map(g => [g.id, g]));
 
-        // Collect spawned team groups with their live members.
         const teamEntries = [];
-        for (const g of terminalGroups) {
-            if (!isSpawnedTeamGroup(g)) { continue; }
-            const members = Array.isArray(g.members) ? g.members : [];
-            const liveMembers = members.filter(name => fleetByFriendly.has(name));
-            // A team with no live members still shows (all-exited) so the
-            // operator can see and close the team — same as a per-terminal
-            // exited button. But a team whose members were never spawned
-            // (definition-only) should not appear at all.
-            if (liveMembers.length === 0 && members.length === 0) { continue; }
+        for (const def of DEFAULT_TEAM_DEFINITIONS) {
+            const cachedDef = defMap.get(def.id) || null;
+            const name = (cachedDef && cachedDef.name) || def.name;
+            const headRole = (cachedDef && cachedDef.headRole) || def.headRole;
+            const iconValue = cachedDef && cachedDef.icon ? cachedDef.icon : null;
+            const iconUri = iconValue ? resolveArtForShell(iconValue) : '';
 
-            // Resolve the definition (for icon + headRole) via definitionId
-            // if present, else by matching the group's head role.
-            const def = (g.definitionId && defMap.has(g.definitionId))
-                ? defMap.get(g.definitionId)
-                : null;
-            const iconValue = def && def.icon ? def.icon : null;
-            const iconUri = iconValue ? resolveArtForShell(iconValue) : null;
-            const headName = (typeof g.head === 'string' && g.head) ? g.head
-                : (members.length > 0 ? members[0] : '');
-            const headRole = def && def.headRole ? def.headRole
-                : (fleetByFriendly.has(headName) ? (fleetByFriendly.get(headName).role || '') : '');
+            // Find matching live spawned group by definitionId, or fallback to head role matching.
+            // If two live groups claim the same definition id, bind to the first by stable order.
+            const liveGroup = terminalGroups.find(g =>
+                isSpawnedTeamGroup(g) && (g.definitionId === def.id || (!g.definitionId && (g.headRole === headRole || (fleetByFriendly.get(g.head)?.role === headRole))))
+            ) || null;
 
-            // Aggregate light: done > active > exited.
-            let light = 'exited';
-            let doneStamp = 0;
+            let running = false;
+            let liveMembers = [];
             let activeCount = 0;
             let exitedCount = 0;
-            for (const name of liveMembers) {
-                const t = fleetByFriendly.get(name);
-                if (!t) { continue; }
-                if (t.status === 'exited') {
-                    exitedCount++;
-                } else if (terminalBadges.has(name)) {
-                    // done wins over active and exited — a team is "done" when
-                    // it has something to report, regardless of other members.
-                    light = 'done';
-                    const stamp = terminalBadges.get(name).stamp;
-                    if (stamp > doneStamp) { doneStamp = stamp; }
-                } else {
-                    activeCount++;
+            let headName = '';
+
+            if (liveGroup) {
+                const members = Array.isArray(liveGroup.members) ? liveGroup.members : [];
+                liveMembers = members.filter(name => fleetByFriendly.has(name));
+                for (const memberName of liveMembers) {
+                    const t = fleetByFriendly.get(memberName);
+                    if (t) {
+                        if (t.status === 'exited') {
+                            exitedCount++;
+                        } else {
+                            activeCount++;
+                        }
+                    }
                 }
-            }
-            if (light !== 'done') {
-                if (activeCount > 0) { light = 'active'; }
-                // else stays 'exited'
+                headName = (typeof liveGroup.head === 'string' && liveGroup.head) ? liveGroup.head
+                    : (members.length > 0 ? members[0] : '');
+                running = activeCount > 0;
             }
 
-            // Send the team icon URI or empty string. The shell falls back
-            // to the head's role letter when there is no team icon — the
-            // head's CLI brand mark is NOT a valid fallback for a team
-            // button (it communicates the wrong identity).
             teamEntries.push({
-                groupId: g.id,
-                definitionId: g.definitionId || (def ? def.id : ''),
-                name: g.name || g.id,
+                definitionId: def.id,
+                name,
                 head: headName,
                 headRole,
                 iconUri: iconUri || '',
-                memberNames: liveMembers,
-                light,
-                doneStamp,
+                running,
+                dispatched: (running && liveGroup) ? Boolean(_teamInFlight.get(liveGroup.id)) : false,
+                groupId: (running && liveGroup) ? liveGroup.id : null,
+                memberNames: running ? liveMembers : [],
                 activeCount,
                 exitedCount,
-                queueDepth: _teamQueueDepths.get(g.id) || 0,
+                queueDepth: (running && liveGroup) ? (_teamQueueDepths.get(liveGroup.id) || 0) : 0,
             });
         }
 
-        // Sort by definition order (index in _agentGroupsCache), then name.
-        // The shell cannot sort by definition order it does not have.
-        const defOrder = new Map((_agentGroupsCache || []).map((g, i) => [g.id, i]));
-        teamEntries.sort((a, b) => {
-            const ai = defOrder.has(a.definitionId) ? defOrder.get(a.definitionId) : 9999;
-            const bi = defOrder.has(b.definitionId) ? defOrder.get(b.definitionId) : 9999;
-            if (ai !== bi) { return ai - bi; }
-            return String(a.name).localeCompare(String(b.name));
-        });
-
         return teamEntries;
-    }
-
-    /* Relay Mission Control seat/armed state to the shell rail so its Mission Control icon can
-     * light (active) or dim (inactive). Mirrors postFleetStateToShell's
-     * embedded-frame guard and origin-targeting. The shell handler checks
-     * event.origin === location.origin on its end; this side uses the same
-     * target origin so a foreign framer cannot spoof the relay. */
-    function relayMissionControlStateToShell(state) {
-        const seat = state.missionControlSeat || null;
-        // Cache the seat name for enterControllerScope: an ADOPTED controller carries
-        // neither the 'mission-control' role nor the 'Mission Control' name, so a
-        // role-only scan cannot find it. Cached before the embedded-check below so it
-        // is populated in a pop-out too.
-        lastMissionControlSeatName = (seat && seat.terminalName) || null;
-        if (window.parent === window) { return; } // not embedded
-        window.parent.postMessage({
-            type: 'missionControlState',
-            active: !!(state.missionControlSeat || state.missionControlArmed),
-            armed: !!state.missionControlArmed,
-            seat: seat ? { terminalName: seat.terminalName || null, adoptedAt: seat.adoptedAt || null } : null
-        }, location.origin);
     }
 
     const LAYOUTS = {
@@ -2224,9 +2190,22 @@
         if (Array.isArray(savedCollapsed)) {
             savedCollapsed.forEach(c => collapsedGroups.add(c));
         }
+
+        if (soloTerminalName) {
+            currentLayout = '1';
+            effectiveLayout = '1';
+            paneAssignments = [soloTerminalName];
+            paneModes = ['terminal'];
+        } else if (isKanbanDock) {
+            currentLayout = '1';
+            effectiveLayout = '1';
+            paneAssignments = [null];
+            paneModes = ['kanban'];
+        }
     }
 
     function saveLayoutSettings() {
+        if (soloTerminalName || isKanbanDock) { return; }
         saveSetting('terminals.layoutMode', currentLayout);
         saveSetting('terminals.paneAssignments', paneAssignments);
         saveSetting('terminals.pinnedPanes', pinnedPanes);
@@ -4131,6 +4110,7 @@
      *  buildTeamsForShell so the shell rail can show queue depth without
      *  opening the cockpit. Non-blocking — stale depth beats no depth. */
     const _teamQueueDepths = new Map();
+    const _teamInFlight = new Map();
     let _queueDepthFetchInFlight = false;
 
     /** Fetch the queue for the scoped team from the API. Non-blocking —
@@ -7651,7 +7631,7 @@
     }
 
     function startFleetPoll() {
-        if (fleetPollTimer) { return; }
+        if (fleetPollTimer || isKanbanDock) { return; }
         fleetPollTimer = setInterval(() => {
             // Skip when the tab is hidden — the WebSocket push will catch up on
             // regain, and a background tab hammering ptyListTerminals wastes a
@@ -11342,7 +11322,7 @@
        label (the rail icon cannot). */
     let controllerScopeActive = false;
     /** Last adopted-controller terminal name seen on the autoban broadcast rail.
-     *  See relayMissionControlStateToShell — the role scan alone cannot see an
+     *  Updated by autoban state handler — the role scan alone cannot see an
      *  adopted seat, which is exactly what the docblock below promises to handle. */
     let lastMissionControlSeatName = null;
 

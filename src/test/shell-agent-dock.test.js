@@ -87,11 +87,22 @@ test('#dock-frame uses .is-visible, not [hidden] alone', () => {
         '#dock-frame.is-visible must declare display:block');
 });
 
-test('#dock-role-menu uses .is-visible, not [hidden] alone', () => {
-    assert.ok(/#dock-role-menu\s*\{[^}]*display:\s*none/.test(shellHtml),
-        '#dock-role-menu must declare a base display:none');
-    assert.ok(/#dock-role-menu\.is-visible\s*\{[^}]*display:\s*block/.test(shellHtml),
-        '#dock-role-menu.is-visible must declare display:block');
+test('#dock-role-btn and #dock-role-menu are absent from shell.html', () => {
+    assert.ok(!shellHtml.includes('id="dock-role-btn"'), '#dock-role-btn must be absent from shell.html');
+    assert.ok(!shellHtml.includes('id="dock-role-menu"'), '#dock-role-menu must be absent from shell.html');
+    assert.ok(!shellHtml.includes('#dock-role-menu'), '#dock-role-menu CSS must be absent from shell.html');
+    assert.ok(!shellHtml.includes('.dock-role-item'), '.dock-role-item CSS must be absent from shell.html');
+});
+
+test('role picker functions and mutable dockRole are absent from shell.js', () => {
+    assert.ok(!shellJs.includes('buildDockRoleMenu'), 'buildDockRoleMenu must be absent from shell.js');
+    assert.ok(!shellJs.includes('fetchDockRoles'), 'fetchDockRoles must be absent from shell.js');
+    assert.ok(!shellJs.includes('dockRolesCache'), 'dockRolesCache must be absent from shell.js');
+    assert.ok(!shellJs.includes('DOCK_SYSTEM_ROLES'), 'DOCK_SYSTEM_ROLES must be absent from shell.js');
+    assert.ok(!shellJs.includes('loadDockRole'), 'loadDockRole must be absent from shell.js');
+    assert.ok(/const\s+dockRole\s*=\s*['"]mission-control['"]/.test(shellJs),
+        'dockRole must be a constant string "mission-control"');
+    assert.ok(!/let\s+dockRole/.test(shellJs), 'dockRole must not be mutable state');
 });
 
 // ── shell.html: sharedDefaults.js loaded before shell.js (edge case 15) ──
@@ -157,44 +168,75 @@ test('DOCK_VIABLE_MIN is declared and the dock toggle consults it', () => {
 
 // ── shell.js: toggle gated on frames.has('terminals') (edge case 3) ──
 
-test('the dock toggle is built only inside a frames.has(terminals) guard', () => {
-    const manifest = shellJs.indexOf('function renderManifest(manifest) {');
-    const dockToggleIdx = shellJs.indexOf('buildDockToggle()', manifest);
-    assert.ok(dockToggleIdx !== -1, 'buildDockToggle must be called in renderManifest');
-    // Check the guard precedes the call.
-    const region = shellJs.substring(manifest, dockToggleIdx + 50);
-    assert.ok(/frames\.has\('terminals'\)/.test(region),
+test('the dock toggle is in renderTopRightCluster, gated on frames.has(terminals)', () => {
+    const fn = shellJs.match(/function\s+renderTopRightCluster\([\s\S]*?\n\s{4}\}/);
+    assert.ok(fn, 'renderTopRightCluster function must exist');
+    assert.ok(/frames\.has\('terminals'\)/.test(fn[0]),
         'the dock toggle must be gated on frames.has(\'terminals\')');
+    assert.ok(fn[0].includes('dock-toggle-btn'), 'dock button must have .dock-toggle-btn class');
+    assert.ok(!shellJs.includes('buildDockToggle'), 'buildDockToggle must be removed from shell.js');
 });
 
 test('the dock toggle glyph is NOT nav-terminals.svg (edge case 17)', () => {
-    const toggleFn = shellJs.match(/function\s+buildDockToggle\(\)\s*\{([\s\S]*?)\n\s{4}\}/);
-    assert.ok(toggleFn, 'buildDockToggle function must exist');
-    assert.ok(/nav-dock\.svg/.test(toggleFn[1]),
+    const fn = shellJs.match(/function\s+renderTopRightCluster\([\s\S]*?\n\s{4}\}/);
+    assert.ok(fn, 'renderTopRightCluster function must exist');
+    assert.ok(/nav-dock\.svg/.test(fn[0]),
         'the dock toggle must use nav-dock.svg');
-    assert.ok(!/nav-terminals\.svg/.test(toggleFn[1]),
+    assert.ok(!/nav-terminals\.svg/.test(fn[0]),
         'the dock toggle must NOT reuse nav-terminals.svg — the Terminals panel already uses that glyph');
 });
 
-// ── shell.js: no implicit create (edge case 4) ──────────────────────
+// ── shell.js: Mission Control start (One Seat, One Path) ────────────
 
-test('no ptyCreateTerminal call outside startDockTerminal', () => {
-    // Every ptyCreateTerminal fetch must be inside startDockTerminal.
-    const calls = [];
-    const re = /ptyCreateTerminal/g;
-    let m;
-    while ((m = re.exec(shellJs)) !== null) {
-        // Find the enclosing function by scanning backwards for 'function NAME'.
-        const before = shellJs.substring(0, m.index);
-        const fnMatch = before.match(/function\s+(\w+)\s*\([^)]*\)\s*\{/g);
-        const lastFn = fnMatch ? fnMatch[fnMatch.length - 1].match(/function\s+(\w+)/)[1] : '<top>';
-        calls.push(lastFn);
-    }
-    assert.ok(calls.length > 0, 'at least one ptyCreateTerminal call must exist (in startDockTerminal)');
-    for (const fn of calls) {
-        assert.strictEqual(fn, 'startDockTerminal',
-            `ptyCreateTerminal must only be called inside startDockTerminal, not ${fn} — no implicit create on shell load`);
-    }
+test('startDockTerminal calls /mission-control/start and handles terminal and clipboard modes', () => {
+    const startFn = shellJs.match(/async\s+function\s+startDockTerminal\(\)\s*\{([\s\S]*?)\n\s{4}\}/);
+    assert.ok(startFn, 'startDockTerminal function must exist in shell.js');
+    const body = startFn[1];
+    assert.ok(body.includes('/mission-control/start'),
+        'startDockTerminal must call POST /mission-control/start');
+    assert.ok(!body.includes('ptyCreateTerminal'),
+        'startDockTerminal must not call ptyCreateTerminal');
+    assert.ok(body.includes('clipboard'),
+        'startDockTerminal must branch on mode: clipboard');
+    assert.ok(!body.includes('/mission-control/confirm'),
+        'startDockTerminal must NOT call /mission-control/confirm — arming is the agent move');
+});
+
+test('no ptyCreateTerminal in shell.js', () => {
+    assert.ok(!shellJs.includes('ptyCreateTerminal'),
+        'ptyCreateTerminal must not be called anywhere in shell.js');
+});
+
+test('dockSeatName loses its parameter in shell.js', () => {
+    assert.ok(/function\s+dockSeatName\(\)\s*\{/.test(shellJs),
+        'dockSeatName must take no arguments');
+});
+
+test('syncDockSeat verifies controller identity before adopting persisted seat', () => {
+    const syncFn = shellJs.match(/function\s+syncDockSeat\(\)\s*\{([\s\S]*?)\n\s{4}\}/);
+    assert.ok(syncFn, 'syncDockSeat function must exist in shell.js');
+    const body = syncFn[1];
+    assert.ok(body.includes('isControllerTerminal'),
+        'syncDockSeat must verify controller identity before adopting');
+});
+
+// ── Composition roots & LocalApiServer contracts ─────────────────────
+
+test('POST /mission-control/start endpoint is present in LocalApiServer.ts', () => {
+    const apiServerTs = fs.readFileSync(path.join(__dirname, '../services/LocalApiServer.ts'), 'utf8');
+    assert.ok(apiServerTs.includes("'/mission-control/start'"),
+        'LocalApiServer must route /mission-control/start');
+    assert.ok(apiServerTs.includes('_handleMissionControlStart'),
+        '_handleMissionControlStart must exist in LocalApiServer');
+});
+
+test('missionControlStart is wired in TaskViewerProvider.ts and bootstrap.ts', () => {
+    const tvpTs = fs.readFileSync(path.join(__dirname, '../services/TaskViewerProvider.ts'), 'utf8');
+    const bootTs = fs.readFileSync(path.join(__dirname, '../standalone/bootstrap.ts'), 'utf8');
+    assert.ok(/missionControlStart:\s*async/.test(tvpTs),
+        'TaskViewerProvider must wire missionControlStart');
+    assert.ok(/missionControlStart:\s*async/.test(bootTs),
+        'bootstrap.ts must wire missionControlStart');
 });
 
 test('no string-prefix test against dock- on a fleet entry (seat name is opaque)', () => {
@@ -249,6 +291,68 @@ test('terminals.js returns early from postFleetStateToShell on the dock flag', (
 test('terminals.js parses the dock=1 URL param', () => {
     assert.ok(/isDockFrame\s*=\s*urlParams\.get\(['"]dock['"]\)\s*===\s*['"]1['"]/.test(terminalsJs),
         'terminals.js must parse isDockFrame from the dock=1 URL param');
+});
+
+test('dock contains two iframes (agent + kanban) and tab strip in header', () => {
+    assert.ok(shellHtml.includes('id="dock-frame"'), '#dock-frame must exist in shell.html');
+    assert.ok(shellHtml.includes('id="dock-kanban-frame"'), '#dock-kanban-frame must exist in shell.html');
+    assert.ok(shellHtml.includes('id="dock-tabs"'), '#dock-tabs must exist in shell.html');
+    assert.ok(shellHtml.includes('id="dock-tab-agent"'), '#dock-tab-agent must exist in shell.html');
+    assert.ok(shellHtml.includes('id="dock-tab-kanban"'), '#dock-tab-kanban must exist in shell.html');
+
+    // Tab strip ahead of title and close
+    const tabsIdx = shellHtml.indexOf('id="dock-tabs"');
+    const titleIdx = shellHtml.indexOf('id="dock-title"');
+    const closeIdx = shellHtml.indexOf('id="dock-close"');
+    assert.ok(tabsIdx < titleIdx && titleIdx < closeIdx,
+        'tab strip must sit ahead of #dock-title and #dock-close in #dock-header');
+
+    // Pointer-events rule covers both frames
+    assert.ok(/body\.dock-dragging\s+#dock-kanban-frame/.test(shellHtml),
+        'body.dock-dragging must neutralise #dock-kanban-frame pointer events');
+});
+
+test('sb.agentDock persistence handles activeTab and defaults to agent', () => {
+    const readFn = shellJs.match(/function\s+readDockState\(\)\s*\{([\s\S]*?)\n\s{4}\}/);
+    assert.ok(readFn, 'readDockState function must exist');
+    assert.ok(readFn[1].includes('activeTab:'), 'readDockState must include activeTab');
+    assert.ok(readFn[1].includes("'agent'"), 'activeTab must default to agent');
+    assert.ok(shellJs.includes('setDockActiveTab'), 'setDockActiveTab must exist in shell.js');
+});
+
+test('applyThemeToAll fans out to both dockFrame and dockKanbanFrame', () => {
+    const fn = shellJs.match(/function\s+applyThemeToAll\([\s\S]*?\n\s{4}\}/);
+    assert.ok(fn, 'applyThemeToAll function must exist');
+    assert.ok(/dockFrame/.test(fn[0]) && /dockKanbanFrame/.test(fn[0]),
+        'applyThemeToAll must fan out theme changes to BOTH dock frames');
+});
+
+test('kanban dock mode is handled in terminals.js and CSS in terminals.html', () => {
+    const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
+    assert.ok(terminalsHtml.includes('body.is-kanban .terminals-sidebar'),
+        'terminals.html must hide .terminals-sidebar for body.is-kanban');
+    assert.ok(terminalsHtml.includes('body.is-kanban .layout-toolbar'),
+        'terminals.html must hide .layout-toolbar for body.is-kanban');
+    assert.ok(terminalsHtml.includes('body.is-kanban #empty-state'),
+        'terminals.html must hide #empty-state for body.is-kanban');
+    assert.ok(terminalsHtml.includes('body.is-kanban #pane-grid'),
+        'terminals.html must style #pane-grid for body.is-kanban');
+
+    // Precedence and parsing
+    assert.ok(terminalsJs.includes("urlParams.get('kanban') === '1'"),
+        'terminals.js must parse kanban query param');
+
+    // Poll suppressions in kanban mode
+    assert.ok(/startFleetPoll\(\)\s*\{[^}]*isKanbanDock/.test(terminalsJs),
+        'startFleetPoll must be suppressed in kanban mode');
+    assert.ok(/refreshAgentGroupsForShell\(\)\s*\{[^}]*isKanbanDock/.test(terminalsJs),
+        'refreshAgentGroupsForShell must be suppressed in kanban mode');
+    assert.ok(/refreshTeamQueueDepths\(\)\s*\{[^}]*isKanbanDock/.test(terminalsJs),
+        'refreshTeamQueueDepths must be suppressed in kanban mode');
+
+    // In-grid kanban toolbar button is preserved
+    assert.ok(terminalsHtml.includes('btn-kanban-toolbar'),
+        'btn-kanban-toolbar in terminals.html must be preserved');
 });
 
 // ── Summary ─────────────────────────────────────────────────────────

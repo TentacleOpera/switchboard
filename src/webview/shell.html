@@ -99,8 +99,8 @@
         .strip-icon:hover { background: var(--bg-elev); color: var(--text); }
         .strip-icon.is-active {
             background: var(--bg-elev);
-            color: var(--accent);
-            border-color: var(--accent-dim);
+            color: var(--text);
+            border-left: 2px solid var(--text);
         }
         .strip-icon[disabled] {
             opacity: 0.35;
@@ -161,7 +161,25 @@
            #tooltip-overlay. */
         #modal-host { position: absolute; inset: 0; z-index: 10; display: none; }
         #modal-host.is-open { display: block; }
+        #content:has(#modal-host.is-open) { z-index: 50; }
         #modal-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.62); }
+
+        /* Top-right control cluster — floating overlay for non-navigational controls:
+           Agent Dock, Setup, Memo, and Connections.
+           Reserved band: the top ~34px of every panel's right edge is tab-strip
+           whitespace; panel controls must start below this band so they are not
+           occluded by the cluster.
+           Fixed positioning; right offset tracks --dock-width when the dock is open. */
+        #top-right-cluster {
+            position: fixed;
+            top: 6px;
+            right: calc(var(--dock-width, 0px) + 6px);
+            z-index: 40;
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 4px;
+        }
         #modal-dialog {
             position: absolute;
             top: 50%; left: 50%;
@@ -232,197 +250,41 @@
             border-top: none;
             padding-top: 0;
         }
-        /* The Mission Control icon is a persistent first child, so :empty no longer
-           matches once it is present — suppress the separator when it is the
-           only child so a lone dimmed UFO does not draw a divider above an empty
-           fleet list. :only-child already implies the container is non-empty, so
-           no :not(:empty) guard is needed (it was redundant). */
-        #strip-terminals > #strip-mission-control:only-child {
-            border-bottom: none;
-            margin-bottom: 0;
-        }
-
-        /* Mission Control rail icon — a UFO button at the top of #strip-terminals.
-           The SVG is INLINED into the shell document (not an <img src>), so these
-           rules reach its sub-elements directly. LIT (active): the cyan lights
-           blink (alternating .light-a / .light-b); the saucer, beam, and stars
-           are static — at 28x16px in a narrow vertical rail, positional movement
-           reads as jitter. DIMMED (inactive): everything frozen + faded via
-           opacity+grayscale. The @media (prefers-reduced-motion: reduce) block
-           is the ONLY reduced-motion guard now (the SVG's internal <style> was
-           dropped when it was inlined), so it is load-bearing — do not remove. */
-        #strip-mission-control {
-            width: 100%;
-            display: flex;
-            justify-content: center;
-            padding: 4px 0;
-            border-bottom: 1px solid var(--border);
-            margin-bottom: 4px;
-            background: none;
-            border-left: none;
-            border-right: none;
-            border-top: none;
-            cursor: default;
-        }
-        #strip-mission-control.mission-control-dimmed {
+        .strip-icon.is-dormant {
             opacity: 0.35;
             filter: grayscale(0.8);
         }
-        /* Dimmed: freeze the blinking lights. This now genuinely works because
-           the SVG is in the same document — the selector reaches .light-a/.light-b
-           inside the inline <svg>. */
-        #strip-mission-control.mission-control-dimmed .light-a,
-        #strip-mission-control.mission-control-dimmed .light-b {
-            animation: none !important;
-        }
-        #strip-mission-control.mission-control-active {
-            cursor: pointer;
-        }
-        /* Lit: the alternating blink. Only the lights animate — no hover bob, no
-           beam pulse, no star twinkle (all dropped per user decision). */
-        #strip-mission-control.mission-control-active .light-a {
-            animation: sb-mc-light-a 1.2s steps(2, end) infinite;
-        }
-        #strip-mission-control.mission-control-active .light-b {
-            animation: sb-mc-light-b 1.2s steps(2, end) infinite;
-        }
-        @keyframes sb-mc-light-a { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .25; } }
-        @keyframes sb-mc-light-b { 0%, 49% { opacity: .25; } 50%, 100% { opacity: 1; } }
-        #strip-mission-control .strip-mc-icon {
-            width: 28px;
-            height: 16px;
-            object-fit: contain;
-            pointer-events: none;
-        }
-        /* The ONLY reduced-motion guard for the inlined SVG — its internal
-           <style> was dropped when it was inlined, so this rail-level rule is
-           load-bearing. Freezes the blinking lights in both lit and dimmed
-           states. */
-        @media (prefers-reduced-motion: reduce) {
-            #strip-mission-control .light-a,
-            #strip-mission-control .light-b {
-                animation: none !important;
-            }
-        }
 
-        /* Settings cluster at the foot of the rail. The bottom anchor (the lone
-           auto top margin that absorbs the rail's free space) is handed to the
-           FIRST member of this cluster at runtime by applyBottomAnchor in
-           shell.js — so this rule declares only the separator and a static
-           margin. A second auto top margin here would split the free space and
-           park the cluster mid-rail, which is why the anchor is applied inline
-           and never declared twice in CSS. */
-        .strip-icon.strip-placement-bottom {
+        .strip-icon.strip-group-cold:first-of-type,
+        .strip-group-cold:first-of-type {
             border-top: 1px solid var(--border);
-            margin-top: 6px;
+            padding-top: 6px;
         }
 
-        .strip-term-btn {
+        .strip-team-btn {
             font-weight: 600;
             font-size: 13px;
+            position: relative;
         }
-        /* Coloured brand icon replaces the old role-letter glyph + status dot. The
-           icon's baked-in fill IS the identity (multi-hue brand marks), so an <img>
-           is correct here — not the strip's CSS-mask/currentColor path used by the
-           single-color nav glyphs. */
         .strip-term-icon {
             width: 22px;
             height: 22px;
             object-fit: contain;
             pointer-events: none;
         }
-        /* exited: desaturated, lifted toward mid grey, then faded. grayscale() ALONE
-           sinks the dark-fill brands (zed #084CCF, jules #715CD7, qwen #6950EF) into
-           the near-black rail — the button reads EMPTY rather than "faded", which is
-           a worse message than the dot ever sent. brightness() sets a contrast floor
-           so every brand lands on a legible grey first; the opacity is then what says
-           "gone". Readable in a monochrome screenshot, which is the accessibility
-           contract the old shape coding carried. */
-        .strip-term-btn.strip-term-exited .strip-term-icon {
-            opacity: 0.5;
-            filter: grayscale(1) brightness(1.7);
+        .strip-team-icon {
+            color: var(--accent);
+            fill: var(--accent);
         }
-        /* done: the completion ring. Same #22c55e + glow the shipped 7px dot used,
-           scaled up to the whole 36px button — strictly MORE salient than the dot it
-           replaces, which is the entire point of this change. Hardcoded green, NOT
-           var(--accent)/var(--accent-dim): the accent is this rail's panel-SELECTION
-           colour (.strip-icon.is-active), so an accent ring would read as "selected",
-           and --accent-dim under theme-claudify is a 40%-alpha terracotta that is
-           nearly invisible on #060609. The ring is a SHAPE (present/absent), so hue
-           is a bonus channel, not the signal — monochrome and deuteranopic viewers
-           read the ring itself. .strip-icon already declares `border: 1px solid
-           transparent`, so this is a colour swap with zero layout shift.
-           CHANGED: the ring is a NOTIFICATION, not a state. It plays ONE 2.2s
-           announcement (two beats, so it reads as deliberate rather than as a render
-           glitch) and fades to nothing. It used to be a permanent border driven by
-           terminalBadges, which has no expiry — so a completed agent ringed its icon
-           until the operator performed one specific dismissal gesture, and a rail of
-           long-running agents ended up permanently green. The durable record lives in
-           the Terminals panel (sidebar DONE chip, pane badge), which is unchanged.
-           The 2.2s duration is mirrored by DONE_PULSE_MS in shell.js and pinned by
-           shell-terminal-strip.test.js — change both or neither. */
-        @keyframes strip-term-done-pulse {
-            0%   { border-color: rgba(34, 197, 94, 0); box-shadow: 0 0 0 1px rgba(34, 197, 94, 0) inset, 0 0 0 rgba(34, 197, 94, 0); }
-            8%   { border-color: #22c55e;             box-shadow: 0 0 0 1px #22c55e inset, 0 0 8px rgba(34, 197, 94, 0.75); }
-            33%  { border-color: rgba(34, 197, 94, 0.35); box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35) inset, 0 0 2px rgba(34, 197, 94, 0.2); }
-            58%  { border-color: #22c55e;             box-shadow: 0 0 0 1px #22c55e inset, 0 0 8px rgba(34, 197, 94, 0.75); }
-            100% { border-color: transparent;        box-shadow: 0 0 0 1px rgba(34, 197, 94, 0) inset, 0 0 0 rgba(34, 197, 94, 0); }
-        }
-        /* Reduced motion: same duration, same end state, no oscillation — hold the
-           ring, then fade it. The cue is preserved; only the flashing is removed. */
-        @keyframes strip-term-done-pulse-reduced {
-            0%, 60% { border-color: #22c55e; box-shadow: 0 0 0 1px #22c55e inset, 0 0 6px rgba(34, 197, 94, 0.55); }
-            100%    { border-color: transparent; box-shadow: 0 0 0 1px rgba(34, 197, 94, 0) inset, 0 0 0 rgba(34, 197, 94, 0); }
-        }
-        .strip-term-btn.strip-term-done.is-pulsing {
-            animation: strip-term-done-pulse 2.2s ease-out 1 both;
-        }
-        @media (prefers-reduced-motion: reduce) {
-            /* Swap the TRACK only. Duration, iteration count and fill-mode are
-               inherited from the rule above, so DONE_PULSE_MS stays valid for both
-               variants and the resume offset does not have to branch. */
-            .strip-term-btn.strip-term-done.is-pulsing {
-                animation-name: strip-term-done-pulse-reduced;
-            }
-        }
-        /* active: DELIBERATELY no rule. The unmodified full-colour icon in an unringed
-           button IS the live state. Never add a fade or a ring here — that absence is
-           precisely what makes active distinguishable from done and exited. */
-
-        /* Team buttons share the strip-term-btn base (sizing, done pulse, exited
-           fade) via the strip-term-<light> state classes. The team icon is the
-           same <img> pattern as a per-terminal brand mark; .strip-team-icon is
-           an alias so theme overrides can target team icons specifically. */
-        .strip-team-btn {
-            font-weight: 600;
-            font-size: 13px;
-            position: relative;
-        }
-        .strip-team-btn.strip-term-exited .strip-team-icon {
-            opacity: 0.5;
-            filter: grayscale(1) brightness(1.7);
-        }
-        .strip-team-btn.strip-term-done.is-pulsing {
-            animation: strip-term-done-pulse 2.2s ease-out 1 both;
-        }
-        @media (prefers-reduced-motion: reduce) {
-            .strip-team-btn.strip-term-done.is-pulsing {
-                animation-name: strip-term-done-pulse-reduced;
-            }
-        }
-        /* Queue-depth badge — top-right corner, accent-violet. Shows pending
-           work on the team rail icon. */
-        .strip-team-queue-depth {
+        .strip-team-btn.is-dispatched::after {
+            content: '';
             position: absolute;
-            top: 1px;
-            right: 2px;
-            font-size: 9px;
-            font-weight: 700;
-            line-height: 1;
-            color: var(--accent-violet, #c586c0);
-            background: var(--panel-bg, #1a1a2e);
-            border-radius: 3px;
-            padding: 1px 3px;
+            top: 4px;
+            right: 4px;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--accent);
             pointer-events: none;
         }
 
@@ -508,13 +370,39 @@
         }
         .dock-start-btn:hover { background: var(--accent-dim); color: var(--text); }
         .dock-start-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+        #dock-tabs {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 1px;
+        }
+        .dock-tab-btn {
+            background: transparent;
+            border: none;
+            border-radius: 3px;
+            color: var(--text-dim);
+            font-family: var(--font);
+            font-size: 11px;
+            padding: 2px 8px;
+            cursor: pointer;
+        }
+        .dock-tab-btn:hover { color: var(--text); }
+        .dock-tab-btn.is-active {
+            background: var(--bg-elev);
+            color: var(--text);
+        }
         /* Visibility via a class, NOT the hidden attribute: [hidden]{display:none}
            is a USER-AGENT rule and loses the cascade to any author `display`
            declaration on the same element, regardless of specificity. The
            attribute stays on the markup for assistive tech; the class is the
            mechanism. Same pattern as .panel-frame / .panel-frame.is-active. */
-        #dock-frame { display: none; flex: 1 1 auto; border: none; width: 100%; background: var(--bg); }
-        #dock-frame.is-visible { display: block; }
+        #dock-frame,
+        #dock-kanban-frame { display: none; flex: 1 1 auto; border: none; width: 100%; background: var(--bg); }
+        #dock-frame.is-visible,
+        #dock-kanban-frame.is-visible { display: block; }
         #dock-empty {
             display: none;
             flex: 1 1 auto;
@@ -530,37 +418,12 @@
         /* position:fixed escapes #agent-dock's overflow:hidden — no ancestor here
            establishes a fixed-position containing block (no transform/filter/
            will-change/contain). Same idiom as #tooltip-overlay. */
-        #dock-role-menu {
-            display: none;
-            position: fixed;
-            z-index: 9999;
-            background: var(--bg-elev);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 4px;
-            min-width: 180px;
-        }
-        #dock-role-menu.is-visible { display: block; }
-        .dock-role-item {
-            display: block;
-            width: 100%;
-            text-align: left;
-            background: transparent;
-            border: none;
-            border-radius: 3px;
-            color: var(--text);
-            font-family: var(--font);
-            font-size: 12px;
-            padding: 5px 8px;
-            cursor: pointer;
-        }
-        .dock-role-item:hover { background: var(--bg); }
-        .dock-role-item.is-selected { color: var(--accent); }
         /* Splitter drag: iframes swallow mousemove, so both the panel frames and
-           the dock frame go pointer-inert for the duration of the drag. Without
+           the dock frames go pointer-inert for the duration of the drag. Without
            this the drag dies the instant the cursor crosses into a frame. */
         body.dock-dragging .panel-frame,
-        body.dock-dragging #dock-frame { pointer-events: none; }
+        body.dock-dragging #dock-frame,
+        body.dock-dragging #dock-kanban-frame { pointer-events: none; }
 
         /* Browser-only shell: dark native palette + a 6px strip scrollbar to
            match the panels it frames. #strip is the document's only scroller
@@ -613,20 +476,24 @@
          aria-label="Resize agent dock" hidden></div>
     <aside id="agent-dock" aria-label="Agent dock" hidden>
         <div id="dock-header">
-            <button id="dock-role-btn" type="button" class="dock-chip"
-                    data-tooltip="Choose which agent this dock starts"></button>
+            <div id="dock-tabs" role="tablist" aria-label="Dock tabs">
+                <button id="dock-tab-agent" type="button" class="dock-tab-btn is-active" role="tab" aria-selected="true">Agent</button>
+                <button id="dock-tab-kanban" type="button" class="dock-tab-btn" role="tab" aria-selected="false">Kanban</button>
+            </div>
             <span id="dock-title"></span>
             <button id="dock-close" type="button" class="dock-icon-btn"
                     aria-label="Close agent dock" data-tooltip="Close">&times;</button>
         </div>
-        <div id="dock-role-menu" hidden></div>
         <div id="dock-empty">
             <button id="dock-start" type="button" class="dock-start-btn"></button>
             <div id="dock-empty-hint"></div>
         </div>
         <iframe id="dock-frame" title="Agent terminal"
                 allow="clipboard-read; clipboard-write" hidden></iframe>
+        <iframe id="dock-kanban-frame" title="Kanban pane"
+                allow="clipboard-read; clipboard-write" hidden></iframe>
     </aside>
+    <div id="top-right-cluster" role="toolbar" aria-label="Quick controls"></div>
     <div id="tooltip-overlay"></div>
     <script nonce="{{NONCE}}" src="/static/webview/sharedDefaults.js"></script>
     <script nonce="{{NONCE}}" src="/static/webview/shell.js"></script>

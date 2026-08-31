@@ -4188,7 +4188,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         return sharedGetProjectHtml(repoRoot, currentWsRoot(), caps, getTheme());
                     },
                     getShellHtml: async () => sharedGetShellHtml(repoRoot, getTheme()),
-                    getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, tickets: true, terminals: ptyHostReady() }),
+                    getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, tickets: true, terminals: ptyHostReady(), linear: true }),
                     getPanelHtml: async (id: string) => {
                         const caps = {
                             ...baseHostCapabilities,
@@ -4270,7 +4270,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // clipboard fallback). The extension host always takes the terminal path
                 // (startMissionControlFromKanban creates/reuses the Mission Control terminal).
                 await this.startMissionControlFromKanban(wsRoot, undefined, missionId);
-                return { success: true, mode: 'terminal' };
+                return { success: true, mode: 'terminal', friendlyName: MISSION_CONTROL_TERMINAL_NAME };
             },
             missionControlStop: async () => {
                 await this.stopMissionControlFromKanban();

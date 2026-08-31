@@ -317,7 +317,7 @@
     <div class="shared-tab-content active" id="providers-fields" data-tab-content="providers">
         <div class="conn-card">
             <div class="conn-heading" id="remote-subsection-title">Remote Control (External AI Surfaces)</div>
-            Drive the board from external AI surfaces (Linear, Notion, ClickUp). Enable sync to poll remote comments or issues and dispatch actions.
+            Drive the board from external AI surfaces (Notion, ClickUp). Enable sync to poll remote comments or issues and dispatch actions.
         </div>
 
         <div class="form-row">
@@ -328,7 +328,6 @@
         <div class="form-row">
             <label for="remote-provider">Provider</label>
             <select id="remote-provider">
-                <option value="linear">Linear</option>
                 <option value="notion">Notion</option>
                 <option value="clickup">ClickUp</option>
             </select>
@@ -379,11 +378,6 @@
         <div class="form-row">
             <label for="remote-ping-frequency">Ping frequency (seconds, 30–120)</label>
             <input type="number" id="remote-ping-frequency" min="30" max="120" step="5" value="60" style="max-width: 120px;" />
-        </div>
-
-        <div class="form-row" id="remote-linear-agent-skill" style="display: none;">
-            <button id="btn-copy-linear-agent-skill" class="btn-action btn-secondary" title="Copy tailored instructions for Linear's native AI agent">Copy Linear Agent Skill</button>
-            <span id="copy-linear-agent-skill-status" style="margin-left: 8px; font-size: 11px; color: var(--text-secondary);"></span>
         </div>
 
         <div class="form-row" id="remote-notion-setup" style="display: none;">

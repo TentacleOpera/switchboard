@@ -522,27 +522,32 @@ export async function saveTerminalGroupsGuarded(opts: {
 const AGENT_GROUPS_CONFIG_KEY = 'terminals.agentGroups';
 
 /**
- * The current seed: a member-less `Lead team` headed on `lead`.
- *
- * A team with no members does nothing — starting a `lead` starts a lead,
- * exactly as today. The seeded row is a piece of explanation that happens
- * to be one click from being functional, which is what allows it to ship
- * into the auto-start feature without a staged rollout.
+ * The three default team definitions.
+ * Rail order is array order: Planning team, Coding team (Lead team), Review team.
+ * All three are member-less: starting a team without members starts only its head.
  */
-export const SEEDED_AGENT_GROUP: any = {
-    id: 'feature-implementation',
-    name: 'Lead team',
-    headRole: 'lead',
-    members: [],
-};
+export const DEFAULT_TEAM_DEFINITIONS: any[] = [
+    {
+        id: 'planning-team',
+        name: 'Planning team',
+        headRole: 'planner',
+        members: [],
+    },
+    {
+        id: 'feature-implementation',
+        name: 'Lead team',
+        headRole: 'lead',
+        members: [],
+    },
+    {
+        id: 'review-team',
+        name: 'Review team',
+        headRole: 'reviewer',
+        members: [],
+    },
+];
 
-// NOTE: there is deliberately no `OFFERED_REVIEW_TEAM_GROUP` / `OFFERED_TEAM_DEFINITIONS`
-// export here. A pair of such constants existed briefly and nothing consumed them:
-// the startable team gallery is `AGENT_GROUP_TEMPLATES` in `kanban.html`, which is
-// what an operator actually sees and starts. Two declarations of one team is the
-// drift shape this file already carries scars from — they had gone out of sync on
-// member count within a single commit. If a definition needs to live in TypeScript,
-// move the gallery to read it; do not add a second copy alongside it.
+export const SEEDED_AGENT_GROUP: any = DEFAULT_TEAM_DEFINITIONS[1];
 
 /**
  * The OLD seed value, preserved verbatim for the migration comparison.
@@ -997,7 +1002,17 @@ export async function resolveTeamById(db: any, teamId: string): Promise<any | nu
         const groups = await db.getConfigJson(AGENT_GROUPS_CONFIG_KEY, []) as any[];
         if (!Array.isArray(groups)) { return null; }
         const converted = migrateAgentGroups(groups) ?? groups;
-        return converted.find(g => g && g.id === teamId) || null;
+        const found = converted.find(g => g && g.id === teamId);
+        if (found) { return found; }
+        const defaultDef = DEFAULT_TEAM_DEFINITIONS.find(d => d && d.id === teamId);
+        if (defaultDef) {
+            try {
+                const next = [...converted, defaultDef];
+                await db.setConfig(AGENT_GROUPS_CONFIG_KEY, JSON.stringify(next));
+            } catch { /* ignore re-seed persist failure */ }
+            return defaultDef;
+        }
+        return null;
     } catch (err) {
         console.warn(`[teamWiring] resolveTeamById('${teamId}') failed:`, err);
         return null;

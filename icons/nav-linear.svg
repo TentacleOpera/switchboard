@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Linear — geometric linear arc/line brand mark, single color -->
+  <g fill="#45e0e6">
+    <path fill-rule="evenodd" d="M2.5 8a5.5 5.5 0 0 1 9.39-3.89l-1.42 1.42A3.5 3.5 0 0 0 4.5 8c0 .97.39 1.84 1.03 2.47l-1.42 1.42A5.48 5.48 0 0 1 2.5 8zm3.03 3.89A5.48 5.48 0 0 0 8 13.5a5.5 5.5 0 0 0 5.5-5.5c0-1.52-.62-2.9-1.61-3.89l-1.42 1.42c.64.63 1.03 1.5 1.03 2.47a3.5 3.5 0 0 1-5.97 2.47l-1.42 1.42z"/>
+    <circle cx="8" cy="8" r="1.5"/>
+  </g>
+</svg>

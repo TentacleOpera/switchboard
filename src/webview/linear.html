@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Linear</title>
+    <style>
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: normal;
+            font-style: normal;
+        }
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-display: swap;
+        }
+        :root {
+            color-scheme: dark;
+
+            --bg-color: #000000;
+            --panel-bg: #000000;
+            --panel-bg2: #0a0a0a;
+            --card-bg: #0d0d0d;
+            --border-color: #333333;
+            --border-bright: #444444;
+            --text-primary: #e0e0e0;
+            --text-secondary: #8C8C8C;
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --display-font: 'GeistPixel';
+            --font-code: Menlo, Consolas, monospace;
+            --display-letter-spacing: -0.05em;
+        }
+
+        body.theme-claudify {
+            --accent-primary: #D97757;
+            --accent-teal: #D97757;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-color));
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+        @supports not selector(::-webkit-scrollbar) {
+            :root {
+                scrollbar-width: thin;
+                scrollbar-color: var(--border-color) transparent;
+            }
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .shared-tab-bar {
+            display: flex;
+            background: #181818;
+            border-bottom: 1px solid var(--border-color);
+            padding: 0 8px;
+            gap: 4px;
+            flex: 0 0 auto;
+        }
+
+        .shared-tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            padding: 8px 12px;
+            font-family: var(--display-font), var(--font-family);
+            letter-spacing: var(--display-letter-spacing);
+            font-size: 11px;
+            text-transform: uppercase;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+
+        .shared-tab-btn:hover:not(.active) {
+            color: var(--text-primary);
+        }
+
+        .shared-tab-btn.active {
+            color: var(--accent-teal);
+            border-bottom-color: var(--accent-teal);
+        }
+
+        .shared-tab-content {
+            display: none;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .shared-tab-content.active {
+            display: block;
+        }
+
+        .conn-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-left: 3px solid var(--accent-teal);
+            border-radius: 4px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+            max-width: 720px;
+            font-size: 11px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+        }
+
+        .conn-card strong { color: var(--text-primary); }
+
+        .conn-card code {
+            font-family: var(--font-code);
+            color: var(--accent-teal);
+        }
+
+        .conn-heading {
+            font-family: var(--display-font), var(--font-family);
+            letter-spacing: var(--display-letter-spacing);
+            text-transform: uppercase;
+            font-size: 11px;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+        }
+
+        .form-row {
+            margin-bottom: 12px;
+        }
+
+        .form-row label {
+            display: block;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        select, input[type="text"], input[type="password"], input[type="number"], textarea {
+            width: 100%;
+            max-width: 500px;
+            background: #1e1e1e;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 6px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            box-sizing: border-box;
+        }
+
+        textarea {
+            font-family: var(--font-code);
+            min-height: 80px;
+            resize: vertical;
+        }
+
+        .btn-action {
+            background: #0e639c;
+            color: #ffffff;
+            border: none;
+            padding: 6px 12px;
+            font-size: 11px;
+            border-radius: 2px;
+            cursor: pointer;
+            margin-right: 8px;
+            margin-top: 6px;
+        }
+
+        .btn-action:hover {
+            background: #1177bb;
+        }
+
+        .btn-secondary {
+            background: #3c3c3c;
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: #4c4c4c;
+        }
+
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+            cursor: pointer;
+        }
+
+        .checkbox-group input[type="checkbox"],
+        .checkbox-group input[type="radio"] {
+            margin: 0;
+            width: auto;
+        }
+
+        .remote-checkbox-list {
+            max-height: 180px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            background: #1e1e1e;
+            padding: 4px 8px;
+            max-width: 500px;
+        }
+
+        .remote-checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 3px 0;
+            font-size: 11px;
+            color: var(--text-primary);
+            cursor: pointer;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: #222;
+            color: var(--text-secondary);
+        }
+
+        .status-badge.is-active {
+            background: rgba(0, 229, 255, 0.15);
+            color: var(--accent-teal);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+        }
+
+        .mapping-table {
+            width: 100%;
+            max-width: 640px;
+            border-collapse: collapse;
+            font-size: 11px;
+            margin-top: 8px;
+        }
+
+        .mapping-table th, .mapping-table td {
+            border: 1px solid var(--border-color);
+            padding: 6px 10px;
+            text-align: left;
+        }
+
+        .mapping-table th {
+            background: #181818;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.05em;
+        }
+
+        .instructions-pre {
+            background: #111118;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 12px;
+            font-family: var(--font-code);
+            font-size: 11px;
+            line-height: 1.5;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+            max-width: 720px;
+            max-height: 340px;
+            overflow-y: auto;
+        }
+    </style>
+    <!-- SHARED_DEFAULTS_SCRIPT -->
+</head>
+<body>
+    <div class="shared-tab-bar" role="tablist">
+        <button class="shared-tab-btn active" data-tab="connect" role="tab" aria-selected="true">Connect</button>
+        <button class="shared-tab-btn" data-tab="wire-agent" role="tab" aria-selected="false">Wire Agent</button>
+        <button class="shared-tab-btn" data-tab="how-it-works" role="tab" aria-selected="false">How It Works</button>
+    </div>
+
+    <!-- TAB 1: CONNECT -->
+    <div class="shared-tab-content active" id="tab-connect" data-tab-content="connect">
+        <div class="conn-card">
+            <div class="conn-heading">Linear Remote Control Setup</div>
+            Connect Switchboard to Linear to mirror boards, drive execution through Linear status transitions, and route issue comments to column agents.
+        </div>
+
+        <div class="form-row">
+            <label for="linear-workspace">Workspace Folder</label>
+            <select id="linear-workspace"></select>
+        </div>
+
+        <div class="conn-card" id="linear-auth-card" style="margin-top: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div class="conn-heading" style="margin: 0;">Authorisation &amp; Status</div>
+                <span id="linear-auth-badge" class="status-badge">Checking…</span>
+            </div>
+            <div id="linear-auth-description" style="font-size: 11px; color: var(--text-secondary); line-height: 1.5;">
+                Linear API token manages project issue synchronization and comment updates.
+            </div>
+            <div id="linear-auth-actions" style="margin-top: 10px;">
+                <div id="linear-token-input-row" style="display: none; margin-bottom: 8px;">
+                    <label for="linear-api-token">Linear API Token</label>
+                    <input type="password" id="linear-api-token" placeholder="lin_api_..." />
+                    <button id="btn-linear-apply-token" class="btn-action">Save Token</button>
+                </div>
+                <button id="btn-switch-to-tickets" class="btn-action btn-secondary" title="Switch to Tickets panel to browse Linear issues and configure status mappings">Browse Linear Issues in Tickets</button>
+                <span id="linear-auth-status" style="margin-left: 8px; font-size: 11px; color: var(--text-secondary);"></span>
+            </div>
+        </div>
+
+        <div class="form-row" style="margin-top: 16px;">
+            <label>Boards to sync</label>
+            <div id="linear-boards-list" class="remote-checkbox-list"></div>
+        </div>
+
+        <div class="form-row">
+            <div class="checkbox-group">
+                <label><input type="checkbox" id="linear-silent-sync" /> Silent syncing — keep selected boards mirrored with Linear even while pinging is off</label>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <label>Remote mode</label>
+            <div class="checkbox-group">
+                <label><input type="radio" name="linear-mode" id="linear-mode-ingest" value="ingest" checked /> Ingest (pull only)</label>
+                <label><input type="radio" name="linear-mode" id="linear-mode-queue" value="queue" /> Queue (pull + stage, no dispatch)</label>
+                <label><input type="radio" name="linear-mode" id="linear-mode-full" value="full" /> Full (pull + mirror + dispatch)</label>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <label>Options</label>
+            <div class="checkbox-group">
+                <label><input type="checkbox" id="linear-comments" checked /> Poll comments from remote</label>
+                <label><input type="checkbox" id="linear-content" checked /> Poll content from remote</label>
+                <label id="linear-push-label"><input type="checkbox" id="linear-push" /> Push status &amp; content to remote</label>
+                <label id="linear-queue-sequencing-label" title="Wake a Mission Control once per batch to reorder by dependency before the first dispatch."><input type="checkbox" id="linear-queue-sequencing" /> Sequence batches (opt-in, requires Queue mode)</label>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <label for="linear-ping-frequency">Ping frequency (seconds, 30–120)</label>
+            <input type="number" id="linear-ping-frequency" min="30" max="120" step="5" value="60" style="max-width: 120px;" />
+        </div>
+
+        <span id="linear-config-status" style="font-size: 11px; color: var(--text-secondary);"></span>
+    </div>
+
+    <!-- TAB 2: WIRE AGENT -->
+    <div class="shared-tab-content" id="tab-wire-agent" data-tab-content="wire-agent">
+        <div class="conn-card">
+            <div class="conn-heading">Agent Wiring &amp; Remote Control</div>
+            Control the background sync worker that polls Linear and dispatches local column agents when issues transition states.
+        </div>
+
+        <div class="form-row">
+            <label>Remote Control Toggle</label>
+            <button id="btn-linear-remote-control-toggle" class="btn-action">Start Remote Control</button>
+            <span id="linear-remote-control-state" style="margin-left: 8px; font-size: 11px; color: var(--accent-teal);"></span>
+        </div>
+
+        <div id="linear-health-section" style="display: none; margin-top: 14px; margin-bottom: 20px;">
+            <div class="conn-heading">Sync Health</div>
+            <div id="linear-health-poll" style="font-size: 11px; color: var(--text-secondary);"></div>
+            <div id="linear-health-push" style="font-size: 11px; color: var(--text-secondary);"></div>
+            <div id="linear-health-throttle" style="font-size: 11px; display: none;"></div>
+            <div id="linear-health-failure" style="font-size: 11px; display: none; margin-top: 4px; font-weight: bold;"></div>
+        </div>
+
+        <div class="form-row" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+            <div class="conn-heading">Tailored Agent Skill Instructions</div>
+            <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.5;">
+                Instructions for driving Switchboard via Linear's native AI agent or remote LLM controllers. Generated live from your workspace's actual status mappings.
+            </div>
+            <button id="btn-copy-linear-agent-skill" class="btn-action btn-secondary" title="Copy tailored instructions for Linear's native AI agent">Copy Linear Agent Skill</button>
+            <span id="copy-linear-agent-skill-status" style="margin-left: 8px; font-size: 11px; color: var(--text-secondary);"></span>
+            <div style="margin-top: 12px;">
+                <pre id="linear-agent-skill-preview" class="instructions-pre">Loading tailored instructions…</pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 3: HOW IT WORKS -->
+    <div class="shared-tab-content" id="tab-how-it-works" data-tab-content="how-it-works">
+        <div class="conn-card">
+            <div class="conn-heading">How Linear Remote Control Works</div>
+            Drive Switchboard completely from Linear without opening the VS Code IDE.
+        </div>
+
+        <div style="max-width: 720px; font-size: 11px; line-height: 1.6; color: var(--text-primary); margin-bottom: 20px;">
+            <h4 style="margin: 12px 0 4px; color: var(--accent-teal); font-size: 12px;">1. Issues Are Plans</h4>
+            <p style="margin: 0 0 10px; color: var(--text-secondary);">
+                Plans live as Linear issues in the mapped Linear project. The issue description contains the implementation plan, goal, and tasks.
+            </p>
+
+            <h4 style="margin: 12px 0 4px; color: var(--accent-teal); font-size: 12px;">2. Status Transitions Drive Execution</h4>
+            <p style="margin: 0 0 10px; color: var(--text-secondary);">
+                Moving an issue between Linear states drives column transitions on the Switchboard Kanban board. When an issue enters an execution-trigger status (e.g. In Progress / Coding), Switchboard dispatches the local column agent to code the solution.
+            </p>
+
+            <h4 style="margin: 12px 0 4px; color: var(--accent-teal); font-size: 12px;">3. Comments Route to the Active Agent</h4>
+            <p style="margin: 0 0 10px; color: var(--text-secondary);">
+                Posting a comment on a Linear issue routes the text directly to the agent assigned to that column. The agent processes your request and posts replies back as issue comments.
+            </p>
+
+            <h4 style="margin: 12px 0 4px; color: var(--accent-teal); font-size: 12px;">4. Startup Reconciler</h4>
+            <p style="margin: 0 0 10px; color: var(--text-secondary);">
+                If you move issues in Linear while Switchboard or VS Code was closed, the startup reconciler picks up the changes on next launch and syncs the board state automatically.
+            </p>
+        </div>
+
+        <div class="form-row" style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+            <div class="conn-heading">Live Column &rarr; Status Mapping</div>
+            <div id="linear-mapping-container" style="margin-top: 8px;">
+                <table class="mapping-table" id="linear-mapping-table">
+                    <thead>
+                        <tr>
+                            <th>Kanban Column</th>
+                            <th>Linear Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="linear-mapping-tbody">
+                        <tr><td colspan="2" style="color: var(--text-secondary);">No mappings loaded.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script nonce="{{NONCE}}" src="/static/webview/linear.js"></script>
+</body>
+</html>

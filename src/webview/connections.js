@@ -124,7 +124,7 @@
 
     function applyRemoteProviderUi() {
         const providerEl = document.getElementById('remote-provider');
-        const provider = providerEl ? providerEl.value : 'linear';
+        const provider = providerEl ? providerEl.value : 'notion';
         const notionSetup = document.getElementById('remote-notion-setup');
         if (notionSetup) notionSetup.style.display = provider === 'notion' ? 'block' : 'none';
         // No ClickUp provisioning block: there is no runClickUpRemoteSetup verb in
@@ -134,12 +134,8 @@
 
         const title = document.getElementById('remote-subsection-title');
         if (title) {
-            title.textContent = provider === 'notion' ? 'Remote Control (Notion)'
-                : provider === 'clickup' ? 'Remote Control (ClickUp)'
-                    : 'Remote Control (Linear)';
+            title.textContent = provider === 'clickup' ? 'Remote Control (ClickUp)' : 'Remote Control (Notion)';
         }
-        const skillBlock = document.getElementById('remote-linear-agent-skill');
-        if (skillBlock) skillBlock.style.display = provider === 'linear' ? 'block' : 'none';
 
         // Capability gating: a provider that cannot push must not offer a push
         // toggle that silently does nothing (PRD contract #6).
@@ -211,7 +207,7 @@
         if (config) {
             _lastRemoteConfig = Object.assign({}, config);
             const providerEl = document.getElementById('remote-provider');
-            if (providerEl) providerEl.value = (config.provider === 'notion' || config.provider === 'clickup') ? config.provider : 'linear';
+            if (providerEl) providerEl.value = (config.provider === 'clickup') ? 'clickup' : 'notion';
             const silent = document.getElementById('remote-silent-sync');
             if (silent) silent.checked = config.silentSync === true;
             const freq = document.getElementById('remote-ping-frequency');
@@ -244,7 +240,7 @@
             document.querySelectorAll('#remote-boards-list input[data-role="remote-board"]:checked')
         ).map(cb => cb.value);
         const providerEl = document.getElementById('remote-provider');
-        const providerVal = providerEl ? providerEl.value : 'linear';
+        const providerVal = providerEl ? providerEl.value : 'notion';
         const modeFull = document.getElementById('remote-mode-full');
         const modeQueue = document.getElementById('remote-mode-queue');
         // Three-way mode: queue is checked → 'queue'; full is checked → 'full';
@@ -255,7 +251,7 @@
         // Merge over the host-supplied config so any field this form does not render
         // survives the replace performed by setRemoteConfig.
         return Object.assign({}, _lastRemoteConfig || {}, {
-            provider: (providerVal === 'notion' || providerVal === 'clickup') ? providerVal : 'linear',
+            provider: (providerVal === 'clickup') ? 'clickup' : 'notion',
             boards,
             silentSync: document.getElementById('remote-silent-sync')?.checked === true,
             pingFrequencySeconds: Math.min(120, Math.max(30,
@@ -330,11 +326,6 @@
             type: remoteControlActive ? 'stopRemoteControl' : 'startRemoteControl',
             workspaceRoot: (wsSel && wsSel.value) || undefined
         });
-    });
-
-    document.getElementById('btn-copy-linear-agent-skill')?.addEventListener('click', () => {
-        const wsSel = document.getElementById('remote-workspace');
-        vscode.postMessage({ type: 'copyLinearAgentSkill', workspaceRoot: (wsSel && wsSel.value) || undefined });
     });
 
     document.getElementById('btn-notion-remote-setup')?.addEventListener('click', () => {
@@ -763,23 +754,6 @@
                     statusEl.textContent = msg.success
                         ? `Setup complete — ${msg.backedUp || 0} card(s) backed up. Connect Notion to claude.ai and drive it from there.`
                         : `Setup failed: ${msg.error || 'unknown error'}`;
-                }
-                break;
-            }
-            case 'linearAgentSkillText': {
-                const btn = document.getElementById('btn-copy-linear-agent-skill');
-                const status = document.getElementById('copy-linear-agent-skill-status');
-                if (msg.text) {
-                    window.sbCopyToClipboard(msg.text).then(() => {
-                        if (btn) { btn.textContent = 'Copied!'; }
-                        if (status) { status.textContent = ''; }
-                        setTimeout(() => { if (btn) { btn.textContent = 'Copy Linear Agent Skill'; } }, 2000);
-                    }).catch(err => {
-                        console.error('Failed to copy Linear agent skill:', err);
-                        if (status) { status.textContent = 'Copy failed — see console.'; }
-                    });
-                } else if (status) {
-                    status.textContent = msg.error || 'Could not build the Linear agent skill.';
                 }
                 break;
             }

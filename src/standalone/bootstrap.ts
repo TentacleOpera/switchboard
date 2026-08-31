@@ -1011,7 +1011,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // passes no availability override.
     // `terminals` is fail-closed in getPanelsManifest (=== true), so gating it on
     // the probe hides the rail tab entirely when node-pty could not load.
-    const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true, terminals: ptyReady });
+    const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, tickets: true, terminals: ptyReady, linear: true });
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
         const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps());
         if (!result) { return null; }
@@ -3301,7 +3301,7 @@ Each plan file must include:
                     try {
                         const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
                         await deliverPrompt(handle, prompt, getPromptDeliveryOptions());
-                        return { success: true, mode: 'terminal' };
+                        return { success: true, mode: 'terminal', friendlyName: handle.friendlyName || handle.name || MISSION_CONTROL_TERMINAL_NAME };
                     } catch (err: any) {
                         return { success: false, mode: 'terminal', error: err instanceof Error ? err.message : String(err) };
                     }
@@ -3331,7 +3331,7 @@ Each plan file must include:
                     try {
                         const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
                         await deliverPrompt(existing, prompt, getPromptDeliveryOptions());
-                        return { success: true, mode: 'terminal' };
+                        return { success: true, mode: 'terminal', friendlyName: existing.friendlyName || existing.name || MISSION_CONTROL_TERMINAL_NAME };
                     } catch (err: any) {
                         return { success: false, mode: 'terminal', error: err instanceof Error ? err.message : String(err) };
                     }
@@ -3347,7 +3347,7 @@ Each plan file must include:
                     await new Promise(r => setTimeout(r, 1500));
                     const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
                     await deliverPrompt(handle, prompt, getPromptDeliveryOptions());
-                    return { success: true, mode: 'terminal' };
+                    return { success: true, mode: 'terminal', friendlyName: handle.friendlyName || handle.name || MISSION_CONTROL_TERMINAL_NAME };
                 } catch (err: any) {
                     return { success: false, mode: 'terminal', error: err instanceof Error ? err.message : String(err) };
                 }
